@@ -354,7 +354,13 @@ impl MatchCoach {
     /// same possession four times per second.
     pub fn can_shoot(&self, current_tick: u64) -> bool {
         // Per-team shot cadence — see type docs for the full rationale.
-        let shot_spaced = current_tick.saturating_sub(self.last_shot_tick) >= 500;
+        // 500 → 750 ticks (~7.5s spacing). Briefly tried 1000 but it
+        // disproportionately hurt weak teams: they shoot rarely already,
+        // and a 10s gate killed too many of their quick-counter chances
+        // (rebounds, second-balls in the box) while barely throttling
+        // strong sides who already pace their shots. 750 hits the
+        // strong side enough to matter without crushing the upset tail.
+        let shot_spaced = current_tick.saturating_sub(self.last_shot_tick) >= 750;
         // Build-up gate: a team that just won possession can't fire
         // within ~1 second. Real football: even elite counter-attacks
         // need at least one progressive pass before a shot arrives.

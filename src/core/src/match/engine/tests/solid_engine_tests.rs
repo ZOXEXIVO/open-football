@@ -233,6 +233,7 @@ fn clear_open_play_metadata_makes_invariants_hold_after_set_piece_restart() {
         goal_line_y: 270.0,
         goal_line_z: 1.5,
         defending_side: PlayerSide::Right,
+        deflected: false,
     });
     ball.pass_target_player_id = Some(10);
     ball.pending_pass_passer = Some(9);
@@ -272,6 +273,7 @@ fn shot_without_previous_owner_fails_invariant() {
         goal_line_y: 270.0,
         goal_line_z: 1.5,
         defending_side: PlayerSide::Right,
+        deflected: false,
     });
     // No previous_owner → "who fired this?" can't be answered — debug
     // builds and tests should flag this.
@@ -317,6 +319,7 @@ fn dead_ball_corner_with_leftover_shot_metadata_fails_invariant() {
         goal_line_y: 270.0,
         goal_line_z: 1.5,
         defending_side: PlayerSide::Right,
+        deflected: false,
     });
     assert!(matches!(
         ball.check_invariants(),

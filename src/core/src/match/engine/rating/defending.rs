@@ -23,11 +23,22 @@ impl<'a> RatingContext<'a> {
         // Real lift comes from zone-aware bonuses below (own-box / six-
         // yard actions, final-third pressure / tackles) where the work
         // actually stopped an attack.
+        // Saturation scales tightened from 6.0 → 4.5 so two tackles or
+        // two interceptions — a typical fullback / CB shift — registers
+        // at 36% saturation rather than 28%. The prior scale was chosen
+        // assuming engine output 4-5 routine actions per defender per
+        // match, but observed output sits closer to 2-3, leaving the
+        // routine work under-credited and dragging defender season
+        // averages (Cambiaso 6.20, Thuram 6.09).
         let effective_tackles = (s.tackles as f32 - s.fouls as f32 * 0.5).max(0.0);
-        let tackles = sat(effective_tackles, 6.0) * 0.30;
-        let interceptions = sat(s.interceptions as f32, 6.0) * 0.30;
+        let tackles = sat(effective_tackles, 4.5) * 0.30;
+        let interceptions = sat(s.interceptions as f32, 4.5) * 0.30;
         let blocks = sat(s.blocks as f32, 3.5) * 0.28;
-        let clearances = sat(s.clearances as f32, 7.5) * 0.16;
+        // Clearances saturation scale tightened 7.5 → 6.0: 3 clearances
+        // — a typical CB / fullback match — now registers at 39% rather
+        // than 33% saturation. Same calibration motive as the tackles
+        // / interceptions tighten above.
+        let clearances = sat(s.clearances as f32, 6.0) * 0.16;
 
         let succ_pressure = sat(s.successful_pressures as f32, 5.5) * 0.16;
         let raw_pressure = s.pressures.saturating_sub(s.successful_pressures);

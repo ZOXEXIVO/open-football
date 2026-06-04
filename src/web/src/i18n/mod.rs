@@ -1,5 +1,5 @@
 use crate::common::default_handler::Assets;
-use chrono::{Datelike, NaiveDateTime};
+use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -186,6 +186,20 @@ impl I18n {
             lang: "en".to_string(),
             date_main: String::new(),
             date_sub: String::new(),
+        }
+    }
+
+    pub fn format_date(&self, date: NaiveDate) -> String {
+        let d = date.day();
+        let m = date.month();
+        let y = date.year();
+        let month_name = self.t(MONTH_KEYS[date.month0() as usize]);
+        match self.lang.as_str() {
+            "en" => format!("{} {} {}", d, month_name, y),
+            "es" | "fr" | "pt" => format!("{:02}/{:02}/{}", d, m, y),
+            "de" | "ru" | "tr" => format!("{:02}.{:02}.{}", d, m, y),
+            "zh" | "ja" => format!("{}年{:02}月{:02}日", y, m, d),
+            _ => format!("{:02}.{:02}.{}", d, m, y),
         }
     }
 

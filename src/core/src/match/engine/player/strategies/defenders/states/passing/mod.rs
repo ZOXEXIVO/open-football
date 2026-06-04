@@ -4,8 +4,8 @@ use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
+    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -19,6 +19,34 @@ impl StateProcessingHandler for DefenderPassingState {
             // Lost possession, transition to appropriate state
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Pressing,
+            ));
+        }
+
+        // ── Counter-attack outlet ──────────────────────────────────────
+        //
+        // Real-football upset mechanic: when a defender wins the ball
+        // in their own half AND the opposition has over-committed
+        // forward (5+ opponents in our defensive half), the canonical
+        // response is a long ball over the press to a forward making a
+        // run, not a safe sideways pass to another defender. Without
+        // this, conservative weak teams keep recycling possession
+        // backward, never reach the final third with momentum, and
+        // never threaten the strong team. Adding the outlet directly
+        // addresses the 0% upset rate at extreme skill gaps in
+        // audit_engine_gap: weak teams reach the final third 65×/match
+        // already but only shoot 0.08× per entry; a counter-attack
+        // gives them a chance to ARRIVE with momentum instead of being
+        // tackled out of a buildup phase.
+        if let Some(target) = Self::find_counter_attack_target(ctx) {
+            return Some(StateChangeResult::with_defender_state_and_event(
+                DefenderState::Standing,
+                Event::PlayerEvent(PlayerEvent::PassTo(
+                    PassingEventContext::new()
+                        .with_from_player_id(ctx.player.id)
+                        .with_to_player_id(target.id)
+                        .with_reason("DEF_COUNTER_ATTACK")
+                        .build(ctx),
+                )),
             ));
         }
 
@@ -197,6 +225,103 @@ impl StateProcessingHandler for DefenderPassingState {
 }
 
 impl DefenderPassingState {
+    /// Detect a counter-attack opportunity and return the long-ball
+    /// target if one exists. Returns `Some` only when:
+    ///
+    ///   1. The team has just won possession (≤50 ticks ago ~= 0.5s).
+    ///      Beyond that the moment has passed — the opposition reorganises.
+    ///   2. The opposition has over-committed: ≥5 opponents are in our
+    ///      defensive half (we won the ball during their build-up).
+    ///   3. A teammate is already in the opposition's half AND meaningfully
+    ///      forward of the defender (50u..350u).
+    ///
+    /// All three gates have to fire. In normal possession phases the
+    /// `ownership_duration` gate alone keeps the helper inert, so this
+    /// doesn't affect calm build-up play — only the post-turnover moment
+    /// where the canonical real-football response IS a long ball.
+    fn find_counter_attack_target(ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        // Recent possession only — beyond this the opposition has
+        // reorganised and the long ball loses its counter-attack value.
+        // 100 ticks ~= 1s gives the defender time to pop out of Standing
+        // → Running → Passing while still inside the transition window.
+        let ownership_duration = ctx.tick_context.ball.ownership_duration;
+        if ownership_duration > 100 {
+            return None;
+        }
+
+        let side = ctx.player.side?;
+        let field_w = ctx.context.field_size.width as f32;
+        let halfway_x = field_w * 0.5;
+
+        // Over-commitment check: at least 5 opponents in our defensive
+        // half. Under 5 means they're already organised in their own
+        // half — counter wouldn't catch them out of position.
+        let opponents_in_our_half = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|opp| match side {
+                PlayerSide::Left => opp.position.x < halfway_x,
+                PlayerSide::Right => opp.position.x > halfway_x,
+            })
+            .count();
+        if opponents_in_our_half < 5 {
+            return None;
+        }
+
+        // Furthest-forward teammate within 300u.
+        let target = ctx.players().teammates().nearby_to_opponent_goal()?;
+
+        // Target must be in opposition's half — a teammate stuck in our
+        // own half is no use as a counter outlet.
+        let target_in_opp_half = match side {
+            PlayerSide::Left => target.position.x > halfway_x,
+            PlayerSide::Right => target.position.x < halfway_x,
+        };
+        if !target_in_opp_half {
+            return None;
+        }
+
+        // Sensible long-ball range. Too short = not a counter (regular
+        // build-up). Too long = unrealistic switch.
+        let pass_distance = (target.position - ctx.player.position).magnitude();
+        if !(50.0..=350.0).contains(&pass_distance) {
+            return None;
+        }
+
+        // Lane-clearness gate. The counter outlet should only fire when
+        // the long ball has a real chance of getting through; otherwise
+        // we're spraying long passes into the opposition's spine where
+        // strong midfielders sweep them up and we hand possession back
+        // even faster than a safe sideways pass would. Allow at most
+        // ONE opponent within 14u of the lane between passer and target.
+        // Without this gate, the audit data showed weak-team pass
+        // accuracy dropped 3% (every extra forward pass = lost ball)
+        // and the counter never produced a shot.
+        let to_target = target.position - ctx.player.position;
+        let target_dir = to_target.normalize();
+        let lane_length = to_target.magnitude();
+        let opponents_in_lane = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|opp| {
+                let rel = opp.position - ctx.player.position;
+                let along = rel.dot(&target_dir);
+                if along < 5.0 || along > lane_length - 5.0 {
+                    return false;
+                }
+                let proj = ctx.player.position + target_dir * along;
+                (opp.position - proj).magnitude() < 14.0
+            })
+            .count();
+        if opponents_in_lane > 1 {
+            return None;
+        }
+
+        Some(target)
+    }
+
     /// Determine if player can effectively dribble out of the current situation
     fn can_dribble_effectively(&self, ctx: &StateProcessingContext) -> bool {
         // Check player's dribbling skill

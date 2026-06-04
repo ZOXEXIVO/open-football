@@ -6,7 +6,9 @@ use core::r#match::FootballEngine;
 use core::r#match::MatchSquad;
 use core::r#match::player::MatchPlayer;
 use core::staff_contract_mod::NaiveDate;
-use core::{MatchRuntime, PeopleNameGeneratorData, PlayerGenerator};
+use core::{
+    AcademyGenerationContext, MatchRuntime, PeopleNameGeneratorData, PlayerGenerator, PlayerSkills,
+};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use rand::RngExt;
@@ -93,19 +95,170 @@ struct MetadataJson {
     total_duration_ms: u64,
 }
 
+/// Maps the user-facing `level` parameter (1..20) onto a target mean
+/// outfield skill the rest of the test rig calibrates around. Wraps the
+/// constants and the retargeting routine into one struct so the level→
+/// skill contract lives in a single place rather than scattered free
+/// functions.
+///
+/// Anchor points (linear so consecutive levels stay distinguishable):
+///   level  1 →  4.2  (Sunday League)
+///   level  6 →  7.4  (lower English Football League)
+///   level 10 →  9.6  (Championship-mid)
+///   level 14 → 11.8  (PL mid-table)
+///   level 18 → 14.0  (PL top six)
+///   level 20 → 15.1  (Champions League elite)
+///
+/// Real-team skill distributions are narrower than 1..20 — peak adult
+/// pros sit in the 12..17 band — so the curve keeps every level inside
+/// the realistic envelope while preserving a meaningful step.
+struct LevelSkillCurve;
+
+impl LevelSkillCurve {
+    const BASE: f32 = 3.6;
+    const STEP: f32 = 0.575;
+    /// `match_readiness` pinned here so fatigue doesn't distort the
+    /// strength signal — players entering a friendly test should start
+    /// fully match-ready.
+    const MATCH_READINESS: f32 = 14.0;
+
+    fn target_mean(level: u8) -> f32 {
+        Self::BASE + level as f32 * Self::STEP
+    }
+
+    /// Additively shift every individually-set skill so the player's
+    /// mean matches `target_mean`. The same delta lands on every skill,
+    /// which preserves the natural intra-player shape (a forward stays
+    /// finishing-heavy, a defender stays marking/tackling-heavy) while
+    /// retargeting the absolute strength.
+    fn retarget(skills: &mut PlayerSkills, target_mean: f32) {
+        let cur_mean = Self::current_mean(skills);
+        let delta = target_mean - cur_mean;
+        skills.physical.match_readiness = Self::MATCH_READINESS;
+        Self::shift_all(skills, delta);
+    }
+
+    fn current_mean(skills: &PlayerSkills) -> f32 {
+        let s = &skills.technical;
+        let m = &skills.mental;
+        let p = &skills.physical;
+        let g = &skills.goalkeeping;
+        let total = s.corners + s.crossing + s.dribbling + s.finishing + s.first_touch
+            + s.free_kicks + s.heading + s.long_shots + s.long_throws + s.marking
+            + s.passing + s.penalty_taking + s.tackling + s.technique
+            + m.aggression + m.anticipation + m.bravery + m.composure + m.concentration
+            + m.decisions + m.determination + m.flair + m.leadership + m.off_the_ball
+            + m.positioning + m.teamwork + m.vision + m.work_rate
+            + p.acceleration + p.agility + p.balance + p.jumping + p.natural_fitness
+            + p.pace + p.stamina + p.strength
+            + g.aerial_reach + g.command_of_area + g.communication + g.eccentricity
+            + g.first_touch + g.handling + g.kicking + g.one_on_ones + g.passing
+            + g.punching + g.reflexes + g.rushing_out + g.throwing;
+        // 14 technical + 14 mental + 8 physical (excluding match_readiness)
+        // + 13 goalkeeping.
+        total / (14 + 14 + 8 + 13) as f32
+    }
+
+    fn shift_all(skills: &mut PlayerSkills, delta: f32) {
+        let bump = |x: &mut f32| *x = (*x + delta).clamp(1.0, 20.0);
+        let s = &mut skills.technical;
+        bump(&mut s.corners);
+        bump(&mut s.crossing);
+        bump(&mut s.dribbling);
+        bump(&mut s.finishing);
+        bump(&mut s.first_touch);
+        bump(&mut s.free_kicks);
+        bump(&mut s.heading);
+        bump(&mut s.long_shots);
+        bump(&mut s.long_throws);
+        bump(&mut s.marking);
+        bump(&mut s.passing);
+        bump(&mut s.penalty_taking);
+        bump(&mut s.tackling);
+        bump(&mut s.technique);
+        let m = &mut skills.mental;
+        bump(&mut m.aggression);
+        bump(&mut m.anticipation);
+        bump(&mut m.bravery);
+        bump(&mut m.composure);
+        bump(&mut m.concentration);
+        bump(&mut m.decisions);
+        bump(&mut m.determination);
+        bump(&mut m.flair);
+        bump(&mut m.leadership);
+        bump(&mut m.off_the_ball);
+        bump(&mut m.positioning);
+        bump(&mut m.teamwork);
+        bump(&mut m.vision);
+        bump(&mut m.work_rate);
+        let p = &mut skills.physical;
+        bump(&mut p.acceleration);
+        bump(&mut p.agility);
+        bump(&mut p.balance);
+        bump(&mut p.jumping);
+        bump(&mut p.natural_fitness);
+        bump(&mut p.pace);
+        bump(&mut p.stamina);
+        bump(&mut p.strength);
+        let g = &mut skills.goalkeeping;
+        bump(&mut g.aerial_reach);
+        bump(&mut g.command_of_area);
+        bump(&mut g.communication);
+        bump(&mut g.eccentricity);
+        bump(&mut g.first_touch);
+        bump(&mut g.handling);
+        bump(&mut g.kicking);
+        bump(&mut g.one_on_ones);
+        bump(&mut g.passing);
+        bump(&mut g.punching);
+        bump(&mut g.reflexes);
+        bump(&mut g.rushing_out);
+        bump(&mut g.throwing);
+    }
+}
+
+/// Generate an adult first-team player whose mean skill matches the
+/// requested `level`. Two-step pipeline:
+///
+///   1. `PlayerGenerator::generate_with_context` with adult age (25-28)
+///      so the position-specific skill SHAPE (forwards score higher on
+///      finishing, defenders on marking/tackling, etc.) and trait roll
+///      come out naturally. The academy context is left at the
+///      `average()` defaults — its absolute level doesn't matter because
+///      step 2 retargets the mean directly.
+///   2. `LevelSkillCurve::retarget` adds a single delta to every skill so
+///      the player's mean lands on the level-target curve.
+///
+/// Necessary because `PlayerGenerator::generate(level)` (used previously
+/// here) routes `level` only into `AcademyGenerationContext.academy_level`,
+/// which contributes a 15% weight to `ca_floor_score()` and zero to the
+/// PA-cap-driving `ecosystem_score()`. Empirically that collapsed every
+/// level into the same ~5-7 skill band — see `audit_levels` output —
+/// which made `run_stats`' strength-curve alarm meaningless.
 fn generate_player(id: u32, position: PlayerPositionType, level: u8) -> Player {
     let empty_names = PeopleNameGeneratorData {
         first_names: Vec::new(),
         last_names: Vec::new(),
         nicknames: Vec::new(),
     };
-    let mut player = PlayerGenerator::generate(
+    // Anchor `now` on the 2026 season we're simulating; min/max ages 25-28
+    // place every player on the adult plateau of the age curves
+    // (`generator.rs:1268`) where tech ≥0.95, mental ≥0.85, physical ≥0.95.
+    // The youth path's `min_age=max_age=14` damped every skill by 25-45%.
+    let now = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+    let mut player = PlayerGenerator::generate_with_context(
         1,
-        NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+        now,
         position,
-        level,
         &empty_names,
+        &AcademyGenerationContext::average(),
+        25,
+        28,
+        None,
     );
+
+    LevelSkillCurve::retarget(&mut player.skills, LevelSkillCurve::target_mean(level));
+
     player.id = id;
     player
 }
@@ -282,6 +435,14 @@ struct TeamStats {
     passes_completed: u32,
     interceptions: u32,
     xg: f32,
+    /// Times a teammate carried the ball INTO the opponent's final third
+    /// on a single carry. Together with `prog_passes_into_final_third`,
+    /// this is the canonical "did the team reach a dangerous area?"
+    /// signal — distinguishes "weak team never gets into the final third"
+    /// from "weak team gets there but can't shoot".
+    prog_carries_into_final_third: u32,
+    /// Completed passes ending in the opponent's final third from outside.
+    prog_passes_into_final_third: u32,
 }
 
 /// One match's row of output and aggregates. Produced inside the
@@ -297,10 +458,12 @@ struct MatchOutcome {
     away_goals: u8,
     home: TeamStats,
     away: TeamStats,
-    /// Per-player rows for this match: (player_id, goals, shots, xg, pos_group).
+    /// Per-player rows for this match:
+    /// (player_id, goals, shots, xg, pos_group, rating, minutes, assists).
     /// pos_group: 0=GK 1=DEF 2=MID 3=FWD (derived from the 442 id slot).
-    /// Used to measure per-player concentration AND per-line goal share.
-    per_player: Vec<(u32, u16, u16, f32, u8)>,
+    /// Used to measure per-player concentration, per-line goal share,
+    /// and rating distribution by position / goal-count tier.
+    per_player: Vec<(u32, u16, u16, f32, u8, f32, u16, u16)>,
 }
 
 /// Position group for a player id, using the deterministic 442 slot
@@ -318,11 +481,22 @@ fn pos_group_of(id: u32) -> u8 {
     }
 }
 
-/// Collect per-player (id, goals, shots, xg, pos_group) rows for both teams.
-fn per_player_rows(result: &core::r#match::MatchResultRaw) -> Vec<(u32, u16, u16, f32, u8)> {
+/// Collect per-player (id, goals, shots, xg, pos_group, rating, minutes, assists) rows.
+fn per_player_rows(
+    result: &core::r#match::MatchResultRaw,
+) -> Vec<(u32, u16, u16, f32, u8, f32, u16, u16)> {
     let mut rows = Vec::new();
     for (id, s) in result.player_stats.iter() {
-        rows.push((*id, s.goals, s.shots_total, s.xg, pos_group_of(*id)));
+        rows.push((
+            *id,
+            s.goals,
+            s.shots_total,
+            s.xg,
+            pos_group_of(*id),
+            s.match_rating,
+            s.minutes_played,
+            s.assists,
+        ));
     }
     rows
 }
@@ -350,6 +524,8 @@ fn team_stats(result: &core::r#match::MatchResultRaw, team_id: u32) -> TeamStats
         passes_completed: 0,
         interceptions: 0,
         xg: 0.0,
+        prog_carries_into_final_third: 0,
+        prog_passes_into_final_third: 0,
     };
     for id in ids {
         if let Some(s) = result.player_stats.get(&id) {
@@ -363,6 +539,10 @@ fn team_stats(result: &core::r#match::MatchResultRaw, team_id: u32) -> TeamStats
             ts.passes_completed += s.passes_completed as u32;
             ts.interceptions += s.interceptions as u32;
             ts.xg += s.xg;
+            ts.prog_carries_into_final_third +=
+                s.zone_stats.progressive_carries_into_final_third as u32;
+            ts.prog_passes_into_final_third +=
+                s.zone_stats.progressive_passes_into_final_third as u32;
         }
     }
     ts
@@ -462,7 +642,7 @@ struct LeagueMatch {
     away_idx: usize,
     home_goals: u8,
     away_goals: u8,
-    per_player: Vec<(u32, u16, u16, f32, u8)>,
+    per_player: Vec<(u32, u16, u16, f32, u8, f32, u16, u16)>,
 }
 
 #[derive(Clone, Default)]
@@ -564,7 +744,7 @@ fn run_league(n_teams: usize, rounds: usize, min_lvl: u8, max_lvl: u8) {
             table[m.away_idx].d += 1;
         }
         total_goals += hg + ag;
-        for &(id, g, sh, xg, grp) in &m.per_player {
+        for &(id, g, sh, xg, grp, _rating, _minutes, _assists) in &m.per_player {
             let e = agg.entry(id).or_insert((0, 0, 0.0, 0, grp));
             e.0 += g as u32;
             e.1 += sh as u32;
@@ -677,6 +857,9 @@ fn print_usage() {
     eprintln!(
         "                                      defaults: 20 teams, 2 rounds (38 games), levels 8–18"
     );
+    eprintln!("  dev_match audit_levels [N]      generator diagnostic: mean outfield skills per level (default 200 squads)");
+    eprintln!("  dev_match audit_engine_gap [N] [lvlA] [lvlB]  engine diagnostic: direct-skill matches at supplied gap");
+    eprintln!("                                      bypasses generator; reveals engine-only response to skill gap");
     eprintln!();
     eprintln!(
         "Random level range: {}–{} inclusive.",
@@ -708,6 +891,26 @@ fn main() {
             let level_b: Option<u8> = args.get(3).and_then(|s| s.parse().ok());
             run_viewer(level_a, level_b);
         }
+        // Generator diagnostic: dumps mean outfield skills per level so
+        // we can see whether `make_squad_simple(level)` actually responds
+        // to `level`. If lvl 1 and lvl 20 print nearly identical numbers,
+        // the strength-curve alarm in `stats` is measuring noise — fix
+        // the generator path before tuning the engine. See
+        // `run_audit_levels` for the rationale.
+        "audit_levels" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(200);
+            run_audit_levels(n);
+        }
+        // Engine diagnostic: directly assigns per-level skills (bypassing
+        // the generator) and runs N matches at the supplied gap. Lets us
+        // tell engine response apart from generator behaviour. See
+        // `run_audit_engine_gap` / `make_squad_calibrated`.
+        "audit_engine_gap" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(50);
+            let a: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(6);
+            let b: u8 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(18);
+            run_audit_engine_gap(n, a, b);
+        }
         "--help" | "-h" | "help" => {
             print_usage();
         }
@@ -725,6 +928,460 @@ fn main() {
             }
         }
     }
+}
+
+// ── audit_levels: dump avg outfield skills by level ────────────────────
+//
+// Generates `n` squads at every level 1..20 via `make_squad_simple` and
+// prints the per-level mean of selected outfield attributes. The headline
+// signal: if level 1 and level 20 produce nearly the same numbers, the
+// generator path used by `.dev/match` is not actually translating its
+// `level` argument into team strength — and any "strength curve" check
+// in `run_stats` is then measuring squad noise, not engine behaviour.
+//
+// Background: `PlayerGenerator::generate(level)` routes its `level` only
+// into `AcademyGenerationContext.academy_level`, which contributes 15% of
+// `ca_floor_score()` and nothing to the PA-ceiling-driving `ecosystem_score()`.
+// All other reputation / facility / coaching inputs default to "average".
+// Empirically this collapses lvl 1 vs lvl 20 finishing to ~0.1 points apart.
+fn run_audit_levels(n: usize) {
+    println!(
+        "Generating {} squads at each level (1..20), dumping avg outfield skill bands.\n",
+        n
+    );
+    println!(
+        "{:>3} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5}",
+        "lvl", "fin", "ls", "tch", "psg", "tck", "mrk", "anti", "dec", "pos", "agi"
+    );
+    for level in 1u8..=20 {
+        let mut sum_fin = 0.0f32;
+        let mut sum_ls = 0.0f32;
+        let mut sum_tch = 0.0f32;
+        let mut sum_psg = 0.0f32;
+        let mut sum_tck = 0.0f32;
+        let mut sum_mrk = 0.0f32;
+        let mut sum_anti = 0.0f32;
+        let mut sum_dec = 0.0f32;
+        let mut sum_pos = 0.0f32;
+        let mut sum_agi = 0.0f32;
+        let mut count = 0u32;
+        for team_id in 0..n {
+            let squad = make_squad_simple((team_id + 1) as u32, level);
+            for mp in &squad.main_squad {
+                let s = &mp.skills;
+                sum_fin += s.technical.finishing;
+                sum_ls += s.technical.long_shots;
+                sum_tch += s.technical.technique;
+                sum_psg += s.technical.passing;
+                sum_tck += s.technical.tackling;
+                sum_mrk += s.technical.marking;
+                sum_anti += s.mental.anticipation;
+                sum_dec += s.mental.decisions;
+                sum_pos += s.mental.positioning;
+                sum_agi += s.physical.agility;
+                count += 1;
+            }
+        }
+        let d = count as f32;
+        println!(
+            "{:>3} {:>5.2} {:>5.2} {:>5.2} {:>5.2} {:>5.2} {:>5.2} {:>5.2} {:>5.2} {:>5.2} {:>5.2}",
+            level,
+            sum_fin / d,
+            sum_ls / d,
+            sum_tch / d,
+            sum_psg / d,
+            sum_tck / d,
+            sum_mrk / d,
+            sum_anti / d,
+            sum_dec / d,
+            sum_pos / d,
+            sum_agi / d,
+        );
+    }
+}
+
+// ── audit_engine_gap: measure engine response to a real skill gap ──────
+//
+// Bypasses `PlayerGenerator` entirely and directly assigns every player
+// the same per-level skill value (`3.0 + level/20 * 14.0`, so lvl 1 ≈ 3.7
+// and lvl 20 ≈ 17.0). Then runs `n` matches at the supplied level pair
+// and reports favourite / draw / upset frequency.
+//
+// Purpose: separate engine behaviour from squad-generation behaviour. If
+// `run_stats` and this diagnostic disagree about whether the strength
+// curve is biting, the generator path is the bottleneck (see
+// `run_audit_levels`). If both show flat results, the engine itself
+// fails to translate skill into outcomes.
+//
+// Stamina, natural_fitness, and match_readiness are pinned at 14 so
+// fatigue dynamics don't confound the skill-curve measurement.
+fn make_squad_calibrated(team_id: u32, level: u8) -> MatchSquad {
+    let base_id = team_id * 100;
+    let target = 3.0 + (level as f32 / 20.0) * 14.0;
+    let main_squad: Vec<MatchPlayer> = POSITIONS_442
+        .iter()
+        .enumerate()
+        .map(|(i, &pos)| {
+            let mut player = generate_player(base_id + i as u32, pos, level);
+            let s = &mut player.skills;
+            // Technical
+            s.technical.corners = target;
+            s.technical.crossing = target;
+            s.technical.dribbling = target;
+            s.technical.finishing = target;
+            s.technical.first_touch = target;
+            s.technical.free_kicks = target;
+            s.technical.heading = target;
+            s.technical.long_shots = target;
+            s.technical.long_throws = target;
+            s.technical.marking = target;
+            s.technical.passing = target;
+            s.technical.penalty_taking = target;
+            s.technical.tackling = target;
+            s.technical.technique = target;
+            // Mental
+            s.mental.aggression = target;
+            s.mental.anticipation = target;
+            s.mental.bravery = target;
+            s.mental.composure = target;
+            s.mental.concentration = target;
+            s.mental.decisions = target;
+            s.mental.determination = target;
+            s.mental.flair = target;
+            s.mental.leadership = target;
+            s.mental.off_the_ball = target;
+            s.mental.positioning = target;
+            s.mental.teamwork = target;
+            s.mental.vision = target;
+            s.mental.work_rate = target;
+            // Physical — pin stamina/natural_fitness/match_readiness so
+            // fatigue doesn't distort the skill-gap measurement.
+            s.physical.acceleration = target;
+            s.physical.agility = target;
+            s.physical.balance = target;
+            s.physical.jumping = target;
+            s.physical.natural_fitness = 14.0;
+            s.physical.pace = target;
+            s.physical.stamina = 14.0;
+            s.physical.strength = target;
+            s.physical.match_readiness = 14.0;
+            // Goalkeeping
+            s.goalkeeping.aerial_reach = target;
+            s.goalkeeping.command_of_area = target;
+            s.goalkeeping.communication = target;
+            s.goalkeeping.eccentricity = target;
+            s.goalkeeping.first_touch = target;
+            s.goalkeeping.handling = target;
+            s.goalkeeping.kicking = target;
+            s.goalkeeping.one_on_ones = target;
+            s.goalkeeping.passing = target;
+            s.goalkeeping.punching = target;
+            s.goalkeeping.reflexes = target;
+            s.goalkeeping.rushing_out = target;
+            s.goalkeeping.throwing = target;
+            MatchPlayer::from_player(team_id, &player, pos, false)
+        })
+        .collect();
+    MatchSquad {
+        team_id,
+        team_name: format!("Team {}", team_id),
+        tactics: Tactics::new(MatchTacticType::T442),
+        main_squad,
+        substitutes: Vec::new(),
+        captain_id: None,
+        vice_captain_id: None,
+        penalty_taker_id: None,
+        free_kick_taker_id: None,
+        selection_omissions: Vec::new(),
+    }
+}
+
+fn run_audit_engine_gap(n: usize, level_a: u8, level_b: u8) {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error")).init();
+    let target_a = 3.0 + (level_a as f32 / 20.0) * 14.0;
+    let target_b = 3.0 + (level_b as f32 / 20.0) * 14.0;
+    println!(
+        "Engine gap test: {} matches, lvl {} (skills={:.1}) vs lvl {} (skills={:.1})",
+        n, level_a, target_a, level_b, target_b
+    );
+    println!();
+
+    struct GapOutcome {
+        ha: u8,
+        aa: u8,
+        sh_a: u32,
+        sh_b: u32,
+        ot_a: u32,
+        ot_b: u32,
+        sv_a: u32,
+        sv_b: u32,
+        pa_a: u32,
+        pa_b: u32,
+        pc_a: u32,
+        pc_b: u32,
+        tk_a: u32,
+        tk_b: u32,
+        int_a: u32,
+        int_b: u32,
+        xg_a: f32,
+        xg_b: f32,
+        ft_carry_a: u32,
+        ft_carry_b: u32,
+        ft_pass_a: u32,
+        ft_pass_b: u32,
+    }
+
+    let outcomes: Vec<GapOutcome> = (0..n)
+        .into_par_iter()
+        .map(|_| {
+            let home = make_squad_calibrated(1, level_a);
+            let away = make_squad_calibrated(2, level_b);
+            let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
+            let score = result.score.as_ref().unwrap();
+            let h = team_stats(&result, 1);
+            let a = team_stats(&result, 2);
+            GapOutcome {
+                ha: score.home_team.get(),
+                aa: score.away_team.get(),
+                sh_a: h.shots as u32,
+                sh_b: a.shots as u32,
+                ot_a: h.on_target as u32,
+                ot_b: a.on_target as u32,
+                sv_a: h.saves as u32,
+                sv_b: a.saves as u32,
+                pa_a: h.passes_attempted as u32,
+                pa_b: a.passes_attempted as u32,
+                pc_a: h.passes_completed as u32,
+                pc_b: a.passes_completed as u32,
+                tk_a: h.tackles as u32,
+                tk_b: a.tackles as u32,
+                int_a: h.interceptions,
+                int_b: a.interceptions,
+                xg_a: h.xg,
+                xg_b: a.xg,
+                ft_carry_a: h.prog_carries_into_final_third,
+                ft_carry_b: a.prog_carries_into_final_third,
+                ft_pass_a: h.prog_passes_into_final_third,
+                ft_pass_b: a.prog_passes_into_final_third,
+            }
+        })
+        .collect();
+
+    let mut a_wins = 0u32;
+    let mut draws = 0u32;
+    let mut b_wins = 0u32;
+    let mut a_goals = 0u32;
+    let mut b_goals = 0u32;
+    let mut a_sh = 0u32;
+    let mut b_sh = 0u32;
+    let mut a_ot = 0u32;
+    let mut b_ot = 0u32;
+    let mut a_sv = 0u32;
+    let mut b_sv = 0u32;
+    let mut a_pa = 0u32;
+    let mut b_pa = 0u32;
+    let mut a_pc = 0u32;
+    let mut b_pc = 0u32;
+    let mut a_tk = 0u32;
+    let mut b_tk = 0u32;
+    let mut a_int = 0u32;
+    let mut b_int = 0u32;
+    let mut a_xg = 0.0f32;
+    let mut b_xg = 0.0f32;
+    let mut a_ftc = 0u32;
+    let mut b_ftc = 0u32;
+    let mut a_ftp = 0u32;
+    let mut b_ftp = 0u32;
+    for o in &outcomes {
+        a_goals += o.ha as u32;
+        b_goals += o.aa as u32;
+        a_sh += o.sh_a;
+        b_sh += o.sh_b;
+        a_ot += o.ot_a;
+        b_ot += o.ot_b;
+        a_sv += o.sv_a;
+        b_sv += o.sv_b;
+        a_pa += o.pa_a;
+        b_pa += o.pa_b;
+        a_pc += o.pc_a;
+        b_pc += o.pc_b;
+        a_tk += o.tk_a;
+        b_tk += o.tk_b;
+        a_int += o.int_a;
+        b_int += o.int_b;
+        a_xg += o.xg_a;
+        b_xg += o.xg_b;
+        a_ftc += o.ft_carry_a;
+        b_ftc += o.ft_carry_b;
+        a_ftp += o.ft_pass_a;
+        b_ftp += o.ft_pass_b;
+        if o.ha > o.aa {
+            a_wins += 1;
+        } else if o.ha < o.aa {
+            b_wins += 1;
+        } else {
+            draws += 1;
+        }
+    }
+    let total = outcomes.len() as f32;
+    let (fav_label, fav_w, dog_w) = if target_a >= target_b {
+        ("A (home)", a_wins, b_wins)
+    } else {
+        ("B (away)", b_wins, a_wins)
+    };
+    println!(
+        "  fav {} wins: {}/{} ({:.1}%)   draws: {}/{} ({:.1}%)   upsets: {}/{} ({:.1}%)",
+        fav_label,
+        fav_w,
+        n,
+        fav_w as f32 / total * 100.0,
+        draws,
+        n,
+        draws as f32 / total * 100.0,
+        dog_w,
+        n,
+        dog_w as f32 / total * 100.0,
+    );
+    println!(
+        "  goals  A: {} (avg {:.2}/match)   B: {} (avg {:.2}/match)",
+        a_goals,
+        a_goals as f32 / total,
+        b_goals,
+        b_goals as f32 / total,
+    );
+    // Per-team funnel: shots → on-target → goals. Lets us tell apart
+    // "weak team takes no shots" from "weak team takes shots but every
+    // one is saved" from "weak team takes shots but they all miss".
+    let pct = |num: u32, den: u32| {
+        if den == 0 {
+            0.0
+        } else {
+            num as f32 * 100.0 / den as f32
+        }
+    };
+    println!(
+        "  shots  A: {} (avg {:.1})   ot {} ({:.1}%)   sv {} ({:.1}% saved)   conv {:.1}% goals/ot",
+        a_sh,
+        a_sh as f32 / total,
+        a_ot,
+        pct(a_ot, a_sh),
+        b_sv, // saves by GK B against shots from A
+        pct(b_sv, a_ot),
+        pct(a_goals, a_ot),
+    );
+    println!(
+        "  shots  B: {} (avg {:.1})   ot {} ({:.1}%)   sv {} ({:.1}% saved)   conv {:.1}% goals/ot",
+        b_sh,
+        b_sh as f32 / total,
+        b_ot,
+        pct(b_ot, b_sh),
+        a_sv,
+        pct(a_sv, b_ot),
+        pct(b_goals, b_ot),
+    );
+    println!(
+        "  passes A: {} ({:.1}% acc)   B: {} ({:.1}% acc)",
+        a_pa,
+        pct(a_pc, a_pa),
+        b_pa,
+        pct(b_pc, b_pa),
+    );
+    // Possession proxy via pass volume. A team that holds the ball longer
+    // attempts more passes per match — this is the metric Opta uses
+    // internally for "possession %" (their lines aren't from clock time,
+    // they're from event count). Useful here because the engine doesn't
+    // expose a possession-time field directly.
+    let pass_total = (a_pa + b_pa).max(1);
+    let a_poss = a_pa as f32 / pass_total as f32 * 100.0;
+    let b_poss = b_pa as f32 / pass_total as f32 * 100.0;
+    println!(
+        "  possession (pass-share)  A: {:.1}%   B: {:.1}%",
+        a_poss, b_poss
+    );
+    // Shots-per-possession: how efficiently a team converts ball
+    // ownership into goal attempts. Real PL: ~3.5% across both teams.
+    // A 5× gap here (vs ~1.6× possession gap) means the bottleneck
+    // is NOT possession — it's converting possession into chances.
+    println!(
+        "  shots / 100 passes attempted  A: {:.2}   B: {:.2}",
+        a_sh as f32 / a_pa.max(1) as f32 * 100.0,
+        b_sh as f32 / b_pa.max(1) as f32 * 100.0,
+    );
+    // Defensive turnovers TAKEN by each team (tackles + interceptions
+    // they made themselves). Compare against the volume of pass attempts
+    // by the OPPOSING team — a team that wins back 30% of opponent
+    // pass attempts is a high-pressing side.
+    let a_steals = a_tk + a_int;
+    let b_steals = b_tk + b_int;
+    println!(
+        "  tackles+ints  A: {} ({} tk + {} int)   B: {} ({} tk + {} int)",
+        a_steals, a_tk, a_int, b_steals, b_tk, b_int,
+    );
+    println!(
+        "  steals / 100 opp-passes  A: {:.2} (vs B's {} passes)   B: {:.2} (vs A's {} passes)",
+        a_steals as f32 / b_pa.max(1) as f32 * 100.0,
+        b_pa,
+        b_steals as f32 / a_pa.max(1) as f32 * 100.0,
+        a_pa,
+    );
+    // xG totals: did the weak team even GENERATE chances worth taking?
+    // If team-A xG is ~0 the issue is "no shots created", not "shots
+    // not converted".
+    println!(
+        "  xG total  A: {:.1} ({:.2}/match, {:.3}/shot)   B: {:.1} ({:.2}/match, {:.3}/shot)",
+        a_xg,
+        a_xg / total,
+        a_xg / a_sh.max(1) as f32,
+        b_xg,
+        b_xg / total,
+        b_xg / b_sh.max(1) as f32,
+    );
+    // Final-third entries: how many times did each team reach the
+    // opponent's attacking third (carries that crossed in + completed
+    // passes that ended there from outside). Bridges the gap between
+    // possession share and shot volume — if A has 38% possession but
+    // only 5% of final-third entries, the funnel collapse is in midfield
+    // not in the box.
+    println!(
+        "  final-third entries  A: {} ({} carries + {} passes, {:.1}/match)   B: {} ({} carries + {} passes, {:.1}/match)",
+        a_ftc + a_ftp,
+        a_ftc,
+        a_ftp,
+        (a_ftc + a_ftp) as f32 / total,
+        b_ftc + b_ftp,
+        b_ftc,
+        b_ftp,
+        (b_ftc + b_ftp) as f32 / total,
+    );
+    // Shots per final-third entry — "did the team SHOOT from the
+    // dangerous areas they reached?". Real PL bottom vs top: ~0.5 shots
+    // per FT entry on both sides — when you get into the final third,
+    // you usually get a shot away. If the engine shows weak teams
+    // entering the final third but not shooting, the bottleneck is in
+    // the final-third shot decision (a defender always close enough to
+    // suppress the shot); if FT entries are themselves rare, the
+    // bottleneck is midfield progression.
+    let a_ft_entries = (a_ftc + a_ftp).max(1);
+    let b_ft_entries = (b_ftc + b_ftp).max(1);
+    println!(
+        "  shots / final-third entry  A: {:.2}   B: {:.2}",
+        a_sh as f32 / a_ft_entries as f32,
+        b_sh as f32 / b_ft_entries as f32,
+    );
+    println!();
+    // Bucket-aligned reference rows. Use the actual `level` gap as the
+    // bucket key (same as the upset-frequency table in `run_stats`).
+    let gap = (level_a as i32 - level_b as i32).unsigned_abs() as u32;
+    let (ref_fav, ref_draw, ref_up, ref_label) = match gap {
+        0..=2 => (45, 25, 30, "gap 0-2 close"),
+        3..=5 => (58, 22, 20, "gap 3-5 clear edge"),
+        6..=8 => (70, 17, 13, "gap 6-8 heavy fav."),
+        _ => (78, 13, 9, "gap 9+ extreme"),
+    };
+    println!(
+        "  reference for {} (gap {}): fav {}%, draw {}%, upset {}%",
+        ref_label, gap, ref_fav, ref_draw, ref_up,
+    );
 }
 
 fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
@@ -981,6 +1638,133 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         println!("  {:>2}: {:>3} {}", total, count, bar);
     }
 
+    // ── UPSET FREQUENCY by level gap ──────────────────────────────────
+    //
+    // Does the stronger team actually win more often when the gap is
+    // big? Real-football reference (Premier League / La Liga seasons):
+    //
+    //   gap 0-2 (close):       favorite ~45%, draw ~25%, underdog ~30%
+    //   gap 3-5 (clear edge):  favorite ~58%, draw ~22%, underdog ~20%
+    //   gap 6-8 (heavy fav.):  favorite ~70%, draw ~17%, underdog ~13%
+    //   gap 9+  (extreme):     favorite ~78%, draw ~13%, underdog ~9%
+    //
+    // The "underdog" column is the upset frequency — should drop as
+    // the gap widens but never reach zero (real football has the rare
+    // 1-0 dogged shock). A flat underdog rate across all gaps means
+    // team strength isn't biting; a zero underdog rate at large gaps
+    // means the strength multiplier is too steep.
+    //
+    // Drawn matches between equal-level teams are excluded from the
+    // bucket totals (no favorite/underdog to assign).
+    let mut gap_buckets: [(u32, u32, u32); 4] = [(0, 0, 0); 4]; // (fav_w, draw, upset)
+    let bucket_labels = [
+        "gap 0-2 (close)     ",
+        "gap 3-5 (clear edge)",
+        "gap 6-8 (heavy fav.)",
+        "gap 9+  (extreme)   ",
+    ];
+    let mut total_in_buckets = 0u32;
+    for o in &outcomes {
+        if o.level_a == o.level_b {
+            continue; // can't measure upsets when levels match
+        }
+        let gap = o.level_a.abs_diff(o.level_b);
+        let bucket = match gap {
+            0..=2 => 0,
+            3..=5 => 1,
+            6..=8 => 2,
+            _ => 3,
+        };
+        let stronger_is_home = o.level_a > o.level_b;
+        let (fav_goals, dog_goals) = if stronger_is_home {
+            (o.home_goals, o.away_goals)
+        } else {
+            (o.away_goals, o.home_goals)
+        };
+        if fav_goals > dog_goals {
+            gap_buckets[bucket].0 += 1;
+        } else if fav_goals < dog_goals {
+            gap_buckets[bucket].2 += 1;
+        } else {
+            gap_buckets[bucket].1 += 1;
+        }
+        total_in_buckets += 1;
+    }
+    println!();
+    println!("--- UPSET FREQUENCY by level gap (mismatched levels only) ---");
+    println!(
+        "  {:<22} {:>6}  {:>6}  {:>6}  {:>6}    reference",
+        "bucket", "fav%", "draw%", "upset%", "n"
+    );
+    let refs = [
+        "fav 45%, draw 25%, upset 30%",
+        "fav 58%, draw 22%, upset 20%",
+        "fav 70%, draw 17%, upset 13%",
+        "fav 78%, draw 13%, upset  9%",
+    ];
+    for (i, label) in bucket_labels.iter().enumerate() {
+        let (fw, dr, up) = gap_buckets[i];
+        let total = (fw + dr + up).max(1);
+        let pct = |x: u32| x as f32 / total as f32 * 100.0;
+        println!(
+            "  {:<22} {:>5.1}%  {:>5.1}%  {:>5.1}%  {:>6}    {}",
+            label,
+            pct(fw),
+            pct(dr),
+            pct(up),
+            fw + dr + up,
+            refs[i],
+        );
+    }
+    println!(
+        "  ({} matches with non-equal levels; {} equal-level matches excluded)",
+        total_in_buckets,
+        outcomes.len() as u32 - total_in_buckets,
+    );
+
+    // Headline upset alarm: if ANY mismatched bucket shows ≥40% upset
+    // or 0% upset, the strength curve is wrong. Print a one-liner
+    // verdict so it's obvious without reading the table.
+    let mut alarms: Vec<String> = Vec::new();
+    for (i, label) in bucket_labels.iter().enumerate() {
+        let (fw, dr, up) = gap_buckets[i];
+        let total = (fw + dr + up).max(1) as f32;
+        if total < 8.0 {
+            continue; // sample too small to read
+        }
+        let up_pct = up as f32 / total * 100.0;
+        // Refs: 30/20/13/9. Tolerance ±10 for the close-gap bucket,
+        // tightening to ±6 for the extreme bucket where upsets are rare.
+        let (ref_pct, tol) = match i {
+            0 => (30.0, 10.0),
+            1 => (20.0, 9.0),
+            2 => (13.0, 8.0),
+            _ => (9.0, 7.0),
+        };
+        let diff = up_pct - ref_pct;
+        if diff.abs() > tol {
+            let direction = if diff > 0.0 {
+                "too many upsets"
+            } else {
+                "too few upsets"
+            };
+            alarms.push(format!(
+                "  ⚠ {} — upset% {:.1} vs ref {:.1} ({})",
+                label.trim_end(),
+                up_pct,
+                ref_pct,
+                direction,
+            ));
+        }
+    }
+    if !alarms.is_empty() {
+        println!();
+        println!("  Strength-curve alarms:");
+        for a in &alarms {
+            println!("{}", a);
+        }
+    }
+
     // ── Per-player goal concentration / season projection ──────────────
     // Aggregate goals/shots/xG by player id across all matches. Player
     // ids are stable per position slot, so each id appears once per match
@@ -996,7 +1780,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     for o in &outcomes {
         // Track the single highest-scoring player in this match (any team).
         let mut match_top = 0u16;
-        for &(id, goals, shots, xg, grp) in &o.per_player {
+        for &(id, goals, shots, xg, grp, _rating, _minutes, _assists) in &o.per_player {
             let e = agg.entry(id).or_insert((0, 0, 0.0, 0, grp));
             e.0 += goals as u32;
             e.1 += shots as u32;
@@ -1041,6 +1825,134 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         );
     }
     println!("  target outfield goal share ≈ FWD 58% / MID 32% / DEF 10%");
+
+    // ── RATINGS DISTRIBUTION — per-position mean/median/p10/p90 ──────────
+    //
+    // Compares the engine's match-rating output against real-football
+    // reference bands (WhoScored season averages):
+    //   GK   ≈ 6.65-7.10    (varies with team strength)
+    //   DEF  ≈ 6.55-6.95
+    //   MID  ≈ 6.60-7.00
+    //   FWD  ≈ 6.55-7.15    (most volatile — goal output drives it)
+    //
+    // For each position, also splits the rating distribution by goal
+    // count (0g, 1g, 2g+) so the "11g/13ap scorer at 6.53" symptom
+    // surfaces directly: if the 1g+ band fails to clear the 0g band by
+    // enough, goal-event credit is under-weighted; if both bands sit
+    // below the reference, ARE / shot-spam / context damping is too
+    // aggressive overall.
+    //
+    // Per-line aggregation: every (player, match) sample is one row.
+    // Apps with minutes==0 are skipped (they didn't really play).
+    let mut ratings_by_pos: [Vec<f32>; 4] = Default::default();
+    let mut ratings_by_pos_goalless: [Vec<f32>; 4] = Default::default();
+    let mut ratings_by_pos_one_goal: [Vec<f32>; 4] = Default::default();
+    let mut ratings_by_pos_two_plus: [Vec<f32>; 4] = Default::default();
+    let mut ratings_by_pos_with_assist_only: [Vec<f32>; 4] = Default::default();
+    // Per-PLAYER weighted season-average rating, sliced by line. This is
+    // the apples-to-apples comparison against the website's "AV RAT"
+    // column the user reports against.
+    let mut player_rating_sum: std::collections::HashMap<u32, (f32, f32, u8)> =
+        std::collections::HashMap::new(); // id -> (rating_points, rating_weight, group)
+    for o in &outcomes {
+        for &(id, goals, _sh, _xg, grp, rating, minutes, assists) in &o.per_player {
+            if minutes == 0 {
+                continue;
+            }
+            let gi = grp as usize;
+            ratings_by_pos[gi].push(rating);
+            match goals {
+                0 if assists == 0 => ratings_by_pos_goalless[gi].push(rating),
+                0 => ratings_by_pos_with_assist_only[gi].push(rating),
+                1 => ratings_by_pos_one_goal[gi].push(rating),
+                _ => ratings_by_pos_two_plus[gi].push(rating),
+            }
+            // Minute-weighted (mirror PlayerStatistics::record_match_rating
+            // clamps: starter floor 0.65, sub floor 0.20). The 442 sim has
+            // no subs, but the floor logic still matters when subs land.
+            let is_starter = minutes as u32 >= 45; // crude proxy: full-game sample
+            let raw = minutes as f32 / 90.0;
+            let min_weight = if is_starter { 0.65 } else { 0.20 };
+            let w = raw.max(min_weight);
+            let e = player_rating_sum.entry(id).or_insert((0.0, 0.0, grp));
+            e.0 += rating * w;
+            e.1 += w;
+        }
+    }
+    fn dist_summary(vals: &mut Vec<f32>) -> (f32, f32, f32, f32, usize) {
+        let n = vals.len();
+        if n == 0 {
+            return (0.0, 0.0, 0.0, 0.0, 0);
+        }
+        let mean = vals.iter().sum::<f32>() / n as f32;
+        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let p = |q: f32| -> f32 {
+            let idx = ((n as f32 - 1.0) * q).round() as usize;
+            vals[idx.min(n - 1)]
+        };
+        (mean, p(0.50), p(0.10), p(0.90), n)
+    }
+    println!();
+    println!(
+        "--- RATINGS DISTRIBUTION (per-match samples, {} matches) ---",
+        n_matches
+    );
+    println!(
+        "  {:<4} {:>6} {:>6} {:>6} {:>6} {:>6}    reference",
+        "pos", "mean", "p50", "p10", "p90", "n"
+    );
+    let refs = [
+        ("GK", "6.65-7.10"),
+        ("DEF", "6.55-6.95"),
+        ("MID", "6.60-7.00"),
+        ("FWD", "6.55-7.15"),
+    ];
+    for (i, (label, refband)) in refs.iter().enumerate() {
+        let (m, p50, p10, p90, n) = dist_summary(&mut ratings_by_pos[i]);
+        println!(
+            "  {:<4} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>6}    {}",
+            label, m, p50, p10, p90, n, refband
+        );
+    }
+    println!();
+    println!("--- RATINGS BY GOAL COUNT (FWD slice, the canonical \"goal scorer\" diagnostic) ---");
+    println!(
+        "  {:<14} {:>6} {:>6} {:>6} {:>6} {:>6}",
+        "tier", "mean", "p50", "p10", "p90", "n"
+    );
+    let fwd_tiers = [
+        ("FWD 0g/0a", &mut ratings_by_pos_goalless[3]),
+        ("FWD 0g+1a", &mut ratings_by_pos_with_assist_only[3]),
+        ("FWD 1g", &mut ratings_by_pos_one_goal[3]),
+        ("FWD 2g+", &mut ratings_by_pos_two_plus[3]),
+    ];
+    for (label, vals) in fwd_tiers {
+        let (m, p50, p10, p90, n) = dist_summary(vals);
+        println!(
+            "  {:<14} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>6}",
+            label, m, p50, p10, p90, n
+        );
+    }
+    println!();
+    println!("--- PER-PLAYER SEASON AVG (minute-weighted, like website's AV RAT) ---");
+    let mut player_avgs_by_pos: [Vec<f32>; 4] = Default::default();
+    for (_id, (pts, w, grp)) in &player_rating_sum {
+        if *w <= 0.0 {
+            continue;
+        }
+        player_avgs_by_pos[*grp as usize].push(pts / w);
+    }
+    println!(
+        "  {:<4} {:>6} {:>6} {:>6} {:>6} {:>6}",
+        "pos", "mean", "p50", "p10", "p90", "n"
+    );
+    for (i, label) in ["GK", "DEF", "MID", "FWD"].iter().enumerate() {
+        let (m, p50, p10, p90, n) = dist_summary(&mut player_avgs_by_pos[i]);
+        println!(
+            "  {:<4} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>6}",
+            label, m, p50, p10, p90, n
+        );
+    }
 
     let mut rows: Vec<(u32, u32, u32, f32, u32, u8)> = agg
         .into_iter()

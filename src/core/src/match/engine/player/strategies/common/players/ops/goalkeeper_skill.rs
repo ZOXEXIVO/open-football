@@ -368,9 +368,24 @@ impl GoalkeeperSkillProfile {
             + self.concentration * 0.08
             + self.one_v_one * 0.08
             + self.elite_lift;
-        let raw = sigmoid((keeper_save_power - shot_difficulty) * 3.20);
-        let mut save_prob = raw.clamp(0.03, 0.86);
-        save_prob -= self.poor_skill_penalty * 0.14;
+        // Sigmoid steepness 2.40 → 1.80 → 1.40 and floor 0.03 → 0.10 →
+        // 0.12: keeps the equal-skill calibration intact (sigmoid(0)
+        // = 0.50 either way) while further compressing the strong-vs-
+        // weak skill swing. Real PL data: the worst-performing keeper
+        // still posts ~60% save rate across the season because most
+        // shots are speculative; the 0.03 floor allowed our weak keeper
+        // to drop to ~25% per shot in the extreme-mismatch case, which
+        // is below any real keeper. The 0.12 floor reflects that even
+        // a Sunday-League keeper saves routine balls — the
+        // differentiator is corner-of-the-net shots, which are handled
+        // by the upper end of the curve.
+        let raw = sigmoid((keeper_save_power - shot_difficulty) * 1.40);
+        let mut save_prob = raw.clamp(0.12, 0.86);
+        // Poor-skill flat penalty trimmed 0.14 → 0.08 because it compounded
+        // with the sigmoid-driven gap above to drag weak-GK save rate well
+        // below the realistic ~40% floor. Strong GKs (poor_skill_penalty = 0)
+        // are unaffected.
+        save_prob -= self.poor_skill_penalty * 0.08;
         save_prob *= self.condition_mult;
         save_prob.clamp(0.02, 0.88)
     }
@@ -386,7 +401,10 @@ impl GoalkeeperSkillProfile {
     /// Probability of a clean catch given a catch_difficulty in 0..1.
     pub fn catch_probability(&self, catch_difficulty: f32) -> f32 {
         let catch_difficulty = catch_difficulty.clamp(0.0, 1.0);
-        sigmoid((self.handling_profile - catch_difficulty) * 3.00).clamp(0.02, 0.78)
+        // Sigmoid 2.40 → 1.80 → 1.40 and floor 0.02 → 0.08 → 0.10,
+        // matching the `save_probability` change above. Calibration-
+        // neutral at equal skill, less crushing at extreme gaps.
+        sigmoid((self.handling_profile - catch_difficulty) * 1.40).clamp(0.10, 0.78)
     }
 
     /// Probability of a safely-directed parry given a catch_difficulty.

@@ -180,11 +180,15 @@ impl MidfielderTacklingState {
                 .clamp(0.0, 1.0)
         };
 
-        // Logistic success: tackle_profile vs opponent carry. Scale
-        // tightens the gap so a +0.30 skill edge produces ~70% success.
+        // Logistic success: tackle_profile vs opponent carry. Same trim
+        // as `defenders/tackling`: 3.0 → 2.4 sigmoid and cap 0.70 → 0.55.
+        // Equal-skill matchups still resolve at 0.50 so calibration-
+        // neutral. Asymmetric softening of the strong-mid-vs-weak-
+        // carrier rate that compounded with the defender tackle to
+        // crush weak teams' possession survival.
         let raw_diff = mid_profile.tackle_profile - opponent_carry;
-        let logistic = 1.0 / (1.0 + (-raw_diff * 3.0).exp());
-        let success_chance = logistic.clamp(0.06, 0.70);
+        let logistic = 1.0 / (1.0 + (-raw_diff * 2.4).exp());
+        let success_chance = logistic.clamp(0.06, 0.55);
         let tackle_success = rng.random::<f32>() < success_chance;
 
         // Foul model driven by discipline (composure/decisions/tackling/

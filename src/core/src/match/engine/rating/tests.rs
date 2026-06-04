@@ -174,8 +174,10 @@ fn one_goal_low_volume_forward_does_not_exceed_7_7() {
     s.minutes_played = 90;
     let r = RatingContext::new(&s, 2, 1).calculate();
     assert!(
-        r >= 7.0 && r <= 7.7,
-        "single-goal low-volume FWD rated {} — should be 7.0..=7.7",
+        r >= 7.0 && r <= 7.85,
+        "single-goal low-volume FWD rated {} — should be 7.0..=7.85 \
+         (upper bound lifted in 2026-06 round 3 after goal scoring \
+         coefficient raise 2.55 → 2.80)",
         r
     );
 }
@@ -1055,8 +1057,9 @@ fn clean_sheet_credit_tiered_by_defensive_evidence() {
     assert!(qctx.clean_sheet_context() < bctx.clean_sheet_context());
     assert!(qctx.clean_sheet_context() < zctx.clean_sheet_context());
     assert!(
-        (zctx.clean_sheet_context() - 0.25).abs() < 0.001,
-        "own-box intervention earns full clean-sheet bonus"
+        (zctx.clean_sheet_context() - 0.32).abs() < 0.001,
+        "own-box intervention earns full clean-sheet bonus (0.32 after \
+         2026-06 defender CS bonus uplift)"
     );
 }
 
@@ -2379,35 +2382,45 @@ fn goalless_forward_modest_line_winning_season_averages_in_mid_sixes() {
 // +0.30 CS bonus stacked on GkModest's +1.05 routine cap.
 
 #[test]
-fn moderate_workload_clean_sheet_gk_stays_under_seven_two() {
+fn moderate_workload_clean_sheet_gk_stays_under_seven_four() {
     // 3 saves, 4 shots faced, clean sheet, win. Typical "did the job"
     // GK shift — enough saves to qualify for the modest CS bonus,
-    // not enough to clear the busy bar. Should land around 7.0,
-    // not 7.3+.
+    // not enough to clear the busy bar. Should land around 7.2-7.3,
+    // not 7.5+. The 2026-06 GK recalibration lifted the GkModest cap
+    // back to 0.92 (was 0.75) after the prior pass dropped TOP-GK
+    // season averages to ~6.3.
     let mut gk = make_gk(3, 4);
     gk.minutes_played = 90;
     let r = RatingContext::new(&gk, 1, 0).calculate();
     assert!(
-        r < 7.2,
-        "moderate-workload CS GK rated {} — average shutout shifts \
-             must stay below 7.2 so season averages don't drift past 7.0",
+        r < 7.4,
+        "moderate-workload CS GK rated {} — should land in the 7.2-7.3 \
+             band, not drift past 7.4",
         r
     );
 }
 
 #[test]
-fn quiet_clean_sheet_gk_stays_in_high_six_band() {
+fn quiet_clean_sheet_gk_stays_under_seven_two() {
     // 1 save / 2 shots faced, clean sheet, win. Quiet shutout: the
-    // back four did the work. The bookkeeping CS bonus only — not
-    // the full +0.30 — so a season of such matches averages well
-    // below 7.0.
+    // back four did the work, but the keeper organised it. With the
+    // 2026-06 recalibration this lands ~6.8 — still clearly below the
+    // "did real GK work" band, but no longer crushed to ~6.6 by a
+    // halved CS credit. Season averages with such matches stay in
+    // the high sixes / low sevens.
     let mut gk = make_gk(1, 2);
     gk.minutes_played = 90;
     let r = RatingContext::new(&gk, 1, 0).calculate();
     assert!(
-        r < 7.0,
+        r < 7.2,
         "quiet CS GK rated {} — back-four-protected shutouts must not \
-             cross 7.0 or every second-tier keeper averages 7.2+",
+             cross 7.2 or every second-tier keeper averages 7.0+",
+        r
+    );
+    assert!(
+        r > 6.5,
+        "quiet CS GK rated {} — a clean-sheet win must still clear 6.5; \
+             previous tightening crushed top-GK season averages to ~6.3",
         r
     );
 }
@@ -2424,6 +2437,405 @@ fn busy_clean_sheet_gk_still_rewards_real_work() {
         "busy CS GK rated {} — a 5-save shutout must remain a clearly \
              good rating after the GK tier rebalance",
         r
+    );
+}
+
+#[test]
+fn top_gk_season_average_lands_in_real_football_band() {
+    // Regression for the 2026-06 issue where Courtois / Maignan /
+    // Unai Simón posted season averages in the 6.21-6.62 band — well
+    // below the WhoScored reference 6.8-7.0 for elite keepers. The
+    // root cause was the cumulative tightening: GkModest cap +0.75,
+    // GkPassenger cap +0.50, halved context credit, and an over-tiered
+    // CS bonus. With the recalibration, a representative 38-match
+    // schedule for a TOP keeper in a strong defensive side must
+    // average comfortably above 6.7.
+    //
+    // The synthetic schedule below approximates the observed match
+    // distribution for Maignan (43% CS, 30% concede-1, 17% concede-2,
+    // 7% concede-3+, in a win-heavy team). Save counts track real
+    // distribution: dominant defence → ~50% of CS games are quiet
+    // (0-1 saves), the rest have 2-5; concede games scale workload
+    // with shots faced.
+    let mut total = 0.0_f32;
+    let mut count = 0_u32;
+    // CS wins, quiet (0-1 saves) — dominant defence, untested keeper.
+    for &(saves, sf) in &[(0_u16, 1_u16), (1, 1), (1, 2), (0, 2), (1, 2), (1, 3)] {
+        let mut gk = make_gk(saves, sf);
+        gk.minutes_played = 90;
+        total += RatingContext::new(&gk, 1, 0).calculate();
+        count += 1;
+    }
+    // CS wins, moderate (2-3 saves) — back-four pressed, keeper tidy.
+    for &(saves, sf) in &[(2_u16, 3_u16), (3, 4), (3, 4), (2, 3), (3, 5)] {
+        let mut gk = make_gk(saves, sf);
+        gk.minutes_played = 90;
+        total += RatingContext::new(&gk, 1, 0).calculate();
+        count += 1;
+    }
+    // CS wins, busy (4-6 saves) — keeper saved the result.
+    for &(saves, sf) in &[(4_u16, 5_u16), (5, 6), (4, 5), (6, 7)] {
+        let mut gk = make_gk(saves, sf);
+        gk.minutes_played = 90;
+        total += RatingContext::new(&gk, 1, 0).calculate();
+        count += 1;
+    }
+    // Concede 1, win (12 games — most common outcome for a TOP team).
+    for &(saves, sf) in &[
+        (2_u16, 4_u16),
+        (3, 5),
+        (2, 4),
+        (3, 5),
+        (1, 3),
+        (3, 5),
+        (4, 6),
+        (2, 4),
+        (3, 5),
+        (2, 4),
+        (3, 6),
+        (4, 7),
+    ] {
+        let mut gk = make_gk(saves, sf);
+        gk.minutes_played = 90;
+        total += RatingContext::new(&gk, 2, 1).calculate();
+        count += 1;
+    }
+    // Concede 2 (6 games — mix of wins and draws/losses).
+    for &(saves, sf, tg, og) in &[
+        (3_u16, 6_u16, 3_u8, 2_u8),
+        (4, 7, 2, 2),
+        (3, 6, 1, 2),
+        (4, 8, 2, 2),
+        (5, 8, 3, 2),
+        (3, 7, 0, 2),
+    ] {
+        let mut gk = make_gk(saves, sf);
+        gk.minutes_played = 90;
+        total += RatingContext::new(&gk, tg, og).calculate();
+        count += 1;
+    }
+    // Concede 3+ (3 games — bad days).
+    for &(saves, sf, og) in &[(4_u16, 8_u16, 3_u8), (3, 7, 3), (4, 9, 4)] {
+        let mut gk = make_gk(saves, sf);
+        gk.minutes_played = 90;
+        total += RatingContext::new(&gk, 1, og).calculate();
+        count += 1;
+    }
+    let avg = total / count as f32;
+    assert!(
+        avg > 6.7,
+        "TOP-GK season average rated {} across {} matches — must \
+             clear 6.7 so elite keepers in a strong defensive side \
+             land in the real-football 6.8-7.0 reference band (was \
+             collapsing to 6.3 after the prior tightening)",
+        avg,
+        count,
+    );
+    assert!(
+        avg < 7.3,
+        "TOP-GK season average rated {} across {} matches — must \
+             stay under 7.3 so the routine band doesn't drift back \
+             into the elite zone the 2026-04 pass was guarding against",
+        avg,
+        count,
+    );
+}
+
+#[test]
+fn fullback_routine_shift_clears_six_six() {
+    // Workhorse fullback shift — no box-zone events, no crosses
+    // completed, no key passes; just routine defensive volume and a
+    // tidy passing line. With the 2026-06 tier-classification fix
+    // (`routine_def >= 3` qualifies for Modest), this no longer
+    // collapses to the Passenger tier that was pinning fullbacks like
+    // Cambiaso to 6.20 season averages.
+    let mut s = make_stats(
+        0,
+        0,
+        38, // passes attempted
+        30, // passes completed (79%)
+        0,
+        0,
+        2, // tackles
+        2, // interceptions
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Defender,
+    );
+    s.minutes_played = 90;
+    s.clearances = 3;
+    s.successful_pressures = 1;
+    s.progressive_passes = 2;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r > 6.6,
+        "fullback with routine defensive shift + CS win rated {} — \
+             a starting defender clearing 7 routine actions in a CS \
+             must rate above 6.6, not collapse to the Passenger band",
+        r
+    );
+}
+
+#[test]
+fn defensive_midfielder_recycler_clears_six_three() {
+    // Deep-lying midfielder shift — no decisive creative events,
+    // no goals/assists, just turnover-resistant ball recycling
+    // and modest defensive work. Pre-fix this was Passenger tier
+    // (Khéphren Thuram averaged 5.96 — *below* the 6.0 baseline);
+    // a starting DM in a top side doing the job should clear 6.4.
+    let mut s = make_stats(
+        0,
+        0,
+        45, // passes attempted
+        38, // passes completed (84%)
+        0,
+        0,
+        1, // tackles
+        2, // interceptions
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    s.minutes_played = 90;
+    s.successful_pressures = 2;
+    s.progressive_passes = 3;
+    let r = RatingContext::new(&s, 1, 1).calculate();
+    assert!(
+        r > 6.3,
+        "DM recycler with no G/A in a 1-1 draw rated {} — a deep \
+             midfielder doing honest pass/defensive volume must clear \
+             6.3, not get crushed to sub-6.0 by Passenger tier",
+        r
+    );
+}
+
+#[test]
+fn fullback_season_average_lands_in_real_football_band() {
+    // Regression for Cambiaso-shape symptom: a Juventus starting RB
+    // posting 6.20-6.25 season averages despite holding down the
+    // role in a top side. Real-football reference for a starting
+    // fullback is 6.7-7.0. The synthetic 30-match schedule below
+    // models a Juve RB's typical match distribution (mix of CS,
+    // concede-1, concede-2; mostly 0 G/A; one assist a season).
+    let mut total = 0.0_f32;
+    let mut count = 0_u32;
+    let make_def = |passes_att: u16,
+                    passes_comp: u16,
+                    tackles: u16,
+                    interceptions: u16,
+                    clearances: u16,
+                    pressures: u16,
+                    crosses_completed: u16,
+                    crosses_attempted: u16,
+                    progressive: u16,
+                    fouls: u16|
+     -> PlayerMatchEndStats {
+        let mut s = make_stats(
+            0,
+            0,
+            passes_att,
+            passes_comp,
+            0,
+            0,
+            tackles,
+            interceptions,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Defender,
+        );
+        s.minutes_played = 90;
+        s.clearances = clearances;
+        s.successful_pressures = pressures;
+        s.crosses_completed = crosses_completed;
+        s.crosses_attempted = crosses_attempted;
+        s.progressive_passes = progressive;
+        s.progressive_carries = progressive / 2;
+        s.fouls = fouls;
+        s
+    };
+    // CS wins (10 — Juve concede CS rate ~35%).
+    for stats in [
+        make_def(40, 33, 2, 2, 3, 1, 1, 3, 2, 0),
+        make_def(38, 31, 1, 3, 2, 2, 0, 2, 2, 1),
+        make_def(42, 35, 3, 2, 4, 0, 2, 4, 3, 0),
+        make_def(35, 28, 2, 1, 3, 2, 1, 3, 2, 1),
+        make_def(45, 38, 1, 2, 4, 1, 1, 3, 3, 0),
+        make_def(36, 29, 2, 2, 2, 1, 0, 1, 2, 0),
+        make_def(40, 32, 2, 2, 3, 2, 1, 2, 2, 1),
+        make_def(38, 30, 3, 1, 4, 0, 0, 2, 2, 0),
+        make_def(42, 34, 2, 3, 2, 1, 1, 3, 3, 0),
+        make_def(48, 41, 1, 2, 3, 2, 2, 4, 2, 0),
+    ] {
+        total += RatingContext::new(&stats, 1, 0).calculate();
+        count += 1;
+    }
+    // Concede 1, win (10 games).
+    for stats in [
+        make_def(40, 33, 2, 2, 3, 1, 0, 2, 2, 1),
+        make_def(38, 30, 1, 2, 4, 0, 1, 3, 2, 1),
+        make_def(42, 34, 3, 1, 3, 2, 0, 1, 3, 0),
+        make_def(45, 37, 2, 3, 2, 1, 1, 3, 2, 1),
+        make_def(36, 28, 2, 2, 4, 0, 0, 2, 2, 0),
+        make_def(40, 32, 1, 2, 3, 1, 1, 2, 3, 1),
+        make_def(38, 30, 2, 1, 4, 2, 0, 1, 2, 0),
+        make_def(44, 36, 3, 2, 2, 1, 1, 4, 3, 0),
+        make_def(35, 27, 2, 2, 3, 0, 0, 2, 2, 1),
+        make_def(42, 34, 1, 2, 4, 1, 1, 3, 2, 0),
+    ] {
+        total += RatingContext::new(&stats, 2, 1).calculate();
+        count += 1;
+    }
+    // Concede 2 (6 games — mix of W/D/L).
+    for (stats, tg, og) in [
+        (make_def(38, 30, 2, 2, 3, 0, 0, 1, 2, 1), 3_u8, 2_u8),
+        (make_def(40, 32, 3, 1, 4, 1, 1, 2, 2, 0), 2, 2),
+        (make_def(36, 28, 2, 2, 4, 0, 0, 2, 1, 1), 1, 2),
+        (make_def(42, 34, 1, 2, 3, 1, 1, 3, 3, 0), 2, 2),
+        (make_def(38, 30, 2, 1, 4, 0, 0, 1, 2, 1), 3, 2),
+        (make_def(35, 27, 2, 2, 3, 1, 0, 2, 2, 0), 0, 2),
+    ] {
+        total += RatingContext::new(&stats, tg, og).calculate();
+        count += 1;
+    }
+    // Concede 3+ (4 games — bad days).
+    for (stats, og) in [
+        (make_def(35, 26, 2, 1, 3, 0, 0, 2, 1, 1), 3_u8),
+        (make_def(38, 28, 1, 2, 4, 1, 1, 3, 2, 0), 3),
+        (make_def(32, 23, 2, 2, 3, 0, 0, 1, 1, 1), 3),
+        (make_def(36, 27, 1, 1, 4, 0, 0, 2, 2, 1), 4),
+    ] {
+        total += RatingContext::new(&stats, 1, og).calculate();
+        count += 1;
+    }
+    let avg = total / count as f32;
+    assert!(
+        avg > 6.5,
+        "Starting fullback season average rated {} across {} matches \
+             — must clear 6.5 so a Juventus RB doesn't post 6.2 \
+             averages while doing the job. Real-football reference \
+             for routine fullbacks is 6.7-7.0.",
+        avg,
+        count,
+    );
+    assert!(
+        avg < 7.2,
+        "Starting fullback season average rated {} across {} matches \
+             — a routine no-G/A fullback shouldn't drift into the \
+             elite band on workhorse evidence alone",
+        avg,
+        count,
+    );
+}
+
+#[test]
+fn defensive_midfielder_season_average_lands_in_real_football_band() {
+    // Regression for Khéphren Thuram-shape symptom: a Juventus
+    // starting DM posting 5.96 / 6.09 — *below baseline* in 27/28 —
+    // because the engine's modest stat-line emission combined with
+    // Passenger tier classification crushed his rating. A starting
+    // top-club DM doing the job should average above 6.4.
+    let mut total = 0.0_f32;
+    let mut count = 0_u32;
+    let make_mid = |passes_att: u16,
+                    passes_comp: u16,
+                    tackles: u16,
+                    interceptions: u16,
+                    pressures: u16,
+                    progressive: u16,
+                    key_passes: u16,
+                    fouls: u16|
+     -> PlayerMatchEndStats {
+        let mut s = make_stats(
+            0,
+            0,
+            passes_att,
+            passes_comp,
+            0,
+            0,
+            tackles,
+            interceptions,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        s.minutes_played = 90;
+        s.successful_pressures = pressures;
+        s.progressive_passes = progressive;
+        s.progressive_carries = progressive / 2;
+        s.key_passes = key_passes;
+        s.fouls = fouls;
+        s
+    };
+    // CS wins (10 games).
+    for stats in [
+        make_mid(50, 42, 2, 2, 2, 3, 1, 1),
+        make_mid(48, 40, 1, 3, 1, 2, 0, 0),
+        make_mid(55, 47, 3, 1, 3, 4, 1, 1),
+        make_mid(42, 35, 2, 2, 2, 2, 0, 1),
+        make_mid(52, 44, 2, 2, 3, 3, 1, 0),
+        make_mid(45, 37, 1, 2, 2, 2, 0, 0),
+        make_mid(50, 42, 2, 3, 1, 3, 1, 1),
+        make_mid(48, 40, 3, 1, 2, 2, 0, 1),
+        make_mid(55, 47, 2, 2, 3, 4, 1, 0),
+        make_mid(52, 44, 1, 2, 2, 3, 0, 0),
+    ] {
+        total += RatingContext::new(&stats, 1, 0).calculate();
+        count += 1;
+    }
+    // Concede 1, win (10 games).
+    for stats in [
+        make_mid(48, 40, 2, 2, 2, 3, 1, 1),
+        make_mid(50, 42, 1, 2, 1, 2, 0, 0),
+        make_mid(45, 37, 2, 3, 3, 3, 1, 1),
+        make_mid(52, 44, 3, 1, 2, 4, 0, 0),
+        make_mid(48, 40, 2, 2, 2, 2, 1, 1),
+        make_mid(42, 35, 1, 2, 1, 2, 0, 0),
+        make_mid(50, 42, 2, 1, 3, 3, 1, 1),
+        make_mid(45, 37, 2, 2, 2, 2, 0, 0),
+        make_mid(48, 40, 3, 2, 1, 3, 1, 0),
+        make_mid(52, 44, 2, 1, 2, 4, 0, 1),
+    ] {
+        total += RatingContext::new(&stats, 2, 1).calculate();
+        count += 1;
+    }
+    // Concede 2 (6 games — mix of W/D/L).
+    for (stats, tg, og) in [
+        (make_mid(45, 37, 2, 1, 2, 3, 0, 1), 3_u8, 2_u8),
+        (make_mid(48, 40, 3, 2, 1, 2, 1, 0), 2, 2),
+        (make_mid(42, 35, 2, 2, 3, 2, 0, 1), 1, 2),
+        (make_mid(50, 42, 1, 1, 2, 4, 0, 0), 2, 2),
+        (make_mid(45, 37, 2, 2, 1, 3, 1, 1), 3, 2),
+        (make_mid(48, 40, 2, 1, 2, 2, 0, 0), 0, 2),
+    ] {
+        total += RatingContext::new(&stats, tg, og).calculate();
+        count += 1;
+    }
+    // Concede 3+ (4 games — bad days).
+    for (stats, og) in [
+        (make_mid(42, 34, 1, 1, 2, 2, 0, 1), 3_u8),
+        (make_mid(45, 37, 2, 2, 1, 3, 0, 0), 3),
+        (make_mid(40, 32, 1, 1, 2, 2, 0, 1), 3),
+        (make_mid(38, 30, 2, 1, 1, 2, 0, 0), 4),
+    ] {
+        total += RatingContext::new(&stats, 1, og).calculate();
+        count += 1;
+    }
+    let avg = total / count as f32;
+    assert!(
+        avg > 6.3,
+        "Starting DM season average rated {} across {} matches — \
+             a Juventus-quality deep midfielder must clear 6.3, not \
+             post 5.96-6.09 averages below baseline",
+        avg,
+        count,
+    );
+    assert!(
+        avg < 7.2,
+        "Starting DM season average rated {} across {} matches — \
+             routine no-G/A defensive midfielder shouldn't drift \
+             into the elite band on recycling alone",
+        avg,
+        count,
     );
 }
 
@@ -2461,5 +2873,255 @@ fn goalless_forward_near_strong_line_winning_season_averages_below_six_eight() {
         "goalless near-Strong FWD rated {} on a 2-0 win — busy routine \
              without a goal contribution must stay below 6.8",
         r
+    );
+}
+
+#[test]
+fn forward_in_hard_away_loss_with_low_output_floor_above_five_five() {
+    // 90 min, 0 G/A, no shooting, no creative footprint, 0-1 loss
+    // away. The canonical "CL-quality opposition kept him quiet"
+    // shift. Real-football reference: 5.5-6.0. Prior calibration
+    // crushed this to 5.2-5.4 by stacking ARE (-0.54) + Passenger
+    // tier cap + halved context (0.10x) + engagement penalty + loss
+    // penalty — the ARE drag is already the forward-specific
+    // role-failure signal; the others double-bit.
+    let mut s = make_stats(
+        0,
+        0,
+        20,
+        16,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Forward,
+    );
+    s.minutes_played = 90;
+    s.successful_pressures = 1;
+    s.attempted_dribbles = 1;
+    s.progressive_passes = 1;
+    s.fouls = 1;
+    let r = RatingContext::new(&s, 0, 1).calculate();
+    assert!(
+        r > 5.4,
+        "FWD in hard away loss with no output rated {} — must stay \
+             above 5.4; the ARE drag alone should not stack with \
+             engagement + tier-cap penalties to collapse the rating \
+             into the 5.2 band that the user observed in CL play",
+        r
+    );
+    assert!(
+        r < 6.2,
+        "FWD in hard away loss with no output rated {} — must still \
+             be a clearly poor shift, well below the baseline",
+        r
+    );
+}
+
+#[test]
+fn eleven_goal_league_scorer_season_average_clears_six_nine() {
+    // Regression for the user-observed 11g/13ap forward posting 6.53
+    // in League play. A genuine goal-scorer with that conversion
+    // should average above 6.9 — combining goal matches (~7.6-7.8)
+    // with goalless full matches (~6.0-6.3) and cameos (~6.0). The
+    // prior forward over-tightening (ARE 4.5/0.80, wasted-xG 0.40,
+    // goalless-context multiplier 0.20, engagement penalty stacking)
+    // pulled goalless matches into the 5.5-5.8 band, dragging the
+    // 11-goal scorer to 6.5.
+    let mut total = 0.0_f32;
+    let mut count = 0_u32;
+
+    let make_fwd = |g: u16,
+                    a: u16,
+                    sot: u16,
+                    shots: u16,
+                    xg: f32,
+                    passes_att: u16,
+                    passes_comp: u16,
+                    kp: u16,
+                    pbox: u16,
+                    drib: u16,
+                    drib_att: u16,
+                    tackles: u16,
+                    pressures: u16,
+                    minutes: u16|
+     -> PlayerMatchEndStats {
+        let mut s = make_stats(
+            g,
+            a,
+            passes_att,
+            passes_comp,
+            sot,
+            shots,
+            tackles,
+            0,
+            0,
+            xg,
+            PlayerFieldPositionGroup::Forward,
+        );
+        s.minutes_played = minutes;
+        s.key_passes = kp;
+        s.passes_into_box = pbox;
+        s.successful_dribbles = drib;
+        s.attempted_dribbles = drib_att;
+        s.successful_pressures = pressures;
+        s.fouls = 1;
+        s
+    };
+
+    // 7 goal-scoring starts (11 goals total, mostly 1-2 per match).
+    for stats in [
+        make_fwd(2, 0, 4, 5, 0.9, 25, 20, 1, 1, 1, 2, 0, 2, 90),
+        make_fwd(1, 1, 3, 4, 0.6, 28, 22, 2, 1, 1, 2, 0, 2, 90),
+        make_fwd(1, 0, 3, 4, 0.5, 24, 19, 0, 1, 2, 3, 0, 2, 90),
+        make_fwd(2, 0, 5, 6, 1.1, 26, 21, 1, 2, 1, 2, 1, 2, 90),
+        make_fwd(1, 0, 2, 3, 0.4, 22, 18, 1, 0, 1, 2, 0, 2, 90),
+        make_fwd(2, 0, 4, 5, 0.8, 30, 24, 2, 1, 1, 2, 0, 3, 90),
+        make_fwd(2, 0, 3, 4, 0.7, 27, 22, 1, 1, 0, 1, 0, 2, 90),
+    ] {
+        total += RatingContext::new(&stats, 2, 1).calculate();
+        count += 1;
+    }
+    // 3 goalless full-match starts (CS/concede mix).
+    for (stats, tg, og) in [
+        (
+            make_fwd(0, 0, 2, 3, 0.4, 25, 20, 1, 1, 1, 2, 0, 2, 90),
+            1_u8,
+            0_u8,
+        ),
+        (
+            make_fwd(0, 0, 1, 2, 0.3, 23, 18, 0, 0, 1, 2, 1, 2, 90),
+            1,
+            1,
+        ),
+        (
+            make_fwd(0, 0, 2, 3, 0.5, 26, 21, 1, 0, 0, 1, 0, 1, 90),
+            2,
+            1,
+        ),
+    ] {
+        total += RatingContext::new(&stats, tg, og).calculate();
+        count += 1;
+    }
+    // 3 sub appearances (cameos, mostly quiet).
+    for stats in [
+        make_fwd(0, 0, 0, 1, 0.1, 8, 6, 0, 0, 1, 1, 0, 0, 20),
+        make_fwd(0, 1, 1, 1, 0.2, 6, 5, 1, 0, 0, 0, 0, 0, 15),
+        make_fwd(0, 0, 1, 1, 0.1, 10, 8, 0, 0, 0, 1, 0, 1, 25),
+    ] {
+        total += RatingContext::new(&stats, 2, 1).calculate();
+        count += 1;
+    }
+
+    let avg = total / count as f32;
+    assert!(
+        avg > 6.9,
+        "11-goal league scorer season average rated {} across {} \
+             matches — must clear 6.9; a forward who scores once every \
+             ~1.2 starts is doing the primary job and should rate above \
+             7.0 in real-football reference (prior calibration crushed \
+             this to 6.5 via forward over-tightening)",
+        avg,
+        count,
+    );
+    assert!(
+        avg < 7.6,
+        "11-goal league scorer season average rated {} across {} \
+             matches — must stay under 7.6 so a high-volume scorer \
+             doesn't drift into the elite hat-trick band on volume alone",
+        avg,
+        count,
+    );
+}
+
+#[test]
+fn five_goal_one_assist_eight_app_scorer_clears_six_seven() {
+    // Regression for user-observed 5g/1a/8ap forward posting 6.15
+    // (with 25 SoT, 1 PoM). A clearly hot striker on a smaller club
+    // should average above 6.7 — main-team forwards with strong goal
+    // returns must not be dragged below the baseline by goalless
+    // hard-match shifts. The 13-match `eleven_goal` regression
+    // proved that scoring lifts season averages above 6.9, but with
+    // fewer matches the variance band of the post-rating pipeline
+    // can pull a single bad swing harder, so this test uses a tighter
+    // 8-match sample matching the user's observation.
+    let mut total = 0.0_f32;
+    let mut count = 0_u32;
+
+    let make_fwd = |g: u16,
+                    a: u16,
+                    sot: u16,
+                    shots: u16,
+                    xg: f32,
+                    passes_att: u16,
+                    passes_comp: u16,
+                    kp: u16,
+                    pbox: u16,
+                    drib: u16,
+                    drib_att: u16,
+                    tackles: u16,
+                    pressures: u16,
+                    fouls: u16|
+     -> PlayerMatchEndStats {
+        let mut s = make_stats(
+            g,
+            a,
+            passes_att,
+            passes_comp,
+            sot,
+            shots,
+            tackles,
+            0,
+            0,
+            xg,
+            PlayerFieldPositionGroup::Forward,
+        );
+        s.minutes_played = 90;
+        s.key_passes = kp;
+        s.passes_into_box = pbox;
+        s.successful_dribbles = drib;
+        s.attempted_dribbles = drib_att;
+        s.successful_pressures = pressures;
+        s.fouls = fouls;
+        s
+    };
+
+    // 4 goal-scoring matches (5 goals total, one brace).
+    for (stats, tg, og) in [
+        (make_fwd(2, 0, 4, 6, 0.9, 22, 17, 1, 1, 1, 2, 1, 2, 1), 3_u8, 1_u8),
+        (make_fwd(1, 0, 3, 5, 0.6, 24, 18, 0, 1, 0, 2, 0, 2, 0), 1, 0),
+        (make_fwd(1, 0, 4, 5, 0.7, 20, 15, 1, 0, 1, 2, 1, 1, 1), 2, 2),
+        (make_fwd(1, 0, 3, 4, 0.5, 21, 17, 0, 1, 0, 1, 0, 2, 0), 1, 1),
+    ] {
+        total += RatingContext::new(&stats, tg, og).calculate();
+        count += 1;
+    }
+    // 1 assist match (no goal).
+    {
+        let stats = make_fwd(0, 1, 2, 4, 0.4, 25, 20, 2, 1, 1, 2, 0, 2, 0);
+        total += RatingContext::new(&stats, 2, 0).calculate();
+        count += 1;
+    }
+    // 3 goalless full-match starts (mix of CS/concede; the kind of
+    // hard-match goalless shift that drags season averages).
+    for (stats, tg, og) in [
+        (make_fwd(0, 0, 3, 5, 0.6, 23, 18, 1, 1, 0, 2, 1, 2, 1), 1_u8, 1_u8),
+        (make_fwd(0, 0, 2, 4, 0.5, 20, 16, 0, 0, 1, 2, 0, 1, 1), 0, 2),
+        (make_fwd(0, 0, 2, 3, 0.4, 22, 17, 1, 0, 0, 1, 1, 2, 0), 1, 2),
+    ] {
+        total += RatingContext::new(&stats, tg, og).calculate();
+        count += 1;
+    }
+
+    let avg = total / count as f32;
+    assert!(
+        avg > 6.7,
+        "5g/1a/8-match forward season average rated {} across {} matches \
+             — a striker scoring at 0.625 G/match with high SoT must \
+             clear 6.7. Prior calibration crushed this shape to 6.15.",
+        avg,
+        count,
     );
 }

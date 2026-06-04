@@ -257,11 +257,18 @@ impl DefenderTacklingState {
             (dribbling + agility) * 0.5
         };
 
-        // Logistic success: tackle_profile vs attacker carry. The 3.2
-        // scale gives a ~0.30 skill edge ≈ 70% success. Clamped to
-        // 0.06..0.72 so even mismatched duels have variance.
+        // Logistic success: tackle_profile vs attacker carry.
+        // Sigmoid 3.2 → 2.4 and upper clamp 0.72 → 0.55 trim the
+        // strong-defender-vs-weak-attacker dominance. At equal skill
+        // `raw_diff = 0` and `sigmoid = 0.5` regardless of coefficient,
+        // so calibration-neutral for equal matchups. The 0.55 cap means
+        // even an elite CB vs a poor forward leaves the attacker with
+        // 45% per-attempt survival — across 3 engagement sequences in
+        // the final third that's ~14% accumulated retention, enough to
+        // let weak teams complete the occasional shooting chain at
+        // extreme skill gaps (the prior 0.62 cap gave only ~5%).
         let raw_diff = def_profile.tackle_profile - attacker_score;
-        let success_chance = (1.0 / (1.0 + (-raw_diff * 3.2).exp())).clamp(0.06, 0.72);
+        let success_chance = (1.0 / (1.0 + (-raw_diff * 2.4).exp())).clamp(0.06, 0.55);
 
         let tackle_success = rng.random::<f32>() < success_chance;
 

@@ -37,10 +37,14 @@ impl<'a> RatingContext<'a> {
                 // Tiered like the defender bonus: evidence-based, not
                 // unconditional. A keeper who made real interventions
                 // (saves, command claims, xG prevented) gets full credit;
-                // a quiet shutout that the defence handled gets the
-                // bookkeeping bonus only. The previous flat +0.30 stacked
-                // on top of GkModest's already generous routine cap and
-                // collapsed second-tier keepers into the elite band.
+                // a quiet shutout that the defence handled gets a
+                // softened bonus — still meaningful because a keeper
+                // organising a CS without a save IS doing the job
+                // (positioning, sweeping, command without claim event),
+                // just not the headline kind. Tiers loosened from the
+                // 2026-04 over-tightening (0.10/0.18) — that pass pulled
+                // TOP-GK season averages to ~6.3 vs the 6.8-7.0 reference
+                // band — while keeping the busy-keeper premium intact.
                 let s = self.stats;
                 let z = s.zone_stats;
                 let saves = s.saves;
@@ -49,9 +53,9 @@ impl<'a> RatingContext<'a> {
                 if saves >= 4 || command >= 2 || xg_prev > 0.5 {
                     0.30
                 } else if saves >= 2 || command >= 1 || xg_prev > 0.0 {
-                    0.18
+                    0.22
                 } else {
-                    0.10
+                    0.18
                 }
             }
             PlayerFieldPositionGroup::Defender => {
@@ -71,12 +75,21 @@ impl<'a> RatingContext<'a> {
                     .saturating_add(self.stats.blocks)
                     .saturating_add(self.stats.clearances)
                     .saturating_add(self.stats.successful_pressures);
+                // Tiers lifted from 0.25/0.15/0.08 → 0.32/0.20/0.13.
+                // Prior values were calibrated against synthetic test
+                // fixtures, but observed engine output (Cambiaso at
+                // 6.20-6.25, Thuram at 5.96-6.09) showed defenders
+                // weren't getting enough team-result credit when they
+                // held the CS together — defenders share the clean
+                // sheet with the keeper but the keeper's tier maxes at
+                // 0.30. A back-four player with 6+ defensive actions
+                // in a CS deserves a comparable share.
                 if high_value >= 1 || routine >= 6 {
-                    0.25
+                    0.32
                 } else if routine >= 3 {
-                    0.15
+                    0.20
                 } else {
-                    0.08
+                    0.13
                 }
             }
             PlayerFieldPositionGroup::Midfielder => 0.05,
@@ -99,8 +112,15 @@ impl<'a> RatingContext<'a> {
             }
             PlayerFieldPositionGroup::Defender if self.opponent_goals >= 3 => {
                 // Defenders share blame from the 3rd onward, smoothly.
+                // Softened (was sat(extra, 3.0) * 1.10): the prior
+                // calibration crushed a defender losing 0-3 to -0.31
+                // on top of the -0.15 loss penalty, dragging a routine
+                // shift on a bad day to sub-5.5. Real-football ratings
+                // for a defender in a 0-3 loss sit at 5.7-6.0; the
+                // softer curve preserves the order (4 GA worse than
+                // 3 GA worse than 0 GA) while pulling the floor up.
                 let extra = (self.opponent_goals as f32 - 2.0).max(0.0);
-                -sat(extra, 3.0) * 1.10
+                -sat(extra, 4.0) * 0.85
             }
             _ => 0.0,
         }

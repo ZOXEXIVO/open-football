@@ -218,6 +218,79 @@ impl StateProcessingHandler for ForwardRunningState {
             // every AI tick and accumulate 30-50 shots per match.
             let can_shoot_self = ctx.player().can_shoot();
             let can_shoot = can_shoot_team && can_shoot_self;
+
+            // ── Snapshot under heavy pressure ──────────────────────────
+            //
+            // A forward who has JUST received the ball (in_state_time <
+            // 6) inside the shooting zone with a defender right on them
+            // (within 8u) fires immediately — real football's "first-
+            // time shot" pattern. Without this, the forward enters the
+            // normal decision tree, applies first-touch + control
+            // settling + pass-EV deferral + willingness roll, and by the
+            // time those gates resolve the defender has tackled them out
+            // of the buildup. The audit data showed weak-side forwards
+            // reaching the final third 65×/match but only shooting ~5
+            // times — almost every chance died here.
+            //
+            // Tight gates (8u defender, 50u shooting zone, 6-tick
+            // window) keep the trigger asymmetric: a STRONG forward is
+            // rarely that close to a defender at the moment of reception
+            // (their team's structure protects them and they get the
+            // ball with space). A WEAK forward facing a strong defence
+            // gets a tight defender on every reception. The wider
+            // 12u/70u version fired equally for both sides and added
+            // strong-side shots; this 8u/50u tightening keeps the
+            // benefit asymmetric.
+            //
+            // The snapshot routes through Shooting state's existing
+            // physics (tagged `FWD_SNAPSHOT_PRESSED`). Error scaling,
+            // body-control penalty, and GK reach all still apply — so a
+            // weak striker firing a rushed snapshot still misses the
+            // target more often than not. The contribution is per-shot
+            // VOLUME, not per-shot quality.
+            if can_shoot
+                && ctx.in_state_time < 8
+                && distance_to_goal < 60.0
+            {
+                // Asymmetric snapshot gate: the forward only fires
+                // instinctively when they KNOW they can't out-touch the
+                // defender — i.e. the nearest opposing tackler's skill
+                // is higher than their own first-touch. A skilled
+                // forward (first_touch > defender's tackling) trusts
+                // their control and takes the time to set up the chance;
+                // a weaker forward facing a strong defender snapshots
+                // before the inevitable tackle. This is the canonical
+                // real-football skill calculus and keeps the trigger
+                // calibration-neutral at equal skill (same skill on both
+                // sides → snapshot rarely fires) while asymmetrically
+                // unlocking shots for weak teams against strong
+                // defenders.
+                //
+                // A "desperate snapshot" variant (looser gates when
+                // losing by ≥2 goals) was tried and reverted: it added
+                // shot VOLUME but tanked per-shot xG so badly (0.066 →
+                // 0.055) that net goals dropped. The desperate strikes
+                // also burned the can_shoot cooldown, blocking better
+                // chances later in the possession. Quality of opportunity
+                // matters more than quantity for low-skill teams.
+                let nearest_threat = ctx
+                    .players()
+                    .opponents()
+                    .nearby_raw(10.0)
+                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
+                    .map(|(id, _)| id);
+                if let Some(threat_id) = nearest_threat {
+                    let defender_tackling = ctx.player().skills(threat_id).technical.tackling;
+                    let attacker_first_touch =
+                        ctx.player.skills.technical.first_touch;
+                    if attacker_first_touch < defender_tackling - 1.0 {
+                        return Some(
+                            StateChangeResult::with_forward_state(ForwardState::Shooting)
+                                .with_shot_reason("FWD_SNAPSHOT_PRESSED"),
+                        );
+                    }
+                }
+            }
             let gm_intensity = ctx.team().game_management_intensity();
             // Treat "we're protecting a result" as a possession preference:
             // same mechanic the coach uses via WasteTime / ParkTheBus, now

@@ -115,9 +115,32 @@ impl<'a> RatingContext<'a> {
             }
 
             let big_def = zone_impact + (s.saves as u32) / 2;
+            // Routine defensive footprint — the workhorse signal. A CB
+            // / fullback / DM who put in 3+ honest defensive actions
+            // (tackles + interceptions + blocks + clearances + won
+            // pressures) is doing the job and shouldn't collapse to
+            // Passenger just because the engine didn't happen to emit a
+            // box-zone tag or a cross-completion event for them.
+            let routine_def =
+                (s.tackles + s.interceptions + s.blocks + s.clearances + s.successful_pressures)
+                    as u32;
+            // High-volume accurate passing — the midfielder recycler
+            // signal. A DM who turned over 30+ completed passes at
+            // 75%+ accuracy did real work even without progressing the
+            // ball or creating a chance.
+            let pct = if s.passes_attempted > 0 {
+                s.passes_completed as f32 / s.passes_attempted as f32
+            } else {
+                0.0
+            };
+            let high_pass_volume = s.passes_completed >= 30 && pct >= 0.75;
+            let big_pass_volume = s.passes_completed >= 50 && pct >= 0.80;
+
             if zone_impact >= 2
                 || creative_strong >= 2
                 || big_def >= 3
+                || routine_def >= 7
+                || big_pass_volume
                 || s.crosses_completed >= 3
                 || (s.key_passes + s.passes_into_box) >= 4
             {
@@ -128,7 +151,12 @@ impl<'a> RatingContext<'a> {
                 + s.successful_dribbles
                 + s.crosses_completed
                 + s.shots_on_target) as u32;
-            if zone_impact >= 1 || creative_decisive >= 1 || creative_any >= 3 {
+            if zone_impact >= 1
+                || routine_def >= 3
+                || high_pass_volume
+                || creative_decisive >= 1
+                || creative_any >= 3
+            {
                 return EvidenceTier::Modest;
             }
             return EvidenceTier::Passenger;
@@ -156,34 +184,37 @@ impl<'a> RatingContext<'a> {
             EvidenceTier::QuietCameo => soft_cap(positive_delta, 0.7, 0.25),
             EvidenceTier::Strong => soft_cap(positive_delta, 1.3, 0.40),
             EvidenceTier::Modest => {
-                // Forwards in the Modest tier cap tighter: a goalless
-                // forward whose footprint hits the modest gate (1 SOT
-                // or 2 KP/PB or 2 dribbles or xG≥0.4) should not stack
-                // routine positives all the way to +0.95, or season
-                // averages drift to ~6.9 over 20 games of no-G/A
-                // routine work. Non-forwards keep the original cap so
-                // a destroyer midfielder's defensive line still rates
-                // above 7.0 when warranted.
-                let cap = if self.pos == PlayerFieldPositionGroup::Forward {
-                    0.65
-                } else {
-                    0.95
-                };
-                soft_cap(positive_delta, cap, 0.30)
+                // Unified Modest cap at 0.95 for all outfield positions
+                // (was forward-specific 0.80 → 0.65 → 0.80). The
+                // forward-specific tighter cap was added to prevent
+                // goalless forwards from drifting to 6.9+ season
+                // averages; but the soft_cap slope 0.30 above the cap
+                // already provides natural compression, and the broader
+                // forward over-tightening of the prior round (ARE +
+                // wasted-xG + context damping) is what was actually
+                // doing that work. Restoring 0.95 lets an active
+                // goalless forward's busy routine line register, while
+                // ARE still drags the rating below the good band.
+                soft_cap(positive_delta, 0.95, 0.30)
             }
             // Tightened: passenger routine volume alone is severely
             // bounded. The engagement penalty + context damping handle
             // the rest of the "showed up, did nothing" signal.
             EvidenceTier::Passenger => soft_cap(positive_delta, 0.20, 0.15),
             EvidenceTier::AnonymousStarter => soft_cap(positive_delta, 1.1, 0.25),
-            // GK caps tightened: the engine emits 0.5 conceded/game and
-            // 60% CS rates outside the elite leagues, which combined with
-            // a +1.05 GkModest cap and the unconditional clean-sheet
-            // bonus piled second-tier keepers into a 7.2-7.4 season-avg
-            // band that should be reserved for genuinely elite GKs.
-            EvidenceTier::GkBusy => soft_cap(positive_delta, 1.30, 0.35),
-            EvidenceTier::GkModest => soft_cap(positive_delta, 0.75, 0.30),
-            EvidenceTier::GkPassenger => soft_cap(positive_delta, 0.50, 0.20),
+            // GK caps: previous tightening (0.75 / 1.30 / 0.50) was
+            // calibrated against synthetic 7.x averages but went too
+            // far — the engine emits modest shot volume so most TOP-GK
+            // shifts land in GkModest, and combined with the halved
+            // GkPassenger context factor a Maignan / Courtois /
+            // Unai Simón quality keeper averaged ~6.3 over a season
+            // (well below the WhoScored 6.8-7.0 reference band).
+            // Caps lifted back toward an honest "did the job" ceiling
+            // while keeping the second-tier-keeper guard from the
+            // 2026-04 calibration pass.
+            EvidenceTier::GkBusy => soft_cap(positive_delta, 1.45, 0.35),
+            EvidenceTier::GkModest => soft_cap(positive_delta, 0.92, 0.30),
+            EvidenceTier::GkPassenger => soft_cap(positive_delta, 0.62, 0.20),
             EvidenceTier::Uncapped => positive_delta,
         }
     }
@@ -201,10 +232,17 @@ impl<'a> RatingContext<'a> {
     /// (positive context only) — being on the losing side still
     /// hits a goalless forward at full strength.
     pub(super) fn context_credit_factor(&self, tier: EvidenceTier) -> f32 {
-        let base = match tier {
-            EvidenceTier::Passenger
-            | EvidenceTier::AnonymousStarter
-            | EvidenceTier::GkPassenger => 0.50,
+        let base: f32 = match tier {
+            EvidenceTier::Passenger | EvidenceTier::AnonymousStarter => 0.50,
+            // Untested keeper is not "riding the wave" the way an
+            // outfield passenger is. A GK who organised the back four
+            // through a clean sheet — even without making a save —
+            // is doing the job. Halving their CS/result credit to 0.50
+            // double-penalised them on top of the +0.62 cap and pulled
+            // TOP-GK season averages into the 6.2–6.4 band. 0.80 keeps
+            // a meaningful "didn't make a single decisive intervention"
+            // discount without collapsing the rating.
+            EvidenceTier::GkPassenger => 0.80,
             _ => 1.0,
         };
         if self.pos == PlayerFieldPositionGroup::Forward
@@ -212,7 +250,15 @@ impl<'a> RatingContext<'a> {
             && self.stats.assists == 0
             && self.stats.minutes_played >= 30
         {
-            return base * 0.20;
+            // Cap the goalless-forward damping at 0.55 (lifted from
+            // 0.40 in 2026-06 round 5). The dev_match benchmark showed
+            // active goalless forwards in wins capped at 0.40 lost ~6%
+            // of the result-credit lift — combined with the multiple
+            // shot-side drags this pushed even busy non-converters
+            // below 6.0. The 0.55 cap still meaningfully discounts a
+            // goalless forward riding the team's win (no full credit)
+            // but lets the lift register.
+            return base.min(0.55);
         }
         base
     }
@@ -265,7 +311,14 @@ impl<'a> RatingContext<'a> {
         let floor = match self.pos {
             PlayerFieldPositionGroup::Defender => 0.40,
             PlayerFieldPositionGroup::Midfielder => 0.50,
-            PlayerFieldPositionGroup::Forward => 0.30,
+            // Forwards are exempt: the forward-specific
+            // `attacking_role_expectation` drag already captures the
+            // "anonymous shift" signal for a striker. Stacking the
+            // engagement penalty on top of ARE double-bit a goalless
+            // forward in a tough CL-away match, collapsing the rating
+            // to ~5.2-5.4. ARE alone scales the drag with the
+            // attacking footprint; that is the right primary signal.
+            PlayerFieldPositionGroup::Forward => return 0.0,
             _ => return 0.0,
         };
         if touches_per_min >= floor {

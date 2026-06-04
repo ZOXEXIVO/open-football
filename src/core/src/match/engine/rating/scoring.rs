@@ -28,10 +28,18 @@ impl<'a> RatingContext<'a> {
             return 0.0;
         }
         // sat(1, 1.6) ≈ 0.46; sat(2) ≈ 0.71; sat(3) ≈ 0.85.
-        let goal_raw = sat(g, 1.6) * 2.55;
+        // Coefficient lifted 2.55 → 2.80 in 2026-06 (round 3): observed
+        // forwards in main teams were posting season averages of 6.15
+        // despite 5g/8 apps with 25 SoT — the goal-event lift wasn't
+        // enough to balance the goalless-match drag over a season. A
+        // +0.12 per single-goal match lifts the 11g/13ap test from 6.95
+        // to 7.05 and the 5g/8ap shape from ~6.8 to ~6.92, in line with
+        // the real-football reference 7.0+ for high-volume scorers.
+        let goal_raw = sat(g, 1.6) * 2.80;
         // Assists ≈ 55% of a goal — decisive but not as decisive as
-        // putting it in.
-        let assist_raw = sat(a, 1.6) * 1.40;
+        // putting it in. Lifted 1.40 → 1.55 in tandem for the same
+        // reason (assist-match rating proportional to goal-match).
+        let assist_raw = sat(a, 1.6) * 1.55;
         let raw = goal_raw + assist_raw;
 
         // Clinical-finisher bonus: goals beyond xG → premium for
@@ -67,8 +75,17 @@ impl<'a> RatingContext<'a> {
 
         let is_forward = self.pos == PlayerFieldPositionGroup::Forward;
 
-        let xg_value = sat(s.xg, 1.8) * 0.30;
-        let sot_value = sat(s.shots_on_target as f32, 2.5) * 0.22;
+        // xG credit lifted 0.30 → 0.38 — chance creation is the active
+        // forward's secondary positive signal when goals don't come;
+        // dev_match showed even high-xG goalless forwards crushed by
+        // the multiple drag lanes.
+        let xg_value = sat(s.xg, 1.8) * 0.38;
+        // SoT credit lifted 0.22 → 0.28 → 0.34 — putting a shot on
+        // target IS the headline forward action even without scoring;
+        // dev_match goalless p90 was only 6.18 even for active 2-3 SOT
+        // forwards. The wasted-xg / shot-spam drags now bite less, so
+        // lifting the *positive* shooting signal balances the equation.
+        let sot_value = sat(s.shots_on_target as f32, 2.5) * 0.34;
         let mut shooting = xg_value + sot_value;
 
         // Wasted high xG: created premium chances, scored nothing.
@@ -77,8 +94,18 @@ impl<'a> RatingContext<'a> {
         // forward shift. Other positions: a stray 0.6+ xG miss still
         // drags, but proportionally to how unusual it is.
         if s.goals == 0 {
+            // Forward threshold 0.75, coef 0.35 — final calibration
+            // (was 0.40/0.90 → 0.55/0.70 → 0.55/0.50 → 0.75/0.35). The
+            // dev_match 200-match benchmark showed forwards' goalless
+            // tier at 5.65 average vs the 6.2 real-football reference;
+            // the wasted-xG drag in shooting was firing for ~half of
+            // goalless matches at any xg > 0.55. Reserve this drag for
+            // genuine sitter-miss shifts (xg > 0.75 unconverted) and
+            // keep the coef in line with the non-forward 0.55 so a
+            // single bad finishing match doesn't double-bite via this
+            // *and* the ARE wasted lane.
             let (threshold, coef) = if is_forward {
-                (0.40, 0.90)
+                (0.75, 0.35)
             } else {
                 (0.60, 0.55)
             };
@@ -93,26 +120,26 @@ impl<'a> RatingContext<'a> {
             shooting += signed_sat(accuracy - 0.40, 0.30) * 0.08;
         }
 
-        // Shot spam: a busier threshold (≥ 3 shots, was 5) and a heavier
-        // per-event drag so a wasteful low-skill finisher who keeps
-        // launching speculative attempts is visibly penalised. A genuine
-        // creator hitting target with 3+ SOT recovers most of this via
-        // the SOT credit above.
+        // Shot spam: a wasteful low-skill finisher who keeps launching
+        // speculative attempts gets a visible drag. Coefficients
+        // softened in 2026-06 round 5 after the dev_match benchmark
+        // showed forward goalless tier at 5.65 — the shot-spam +
+        // no-SoT spam + wasted-xG triplet was double/triple-biting on
+        // the same bad-finishing forward.
         if s.shots_total >= 3 {
             let xg_per_shot = s.xg / s.shots_total as f32;
             if xg_per_shot < 0.10 {
-                let spam_coef = if is_forward { 0.60 } else { 0.45 };
+                let spam_coef = if is_forward { 0.40 } else { 0.30 };
                 shooting -= sat(s.shots_total as f32 - 2.0, 4.0) * spam_coef;
             }
         }
 
         // No-goal, no-SOT spammer: drag scales with raw shot volume
-        // even when xG is small — a low-skill forward hammering
-        // speculative off-target attempts looks busy on `shots_total`
-        // but produced nothing the keeper had to deal with. Heavier on
-        // forwards.
+        // even when xG is small. Forward coef cut 0.50 → 0.30 — it
+        // was contributing ~-0.14 to -0.25 to goalless forwards with
+        // 2-3 missed shots, stacking with the shot-spam block above.
         if s.goals == 0 && s.shots_on_target == 0 && s.shots_total >= 2 {
-            let nosot_coef = if is_forward { 0.50 } else { 0.30 };
+            let nosot_coef = if is_forward { 0.30 } else { 0.25 };
             shooting -= sat(s.shots_total as f32 - 1.0, 3.0) * nosot_coef;
         }
 
@@ -146,9 +173,17 @@ impl<'a> RatingContext<'a> {
         let box_entries = sat(s.passes_into_box as f32 + z.carries_into_box as f32, 5.0) * 0.30;
 
         // Cross output: completed crosses help, failed crosses drag.
+        // Failed-cross penalty softened (was sat(failed, 5.0) * 0.22):
+        // a routine fullback attempts 3-5 crosses per match and
+        // completes 1-2 (real-football reference: ~25% completion).
+        // The prior coefficient hit them with -0.07 to -0.14 routine
+        // drag for normal workload, contributing to the Cambiaso 6.20
+        // average. The gentler curve still drags a player who can't
+        // hit a cross to save their life, but absorbs ordinary fullback
+        // crossing volume.
         let cross_credit = sat(s.crosses_completed as f32, 3.5) * 0.13;
         let cross_failed = s.crosses_attempted.saturating_sub(s.crosses_completed) as f32;
-        let cross_penalty = sat(cross_failed, 5.0) * 0.22;
+        let cross_penalty = sat(cross_failed, 10.0) * 0.10;
 
         // xG buildup — chains the player participated in that ended
         // in a shot. Clean "made the chance happen" signal.
@@ -328,20 +363,25 @@ impl<'a> RatingContext<'a> {
         // direct threat.
         let footprint = threat + creative * 0.7;
 
-        // Penalty saturates around footprint = 4.5 (e.g. ≥2 SOT + real
-        // xG + a busy creative line). Below that, the gap drives the
-        // penalty. Threshold raised + coefficient lifted so a moderate
-        // creative/shooting line without a goal contribution still
-        // reads as "didn't deliver on the primary role" — the previous
-        // calibration let near-Strong-tier forwards escape the drag at
-        // footprint ≥ 3 and inflated 20-match season averages to ~6.9.
-        let shortfall = (4.5 - footprint).max(0.0);
-        let lack_penalty = -sat(shortfall, 4.0) * 0.80;
+        // Final calibration anchored to .dev/match 200-match benchmark.
+        // The 2.0 threshold from prior round only lifted goalless mean
+        // by +0.09 (5.65 → 5.74); the dominant drag was the *stack*
+        // of ARE + shot-spam + no-SoT spam + wasted-xG. Threshold cut
+        // to 1.0 so any forward with even one SoT or 0.3 xG clears the
+        // gate completely; ARE only fires for genuinely zero-footprint
+        // shifts. Coef cut 0.30 → 0.20 so the residual drag is gentle.
+        // Saturation scale 3.0 → 2.0 keeps the bottom of the curve in
+        // line for footprint=0 (still −0.16).
+        let shortfall = (1.0 - footprint).max(0.0);
+        let lack_penalty = -sat(shortfall, 2.0) * 0.20;
 
-        // Wasted big-chance drag: scored 0 from xG > 0.7 worth of
-        // chances. The classic missed-sitter forward shift.
-        let wasted = if xg > 0.7 {
-            -sat(xg - 0.7, 1.2) * 0.45
+        // Wasted big-chance drag (ARE lane, separate from shooting()).
+        // Threshold 0.8, coef cut 0.30 → 0.20 — the 200-match benchmark
+        // showed even this minor lane stacking with the shooting()
+        // wasted-xG drag on the same xg signal. Reserve this for
+        // 1.0+ xG unconverted (clear sitter case).
+        let wasted = if xg > 0.8 {
+            -sat(xg - 0.8, 1.2) * 0.20
         } else {
             0.0
         };

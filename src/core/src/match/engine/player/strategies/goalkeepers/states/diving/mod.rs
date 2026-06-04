@@ -164,7 +164,17 @@ impl GoalkeeperDivingState {
             + prof.poor_skill_penalty * 0.10)
             .clamp(0.0, 1.0);
 
-        let catch_prob = prof.catch_probability(catch_difficulty);
+        let mut catch_prob = prof.catch_probability(catch_difficulty);
+        // Deflection damping — match the `catching/mod.rs` path. A GK
+        // mid-dive after a deflection has committed to the original
+        // line; the redirected ball arrives on a trajectory their
+        // outstretched arm wasn't shaped for. ~50% reduction matches
+        // real PL's deflected-goal share.
+        if let Some(t) = &ctx.tick_context.ball.cached_shot_target {
+            if t.deflected {
+                catch_prob *= 0.50;
+            }
+        }
         ctx.context.rng.unit_f32() < catch_prob
     }
 

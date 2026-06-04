@@ -534,13 +534,26 @@ impl DefenderSkillProfile {
     /// Press boost multiplier on closing speed.
     #[inline]
     pub fn press_boost(&self) -> f32 {
-        (1.05 + self.press_profile * 0.55).clamp(1.05, 1.70)
+        // Skill-driven swing trimmed 0.55 → 0.35 because the steeper curve
+        // gave strong defenders a 30%+ closing-speed advantage over weak
+        // ones (1.16 → 1.51). Real elite-vs-poor defenders aren't that
+        // far apart in raw closing speed — the gap lives more in
+        // anticipation/positioning (which the gate functions already
+        // model) than in straight-line pace. The trimmed curve keeps the
+        // floor (1.10) above slow-jog territory while capping the
+        // ceiling (1.45) so weak attackers carrying into the final third
+        // get realistic milliseconds to make a decision before contact.
+        (1.10 + self.press_profile * 0.35).clamp(1.10, 1.45)
     }
 
     /// Tackling closing-speed boost (tackle_profile + press_profile).
     #[inline]
     pub fn tackle_speed_boost(&self) -> f32 {
-        1.05 + self.press_profile * 0.35 + self.tackle_profile * 0.20
+        // Differential trimmed 0.35/0.20 → 0.22/0.13 — same reasoning as
+        // `press_boost`. Strong defenders still close faster, but the
+        // gap doesn't compound into the strong-defender-always-catches
+        // dynamic at extreme skill mismatches.
+        1.05 + self.press_profile * 0.22 + self.tackle_profile * 0.13
     }
 }
 

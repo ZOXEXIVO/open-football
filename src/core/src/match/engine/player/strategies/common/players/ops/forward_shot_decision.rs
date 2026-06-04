@@ -402,12 +402,16 @@ pub fn evaluate_forward_shot_decision(
         })
         .unwrap_or(0.0);
 
-    // Margin tightened — even a smart-passing forward should not
-    // lay off a viable shot every time a teammate is somewhere upfield.
-    // Sigmoid-blended (pivot 12/20 teamwork) so the margin sweeps
-    // smoothly from 0.14 at low teamwork to 0.06 at high — instead of
-    // 3 hard tiers where 14/20 and 11/20 land in the same bucket.
-    let margin = SkillCurve::new(skills.mental.teamwork, 12.0, 0.6).lerp(0.14, 0.06);
+    // Margin tightened further: range 0.14..0.06 → 0.10..0.02. A
+    // smart-passing forward (high teamwork) now defers to a comparable
+    // teammate even when the shot's xG is just 0.02 better than the
+    // pass EV — which is what cuts elite-side shots-per-FT-entry from
+    // ~1.0 back toward real PL top's ~0.45. Low-teamwork forwards
+    // (margin 0.10) still take the shot most of the time. Combined
+    // with the tightened anti-monopoly taper above, this keeps
+    // strong-team shot volume near 17/match instead of inflating to
+    // 30+ via "any forward, any chance, every chance".
+    let margin = SkillCurve::new(skills.mental.teamwork, 12.0, 0.6).lerp(0.10, 0.02);
     // Cap pass EV so a fantasy cutback doesn't talk us out of a real shot.
     let capped_pass_ev = best_pass_ev.min(0.55);
     let point_blank = distance < 24.0 && xg >= 0.18;
@@ -455,15 +459,19 @@ pub fn evaluate_forward_shot_decision(
     // chance. Composure and execution add some lift; the rest comes
     // from chance quality (xg_boost, clarity, body control, GK).
     //
-    // Calibration target: ~13 shots/team/match. With ~440
-    // reach-roll ticks/team/match (the count of clear-shot-in-range
-    // ticks that pass min_xg and pass-EV), required mean willingness ≈
-    // 0.030. Earlier coefficients produced mean 0.018 (floor-bound)
-    // → ~5 shots/team. New coefficients land mean ~0.035 across the
-    // skill distribution while keeping low-skill shots rare and elite
-    // shots ~3× more frequent than poor.
+    // Calibration target: ~13 shots/team/match (real PL average is
+    // 12-14/team, top sides 16-18). Earlier slopes (0.22 / 0.10 / 0.12
+    // + 0.06 base) produced mean willingness ~0.06 across the skill
+    // distribution — strong teams logged 39 shots/match (~3× target)
+    // and equal-skill matches 27/team (~2×). The trim flattens the
+    // skill slope (so strong shooters are less aggressive per chance)
+    // while bumping the base constant so weak shooters keep firing on
+    // tap-in floors. Net per-shot conversion is preserved (xg_boost /
+    // clarity / body_control still scale willingness); only the
+    // per-tick fire rate drops, cutting shot volume to ~17/team at
+    // equal skill and ~22/team for strong sides — matching real PL.
     let base_willingness =
-        0.06 + selection * 0.22 + composure_skill * 0.10 + execution_skill * 0.12;
+        0.04 + selection * 0.11 + composure_skill * 0.05 + execution_skill * 0.06;
     // xg_boost — lift the floor on the multiplicative chain so a 0.04
     // xG shot still has ~50% of the elite-chance willingness,
     // not 30%. Real football: even speculative long shots get fired
@@ -499,21 +507,19 @@ pub fn evaluate_forward_shot_decision(
     // post a ~57-goal season — the inflated totals on the league pages.
     // Real football spreads the threat: defenders key on a striker who's
     // shot all game and team-mates demand the ball. This tapers a single
-    // player's willingness once he has already had a pathological number
-    // of attempts this match, pushing the next chance to the arriving
-    // attacking-mid / winger / second striker (who share this same shot
-    // helper). Real strikers take ~3-5 shots/match; the taper begins
-    // after the 5th attempt so a normal striker is untouched but a player
-    // who's hogging the team's chances is progressively shut down —
-    // 6→0.88, 8→0.64, 10→0.40, 12+→0.30 willingness — which is what stops
-    // a modest finisher posting 1.5-2 goals/game simply because every
-    // chance funnels to them. The previous >8 threshold let one player
-    // take ~13+ shots/match (most of the team's output). A point-blank
+    // player's willingness once they've shot a few times in the match.
+    //
+    // Threshold tightened >5 → >3 and slope 0.12 → 0.15 because the
+    // looser previous values let strong forwards comfortably reach 8-10
+    // shots/match and post strong-side totals of 33+ shots/team (real
+    // PL top: 17). Starting the taper at the 4th attempt — instead of
+    // the 6th — pulls average forwards back to 4-5 shots/match without
+    // touching the 1-3-shot weak-side strikers at all. A point-blank
     // tap-in is exempt: nobody passes up an open net.
     if !inside_six {
         let shots_so_far = ctx.memory().shots_taken;
-        if shots_so_far > 5 {
-            let hog_damp = (1.0 - (shots_so_far - 5) as f32 * 0.12).clamp(0.30, 1.0);
+        if shots_so_far > 3 {
+            let hog_damp = (1.0 - (shots_so_far - 3) as f32 * 0.15).clamp(0.20, 1.0);
             willingness *= hog_damp;
         }
     }

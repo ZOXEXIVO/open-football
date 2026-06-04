@@ -28,6 +28,27 @@ impl StateProcessingHandler for DefenderRunningState {
         }
 
         if ctx.player.has_ball(ctx) {
+            // Counter-attack outlet (see `defenders/states/passing/mod.rs`
+            // for the rationale). Defenders frequently fire passes from
+            // the Running state on the first tick after winning the ball
+            // — long before they're allowed to transition into Passing
+            // state — so the same opportunity check has to live here
+            // too, or counters that fire here would be missed and the
+            // defender would end up recycling backwards via the buildup
+            // branches further down.
+            if let Some(target) = Self::find_counter_attack_target(ctx) {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target.id)
+                            .with_reason("DEF_COUNTER_ATTACK")
+                            .build(ctx),
+                    )),
+                ));
+            }
+
             let coach = ctx.team().coach_instruction();
 
             // COACH INSTRUCTION: When told to waste time or slow down,
@@ -398,6 +419,70 @@ impl StateProcessingHandler for DefenderRunningState {
 }
 
 impl DefenderRunningState {
+    /// Counter-attack outlet — same gates as `DefenderPassingState`.
+    /// Returns the long-ball target when (a) we won possession recently,
+    /// (b) the opposition over-committed forward, and (c) a teammate is
+    /// already in the opposition half. See `passing/mod.rs` for the
+    /// rationale and exact gate values.
+    fn find_counter_attack_target(ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        let ownership_duration = ctx.tick_context.ball.ownership_duration;
+        if ownership_duration > 100 {
+            return None;
+        }
+        let side = ctx.player.side?;
+        let field_w = ctx.context.field_size.width as f32;
+        let halfway_x = field_w * 0.5;
+        let opponents_in_our_half = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|opp| match side {
+                PlayerSide::Left => opp.position.x < halfway_x,
+                PlayerSide::Right => opp.position.x > halfway_x,
+            })
+            .count();
+        if opponents_in_our_half < 5 {
+            return None;
+        }
+        let target = ctx.players().teammates().nearby_to_opponent_goal()?;
+        let target_in_opp_half = match side {
+            PlayerSide::Left => target.position.x > halfway_x,
+            PlayerSide::Right => target.position.x < halfway_x,
+        };
+        if !target_in_opp_half {
+            return None;
+        }
+        let pass_distance = (target.position - ctx.player.position).magnitude();
+        if !(50.0..=350.0).contains(&pass_distance) {
+            return None;
+        }
+        // Lane-clearness gate — at most one opponent within 14u of the
+        // lane. See `defenders/states/passing/mod.rs` for the
+        // rationale; without this the counter outlet sprays passes
+        // through congested midfield.
+        let to_target = target.position - ctx.player.position;
+        let target_dir = to_target.normalize();
+        let lane_length = to_target.magnitude();
+        let opponents_in_lane = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|opp| {
+                let rel = opp.position - ctx.player.position;
+                let along = rel.dot(&target_dir);
+                if along < 5.0 || along > lane_length - 5.0 {
+                    return false;
+                }
+                let proj = ctx.player.position + target_dir * along;
+                (opp.position - proj).magnitude() < 14.0
+            })
+            .count();
+        if opponents_in_lane > 1 {
+            return None;
+        }
+        Some(target)
+    }
+
     /// Phase-first dispatch for defenders. Defenders hold shape most
     /// of the time — the big wins from phase awareness are "do we
     /// hold a line, drop into a low block, or push up".

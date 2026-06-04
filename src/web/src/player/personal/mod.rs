@@ -452,7 +452,7 @@ fn get_player_info(player: &Player, i18n: &I18n) -> PlayerInfoDto {
         .collect();
 
     PlayerInfoDto {
-        birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
+        birth_date: i18n.format_date(player.birth_date),
         preferred_foot: preferred_foot.to_string(),
         leadership,
         determination,

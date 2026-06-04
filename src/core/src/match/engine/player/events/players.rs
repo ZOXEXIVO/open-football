@@ -1559,6 +1559,16 @@ impl PlayerEventDispatcher {
             let crossing_shortfall = (1.0 - skills.crossing).clamp(0.0, 1.0);
             let cross_multiplier = 1.0 + crossing_shortfall.powf(1.2) * 1.2;
             base_max_position_error * cross_multiplier
+        } else if event_model.reason == "DEF_COUNTER_ATTACK" {
+            // Counter-attack outlet: the passer just won the ball and
+            // had a clear moment to look up. Real football's "the
+            // unpressed long ball" is a high-completion pass — the
+            // passer isn't being closed down because the opposition
+            // hasn't reorganised yet. Halve the targeting error so
+            // even a weak-skilled defender's outlet pass realistically
+            // reaches the forward. Without this boost the audit data
+            // showed counter passes producing more turnovers than goals.
+            base_max_position_error * 0.50
         } else {
             base_max_position_error
         };
@@ -2529,9 +2539,17 @@ impl PlayerEventDispatcher {
         } else {
             0.150
         };
+        // Skill-and-condition contributions trimmed (0.07/0.05 → 0.05/0.03)
+        // because they compound with `random_error_scale`, `over_bar_chance`,
+        // and `miskick_probability` against the same weak shooter — when
+        // stacked, the lvl-6 outfield was wide-missing >35% of its shots
+        // vs the lvl-18 reference's ~12%, which was crushing the upset
+        // tail to zero (see audit_engine_gap). Elite shooters are
+        // unaffected: at execution_skill ≥ 0.55, `(1 - exec)` < 0.45 and
+        // `poor_penalty` is already zero.
         let wide_miss_chance = wide_base
-            + (1.0 - execution_skill) * 0.07
-            + poor_penalty * 0.05
+            + (1.0 - execution_skill) * 0.05
+            + poor_penalty * 0.03
             + pressure_penalty * 0.04
             + low_condition_penalty * 0.03;
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
@@ -2548,6 +2566,104 @@ impl PlayerEventDispatcher {
         // than a single technique^3 read.
         if rng.random_range(0.0f32..1.0) < miskick_probability {
             actual_y_target += rng.random_range(-GOAL_WIDTH * 1.5..GOAL_WIDTH * 1.5);
+        }
+
+        // ── Deflection on the way to goal ───────────────────────────────
+        //
+        // Real Opta data: 3-5% of all Premier League goals come from
+        // shots that took a deflection off a defender or attacker. The
+        // engine had no representation of this — every off-target shot
+        // sailed cleanly into the stands. Without a stochastic floor,
+        // weak teams at extreme skill gaps never beat strong GKs because
+        // their own poor placement crushed every shot's threat.
+        //
+        // Model: only OFF-TARGET shots are deflection candidates. If a
+        // defender is roughly in the lane between shooter and goal,
+        // there's a per-defender chance the shot ricochets back inside
+        // the goal frame. Aim is biased toward corners (a deflection
+        // off a leg / hip doesn't fall back to the centre of the goal —
+        // that's where the keeper was already set).
+        //
+        // The deflected flag is forwarded into `cached_shot_target` so
+        // the GK's save probability damps appropriately — without that,
+        // the deflection actively HURT weak teams (it redirected a
+        // would-be-wide shot to on-target where the GK then saved it).
+        let was_offtarget =
+            actual_y_target < goal_left_post || actual_y_target > goal_right_post;
+        let goal_dir = (goal_center - shooter_position).normalize();
+        let shot_lane_distance = (goal_center - shooter_position).magnitude();
+        let mut defenders_in_lane: u32 = 0;
+        if was_offtarget && shot_lane_distance > 10.0 {
+            if let Some(side) = shooter_side {
+                for other in field.players.iter() {
+                    if other.id == shoot_event_model.from_player_id {
+                        continue;
+                    }
+                    if other.side == Some(side) {
+                        continue;
+                    }
+                    let to_other = other.position - shooter_position;
+                    let along = to_other.dot(&goal_dir);
+                    if along < 3.0 || along > shot_lane_distance - 3.0 {
+                        continue;
+                    }
+                    let proj = shooter_position + goal_dir * along;
+                    let perp = (other.position - proj).magnitude();
+                    // Lane half-width 12u (~1.5m) — defenders within
+                    // sliding / outstretched-leg / chest-block range of
+                    // the shot path. Tightening below this and the
+                    // deflection rate collapsed because defenders rarely
+                    // stand RIGHT in the shot line — they're a couple of
+                    // metres either side.
+                    if perp < 12.0 {
+                        defenders_in_lane += 1;
+                    }
+                }
+            }
+        }
+        // Per-defender 4% chance, capped at 14% total. Sized so the
+        // per-shot deflection rate on off-target shots in a crowded box
+        // is ~10-14% — matching real PL's deflected-goal share.
+        // Per-defender chance scaled so a crowded box (3-4 defenders in
+        // the shot lane) reaches a ~12-14% deflection rate. Real Opta
+        // shot-block / deflection data sits in that band. Solo shots
+        // from outside the box rarely deflect (no body to clip).
+        //
+        // Set-piece bonus: shots originating from a corner / direct FK
+        // arrive into a crowded box where the keeper's sight is
+        // partially obstructed and bodies are everywhere — the chaos
+        // factor that drives real football's "shock corner goal" upset
+        // narrative. Bumps the deflection ceiling by 0.12 so set-piece
+        // off-target attempts have a meaningful chance of redirecting
+        // past the keeper.
+        let is_set_piece = matches!(
+            field.ball.pass_origin_restart,
+            PassOriginRestart::Corner | PassOriginRestart::DirectFreeKick
+        );
+        let setpiece_bonus = if is_set_piece { 0.12 } else { 0.0 };
+        let deflection_chance =
+            (defenders_in_lane as f32 * 0.04 + setpiece_bonus).min(0.26);
+        let deflected = was_offtarget && rng.random_range(0.0f32..1.0) < deflection_chance;
+        // Save the pre-deflection trajectory: when a deflection fires, the
+        // GK shouldn't track the new trajectory in mid-flight — real
+        // deflections happen close to arrival and the keeper has already
+        // committed to the original line. We keep `original_y_target` for
+        // building the GK's cached intercept point further down so they
+        // sprint toward the off-target path while the ball arcs into the
+        // corner. Without this the GK would just reposition mid-flight
+        // and reach the deflected target with no penalty.
+        let original_y_target = actual_y_target;
+        if deflected {
+            // Bias to the FAR corner (|offset| 0.78..0.97 of goal half-
+            // width = 22.6u..28.1u from centre). Beyond the strong
+            // keeper's lateral reach (~19u) but inside the 29u post.
+            let side_sign: f32 = if rng.random_range(0.0f32..1.0) < 0.5 {
+                -1.0
+            } else {
+                1.0
+            };
+            let corner_offset = rng.random_range(0.78f32..0.97);
+            actual_y_target = goal_center.y + side_sign * corner_offset * GOAL_WIDTH;
         }
 
         // Clamp to reasonable bounds — allow shots to miss by up to 3x goal width
@@ -2628,9 +2744,15 @@ impl PlayerEventDispatcher {
         } else {
             0.080
         };
+        // Skill contributions trimmed (0.04 / 0.04 → 0.025 / 0.025) — same
+        // logic as `wide_miss_chance` above: the over-bar term compounds
+        // with miskick and random-error sources against weak shooters and
+        // was pushing the low-level outfield's on-target rate well below
+        // real Opta's 33% baseline. Strong shooters (technique_curve ≥
+        // 0.55, poor_penalty = 0) are unaffected.
         let over_bar_chance = over_bar_base
-            + (1.0 - technique_curve).max(0.0) * 0.04
-            + poor_penalty * 0.04
+            + (1.0 - technique_curve).max(0.0) * 0.025
+            + poor_penalty * 0.025
             + low_condition_penalty * 0.03;
         let shot_goes_over_bar = rng.random_range(0.0f32..1.0) < over_bar_chance;
         let z_velocity = if shot_goes_over_bar {
@@ -2794,7 +2916,18 @@ impl PlayerEventDispatcher {
             // and the cache would mislead the keeper.
             if (dx > 0.0 && vx > 0.1) || (dx < 0.0 && vx < -0.1) {
                 let ticks_to_goal = (dx / vx).abs();
-                let goal_line_y = field.ball.position.y + final_velocity.y * ticks_to_goal;
+                let goal_line_y = if deflected {
+                    // GK reads the ORIGINAL trajectory until the
+                    // deflection happens; the redirect arrives after
+                    // they've committed to the line. By storing the
+                    // pre-deflection y here, the keeper's velocity()
+                    // arrives at the wrong spot and the actual ball
+                    // (which uses the deflected `final_velocity` below)
+                    // sails past into the far corner.
+                    original_y_target
+                } else {
+                    field.ball.position.y + final_velocity.y * ticks_to_goal
+                };
                 // Arc approximation: z under gravity (~0.157 u/tick² from
                 // update_velocity's 9.81 * 0.016 scaling).
                 let goal_line_z = (field.ball.position.z + final_velocity.z * ticks_to_goal
@@ -2804,6 +2937,7 @@ impl PlayerEventDispatcher {
                     goal_line_y,
                     goal_line_z,
                     defending_side,
+                    deflected,
                 });
             } else {
                 field.ball.cached_shot_target = None;

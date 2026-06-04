@@ -233,9 +233,15 @@ impl ShotSkillProfile {
             (1.15 - execution_skill * 0.85 + poor_penalty * 0.15).clamp(0.30, 1.50);
 
         // Miskick: dominated by poor_penalty + low technique. Pressure /
-        // condition push it up further.
+        // condition push it up further. Exponent 2.2 → 1.6 because the
+        // earlier curve made weak-technique miskicks balloon disproportionately
+        // (a technique_curve of 0.20 produced (0.80)^2.2 * 0.08 = 4.5% just
+        // from technique, stacking with poor_penalty / pressure / condition
+        // to push the realistic-weak shot population over 30% miskick rate).
+        // 1.6 keeps the soft-curve shape but lets weak players still strike
+        // cleanly often enough to convert tap-ins.
         let miskick_probability = (poor_penalty * 0.10
-            + (1.0 - technique_curve).max(0.0).powf(2.2) * 0.08
+            + (1.0 - technique_curve).max(0.0).powf(1.6) * 0.08
             + inputs.pressure_count_5u as f32 * 0.025
             + low_condition_penalty * 0.05)
             .clamp(0.0, 0.55);
@@ -301,9 +307,15 @@ impl ShotSkillProfile {
             xg = xg.min(0.055);
         }
         // Low-skill conversion cap — even on easy chances a 5/20 player
-        // can't post elite xG.
-        if self.execution_skill < 0.20 {
-            xg = xg.min(0.18);
+        // can't post elite xG. Tightened from `< 0.20 → cap 0.18` because
+        // that crushed tap-in conversion for whole-team lvl-6 outfields
+        // (audit_engine_gap lvl 6 vs lvl 18: 0.16 goals/match, real ~0.5).
+        // 0.30 still keeps a weak striker well below an elite's 0.55+ xG
+        // at penalty distance while permitting the occasional dogged-shock
+        // goal that real football preserves (~9% upset at gap-9+ vs the
+        // engine's prior 0%).
+        if self.execution_skill < 0.18 {
+            xg = xg.min(0.30);
         }
         xg.clamp(0.005, 0.82)
     }

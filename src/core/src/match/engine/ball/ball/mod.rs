@@ -334,6 +334,11 @@ pub struct ShotTarget {
     /// Goal the ball is heading for — left (x=0) or right (x=field_w).
     /// Used so the correct keeper reads the cache.
     pub defending_side: PlayerSide,
+    /// Set when the shot took a deflection off a body in the lane.
+    /// Catching/Diving states damp the save probability — the keeper
+    /// was set for the original trajectory and the redirected ball is
+    /// arriving on a new line they haven't committed to.
+    pub deflected: bool,
 }
 
 #[derive(Default, Clone)]

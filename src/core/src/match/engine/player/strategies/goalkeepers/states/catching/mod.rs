@@ -175,7 +175,18 @@ impl GoalkeeperCatchingState {
 
             // Per-shot save probability, then converted to per-tick.
             // Calibrated for ~3 ticks of approach during a save.
-            let save_prob = prof.save_probability(shot_difficulty);
+            let mut save_prob = prof.save_probability(shot_difficulty);
+            // Deflection damping: the GK was set for the original
+            // trajectory. A redirected shot arrives on a line they
+            // haven't committed to, so reaction window is shorter.
+            // Real PL data: deflected on-target shots produce ~30% goals
+            // vs ~10% for clean on-target shots — a ~3× boost to
+            // goal-per-shot, which we model as a ~0.50 multiplier to
+            // save_prob (keepers save the rest by reflex or blocked
+            // shot recovery).
+            if target.deflected {
+                save_prob *= 0.50;
+            }
             let per_tick = prof.per_tick_save(save_prob, 3.0);
             return ctx.context.rng.unit_f32() < per_tick;
         }

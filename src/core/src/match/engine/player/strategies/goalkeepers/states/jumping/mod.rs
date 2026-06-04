@@ -111,7 +111,13 @@ impl GoalkeeperJumpingState {
             + prof.poor_skill_penalty * 0.10)
             .clamp(0.0, 1.0);
 
-        let catch_prob = prof.catch_probability(catch_difficulty);
+        let mut catch_prob = prof.catch_probability(catch_difficulty);
+        // Deflection damping — match `catching/mod.rs` and `diving/mod.rs`.
+        if let Some(t) = &ctx.tick_context.ball.cached_shot_target {
+            if t.deflected {
+                catch_prob *= 0.50;
+            }
+        }
         ctx.context.rng.unit_f32() < catch_prob
     }
 
