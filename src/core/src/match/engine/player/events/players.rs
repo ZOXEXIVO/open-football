@@ -1564,11 +1564,16 @@ impl PlayerEventDispatcher {
             // had a clear moment to look up. Real football's "the
             // unpressed long ball" is a high-completion pass — the
             // passer isn't being closed down because the opposition
-            // hasn't reorganised yet. Halve the targeting error so
-            // even a weak-skilled defender's outlet pass realistically
-            // reaches the forward. Without this boost the audit data
-            // showed counter passes producing more turnovers than goals.
-            base_max_position_error * 0.50
+            // hasn't reorganised yet. Tightened 0.50 → 0.35 because
+            // the 0.50 multiplier still produced 30-40% turnover on
+            // long counter balls (the long-distance distance_error
+            // multiplied through), and the resulting failed counters
+            // burned weak team's possession faster than the safe-pass
+            // baseline they were replacing. A real counter-attack
+            // outlet completes ~75% of the time; 0.35 brings the
+            // engine closer to that band without crossing into elite-
+            // through-ball territory.
+            base_max_position_error * 0.35
         } else {
             base_max_position_error
         };

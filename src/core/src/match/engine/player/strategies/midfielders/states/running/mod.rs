@@ -87,6 +87,44 @@ impl StateProcessingHandler for MidfielderRunningState {
             let coach = ctx.team().coach_instruction();
             let can_shoot = ctx.team().can_shoot();
 
+            // ── Midfielder snapshot under pressure ─────────────────────
+            //
+            // Same asymmetric pattern as the forward snapshot in
+            // `forwarders/states/running/mod.rs`: a midfielder who just
+            // received the ball (in_state_time < 8) inside shooting
+            // range (< 60u) with a defender right on them (within 10u),
+            // AND whose first_touch is below the defender's tackling
+            // (by ≥0.5), fires immediately instead of going through
+            // the normal control + decision tree. Without this,
+            // arriving box-runners who would-be cut-back recipients
+            // get tackled before they can shoot — they're MIDfielders
+            // and have lower first-touch than dedicated forwards, so
+            // strong defenders out-touch them on virtually every
+            // reception. Adding the midfielder path lifts the
+            // weak-team scoring contribution from runners-into-the-
+            // box, which the forward-only path missed entirely.
+            //
+            // Calibration-neutral at equal skill: at first_touch =
+            // tackling, 11 < 10.5 is false, snapshot doesn't fire.
+            if can_shoot && ctx.in_state_time < 8 && distance_to_goal < 60.0 {
+                let nearest_threat = ctx
+                    .players()
+                    .opponents()
+                    .nearby_raw(10.0)
+                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
+                    .map(|(id, _)| id);
+                if let Some(threat_id) = nearest_threat {
+                    let defender_tackling = ctx.player().skills(threat_id).technical.tackling;
+                    let attacker_first_touch = ctx.player.skills.technical.first_touch;
+                    if attacker_first_touch < defender_tackling - 0.5 {
+                        return Some(
+                            StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                                .with_shot_reason("MID_SNAPSHOT_PRESSED"),
+                        );
+                    }
+                }
+            }
+
             // Emergency clearance: under heavy pressure in our own box.
             // Route to Passing so its emergency-clearance code path fires
             // (Passing already has `emit_emergency_clearance` gated on

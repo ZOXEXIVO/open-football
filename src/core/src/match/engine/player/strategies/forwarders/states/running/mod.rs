@@ -283,7 +283,15 @@ impl StateProcessingHandler for ForwardRunningState {
                     let defender_tackling = ctx.player().skills(threat_id).technical.tackling;
                     let attacker_first_touch =
                         ctx.player.skills.technical.first_touch;
-                    if attacker_first_touch < defender_tackling - 1.0 {
+                    // Buffer 1.0 → 0.5 — fires at SMALLER skill gaps
+                    // too. At equal skill (both ~11) the gate still
+                    // doesn't fire (11 < 10.5 is false), so calibration
+                    // remains neutral. But at gap 3-5 buckets (where
+                    // defender tackling exceeds attacker first_touch
+                    // by ~1) the gate now triggers, covering the
+                    // moderate-asymmetry case the original buffer
+                    // missed.
+                    if attacker_first_touch < defender_tackling - 0.5 {
                         return Some(
                             StateChangeResult::with_forward_state(ForwardState::Shooting)
                                 .with_shot_reason("FWD_SNAPSHOT_PRESSED"),
