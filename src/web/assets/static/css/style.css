@@ -4673,24 +4673,9 @@ a:active {
         0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
-.fm-info-tile-countries .fm-info-tile-icon {
-    background: linear-gradient(160deg, #2c4a66 0%, #213a52 100%);
-    border: 1px solid #3a5e80;
-    color: #7ab8e8;
-}
-
-.fm-info-tile-clubs .fm-info-tile-icon {
-    background: linear-gradient(160deg, #5a4628 0%, #3f3220 100%);
-    border: 1px solid #7a5e36;
-    color: #f0c870;
-}
-
-.fm-info-tile-players .fm-info-tile-icon {
-    background: linear-gradient(160deg, #2e5a40 0%, #234430 100%);
-    border: 1px solid #3e7252;
-    color: #84d8a4;
-}
-
+.fm-info-tile-countries .fm-info-tile-icon,
+.fm-info-tile-clubs .fm-info-tile-icon,
+.fm-info-tile-players .fm-info-tile-icon,
 .fm-info-tile-machine .fm-info-tile-icon {
     background: linear-gradient(160deg, #2a3a48 0%, #22303c 100%);
     border: 1px solid #38485a;
@@ -4743,8 +4728,8 @@ a:active {
     align-items: center;
     gap: 6px;
     padding: 6px 12px;
-    background: linear-gradient(160deg, #1f3a2c 0%, #16291f 100%);
-    border: 1px solid #2f6c4a;
+    background: linear-gradient(160deg, #00453eb8 0%, #10433e 100%);
+    border: 1px solid #165953;
     border-radius: 6px;
     text-decoration: none;
     transition:
@@ -4757,7 +4742,6 @@ a:active {
 }
 
 .fm-workers-chip:hover {
-    border-color: #57b07c;
     transform: translateY(-1px);
     box-shadow:
         0 1px 0 rgba(255, 255, 255, 0.08) inset,
@@ -4767,7 +4751,7 @@ a:active {
 .fm-workers-chip-count {
     font-size: 18px;
     font-weight: 700;
-    color: #5bd28a;
+    color: #01b6a4;
     font-variant-numeric: tabular-nums;
     line-height: 1;
     letter-spacing: -0.3px;
