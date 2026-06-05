@@ -1,7 +1,7 @@
 use crate::MatchTacticType;
 use crate::club::board::BoardManagerMeeting;
 use crate::club::board::context::FfpStatus;
-use crate::club::board::decision::{BoardDecision, BoardFacility, DecisionReason};
+use crate::club::board::decision::{BoardDecision, DecisionReason};
 use crate::club::board::infrastructure::FacilityReview;
 use crate::club::board::manager_market::ManagerCandidate;
 use crate::club::board::ownership::{OwnershipModel, OwnershipType};
@@ -2274,6 +2274,7 @@ mod board_behaviour_tests {
     //! manager-relationship renewals. These exercise the integrated
     //! `evaluate_performance` / governance / takeover paths end to end.
     use super::*;
+    use crate::club::BoardFacility;
     use crate::club::board::ownership::{OwnershipModel, OwnershipType};
     use crate::club::board::takeover::TakeoverStatus;
 

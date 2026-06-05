@@ -2146,6 +2146,60 @@ mod emergency_fill_tests {
     }
 
     #[test]
+    fn zzz_temp_measure_gk_accept_rate() {
+        use crate::utils::random::engine::RandomEngine;
+        for cp in [0.6_f32, 0.8, 0.9, 0.95, 0.99] {
+            let mut empties = 0;
+            let mut not_gk_first = 0;
+            let trials = 5000u64;
+            for s in 0..trials {
+                RandomEngine::set_seed(s + 1);
+                let players: Vec<Player> = (0..8)
+                    .map(|i| EmergencyFillFixtures::player(i, PlayerPositionType::DefenderCenter))
+                    .chain((0..6).map(|i| {
+                        EmergencyFillFixtures::player(20 + i, PlayerPositionType::MidfielderCenter)
+                    }))
+                    .chain(
+                        (0..4).map(|i| EmergencyFillFixtures::player(40 + i, PlayerPositionType::Striker)),
+                    )
+                    .collect();
+                let main = EmergencyFillFixtures::team(10, "FC", "fc", players);
+                let club = EmergencyFillFixtures::club(100, "FC", main);
+                let country = EmergencyFillFixtures::country(vec![club]);
+                let candidates: Vec<FreeAgentCandidate> = (0..3)
+                    .map(|i| {
+                        EmergencyFillFixtures::candidate_with(
+                            500 + i,
+                            70,
+                            26,
+                            PlayerFieldPositionGroup::Goalkeeper,
+                            true,
+                            cp,
+                            4000,
+                        )
+                    })
+                    .collect();
+                let mut signings = Vec::new();
+                EmergencyFillFixtures::run_emergency(
+                    &country,
+                    &candidates,
+                    &TransferConfig::default(),
+                    &mut signings,
+                );
+                if signings.is_empty() {
+                    empties += 1;
+                } else if signings[0].reason != "emergency_squad_fill_gk" {
+                    not_gk_first += 1;
+                }
+            }
+            RandomEngine::set_seed(0);
+            println!(
+                "cp={cp}: empties={empties}/{trials} not_gk_first={not_gk_first}/{trials}"
+            );
+        }
+    }
+
+    #[test]
     fn club_short_one_gk_signs_a_gk_first() {
         // Squad has 0 GK and a handful of outfield bodies — emergency
         // pass must reach for the goalkeeper before anything else.
