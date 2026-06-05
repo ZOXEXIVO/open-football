@@ -11,6 +11,7 @@
 //! every reserve every match would spam the events log. Only players
 //! who would normally have featured (squad status, recent form, force
 //! flag) qualify.
+use crate::club::staff::{CoachDecisionEngine, CoachDecisionReason, CoachSelectionContext};
 use crate::club::{PlayerFieldPositionGroup, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
 use crate::utils::DateUtils;
@@ -20,7 +21,8 @@ use crate::{
 };
 use chrono::NaiveDate;
 
-use super::DomesticCupContext;
+use super::{DomesticCupContext, SelectionCompetition};
+use super::helpers;
 use super::scoring::{ScoringEngine, SlotScoreBreakdown};
 use crate::HappinessEventType;
 
@@ -46,6 +48,11 @@ pub(crate) struct OmissionBuilder<'a> {
     /// Present only for domestic cup ties — gates `CupRotation` so a
     /// league dead rubber doesn't borrow the cup-rotation copy.
     pub cup: Option<&'a DomesticCupContext>,
+    /// Coach decision engine for the selecting side — used to enrich
+    /// the chosen omission reason with the coach-memory read where it
+    /// outweighs the raw factor-gap fallback.
+    pub coach: Option<&'a CoachDecisionEngine<'a>>,
+    pub competition: SelectionCompetition,
 }
 
 impl<'a> OmissionBuilder<'a> {
@@ -299,7 +306,10 @@ impl<'a> OmissionBuilder<'a> {
     /// comparison and player state. Order of checks is hand-tuned —
     /// the first matching atom wins, so concrete situational reasons
     /// (no role, returning, fatigue) trump generic "rival was better"
-    /// fallbacks.
+    /// fallbacks. The coach-memory pass runs *after* the situational
+    /// reasons but *before* the factor-gap fallback so a sustained-
+    /// poor-form omission reads as the coach's read, not a raw
+    /// quality gap that may have only marginal explanatory power.
     fn choose_reason(
         &self,
         omitted: &Player,
@@ -327,6 +337,11 @@ impl<'a> OmissionBuilder<'a> {
                 return SelectionOmissionReason::CupRotation;
             }
             return SelectionOmissionReason::LowMatchImportanceRotation;
+        }
+        // Coach memory pass — a sustained-poor-form / low-tactical-
+        // trust read trumps the raw factor gap as the explanation.
+        if let Some(reason) = self.coach_memory_reason(omitted) {
+            return reason;
         }
         if let Some(c) = comparison {
             if let Some(top) = c.top_factors.first() {
@@ -370,6 +385,79 @@ impl<'a> OmissionBuilder<'a> {
             return SelectionOmissionReason::PoorRecentForm;
         }
         SelectionOmissionReason::TacticalMismatch
+    }
+
+    /// Map the coach engine's dominant decision reason into a
+    /// [`SelectionOmissionReason`], or `None` when memory isn't wired
+    /// in / the read doesn't yield a strong-enough negative signal.
+    fn coach_memory_reason(&self, omitted: &Player) -> Option<SelectionOmissionReason> {
+        let coach = self.coach?;
+        let slot = best_natural_position(omitted, self.tactics)?;
+        let natural_role_fit =
+            (helpers::position_fit_score(omitted, slot, slot.position_group()) / 20.0)
+                .clamp(0.0, 1.0);
+        let coach_ctx = CoachSelectionContext {
+            date: self.date,
+            match_importance: self.match_importance,
+            is_friendly: self.is_friendly,
+            is_cup: matches!(
+                self.competition,
+                SelectionCompetition::DomesticCup { .. } | SelectionCompetition::ContinentalCup
+            ),
+            is_derby: false,
+            is_continental: matches!(self.competition, SelectionCompetition::ContinentalCup),
+            natural_role_fit,
+            is_succession_heir: &[],
+        };
+        let assessment = coach.assess_player_for_selection(omitted, &coach_ctx);
+        // Only surface a coach-memory reason when the coach's
+        // selection_confidence is actually negative on the player —
+        // otherwise the omission is driven by the factor gap, not
+        // memory, and the renderer's existing copy fits better.
+        if assessment.drop_risk < 0.55 {
+            return None;
+        }
+        let dominant = assessment.dominant_reason()?;
+        OmissionReasonMap::map(dominant)
+    }
+}
+
+/// Stateless namespace mapping a [`CoachDecisionReason`] onto the
+/// closest [`SelectionOmissionReason`] variant. Kept as a struct so
+/// the conversion stays declarative and tests can drive it without
+/// constructing a full `OmissionBuilder`.
+struct OmissionReasonMap;
+
+impl OmissionReasonMap {
+    fn map(reason: CoachDecisionReason) -> Option<SelectionOmissionReason> {
+        let mapped = match reason {
+            CoachDecisionReason::PoorRecentForm => SelectionOmissionReason::PoorRecentForm,
+            CoachDecisionReason::SustainedPoorForm => SelectionOmissionReason::PoorRecentForm,
+            CoachDecisionReason::LowTacticalTrust => {
+                SelectionOmissionReason::ManagerDoesNotTrustPlayer
+            }
+            CoachDecisionReason::StickyDoubt => SelectionOmissionReason::ManagerDoesNotTrustPlayer,
+            CoachDecisionReason::BigMatchFailure => {
+                SelectionOmissionReason::ManagerDoesNotTrustPlayer
+            }
+            CoachDecisionReason::RoleMismatch => SelectionOmissionReason::PositionFitIssue,
+            CoachDecisionReason::FatigueRisk => SelectionOmissionReason::FatigueManagement,
+            CoachDecisionReason::InjuryRisk => SelectionOmissionReason::FitnessProtection,
+            // Positive reasons don't generate an omission — only used for diagnostics.
+            CoachDecisionReason::StrongRecentForm
+            | CoachDecisionReason::HighTacticalTrust
+            | CoachDecisionReason::BigMatchReliability
+            | CoachDecisionReason::TrainingLevel
+            | CoachDecisionReason::CoachRelationship
+            | CoachDecisionReason::DevelopmentPathway
+            | CoachDecisionReason::SuccessionPlanning
+            | CoachDecisionReason::ProtectingStar
+            | CoachDecisionReason::TacticalNeed
+            | CoachDecisionReason::LiveMatchUnderperformance
+            | CoachDecisionReason::CostlyError
+            | CoachDecisionReason::CardRisk => return None,
+        };
+        Some(mapped)
     }
 }
 

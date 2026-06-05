@@ -1,7 +1,10 @@
+use crate::club::staff::{
+    CoachMatchSnapshot, CoachProfile, CoachStrategy, StrategyDeriver, StrategyInputs,
+};
 use crate::club::team::MatchdayLeadership;
-use crate::r#match::squad::PlayerSelectionResult;
+use crate::r#match::squad::{PlayerSelectionResult, SelectionCompetition};
 use crate::r#match::{MatchPlayer, MatchSquad, SelectionContext, SquadSelector};
-use crate::{Player, Tactics, TacticsSelector, Team};
+use crate::{Player, Staff, Tactics, TacticsSelector, Team};
 use chrono::NaiveDate;
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -31,6 +34,8 @@ impl Team {
             date,
         );
 
+        let coach_snapshot = MatchCoachSnapshot::for_rotation(head_coach);
+
         MatchSquad {
             team_id: self.id,
             team_name: self.name.clone(),
@@ -42,6 +47,7 @@ impl Team {
             penalty_taker_id: self.select_penalty_taker(),
             free_kick_taker_id: self.select_free_kick_taker(),
             selection_omissions: squad_result.omissions,
+            coach_snapshot,
         }
     }
 
@@ -72,6 +78,8 @@ impl Team {
             ctx.date,
         );
 
+        let coach_snapshot = MatchCoachSnapshot::for_selection_context(head_coach, ctx);
+
         MatchSquad {
             team_id: self.id,
             team_name: self.name.clone(),
@@ -83,6 +91,7 @@ impl Team {
             penalty_taker_id: self.select_penalty_taker(),
             free_kick_taker_id: self.select_free_kick_taker(),
             selection_omissions: squad_result.omissions,
+            coach_snapshot,
         }
     }
 
@@ -128,6 +137,8 @@ impl Team {
             ctx.date,
         );
 
+        let coach_snapshot = MatchCoachSnapshot::for_selection_context(head_coach, ctx);
+
         MatchSquad {
             team_id: self.id,
             team_name: self.name.clone(),
@@ -139,6 +150,7 @@ impl Team {
             penalty_taker_id: self.select_penalty_taker(),
             free_kick_taker_id: self.select_free_kick_taker(),
             selection_omissions: squad_result.omissions,
+            coach_snapshot,
         }
     }
 
@@ -223,5 +235,63 @@ impl Team {
                     .unwrap_or(Ordering::Equal)
             })
             .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
+    }
+}
+
+/// Stateless namespace owning the [`CoachMatchSnapshot`] construction
+/// used by the three [`MatchSquad`] builders above. Bundles the
+/// memory-clone + profile-derivation + strategy-derivation in one
+/// place so the build sites read declaratively and the strategy rule
+/// stays consistent with the selection layer's read.
+struct MatchCoachSnapshot;
+
+impl MatchCoachSnapshot {
+    /// Build a snapshot for a rotation / dev-league fixture — match
+    /// importance is implicitly low, philosophy is irrelevant. The
+    /// strategy collapses to [`CoachStrategy::DevelopYouth`].
+    fn for_rotation(head_coach: &Staff) -> Option<CoachMatchSnapshot> {
+        if head_coach.id == 0 {
+            return None;
+        }
+        let profile = CoachProfile::from_staff(head_coach);
+        let strategy = CoachStrategy::DevelopYouth;
+        Some(CoachMatchSnapshot::new(
+            head_coach.coach_memory.clone(),
+            profile,
+            strategy,
+        ))
+    }
+
+    /// Build a snapshot for a competitive fixture. The strategy is
+    /// derived from the same inputs the selection layer reads via
+    /// [`StrategyDeriver`] so a UI showing "manager strategy" and
+    /// the match engine's in-flight reads agree on the same call.
+    fn for_selection_context(
+        head_coach: &Staff,
+        ctx: &SelectionContext,
+    ) -> Option<CoachMatchSnapshot> {
+        if head_coach.id == 0 {
+            return None;
+        }
+        let profile = CoachProfile::from_staff(head_coach);
+        let strategy = StrategyDeriver::derive(&StrategyInputs {
+            profile: &profile,
+            philosophy: ctx.philosophy.clone(),
+            match_importance: ctx.match_importance,
+            is_friendly: ctx.is_friendly,
+            is_cup: matches!(
+                ctx.competition,
+                SelectionCompetition::DomesticCup { .. } | SelectionCompetition::ContinentalCup
+            ),
+            is_continental: matches!(ctx.competition, SelectionCompetition::ContinentalCup),
+            is_derby: false,
+            strength_ratio: 1.0,
+            squad_depth: 0.5,
+        });
+        Some(CoachMatchSnapshot::new(
+            head_coach.coach_memory.clone(),
+            profile,
+            strategy,
+        ))
     }
 }

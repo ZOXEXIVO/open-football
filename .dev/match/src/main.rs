@@ -343,6 +343,7 @@ fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
         penalty_taker_id: None,
         free_kick_taker_id: None,
         selection_omissions: Vec::new(),
+        coach_snapshot: None,
     }
 }
 
@@ -418,6 +419,7 @@ fn make_squad_viewer(
         penalty_taker_id: None,
         free_kick_taker_id: None,
         selection_omissions: Vec::new(),
+        coach_snapshot: None,
     };
 
     (squad, players_json)
@@ -464,6 +466,13 @@ struct MatchOutcome {
     /// Used to measure per-player concentration, per-line goal share,
     /// and rating distribution by position / goal-count tier.
     per_player: Vec<(u32, u16, u16, f32, u8, f32, u16, u16)>,
+    /// Goal timing: (time_ms, is_home_team_scored). Used for the
+    /// draw-inflation diagnostics: first-goal time, equalizer-response
+    /// rate, lead-flip rate, scoring-cascade detection. Captured from
+    /// `score.detail()` filtered to real goals (excluding own-goals to
+    /// avoid attributing them to the wrong team in sequence analysis;
+    /// own-goals are still counted in the final score).
+    goal_events: Vec<(u64, bool)>,
 }
 
 /// Position group for a player id, using the deterministic 442 slot
@@ -634,6 +643,7 @@ fn league_squad(t: &LeagueTeam) -> MatchSquad {
         penalty_taker_id: None,
         free_kick_taker_id: None,
         selection_omissions: Vec::new(),
+        coach_snapshot: None,
     }
 }
 
@@ -1093,6 +1103,7 @@ fn make_squad_calibrated(team_id: u32, level: u8) -> MatchSquad {
         penalty_taker_id: None,
         free_kick_taker_id: None,
         selection_omissions: Vec::new(),
+        coach_snapshot: None,
     }
 }
 
@@ -1483,6 +1494,20 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             let h = team_stats(&result, 1);
             let a = team_stats(&result, 2);
             let per_player = per_player_rows(&result);
+            // Goal timeline: filter to real goals (skip own-goals so the
+            // scorer-team attribution from player_id/100 is correct), then
+            // sort by time so cascade / equalizer analysis is well-defined
+            // even if goals were emitted out of order.
+            let mut goal_events: Vec<(u64, bool)> = score
+                .detail()
+                .iter()
+                .filter(|g| {
+                    g.stat_type == core::r#match::player::statistics::MatchStatisticType::Goal
+                        && !g.is_auto_goal
+                })
+                .map(|g| (g.time, g.player_id / 100 == 1))
+                .collect();
+            goal_events.sort_by_key(|e| e.0);
             MatchOutcome {
                 idx: i,
                 level_a: match_level_a,
@@ -1492,6 +1517,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 home: h,
                 away: a,
                 per_player,
+                goal_events,
             }
         })
         .collect();
@@ -1707,6 +1733,240 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         total_draws,
         total_draws as f32 / total_n * 100.0,
     );
+
+    // ── GOAL TIMELINE — diagnose WHEN draws happen ───────────────────
+    //
+    // Hypothesis: the draw inflation comes from scoring being too
+    // CORRELATED across the two teams within a single match. If team A
+    // scores a goal and team B equalises within X minutes far more
+    // often than real football, the engine has a "response goal"
+    // dynamic baked in (kickoff momentum, possession reset, etc).
+    //
+    // Reference distributions (Premier League aggregate):
+    //   * First-goal time: median ~32 min, mean ~36 min (geometric
+    //     spread because goals can happen anywhere). 0-15 min ~25%,
+    //     15-30 ~24%, 30-45 ~20%, 45-60 ~15%, 60-75 ~10%, 75-90 ~6%.
+    //     The dev-engine uses 90 min of sim time.
+    //   * Equalizer-within-15-min rate: after a goal that puts a team
+    //     ahead, ~28% of the time the trailing team equalises within
+    //     15 min. In the engine if this clears ~50% the response-goal
+    //     mechanism is too strong.
+    //   * Lead-flips per match: a "flip" is when the team that's
+    //     trailing goes ahead (rare in real football, ~7% of matches).
+    //
+    // Match clock: `total_match_time` (used as `GoalDetail.time` in
+    // `events/players.rs::handle_goal_event`) is in MILLISECONDS — the
+    // engine increments `total_match_time += MATCH_TIME_INCREMENT_MS`
+    // each tick, and MATCH_TIME_INCREMENT_MS=10. So 1 minute = 60_000.
+    // 90 minutes of match time = 5_400_000.
+    const TICKS_PER_MIN: u64 = 60_000;
+    let mut first_goal_buckets = [0u32; 7]; // 0-15, 15-30, ... 75-90, no goal
+    let mut equalizers_within_15 = 0u32;
+    let mut goals_that_could_be_equalised = 0u32;
+    let mut quick_response_within_5min = 0u32;
+    let mut lead_flips = 0u32;
+    let mut matches_with_a_lead = 0u32;
+    let mut goal_gap_total: u64 = 0;
+    let mut goal_gap_count: u32 = 0;
+    let mut score_state_neutral_first = 0u32; // matches where score was 0-0 at HT (>=45 min in)
+    let mut total_matches_with_goals = 0u32;
+
+    for o in &outcomes {
+        // First goal time bucketing.
+        if let Some(first) = o.goal_events.first() {
+            let min = (first.0 / TICKS_PER_MIN) as u32;
+            let bucket = (min / 15).min(5) as usize;
+            first_goal_buckets[bucket] += 1;
+            total_matches_with_goals += 1;
+            // Was the half-time score 0-0?
+            if min >= 45 {
+                score_state_neutral_first += 1;
+            }
+        } else {
+            first_goal_buckets[6] += 1;
+        }
+
+        // Walk through the goal stream tracking lead state.
+        let mut home_g = 0u8;
+        let mut away_g = 0u8;
+        let mut last_leader: Option<bool> = None; // Some(true) home, Some(false) away
+        let mut ever_had_lead = false;
+        for window in o.goal_events.windows(2) {
+            let gap = window[1].0.saturating_sub(window[0].0);
+            goal_gap_total += gap;
+            goal_gap_count += 1;
+        }
+        for &(time, home_scored) in &o.goal_events {
+            // Record state BEFORE this goal — was a leader being equalised?
+            let pre_diff = home_g as i16 - away_g as i16;
+            // Apply the goal.
+            if home_scored {
+                home_g += 1;
+            } else {
+                away_g += 1;
+            }
+            let post_diff = home_g as i16 - away_g as i16;
+
+            // Equalizer detection: previous goal put someone ahead, and
+            // this goal restored parity within X minutes.
+            if pre_diff != 0 && post_diff == 0 {
+                // Lookup prior goal time (could be many goals back, but
+                // the most recent one is what matters). Find the most
+                // recent goal before `time`.
+                // We iterate again, so we find the previous goal event:
+                // this is the goal that PUT the now-equalising team behind.
+                if let Some(prev_time) = o
+                    .goal_events
+                    .iter()
+                    .take_while(|(t, _)| *t < time)
+                    .last()
+                    .map(|(t, _)| *t)
+                {
+                    let gap_ticks = time.saturating_sub(prev_time);
+                    let gap_min = gap_ticks / TICKS_PER_MIN;
+                    goals_that_could_be_equalised += 1;
+                    if gap_min <= 15 {
+                        equalizers_within_15 += 1;
+                    }
+                    if gap_min <= 5 {
+                        quick_response_within_5min += 1;
+                    }
+                }
+            }
+
+            // Lead-flip: someone was ahead and now the other side is.
+            if let Some(prev_leader) = last_leader {
+                let now_leader = if post_diff > 0 {
+                    Some(true)
+                } else if post_diff < 0 {
+                    Some(false)
+                } else {
+                    None
+                };
+                if let Some(now) = now_leader {
+                    if now != prev_leader {
+                        lead_flips += 1;
+                    }
+                }
+            }
+            if post_diff > 0 {
+                last_leader = Some(true);
+                ever_had_lead = true;
+            } else if post_diff < 0 {
+                last_leader = Some(false);
+                ever_had_lead = true;
+            }
+        }
+        if ever_had_lead {
+            matches_with_a_lead += 1;
+        }
+    }
+    println!();
+    println!("--- GOAL TIMELINE diagnostics (draw-correlation hunt) ---");
+    let bucket_labels = [
+        "0-15  min", "15-30 min", "30-45 min", "45-60 min", "60-75 min", "75-90 min",
+    ];
+    let bucket_refs = [25, 24, 20, 15, 10, 6];
+    println!("  First-goal time distribution (real PL reference):");
+    for (i, label) in bucket_labels.iter().enumerate() {
+        let n = first_goal_buckets[i];
+        let pct = n as f32 / total_matches_with_goals.max(1) as f32 * 100.0;
+        println!("    {} : {:>4} ({:>5.1}%)  ref ~{}%", label, n, pct, bucket_refs[i]);
+    }
+    println!(
+        "    no goal   : {:>4} ({:>5.1}%)",
+        first_goal_buckets[6],
+        first_goal_buckets[6] as f32 / total_n * 100.0,
+    );
+    println!(
+        "    0-0 at HT : {:>4} ({:>5.1}%)  — first goal happens after minute 45",
+        score_state_neutral_first,
+        score_state_neutral_first as f32 / total_n * 100.0,
+    );
+    println!();
+    println!("  Response-goal mechanics (the draw-cascade signal):");
+    let equ_pct = if goals_that_could_be_equalised > 0 {
+        equalizers_within_15 as f32 / goals_that_could_be_equalised as f32 * 100.0
+    } else {
+        0.0
+    };
+    let quick_pct = if goals_that_could_be_equalised > 0 {
+        quick_response_within_5min as f32 / goals_that_could_be_equalised as f32 * 100.0
+    } else {
+        0.0
+    };
+    println!(
+        "    after a go-ahead goal, equalizer within 15min: {:>4}/{:<4} ({:>5.1}%)  ref ~28%",
+        equalizers_within_15, goals_that_could_be_equalised, equ_pct
+    );
+    println!(
+        "    after a go-ahead goal, equalizer within  5min: {:>4}/{:<4} ({:>5.1}%)  ref ~10%",
+        quick_response_within_5min, goals_that_could_be_equalised, quick_pct
+    );
+    let flip_pct = lead_flips as f32 / total_n * 100.0;
+    println!(
+        "    lead-flips per match (trailer goes ahead)   : {:>4} ({:>5.1}% of matches)  ref ~7%",
+        lead_flips, flip_pct,
+    );
+    let avg_gap_min = if goal_gap_count > 0 {
+        (goal_gap_total as f32 / goal_gap_count as f32) / TICKS_PER_MIN as f32
+    } else {
+        0.0
+    };
+    println!(
+        "    avg gap between consecutive goals           : {:>5.1} min  ref ~28 min",
+        avg_gap_min,
+    );
+    println!(
+        "    matches that ever had a lead                : {:>4} ({:>5.1}% of matches)",
+        matches_with_a_lead,
+        matches_with_a_lead as f32 / total_n * 100.0,
+    );
+
+    // ── XG / SHOT EFFICIENCY BY OUTCOME — who deserved the draw? ──────
+    // For each match, classify by result (home win / draw / away win)
+    // and average the xG totals and shot counts. If draws cluster
+    // around matches where both teams had similar xG (~each team's
+    // typical match), the engine is failing to convert xG differential
+    // into result differential — likely keeper-save inflation or shot
+    // quality compression. If draws have ABOVE-average xG, the
+    // problem is conversion efficiency, not chance creation.
+    let mut xg_by_result = [(0.0f32, 0.0f32, 0u32); 3]; // (home_xg, away_xg, n) for [home_win, draw, away_win]
+    let mut shots_by_result = [(0u32, 0u32, 0u32); 3]; // (home_sh, away_sh, n)
+    for o in &outcomes {
+        let bucket = if o.home_goals > o.away_goals {
+            0
+        } else if o.home_goals < o.away_goals {
+            2
+        } else {
+            1
+        };
+        xg_by_result[bucket].0 += o.home.xg;
+        xg_by_result[bucket].1 += o.away.xg;
+        xg_by_result[bucket].2 += 1;
+        shots_by_result[bucket].0 += o.home.shots as u32;
+        shots_by_result[bucket].1 += o.away.shots as u32;
+        shots_by_result[bucket].2 += 1;
+    }
+    println!();
+    println!("--- xG/SHOTS BY MATCH OUTCOME ---");
+    let result_labels = ["home win", "draw    ", "away win"];
+    for (i, label) in result_labels.iter().enumerate() {
+        let n = xg_by_result[i].2;
+        if n == 0 {
+            continue;
+        }
+        let h_xg = xg_by_result[i].0 / n as f32;
+        let a_xg = xg_by_result[i].1 / n as f32;
+        let h_sh = shots_by_result[i].0 as f32 / n as f32;
+        let a_sh = shots_by_result[i].1 as f32 / n as f32;
+        let xg_diff = h_xg - a_xg;
+        println!(
+            "  {}  n={:>4}  xG h={:>4.1} a={:>4.1}  (diff {:+.1})  sh h={:>4.1} a={:>4.1}",
+            label, n, h_xg, a_xg, xg_diff, h_sh, a_sh,
+        );
+    }
+    println!("  (if draws have similar xG-spread as decisive matches, the engine's xG→goal step is too noisy)");
 
     // ── UPSET FREQUENCY by level gap ──────────────────────────────────
     //

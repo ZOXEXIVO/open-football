@@ -1,5 +1,6 @@
 use chrono::NaiveDate;
 
+use crate::club::staff::{CoachDecisionEngine, CoachLiveMatchContext};
 use crate::r#match::engine::coach::TacticalNeed;
 use crate::r#match::engine::sub_scoring::{LiveSubstitutionStats, SubScoring};
 use crate::r#match::field::MatchField;
@@ -78,238 +79,34 @@ pub fn process_substitutions(
     max_subs_per_team: usize,
     today: NaiveDate,
 ) {
-    // Roll for explicit in-match injuries first so the force-sub logic
-    // downstream picks them up. A match can now produce genuine injury-
-    // driven substitutions instead of waiting for condition to drift down
-    // naturally.
-    Substitutions::roll_in_match_injuries(field, context);
-
-    let team_ids = [field.home_team_id, field.away_team_id];
-
-    for &team_id in &team_ids {
-        if !context.can_substitute(team_id) {
-            continue;
-        }
-
-        let has_bench = field.substitutes.iter().any(|p| p.team_id == team_id);
-        if !has_bench {
-            continue;
-        }
-
-        // Determine match situation for this team
-        let (own_goals, opp_goals) = if team_id == context.field_home_team_id {
-            (
-                context.score.home_team.get() as i32,
-                context.score.away_team.get() as i32,
-            )
-        } else {
-            (
-                context.score.away_team.get() as i32,
-                context.score.home_team.get() as i32,
-            )
-        };
-        let goal_diff = own_goals - opp_goals;
-        let match_minutes = context.total_match_time / 60_000;
-
-        // Critical-injury candidates ignore the force-selection flag —
-        // a sub-2000 condition models an in-match injury the coach can't
-        // ignore even for a pinned player.
-        let mut critical_candidates: Vec<(u32, i16, PlayerPositionType)> = field
-            .players
-            .iter()
-            .filter(|p| p.team_id == team_id)
-            .filter(|p| p.tactical_position.current_position != PlayerPositionType::Goalkeeper)
-            .filter(|p| p.player_attributes.condition < 2000)
-            .map(|p| {
-                (
-                    p.id,
-                    p.player_attributes.condition,
-                    p.tactical_position.current_position,
-                )
-            })
-            .collect();
-
-        critical_candidates.sort_by_key(|&(_, cond, _)| cond);
-
-        // Youth-protection candidates: under-17 players whose condition or
-        // jadedness has dropped into the danger band. The force-selection
-        // flag does not protect them — a manager who pinned a 15-year-old
-        // into the XI cannot keep him on the pitch at 35% condition.
-        // Goalkeepers stay on the pitch (substitute keepers are usually a
-        // bigger risk than a tired starter). The predicate is extracted
-        // to a helper so tests can pin its behaviour without standing up
-        // a full MatchField/MatchContext fixture.
-        let mut youth_protection_candidates: Vec<(u32, i16, PlayerPositionType)> = field
-            .players
-            .iter()
-            .filter(|p| p.team_id == team_id)
-            .filter(|p| YouthProtection::is_candidate(p, today))
-            .map(|p| {
-                (
-                    p.id,
-                    p.player_attributes.condition,
-                    p.tactical_position.current_position,
-                )
-            })
-            .collect();
-
-        youth_protection_candidates.sort_by_key(|&(_, cond, _)| cond);
-
-        // Determine sub strategy based on match situation:
-        // - Tired subs: always replace the most fatigued player
-        // - Comfortable lead (2+ goals, 65+ min): also use development subs
-        //   to give bench players match experience
-        let comfortable_lead = goal_diff >= 2 && match_minutes >= 65;
-        let late_comfort = goal_diff >= 3 && match_minutes >= 75;
-
-        let mut subs_made = 0;
-
-        // Zero: force-sub critically-broken players regardless of score /
-        // minute. Condition below 20% models an in-match injury the coach
-        // can't ignore — a real manager pulls them straight off, even if
-        // the player carries the manager's force-selection flag. Takes
-        // priority over strategic fatigue rotation.
-        for (player_out_id, _condition, position) in &critical_candidates {
-            if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
-                break;
-            }
-            let position_group = position.position_group();
-            if let Some(player_in_id) =
-                Substitutions::find_best_substitute(field, team_id, position_group)
-            {
-                if Substitutions::execute_substitution(
-                    field,
-                    context,
-                    team_id,
-                    *player_out_id,
-                    player_in_id,
-                    crate::r#match::engine::flow::result::SubstitutionReason::CriticalInjury,
-                ) {
-                    subs_made += 1;
-                }
-            }
-        }
-
-        // Zero-and-a-half: youth-protection. A 15-year-old at 35% condition
-        // or 90%+ jadedness is hooked even when the manager pinned him in.
-        // Real coaches pull young players off the pitch when they look
-        // gone — the force-selection flag should not be a back door for
-        // overloading a body that hasn't finished growing.
-        for (player_out_id, _condition, position) in &youth_protection_candidates {
-            if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
-                break;
-            }
-            // Don't double-process if the critical pass already pulled them.
-            if field.get_player(*player_out_id).is_none() {
-                continue;
-            }
-            let position_group = position.position_group();
-            if let Some(player_in_id) =
-                Substitutions::find_best_substitute(field, team_id, position_group)
-            {
-                if Substitutions::execute_substitution(
-                    field,
-                    context,
-                    team_id,
-                    *player_out_id,
-                    player_in_id,
-                    crate::r#match::engine::flow::result::SubstitutionReason::YouthProtection,
-                ) {
-                    subs_made += 1;
-                }
-            }
-        }
-
-        // Decide the tactical need for this team. Below minute 55 we
-        // hold to the "fatigue rotation only" stance — same gate as
-        // the legacy code — to avoid panicky early subs. Past that, we
-        // read the coach's rolling metrics for a tactical need that
-        // can outvote the fatigue case in the pair scorer.
-        let need = if match_minutes >= 55 {
-            let progress =
-                (context.total_match_time as f32 / crate::r#match::MATCH_TIME_MS as f32).min(1.0);
-            let coach = context.coach_for_team(team_id);
-            let condition_avg = field
-                .players
-                .iter()
-                .filter(|p| p.team_id == team_id)
-                .map(|p| p.player_attributes.condition as f32 / 10000.0)
-                .sum::<f32>()
-                / field
-                    .players
-                    .iter()
-                    .filter(|p| p.team_id == team_id)
-                    .count()
-                    .max(1) as f32;
-            TacticalNeed::from_state(goal_diff as i8, progress, condition_avg, coach.metrics)
-        } else {
-            TacticalNeed::Fatigue
-        };
-
-        // Discretionary scored-pair loop. Each iteration picks the
-        // best `(out, in)` swap by combining sub_off_score (with star
-        // protection), sub_in_score, a small tactical-fit bonus, and
-        // a disruption penalty for hollowing out a thin position
-        // group. We keep iterating until either the team is out of
-        // subs, the window doesn't permit the next slot, or no
-        // remaining pair clears the threshold.
-        //
-        // The threshold tightens for "ordinary" match states and
-        // loosens for comfortable leads (where resting players is
-        // acceptable) and late comfortable leads (where development
-        // minutes are a real priority). This is how a star scorer is
-        // protected from a 60% routine fatigue sub but can still be
-        // rested in a 3-0 game at minute 78.
-        let match_minute_u32 = match_minutes as u32;
-        loop {
-            if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
-                break;
-            }
-            let used = context.subs_used_by_team(team_id) as u8;
-            if !SubScoring::allowed_in_window(used, match_minute_u32, false) {
-                break;
-            }
-
-            // Comfortable lead → coach can afford a softer threshold
-            // and weakens star protection (late comfort rests stars).
-            let (threshold, protection_dampening) = if late_comfort {
-                (0.60, 0.5)
-            } else if comfortable_lead {
-                (0.70, 0.75)
-            } else {
-                (0.85, 1.0)
-            };
-
-            let chosen = Substitutions::best_discretionary_pair(
-                field,
-                team_id,
-                need,
-                own_goals as u8,
-                opp_goals as u8,
-                context.total_match_time,
-                today,
-                protection_dampening,
-                threshold,
-            );
-
-            match chosen {
-                Some((out_id, in_id)) => {
-                    if !Substitutions::execute_substitution(
-                        field,
-                        context,
-                        team_id,
-                        out_id,
-                        in_id,
-                        crate::r#match::engine::flow::result::SubstitutionReason::Discretionary,
-                    ) {
-                        break;
-                    }
-                    subs_made += 1;
-                }
-                None => break,
-            }
-        }
-    }
+    // Take the snapshots by `mem::take`. The substitution layer needs
+    // an immutable borrow of the snapshot to build the
+    // `CoachDecisionEngine`, while `process_with_coaches` needs a
+    // mutable borrow of `field` for the actual swap. Borrowing the
+    // snapshot back at the end of the call (so a future substitution
+    // pass on the same field still sees it) avoids cloning the memory
+    // map twice per match. Empty snapshots (tests / dev_match /
+    // wire-format reconstruction) keep the legacy memory-less path.
+    let home_snapshot = std::mem::take(&mut field.home_coach_snapshot);
+    let away_snapshot = std::mem::take(&mut field.away_coach_snapshot);
+    let home_engine = home_snapshot
+        .as_ref()
+        .map(|s| CoachDecisionEngine::new(&s.memory, &s.profile, s.strategy));
+    let away_engine = away_snapshot
+        .as_ref()
+        .map(|s| CoachDecisionEngine::new(&s.memory, &s.profile, s.strategy));
+    Substitutions::process_with_coaches(
+        field,
+        context,
+        max_subs_per_team,
+        today,
+        home_engine.as_ref(),
+        away_engine.as_ref(),
+    );
+    drop(home_engine);
+    drop(away_engine);
+    field.home_coach_snapshot = home_snapshot;
+    field.away_coach_snapshot = away_snapshot;
 }
 
 /// Match-side helpers grouped under one namespace. The free-function
@@ -318,6 +115,229 @@ pub fn process_substitutions(
 /// reach in via stable `Substitutions::xxx` paths, and gives the file a
 /// single place to grow per-difficulty / per-rule-set knobs later.
 pub(super) struct Substitutions;
+
+impl Substitutions {
+    /// Internal entry point that carries optional coach decision
+    /// engines per side. Mirrors the public `process_substitutions`
+    /// signature but adds the two `Option<&CoachDecisionEngine>`
+    /// handles — used by the public wrapper above (with `None`) and
+    /// by tests / wiring code that already holds the head coach.
+    pub(crate) fn process_with_coaches(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        max_subs_per_team: usize,
+        today: NaiveDate,
+        home_coach: Option<&CoachDecisionEngine<'_>>,
+        away_coach: Option<&CoachDecisionEngine<'_>>,
+    ) {
+        Self::process_inner(
+            field,
+            context,
+            max_subs_per_team,
+            today,
+            home_coach,
+            away_coach,
+        );
+    }
+
+    fn process_inner(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        max_subs_per_team: usize,
+        today: NaiveDate,
+        home_coach: Option<&CoachDecisionEngine<'_>>,
+        away_coach: Option<&CoachDecisionEngine<'_>>,
+    ) {
+        // Roll for explicit in-match injuries first so the force-sub logic
+        // downstream picks them up.
+        Self::roll_in_match_injuries(field, context);
+
+        let team_ids = [field.home_team_id, field.away_team_id];
+
+        for &team_id in &team_ids {
+            if !context.can_substitute(team_id) {
+                continue;
+            }
+            if !field.substitutes.iter().any(|p| p.team_id == team_id) {
+                continue;
+            }
+
+            let (own_goals, opp_goals) = if team_id == context.field_home_team_id {
+                (
+                    context.score.home_team.get() as i32,
+                    context.score.away_team.get() as i32,
+                )
+            } else {
+                (
+                    context.score.away_team.get() as i32,
+                    context.score.home_team.get() as i32,
+                )
+            };
+            let goal_diff = own_goals - opp_goals;
+            let match_minutes = context.total_match_time / 60_000;
+            let coach = if team_id == context.field_home_team_id {
+                home_coach
+            } else {
+                away_coach
+            };
+
+            // Critical and youth-protection candidates (same as the legacy path).
+            let mut critical_candidates: Vec<(u32, i16, PlayerPositionType)> = field
+                .players
+                .iter()
+                .filter(|p| p.team_id == team_id)
+                .filter(|p| {
+                    p.tactical_position.current_position != PlayerPositionType::Goalkeeper
+                })
+                .filter(|p| p.player_attributes.condition < 2000)
+                .map(|p| {
+                    (
+                        p.id,
+                        p.player_attributes.condition,
+                        p.tactical_position.current_position,
+                    )
+                })
+                .collect();
+            critical_candidates.sort_by_key(|&(_, cond, _)| cond);
+
+            let mut youth_protection_candidates: Vec<(u32, i16, PlayerPositionType)> = field
+                .players
+                .iter()
+                .filter(|p| p.team_id == team_id)
+                .filter(|p| YouthProtection::is_candidate(p, today))
+                .map(|p| {
+                    (
+                        p.id,
+                        p.player_attributes.condition,
+                        p.tactical_position.current_position,
+                    )
+                })
+                .collect();
+            youth_protection_candidates.sort_by_key(|&(_, cond, _)| cond);
+
+            let comfortable_lead = goal_diff >= 2 && match_minutes >= 65;
+            let late_comfort = goal_diff >= 3 && match_minutes >= 75;
+
+            let mut subs_made = 0;
+
+            for (player_out_id, _condition, position) in &critical_candidates {
+                if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
+                    break;
+                }
+                let position_group = position.position_group();
+                if let Some(player_in_id) =
+                    Self::find_best_substitute(field, team_id, position_group)
+                {
+                    if Self::execute_substitution(
+                        field,
+                        context,
+                        team_id,
+                        *player_out_id,
+                        player_in_id,
+                        crate::r#match::engine::flow::result::SubstitutionReason::CriticalInjury,
+                    ) {
+                        subs_made += 1;
+                    }
+                }
+            }
+
+            for (player_out_id, _condition, position) in &youth_protection_candidates {
+                if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
+                    break;
+                }
+                if field.get_player(*player_out_id).is_none() {
+                    continue;
+                }
+                let position_group = position.position_group();
+                if let Some(player_in_id) =
+                    Self::find_best_substitute(field, team_id, position_group)
+                {
+                    if Self::execute_substitution(
+                        field,
+                        context,
+                        team_id,
+                        *player_out_id,
+                        player_in_id,
+                        crate::r#match::engine::flow::result::SubstitutionReason::YouthProtection,
+                    ) {
+                        subs_made += 1;
+                    }
+                }
+            }
+
+            let need = if match_minutes >= 55 {
+                let progress = (context.total_match_time as f32
+                    / crate::r#match::MATCH_TIME_MS as f32)
+                    .min(1.0);
+                let match_coach = context.coach_for_team(team_id);
+                let condition_avg = field
+                    .players
+                    .iter()
+                    .filter(|p| p.team_id == team_id)
+                    .map(|p| p.player_attributes.condition as f32 / 10000.0)
+                    .sum::<f32>()
+                    / field
+                        .players
+                        .iter()
+                        .filter(|p| p.team_id == team_id)
+                        .count()
+                        .max(1) as f32;
+                TacticalNeed::from_state(goal_diff as i8, progress, condition_avg, match_coach.metrics)
+            } else {
+                TacticalNeed::Fatigue
+            };
+
+            let match_minute_u32 = match_minutes as u32;
+            loop {
+                if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
+                    break;
+                }
+                let used = context.subs_used_by_team(team_id) as u8;
+                if !SubScoring::allowed_in_window(used, match_minute_u32, false) {
+                    break;
+                }
+
+                let (threshold, protection_dampening) = if late_comfort {
+                    (0.60, 0.5)
+                } else if comfortable_lead {
+                    (0.70, 0.75)
+                } else {
+                    (0.85, 1.0)
+                };
+
+                let chosen = Self::best_discretionary_pair_with_coach(
+                    field,
+                    team_id,
+                    need,
+                    own_goals as u8,
+                    opp_goals as u8,
+                    context.total_match_time,
+                    today,
+                    protection_dampening,
+                    threshold,
+                    coach,
+                );
+
+                match chosen {
+                    Some((out_id, in_id)) => {
+                        if !Self::execute_substitution(
+                            field,
+                            context,
+                            team_id,
+                            out_id,
+                            in_id,
+                            crate::r#match::engine::flow::result::SubstitutionReason::Discretionary,
+                        ) {
+                            break;
+                        }
+                        subs_made += 1;
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+}
 
 impl Substitutions {
     /// Per-tick in-match injury roll. A small per-player chance scaled by
@@ -638,6 +658,13 @@ impl Substitutions {
     /// `sub_off_score_protected` and is dampened by `protection_dampening`
     /// (1.0 = full protection in ordinary states, 0.5 in a late
     /// comfortable lead).
+    /// Back-compat thin wrapper without coach handles. Used by the
+    /// substitution layer's existing tests and any caller that
+    /// doesn't yet hold a coach engine — passes `None` straight
+    /// through. Marked `allow(dead_code)` because the public match
+    /// loop calls the `_with_coach` variant directly; this wrapper
+    /// exists for the existing test surface only.
+    #[allow(dead_code)]
     fn best_discretionary_pair(
         field: &MatchField,
         team_id: u32,
@@ -648,6 +675,42 @@ impl Substitutions {
         today: NaiveDate,
         protection_dampening: f32,
         min_threshold: f32,
+    ) -> Option<(u32, u32)> {
+        Self::best_discretionary_pair_with_coach(
+            field,
+            team_id,
+            need,
+            own_goals,
+            opp_goals,
+            total_match_time_ms,
+            today,
+            protection_dampening,
+            min_threshold,
+            None,
+        )
+    }
+
+    /// Coach-aware variant of [`best_discretionary_pair`]. When
+    /// `coach` is `Some`, the pair score folds in two small memory-
+    /// driven nudges: a sub-off urgency nudge derived from the
+    /// coach's read of the on-field player, and a sub-in preference
+    /// nudge derived from the coach's read of the candidate
+    /// substitute. The nudges are bounded by
+    /// [`AssessmentMath::LIVE_SCALE`] inside the coach module, so a
+    /// fresh coach with no memory cannot move the pair score by more
+    /// than a fraction. When `coach` is `None`, the behaviour matches
+    /// the legacy `best_discretionary_pair` exactly.
+    fn best_discretionary_pair_with_coach(
+        field: &MatchField,
+        team_id: u32,
+        need: TacticalNeed,
+        own_goals: u8,
+        opp_goals: u8,
+        total_match_time_ms: u64,
+        today: NaiveDate,
+        protection_dampening: f32,
+        min_threshold: f32,
+        coach: Option<&CoachDecisionEngine<'_>>,
     ) -> Option<(u32, u32)> {
         let outfield_starters: Vec<&MatchPlayer> = field
             .players
@@ -679,9 +742,6 @@ impl Substitutions {
             return None;
         }
 
-        // Snapshot every on-field player's live contribution once for
-        // this evaluation — the rating calculation is cheap but we
-        // avoid recomputing per bench candidate.
         let live_snapshots: Vec<LiveSubstitutionStats> = outfield_starters
             .iter()
             .map(|p| {
@@ -694,17 +754,15 @@ impl Substitutions {
         for (out_idx, out) in outfield_starters.iter().enumerate() {
             let live = &live_snapshots[out_idx];
 
-            // Errors-leading-to-goal and red-card aftermath bypass star
-            // protection — the brief is explicit that these cases are
-            // not protected. Red cards on an on-field player should be
-            // rare here (sent-off players are already filtered), but
-            // the carve-out keeps the contract clean.
             let local_dampening = if live.errors_leading_to_goal >= 1 || live.red_cards >= 1 {
                 0.0
             } else {
                 protection_dampening
             };
             let out_score = SubScoring::sub_off_score_protected(out, live, need, local_dampening);
+            let coach_off_nudge = coach
+                .map(|c| c.sub_off_adjustment(out.id, &CoachLiveAdapter::live_ctx(out, live, true)))
+                .unwrap_or(0.0);
 
             for sub in &bench {
                 let fit = Self::position_fit(out, sub);
@@ -718,20 +776,26 @@ impl Substitutions {
                 }
 
                 let dev = Self::development_priority(sub, today);
-
-                // `sub_in_score` already includes position_fit as its
-                // largest single term (0.30 * fit). Re-multiplying by
-                // fit here double-discounted cross-group swaps, which
-                // made chasing-need preferences impossible to express
-                // — a like-for-like Mid→Mid swap drowned out a tactical
-                // Mid→Forward swap. Keep `fit` as one term inside
-                // sub_in_score; let `tactical_fit_bonus` express the
-                // "this is the kind of player we need right now"
-                // preference on top.
                 let in_score = SubScoring::sub_in_score(sub, need, fit, dev);
                 let tactical_bonus = Self::tactical_fit_bonus(out, sub, need);
 
-                let pair_score = out_score + in_score + tactical_bonus - disruption;
+                // Live coach memory adapter — read tactical_trust / big-
+                // match flags for both the on-field and bench players.
+                let coach_in_nudge = coach
+                    .map(|c| {
+                        c.sub_in_adjustment(
+                            sub.id,
+                            &CoachLiveAdapter::live_ctx_sub(sub, total_match_time_ms),
+                        )
+                    })
+                    .unwrap_or(0.0);
+
+                let pair_score = out_score
+                    + in_score
+                    + tactical_bonus
+                    + coach_off_nudge
+                    + coach_in_nudge
+                    - disruption;
                 if pair_score < min_threshold {
                     continue;
                 }
@@ -780,6 +844,53 @@ impl Substitutions {
             })
             .max_by_key(|p| p.player_attributes.current_ability)
             .map(|p| p.id)
+    }
+}
+
+/// Tiny adapter mapping the substitution scorer's per-player snapshot
+/// onto the [`CoachLiveMatchContext`] the coach engine consumes.
+/// Bundled in its own struct so the conversion is in one place and the
+/// pair scorer reads as orchestration.
+struct CoachLiveAdapter;
+
+impl CoachLiveAdapter {
+    fn live_ctx(
+        player: &MatchPlayer,
+        live: &LiveSubstitutionStats,
+        is_starter: bool,
+    ) -> CoachLiveMatchContext {
+        CoachLiveMatchContext {
+            date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            match_minute: live.match_minute,
+            goal_diff: live.goal_diff,
+            live_rating: live.live_rating,
+            goals: live.goals,
+            assists: live.assists,
+            errors_leading_to_goal: live.errors_leading_to_goal,
+            yellow_cards: live.yellow_cards,
+            red_cards: live.red_cards,
+            condition_pct: (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0),
+            is_starter,
+        }
+    }
+
+    /// Build a neutral live context for a bench player — the sub-in
+    /// scorer doesn't have a live rating for him; the coach engine
+    /// reads memory only.
+    fn live_ctx_sub(sub: &MatchPlayer, total_match_time_ms: u64) -> CoachLiveMatchContext {
+        CoachLiveMatchContext {
+            date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            match_minute: (total_match_time_ms / 60_000) as u32,
+            goal_diff: 0,
+            live_rating: 6.7,
+            goals: 0,
+            assists: 0,
+            errors_leading_to_goal: 0,
+            yellow_cards: 0,
+            red_cards: 0,
+            condition_pct: (sub.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0),
+            is_starter: false,
+        }
     }
 }
 
@@ -1137,6 +1248,7 @@ mod tests {
             penalty_taker_id: None,
             free_kick_taker_id: None,
             selection_omissions: vec![],
+            coach_snapshot: None,
         }
     }
 
@@ -1165,6 +1277,8 @@ mod tests {
             left_team_tactics: Tactics::new(MatchTacticType::T442),
             right_side_players: None,
             right_team_tactics: Tactics::new(MatchTacticType::T442),
+            home_coach_snapshot: None,
+            away_coach_snapshot: None,
         }
     }
 

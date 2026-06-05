@@ -3,7 +3,7 @@ use crate::r#match::engine::zones::ZoneStats;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::squad::OmittedPlayer;
 use crate::r#match::{MatchSquad, ResultMatchPositionData};
-use crate::{MatchTacticType, PlayerFieldPositionGroup};
+use crate::{MatchTacticType, PlayerFieldPositionGroup, PlayerPositionType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -318,6 +318,16 @@ pub struct FieldSquad {
     /// `Player::on_match_dropped_with_context` with the right
     /// explanation. Empty when nothing notable happened.
     pub selection_omissions: Vec<OmittedPlayer>,
+    /// Slot each starter was assigned at kickoff. Drives the post-
+    /// match coach-memory observation's `role_fit` reading so a
+    /// player pressed into an emergency role (e.g. a midfielder
+    /// starting at fullback) registers as an out-of-position
+    /// appearance instead of a natural-slot start. Empty for
+    /// FieldSquads built outside the squad selector flow (tests,
+    /// dev_match harness) — the dispatcher falls back to assuming
+    /// a natural-role start in that case.
+    #[serde(default)]
+    pub starter_slots: Vec<(u32, PlayerPositionType)>,
 }
 
 impl FieldSquad {
@@ -328,6 +338,7 @@ impl FieldSquad {
             substitutes: Vec::new(),
             substitutes_used: Vec::new(),
             selection_omissions: Vec::new(),
+            starter_slots: Vec::new(),
         }
     }
 
@@ -338,6 +349,11 @@ impl FieldSquad {
             substitutes: squad.substitutes.iter().map(|p| p.id).collect(),
             substitutes_used: Vec::new(),
             selection_omissions: squad.selection_omissions.clone(),
+            starter_slots: squad
+                .main_squad
+                .iter()
+                .map(|p| (p.id, p.tactical_position.current_position))
+                .collect(),
         }
     }
 
@@ -349,6 +365,16 @@ impl FieldSquad {
 
     pub fn count(&self) -> usize {
         self.main.len() + self.substitutes.len()
+    }
+
+    /// Slot the starter played at kickoff, or `None` if the
+    /// `starter_slots` map was not populated (legacy paths) or the
+    /// player wasn't in the starting eleven.
+    pub fn starter_slot(&self, player_id: u32) -> Option<PlayerPositionType> {
+        self.starter_slots
+            .iter()
+            .find(|(id, _)| *id == player_id)
+            .map(|(_, slot)| *slot)
     }
 }
 

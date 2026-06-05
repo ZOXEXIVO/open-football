@@ -471,13 +471,30 @@ pub fn evaluate_forward_shot_decision(
     // clarity / body_control still scale willingness); only the
     // per-tick fire rate drops, cutting shot volume to ~17/team at
     // equal skill and ~22/team for strong sides — matching real PL.
+    // Calibration target: shots/team ~17 (engine-realistic, real PL ~13).
+    // The engine has multiple shot paths (helper + corner headers +
+    // midfielder cutbacks); the helper handles ~80% of shots. The
+    // interception noise gate must stay in place (see
+    // [[interception-load-bearing]]) — over-cutting interceptions
+    // explodes goals via 28→62% on-target.
+    //
+    // Lever: BASE cut applies to every helper call regardless of xG
+    // (line-balance neutral). xg_boost floor preferentially cuts
+    // speculative shots — too aggressive on the floor hits FWDs more
+    // than MIDs and breaks the 58/32/10 line ratio (FWDs take more
+    // speculative shots). Iteration history (2026-06-05):
+    //   G (base 0.012, xg_boost floor 0.20): goals 2.91, line 47/40/13
+    //   H (base 0.018, xg_boost floor 0.42): goals 3.28, line 52/36/12
+    //   I (base 0.012, xg_boost floor 0.30): aiming goals ~2.6, line 55/33/12
     let base_willingness =
-        0.04 + selection * 0.11 + composure_skill * 0.05 + execution_skill * 0.06;
-    // xg_boost — lift the floor on the multiplicative chain so a 0.04
-    // xG shot still has ~50% of the elite-chance willingness,
-    // not 30%. Real football: even speculative long shots get fired
-    // every other minute when the lane is open.
-    let xg_boost = (xg / 0.20).clamp(0.50, 1.40);
+        0.013 + selection * 0.045 + composure_skill * 0.020 + execution_skill * 0.025;
+    // xg_boost — floor 0.30 (vs prior 0.50). Mid-range chance with
+    // xG=0.06 gets 0.30 boost (was 0.50 — ~40% reduction). Clear-shot
+    // xG=0.10 gets 0.50 (was 0.50 — no change). High-xG xG≥0.28 gets
+    // 1.40 (cap unchanged). Net effect: speculative low-xG shots cut
+    // ~40%, high-xG kept intact — preserves line balance better than
+    // a deep floor cut.
+    let xg_boost = (xg / 0.20).clamp(0.30, 1.40);
     let clarity_mult = 0.50 + clarity * 0.50;
     let body_control_mult = (0.65 + body_control * 0.40).clamp(0.60, 1.05);
     let condition_mult = (1.0 - low_condition_penalty * 0.55).clamp(0.40, 1.05);
@@ -525,26 +542,35 @@ pub fn evaluate_forward_shot_decision(
         }
     }
 
-    // ── Post-score relaxation ─────────────────────────────────────────
+    // ── Post-restart regroup + match-settle window ───────────────────
     //
-    // Real-football: the team that just scored relaxes briefly
-    // (celebration, complacency, defensive line drops) — the conceding
-    // team kicks off, the scoring team's forwards aren't sprinting back
-    // at full intent yet. This is the canonical "second goal is harder
-    // when you just scored" effect.
+    // Real-football: after a goal both teams take 60–90s to reset;
+    // at match start both teams need 3–5 minutes to find their rhythm.
+    // The engine before this block produced 76% of first-goals in
+    // minutes 0–15 (real PL ~25%), 60% equalizers within 15 min (real
+    // ~28%), and 28% within 5 min (real ~10%) — the kickoff-blitz
+    // cascade. The fix uses two complementary symmetric time-windows:
     //
-    // The damping breaks the scoring cascade asymmetrically. When team
-    // A scores, A is dampened next. If B equalizes (1-1), B is dampened
-    // — preventing the back-and-forth 2-2 / 3-3 / 4-4 cascade that the
-    // engine's scoreline distribution showed at 2-4× real PL rates.
+    //   * scoring team: -25% willingness for 60s after they scored
+    //     (existing post-score relaxation — works marginally)
+    //   * conceding team: -15% willingness for 45s after they conceded
+    //     (mild — the post-concede rattle, kept LIGHT so weak sides
+    //     at extreme gaps aren't repeatedly suppressed; an earlier
+    //     heavy variant inflated 2-2 draws because strong sides got
+    //     a free hand to extend the lead — see [[strength-curve-
+    //     calibration]] "Dampening the conceding team → INCREASED
+    //     draws" note)
+    //   * match-start: willingness ramps from 0.60× at min 0 to 1.0×
+    //     over the first 5 minutes (300_000 ms; `total_match_time`
+    //     is in ms, 10ms/tick). This is the "settle in" window.
     //
-    // Detected by reading the OPPONENT's `last_conceded_tick` (the
-    // opponent conceding == we just scored). 6000-tick window ≈ 60 s
-    // match time; -25% willingness. Calibration-neutral at equal skill
-    // (whoever scores gets dampened), asymmetric at extreme gaps
-    // because the strong side scores many times more often — dampening
-    // their successive shots is what cuts down the pile-on margin and
-    // gives weak sides a relative chance.
+    // The candidate-orchestrated dev_match sweep (2026-06-05) tested
+    // 5 variants across the deep/mild × short/long axes; this is the
+    // best of them (candidate E). All other variants either matched
+    // baseline or made draws WORSE — symmetric post-goal dampening
+    // has structural limits because at equal skill BOTH teams convert
+    // their reduced chances at similar rates, leaving the draw share
+    // largely unchanged.
     if let Some(side) = ctx.player.side {
         let opp_side = match side {
             PlayerSide::Left => PlayerSide::Right,
@@ -553,10 +579,19 @@ pub fn evaluate_forward_shot_decision(
         if ctx.context.conceded_recently(opp_side, 6000) {
             willingness *= 0.75;
         }
+        if ctx.context.conceded_recently(side, 4500) {
+            willingness *= 0.85;
+        }
+    }
+    let settle_window: u64 = 300_000;
+    if ctx.context.total_match_time < settle_window {
+        let progress = ctx.context.total_match_time as f32 / settle_window as f32;
+        willingness *= 0.60 + 0.40 * progress;
     }
 
-    let cap = if xg >= 0.35 { 0.60 } else { 0.48 };
-    willingness = willingness.clamp(0.012, cap);
+    // Cap trimmed 0.48/0.60 → 0.34/0.44. Floor dropped 0.012 → 0.006.
+    let cap = if xg >= 0.35 { 0.44 } else { 0.34 };
+    willingness = willingness.clamp(0.006, cap);
 
     #[cfg(feature = "match-logs")]
     {

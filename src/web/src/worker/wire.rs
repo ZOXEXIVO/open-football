@@ -189,6 +189,10 @@ impl SquadWire {
             main_squad: main,
             substitutes: subs,
             selection_omissions,
+            // Coach snapshot is not currently transported over the
+            // worker wire format — distributed match runs fall back
+            // to the legacy memory-less substitution scoring.
+            coach_snapshot: None,
         }
     }
 }

@@ -27,7 +27,10 @@ use crate::transfers::window::PlayerValuationCalculator;
 use chrono::Datelike;
 use chrono::NaiveDate;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+use crate::Team;
+use crate::club::staff::{CoachMatchObservation, CoachProfile};
 
 impl LeagueResult {
     pub(super) fn process_match_events<D: LeagueProcessAccess>(
@@ -1810,6 +1813,30 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
         )
         .collect();
 
+    // Build coach observations alongside the per-player match dispatch.
+    // The persistent staff lives on `team.staffs`, so we collect the
+    // observations in this pass and apply them once at the end behind
+    // a single team_mut borrow — keeping the player_mut borrows for
+    // `on_match_played` from overlapping with the staff borrow.
+    let today_date = data.date().date();
+    let coach_match_importance =
+        CoachObservationBuilder::match_importance(is_friendly, is_cup, is_continental);
+    let mut coach_observations: Vec<crate::club::staff::CoachMatchObservation> = Vec::new();
+    let early_hook_threshold_minutes: u16 = 70;
+    let early_hooks: HashSet<u32> = details
+        .substitutions
+        .iter()
+        .filter(|s| s.team_id == side.team_id)
+        .filter(|s| {
+            matches!(
+                s.reason,
+                crate::r#match::engine::flow::result::SubstitutionReason::Discretionary
+            )
+        })
+        .filter(|s| (s.match_time_ms / 60_000) as u16 <= early_hook_threshold_minutes)
+        .map(|s| s.player_out_id)
+        .collect();
+
     for (pid, participation) in all_ids {
         let stats = match details.player_stats.get(&pid) {
             Some(s) => s,
@@ -1817,6 +1844,16 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
         };
         let effective = *effective_ratings.get(&pid).unwrap_or(&stats.match_rating);
         let is_motm = best_player_id == Some(pid);
+        let is_starter = matches!(participation, MatchParticipation::Starter);
+        // Slot the player started in, taken from the kickoff `FieldSquad`.
+        // Drives the coach's `role_fit` reading so an emergency-slot
+        // appearance (e.g. midfielder pressed into fullback) registers as
+        // an out-of-position start instead of a natural-role one.
+        let played_slot = if is_starter {
+            side.starter_slot(pid)
+        } else {
+            None
+        };
         if let Some(player) = data.player_mut(pid) {
             player.on_match_played(&MatchOutcome {
                 stats,
@@ -1836,6 +1873,32 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
                 is_continental,
                 opponent_team_id,
             });
+            coach_observations.push(CoachObservationBuilder::build(
+                player,
+                pid,
+                effective,
+                stats,
+                is_starter,
+                early_hooks.contains(&pid),
+                coach_match_importance,
+                is_cup,
+                is_derby,
+                is_continental,
+                team_won,
+                played_slot,
+                today_date,
+            ));
+        }
+    }
+
+    // Apply observations to the head coach's persistent memory. The
+    // staff borrow is fully scoped here so it doesn't overlap with
+    // the player borrows above. Memory updates are friendly-safe:
+    // friendlies contribute small signals so a pre-season cameo
+    // doesn't reshape the manager's trust profile.
+    if !coach_observations.is_empty() && !is_friendly {
+        if let Some(team) = data.team_mut(side.team_id) {
+            CoachObservationBuilder::apply(team, &coach_observations);
         }
     }
 
@@ -1931,6 +1994,114 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
         }
         if let Some(player) = data.player_mut(omitted.player_id) {
             player.on_match_dropped_with_context(omitted.context.clone());
+        }
+    }
+}
+
+/// Stateless namespace bundling the per-player coach observation
+/// construction and the per-team apply pass. Owning a single struct
+/// keeps the dispatch loop above readable and gives the conversion
+/// from `MatchOutcome`-like data to [`CoachMatchObservation`] a
+/// single home.
+struct CoachObservationBuilder;
+
+impl CoachObservationBuilder {
+    /// Pick a representative match importance for the coach memory
+    /// signals. Cup and continental ties carry materially more weight
+    /// than league rounds — the big-match flags only update when the
+    /// fixture is itself big.
+    fn match_importance(is_friendly: bool, is_cup: bool, is_continental: bool) -> f32 {
+        if is_friendly {
+            return 0.2;
+        }
+        if is_continental {
+            return 0.95;
+        }
+        if is_cup {
+            return 0.80;
+        }
+        0.70
+    }
+
+    /// Build a single observation from the per-player stats already
+    /// captured in the dispatch loop.
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        player: &Player,
+        player_id: u32,
+        effective_rating: f32,
+        stats: &PlayerMatchEndStats,
+        is_starter: bool,
+        was_substituted_early: bool,
+        match_importance: f32,
+        is_cup: bool,
+        is_derby: bool,
+        is_continental: bool,
+        team_won: bool,
+        played_slot: Option<PlayerPositionType>,
+        date: NaiveDate,
+    ) -> CoachMatchObservation {
+        CoachMatchObservation {
+            player_id,
+            effective_rating,
+            minutes_played: stats.minutes_played as u16,
+            is_starter,
+            match_importance,
+            is_cup,
+            is_derby,
+            is_continental,
+            goals: stats.goals,
+            assists: stats.assists,
+            errors_leading_to_goal: stats.errors_leading_to_goal,
+            yellow_cards: stats.yellow_cards as u8,
+            red_cards: stats.red_cards as u8,
+            team_won,
+            was_substituted_early,
+            role_fit: Self::role_fit(player, played_slot),
+            professionalism_signal: (player.attributes.professionalism / 20.0).clamp(0.0, 1.0),
+            date,
+        }
+    }
+
+    /// Coach's read of how well the player's natural role matched
+    /// the slot they actually played. Read at observation time so
+    /// the coach's `role_fit_confidence` learns from emergency-slot
+    /// appearances (a midfielder pressed into fullback registers as
+    /// a sub-1.0 fit). Falls back to 1.0 when the played slot isn't
+    /// known (substitutes, legacy FieldSquads without `starter_slots`).
+    ///
+    /// The level is the player's own positional rating at the slot,
+    /// normalised into [0.0, 1.0] by the engine's 0..20 convention.
+    fn role_fit(player: &Player, played_slot: Option<PlayerPositionType>) -> f32 {
+        let Some(slot) = played_slot else {
+            return 1.0;
+        };
+        let level = player.positions.get_level(slot);
+        if level == 0 {
+            // Outright emergency role — read as 0.35 so the signal is
+            // negative but the EMA doesn't crash the confidence in one
+            // appearance.
+            return 0.35;
+        }
+        (level as f32 / 20.0).clamp(0.35, 1.0)
+    }
+
+    /// Apply every queued observation to the team's head coach.
+    /// Walks the same manager → caretaker → assistant chain that the
+    /// selection layer uses via `head_coach()`, so the coach calling
+    /// the shots and the coach whose memory updates are always the
+    /// same person. Also runs the dormant-record decay so memory of
+    /// players the coach hasn't seen recently softens.
+    fn apply(team: &mut Team, observations: &[CoachMatchObservation]) {
+        let Some(head_coach) = team.staffs.head_coach_mut() else {
+            return;
+        };
+        let profile = CoachProfile::from_staff(head_coach);
+        for obs in observations {
+            head_coach.coach_memory.observe(obs, &profile);
+        }
+        if let Some(latest) = observations.last() {
+            head_coach.coach_memory.decay_inactive(latest.date);
         }
     }
 }

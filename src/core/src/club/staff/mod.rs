@@ -7,7 +7,12 @@ pub mod model;
 pub mod recruitment;
 // Staff perception / scouting evaluation.
 pub mod perception;
+// Persistent coach decision / coach memory system. The lens that
+// translates a player's body of work into a coach-aware assessment
+// the selection / substitution layers can fold into their scoring.
+pub mod coach;
 
+pub use coach::*;
 pub use model::*;
 pub use perception::*;
 pub use recruitment::*;

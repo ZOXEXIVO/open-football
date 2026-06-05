@@ -1,4 +1,5 @@
 use crate::Tactics;
+use crate::club::staff::CoachMatchSnapshot;
 use crate::r#match::MatchPlayer;
 use crate::r#match::squad::OmittedPlayer;
 
@@ -18,4 +19,13 @@ pub struct MatchSquad {
     /// the manager picked instead and why. Empty for rotation /
     /// friendly squads, or when nothing notable happened.
     pub selection_omissions: Vec<OmittedPlayer>,
+    /// Live-match snapshot of the head coach's persistent state —
+    /// memory store, perception profile, and strategy for this
+    /// fixture. Populated at squad-construction time by the team
+    /// builders so the match engine's substitution layer can build a
+    /// [`CoachDecisionEngine`] without reaching back to the league
+    /// pipeline. `None` for tests / dev_match harnesses that don't
+    /// stand up a real club — the substitution path falls back to
+    /// the legacy (memory-less) scoring in that case.
+    pub coach_snapshot: Option<CoachMatchSnapshot>,
 }

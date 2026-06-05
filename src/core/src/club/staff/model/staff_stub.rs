@@ -1,4 +1,5 @@
 use crate::club::PersonBehaviour;
+use crate::club::staff::CoachMemoryStore;
 use crate::shared::fullname::FullName;
 use crate::{
     CoachFocus, MentalFocusType, PersonAttributes, PhysicalFocusType, Relations, Staff,
@@ -93,6 +94,7 @@ impl StaffStub {
             training_schedule: vec![],
             recent_events: Vec::new(),
             specialization_days: [0; 4],
+            coach_memory: CoachMemoryStore::new(),
         };
         staff
     }

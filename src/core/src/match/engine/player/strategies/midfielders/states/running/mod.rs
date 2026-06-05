@@ -172,20 +172,19 @@ impl StateProcessingHandler for MidfielderRunningState {
                 // has hogged (>6 attempts) this falls through to the
                 // willingness roll like everyone else, so it can't be abused.
                 let sp = ctx.player().shooting().shot_profile();
-                // Lowered xG bar from 0.12 → 0.085. A midfielder arriving
-                // centrally with a clear sight of goal in standard range
-                // (≤52u, edge of box) at xG ~0.10 is a quintessential
-                // box-to-box chance — the previous bar of 0.12 made the
-                // tier near-unreachable, leaving midfielders dependent on
-                // the forward-tuned willingness roll. Effect on goal
-                // distribution: MID share lifts from ~10% toward the
-                // realistic ~30% without touching forward behaviour.
+                // xG bar 0.085 → 0.110: a tighter Tier-1 keeps the box-to-box
+                // mid path open for genuinely high-quality central chances
+                // while letting the helper's willingness roll handle the
+                // grey zone (xG 0.085-0.110). With the forward willingness
+                // cut, the prior 0.085 bar overweighted MID share (32→40%
+                // of goals); 0.110 restores the 32% target. The anti-
+                // monopoly cap also tightens 6 → 4 to mirror the FWD path.
                 let clear_good = distance_to_goal <= STANDARD_SHOOTING_DISTANCE
                     && coach.shooting_reluctance() < 0.5
                     && ctx.player().has_clear_shot()
                     && ctx.player().shooting().has_good_angle()
-                    && sp.expected_xg(distance_to_goal, true) >= 0.085;
-                if clear_good && ctx.memory().shots_taken <= 6 {
+                    && sp.expected_xg(distance_to_goal, true) >= 0.110;
+                if clear_good && ctx.memory().shots_taken <= 4 {
                     #[cfg(feature = "match-logs")]
                     {
                         use std::sync::atomic::Ordering;

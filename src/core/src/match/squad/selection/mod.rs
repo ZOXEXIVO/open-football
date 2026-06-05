@@ -8,6 +8,9 @@ pub(crate) mod scoring;
 #[cfg(test)]
 mod tests;
 
+use crate::club::staff::{
+    CoachDecisionEngine, CoachProfile, CoachStrategy, StrategyDeriver, StrategyInputs,
+};
 use crate::club::{ClubPhilosophy, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
 use crate::{MatchTacticType, Player, PlayerStatusType, Tactics, Team, TeamType};
@@ -233,6 +236,9 @@ impl SquadSelector {
         // quality/readiness/status logic untouched.
         let cup = ctx.competition.domestic_cup_context(ctx.date);
 
+        // Coach perception profile — read-only lens, derived once.
+        let coach_profile = CoachProfile::from_staff(staff);
+
         // Force-selection is a Main-team pin: a flagged player is committed
         // to the senior XI, so non-Main squads must drop them from every
         // entry path — both their own roster (a B-team player flagged for
@@ -361,6 +367,32 @@ impl SquadSelector {
             );
         }
 
+        // Coach decision engine — built once per side, after
+        // `available` so the strategy reads real squad-depth and any
+        // available cup-context signals (opponent reputation /
+        // strength ratio). Personality + strategy is the lens; the
+        // existing scoring engine still does the heavy lifting.
+        let strength_ratio = StrategyInputsBuilder::strength_ratio(&ctx.competition);
+        let squad_depth = StrategyInputsBuilder::squad_depth(available.len());
+        let coach_strategy = StrategyDeriver::derive(&StrategyInputs {
+            profile: &coach_profile,
+            philosophy: ctx.philosophy.clone(),
+            match_importance: ctx.match_importance,
+            is_friendly: ctx.is_friendly,
+            is_cup: matches!(
+                ctx.competition,
+                SelectionCompetition::DomesticCup { .. } | SelectionCompetition::ContinentalCup
+            ),
+            is_continental: matches!(ctx.competition, SelectionCompetition::ContinentalCup),
+            // TODO derby flag: requires opponent_team_id on SelectionContext
+            // and a derby check against the club's rivals. Left as false
+            // until the selection context grows that field.
+            is_derby: false,
+            strength_ratio,
+            squad_depth,
+        });
+        let coach_engine = CoachDecisionEngine::from_staff(staff, &coach_profile, coach_strategy);
+
         let scx = competitive::SelectionScoringContext {
             staff,
             tactics,
@@ -370,6 +402,8 @@ impl SquadSelector {
             match_importance: ctx.match_importance,
             policy,
             cup: cup.as_ref(),
+            coach: Some(&coach_engine),
+            competition: ctx.competition,
         };
 
         let main_squad = scx.select_starting_eleven(team.id, &available);
@@ -414,6 +448,8 @@ impl SquadSelector {
             is_friendly: ctx.is_friendly,
             match_importance: ctx.match_importance,
             cup: cup.as_ref(),
+            coach: Some(&coach_engine),
+            competition: ctx.competition,
         }
         .build();
 
@@ -592,6 +628,77 @@ impl SquadSelector {
             match_importance: 0.7,
             policy: SelectionPolicy::StrongWithRotation,
             cup: None,
+            coach: None,
+            competition: SelectionCompetition::League,
         }
+    }
+}
+
+/// Helpers for deriving the soft signals fed into [`StrategyInputs`]
+/// from objective squad / fixture state. Kept under one struct so the
+/// formulas live in one place — selection and tests read them by
+/// name rather than re-deriving inline.
+pub(crate) struct StrategyInputsBuilder;
+
+impl StrategyInputsBuilder {
+    /// Coach's strength signal vs the opponent (1.0 = even). Derived
+    /// from the domestic-cup context's opponent reputation when
+    /// available; falls back to 1.0 for league / continental fixtures
+    /// because the selection layer doesn't yet carry opponent
+    /// reputation outside the cup bracket.
+    pub(crate) fn strength_ratio(competition: &SelectionCompetition) -> f32 {
+        match *competition {
+            SelectionCompetition::DomesticCup {
+                own_reputation,
+                opponent_reputation,
+                ..
+            } => {
+                let own = own_reputation.max(1) as f32;
+                let opp = opponent_reputation.max(1) as f32;
+                (own / opp).clamp(0.25, 4.0)
+            }
+            _ => 1.0,
+        }
+    }
+
+    /// Squad-depth heuristic in [0.0, 1.0]: 1.0 = deep bench, 0.0 =
+    /// thin. Linear ramp over the available pool size — anything at
+    /// or below the matchday 18 is thin; 25+ available is deep.
+    /// Selection's force-fill paths can still field an XI from a
+    /// thin pool; this signal only shapes how aggressively the
+    /// coach rotates.
+    pub(crate) fn squad_depth(available_len: usize) -> f32 {
+        let minimum = (DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE) as f32;
+        let deep = 25.0_f32;
+        let available = available_len as f32;
+        ((available - minimum) / (deep - minimum)).clamp(0.0, 1.0)
+    }
+}
+
+/// Convenience helper bundling the strategy / coach hints derived from
+/// a [`SelectionContext`]. Kept as a struct namespace so the conversion
+/// rules live in one place — the selection layer reads them by name
+/// instead of hand-derived flags scattered across each call site.
+pub struct CoachStrategyForSelection;
+
+impl CoachStrategyForSelection {
+    /// Compute the coach strategy used by the selection layer's coach
+    /// adjustment. Exposed so omissions / tests can rebuild the same
+    /// strategy without duplicating the SelectionContext → inputs map.
+    pub fn derive(profile: &CoachProfile, ctx: &SelectionContext) -> CoachStrategy {
+        StrategyDeriver::derive(&StrategyInputs {
+            profile,
+            philosophy: ctx.philosophy.clone(),
+            match_importance: ctx.match_importance,
+            is_friendly: ctx.is_friendly,
+            is_cup: matches!(
+                ctx.competition,
+                SelectionCompetition::DomesticCup { .. } | SelectionCompetition::ContinentalCup
+            ),
+            is_continental: matches!(ctx.competition, SelectionCompetition::ContinentalCup),
+            is_derby: false,
+            strength_ratio: 1.0,
+            squad_depth: 0.5,
+        })
     }
 }

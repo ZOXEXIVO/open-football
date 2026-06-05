@@ -624,7 +624,7 @@ a:active {
 .fm-tab {
     display: inline-flex;
     align-items: center;
-    padding: 12px 18px;
+    padding: 10px 18px;
     font-size: 10px;
     font-weight: 500;
     text-transform: uppercase;
@@ -653,15 +653,15 @@ a:active {
 .fm-tab-badge {
     display: inline-block;
     position: relative;
-    top: -1px;
-    margin-left: 4px;
-    padding: 2px 6px;
-    min-width: 16px;
+    top: 0px;
+    margin-left: 5px;
+    padding: 3px 5px;
+    min-width: 20px;
     font-size: 9px;
-    font-weight: 700;
+    font-weight: 600;
     line-height: 1;
     text-align: center;
-    border-radius: 4px;
+    border-radius: 2px;
     background: var(--tab-fg-active, #4a9d5b);
     color: var(--header-bg, #fff);
     vertical-align: middle;

@@ -1,3 +1,4 @@
+use crate::club::staff::{CoachDecisionEngine, CoachSelectionContext};
 use crate::club::{PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
 use crate::utils::DateUtils;
@@ -8,7 +9,7 @@ use log::debug;
 use super::cup_rotation::CupRotation;
 use super::helpers;
 use super::scoring::ScoringEngine;
-use super::{CupStage, DomesticCupContext, SelectionPolicy};
+use super::{CupStage, DomesticCupContext, SelectionCompetition, SelectionPolicy};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
@@ -41,6 +42,16 @@ pub(crate) struct SelectionScoringContext<'a> {
     pub match_importance: f32,
     pub policy: SelectionPolicy,
     pub cup: Option<&'a DomesticCupContext>,
+    /// Coach decision engine for the selecting side, when available.
+    /// Absent for the legacy public scoring entry points and tests that
+    /// don't build it. The slot / bench scorers fold a small coach
+    /// adjustment on top of the existing score when present, and
+    /// behave exactly as before when absent.
+    pub coach: Option<&'a CoachDecisionEngine<'a>>,
+    /// Competition the tie sits in. Used by the coach adjustment to
+    /// build the per-player `CoachSelectionContext` (drives the big-
+    /// match / derby / continental dimension).
+    pub competition: SelectionCompetition,
 }
 
 impl SelectionScoringContext<'_> {
@@ -880,6 +891,60 @@ impl SelectionScoringContext<'_> {
             + self.policy_starting_adjustment(player)
             + self.cup_opportunity(player, true)
             + self.future_pathway_start(player, slot, available)
+            + self.coach_starting_adjustment(player, slot)
+    }
+
+    /// Memory-aware coach lens layered on top of the slot score.
+    /// Returns 0.0 when no coach engine is wired in (legacy callers /
+    /// tests) so the existing scoring is unchanged. Otherwise returns
+    /// a small signed nudge — the engine's adjustment is bounded by
+    /// [`AssessmentMath::SELECTION_SCALE`] inside the coach module,
+    /// so a personality + memory composite cannot dominate raw quality.
+    fn coach_starting_adjustment(&self, player: &Player, slot: PlayerPositionType) -> f32 {
+        let Some(coach) = self.coach else {
+            return 0.0;
+        };
+        let target_group = slot.position_group();
+        let natural_role_fit =
+            (helpers::position_fit_score(player, slot, target_group) / 20.0).clamp(0.0, 1.0);
+        let coach_ctx = CoachSelectionContext {
+            date: self.date,
+            match_importance: self.match_importance,
+            is_friendly: self.is_friendly,
+            is_cup: matches!(
+                self.competition,
+                SelectionCompetition::DomesticCup { .. } | SelectionCompetition::ContinentalCup
+            ),
+            is_derby: false,
+            is_continental: matches!(self.competition, SelectionCompetition::ContinentalCup),
+            natural_role_fit,
+            is_succession_heir: &[],
+        };
+        coach.score_starting_slot(player, &coach_ctx).adjustment
+    }
+
+    /// Memory-aware coach lens on top of the bench-role score.
+    fn coach_bench_adjustment(&self, player: &Player) -> f32 {
+        let Some(coach) = self.coach else {
+            return 0.0;
+        };
+        let slot = helpers::best_tactical_position(player, self.tactics);
+        let natural_role_fit =
+            (helpers::position_fit_score(player, slot, slot.position_group()) / 20.0).clamp(0.0, 1.0);
+        let coach_ctx = CoachSelectionContext {
+            date: self.date,
+            match_importance: self.match_importance,
+            is_friendly: self.is_friendly,
+            is_cup: matches!(
+                self.competition,
+                SelectionCompetition::DomesticCup { .. } | SelectionCompetition::ContinentalCup
+            ),
+            is_derby: false,
+            is_continental: matches!(self.competition, SelectionCompetition::ContinentalCup),
+            natural_role_fit,
+            is_succession_heir: &[],
+        };
+        coach.score_bench_role(player, &coach_ctx).adjustment
     }
 
     fn policy_starting_adjustment(&self, player: &Player) -> f32 {
@@ -1005,6 +1070,7 @@ impl SelectionScoringContext<'_> {
             + self.cup_opportunity(player, false)
             + self.cup_bench_unseen_bonus(player)
             + self.future_pathway_bench(player)
+            + self.coach_bench_adjustment(player)
     }
 
     /// Extra bench pull for a non-established player who hasn't featured in

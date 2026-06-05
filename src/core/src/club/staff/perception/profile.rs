@@ -213,4 +213,50 @@ impl CoachProfile {
     pub fn perception_noise(&self, player_id: u32, salt: u32) -> f32 {
         super::utils::perception_noise_raw(self.coach_seed, player_id, salt)
     }
+
+    // ── Coach-decision reaction weights ────────────────────────────────
+    //
+    // The persistent coach memory / coach decision engine reads these
+    // helpers to size *how strongly* the coach reacts to evidence. The
+    // formulas live here so the engine reads as orchestration and the
+    // tuning surface stays in one place.
+
+    /// How strongly the coach reacts to recent form evidence (0..1+).
+    /// A negativity-biased and recency-biased coach reacts harder; a
+    /// stubborn / high-judging coach reacts less.
+    ///
+    /// Used by [`AssessmentMath`] to size the form-pressure adjustment.
+    pub fn form_reaction_weight(&self) -> f32 {
+        let recency = self.recency_bias;
+        let negativity = self.negativity_bias;
+        let stubborn_damp = (1.0 - self.stubbornness * 0.4).clamp(0.6, 1.0);
+        let acc_damp = (1.0 - self.judging_accuracy * 0.3).clamp(0.7, 1.0);
+        ((recency * 0.5 + negativity * 0.4 + 0.3) * stubborn_damp * acc_damp).clamp(0.2, 1.4)
+    }
+
+    /// How strongly the coach reacts to trust-delta evidence (0..1+).
+    /// Authoritarian / negativity-biased coaches react harder.
+    pub fn trust_reaction_weight(&self) -> f32 {
+        ((self.attitude_weight + self.negativity_bias * 0.5 + 0.3) * 0.8).clamp(0.3, 1.3)
+    }
+
+    /// How patient the coach is with development minutes (0..1+).
+    /// High youth_preference + high man_management + transformational
+    /// style → patient. Conservative + low man_management → impatient.
+    pub fn development_patience(&self) -> f32 {
+        ((self.youth_preference * 0.4 + self.man_management * 0.4 + 0.2) * 1.05).clamp(0.2, 1.4)
+    }
+
+    /// Multiplier applied to single-bad-game pressure (0..1, closer to
+    /// 0 = stronger dampening). A high-judging-accuracy, high-man-
+    /// management coach sees through one bad game; a high-recency,
+    /// high-negativity coach lets it through unchecked.
+    pub fn one_bad_game_dampener(&self) -> f32 {
+        let damp = self.judging_accuracy * 0.4
+            + self.man_management * 0.3
+            + (1.0 - self.recency_bias) * 0.2
+            + (1.0 - self.emotional_volatility) * 0.1;
+        // Map 0..1 onto a tightening dampener: high damp → small mult.
+        (1.0 - damp * 0.7).clamp(0.3, 1.0)
+    }
 }

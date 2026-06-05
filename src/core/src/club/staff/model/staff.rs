@@ -1,5 +1,6 @@
 // Assuming rand is available
 extern crate rand;
+use crate::club::staff::CoachMemoryStore;
 use crate::club::{PersonBehaviour, StaffClubContract, StaffPosition, StaffStatus};
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
@@ -78,6 +79,13 @@ pub struct Staff {
     ///
     /// Indices match `PlayerFieldPositionGroup` discriminants.
     pub specialization_days: [u32; 4],
+
+    /// Persistent coach decision / coach memory store. Holds the
+    /// coach's interpretation of every observed player — recent /
+    /// long-form rating EMAs, streak counters, trust signals, and
+    /// structured flags. Defaults to empty, so a freshly-generated
+    /// coach behaves neutrally until enough observations accumulate.
+    pub coach_memory: CoachMemoryStore,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +136,28 @@ impl StaffCollection {
             Some(head_coach) => head_coach,
             None => self.get_by_position(StaffPosition::AssistantManager),
         }
+    }
+
+    /// Mutable counterpart of [`head_coach`]. Walks the same fallback
+    /// chain (manager → caretaker → assistant) so the persistent
+    /// coach memory updates land on the same staff member the
+    /// selection layer is reading. Returns `None` only when every
+    /// seat is vacant — the read-only [`head_coach`] falls back to a
+    /// stub in that case, but the stub has no real club affiliation
+    /// and updating its memory would be a no-op.
+    pub fn head_coach_mut(&mut self) -> Option<&mut Staff> {
+        let positions = [
+            StaffPosition::Manager,
+            StaffPosition::CaretakerManager,
+            StaffPosition::AssistantManager,
+        ];
+        let idx = self.staffs.iter().position(|s| {
+            s.contract
+                .as_ref()
+                .map(|c| positions.contains(&c.position))
+                .unwrap_or(false)
+        })?;
+        Some(&mut self.staffs[idx])
     }
 
     /// Display name for the head coach, used wherever a decision is
@@ -459,6 +489,7 @@ impl Staff {
             training_schedule: Vec::new(),
             recent_events: Vec::new(),
             specialization_days: [0; 4],
+            coach_memory: CoachMemoryStore::new(),
         }
     }
 

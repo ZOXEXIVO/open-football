@@ -1937,6 +1937,8 @@ fn gk_unit_ctx<'a>(
         match_importance: 0.7,
         policy: SelectionPolicy::StrongWithRotation,
         cup: None,
+        coach: None,
+        competition: super::SelectionCompetition::League,
     }
 }
 
@@ -2377,6 +2379,8 @@ fn prospect_bench_fit_uses_simulation_date() {
         match_importance: 0.3,
         policy: SelectionPolicy::CupRotation,
         cup: None,
+        coach: None,
+        competition: super::SelectionCompetition::League,
     };
     // 22 on the simulation date (born 2023) → the 0.65 prospect tier. Against
     // the wall clock he'd read as a small child (the 1.0 tier), so a wall-clock

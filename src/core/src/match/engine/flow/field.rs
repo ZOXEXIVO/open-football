@@ -1,4 +1,5 @@
 use crate::Tactics;
+use crate::club::staff::CoachMatchSnapshot;
 use crate::r#match::ball::Ball;
 use crate::r#match::{
     FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, POSITION_POSITIONING, PlayerSide,
@@ -20,6 +21,22 @@ pub struct MatchField {
 
     pub right_side_players: Option<FieldSquad>,
     pub right_team_tactics: Tactics,
+
+    /// Live-match snapshot of each side's head coach. Carries the
+    /// memory store, perception profile, and strategy needed by the
+    /// substitution layer's coach-aware pair scorer. `None` when the
+    /// squad was built outside the real club flow (tests / dev_match
+    /// / wire-format reconstruction) — the substitution layer then
+    /// falls back to the legacy memory-less scoring.
+    ///
+    /// Stored on `MatchField` rather than `MatchContext` because the
+    /// snapshot is fundamentally tied to the squads' identities, and
+    /// `MatchField::new` is the construction point that already
+    /// consumes the `MatchSquad` values; `MatchContext::new` borrows
+    /// the field afterwards and can read these without an extra
+    /// parameter.
+    pub home_coach_snapshot: Option<CoachMatchSnapshot>,
+    pub away_coach_snapshot: Option<CoachMatchSnapshot>,
 }
 
 impl MatchField {
@@ -38,6 +55,12 @@ impl MatchField {
         let left_tactics = left_team_squad.tactics.clone();
         let right_tactics = right_team_squad.tactics.clone();
 
+        // Snapshots taken before the squads are consumed by the
+        // player-setup pass. Cheap: the inner memory map is bounded
+        // by the player roster the coach has observed.
+        let home_coach_snapshot = left_team_squad.coach_snapshot.clone();
+        let away_coach_snapshot = right_team_squad.coach_snapshot.clone();
+
         let (players_on_field, substitutes) =
             setup_player_on_field(left_team_squad, right_team_squad);
 
@@ -52,9 +75,24 @@ impl MatchField {
             left_team_tactics: left_tactics,
             right_side_players: Some(away_squad),
             right_team_tactics: right_tactics,
+            home_coach_snapshot,
+            away_coach_snapshot,
         };
 
         field
+    }
+
+    /// Borrow the coach snapshot for the given `team_id`, if any.
+    /// Centralises the home/away mapping so the substitution layer
+    /// reads by team rather than by side.
+    pub fn coach_snapshot_for_team(&self, team_id: u32) -> Option<&CoachMatchSnapshot> {
+        if team_id == self.home_team_id {
+            self.home_coach_snapshot.as_ref()
+        } else if team_id == self.away_team_id {
+            self.away_coach_snapshot.as_ref()
+        } else {
+            None
+        }
     }
 
     pub fn reset_players_positions(&mut self) {
