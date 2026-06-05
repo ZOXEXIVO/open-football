@@ -57,7 +57,7 @@ impl MatchEngineConfig {
 }
 use crate::r#match::{
     GameState, GoalDetail, GoalPosition, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchCoach,
-    MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score,
+    MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, PlayerSide, Score,
     TeamSkillAggregates, TeamTacticalState, TeamsTactics,
 };
 use nalgebra::Vector3;
@@ -110,6 +110,18 @@ pub struct MatchContext {
     // Global goal cooldown: tick when last goal was scored
     // Prevents immediate scoring after kickoff restart
     pub last_goal_tick: u64,
+
+    /// Per-side tick at which that side last conceded a goal. Used to
+    /// model "post-concede rattle" — the well-documented real-football
+    /// dynamic where teams that just conceded a goal under-perform on
+    /// their next attacking moves (decision-making rushed, body language
+    /// shaken, defensive lines slow to reset). The forward shot-decision
+    /// helper reads this to dampen willingness for ~1 minute of match
+    /// time after a goal. Without this, the engine's equal-skill
+    /// scoreline distribution showed 2-2 / 3-3 / 4-4 draws at 2-4× real
+    /// PL rates — every concede triggered an immediate equalizer.
+    /// Index 0 = home, index 1 = away. `u64::MAX` = never conceded.
+    pub last_conceded_tick: [u64; 2],
 
     // Stats for players who were substituted out (preserved before replacement)
     pub substituted_out_stats: Vec<(u32, PlayerMatchEndStats)>,
@@ -328,6 +340,7 @@ impl MatchContext {
             period_stoppage_time_ms: 0,
             penalty_shootout_kicks: Vec::new(),
             last_goal_tick: 0,
+            last_conceded_tick: [u64::MAX, u64::MAX],
             substituted_out_stats: Vec::new(),
             substituted_out_physical_snapshots: Vec::new(),
             coach_home: MatchCoach::new(),
@@ -472,6 +485,33 @@ impl MatchContext {
 
     pub fn record_goal_tick(&mut self) {
         self.last_goal_tick = self.current_tick();
+    }
+
+    /// Mark that the given side just conceded a goal. Read by the
+    /// forward shot decision to dampen willingness in the immediate
+    /// post-concede window. See `last_conceded_tick` docs for the
+    /// mechanism rationale.
+    pub fn record_conceded(&mut self, side: PlayerSide) {
+        let tick = self.current_tick();
+        let idx = match side {
+            PlayerSide::Left => 0,
+            PlayerSide::Right => 1,
+        };
+        self.last_conceded_tick[idx] = tick;
+    }
+
+    /// Did the given side concede within the last `window_ticks` ticks?
+    /// One tick is 10 ms of match time, so 6000 ticks ≈ 60 s.
+    pub fn conceded_recently(&self, side: PlayerSide, window_ticks: u64) -> bool {
+        let idx = match side {
+            PlayerSide::Left => 0,
+            PlayerSide::Right => 1,
+        };
+        let last = self.last_conceded_tick[idx];
+        if last == u64::MAX {
+            return false;
+        }
+        self.current_tick().saturating_sub(last) < window_ticks
     }
 
     pub fn enable_logging(&mut self) {

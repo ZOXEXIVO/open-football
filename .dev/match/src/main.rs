@@ -1638,6 +1638,76 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         println!("  {:>2}: {:>3} {}", total, count, bar);
     }
 
+    // ── Scoreline distribution — diagnose draw inflation ──────────────
+    //
+    // Real PL scoreline distribution (approximate, last 5 seasons):
+    //   1-1: 11% | 1-0: 10% | 2-1: 12% | 0-0: 8% | 2-0: 9% | 2-2: 5%
+    //   3-1: 7% | 3-0: 5% | 3-2: 4% | other: 29%
+    //   Total draws ≈ 25%, decisive ≈ 75%
+    //
+    // The engine sits at ~52-55% draws at equal skill. This breakdown
+    // identifies WHICH draws are over-represented. Hypotheses:
+    //   - 0-0 inflation → not enough scoring opportunities (low total goals)
+    //   - 1-1 inflation → equalizer dynamic (team B scores soon after A)
+    //   - 2-2 inflation → back-and-forth correlation (both keep responding)
+    let mut scoreline_counts: std::collections::BTreeMap<(u8, u8), u32> =
+        std::collections::BTreeMap::new();
+    let mut draws_by_total: std::collections::BTreeMap<u8, u32> =
+        std::collections::BTreeMap::new();
+    for o in &outcomes {
+        // Bucket as (lower, higher) so 2-1 and 1-2 land in same row —
+        // we care about scoreline shape, not which team scored.
+        let key = (o.home_goals.min(o.away_goals), o.home_goals.max(o.away_goals));
+        *scoreline_counts.entry(key).or_default() += 1;
+        if o.home_goals == o.away_goals {
+            *draws_by_total.entry(o.home_goals).or_default() += 1;
+        }
+    }
+    println!();
+    println!("--- SCORELINE distribution (sorted by frequency) ---");
+    let mut scoreline_sorted: Vec<((u8, u8), u32)> =
+        scoreline_counts.into_iter().collect();
+    scoreline_sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    let total_n = n_matches as f32;
+    for ((lo, hi), count) in scoreline_sorted.iter().take(15) {
+        let pct = *count as f32 / total_n * 100.0;
+        let kind = if lo == hi { "DRAW" } else { "DEC " };
+        let bar: String = std::iter::repeat('#').take((pct.round() as usize).min(40)).collect();
+        println!(
+            "  {}-{}  {}  {:>4} ({:>5.1}%) {}",
+            lo, hi, kind, count, pct, bar
+        );
+    }
+    println!();
+    println!("--- DRAWS breakdown (each n-n) ---");
+    let total_draws: u32 = draws_by_total.values().sum();
+    let real_draw_breakdown = [
+        (0u8, "0-0 (real ~8%)"),
+        (1u8, "1-1 (real ~11%)"),
+        (2u8, "2-2 (real ~5%)"),
+        (3u8, "3-3 (real ~1%)"),
+    ];
+    for (n, label) in &real_draw_breakdown {
+        let count = draws_by_total.get(n).copied().unwrap_or(0);
+        let pct = count as f32 / total_n * 100.0;
+        println!("  {} : {:>4} ({:>5.1}% of all matches)", label, count, pct);
+    }
+    let other_draws: u32 = draws_by_total
+        .iter()
+        .filter(|(n, _)| **n >= 4)
+        .map(|(_, c)| *c)
+        .sum();
+    println!(
+        "  4-4+         : {:>4} ({:>5.1}% of all matches)",
+        other_draws,
+        other_draws as f32 / total_n * 100.0,
+    );
+    println!(
+        "  total draws  : {:>4} ({:>5.1}% of all matches, real ~25%)",
+        total_draws,
+        total_draws as f32 / total_n * 100.0,
+    );
+
     // ── UPSET FREQUENCY by level gap ──────────────────────────────────
     //
     // Does the stronger team actually win more often when the gap is

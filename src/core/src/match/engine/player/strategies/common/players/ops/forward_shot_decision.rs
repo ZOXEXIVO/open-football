@@ -1,4 +1,5 @@
 use crate::r#match::MatchPlayerLite;
+use crate::r#match::PlayerSide;
 use crate::r#match::StateProcessingContext;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
@@ -521,6 +522,36 @@ pub fn evaluate_forward_shot_decision(
         if shots_so_far > 3 {
             let hog_damp = (1.0 - (shots_so_far - 3) as f32 * 0.15).clamp(0.20, 1.0);
             willingness *= hog_damp;
+        }
+    }
+
+    // ── Post-score relaxation ─────────────────────────────────────────
+    //
+    // Real-football: the team that just scored relaxes briefly
+    // (celebration, complacency, defensive line drops) — the conceding
+    // team kicks off, the scoring team's forwards aren't sprinting back
+    // at full intent yet. This is the canonical "second goal is harder
+    // when you just scored" effect.
+    //
+    // The damping breaks the scoring cascade asymmetrically. When team
+    // A scores, A is dampened next. If B equalizes (1-1), B is dampened
+    // — preventing the back-and-forth 2-2 / 3-3 / 4-4 cascade that the
+    // engine's scoreline distribution showed at 2-4× real PL rates.
+    //
+    // Detected by reading the OPPONENT's `last_conceded_tick` (the
+    // opponent conceding == we just scored). 6000-tick window ≈ 60 s
+    // match time; -25% willingness. Calibration-neutral at equal skill
+    // (whoever scores gets dampened), asymmetric at extreme gaps
+    // because the strong side scores many times more often — dampening
+    // their successive shots is what cuts down the pile-on margin and
+    // gives weak sides a relative chance.
+    if let Some(side) = ctx.player.side {
+        let opp_side = match side {
+            PlayerSide::Left => PlayerSide::Right,
+            PlayerSide::Right => PlayerSide::Left,
+        };
+        if ctx.context.conceded_recently(opp_side, 6000) {
+            willingness *= 0.75;
         }
     }
 

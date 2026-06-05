@@ -128,4 +128,12 @@ pub fn handle_goal_reset(field: &mut MatchField, context: &mut MatchContext) {
     field.ball.goal_scored = false;
     field.ball.kickoff_team_side = None;
     context.record_goal_tick();
+    // The side kicking off after a goal IS the side that just conceded.
+    // Mark them so the forward shot-decision dampens willingness in the
+    // ~1-minute post-concede window — breaks the equalizer cascade that
+    // was the dominant source of 2-2 / 3-3 / 4-4 draws in the engine's
+    // scoreline distribution.
+    if let Some(conceding_side) = kickoff_side {
+        context.record_conceded(conceding_side);
+    }
 }
