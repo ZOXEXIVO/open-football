@@ -124,21 +124,49 @@ impl Player {
     ///   2. `player.friendly_source_slug` captured at match-record time
     ///      (the only path that knows the actual youth league a senior
     ///      loanee played friendlies in),
-    ///   3. `team.league_slug` (senior pre-season friendlies — the row
-    ///      then renders as the generic "Friendly").
+    ///   3. the matching active spell's preserved `league_slug`, or
+    ///      `team.league_slug` as a last resort (senior pre-season
+    ///      friendlies — the row then renders as the generic "Friendly").
     fn drain_match_stats(
         &mut self,
         team: &TeamInfo,
         season_year: u16,
         friendly_source_slug: Option<String>,
     ) -> PlayerStatistics {
-        self.record_continental_spell(season_year, team);
-        self.record_domestic_cup_spell(season_year, team);
+        // The `team` argument carries the team's CURRENT league at call
+        // time. At a season-end snapshot fired after relegation /
+        // promotion has updated `team.league_id`, that's the NEXT
+        // season's league — not the one the closing season's matches
+        // were actually played in. The player's own current-season
+        // entry preserves the league_slug stamped when the spell was
+        // opened, so prefer it for the per-spell freeze writes. Without
+        // this, cup / continental / friendly entries land under a
+        // (year, team, post-relegation-league) row key that the
+        // season's League entry (correctly stamped under the
+        // pre-relegation league via record_season_end's preserved
+        // snapshot) never matches — producing a phantom history row.
+        let spell_team = self
+            .statistics_history
+            .current
+            .iter()
+            .rev()
+            .find(|e| e.team_slug == team.slug && e.departed_date.is_none())
+            .map(|e| TeamInfo {
+                name: e.team_name.clone(),
+                slug: e.team_slug.clone(),
+                reputation: e.team_reputation,
+                league_name: e.league_name.clone(),
+                league_slug: e.league_slug.clone(),
+            });
+        let effective_team = spell_team.as_ref().unwrap_or(team);
+
+        self.record_continental_spell(season_year, effective_team);
+        self.record_domestic_cup_spell(season_year, effective_team);
         let recorded_source = self.friendly_source_slug.take();
         let friendly_slug = friendly_source_slug
             .or(recorded_source)
-            .unwrap_or_else(|| team.league_slug.clone());
-        self.record_friendly_spell_with_source(season_year, team, friendly_slug);
+            .unwrap_or_else(|| effective_team.league_slug.clone());
+        self.record_friendly_spell_with_source(season_year, effective_team, friendly_slug);
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.reset_cup_statistics();
@@ -3069,6 +3097,110 @@ mod drain_invariants_tests {
 
         assert!(has_ledger_entry(&p, "inter", PlayerStatCompetitionKind::Friendly, "serie-a", 4));
         assert_eq!(p.friendly_statistics.played, 0);
+    }
+
+    #[test]
+    fn on_season_end_after_relegation_keeps_cup_under_prior_league() {
+        // User-reported repro (Azat Taykenov, Barcelona 26/27): a player
+        // on loan at Barcelona plays La Liga + Copa del Rey. Barcelona
+        // is relegated to LIGA adelante at season-end. The snapshot
+        // fires AFTER `process_end_of_period` has rewritten
+        // `team.league_id`, so the TeamInfo handed to `on_season_end`
+        // carries the NEXT season's league. Cup / Friendly entries
+        // used to be stamped with that post-relegation league_slug,
+        // splitting them off from the season's League entry (which
+        // correctly uses the spell's preserved league) and producing
+        // a phantom "Barcelona LIGA adelante 3 games" row for 26/27.
+        //
+        // The drain must instead use the player's active current
+        // entry's preserved league_slug so League + Cup + Friendly
+        // all fold under one (year, team, league_slug) row.
+        use crate::club::player::statistics::history::CurrentSeasonEntry;
+        let mut p = player();
+        // Spell opened earlier in 26/27 while Barca was still in La Liga.
+        p.statistics_history.current.push(CurrentSeasonEntry {
+            team_name: "Barcelona".to_string(),
+            team_slug: "barcelona".to_string(),
+            team_reputation: 9000,
+            league_name: "La Liga".to_string(),
+            league_slug: "spanish-first-division".to_string(),
+            is_loan: true,
+            transfer_fee: Some(0.0),
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2026, 8, 1),
+            departed_date: None,
+            seq_id: 1,
+        });
+        p.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500,
+            d(2027, 5, 31),
+            99,
+            0,
+            100,
+        ));
+        p.statistics = stats(38, 0);
+        p.friendly_statistics = stats(2, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "copa-del-rey".to_string(),
+            statistics: stats(3, 0),
+        });
+        // Snapshot fires AFTER relegation — team_info carries the new
+        // (LIGA adelante) league_slug.
+        let team_after_relegation = team("Barcelona", "barcelona", "spanish-second-division");
+        p.on_season_end(Season::new(2026), &team_after_relegation, d(2027, 8, 1));
+
+        // Cup / Friendly entries inherit the preserved La Liga league_slug,
+        // NOT the post-relegation LIGA adelante league_slug.
+        let cup = p
+            .statistics_history
+            .season_ledger
+            .iter()
+            .find(|e| e.competition_kind == PlayerStatCompetitionKind::DomesticCup)
+            .expect("domestic cup entry missing");
+        assert_eq!(
+            cup.league_slug, "spanish-first-division",
+            "cup must fold under the season's actual league, not the post-relegation one"
+        );
+        let friendly = p
+            .statistics_history
+            .season_ledger
+            .iter()
+            .find(|e| e.competition_kind == PlayerStatCompetitionKind::Friendly)
+            .expect("friendly entry missing");
+        assert_eq!(friendly.league_slug, "spanish-first-division");
+
+        // And the projection produces exactly one 26/27 Barcelona row,
+        // labelled with La Liga — no phantom "Barcelona LIGA adelante"
+        // row for the Copa del Rey games.
+        let empty = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &empty,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let rows = PlayerStatisticsProjection::player_history_rows(
+            &p.statistics_history,
+            &live,
+            d(2028, 9, 1),
+        );
+        let barca_2026: Vec<&_> = rows
+            .iter()
+            .filter(|r| r.season.start_year == 2026 && r.team_slug == "barcelona")
+            .collect();
+        assert_eq!(
+            barca_2026.len(),
+            1,
+            "post-relegation cup drain must not create a phantom row; got {:?}",
+            barca_2026
+                .iter()
+                .map(|r| format!("{}({})", r.team_slug, r.league_slug))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(barca_2026[0].league_slug, "spanish-first-division");
+        assert!(barca_2026[0].is_loan);
+        // 38 League + 3 Copa del Rey folded into a single career row.
+        assert_eq!(barca_2026[0].statistics.played, 41);
     }
 
     #[test]
