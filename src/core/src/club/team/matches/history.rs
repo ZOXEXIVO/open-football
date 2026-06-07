@@ -1,3 +1,4 @@
+use crate::PlayerPositionType;
 use crate::MatchTacticType;
 use crate::r#match::TeamScore;
 use chrono::NaiveDateTime;
@@ -85,6 +86,13 @@ pub struct MatchHistoryItem {
     /// when neither side changed shape, which is the common case for
     /// stable scorelines.
     pub tactic_change_minute: Option<u8>,
+    /// The starting XI this team fielded at kickoff, each player
+    /// paired with the tactical slot they were deployed in. Lets the
+    /// web tactics view render the real last-match lineup on the
+    /// pitch instead of recomputing "best available" every render.
+    /// Empty for legacy items predating the recording (and for paths
+    /// that don't go through the squad selector, e.g. dev_match).
+    pub starting_eleven: Vec<(u32, PlayerPositionType)>,
 }
 
 impl MatchHistoryItem {
@@ -96,11 +104,20 @@ impl MatchHistoryItem {
             tactic_started: None,
             tactic_used: None,
             tactic_change_minute: None,
+            starting_eleven: Vec::new(),
         }
     }
 
     pub fn with_tactic(mut self, tactic: Option<MatchTacticType>) -> Self {
         self.tactic_used = tactic;
+        self
+    }
+
+    pub fn with_starting_eleven(
+        mut self,
+        starting_eleven: Vec<(u32, PlayerPositionType)>,
+    ) -> Self {
+        self.starting_eleven = starting_eleven;
         self
     }
 

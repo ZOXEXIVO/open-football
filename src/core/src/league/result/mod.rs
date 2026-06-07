@@ -121,6 +121,16 @@ impl LeagueResult {
                 d.shape_change_minute,
             )
         });
+        let home_starting_eleven = result
+            .details
+            .as_ref()
+            .map(|d| d.left_team_players.starter_slots.clone())
+            .unwrap_or_default();
+        let away_starting_eleven = result
+            .details
+            .as_ref()
+            .map(|d| d.right_team_players.starter_slots.clone())
+            .unwrap_or_default();
 
         let home_team = data
             .team_mut(home_team_id)
@@ -137,7 +147,8 @@ impl LeagueResult {
                 TeamScore::from(&result.score.away_team),
             ),
         )
-        .with_tactic(final_home_tactic);
+        .with_tactic(final_home_tactic)
+        .with_starting_eleven(home_starting_eleven);
         if let Some((start, _, change_minute)) = tactic_summary {
             home_item = home_item.with_tactic_summary(start, final_home_tactic, change_minute);
         }
@@ -154,7 +165,8 @@ impl LeagueResult {
                 TeamScore::from(&result.score.home_team),
             ),
         )
-        .with_tactic(final_away_tactic);
+        .with_tactic(final_away_tactic)
+        .with_starting_eleven(away_starting_eleven);
         if let Some((_, start, change_minute)) = tactic_summary {
             away_item = away_item.with_tactic_summary(start, final_away_tactic, change_minute);
         }

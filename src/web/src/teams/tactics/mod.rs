@@ -6,9 +6,15 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use core::MatchHistoryItem;
+use core::Player;
 use core::PlayerPositionType;
 use core::SimulatorData;
+use core::Tactics;
+use core::Team;
+use core::TeamType;
 use serde::Deserialize;
+use std::borrow::Cow;
 
 #[derive(Deserialize)]
 pub struct TeamTacticsGetRequest {
@@ -100,92 +106,21 @@ pub async fn team_tactics_get_action(
 
     let league = team.league_id.and_then(|id| simulator_data.league(id));
 
-    let tactics = team.tactics();
-    let formation_name = tactics.tactic_type.display_name().to_string();
-    let formation_positions = tactics.positions();
+    let last_match = LastMatchLookup::find(team);
+    let lineup = TacticsLineupBuilder::build(team, last_match);
+    let formation_name = lineup.formation_name;
+    let formation_players = lineup.players;
 
-    // Match best players to formation positions
-    let mut formation_players: Vec<FormationPlayer> = Vec::new();
-    let mut used_player_ids: Vec<u32> = Vec::new();
+    let recent_used_shapes = RecentShapesView::build(team, simulator_data);
 
-    for required_pos in formation_positions.iter() {
-        let is_gk_slot = *required_pos == PlayerPositionType::Goalkeeper;
-        // Find best available player for this position
-        let players = team.players();
-        let best_player = players
-            .iter()
-            .filter(|p| !used_player_ids.contains(&p.id))
-            .filter(|p| p.is_ready_for_match())
-            .filter(|p| p.positions.is_goalkeeper() == is_gk_slot)
-            .max_by_key(|p| {
-                let pos_level = p.positions.get_level(*required_pos) as i32;
-                let ability = p.player_attributes.current_ability as i32;
-                pos_level * 10 + ability
-            });
-
-        if let Some(player) = best_player {
-            used_player_ids.push(player.id);
-            let ca = player.player_attributes.current_ability as f32 / 20.0;
-            formation_players.push(FormationPlayer {
-                player_id: player.id,
-                slug: player.slug(),
-                last_name: player.full_name.display_last_name().to_string(),
-                is_generated: player.is_generated(),
-                rating: format!("{:.1}", ca.min(10.0)),
-                css_class: position_to_css_class(required_pos),
-            });
-        }
-    }
-
-    // Pull the last few in-match shapes the team actually used so the
-    // tactics screen can show "Plan: 4-3-3 — Last used: 4-5-1 vs Spurs
-    // (shifted at min 72), 4-4-2, 4-3-3" instead of pretending the
-    // persistent plan was the only shape that ever ran. Each chip
-    // shows whether the shape was a kept plan or an in-match shift,
-    // and (when the rival id can be resolved cheaply) tags the
-    // opponent. Most-recent-first, capped at 5.
-    let recent_used_shapes: Vec<RecentUsedShape> = team
-        .match_history
-        .items()
-        .iter()
-        .rev()
-        .filter_map(|m| {
-            let final_tac = m.tactic_used?;
-            // Use the engine-recorded starting tactic when available
-            // (i.e. the team's actual plan at kickoff, regardless of
-            // what their *current* persistent plan happens to be —
-            // those can drift across weeks). Fall back to "shift only
-            // when the canonical history field disagrees with itself".
-            let is_shift = m.shape_changed();
-            let opponent_label = simulator_data
-                .team(m.rival_team_id)
-                .map(|t| format!("vs {}", t.name))
-                .unwrap_or_default();
-            let change_minute_label = if is_shift {
-                m.tactic_change_minute
-                    .map(|min| format!("min {}", min))
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-            Some(RecentUsedShape {
-                date_label: m.date.format("%d %b").to_string(),
-                formation_name: final_tac.display_name().to_string(),
-                opponent_label,
-                is_shift,
-                change_minute_label,
-            })
-        })
-        .take(5)
-        .collect();
-
-    let (neighbor_teams, country_leagues) =
-        get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
+    let neighborhood = TeamNeighborhood::for_club(team.club_id, simulator_data, &i18n)?;
+    let neighbor_refs: Vec<(&str, &str)> = neighborhood
+        .teams
         .iter()
         .map(|(n, s)| (n.as_str(), s.as_str()))
         .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues
+    let league_refs: Vec<(&str, &str)> = neighborhood
+        .leagues
         .iter()
         .map(|(n, s)| (n.as_str(), s.as_str()))
         .collect();
@@ -232,71 +167,226 @@ pub async fn team_tactics_get_action(
         team_slug: team.slug.clone(),
         active_tab: "tactics",
         show_finances_tab: team.team_type.is_own_team(),
-        show_academy_tab: team.team_type == core::TeamType::Main
-            || team.team_type == core::TeamType::U18,
+        show_academy_tab: team.team_type == TeamType::Main
+            || team.team_type == TeamType::U18,
         formation_name,
         formation_players,
         recent_used_shapes,
     })
 }
 
-fn position_to_css_class(pos: &PlayerPositionType) -> String {
-    match pos {
-        PlayerPositionType::Goalkeeper => "pos-gk".to_string(),
-        PlayerPositionType::Sweeper => "pos-sw".to_string(),
-        PlayerPositionType::DefenderLeft => "pos-dl".to_string(),
-        PlayerPositionType::DefenderCenterLeft => "pos-dcl".to_string(),
-        PlayerPositionType::DefenderCenter => "pos-dc".to_string(),
-        PlayerPositionType::DefenderCenterRight => "pos-dcr".to_string(),
-        PlayerPositionType::DefenderRight => "pos-dr".to_string(),
-        PlayerPositionType::DefensiveMidfielder => "pos-dm".to_string(),
-        PlayerPositionType::WingbackLeft => "pos-wl".to_string(),
-        PlayerPositionType::WingbackRight => "pos-wr".to_string(),
-        PlayerPositionType::MidfielderLeft => "pos-ml".to_string(),
-        PlayerPositionType::MidfielderCenterLeft => "pos-mcl".to_string(),
-        PlayerPositionType::MidfielderCenter => "pos-mc".to_string(),
-        PlayerPositionType::MidfielderCenterRight => "pos-mcr".to_string(),
-        PlayerPositionType::MidfielderRight => "pos-mr".to_string(),
-        PlayerPositionType::AttackingMidfielderLeft => "pos-aml".to_string(),
-        PlayerPositionType::AttackingMidfielderCenter => "pos-amc".to_string(),
-        PlayerPositionType::AttackingMidfielderRight => "pos-amr".to_string(),
-        PlayerPositionType::ForwardLeft => "pos-fl".to_string(),
-        PlayerPositionType::ForwardCenter => "pos-fc".to_string(),
-        PlayerPositionType::ForwardRight => "pos-fr".to_string(),
-        PlayerPositionType::Striker => "pos-st".to_string(),
+struct PositionCss;
+
+impl PositionCss {
+    fn slot_class(pos: &PlayerPositionType) -> &'static str {
+        match pos {
+            PlayerPositionType::Goalkeeper => "pos-gk",
+            PlayerPositionType::Sweeper => "pos-sw",
+            PlayerPositionType::DefenderLeft => "pos-dl",
+            PlayerPositionType::DefenderCenterLeft => "pos-dcl",
+            PlayerPositionType::DefenderCenter => "pos-dc",
+            PlayerPositionType::DefenderCenterRight => "pos-dcr",
+            PlayerPositionType::DefenderRight => "pos-dr",
+            PlayerPositionType::DefensiveMidfielder => "pos-dm",
+            PlayerPositionType::WingbackLeft => "pos-wl",
+            PlayerPositionType::WingbackRight => "pos-wr",
+            PlayerPositionType::MidfielderLeft => "pos-ml",
+            PlayerPositionType::MidfielderCenterLeft => "pos-mcl",
+            PlayerPositionType::MidfielderCenter => "pos-mc",
+            PlayerPositionType::MidfielderCenterRight => "pos-mcr",
+            PlayerPositionType::MidfielderRight => "pos-mr",
+            PlayerPositionType::AttackingMidfielderLeft => "pos-aml",
+            PlayerPositionType::AttackingMidfielderCenter => "pos-amc",
+            PlayerPositionType::AttackingMidfielderRight => "pos-amr",
+            PlayerPositionType::ForwardLeft => "pos-fl",
+            PlayerPositionType::ForwardCenter => "pos-fc",
+            PlayerPositionType::ForwardRight => "pos-fr",
+            PlayerPositionType::Striker => "pos-st",
+        }
     }
 }
 
-fn get_neighbor_teams(
-    club_id: u32,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
-    let club = data
-        .club(club_id)
-        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
+struct LastMatchLookup;
 
-    let teams = views::neighbor_teams(club, i18n);
+impl LastMatchLookup {
+    /// Most recent match that recorded both a final tactic AND a
+    /// starting XI — the canonical "what did the team really do last
+    /// time out?" reference for the tactics page. Older history items
+    /// predating the recording return as `None`.
+    fn find(team: &Team) -> Option<&MatchHistoryItem> {
+        team.match_history
+            .items()
+            .iter()
+            .rev()
+            .find(|m| m.tactic_used.is_some() && !m.starting_eleven.is_empty())
+    }
+}
 
-    let mut country_leagues: Vec<(u32, String, String)> = data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                .collect()
+struct TacticsLineup {
+    formation_name: String,
+    players: Vec<FormationPlayer>,
+}
+
+struct TacticsLineupBuilder;
+
+impl TacticsLineupBuilder {
+    /// Pick the formation + XI shown on the tactics pitch. Prefers the
+    /// last match's actual shape and starters; falls back to the
+    /// team's persistent plan and a best-available pick when no usable
+    /// history exists. Recorded starters who have left the club fall
+    /// through to the best-available filler for that slot.
+    fn build(team: &Team, last_match: Option<&MatchHistoryItem>) -> TacticsLineup {
+        let tactics: Cow<'_, Tactics> = match last_match.and_then(|m| m.tactic_used) {
+            Some(tac) => Cow::Owned(Tactics::new(tac)),
+            None => team.tactics(),
+        };
+        let formation_name = tactics.tactic_type.display_name().to_string();
+        let formation_positions = tactics.positions();
+
+        let players = team.players();
+        let mut recorded_pool: Vec<(u32, PlayerPositionType)> = last_match
+            .map(|m| m.starting_eleven.clone())
+            .unwrap_or_default();
+        let mut used: Vec<u32> = Vec::new();
+        let mut out: Vec<FormationPlayer> = Vec::new();
+
+        for required_pos in formation_positions.iter() {
+            let chosen = Self::take_recorded(&mut recorded_pool, required_pos, &players, &used)
+                .or_else(|| Self::pick_best(required_pos, &players, &used));
+            if let Some(player) = chosen {
+                used.push(player.id);
+                out.push(FormationPlayer::from_pick(player, required_pos));
+            }
+        }
+
+        TacticsLineup {
+            formation_name,
+            players: out,
+        }
+    }
+
+    fn take_recorded<'a>(
+        pool: &mut Vec<(u32, PlayerPositionType)>,
+        slot: &PlayerPositionType,
+        players: &[&'a Player],
+        used: &[u32],
+    ) -> Option<&'a Player> {
+        let idx = pool.iter().position(|(_, s)| s == slot)?;
+        let (player_id, _) = pool.remove(idx);
+        players
+            .iter()
+            .find(|p| p.id == player_id)
+            .filter(|p| !used.contains(&p.id))
+            .copied()
+    }
+
+    fn pick_best<'a>(
+        slot: &PlayerPositionType,
+        players: &[&'a Player],
+        used: &[u32],
+    ) -> Option<&'a Player> {
+        let is_gk_slot = *slot == PlayerPositionType::Goalkeeper;
+        players
+            .iter()
+            .filter(|p| !used.contains(&p.id))
+            .filter(|p| p.is_ready_for_match())
+            .filter(|p| p.positions.is_goalkeeper() == is_gk_slot)
+            .max_by_key(|p| {
+                let pos_level = p.positions.get_level(*slot) as i32;
+                let ability = p.player_attributes.current_ability as i32;
+                pos_level * 10 + ability
+            })
+            .copied()
+    }
+}
+
+impl FormationPlayer {
+    fn from_pick(player: &Player, slot: &PlayerPositionType) -> Self {
+        let ca = player.player_attributes.current_ability as f32 / 20.0;
+        FormationPlayer {
+            player_id: player.id,
+            slug: player.slug(),
+            last_name: player.full_name.display_last_name().to_string(),
+            is_generated: player.is_generated(),
+            rating: format!("{:.1}", ca.min(10.0)),
+            css_class: PositionCss::slot_class(slot).to_string(),
+        }
+    }
+}
+
+struct RecentShapesView;
+
+impl RecentShapesView {
+    /// Most-recent-first list of in-match shapes (capped at 5). Each
+    /// chip records whether the coach shifted shape mid-match and, if
+    /// the rival is still resolvable on the current sim snapshot,
+    /// labels the opponent. Drops items the engine never tagged with
+    /// a tactic (e.g. friendlies in some pipelines).
+    fn build(team: &Team, data: &SimulatorData) -> Vec<RecentUsedShape> {
+        team.match_history
+            .items()
+            .iter()
+            .rev()
+            .filter_map(|m| {
+                let final_tac = m.tactic_used?;
+                let is_shift = m.shape_changed();
+                let opponent_label = data
+                    .team(m.rival_team_id)
+                    .map(|t| format!("vs {}", t.name))
+                    .unwrap_or_default();
+                let change_minute_label = if is_shift {
+                    m.tactic_change_minute
+                        .map(|min| format!("min {}", min))
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                Some(RecentUsedShape {
+                    date_label: m.date.format("%d %b").to_string(),
+                    formation_name: final_tac.display_name().to_string(),
+                    opponent_label,
+                    is_shift,
+                    change_minute_label,
+                })
+            })
+            .take(5)
+            .collect()
+    }
+}
+
+struct TeamNeighborhood {
+    teams: Vec<(String, String)>,
+    leagues: Vec<(String, String)>,
+}
+
+impl TeamNeighborhood {
+    fn for_club(club_id: u32, data: &SimulatorData, i18n: &I18n) -> Result<Self, ApiError> {
+        let club = data.club(club_id).ok_or_else(|| {
+            ApiError::InternalError(format!("Club with ID {} not found", club_id))
+        })?;
+
+        let teams = views::neighbor_teams(club, i18n);
+
+        let mut country_leagues: Vec<(u32, String, String)> = data
+            .country_by_club(club_id)
+            .map(|country| {
+                country
+                    .leagues
+                    .leagues
+                    .iter()
+                    .filter(|l| !l.friendly)
+                    .map(|l| (l.id, l.name.clone(), l.slug.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        country_leagues.sort_by_key(|(id, _, _)| *id);
+
+        Ok(TeamNeighborhood {
+            teams,
+            leagues: country_leagues
+                .into_iter()
+                .map(|(_, name, slug)| (name, slug))
+                .collect(),
         })
-        .unwrap_or_default();
-    country_leagues.sort_by_key(|(id, _, _)| *id);
-
-    Ok((
-        teams,
-        country_leagues
-            .into_iter()
-            .map(|(_, name, slug)| (name, slug))
-            .collect(),
-    ))
+    }
 }
