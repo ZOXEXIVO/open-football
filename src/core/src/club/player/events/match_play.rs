@@ -989,6 +989,19 @@ fn compute_drop_magnitude(player: &Player, ctx: &MatchSelectionContext) -> f32 {
         SelectionOmissionReason::NewcomerStillIntegrating => 0.7,
         SelectionOmissionReason::BenchBalance => 0.6,
         SelectionOmissionReason::LowerMatchReadiness => 0.8,
+        // Opponent / role-duty / lineup-balance / bench-scenario reads
+        // are all tactical / planning-driven explanations — they sting
+        // less than a perceived-ability drop because the player can
+        // see the football reason.
+        SelectionOmissionReason::OpponentMatchupMismatch
+        | SelectionOmissionReason::LineupBalanceCall
+        | SelectionOmissionReason::BenchScenarioCoverage => 0.9,
+        // A medical-caution call carries the same gentleness as the
+        // existing fitness-protection variant.
+        SelectionOmissionReason::MedicalRecurrenceRisk => 0.5,
+        // An eligibility-rule block isn't a coaching judgement at all —
+        // the player accepts the rule and the morale hit is minimal.
+        SelectionOmissionReason::EligibilityRuleBlock => 0.4,
     };
 
     let repeat_mul = if ctx.repeated { 1.4 } else { 1.0 };

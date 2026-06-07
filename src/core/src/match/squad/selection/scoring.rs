@@ -57,6 +57,26 @@ pub struct SlotScoreBreakdown {
     /// score, populated by the omissions builder. Surfaced through the same
     /// `DevelopmentMinutes` factor as the development-minutes nudge.
     pub future_pathway: f32,
+    /// Bounded opponent-matchup adjustment (pace, aerial, press, low block,
+    /// wide). Populated by the omissions builder when the selection layer
+    /// carries a richer game model. The pure scoring engine leaves it at
+    /// zero so existing callers behave identically.
+    pub opponent_matchup: f32,
+    /// Role / duty fit on top of the raw position-level score — rewards
+    /// a player whose attribute profile matches the slot's role recipe.
+    pub role_duty_fit: f32,
+    /// Whole-XI balance bonus (defensive security, ball progression, …).
+    /// Aggregated per-player from the post-DP balance pass.
+    pub lineup_balance: f32,
+    /// Bench scenario coverage — only populated for bench candidates.
+    pub bench_scenario: f32,
+    /// Extra medical-caution premium on top of `injury_risk` — non-zero
+    /// when the coach policy is medical-cautious and the player is
+    /// fragile in this fixture.
+    pub medical_risk: f32,
+    /// Eligibility-rule penalty (registration, cup-tie, loan clause).
+    /// Hard blocks register as a large negative; soft limits a small one.
+    pub eligibility_rule: f32,
 }
 
 impl SlotScoreBreakdown {
@@ -81,6 +101,12 @@ impl SlotScoreBreakdown {
             + self.domestic_cup_opportunity
             + self.injury_risk
             + self.future_pathway
+            + self.opponent_matchup
+            + self.role_duty_fit
+            + self.lineup_balance
+            + self.bench_scenario
+            + self.medical_risk
+            + self.eligibility_rule
     }
 
     /// Pairwise comparison: rank scoring factors where `selected`
@@ -93,7 +119,7 @@ impl SlotScoreBreakdown {
         omitted: &SlotScoreBreakdown,
         limit: usize,
     ) -> Vec<SelectionScoreFactor> {
-        let factors: [(SelectionScoreFactor, f32); 19] = [
+        let factors: [(SelectionScoreFactor, f32); 25] = [
             (
                 SelectionScoreFactor::PositionFit,
                 self.position_fit - omitted.position_fit,
@@ -181,6 +207,30 @@ impl SlotScoreBreakdown {
             (
                 SelectionScoreFactor::InjuryRisk,
                 self.injury_risk - omitted.injury_risk,
+            ),
+            (
+                SelectionScoreFactor::OpponentMatchup,
+                self.opponent_matchup - omitted.opponent_matchup,
+            ),
+            (
+                SelectionScoreFactor::RoleDutyFit,
+                self.role_duty_fit - omitted.role_duty_fit,
+            ),
+            (
+                SelectionScoreFactor::LineupBalance,
+                self.lineup_balance - omitted.lineup_balance,
+            ),
+            (
+                SelectionScoreFactor::BenchScenario,
+                self.bench_scenario - omitted.bench_scenario,
+            ),
+            (
+                SelectionScoreFactor::MedicalRisk,
+                self.medical_risk - omitted.medical_risk,
+            ),
+            (
+                SelectionScoreFactor::EligibilityRule,
+                self.eligibility_rule - omitted.eligibility_rule,
             ),
         ];
 

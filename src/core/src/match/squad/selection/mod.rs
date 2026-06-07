@@ -1,7 +1,11 @@
+mod balance;
+mod bench_scenarios;
 mod competitive;
 mod cup_rotation;
 pub(crate) mod helpers;
+pub mod model;
 mod omissions;
+mod role_duty;
 mod rotation;
 pub(crate) mod scoring;
 
@@ -20,6 +24,7 @@ use std::borrow::Borrow;
 use std::collections::HashSet;
 
 use helpers::*;
+use model::MatchSelectionGameModel;
 use scoring::ScoringEngine;
 
 use chrono::Utc;
@@ -57,6 +62,12 @@ pub struct SelectionContext {
     /// strong XI in semis/finals) instead of inferring everything from a
     /// `knockout` bool.
     pub competition: SelectionCompetition,
+    /// Optional richer fixture model — opponent profile, environment,
+    /// competition rules, squad state, coach policy. When `None` the
+    /// selector synthesises a neutral default so existing callers
+    /// behave exactly as before; richer match-day callers populate
+    /// this with real opponent / weather / registration data.
+    pub game_model: Option<MatchSelectionGameModel>,
 }
 
 /// Competition context for squad selection. Replaces inferring the cup
@@ -191,6 +202,7 @@ impl Default for SelectionContext {
             philosophy: None,
             opponent_tactic: None,
             competition: SelectionCompetition::League,
+            game_model: None,
         }
     }
 }
@@ -393,6 +405,15 @@ impl SquadSelector {
         });
         let coach_engine = CoachDecisionEngine::from_staff(staff, &coach_profile, coach_strategy);
 
+        // Borrow the richer game model only when the caller actually
+        // populated `ctx.game_model`. Conservative default: leave it
+        // `None` so the new bounded additive terms collapse to zero —
+        // existing callers see the same scoring they always have.
+        // Match-day callers that want the new layered behaviour build a
+        // model with `MatchSelectionGameModel::build` and store it on
+        // the context before invoking the selector.
+        let game_model_ref: Option<&MatchSelectionGameModel> = ctx.game_model.as_ref();
+
         let scx = competitive::SelectionScoringContext {
             staff,
             tactics,
@@ -404,6 +425,7 @@ impl SquadSelector {
             cup: cup.as_ref(),
             coach: Some(&coach_engine),
             competition: ctx.competition,
+            game_model: game_model_ref,
         };
 
         let main_squad = scx.select_starting_eleven(team.id, &available);
@@ -450,6 +472,7 @@ impl SquadSelector {
             cup: cup.as_ref(),
             coach: Some(&coach_engine),
             competition: ctx.competition,
+            game_model: game_model_ref,
         }
         .build();
 
@@ -630,6 +653,7 @@ impl SquadSelector {
             cup: None,
             coach: None,
             competition: SelectionCompetition::League,
+            game_model: None,
         }
     }
 }

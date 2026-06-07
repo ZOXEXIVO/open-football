@@ -125,6 +125,22 @@ pub enum SelectionOmissionReason {
     BenchBalance,
     /// Formation has no slot anywhere near the player's preferred role.
     NoNaturalRoleInFormation,
+    /// The XI needed a different physical / mental profile against this
+    /// opponent (recovery pace, aerial spine, press resistance).
+    OpponentMatchupMismatch,
+    /// The XI balance pass preferred a different player at the same slot
+    /// because the whole-lineup balance lifted more than the slot-score it
+    /// cost (e.g. needed more pace at the back against a fast front line).
+    LineupBalanceCall,
+    /// The bench was built around a planned in-match scenario the player
+    /// doesn't cover (chase goal, protect lead, fresh-legs press).
+    BenchScenarioCoverage,
+    /// The recurrence risk after recent load made starting genuinely
+    /// medically unwise (distinct from generic fatigue management).
+    MedicalRecurrenceRisk,
+    /// Competition rules (registration, cup-tie, loan clause, comp-specific
+    /// suspension) blocked or strongly discouraged the pick.
+    EligibilityRuleBlock,
 }
 
 impl SelectionOmissionReason {
@@ -175,6 +191,19 @@ impl SelectionOmissionReason {
             SelectionOmissionReason::DisciplinarySelection => "selection_reason_disciplinary",
             SelectionOmissionReason::BenchBalance => "selection_reason_bench_balance",
             SelectionOmissionReason::NoNaturalRoleInFormation => "selection_reason_no_natural_role",
+            SelectionOmissionReason::OpponentMatchupMismatch => {
+                "selection_reason_opponent_matchup_mismatch"
+            }
+            SelectionOmissionReason::LineupBalanceCall => "selection_reason_lineup_balance_call",
+            SelectionOmissionReason::BenchScenarioCoverage => {
+                "selection_reason_bench_scenario_coverage"
+            }
+            SelectionOmissionReason::MedicalRecurrenceRisk => {
+                "selection_reason_medical_recurrence_risk"
+            }
+            SelectionOmissionReason::EligibilityRuleBlock => {
+                "selection_reason_eligibility_rule_block"
+            }
         }
     }
 }
@@ -264,6 +293,18 @@ pub enum SelectionScoreFactor {
     /// as part of the manager's early-round rotation (status / age / fresh
     /// legs), distinct from the generic development-minutes nudge.
     CupOpportunity,
+    /// Opponent matchup adjustment (pace, aerial, press, low block, wide).
+    OpponentMatchup,
+    /// Role / duty fit on top of the raw position-level score.
+    RoleDutyFit,
+    /// Whole-XI balance band the rival improved (security, creation, …).
+    LineupBalance,
+    /// Bench scenario coverage (chase, protect lead, fresh legs press, …).
+    BenchScenario,
+    /// Heavy medical / recurrence risk premium.
+    MedicalRisk,
+    /// Competition rule (registration, cup-tie, loan clause) penalty.
+    EligibilityRule,
 }
 
 impl SelectionScoreFactor {
@@ -287,6 +328,12 @@ impl SelectionScoreFactor {
             SelectionScoreFactor::InjuryRisk => "selection_factor_injury_risk",
             SelectionScoreFactor::DevelopmentMinutes => "selection_factor_development_minutes",
             SelectionScoreFactor::CupOpportunity => "selection_factor_cup_opportunity",
+            SelectionScoreFactor::OpponentMatchup => "selection_factor_opponent_matchup",
+            SelectionScoreFactor::RoleDutyFit => "selection_factor_role_duty_fit",
+            SelectionScoreFactor::LineupBalance => "selection_factor_lineup_balance",
+            SelectionScoreFactor::BenchScenario => "selection_factor_bench_scenario",
+            SelectionScoreFactor::MedicalRisk => "selection_factor_medical_risk",
+            SelectionScoreFactor::EligibilityRule => "selection_factor_eligibility_rule",
         }
     }
 }

@@ -6,8 +6,14 @@ use crate::{Player, PlayerSquadStatus, Tactics};
 use chrono::NaiveDate;
 use log::debug;
 
+use super::balance::{BalanceSwapPass, LineupBalanceScorer, ObjectiveResolver};
+use super::bench_scenarios::{BenchScenarioPlan, BenchScenarioScorer};
 use super::cup_rotation::CupRotation;
 use super::helpers;
+use super::model::{
+    EligibilityDecision, EligibilityEvaluator, MatchSelectionGameModel, MatchTypeSignal,
+};
+use super::role_duty::{OpponentMatchupScorer, RoleDutyFitScorer, TacticalDuty};
 use super::scoring::ScoringEngine;
 use super::{CupStage, DomesticCupContext, SelectionCompetition, SelectionPolicy};
 use std::cmp::Ordering;
@@ -52,6 +58,12 @@ pub(crate) struct SelectionScoringContext<'a> {
     /// build the per-player `CoachSelectionContext` (drives the big-
     /// match / derby / continental dimension).
     pub competition: SelectionCompetition,
+    /// Richer per-fixture model — opponent profile, environment,
+    /// competition rules, squad state, coach policy. When `None` the
+    /// new bounded additive terms (opponent matchup, role/duty,
+    /// eligibility rule penalty) collapse to zero so existing legacy
+    /// callers behave identically to before this layer existed.
+    pub game_model: Option<&'a MatchSelectionGameModel>,
 }
 
 impl SelectionScoringContext<'_> {
@@ -245,6 +257,13 @@ impl SelectionScoringContext<'_> {
         // knit the unit together better — so flip only genuinely close calls.
         self.apply_cohesion_swaps(team_id, &mut squad, &mut used_ids, available);
 
+        // STEP 4.6: XI-level balance pass. The DP / cohesion passes optimise
+        // per-slot quality and unit chemistry; this pass evaluates the whole
+        // XI against the spec's balance bands (defensive security, ball
+        // progression, pressing, …) and applies same-group swaps when they
+        // improve the balance more than they cost in raw slot score.
+        self.apply_balance_swaps(team_id, &mut squad, &mut used_ids, available);
+
         // STEP 5: Domestic cup rotation target. The DP optimizer pushes back
         // toward the strongest XI when the cup opportunity bias isn't a wide
         // enough margin to flip an individual slot. In real football, a manager
@@ -361,6 +380,94 @@ impl SelectionScoringContext<'_> {
 
             if !swapped {
                 break;
+            }
+        }
+    }
+
+    /// Post-assignment XI-balance swap pass. Wraps [`BalanceSwapPass`] and
+    /// [`LineupBalanceScorer`]. For each starter, looks at same-group bench
+    /// candidates and applies the single swap (per pass over the XI) that
+    /// lifts the balance score by more than the slot-score it concedes,
+    /// within the spec's caps. Goalkeeper and force-selected players are
+    /// never touched. No-op when no game model is wired in (the balance
+    /// scorer's reading wouldn't be objective-weighted).
+    fn apply_balance_swaps(
+        &self,
+        team_id: u32,
+        squad: &mut [MatchPlayer],
+        used_ids: &mut Vec<u32>,
+        available: &[&Player],
+    ) {
+        if self.game_model.is_none() {
+            return;
+        }
+        let player_by_id: HashMap<u32, &Player> = available.iter().map(|p| (p.id, *p)).collect();
+        let pass = BalanceSwapPass::standard();
+        let is_cup_early = matches!(self.competition, SelectionCompetition::DomesticCup { .. })
+            && self.match_importance < 0.5;
+        let allowed_loss = pass.allowed_slot_loss(self.match_importance, is_cup_early);
+        let objective = ObjectiveResolver::resolve(self.game_model);
+        let baseline = LineupBalanceScorer::score(squad, &player_by_id, objective);
+
+        for idx in 0..squad.len() {
+            let slot = squad[idx].tactical_position.current_position;
+            if slot == PlayerPositionType::Goalkeeper {
+                continue;
+            }
+            let Some(current) = player_by_id.get(&squad[idx].id).copied() else {
+                continue;
+            };
+            if self.engine.honor_force_selection && current.is_force_match_selection {
+                continue;
+            }
+
+            let group = slot.position_group();
+            let current_base = self.starting_slot_score(current, slot, available);
+            let used_set: HashSet<u32> = used_ids.iter().copied().collect();
+
+            let mut best: Option<(&Player, f32, f32)> = None;
+            for cand in available.iter().copied() {
+                if used_set.contains(&cand.id) {
+                    continue;
+                }
+                if cand.positions.is_goalkeeper() {
+                    continue;
+                }
+                if cand.position().position_group() != group {
+                    continue;
+                }
+                let cand_base = self.starting_slot_score(cand, slot, available);
+                let base_loss = current_base - cand_base;
+                if base_loss > allowed_loss {
+                    continue;
+                }
+                // Probe the swap balance.
+                let saved = squad[idx].id;
+                squad[idx] = MatchPlayer::from_player(team_id, cand, slot, false);
+                let after = LineupBalanceScorer::score(squad, &player_by_id, objective);
+                let balance_gain = after - baseline;
+                // Restore so we make the swap only once we've picked the best.
+                let original = player_by_id.get(&saved).copied();
+                if let Some(orig) = original {
+                    squad[idx] = MatchPlayer::from_player(team_id, orig, slot, false);
+                }
+                if balance_gain < pass.min_balance_gain {
+                    continue;
+                }
+                let net = balance_gain - base_loss.max(0.0);
+                if net <= 0.0 {
+                    continue;
+                }
+                if best.map(|(_, n, _)| net > n).unwrap_or(true) {
+                    best = Some((cand, net, balance_gain));
+                }
+            }
+
+            if let Some((new_player, _, _)) = best {
+                let old_id = squad[idx].id;
+                used_ids.retain(|id| *id != old_id);
+                used_ids.push(new_player.id);
+                squad[idx] = MatchPlayer::from_player(team_id, new_player, slot, false);
             }
         }
     }
@@ -892,6 +999,87 @@ impl SelectionScoringContext<'_> {
             + self.cup_opportunity(player, true)
             + self.future_pathway_start(player, slot, available)
             + self.coach_starting_adjustment(player, slot)
+            + self.opponent_matchup_adjustment(player, slot)
+            + self.role_duty_adjustment(player, slot)
+            + self.eligibility_rule_penalty(player)
+            + self.medical_caution_adjustment(player)
+    }
+
+    /// Opponent-matchup nudge, gated by the presence of a richer game
+    /// model. Returns 0.0 when no game model is wired in.
+    fn opponent_matchup_adjustment(&self, player: &Player, slot: PlayerPositionType) -> f32 {
+        let Some(model) = self.game_model else {
+            return 0.0;
+        };
+        OpponentMatchupScorer::score(player, slot, &model.opponent_profile)
+    }
+
+    /// Role/duty fit, mapped onto a bounded `[-1.8, 1.8]` signed term —
+    /// rewards a player whose attribute profile matches the slot's role
+    /// recipe, penalises an obvious miscast even when the position
+    /// level alone would clear the slot. Returns 0.0 with no game model.
+    fn role_duty_adjustment(&self, player: &Player, slot: PlayerPositionType) -> f32 {
+        if self.game_model.is_none() {
+            return 0.0;
+        }
+        let duty = self.duty_for_slot(slot);
+        let fit = RoleDutyFitScorer::score(player, slot, duty);
+        ((fit - 0.55) * 3.6).clamp(-1.8, 1.8)
+    }
+
+    /// Hard / soft eligibility penalty driven by the competition rules
+    /// block of the game model. `HardBlocked` returns a large penalty
+    /// so the DP will avoid the player unless every option is blocked;
+    /// `SoftLimited` applies the spec's small penalty.
+    fn eligibility_rule_penalty(&self, player: &Player) -> f32 {
+        let Some(model) = self.game_model else {
+            return 0.0;
+        };
+        match EligibilityEvaluator::evaluate(player, &model.competition_rules) {
+            EligibilityDecision::Eligible => 0.0,
+            EligibilityDecision::SoftLimited { penalty, .. } => -penalty,
+            EligibilityDecision::HardBlocked { .. } => -50.0,
+        }
+    }
+
+    /// Medical-caution scaler — bumps the injury-risk penalty when the
+    /// coach policy reads `medical_caution` high (cautious manager
+    /// pulls a fragile star sooner). Returns 0.0 with no game model.
+    fn medical_caution_adjustment(&self, player: &Player) -> f32 {
+        let Some(model) = self.game_model else {
+            return 0.0;
+        };
+        let base = self
+            .engine
+            .injury_risk_penalty(player, self.match_importance, self.is_friendly);
+        // Extra premium scaled by policy.medical_caution. Capped low so it
+        // can shape close calls without doubling the base penalty.
+        -base * (model.coach_policy.medical_caution - 0.5).max(0.0) * 0.6
+    }
+
+    /// Resolve the duty for a slot from the formation context. The
+    /// current `Tactics` model doesn't carry per-slot duties yet, so
+    /// the helper infers a sensible default from the slot position.
+    /// When a richer formation-with-duties model arrives, swap this
+    /// out for a lookup; the rest of the slot scoring stays unchanged.
+    fn duty_for_slot(&self, slot: PlayerPositionType) -> TacticalDuty {
+        use PlayerPositionType::*;
+        match slot {
+            Goalkeeper
+            | Sweeper
+            | DefenderCenter
+            | DefenderCenterLeft
+            | DefenderCenterRight
+            | DefenderLeft
+            | DefenderRight
+            | DefensiveMidfielder => TacticalDuty::Defend,
+            WingbackLeft
+            | WingbackRight
+            | MidfielderCenter
+            | MidfielderCenterLeft
+            | MidfielderCenterRight => TacticalDuty::Support,
+            _ => TacticalDuty::Attack,
+        }
     }
 
     /// Memory-aware coach lens layered on top of the slot score.
@@ -1071,6 +1259,35 @@ impl SelectionScoringContext<'_> {
             + self.cup_bench_unseen_bonus(player)
             + self.future_pathway_bench(player)
             + self.coach_bench_adjustment(player)
+            + self.bench_scenario_coverage_score(player)
+            + self.eligibility_rule_penalty(player)
+    }
+
+    /// Per-fixture bench scenario coverage bonus. Returns 0 when no
+    /// game model is wired in (legacy callers / tests). Otherwise
+    /// rewards bench candidates whose profile fits the planned match
+    /// scenarios (chase goal, protect lead, fresh legs press, …) by
+    /// rolling [`BenchScenarioPlan`] over [`BenchScenarioScorer`].
+    fn bench_scenario_coverage_score(&self, player: &Player) -> f32 {
+        let Some(model) = self.game_model else {
+            return 0.0;
+        };
+        let plan = BenchScenarioPlan::build(model.match_type, model.tactical_objective);
+        let coverage = plan.cover_score(|scenario| {
+            BenchScenarioScorer::coverage(player, scenario, self.date)
+        });
+        // Headline scenario coverage carries a slightly bigger weight
+        // than the fixed role fit since it's the scenario-aware
+        // bench's primary signal.
+        let mut bonus = coverage * 3.0;
+        // Penalty-taker premium when shootouts matter.
+        if matches!(
+            model.match_type,
+            MatchTypeSignal::CupFinal | MatchTypeSignal::ContinentalKnockout
+        ) {
+            bonus += BenchScenarioScorer::penalty_value(player) * 1.0;
+        }
+        bonus
     }
 
     /// Extra bench pull for a non-established player who hasn't featured in

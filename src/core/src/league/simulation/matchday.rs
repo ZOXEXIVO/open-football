@@ -314,6 +314,7 @@ impl League {
             philosophy: home_philosophy,
             opponent_tactic: away_baseline,
             competition: home_competition,
+            game_model: None,
         };
         let away_ctx = SelectionContext {
             is_friendly: friendly,
@@ -322,6 +323,7 @@ impl League {
             philosophy: away_philosophy,
             opponent_tactic: home_baseline,
             competition: away_competition,
+            game_model: None,
         };
         let selection_ctx = home_ctx;
 

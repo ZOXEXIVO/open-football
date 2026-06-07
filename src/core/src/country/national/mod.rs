@@ -16,6 +16,10 @@ mod synthetic;
 mod types;
 mod world_status;
 
+pub use callup::{
+    NationalCallupConstraints, NationalEligibilityIssue, NationalSquadStage,
+    NationalTournamentRequirements,
+};
 pub use types::*;
 
 use crate::HappinessEventType;

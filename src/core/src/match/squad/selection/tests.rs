@@ -1939,6 +1939,7 @@ fn gk_unit_ctx<'a>(
         cup: None,
         coach: None,
         competition: super::SelectionCompetition::League,
+        game_model: None,
     }
 }
 
@@ -2381,6 +2382,7 @@ fn prospect_bench_fit_uses_simulation_date() {
         cup: None,
         coach: None,
         competition: super::SelectionCompetition::League,
+        game_model: None,
     };
     // 22 on the simulation date (born 2023) → the 0.65 prospect tier. Against
     // the wall clock he'd read as a small child (the 1.0 tier), so a wall-clock
@@ -2505,4 +2507,315 @@ fn cohesion_swap_never_drops_force_selected_starter() {
         !xi.iter().any(|mp| mp.id == 12),
         "the cohesion candidate does not displace the pinned incumbent"
     );
+}
+
+// ========== MatchSelectionGameModel + new layered terms ==========
+
+mod game_model_tests {
+    use super::super::balance::LineupBalanceScorer;
+    use super::super::bench_scenarios::{BenchScenario, BenchScenarioPlan, BenchScenarioScorer};
+    use super::super::model::{
+        CompetitionSelectionRules, EligibilityDecision, EligibilityEvaluator,
+        MatchSelectionGameModel, MatchTypeClassifier, MatchTypeSignal, OpponentSelectionProfile,
+        TacticalObjective,
+    };
+    use super::super::role_duty::{
+        OpponentMatchupScorer, RoleDutyFitScorer, RoleProfileResolver, SelectionRoleProfile,
+        TacticalDuty,
+    };
+    use super::super::{SelectionCompetition, SelectionContext};
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn date() -> NaiveDate {
+        Utc::now().date_naive()
+    }
+
+    fn slow_cb(id: u32) -> Player {
+        let mut p = make_test_player(
+            id,
+            &[(PlayerPositionType::DefenderCenter, 18)],
+            150,
+            date(),
+        );
+        p.skills.physical.pace = 6.0;
+        p.skills.physical.acceleration = 6.0;
+        p.skills.mental.positioning = 17.0;
+        p.skills.technical.tackling = 17.0;
+        p.skills.technical.marking = 17.0;
+        p
+    }
+
+    fn fast_cb(id: u32) -> Player {
+        let mut p = make_test_player(
+            id,
+            &[(PlayerPositionType::DefenderCenter, 16)],
+            130,
+            date(),
+        );
+        p.skills.physical.pace = 18.0;
+        p.skills.physical.acceleration = 17.0;
+        p.skills.mental.positioning = 14.0;
+        p.skills.technical.tackling = 14.0;
+        p.skills.technical.marking = 14.0;
+        p
+    }
+
+    #[test]
+    fn opponent_matchup_rewards_pace_against_fast_front_line() {
+        let slow = slow_cb(1);
+        let fast = fast_cb(2);
+        let mut opponent = OpponentSelectionProfile::neutral();
+        opponent.pace_threat = 0.95;
+
+        let slow_bonus =
+            OpponentMatchupScorer::score(&slow, PlayerPositionType::DefenderCenter, &opponent);
+        let fast_bonus =
+            OpponentMatchupScorer::score(&fast, PlayerPositionType::DefenderCenter, &opponent);
+
+        assert!(
+            fast_bonus > slow_bonus,
+            "fast CB must outscore slow CB against high pace threat: fast={} slow={}",
+            fast_bonus,
+            slow_bonus
+        );
+    }
+
+    #[test]
+    fn role_profile_resolver_picks_stopper_for_defend_duty() {
+        let role = RoleProfileResolver::resolve(
+            PlayerPositionType::DefenderCenter,
+            TacticalDuty::Defend,
+        );
+        assert_eq!(role, SelectionRoleProfile::StopperCentreBack);
+    }
+
+    #[test]
+    fn role_profile_resolver_picks_ball_playing_for_attack_duty() {
+        let role = RoleProfileResolver::resolve(
+            PlayerPositionType::DefenderCenter,
+            TacticalDuty::Attack,
+        );
+        assert_eq!(role, SelectionRoleProfile::BallPlayingCentreBack);
+    }
+
+    #[test]
+    fn role_duty_fit_separates_playmaker_from_destroyer() {
+        let mut playmaker = make_test_player(
+            10,
+            &[(PlayerPositionType::MidfielderCenter, 18)],
+            150,
+            date(),
+        );
+        playmaker.skills.mental.vision = 18.0;
+        playmaker.skills.technical.passing = 18.0;
+        playmaker.skills.technical.technique = 17.0;
+        playmaker.skills.mental.composure = 17.0;
+
+        let mut destroyer = make_test_player(
+            11,
+            &[(PlayerPositionType::MidfielderCenter, 18)],
+            150,
+            date(),
+        );
+        destroyer.skills.technical.tackling = 18.0;
+        destroyer.skills.mental.aggression = 18.0;
+        destroyer.skills.mental.bravery = 17.0;
+
+        let playmaker_fit = RoleDutyFitScorer::score(
+            &playmaker,
+            PlayerPositionType::MidfielderCenter,
+            TacticalDuty::Attack,
+        );
+        let destroyer_fit = RoleDutyFitScorer::score(
+            &destroyer,
+            PlayerPositionType::MidfielderCenter,
+            TacticalDuty::Defend,
+        );
+
+        assert!(playmaker_fit > 0.45, "playmaker fits playmaker duty: {}", playmaker_fit);
+        assert!(destroyer_fit > 0.45, "destroyer fits destroyer duty: {}", destroyer_fit);
+    }
+
+    #[test]
+    fn eligibility_evaluator_blocks_cup_tied() {
+        let player = make_test_player(99, &[(PlayerPositionType::Striker, 16)], 130, date());
+        let mut rules = CompetitionSelectionRules::open();
+        rules.cup_tied_player_ids.push(99);
+        match EligibilityEvaluator::evaluate(&player, &rules) {
+            EligibilityDecision::HardBlocked { .. } => {}
+            other => panic!("expected HardBlocked for cup-tied player, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn eligibility_evaluator_allows_registered_player() {
+        let player = make_test_player(50, &[(PlayerPositionType::Striker, 16)], 130, date());
+        let mut rules = CompetitionSelectionRules::open();
+        rules.registered_player_ids = Some(vec![50, 51]);
+        match EligibilityEvaluator::evaluate(&player, &rules) {
+            EligibilityDecision::Eligible => {}
+            other => panic!("expected Eligible for registered player, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn eligibility_evaluator_blocks_unregistered_player() {
+        let player = make_test_player(60, &[(PlayerPositionType::Striker, 16)], 130, date());
+        let mut rules = CompetitionSelectionRules::open();
+        rules.registered_player_ids = Some(vec![70, 71]);
+        match EligibilityEvaluator::evaluate(&player, &rules) {
+            EligibilityDecision::HardBlocked { .. } => {}
+            other => panic!("expected HardBlocked, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn match_type_classifier_maps_friendly() {
+        let ctx = SelectionContext {
+            is_friendly: true,
+            ..SelectionContext::default()
+        };
+        assert_eq!(MatchTypeClassifier::classify(&ctx), MatchTypeSignal::Friendly);
+    }
+
+    #[test]
+    fn match_type_classifier_maps_cup_final() {
+        let ctx = SelectionContext {
+            competition: SelectionCompetition::DomesticCup {
+                round: 5,
+                total_rounds: 5,
+                own_reputation: 100,
+                opponent_reputation: 100,
+            },
+            match_importance: 1.0,
+            ..SelectionContext::default()
+        };
+        assert_eq!(MatchTypeClassifier::classify(&ctx), MatchTypeSignal::CupFinal);
+    }
+
+    #[test]
+    fn bench_scenario_plan_for_cup_final_includes_shootout() {
+        let plan = BenchScenarioPlan::build(MatchTypeSignal::CupFinal, TacticalObjective::WinNowBalanced);
+        let has_shootout = plan
+            .weights
+            .iter()
+            .any(|(s, w)| matches!(s, BenchScenario::PenaltyShootout) && *w >= 0.10);
+        assert!(has_shootout, "knockout final must carry shootout weight");
+    }
+
+    #[test]
+    fn bench_scenario_plan_for_underdog_away_protects_lead() {
+        let plan =
+            BenchScenarioPlan::build(MatchTypeSignal::LeagueRoutine, TacticalObjective::UnderdogAway);
+        let protect = plan
+            .weights
+            .iter()
+            .find(|(s, _)| matches!(s, BenchScenario::ProtectLead))
+            .map(|(_, w)| *w)
+            .unwrap_or(0.0);
+        assert!(protect >= 0.18, "underdog plan must weight ProtectLead heavily: {}", protect);
+    }
+
+    #[test]
+    fn bench_scenario_coverage_rewards_aerial_target() {
+        let mut p = make_test_player(40, &[(PlayerPositionType::Striker, 16)], 130, date());
+        p.skills.technical.heading = 19.0;
+        p.skills.physical.jumping = 18.0;
+        p.skills.physical.strength = 17.0;
+        let cover = BenchScenarioScorer::coverage(&p, BenchScenario::AerialPlanB, date());
+        assert!(cover >= 0.8, "aerial target should cover AerialPlanB: {}", cover);
+    }
+
+    #[test]
+    fn bench_scenario_coverage_recognises_youth_cameo() {
+        let young = NaiveDate::from_ymd_opt(date().year() - 18, 1, 1).unwrap();
+        let mut p = make_test_player(45, &[(PlayerPositionType::Striker, 14)], 120, date());
+        p.birth_date = young;
+        assert_eq!(
+            BenchScenarioScorer::coverage(&p, BenchScenario::YouthCameo, date()),
+            1.0
+        );
+    }
+
+    #[test]
+    fn game_model_builds_neutral_defaults_from_context() {
+        let staff = generate_test_staff();
+        let ctx = SelectionContext::default();
+        let model = MatchSelectionGameModel::build(&ctx, &staff, 22);
+        // Neutral opponent profile: strength_ratio 1.0.
+        assert!((model.opponent_profile.strength_ratio - 1.0).abs() < 1e-6);
+        // Squad depth tracks the available pool size.
+        assert!(model.squad_state.depth >= 0.0 && model.squad_state.depth <= 1.0);
+        // Coach policy values clamped to 0..1.
+        let p = &model.coach_policy;
+        assert!((0.0..=1.0).contains(&p.rotation_discipline));
+        assert!((0.0..=1.0).contains(&p.medical_caution));
+    }
+
+    #[test]
+    fn lineup_balance_score_changes_with_objective() {
+        let team = generate_test_team();
+        let staff = generate_test_staff();
+        let result = SquadSelector::select(&team, &staff);
+        let player_by_id: std::collections::HashMap<u32, &Player> =
+            team.players.players().iter().map(|p| (p.id, *p)).collect();
+
+        let security =
+            LineupBalanceScorer::score(&result.main_squad, &player_by_id, TacticalObjective::ProtectLead);
+        let creation =
+            LineupBalanceScorer::score(&result.main_squad, &player_by_id, TacticalObjective::ChaseGame);
+
+        // The same XI evaluated under two different objectives yields
+        // different totals — the per-objective weight tables actually
+        // weigh different bands.
+        assert!(
+            (security - creation).abs() > 0.1,
+            "expected non-trivial difference between objectives: security={} creation={}",
+            security,
+            creation
+        );
+    }
+}
+
+// ========== National-team constraints ==========
+
+mod national_callup_tests {
+    use crate::country::{NationalCallupConstraints, NationalEligibilityIssue, NationalSquadStage, NationalTournamentRequirements};
+    use crate::CallUpWindowType;
+
+    #[test]
+    fn national_constraints_block_cap_tied_player() {
+        let mut c = NationalCallupConstraints::empty();
+        c.cap_tied_elsewhere.push(42);
+        assert_eq!(
+            c.is_blocked(42),
+            Some(NationalEligibilityIssue::CapTiedToAnotherCountry)
+        );
+    }
+
+    #[test]
+    fn national_constraints_block_refusal() {
+        let mut c = NationalCallupConstraints::empty();
+        c.refused_callup.push(7);
+        assert_eq!(
+            c.is_blocked(7),
+            Some(NationalEligibilityIssue::DeclinedCallup)
+        );
+    }
+
+    #[test]
+    fn national_squad_stage_preliminary_then_final() {
+        let preliminary = NationalSquadStage::target_size(CallUpWindowType::TournamentFinals, false);
+        let near_deadline = NationalSquadStage::target_size(CallUpWindowType::TournamentFinals, true);
+        assert!(preliminary > near_deadline);
+        assert_eq!(near_deadline, NationalSquadStage::FINAL_TOURNAMENT);
+    }
+
+    #[test]
+    fn tournament_window_requires_three_goalkeepers() {
+        let req = NationalTournamentRequirements::for_window(CallUpWindowType::TournamentFinals);
+        assert_eq!(req.min_goalkeepers, 3);
+        assert!(req.min_left_flank >= 2 && req.min_right_flank >= 2);
+    }
 }

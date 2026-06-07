@@ -223,6 +223,7 @@ impl EuropaLeague {
                     philosophy: None,
                     opponent_tactic: away_baseline,
                     competition: SelectionCompetition::ContinentalCup,
+                    game_model: None,
                 };
                 let away_ctx = SelectionContext {
                     is_friendly: false,
@@ -231,6 +232,7 @@ impl EuropaLeague {
                     philosophy: None,
                     opponent_tactic: home_baseline,
                     competition: SelectionCompetition::ContinentalCup,
+                    game_model: None,
                 };
 
                 let home_squad = home_team.get_enhanced_match_squad(&home_force, &home_ctx);

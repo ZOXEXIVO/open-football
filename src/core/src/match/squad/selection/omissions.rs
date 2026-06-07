@@ -21,10 +21,15 @@ use crate::{
 };
 use chrono::NaiveDate;
 
+use super::balance::LineupBalanceScorer;
+use super::bench_scenarios::{BenchScenarioPlan, BenchScenarioScorer};
+use super::model::{EligibilityDecision, EligibilityEvaluator, MatchSelectionGameModel};
+use super::role_duty::{OpponentMatchupScorer, RoleDutyFitScorer, TacticalDuty};
 use super::{DomesticCupContext, SelectionCompetition};
 use super::helpers;
 use super::scoring::{ScoringEngine, SlotScoreBreakdown};
 use crate::HappinessEventType;
+use std::collections::HashMap;
 
 /// Output of the omissions builder — one entry per important
 /// omission. The simulator ultimately surfaces the carried context on
@@ -53,6 +58,12 @@ pub(crate) struct OmissionBuilder<'a> {
     /// outweighs the raw factor-gap fallback.
     pub coach: Option<&'a CoachDecisionEngine<'a>>,
     pub competition: SelectionCompetition,
+    /// Richer per-fixture model. When present the omission breakdown
+    /// surfaces opponent-matchup, role/duty, balance, scenario,
+    /// medical and eligibility factors so the rendered reason can
+    /// reach the new variants instead of falling back to a generic
+    /// quality / tactical mismatch line.
+    pub game_model: Option<&'a MatchSelectionGameModel>,
 }
 
 impl<'a> OmissionBuilder<'a> {
@@ -299,7 +310,85 @@ impl<'a> OmissionBuilder<'a> {
             self.available,
             true,
         );
+        // New layered factors — populated only when a richer game model is
+        // wired in so the comparison line can surface opponent / role-duty
+        // / scenario reasoning. Without the model these stay at zero and
+        // the comparison shape is exactly as before.
+        if let Some(model) = self.game_model {
+            b.opponent_matchup =
+                OpponentMatchupScorer::score(player, slot, &model.opponent_profile);
+            let duty = self.duty_for_slot(slot);
+            let fit = RoleDutyFitScorer::score(player, slot, duty);
+            b.role_duty_fit = ((fit - 0.55) * 3.6).clamp(-1.8, 1.8);
+            match EligibilityEvaluator::evaluate(player, &model.competition_rules) {
+                EligibilityDecision::Eligible => {}
+                EligibilityDecision::SoftLimited { penalty, .. } => {
+                    b.eligibility_rule = -penalty;
+                }
+                EligibilityDecision::HardBlocked { .. } => {
+                    b.eligibility_rule = -50.0;
+                }
+            }
+            b.medical_risk =
+                -self
+                    .engine
+                    .injury_risk_penalty(player, self.match_importance, self.is_friendly)
+                    * (model.coach_policy.medical_caution - 0.5).max(0.0)
+                    * 0.6;
+            // Lineup balance contribution — small per-player share of the
+            // whole-XI band the rival's profile uplifts. Cheap proxy: a
+            // single-player evaluation, normalised to a comparable scale.
+            let single_squad: Vec<MatchPlayer> = vec![MatchPlayer::from_player(
+                0, player, slot, false,
+            )];
+            let mut singleton = HashMap::new();
+            singleton.insert(player.id, player);
+            let band = LineupBalanceScorer::evaluate(&single_squad, &singleton);
+            // Use only the bands most relevant to the slot's group as the
+            // per-player contribution.
+            let per_player = match group {
+                PlayerFieldPositionGroup::Goalkeeper => band.aerial_security * 0.02,
+                PlayerFieldPositionGroup::Defender => {
+                    (band.defensive_security + band.aerial_security + band.pace_recovery) * 0.012
+                }
+                PlayerFieldPositionGroup::Midfielder => {
+                    (band.ball_progression + band.pressing_capacity) * 0.012
+                }
+                PlayerFieldPositionGroup::Forward => {
+                    (band.chance_creation + band.pressing_capacity) * 0.012
+                }
+            };
+            b.lineup_balance = per_player.clamp(-2.5, 2.5);
+            // Bench scenario contribution — only meaningful for bench candidates,
+            // surfaced here so the comparison can also flag scenario-coverage on
+            // bench-vs-bench omissions.
+            let plan = BenchScenarioPlan::build(model.match_type, model.tactical_objective);
+            let cover = plan.cover_score(|scenario| {
+                BenchScenarioScorer::coverage(player, scenario, self.date)
+            });
+            b.bench_scenario = (cover * 3.0).clamp(0.0, 3.0);
+        }
         b
+    }
+
+    fn duty_for_slot(&self, slot: PlayerPositionType) -> TacticalDuty {
+        use PlayerPositionType::*;
+        match slot {
+            Goalkeeper
+            | Sweeper
+            | DefenderCenter
+            | DefenderCenterLeft
+            | DefenderCenterRight
+            | DefenderLeft
+            | DefenderRight
+            | DefensiveMidfielder => TacticalDuty::Defend,
+            WingbackLeft
+            | WingbackRight
+            | MidfielderCenter
+            | MidfielderCenterLeft
+            | MidfielderCenterRight => TacticalDuty::Support,
+            _ => TacticalDuty::Attack,
+        }
     }
 
     /// Pick the dominant football-realistic reason from the
@@ -366,6 +455,12 @@ impl<'a> OmissionBuilder<'a> {
                     F::DevelopmentMinutes => SelectionOmissionReason::LowMatchImportanceRotation,
                     F::CupOpportunity => SelectionOmissionReason::CupRotation,
                     F::InjuryRisk => SelectionOmissionReason::FitnessProtection,
+                    F::OpponentMatchup => SelectionOmissionReason::OpponentMatchupMismatch,
+                    F::RoleDutyFit => SelectionOmissionReason::PositionFitIssue,
+                    F::LineupBalance => SelectionOmissionReason::LineupBalanceCall,
+                    F::BenchScenario => SelectionOmissionReason::BenchScenarioCoverage,
+                    F::MedicalRisk => SelectionOmissionReason::MedicalRecurrenceRisk,
+                    F::EligibilityRule => SelectionOmissionReason::EligibilityRuleBlock,
                 };
             }
         }

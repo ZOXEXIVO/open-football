@@ -1026,46 +1026,56 @@ impl NationalTeam {
         let impact = Self::impact_score(c);
         let bias = Self::coach_bias(c, tactics, ctx.country_id);
 
+        // Mode-specific weights matching the spec (tournament finals lean
+        // proven quality + experience; competitive windows reward current
+        // form; friendlies make room for potential + experimentation).
         let weighted = match ctx.window_type {
             CallUpWindowType::TournamentFinals => {
-                ability * 0.22
-                    + form * 0.17
-                    + experience * 0.16
-                    + tactical * 0.11
-                    + role_fit * 0.09
-                    + impact * 0.10
-                    + mental * 0.07
-                    + age_s * 0.05
-                    + continuity * 0.03
-                    + league * 0.00
+                ability * 0.24
+                    + form * 0.15
+                    + tactical * 0.13
+                    + role_fit * 0.12
+                    + experience * 0.13
+                    + mental * 0.08
+                    + impact * 0.08
+                    + continuity * 0.05
+                    + potential * 0.02
             }
             CallUpWindowType::CompetitiveWindow => {
-                ability * 0.20
-                    + form * 0.21
-                    + tactical * 0.12
-                    + role_fit * 0.10
-                    + impact * 0.12
+                ability * 0.22
+                    + form * 0.20
+                    + tactical * 0.14
+                    + role_fit * 0.12
                     + experience * 0.09
-                    + mental * 0.06
-                    + age_s * 0.04
-                    + continuity * 0.06
-                    + league * 0.00
+                    + mental * 0.07
+                    + impact * 0.08
+                    + continuity * 0.05
+                    + potential * 0.03
             }
             CallUpWindowType::FriendlyWindow => {
                 let experiment = Self::experimentation_bonus(c, ability);
                 ability * 0.14
-                    + form * 0.15
-                    + tactical * 0.08
-                    + role_fit * 0.08
-                    + impact * 0.09
-                    + experience * 0.03
-                    + mental * 0.04
-                    + age_s * 0.12
-                    + potential * 0.17
-                    + continuity * 0.02
-                    + experiment
+                    + form * 0.13
+                    + tactical * 0.10
+                    + role_fit * 0.10
+                    + potential * 0.18
+                    + impact * 0.08
+                    + mental * 0.05
+                    + continuity * 0.04
+                    + experience * 0.04
+                    + age_s * 0.04
+                    + experiment * 0.14
             }
         };
+        // Keep age_s influence in non-friendly windows as a small implicit
+        // signal (the spec doesn't list a separate `age` weight for
+        // tournament / qualifier, but a tournament squad still leans
+        // toward peak-age players). Folded in as a small nudge.
+        let age_nudge = match ctx.window_type {
+            CallUpWindowType::FriendlyWindow => 0.0,
+            _ => age_s * 0.04,
+        };
+        let weighted = weighted + age_nudge;
 
         // League nudge applied as a small bias regardless of mode — the
         // top-flight signal is too important to fully zero out, even
@@ -1539,5 +1549,120 @@ impl NationalTeam {
             mid.max(5),
             fwd.max(3),
         ]
+    }
+}
+
+/// Closed enum mirroring the FIFA-realism constraints the spec calls out
+/// (dual nationality, refusal, travel friction). Built per fixture by
+/// [`NationalCallupConstraints`] and applied as a pre-scoring filter so
+/// the call-up pipeline produces realistic squads without invading the
+/// existing `Player` data model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NationalEligibilityIssue {
+    NotEligible,
+    CapTiedToAnotherCountry,
+    DeclinedCallup,
+    UnableToTravel,
+    MidSeasonInjuryReplacement,
+}
+
+/// Per-fixture FIFA-style constraints. Each set is a small list of
+/// player ids the squad pipeline filters against before scoring. Every
+/// list defaults to empty so existing callers continue to behave as
+/// before this layer existed.
+#[derive(Debug, Clone, Default)]
+pub struct NationalCallupConstraints {
+    pub cap_tied_elsewhere: Vec<u32>,
+    pub refused_callup: Vec<u32>,
+    pub travel_unable: Vec<u32>,
+    pub late_replacement: Vec<u32>,
+}
+
+impl NationalCallupConstraints {
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    pub fn is_blocked(&self, player_id: u32) -> Option<NationalEligibilityIssue> {
+        if self.cap_tied_elsewhere.contains(&player_id) {
+            return Some(NationalEligibilityIssue::CapTiedToAnotherCountry);
+        }
+        if self.refused_callup.contains(&player_id) {
+            return Some(NationalEligibilityIssue::DeclinedCallup);
+        }
+        if self.travel_unable.contains(&player_id) {
+            return Some(NationalEligibilityIssue::UnableToTravel);
+        }
+        None
+    }
+}
+
+/// Stateless helper: target squad sizes per window mode and per stage.
+/// Preliminary squads run wider (30-35) then narrow to 23/26 by the
+/// deadline.
+pub struct NationalSquadStage;
+
+impl NationalSquadStage {
+    pub const PRELIMINARY: usize = 35;
+    pub const FINAL_TOURNAMENT: usize = 26;
+    pub const FINAL_QUALIFIER: usize = 23;
+
+    pub fn target_size(window: CallUpWindowType, near_deadline: bool) -> usize {
+        match window {
+            CallUpWindowType::TournamentFinals => {
+                if near_deadline {
+                    Self::FINAL_TOURNAMENT
+                } else {
+                    Self::PRELIMINARY
+                }
+            }
+            CallUpWindowType::CompetitiveWindow | CallUpWindowType::FriendlyWindow => {
+                Self::FINAL_QUALIFIER
+            }
+        }
+    }
+}
+
+/// Tournament-mode role coverage requirements (3 GK, 2 per flank, …).
+/// Returned by [`NationalTournamentRequirements::for_window`] and read
+/// by the squad pipeline as a hard constraint check after scoring.
+#[derive(Debug, Clone, Copy)]
+pub struct NationalTournamentRequirements {
+    pub min_goalkeepers: usize,
+    pub min_left_flank: usize,
+    pub min_right_flank: usize,
+    pub min_central_defenders: usize,
+    pub min_central_forwards: usize,
+    pub min_penalty_takers: usize,
+}
+
+impl NationalTournamentRequirements {
+    pub fn for_window(window: CallUpWindowType) -> Self {
+        match window {
+            CallUpWindowType::TournamentFinals => NationalTournamentRequirements {
+                min_goalkeepers: 3,
+                min_left_flank: 2,
+                min_right_flank: 2,
+                min_central_defenders: 3,
+                min_central_forwards: 2,
+                min_penalty_takers: 1,
+            },
+            CallUpWindowType::CompetitiveWindow => NationalTournamentRequirements {
+                min_goalkeepers: 3,
+                min_left_flank: 1,
+                min_right_flank: 1,
+                min_central_defenders: 3,
+                min_central_forwards: 2,
+                min_penalty_takers: 1,
+            },
+            CallUpWindowType::FriendlyWindow => NationalTournamentRequirements {
+                min_goalkeepers: 2,
+                min_left_flank: 1,
+                min_right_flank: 1,
+                min_central_defenders: 2,
+                min_central_forwards: 1,
+                min_penalty_takers: 0,
+            },
+        }
     }
 }
