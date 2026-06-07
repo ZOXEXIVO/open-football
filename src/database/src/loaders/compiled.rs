@@ -21,7 +21,7 @@ use super::names::NamesByCountryEntity;
 use super::national::NationalCompetitionEntity;
 use super::players::OdbPlayer;
 
-pub const SUPPORTED_VERSION: &str = "0.01";
+pub const SUPPORTED_VERSION: &str = "0.03";
 
 static DATABASE_BYTES: &[u8] = include_bytes!("../data/database.db");
 
