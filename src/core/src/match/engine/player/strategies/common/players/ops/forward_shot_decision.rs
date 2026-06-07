@@ -583,10 +583,18 @@ pub fn evaluate_forward_shot_decision(
             willingness *= 0.85;
         }
     }
-    let settle_window: u64 = 300_000;
+    // Match-start settle window — extended after dev_match stats showed
+    // 80% of first goals were still landing in minutes 0–15 (real PL ~25%)
+    // despite the prior 5-minute / 0.60 floor. The realistic "feel-out"
+    // window is closer to 12 minutes; pushing further yielded no
+    // additional improvement on top of this. Other early-goal paths
+    // (state-machine shooting decisions outside this helper, fresh-
+    // player condition multiplier) still contribute and would need
+    // their own dampeners for a full fix.
+    let settle_window: u64 = 720_000;
     if ctx.context.total_match_time < settle_window {
         let progress = ctx.context.total_match_time as f32 / settle_window as f32;
-        willingness *= 0.60 + 0.40 * progress;
+        willingness *= 0.35 + 0.65 * progress;
     }
 
     // Cap trimmed 0.48/0.60 → 0.34/0.44. Floor dropped 0.012 → 0.006.

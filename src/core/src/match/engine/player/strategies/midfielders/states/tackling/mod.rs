@@ -11,7 +11,7 @@ use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 12.0; // ~1.5m — midfielder ball-winner engagement range.
+const TACKLE_DISTANCE_THRESHOLD: f32 = 8.0; // ~1m — midfielder ball-winner contact range. Tightened from 12u after dev_match showed MID tackles at 21/match/team vs real ~4: the 12u "engagement" radius was a soft press circle, not a tackle zone. Real midfielders win the ball by getting CLOSE to the carrier; the 8u threshold matches the actual contact distance.
 
 #[derive(Default, Clone)]
 pub struct MidfielderTacklingState {}

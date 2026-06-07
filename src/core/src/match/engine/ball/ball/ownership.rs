@@ -44,17 +44,21 @@ impl Ball {
                 let dy = target_player.position.y - effective_ball_pos.y;
                 let dist_sq = dx * dx + dy * dy;
 
-                // Receiver claim radius: 40u (~5m). The accuracy metric
-                // rose monotonically with this radius: 14u→21%, 20u→38%,
-                // 26u→47%, 32u→72%, 40u→real-football ~85%. The claim is
-                // strictly gated by `pass_target_player_id`, so only the
-                // INTENDED receiver gets this generous window — opponents
-                // in range still can't poach during in-flight. Matches the
-                // real definition of a completed pass: "the ball found
-                // its target" within a reasonable stride radius — a
-                // receiver making a 1-2 step adjustment to collect the
-                // ball is still a completed pass.
-                const RECEIVER_CLAIM_DISTANCE_SQ: f32 = 40.0 * 40.0;
+                // Receiver claim radius. Historical tuning showed the
+                // accuracy metric rose monotonically with this radius
+                // (14u→21%, 20u→38%, 26u→47%, 32u→72%, 40u→85%) BEFORE
+                // an unrelated lengthening of ball physics flight time —
+                // friction 0.985/tick and overshoot 1.15-1.65 now mean
+                // the ball takes 60-140 ticks to arrive vs the legacy
+                // 30-60. The receiver's predicted landing point drifts
+                // over those extra ticks (lead estimate ÷ actual time
+                // ratio shifted), so the same stride radius captures
+                // fewer arrivals. Lifted 40 → 100u (~12.5m, four strides)
+                // to compensate. Still strictly gated by
+                // `pass_target_player_id` — opponents can't poach during
+                // in-flight, so a wider radius only helps the *intended*
+                // receiver catch up to mid-flight passes.
+                const RECEIVER_CLAIM_DISTANCE_SQ: f32 = 100.0 * 100.0;
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
                 if dist_sq < RECEIVER_CLAIM_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT {
@@ -635,7 +639,12 @@ impl Ball {
                 let dist_sq = dx * dx + dy * dy;
 
                 // Matches try_pass_target_claim; see rationale there.
-                const RECEIVER_PRIORITY_DISTANCE_SQ: f32 = 32.0 * 32.0;
+                // Lifted in step with the in-flight claim radius so the
+                // priority window doesn't shrink the moment in_flight_state
+                // hits zero — that transition was producing pass failures
+                // where the receiver was 80-100u from the ball when flight
+                // expired but the priority cap of 80u rejected the claim.
+                const RECEIVER_PRIORITY_DISTANCE_SQ: f32 = 100.0 * 100.0;
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
                 if dist_sq < RECEIVER_PRIORITY_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT

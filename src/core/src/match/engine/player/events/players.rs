@@ -1748,18 +1748,27 @@ impl PlayerEventDispatcher {
         field.ball.current_owner = None;
         field.ball.pass_target_player_id = Some(event_model.to_player_id);
 
-        // Increase in_flight_state based on pass distance to prevent immediate reclaim
-        // Ball velocity is low (~1-3 units/tick) so it needs significant protection
-        // to travel most of the distance before opponents can claim
-        // Short passes (< 30m): 40 ticks — covers ~45% of distance
-        // Medium passes (30-80m): 60 ticks — covers ~60% of distance
-        // Long passes (> 80m): 80 ticks — covers ~70% of distance
+        // In-flight protection window — keeps the intended receiver's
+        // 40u claim privilege live until the ball actually arrives.
+        //
+        // Why: ground passes decay at 0.985/tick (1.5% per tick). Solving
+        // x(t) = v0(1 - 0.985^t)/0.015 with v0 = d × 0.015 × overshoot
+        // gives an actual arrival time of ~135-170 ticks for a 30u pass,
+        // ~190-260 for a 60u, ~260-340 for a 100u+. Prior window of
+        // 40/60/80 ticks covered only the first 25-30% of the flight —
+        // once it expired, anyone within 5u of the CURRENT (still mid-
+        // flight) ball position could claim, and the chasing defender
+        // typically beat the intended receiver to it. Population pass
+        // accuracy sat at ~50% vs real-football ~85% for that reason.
+        // Sizing the window to match the physical flight time keeps the
+        // receiver's priority through arrival; defenders still get the
+        // ball when the receiver doesn't actually reach the landing spot.
         let flight_protection = if actual_horizontal_distance < 30.0 {
-            40
+            120
         } else if actual_horizontal_distance < 80.0 {
-            60
+            180
         } else {
-            80
+            240
         };
         field.ball.flags.in_flight_state = flight_protection;
     }

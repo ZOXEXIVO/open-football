@@ -10,8 +10,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 12.0; // ~1.5m — forwards close ball at press range.
-const CLOSE_TACKLE_DISTANCE: f32 = 7.0; // Immediate-attempt range when right on top of the ball carrier.
+const TACKLE_DISTANCE_THRESHOLD: f32 = 8.0; // ~1m — forwards rarely tackle from range. Tightened from 12u after dev_match showed FWD tackles at 15/match/team vs real ~2.
+const CLOSE_TACKLE_DISTANCE: f32 = 5.0; // Immediate-attempt range when right on top of the ball carrier.
 const FOUL_CHANCE_BASE: f32 = 0.15; // Base chance of committing a foul
 const CHASE_DISTANCE_THRESHOLD: f32 = 100.0; // Maximum distance to chase for tackle
 const PRESSURE_DISTANCE: f32 = 20.0; // Distance to apply pressure without tackling
