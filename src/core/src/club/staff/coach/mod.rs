@@ -29,7 +29,7 @@ pub mod strategy;
 mod tests;
 
 pub use assessment::{CoachDecisionScore, CoachPlayerAssessment};
-pub use bond::CoachPlayerBond;
+pub use bond::{CoachPlayerBond, CoachPlayerBondBreakdown};
 pub use engine::{CoachDecisionEngine, CoachLiveMatchContext, CoachSelectionContext};
 pub use memory::{
     CoachMatchObservation, CoachMemory, CoachMemoryFlags, CoachMemoryStore, MemoryEngine,

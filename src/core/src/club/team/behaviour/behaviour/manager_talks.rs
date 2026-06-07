@@ -18,7 +18,7 @@ use crate::context::GlobalContext;
 use crate::utils::DateUtils;
 use crate::{
     ContractType, Player, PlayerCollection, PlayerSquadStatus, PlayerStatusType, Staff,
-    StaffCollection, StaffPosition,
+    StaffCollection,
 };
 use chrono::NaiveDate;
 use log::debug;
@@ -34,8 +34,10 @@ impl TeamBehaviour {
         result: &mut TeamBehaviourResult,
         today: Option<NaiveDate>,
     ) {
-        // Find the manager
-        let manager = match staffs.find_by_position(StaffPosition::Manager) {
+        // Head-coach lookup: Manager → CaretakerManager → AssistantManager →
+        // FirstTeamCoach → Coach. A caretaker / assistant can run morale and
+        // preventive talks while the manager seat is open.
+        let manager = match staffs.social_head_coach() {
             Some(m) => m,
             None => return,
         };
@@ -350,7 +352,7 @@ impl TeamBehaviour {
         result: &mut TeamBehaviourResult,
         ctx: &GlobalContext<'_>,
     ) {
-        let manager = match staffs.find_by_position(StaffPosition::Manager) {
+        let manager = match staffs.social_head_coach() {
             Some(m) => m,
             None => return,
         };
@@ -520,7 +522,7 @@ impl TeamBehaviour {
         result: &mut TeamBehaviourResult,
         ctx: &GlobalContext<'_>,
     ) {
-        if staffs.find_by_position(StaffPosition::Manager).is_none() {
+        if staffs.social_head_coach().is_none() {
             return;
         }
 

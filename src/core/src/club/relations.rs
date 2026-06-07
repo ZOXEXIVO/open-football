@@ -687,7 +687,7 @@ impl Relationship for StaffRelation {
         self.level = decay_toward(self.level, 0.0, 0.985);
         self.authority_respect = decay_toward(self.authority_respect, 50.0, 0.993);
         self.trust_in_abilities = decay_toward(self.trust_in_abilities, 50.0, 0.995);
-        self.personal_bond = decay_toward(self.personal_bond, 25.0, 0.980);
+        self.personal_bond = decay_toward(self.personal_bond, 30.0, 0.980);
         self.receptiveness = decay_toward(self.receptiveness, 50.0, 0.992);
         self.loyalty = decay_toward(self.loyalty, 30.0, 0.990);
     }
@@ -1502,8 +1502,8 @@ mod tests {
             rel.trust_in_abilities
         );
         assert!(
-            (rel.personal_bond - 25.0).abs() < 1.5,
-            "personal_bond={} expected ~25",
+            (rel.personal_bond - 30.0).abs() < 1.5,
+            "personal_bond={} expected ~30",
             rel.personal_bond
         );
         assert!(

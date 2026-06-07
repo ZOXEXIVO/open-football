@@ -23,6 +23,7 @@ use chrono::Weekday;
 use log::debug;
 
 mod calculations;
+pub(crate) mod conflict_escalation;
 mod dynamics;
 mod hierarchy;
 mod interactions;
@@ -228,6 +229,13 @@ impl TeamBehaviour {
         // Head-coach-driven squad cleanup: terminate contracts of players
         // the manager has given up on, provided the payout is acceptable.
         Self::process_coach_contract_terminations(players, staffs, &mut result, &ctx);
+
+        // Living conflict escalation: persistent high-bond friction
+        // crosses from "the coach noticed" into player-driven incidents
+        // — private complaints, Unhappy status, transfer-request risk,
+        // public criticism. Runs after the talks pass so the streak
+        // reads the post-talk bond reflecting any successful chat.
+        Self::process_conflict_escalation(players, staffs, &mut result, &ctx);
 
         debug!(
             "Full team behaviour update complete - {} relationship changes, {} manager talks",

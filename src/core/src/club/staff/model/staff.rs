@@ -279,6 +279,23 @@ impl StaffCollection {
         self.find_by_any_position(&[StaffPosition::Manager, StaffPosition::CaretakerManager])
     }
 
+    /// The "who runs this dressing room this week?" lookup used by every
+    /// social pass (manager talks, manager credibility, conflict gating,
+    /// social snapshot). Walks Manager → CaretakerManager → AssistantManager
+    /// → FirstTeamCoach → Coach so an unfilled manager seat doesn't
+    /// silently disable morale talks, preventive interventions, or
+    /// credibility drift while a caretaker is in place. Returns `None`
+    /// only when every coaching seat is genuinely vacant.
+    pub fn social_head_coach(&self) -> Option<&Staff> {
+        self.find_by_any_position(&[
+            StaffPosition::Manager,
+            StaffPosition::CaretakerManager,
+            StaffPosition::AssistantManager,
+            StaffPosition::FirstTeamCoach,
+            StaffPosition::Coach,
+        ])
+    }
+
     /// Mutable counterpart of `manager`.
     pub fn manager_mut(&mut self) -> Option<&mut Staff> {
         self.staffs.iter_mut().find(|s| {

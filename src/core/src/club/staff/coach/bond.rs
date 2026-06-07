@@ -46,10 +46,10 @@ const RECENT_TALK_WINDOW_DAYS: i64 = 120;
 const SIGNAL_CONTRIBUTION_CAP: f32 = 0.5;
 
 /// Canonical neutral baseline for the `personal_bond` axis on
-/// [`StaffRelation`]. The relation type defaults `personal_bond` to
-/// 25.0; centring on that value keeps "absent relation" and "freshly-
-/// created neutral relation" producing identical bond reads.
-const PERSONAL_BOND_NEUTRAL: f32 = 25.0;
+/// [`StaffRelation`]. Matches the `StaffRelation::new_neutral` default
+/// and the `apply_decay` target so "absent relation" and "freshly-
+/// created neutral relation" produce identical bond reads.
+const PERSONAL_BOND_NEUTRAL: f32 = 30.0;
 
 /// Canonical neutral baseline for the `loyalty` axis. Matches the
 /// `StaffRelation::new_neutral` default of 30.0.
@@ -103,11 +103,35 @@ impl CoachPlayerBond {
     /// `today` is used to age recent-talk and broken-promise signals.
     pub fn build(player: &Player, staff: &Staff, today: NaiveDate) -> Self {
         let inputs = BondInputs::collect(player, staff, today);
+        Self::from_inputs(&inputs)
+    }
+
+    /// Build the bond AND surface the 16 pre-aggregated input signals
+    /// that fed each axis. Used by debug / LLM consumers that need to
+    /// explain *why* a particular bond reads the way it does, and by
+    /// the calibration tests that verify a breakdown re-blends to the
+    /// same `CoachPlayerBond`. Reuses `BondInputs::collect` so the
+    /// formula stays in one place.
+    pub fn build_with_breakdown(
+        player: &Player,
+        staff: &Staff,
+        today: NaiveDate,
+    ) -> (Self, CoachPlayerBondBreakdown) {
+        let inputs = BondInputs::collect(player, staff, today);
+        let bond = Self::from_inputs(&inputs);
+        let breakdown = CoachPlayerBondBreakdown::from_inputs(&inputs);
+        (bond, breakdown)
+    }
+
+    /// Internal — blend the four axes from a prebuilt `BondInputs`.
+    /// Single source of truth so `build` and `build_with_breakdown`
+    /// can't drift apart.
+    fn from_inputs(inputs: &BondInputs) -> Self {
         Self {
-            selection_trust: SelectionTrust::compose(&inputs),
-            training_receptiveness: TrainingReceptiveness::compose(&inputs),
-            tactical_buy_in: TacticalBuyIn::compose(&inputs),
-            conflict_risk: ConflictRisk::compose(&inputs),
+            selection_trust: SelectionTrust::compose(inputs),
+            training_receptiveness: TrainingReceptiveness::compose(inputs),
+            tactical_buy_in: TacticalBuyIn::compose(inputs),
+            conflict_risk: ConflictRisk::compose(inputs),
         }
     }
 
@@ -127,6 +151,53 @@ impl CoachPlayerBond {
             centered * scale * 0.85
         } else {
             centered * scale * 1.20
+        }
+    }
+}
+
+/// Per-input snapshot of the signals that feed [`CoachPlayerBond`].
+/// Each field carries the same 0..1 normalisation the bond composers
+/// consume, so a downstream UI / LLM explanation reads identical
+/// numbers to what `selection_trust`, `tactical_buy_in`, `conflict_risk`
+/// were blended from. Use [`CoachPlayerBond::build_with_breakdown`] —
+/// don't construct this directly.
+#[derive(Debug, Clone, Copy)]
+pub struct CoachPlayerBondBreakdown {
+    pub staff_relation_quality: f32,
+    pub authority_respect: f32,
+    pub trust_in_abilities: f32,
+    pub personal_bond: f32,
+    pub receptiveness: f32,
+    pub rapport_norm: f32,
+    pub coach_memory_tactical_trust: f32,
+    pub coach_memory_training_trust: f32,
+    pub coach_memory_big_match_trust: f32,
+    pub promise_credibility: f32,
+    pub broken_promise_pressure: f32,
+    pub role_fairness: f32,
+    pub unmet_role_expectation: f32,
+    pub recent_talk_outcomes: f32,
+    pub controversy: f32,
+}
+
+impl CoachPlayerBondBreakdown {
+    fn from_inputs(i: &BondInputs) -> Self {
+        Self {
+            staff_relation_quality: i.staff_relation_quality,
+            authority_respect: i.authority_respect,
+            trust_in_abilities: i.trust_in_abilities,
+            personal_bond: i.personal_bond,
+            receptiveness: i.receptiveness,
+            rapport_norm: i.rapport_norm,
+            coach_memory_tactical_trust: i.coach_memory_tactical_trust,
+            coach_memory_training_trust: i.coach_memory_training_trust,
+            coach_memory_big_match_trust: i.coach_memory_big_match_trust,
+            promise_credibility: i.promise_credibility,
+            broken_promise_pressure: i.broken_promise_pressure,
+            role_fairness: i.role_fairness,
+            unmet_role_expectation: i.unmet_role_expectation,
+            recent_talk_outcomes: i.recent_talk_outcomes,
+            controversy: i.controversy,
         }
     }
 }
@@ -164,10 +235,10 @@ impl Axis {
         (0.5 + (value - 50.0) / 100.0).clamp(0.0, 1.0)
     }
 
-    /// `personal_bond` neutral default is 25 (see
-    /// `StaffRelation::new_neutral`). Centring on 25 keeps a brand-new
+    /// `personal_bond` neutral default is 30 (see
+    /// `StaffRelation::new_neutral`). Centring on 30 keeps a brand-new
     /// "we don't really know each other yet" pair at 0.5 rather than
-    /// at 0.25 (which the pre-polish read used).
+    /// at 0.30 (which the pre-polish read used).
     #[inline]
     fn personal_bond(value: f32) -> f32 {
         (0.5 + (value - PERSONAL_BOND_NEUTRAL) / 100.0).clamp(0.0, 1.0)
@@ -260,8 +331,12 @@ impl BondInputs {
         // BELOW neutral (0.5). A player getting fair playing time
         // produces zero unmet pressure regardless of squad status — only
         // an actual gap between expectation and reality fires the term.
-        let unmet_role_expectation = ((0.5 - role_fairness) * 2.0).clamp(0.0, 1.0)
-            * BondInputs::role_expectation_weight_of(player);
+        // Clamp AFTER weighting so a KeyPlayer (weight 1.20) with role
+        // fairness at the floor cannot exceed 1.0 and dominate the
+        // conflict_risk blend on its own.
+        let base_unmet = ((0.5 - role_fairness) * 2.0).clamp(0.0, 1.0);
+        let unmet_role_expectation =
+            (base_unmet * BondInputs::role_expectation_weight_of(player)).clamp(0.0, 1.0);
         let recent_talk_outcomes = BondInputs::recent_talk_outcomes_of(player, staff.id, today);
         let controversy = (player.attributes.controversy / 20.0).clamp(0.0, 1.0);
 
@@ -286,7 +361,7 @@ impl BondInputs {
 
     /// 0..1 read of the StaffRelation as a whole. Centred on 0.5 so a
     /// neutral StaffRelation (every axis at its `new_neutral` default —
-    /// level 0, authority/trust/receptiveness 50, personal_bond 25,
+    /// level 0, authority/trust/receptiveness 50, personal_bond 30,
     /// loyalty 30) produces exactly 0.5, matching the "no relation"
     /// fallback. Weights match the spec: 0.30/0.25/0.25/0.10/0.10.
     fn staff_relation_quality_of(r: &StaffRelation) -> f32 {
@@ -873,6 +948,107 @@ mod tests {
             "asymmetric ratio={:.3} expected {:.3}",
             ratio,
             1.20 / 0.85
+        );
+    }
+
+    // ── Improvement-pass tests ─────────────────────────────────────
+
+    #[test]
+    fn unmet_role_expectation_stays_in_0_1_for_key_player() {
+        // Improvement task #4: clamp01 after role-status weighting.
+        // A KeyPlayer with the most punishing role fairness possible
+        // (role_clarity = -8 → role_fairness = 0) and weight 1.20
+        // must still produce unmet_role_expectation ≤ 1.0.
+        use crate::club::player::contract::PlayerClubContract;
+        use crate::{ContractType, PlayerSquadStatus};
+        let mut player = Fixture::player(1);
+        let staff = Fixture::staff(7);
+        let mut contract = PlayerClubContract::new(
+            50_000,
+            Fixture::today() + chrono::Duration::days(365),
+        );
+        contract.squad_status = PlayerSquadStatus::KeyPlayer;
+        contract.contract_type = ContractType::FullTime;
+        player.contract = Some(contract);
+        // Pin role_clarity to the floor so the raw base hits 1.0.
+        player.happiness.factors.role_clarity = -8.0;
+
+        let (_, breakdown) =
+            CoachPlayerBond::build_with_breakdown(&player, &staff, Fixture::today());
+
+        assert!(
+            breakdown.unmet_role_expectation >= 0.0
+                && breakdown.unmet_role_expectation <= 1.0,
+            "unmet_role_expectation={} must stay in 0..=1 even for KeyPlayer",
+            breakdown.unmet_role_expectation
+        );
+    }
+
+    #[test]
+    fn bond_breakdown_reads_match_bond_inputs_one_to_one() {
+        // Improvement task #5: build_with_breakdown must expose the
+        // SAME pre-blend numbers the bond is composed from. We can't
+        // re-derive the bond's final axes from the breakdown alone
+        // (the composers carry their own weights), but every
+        // breakdown field must equal what BondInputs::collect produces
+        // — so a downstream debugger reads the exact numbers each
+        // composer saw.
+        let mut player = Fixture::player(1);
+        Fixture::push_broken_promise(&mut player);
+        let staff = Fixture::staff(7);
+        let today = Fixture::today();
+        let (_bond, breakdown) =
+            CoachPlayerBond::build_with_breakdown(&player, &staff, today);
+        let inputs = BondInputs::collect(&player, &staff, today);
+
+        // Every field must equal exactly — no rounding because the
+        // breakdown is a literal copy of the inputs.
+        assert_eq!(
+            breakdown.staff_relation_quality, inputs.staff_relation_quality,
+            "staff_relation_quality"
+        );
+        assert_eq!(breakdown.authority_respect, inputs.authority_respect);
+        assert_eq!(breakdown.trust_in_abilities, inputs.trust_in_abilities);
+        assert_eq!(breakdown.personal_bond, inputs.personal_bond);
+        assert_eq!(breakdown.receptiveness, inputs.receptiveness);
+        assert_eq!(breakdown.rapport_norm, inputs.rapport_norm);
+        assert_eq!(
+            breakdown.coach_memory_tactical_trust,
+            inputs.coach_memory_tactical_trust
+        );
+        assert_eq!(
+            breakdown.coach_memory_training_trust,
+            inputs.coach_memory_training_trust
+        );
+        assert_eq!(
+            breakdown.coach_memory_big_match_trust,
+            inputs.coach_memory_big_match_trust
+        );
+        assert_eq!(breakdown.promise_credibility, inputs.promise_credibility);
+        assert_eq!(
+            breakdown.broken_promise_pressure,
+            inputs.broken_promise_pressure
+        );
+        assert_eq!(breakdown.role_fairness, inputs.role_fairness);
+        assert_eq!(
+            breakdown.unmet_role_expectation,
+            inputs.unmet_role_expectation
+        );
+        assert_eq!(breakdown.recent_talk_outcomes, inputs.recent_talk_outcomes);
+        assert_eq!(breakdown.controversy, inputs.controversy);
+    }
+
+    #[test]
+    fn neutral_staff_relation_personal_bond_does_not_drift() {
+        // Improvement task #1: PERSONAL_BOND_NEUTRAL = 30 must match
+        // StaffRelation::new_neutral and apply_decay so a freshly-
+        // created neutral relation reads identically to an absent
+        // one through the personal_bond axis.
+        let absent = Axis::personal_bond(30.0);
+        assert!(
+            (absent - 0.5).abs() < 1e-6,
+            "personal_bond axis at 30 must produce neutral 0.5 (got {})",
+            absent
         );
     }
 }

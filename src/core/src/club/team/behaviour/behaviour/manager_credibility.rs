@@ -17,7 +17,6 @@ use crate::context::GlobalContext;
 use crate::utils::DateUtils;
 use crate::{
     ChangeType, Player, PlayerCollection, PlayerSquadStatus, RelationshipChange, StaffCollection,
-    StaffPosition,
 };
 
 impl TeamBehaviour {
@@ -33,7 +32,9 @@ impl TeamBehaviour {
         _result: &mut TeamBehaviourResult,
         ctx: &GlobalContext<'_>,
     ) {
-        let manager = match staffs.find_by_position(StaffPosition::Manager) {
+        // Head-coach fallback: caretaker / assistant can carry the
+        // background relationship drift while the manager seat is open.
+        let manager = match staffs.social_head_coach() {
             Some(m) => m,
             None => return,
         };

@@ -2,7 +2,8 @@ use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::{
     Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
     MatchResultInfo, MentorshipProcessor, PreventiveRestPass, SquadSocialViewBuilder,
-    SquadStatusUpdater, TeamBuilder, TeamFixtureWindow, TeamSocialSnapshot, TeamType,
+    SquadStatusUpdater, TeamBuilder, TeamFixtureWindow, TeamSocialDebug, TeamSocialSnapshot,
+    TeamType,
 };
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
@@ -162,6 +163,15 @@ impl Team {
     /// per-player chemistry to avoid each player's local noise.
     pub fn team_chemistry(&self) -> f32 {
         self.social_snapshot.team_chemistry
+    }
+
+    /// Debug / LLM-facing read of the team's social weather. Bundles
+    /// the headline snapshot, captain mediation score, top-3
+    /// conflict-risk players (with bond breakdown), and top-3
+    /// isolated players. Pure read — safe to call from any UI / debug
+    /// / narrator path. See [`TeamSocialDebug`].
+    pub fn social_debug(&self, today: NaiveDate) -> TeamSocialDebug {
+        TeamSocialDebug::build(self, today)
     }
 
     pub fn players(&self) -> Vec<&Player> {

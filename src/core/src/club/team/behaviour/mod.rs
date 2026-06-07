@@ -1,4 +1,4 @@
-mod behaviour;
+pub(crate) mod behaviour;
 mod result;
 
 pub use behaviour::*;

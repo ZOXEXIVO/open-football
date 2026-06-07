@@ -72,6 +72,16 @@ pub struct PlayerHappiness {
     /// player who recovers form sees the pressure fade. Summed into
     /// the morale recalculation as a hidden form-pressure factor.
     pub hidden_form_pressure: f32,
+
+    /// Consecutive weekly ticks the player's CoachPlayerBond
+    /// `conflict_risk` has stayed above the elevated band (>0.80).
+    /// Reset to 0 the moment the bond eases. Drives the escalation
+    /// ladder (private complaint → Unhappy → transfer request /
+    /// public criticism) in the conflict-escalation pass, so the
+    /// escalation can only fire once a problem has *persisted* — a
+    /// single bad week alone never triggers a transfer request.
+    /// Saturates at u8::MAX.
+    pub conflict_risk_streak: u8,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -162,6 +172,7 @@ impl PlayerHappiness {
             unused_bench_since_join: 0,
             left_out_since_join: 0,
             hidden_form_pressure: 0.0,
+            conflict_risk_streak: 0,
         }
     }
 
@@ -603,6 +614,7 @@ impl PlayerHappiness {
         self.unused_bench_since_join = 0;
         self.left_out_since_join = 0;
         self.hidden_form_pressure = 0.0;
+        self.conflict_risk_streak = 0;
     }
 
     /// Backward compatible: morale >= happy_threshold means happy.
