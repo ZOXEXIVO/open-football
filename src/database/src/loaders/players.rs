@@ -222,6 +222,7 @@ impl PlayersOdb {
 
     /// Index an in-memory list of players — useful for tests and ad-hoc tools.
     pub fn from_players(players: Vec<OdbPlayer>) -> Self {
+        let players = Self::dedupe_by_id(players);
         let mut by_physical_club: HashMap<u32, Vec<OdbPlayer>> = HashMap::new();
         let mut free_agents: Vec<OdbPlayer> = Vec::new();
         for p in players {
@@ -237,6 +238,32 @@ impl PlayersOdb {
             by_physical_club,
             free_agents,
         }
+    }
+
+    /// Collapse multiple records sharing one player id into one. Sortitoutsi
+    /// exports a loanee under both the parent club (with a `loan` block) and
+    /// the borrower (without it). Both records resolve to the same physical
+    /// club, so without this pass the borrower's squad ends up with two
+    /// `Player` instances at the same id — and the loan-less one shadows the
+    /// authoritative loan relationship on every lookup that hits it first
+    /// (player page renders "Contracted to <borrower>" instead of the loan
+    /// banner). Keep the record carrying loan info — it's the parent's
+    /// canonical listing.
+    fn dedupe_by_id(players: Vec<OdbPlayer>) -> Vec<OdbPlayer> {
+        let mut by_id: HashMap<u32, OdbPlayer> = HashMap::with_capacity(players.len());
+        for p in players {
+            match by_id.entry(p.id) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(p);
+                }
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    if p.loan.is_some() && e.get().loan.is_none() {
+                        e.insert(p);
+                    }
+                }
+            }
+        }
+        by_id.into_values().collect()
     }
 
     pub fn for_club(&self, club_id: u32) -> Option<&[OdbPlayer]> {
@@ -358,5 +385,25 @@ mod tests {
     fn embedded_players_load() {
         let odb = PlayersOdb::load().expect("embedded DB should contain players");
         assert!(odb.max_player_id().unwrap_or(0) > 0);
+    }
+
+    /// Sortitoutsi exports loanees twice — once at the parent with the loan
+    /// block, once at the borrower without it. Both records key into the
+    /// borrower's bucket; only the record carrying the loan info should
+    /// survive, so the borrower's squad lists exactly one Tiago with his
+    /// loan-from-parent context intact.
+    #[test]
+    fn duplicate_id_keeps_record_with_loan_block() {
+        let parent = make_player(2000444359, 1139, Some(2215));
+        let mut borrower_dupe = make_player(2000444359, 2215, None);
+        borrower_dupe.current_ability = 60;
+        let odb = PlayersOdb::from_players(vec![borrower_dupe, parent]);
+
+        let borrower_squad = odb.for_club(2215).expect("borrower indexed");
+        assert_eq!(borrower_squad.len(), 1, "duplicate must collapse to one");
+        let kept = &borrower_squad[0];
+        assert_eq!(kept.club_id, 1139, "kept record is the parent's listing");
+        assert!(kept.loan.is_some(), "kept record carries the loan block");
+        assert!(!odb.has_club(1139), "loaned player not indexed at parent");
     }
 }
