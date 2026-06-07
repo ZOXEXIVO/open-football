@@ -8,15 +8,10 @@
 
 use crate::club::relations::ChemistryContext;
 use crate::club::team::Team;
-use chrono::Duration;
+use crate::club::team::squad_life::social_snapshot::TeamSocialSnapshot;
 use chrono::NaiveDate;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-
-/// Cutoff window for "recent signing" status used by the chemistry model.
-/// Anyone whose last transfer falls within this window counts toward the
-/// dressing-room turnover signal.
-const RECENT_SIGNING_WINDOW_DAYS: i64 = 90;
 
 /// How many top leaders / influencers are surfaced to the chemistry model.
 /// Tuned to the natural size of a dressing-room leadership core.
@@ -70,14 +65,12 @@ impl ChemistryContextBuilder {
         influences.into_iter().take(TOP_RANK_SCORES).collect()
     }
 
+    /// Recent-signings count for the dressing-room turnover signal.
+    /// Delegates to [`TeamSocialSnapshot::compute_recent_signings`] so
+    /// the chemistry context and the team-level snapshot read from a
+    /// single source — see polish task #10's dedupe requirement.
     fn recent_signings(team: &Team, today: NaiveDate) -> u8 {
-        let cutoff = today - Duration::days(RECENT_SIGNING_WINDOW_DAYS);
-        team.players
-            .players
-            .iter()
-            .filter(|p| p.last_transfer_date.map(|d| d >= cutoff).unwrap_or(false))
-            .count()
-            .min(u8::MAX as usize) as u8
+        TeamSocialSnapshot::compute_recent_signings(team, today)
     }
 
     /// Average inner-circle cohesion across the squad — a coarse signal of

@@ -2,7 +2,7 @@ use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::{
     Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
     MatchResultInfo, MentorshipProcessor, PreventiveRestPass, SquadSocialViewBuilder,
-    SquadStatusUpdater, TeamBuilder, TeamFixtureWindow, TeamType,
+    SquadStatusUpdater, TeamBuilder, TeamFixtureWindow, TeamSocialSnapshot, TeamType,
 };
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
@@ -49,6 +49,14 @@ pub struct Team {
     pub captain_id: Option<u32>,
     /// Stand-in captain when the captain is unavailable (injured / benched).
     pub vice_captain_id: Option<u32>,
+
+    /// Team-wide social snapshot (avg_pair_harmony, leadership_quality,
+    /// manager_trust_avg, …, team_chemistry). Refreshed during the
+    /// weekly tick; defaults to neutral (50 across the board) until the
+    /// first refresh runs. Downstream consumers (training, match-rating,
+    /// board mood) read [`Team::team_chemistry`] instead of averaging
+    /// per-player chemistry numbers.
+    pub social_snapshot: TeamSocialSnapshot,
 }
 
 impl Team {
@@ -139,6 +147,21 @@ impl Team {
         PreventiveRestPass::apply(&mut self.players.players, best_sports_sci, week_date);
 
         SquadSocialViewBuilder::refresh(&mut self.players.players);
+
+        // Team-level social weather. Runs after the per-player chemistry
+        // recalc so today's per-relation drift is already visible in
+        // `avg_pair_harmony`. The snapshot reads the manager bond for
+        // every non-loanee, so it must run after relations / rapport
+        // decay (above) too — otherwise it would see stale data.
+        self.social_snapshot = TeamSocialSnapshot::build(self, week_date);
+    }
+
+    /// Headline team chemistry on a 0..100 scale. Refreshed weekly by
+    /// [`Team::run_weekly_pass`]; downstream consumers (training tick,
+    /// match-rating, board mood) read this number instead of averaging
+    /// per-player chemistry to avoid each player's local noise.
+    pub fn team_chemistry(&self) -> f32 {
+        self.social_snapshot.team_chemistry
     }
 
     pub fn players(&self) -> Vec<&Player> {

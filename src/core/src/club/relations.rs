@@ -498,12 +498,21 @@ impl Relationship for PlayerRelation {
     }
 
     fn apply_decay(&mut self) {
-        // Relationships naturally decay toward neutral
+        // Drift every axis toward its neutral baseline, not zero — a
+        // dormant player relation should converge on "we don't really
+        // know each other" (level 0, trust/respect 50, friendship 20),
+        // not on permanent mutual distrust. Light-interaction periods
+        // decay faster than full no-contact: only `level` and `friendship`
+        // gate on `interaction_frequency`; the cognitive axes (trust,
+        // respect, professional respect) drift slowly all the time so a
+        // single old grudge isn't carried for ten years untouched.
         if self.interaction_frequency < 0.3 {
-            self.level *= 0.98;
-            self.trust *= 0.99;
-            self.friendship *= 0.97;
+            self.level = decay_toward(self.level, 0.0, 0.98);
+            self.friendship = decay_toward(self.friendship, 20.0, 0.975);
         }
+        self.trust = decay_toward(self.trust, 50.0, 0.992);
+        self.respect = decay_toward(self.respect, 50.0, 0.994);
+        self.professional_respect = decay_toward(self.professional_respect, 50.0, 0.996);
 
         // Reset interaction frequency
         self.interaction_frequency *= 0.9;
@@ -667,14 +676,20 @@ impl Relationship for StaffRelation {
     }
 
     fn apply_decay(&mut self) {
-        // Authority respect decays if not reinforced
-        self.authority_respect *= 0.99;
-
-        // Personal bonds decay without interaction
-        self.personal_bond *= 0.98;
-
-        // Level trends toward neutral
-        self.level *= 0.99;
+        // Same shape as PlayerRelation::apply_decay — drift toward each
+        // axis's neutral baseline rather than zero. The previous code
+        // multiplied everything by 0.99 and so silently eroded
+        // authority_respect / personal_bond down to 0 whenever the coach
+        // wasn't actively engaging the player. Real coaches keep a
+        // baseline level of respect from a player they barely speak to;
+        // erosion below the neutral baseline should require explicit
+        // negative events (broken promise, public criticism, …).
+        self.level = decay_toward(self.level, 0.0, 0.985);
+        self.authority_respect = decay_toward(self.authority_respect, 50.0, 0.993);
+        self.trust_in_abilities = decay_toward(self.trust_in_abilities, 50.0, 0.995);
+        self.personal_bond = decay_toward(self.personal_bond, 25.0, 0.980);
+        self.receptiveness = decay_toward(self.receptiveness, 50.0, 0.992);
+        self.loyalty = decay_toward(self.loyalty, 30.0, 0.990);
     }
 
     fn quality_score(&self) -> f32 {
@@ -999,6 +1014,18 @@ impl TeamChemistry {
             turnover,
         );
     }
+}
+
+/// Geometric drift of `value` toward `neutral` at retention `rate`. The
+/// rate is the fraction of the *distance from neutral* preserved each
+/// tick — `rate=0.99` means 99% of the gap survives, so the value
+/// converges on `neutral` instead of zero. Used by every per-axis
+/// decay so trust/respect/authority drift back to their cognitive
+/// baselines (typically 50) rather than collapsing to 0 over years
+/// of light interaction.
+#[inline]
+fn decay_toward(value: f32, neutral: f32, rate: f32) -> f32 {
+    neutral + (value - neutral) * rate
 }
 
 /// Player harmony — weighted average across all stored player relations of
@@ -1356,5 +1383,138 @@ mod tests {
 
         let chemistry = relations.get_team_chemistry();
         assert!(chemistry > 50.0);
+    }
+
+    /// Apply decay weekly for the given number of simulated weeks and
+    /// return the slowest residual gap to the neutral baseline across
+    /// the axes the caller cares about.
+    fn weeks_to_converge<T: Relationship>(
+        store: &mut RelationStore<T>,
+        weeks: u32,
+    ) {
+        for _ in 0..weeks {
+            store.apply_natural_decay();
+        }
+    }
+
+    #[test]
+    fn player_trust_decays_toward_neutral_not_zero() {
+        // Pre-fix behaviour: trust *= 0.99 each tick → eventually 0.
+        // New behaviour: trust drifts back toward the neutral 50
+        // baseline. A relation that has been quiet for years should
+        // read as "we don't really know each other" (neutral), not
+        // "permanent distrust" (zero).
+        //
+        // Two-stage assertion: (1) after a single year (52 weeks) of
+        // inactivity the value must be CLOSER to 50 than to 0 — this
+        // proves the direction of drift, which is the bug-fix
+        // contract. (2) after several decades the value must be
+        // within 1.0 of the neutral baseline — this proves the
+        // asymptote is genuinely 50, not "0 reached very slowly".
+        let mut store: RelationStore<PlayerRelation> = RelationStore::new();
+        {
+            let rel = store.get_or_create(1);
+            rel.trust = 80.0;
+            rel.respect = 80.0;
+            rel.professional_respect = 80.0;
+            rel.interaction_frequency = 0.0;
+        }
+        weeks_to_converge(&mut store, 52);
+        let one_year = store.get(1).unwrap().clone();
+        assert!(
+            (one_year.trust - 50.0).abs() < (one_year.trust - 0.0).abs(),
+            "trust at {} should be closer to 50 than to 0",
+            one_year.trust
+        );
+
+        // Long-run convergence: trust rate 0.992 means trust at
+        // 50 + 30*0.992^N. After ~2000 weeks the gap is < 0.01.
+        weeks_to_converge(&mut store, 2000);
+        let rel = store.get(1).unwrap();
+        assert!(
+            (rel.trust - 50.0).abs() < 1.0,
+            "trust converged to {}, expected ~50",
+            rel.trust
+        );
+        assert!(
+            (rel.respect - 50.0).abs() < 1.0,
+            "respect converged to {}, expected ~50",
+            rel.respect
+        );
+        assert!(
+            (rel.professional_respect - 50.0).abs() < 1.0,
+            "professional_respect converged to {}, expected ~50",
+            rel.professional_respect
+        );
+    }
+
+    #[test]
+    fn player_trust_decay_works_from_below_neutral_too() {
+        // Same test from the other side — a dormant pair with elevated
+        // distrust should drift up to the neutral baseline rather
+        // than down to zero.
+        let mut store: RelationStore<PlayerRelation> = RelationStore::new();
+        {
+            let rel = store.get_or_create(1);
+            rel.trust = 20.0;
+            rel.respect = 20.0;
+            rel.interaction_frequency = 0.0;
+        }
+        weeks_to_converge(&mut store, 2000);
+        let rel = store.get(1).expect("relation exists");
+        assert!(
+            (rel.trust - 50.0).abs() < 1.0,
+            "trust from below converged to {}, expected ~50",
+            rel.trust
+        );
+        assert!(
+            (rel.respect - 50.0).abs() < 1.0,
+            "respect from below converged to {}, expected ~50",
+            rel.respect
+        );
+    }
+
+    #[test]
+    fn staff_relation_decays_toward_neutral_axes() {
+        // Counterpart for staff relations.
+        // authority_respect → 50, trust_in_abilities → 50,
+        // personal_bond → 25, loyalty → 30, receptiveness → 50.
+        let mut store: RelationStore<StaffRelation> = RelationStore::new();
+        {
+            let rel = store.get_or_create(1);
+            rel.authority_respect = 90.0;
+            rel.trust_in_abilities = 90.0;
+            rel.personal_bond = 80.0;
+            rel.receptiveness = 90.0;
+            rel.loyalty = 90.0;
+            rel.level = 50.0;
+        }
+        weeks_to_converge(&mut store, 2000);
+        let rel = store.get(1).expect("relation exists");
+        assert!(
+            (rel.authority_respect - 50.0).abs() < 1.5,
+            "authority_respect={} expected ~50",
+            rel.authority_respect
+        );
+        assert!(
+            (rel.trust_in_abilities - 50.0).abs() < 1.5,
+            "trust_in_abilities={} expected ~50",
+            rel.trust_in_abilities
+        );
+        assert!(
+            (rel.personal_bond - 25.0).abs() < 1.5,
+            "personal_bond={} expected ~25",
+            rel.personal_bond
+        );
+        assert!(
+            (rel.loyalty - 30.0).abs() < 1.5,
+            "loyalty={} expected ~30",
+            rel.loyalty
+        );
+        assert!(
+            (rel.level).abs() < 1.0,
+            "level converged to {}, expected ~0",
+            rel.level
+        );
     }
 }

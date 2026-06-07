@@ -124,32 +124,52 @@ impl StaffResult {
                     }
                 }
                 RelationshipEvent::Conflict => {
+                    let staff_id = self.staff_id;
                     if let Some(player) = data.random_player_mut() {
-                        let change =
-                            RelationshipChange::negative(ChangeType::TacticalDisagreement, 0.3);
-                        player
-                            .relations
-                            .update_staff_relationship(self.staff_id, change, sim_date);
-                        let mctx = ManagerInteractionEventContext::new(
-                            ManagerInteractionTopic::Tactical,
-                            ManagerInteractionTone::Stern,
-                            PlayerAcceptance::Resented,
-                        )
-                        .with_manager_staff_id(self.staff_id)
-                        .with_criticism_reason(ManagerCriticismReason::IgnoredTacticalInstruction);
-                        let ctx = HappinessEventContext::new(
-                            HappinessEventCause::TacticalDisagreement,
-                            HappinessEventSeverity::Moderate,
-                            HappinessEventScope::TrainingGround,
-                        )
-                        .with_manager_interaction_context(mctx)
-                        .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
-                        player.happiness.add_event_with_context(
-                            HappinessEventType::ManagerCriticism,
-                            -2.0,
-                            None,
-                            ctx,
-                        );
+                        // Polish task #5: suppress random coach-player
+                        // conflict events when the underlying bond is
+                        // healthy. The `&mut D` borrow precludes a
+                        // second look-up to build a full
+                        // `CoachPlayerBond` here, so we use the
+                        // player-side proxy: a friendly staff relation
+                        // (level ≥ 30, authority ≥ 55) AND an intact
+                        // promise track-record (`promise_trust ≥ 0`)
+                        // imply the bond would compute
+                        // `conflict_risk < 0.30`. Skip the random row.
+                        if ConflictGate::suppresses(player, staff_id) {
+                            // bond is healthy; no random conflict
+                            // event lands.
+                        } else {
+                            let change = RelationshipChange::negative(
+                                ChangeType::TacticalDisagreement,
+                                0.3,
+                            );
+                            player.relations.update_staff_relationship(
+                                staff_id, change, sim_date,
+                            );
+                            let mctx = ManagerInteractionEventContext::new(
+                                ManagerInteractionTopic::Tactical,
+                                ManagerInteractionTone::Stern,
+                                PlayerAcceptance::Resented,
+                            )
+                            .with_manager_staff_id(staff_id)
+                            .with_criticism_reason(
+                                ManagerCriticismReason::IgnoredTacticalInstruction,
+                            );
+                            let ctx = HappinessEventContext::new(
+                                HappinessEventCause::TacticalDisagreement,
+                                HappinessEventSeverity::Moderate,
+                                HappinessEventScope::TrainingGround,
+                            )
+                            .with_manager_interaction_context(mctx)
+                            .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
+                            player.happiness.add_event_with_context(
+                                HappinessEventType::ManagerCriticism,
+                                -2.0,
+                                None,
+                                ctx,
+                            );
+                        }
                     }
                 }
                 RelationshipEvent::MentorshipStarted => {
@@ -215,6 +235,35 @@ impl StaffResult {
                 _ => {}
             }
         }
+    }
+}
+
+/// Player-side proxy for the bond `conflict_risk < 0.30` gate used by
+/// the random coach-player conflict suppression rule (polish task #5).
+/// The full `CoachPlayerBond::build` would need a `&Staff` reference
+/// the `StaffResult::process` context can't supply alongside the
+/// `&mut Player` borrow, so we approximate from the player-side state
+/// the suppression rule actually depends on.
+struct ConflictGate;
+
+impl ConflictGate {
+    /// Returns `true` when the random conflict event should be
+    /// suppressed because the underlying bond is healthy. Approximates
+    /// the bond formula's "below 0.30 conflict_risk" condition:
+    ///   * `low_authority` term is zero when `authority_respect ≥ 55`;
+    ///   * `low_rapport` reads via the player-side staff relation
+    ///     level being ≥ 30 (i.e. not strained);
+    ///   * `broken_promise_pressure` is zero when `promise_trust ≥ 0`.
+    /// When ALL three hold the bond's `conflict_risk` sits in the
+    /// suppress band, so the random row is dropped.
+    fn suppresses(player: &Player, staff_id: u32) -> bool {
+        let Some(rel) = player.relations.get_staff(staff_id) else {
+            return false;
+        };
+        let healthy_relation =
+            rel.level >= 30.0 && rel.authority_respect >= 55.0;
+        let intact_promises = player.happiness.factors.promise_trust >= 0.0;
+        healthy_relation && intact_promises
     }
 }
 

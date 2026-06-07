@@ -1,5 +1,6 @@
 use crate::club::team::TeamFixtureWindow;
 use crate::club::team::behaviour::TeamBehaviour;
+use crate::club::team::squad_life::social_snapshot::TeamSocialSnapshot;
 use crate::{
     MatchHistory, PlayerCollection, StaffCollection, Tactics, Team, TeamReputation, TeamType,
     TrainingSchedule, Transfers,
@@ -119,6 +120,7 @@ impl TeamBuilder {
             fixture_window: TeamFixtureWindow::default(),
             captain_id: None,
             vice_captain_id: None,
+            social_snapshot: TeamSocialSnapshot::default(),
         })
     }
 }

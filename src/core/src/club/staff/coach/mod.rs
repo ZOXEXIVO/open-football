@@ -18,6 +18,7 @@
 //! neutral 0.0 adjustment and leave the existing scoring intact.
 
 pub mod assessment;
+pub mod bond;
 pub mod engine;
 pub mod memory;
 pub mod reason;
@@ -28,6 +29,7 @@ pub mod strategy;
 mod tests;
 
 pub use assessment::{CoachDecisionScore, CoachPlayerAssessment};
+pub use bond::CoachPlayerBond;
 pub use engine::{CoachDecisionEngine, CoachLiveMatchContext, CoachSelectionContext};
 pub use memory::{
     CoachMatchObservation, CoachMemory, CoachMemoryFlags, CoachMemoryStore, MemoryEngine,

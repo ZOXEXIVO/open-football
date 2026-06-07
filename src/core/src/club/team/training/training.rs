@@ -1,5 +1,6 @@
 use crate::club::player::language::Language;
 use crate::club::player::training::result::PlayerTrainingResult;
+use crate::club::staff::CoachPlayerBond;
 use crate::{
     ChangeType, ConflictLocation, HappinessEventCause, HappinessEventContext,
     HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
@@ -41,6 +42,51 @@ fn is_recovery_compatible_session(session_type: &TrainingType) -> bool {
             | TrainingType::VideoAnalysis
             | TrainingType::Positioning
     )
+}
+
+/// Coach-player bond → training-gain multiplier. Encapsulates the
+/// polish task #4 spec formula so the team training loop reads as one
+/// named call and the calibration lives in a single place we can tune.
+struct TrainingBondGate;
+
+impl TrainingBondGate {
+    /// Spec multiplier: `0.90 + training_receptiveness * 0.20`, clamped
+    /// to `0.90..1.10`. A neutral bond (receptiveness ≈ 0.5) lands at
+    /// 1.0; a fully-bought-in player extracts 10% more from each
+    /// session; a coach the player has lost extracts 10% less.
+    #[inline]
+    fn multiplier(bond: &CoachPlayerBond) -> f32 {
+        (0.90 + bond.training_receptiveness * 0.20).clamp(0.90, 1.10)
+    }
+
+    /// Spec multiplier for tactical-familiarity drills:
+    /// `0.90 + tactical_buy_in * 0.20`, clamped to 0.90..1.10. Used by
+    /// tactical-cohesion / formation sessions where the gain comes from
+    /// the player believing in the system, not just absorbing skill
+    /// reps.
+    #[inline]
+    pub(crate) fn tactical_familiarity_multiplier(bond: &CoachPlayerBond) -> f32 {
+        (0.90 + bond.tactical_buy_in * 0.20).clamp(0.90, 1.10)
+    }
+
+    /// True for sessions whose primary gain is tactical/system
+    /// understanding rather than skill reps — these get the extra
+    /// `tactical_familiarity_multiplier` layer applied on top of the
+    /// general training-receptiveness multiplier.
+    #[inline]
+    fn is_tactical(session_type: &TrainingType) -> bool {
+        matches!(
+            session_type,
+            TrainingType::Positioning
+                | TrainingType::TeamShape
+                | TrainingType::PressingDrills
+                | TrainingType::TransitionPlay
+                | TrainingType::SetPiecesDefensive
+                | TrainingType::SetPieces
+                | TrainingType::VideoAnalysis
+                | TrainingType::OpponentSpecific
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -129,15 +175,43 @@ impl TeamTraining {
 
         let mut results = Vec::with_capacity(participants.len());
 
+        // Team-level chemistry is now the canonical "dressing room mood"
+        // signal — read from the weekly-refreshed snapshot instead of
+        // each player's local per-relation chemistry. Per polish task
+        // #6: prefer `team.team_chemistry()` over
+        // `player.relations.get_team_chemistry()` in team-aware paths;
+        // the local read is reserved for player-only adaptation.
+        let team_chem = (team.team_chemistry() / 100.0).clamp(0.0, 1.0);
+        let chem_factor = 0.90 + team_chem * 0.20;
+        let today = date.date();
+
+        let is_tactical_session = TrainingBondGate::is_tactical(&session.session_type);
+
         for player in participants {
             let mut r = PlayerTraining::train(player, coach, session, date, facility_quality);
-            // Chemistry multiplier: a player happy in the dressing room
-            // gets 10% more out of a session; one in a toxic one gets 10%
-            // less. Narrow band so chemistry is meaningful without being
-            // decisive — coach quality and intensity still dominate.
-            let chem = player.relations.get_team_chemistry() / 100.0; // 0..1
-            let factor = 0.90 + chem * 0.20;
-            r.effects.scale_gains(factor);
+            r.effects.scale_gains(chem_factor);
+            // Coach-player bond gates absorption per polish task #4 —
+            // spec multiplier `0.90 + training_receptiveness * 0.20`
+            // clamped to 0.90..1.10. Applied at the team layer (not
+            // inside `PlayerTraining::train`) so the existing thousands
+            // of unit-test callers don't have to thread a bond through.
+            //
+            // Double-count note: `PlayerTraining::train` already reads
+            // rapport directly. The bond's receptiveness axis is only
+            // 30% rapport (the rest is staff-relation receptiveness,
+            // coach-memory training trust, personal bond, and promise
+            // credibility) so the overlap is ~3% of the multiplier band
+            // — small enough to live with for the cleaner caller API.
+            let bond = CoachPlayerBond::build(player, coach, today);
+            r.effects.scale_gains(TrainingBondGate::multiplier(&bond));
+
+            // Tactical-shape sessions additionally scale by the
+            // player's belief in the plan (polish task #5). A player
+            // who doesn't buy in tunes out the chalkboard; one who
+            // does extracts a small extra gain.
+            if is_tactical_session {
+                r.effects.scale_gains(TrainingBondGate::tactical_familiarity_multiplier(&bond));
+            }
             results.push(r);
         }
 
@@ -1611,5 +1685,64 @@ impl PlayerTrainingLoad {
     pub fn weekly_reset(&mut self) {
         self.sessions_this_week = 0;
         self.cumulative_fatigue *= 0.7; // Partial recovery
+    }
+}
+
+#[cfg(test)]
+mod bond_consumer_tests {
+    //! Polish task #11 spec tests covering the team-training consumers
+    //! added in polish tasks #4 and #5: `training_receptiveness` and
+    //! `tactical_buy_in`. The pure multiplier functions are tested
+    //! directly so we don't need to stand up a whole team training
+    //! cycle to prove the spec curves.
+    use super::*;
+
+    fn bond(training_receptiveness: f32, tactical_buy_in: f32) -> CoachPlayerBond {
+        let mut b = CoachPlayerBond::default();
+        b.training_receptiveness = training_receptiveness;
+        b.tactical_buy_in = tactical_buy_in;
+        b
+    }
+
+    #[test]
+    fn training_relationship_multiplier_matches_spec_band() {
+        // Spec: 0.90 + receptiveness * 0.20, clamped 0.90..1.10.
+        // Neutral 0.5 → 1.0; max 1.0 → 1.10; min 0.0 → 0.90.
+        assert!((TrainingBondGate::multiplier(&bond(0.5, 0.5)) - 1.0).abs() < 1e-3);
+        assert!((TrainingBondGate::multiplier(&bond(1.0, 0.5)) - 1.10).abs() < 1e-3);
+        assert!((TrainingBondGate::multiplier(&bond(0.0, 0.5)) - 0.90).abs() < 1e-3);
+        // Clamps at the band edges even if upstream produces noise above 1.0.
+        assert!(TrainingBondGate::multiplier(&bond(1.4, 0.5)) <= 1.10 + 1e-3);
+    }
+
+    #[test]
+    fn low_tactical_buy_in_reduces_tactical_familiarity_multiplier() {
+        // Polish task #11 spec test: "low tactical_buy_in reduces
+        // tactical familiarity gain." The multiplier must be strictly
+        // below the neutral 1.0 when buy_in drops below 0.5.
+        let neutral = TrainingBondGate::tactical_familiarity_multiplier(&bond(0.5, 0.5));
+        let low = TrainingBondGate::tactical_familiarity_multiplier(&bond(0.5, 0.1));
+        let high = TrainingBondGate::tactical_familiarity_multiplier(&bond(0.5, 0.9));
+        assert!((neutral - 1.0).abs() < 1e-3, "neutral should be 1.0, got {}", neutral);
+        assert!(low < 1.0, "low buy_in should produce < 1.0 ({})", low);
+        assert!(high > 1.0, "high buy_in should produce > 1.0 ({})", high);
+        assert!(low < neutral && neutral < high);
+    }
+
+    #[test]
+    fn tactical_session_classification_covers_team_shape_family() {
+        // Sanity: the sessions targeted by polish task #5 must be
+        // flagged as tactical so the snapshot's tactical-buy-in
+        // multiplier actually fires for them.
+        assert!(TrainingBondGate::is_tactical(&TrainingType::TeamShape));
+        assert!(TrainingBondGate::is_tactical(&TrainingType::Positioning));
+        assert!(TrainingBondGate::is_tactical(&TrainingType::PressingDrills));
+        assert!(TrainingBondGate::is_tactical(&TrainingType::TransitionPlay));
+        assert!(TrainingBondGate::is_tactical(&TrainingType::SetPiecesDefensive));
+        // And the skill-rep sessions must NOT — applying the tactical
+        // multiplier to a pure shooting drill would double-dip.
+        assert!(!TrainingBondGate::is_tactical(&TrainingType::Shooting));
+        assert!(!TrainingBondGate::is_tactical(&TrainingType::BallControl));
+        assert!(!TrainingBondGate::is_tactical(&TrainingType::Endurance));
     }
 }

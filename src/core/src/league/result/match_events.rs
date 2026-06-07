@@ -1633,6 +1633,16 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
         // so for now it contributes a small always-on bonus scaled by the
         // opponent's reputation relative to ours — a real "big-game"
         // player.)
+        // Team-level chemistry — read from the weekly-refreshed
+        // snapshot whenever the player's current team can be located.
+        // Per polish task #6, the team's `team_chemistry()` is the
+        // canonical source; the per-player
+        // `relations.get_team_chemistry()` is reserved for the
+        // adaptation read above where there's no clean team context.
+        let team_chem = location
+            .and_then(|(_, _, _, team_id)| data.team(team_id))
+            .map(|t| t.team_chemistry())
+            .unwrap_or(50.0);
         let (consistency, big_match, temperament, chemistry) = data
             .player(*player_id)
             .map(|p| {
@@ -1640,7 +1650,7 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
                     p.attributes.consistency,
                     p.attributes.important_matches,
                     p.attributes.temperament,
-                    p.relations.get_team_chemistry(),
+                    team_chem,
                 )
             })
             .unwrap_or((10.0, 10.0, 10.0, 50.0));

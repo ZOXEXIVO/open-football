@@ -9,6 +9,7 @@ use super::TeamBehaviour;
 use crate::club::player::ManagerPromiseKind;
 use crate::club::player::interaction::{InteractionTone, InteractionTopic};
 use crate::club::player::happiness::{PlayingTimeFrustrationConfig, PlayingTimeOpportunityContext};
+use crate::club::staff::CoachPlayerBond;
 use crate::club::team::behaviour::topic_for_talk;
 use crate::club::team::behaviour::{
     ContractTermination, ManagerTalkResult, ManagerTalkType, TeamBehaviourResult,
@@ -113,6 +114,22 @@ impl TeamBehaviour {
                     && player.player_attributes.current_ability >= 70
                 {
                     talk_candidates.push((player.id, ManagerTalkType::Discipline, 55));
+                }
+            }
+
+            // Polish task #5: conflict-risk gated preventive talks. The
+            // bond's `conflict_risk` reads across staff relation,
+            // promise track-record, low rapport, low authority and
+            // personality controversy — so a player whose risk has
+            // crept above 0.65 is showing the warning signs of a
+            // dressing-room incident before anything formal has
+            // happened. Catch it early.
+            if let Some(date) = today {
+                let bond = CoachPlayerBond::build(player, manager, date);
+                if let Some(candidate) =
+                    ConflictTalkGate::candidate_for(player.id, bond.conflict_risk)
+                {
+                    talk_candidates.push(candidate);
                 }
             }
         }
@@ -900,5 +917,41 @@ mod tests {
             !positive_tone,
             "successful Discipline should still read negative"
         );
+    }
+}
+
+/// Conflict-risk gated candidate generator for the weekly talk picker.
+/// Translates the spec thresholds (>0.65 private talk, >0.80 morale
+/// rescue) into the existing candidate format. Bundled under a named
+/// type so the per-player branch in the talk-picker loop stays compact.
+struct ConflictTalkGate;
+
+impl ConflictTalkGate {
+    /// Priority for a "soft warning" preventive talk — sits between
+    /// the medium-priority Motivational candidate (70) and the
+    /// proactive playing-time candidate band (75-90), reflecting "the
+    /// coach has noticed but it's not yet on fire".
+    const SOFT_WARNING_PRIORITY: u8 = 72;
+    /// Priority for an "elevated risk" intervention — high enough to
+    /// land above proactive playing-time but below the Unh / Req
+    /// emergency band (90+). The coach is reading early signs of a
+    /// genuine breakdown.
+    const ELEVATED_RISK_PRIORITY: u8 = 85;
+
+    /// Map `conflict_risk` onto a (player_id, talk_type, priority)
+    /// candidate, or `None` when the risk sits in the suppress band
+    /// (< 0.65). Routes through `MoraleTalk` so the talk picker's
+    /// existing morale-talk delivery code (tone selection, outcome
+    /// recording, follow-up promise) handles the conversation; the
+    /// distinction is just that this candidate fires from a bond
+    /// reading rather than from a status flag.
+    fn candidate_for(player_id: u32, conflict_risk: f32) -> Option<(u32, ManagerTalkType, u8)> {
+        if conflict_risk > 0.80 {
+            Some((player_id, ManagerTalkType::MoraleTalk, Self::ELEVATED_RISK_PRIORITY))
+        } else if conflict_risk > 0.65 {
+            Some((player_id, ManagerTalkType::MoraleTalk, Self::SOFT_WARNING_PRIORITY))
+        } else {
+            None
+        }
     }
 }

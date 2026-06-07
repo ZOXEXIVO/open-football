@@ -1268,7 +1268,7 @@ impl SelectionScoringContext<'_> {
             .max_by(|a, b| {
                 let score = |p: &Player| {
                     self.engine
-                        .goalkeeper_score(p, self.staff, self.is_friendly)
+                        .goalkeeper_score(p, self.staff, self.is_friendly, self.date)
                         + self
                             .engine
                             .development_minutes_bonus(p, self.match_importance)

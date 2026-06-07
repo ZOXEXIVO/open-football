@@ -2,6 +2,7 @@ use crate::club::player::load::{
     FATIGUE_LOAD_DANGER, FATIGUE_LOAD_THRESHOLD, PHYSICAL_LOAD_DANGER, PHYSICAL_LOAD_THRESHOLD,
     RECOVERY_DEBT_HEAVY,
 };
+use crate::club::staff::CoachPlayerBond;
 use crate::club::staff::perception::CoachProfile;
 use crate::club::{
     ClubPhilosophy, PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, Staff,
@@ -466,32 +467,27 @@ impl ScoringEngine {
         raw_rep * rep_susceptibility * 2.5
     }
 
-    /// Coach-player relationship score (-2.0..+2.0)
-    pub fn relationship_score(&self, player: &Player, staff: &Staff) -> f32 {
-        let p = &self.profile;
-
-        let relation = match staff.relations.get_player(player.id) {
-            Some(r) => r,
-            None => return 0.0,
-        };
-
-        let level_norm = relation.level / 100.0;
-        let trust_norm = (relation.trust - 50.0) / 100.0;
-        let prof_respect_norm = (relation.professional_respect - 50.0) / 100.0;
-
-        let personal_weight = 0.3 + p.stubbornness * 0.2;
-        let trust_weight = 0.3 + p.conservatism * 0.1;
-        let professional_weight = 0.4 - p.stubbornness * 0.1;
-
-        let raw_score = level_norm * personal_weight
-            + trust_norm * trust_weight
-            + prof_respect_norm * professional_weight;
-
-        if raw_score < 0.0 {
-            raw_score * 2.5
-        } else {
-            raw_score * 1.5
-        }
+    /// Coach-player relationship score — single source of truth for
+    /// the selection layer. Delegates to [`CoachPlayerBond::build`]
+    /// (which blends staff relation + rapport + promise credibility +
+    /// recent talk outcomes + coach memory) and converts the
+    /// resulting `selection_trust` into a small signed nudge via the
+    /// bond's asymmetric `selection_adjustment` (positive ×0.85,
+    /// negative ×1.20).
+    ///
+    /// Pre-polish history: the layer used a handcrafted weighted sum
+    /// over `StaffRelation` axes that ignored rapport, promises, and
+    /// coach memory entirely. The replacement makes the bond model
+    /// canonical — every consumer of "does the coach want this player"
+    /// now reads the same number, so a kept promise, a successful
+    /// talk, and a coach memory of strong form all show up in the
+    /// score consistently.
+    ///
+    /// Output is clamped to the design band `-0.8..+0.6` so the
+    /// relationship can nudge close calls but never override quality.
+    pub fn relationship_score(&self, player: &Player, staff: &Staff, date: NaiveDate) -> f32 {
+        let bond = CoachPlayerBond::build(player, staff, date);
+        bond.selection_adjustment(1.4).clamp(-0.8, 0.6)
     }
 
     /// Newcomer integration penalty
@@ -658,7 +654,7 @@ impl ScoringEngine {
             * (0.6 * (1.0 - p.tactical_blindness * 0.3));
 
         let rep = self.reputation_score(player);
-        let rel = self.relationship_score(player, staff);
+        let rel = self.relationship_score(player, staff, date);
         b.reputation = rep;
         let rel_dampening = if rel < 0.0 {
             1.0
@@ -1378,7 +1374,7 @@ impl ScoringEngine {
         score -= self.condition_floor_penalty(player, is_friendly);
 
         let rep = self.reputation_score(player);
-        let rel = self.relationship_score(player, staff);
+        let rel = self.relationship_score(player, staff, date);
         score += rep;
         let rel_dampening = if rel < 0.0 {
             1.0
@@ -1468,7 +1464,13 @@ impl ScoringEngine {
     /// the wrong attributes. We anchor on `current_ability` (so the better
     /// keeper plays) and add a GK-specific skill composite that actually
     /// reads handling, reflexes, aerial ability, and distribution.
-    pub fn goalkeeper_score(&self, player: &Player, staff: &Staff, is_friendly: bool) -> f32 {
+    pub fn goalkeeper_score(
+        &self,
+        player: &Player,
+        staff: &Staff,
+        is_friendly: bool,
+        date: NaiveDate,
+    ) -> f32 {
         let ca = player.player_attributes.current_ability as f32 / 10.0;
         let gk_q = self.gk_perceived_quality(player);
         let gk_level = player.positions.get_level(PlayerPositionType::Goalkeeper) as f32;
@@ -1479,7 +1481,7 @@ impl ScoringEngine {
         score -= self.condition_floor_penalty(player, is_friendly);
 
         score += self.reputation_score(player) * 0.30;
-        score += self.relationship_score(player, staff) * 0.30;
+        score += self.relationship_score(player, staff, date) * 0.30;
         score += self.force_selection_bonus(player);
 
         score
@@ -1625,4 +1627,186 @@ fn ramp(value: f32, lo: f32, hi: f32) -> f32 {
     }
     let span = (hi - lo).max(1.0);
     ((value - lo) / span).min(2.0)
+}
+
+#[cfg(test)]
+mod relationship_score_tests {
+    //! End-to-end test of the relation-store-mismatch fix.
+    //!
+    //! The legacy `relationship_score` read `staff.relations.get_player`
+    //! while every relationship-update path wrote to
+    //! `player.relations.update_staff_relationship` — the read and
+    //! write stores were different objects, so the selection layer was
+    //! effectively blind to every manager talk. These tests assert the
+    //! read now sees the writes, and that the sign of the talk outcome
+    //! propagates into the selection slot score.
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::staff::StaffStub;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        ChangeType, PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions,
+        PlayerSkills, RelationshipChange, Staff,
+    };
+    use chrono::NaiveDate;
+
+    struct Fixture;
+
+    impl Fixture {
+        fn d() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()
+        }
+
+        fn build_player() -> Player {
+            PlayerBuilder::new()
+                .id(101)
+                .full_name(FullName::new("Rel".into(), "Test".into()))
+                .birth_date(NaiveDate::from_ymd_opt(1998, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap()
+        }
+
+        fn build_staff(id: u32) -> Staff {
+            let mut s = StaffStub::default();
+            s.id = id;
+            s
+        }
+    }
+
+    #[test]
+    fn baseline_no_relation_reads_zero() {
+        let player = Fixture::build_player();
+        let staff = Fixture::build_staff(7);
+        let engine = ScoringEngine::from_staff(&staff);
+        assert_eq!(
+            engine.relationship_score(&player, &staff, Fixture::d()),
+            0.0,
+            "no relation → neutral 0.0 score"
+        );
+    }
+
+    #[test]
+    fn successful_manager_talk_lifts_future_selection_score() {
+        // The fix: writes to `player.relations.update_staff_relationship`
+        // are now visible to `scoring.relationship_score(player, staff)`.
+        // A successful manager talk should produce a strictly positive
+        // selection adjustment.
+        let mut player = Fixture::build_player();
+        let staff = Fixture::build_staff(7);
+        let engine = ScoringEngine::from_staff(&staff);
+
+        let baseline = engine.relationship_score(&player, &staff, Fixture::d());
+        let positive = RelationshipChange::positive(ChangeType::CoachingSuccess, 1.0);
+        player
+            .relations
+            .update_staff_relationship(staff.id, positive, Fixture::d());
+
+        let after = engine.relationship_score(&player, &staff, Fixture::d());
+        assert!(
+            after > baseline,
+            "successful talk must raise selection score (baseline {} → after {})",
+            baseline,
+            after
+        );
+    }
+
+    #[test]
+    fn failed_manager_talk_drops_future_selection_score() {
+        let mut player = Fixture::build_player();
+        let staff = Fixture::build_staff(7);
+        let engine = ScoringEngine::from_staff(&staff);
+
+        let baseline = engine.relationship_score(&player, &staff, Fixture::d());
+        // TacticalDisagreement is the canonical "failed talk" change
+        // used by manager_credibility.rs (line 119).
+        let negative = RelationshipChange::negative(ChangeType::TacticalDisagreement, 1.0);
+        player
+            .relations
+            .update_staff_relationship(staff.id, negative, Fixture::d());
+
+        let after = engine.relationship_score(&player, &staff, Fixture::d());
+        assert!(
+            after < baseline,
+            "failed talk must drop selection score (baseline {} → after {})",
+            baseline,
+            after
+        );
+    }
+
+    #[test]
+    fn relationship_score_stays_inside_design_band() {
+        // Even a swarm of positive updates can't push the slot bonus
+        // beyond +0.6 — the relation can nudge close calls, never
+        // override quality.
+        let mut player = Fixture::build_player();
+        let staff = Fixture::build_staff(7);
+        let engine = ScoringEngine::from_staff(&staff);
+        for _ in 0..20 {
+            let positive = RelationshipChange::positive(ChangeType::CoachingSuccess, 2.0);
+            player.relations.update_staff_relationship(
+                staff.id,
+                positive,
+                Fixture::d(),
+            );
+        }
+        let score = engine.relationship_score(&player, &staff, Fixture::d());
+        assert!(
+            (-0.8..=0.6).contains(&score),
+            "score {} must stay inside design band -0.8..+0.6",
+            score
+        );
+        assert!(score > 0.0, "stack of positive updates should still tilt positive");
+    }
+
+    #[test]
+    fn negative_relationship_stings_more_than_equivalent_positive() {
+        // Spec rule: negative selection_trust deltas must hit harder
+        // than the same-magnitude positive delta. The asymmetry lives
+        // in `CoachPlayerBond::selection_adjustment` — positive ×0.85,
+        // negative ×1.20, so a delta of ±0.2 produces magnitudes of
+        // 0.20 * 0.85 vs 0.20 * 1.20 = 0.17 vs 0.24.
+        //
+        // We test the property directly on the bond rather than via the
+        // staff-relation update path, because different `ChangeType`s
+        // produce different magnitudes inside `StaffRelation::apply_change`
+        // — using the relation pipeline would conflate two asymmetries.
+        let mut high_trust_bond = CoachPlayerBond::default();
+        let mut low_trust_bond = CoachPlayerBond::default();
+        high_trust_bond.selection_trust = 0.7;
+        low_trust_bond.selection_trust = 0.3;
+
+        let positive_adj = high_trust_bond.selection_adjustment(1.4);
+        let negative_adj = low_trust_bond.selection_adjustment(1.4);
+        assert!(
+            negative_adj < 0.0 && positive_adj > 0.0,
+            "sanity: pos={} neg={}",
+            positive_adj,
+            negative_adj
+        );
+        assert!(
+            negative_adj.abs() > positive_adj.abs() * 1.30,
+            "negative delta must hit ≥1.30× harder than positive (pos_mag={:.4} neg_mag={:.4})",
+            positive_adj.abs(),
+            negative_adj.abs()
+        );
+    }
+
+    #[test]
+    fn selection_adjustment_neutral_bond_reads_zero() {
+        // A neutral bond (selection_trust = 0.5) produces no signed
+        // adjustment regardless of scale.
+        let bond = CoachPlayerBond::default();
+        assert_eq!(bond.selection_adjustment(1.4), 0.0);
+        assert_eq!(bond.selection_adjustment(10.0), 0.0);
+    }
 }

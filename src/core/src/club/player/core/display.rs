@@ -371,7 +371,7 @@ impl Player {
             cup_stats,
             training_trend: self.training_trend_llm(),
             club_history: self.club_history_vec(),
-            staff_opinion: Self::staff_relationship_llm(staff, self.id),
+            staff_opinion: Self::staff_relationship_llm(self, staff),
             contract_stalemate,
         };
 
@@ -457,8 +457,13 @@ impl Player {
             .collect()
     }
 
-    fn staff_relationship_llm(staff: &Staff, player_id: u32) -> String {
-        if let Some(rel) = staff.relations.get_player(player_id) {
+    /// Read the player's view of the relationship with `staff` — the
+    /// canonical store every relationship-update path writes to. The
+    /// previous version read `staff.relations.get_player(player_id)`,
+    /// which is a separate store the simulator never populates, so the
+    /// LLM-summary line always read "unknown".
+    fn staff_relationship_llm(player: &Player, staff: &Staff) -> String {
+        if let Some(rel) = player.relations.get_staff(staff.id) {
             let opinion = if rel.level > 50.0 {
                 "favored"
             } else if rel.level > 20.0 {
@@ -470,7 +475,7 @@ impl Player {
             } else {
                 "conflict"
             };
-            format!("{} trust:{}", opinion, rel.trust as u8)
+            format!("{} trust:{}", opinion, rel.trust_in_abilities as u8)
         } else {
             "unknown".to_string()
         }
