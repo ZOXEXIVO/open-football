@@ -1,5 +1,6 @@
 use super::*;
 use crate::r#match::engine::context::MatchEngineConfig;
+use crate::r#match::engine::rating::{RatingExpectationContext, TeamRatingSummary};
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub fn new() -> Self {
@@ -229,25 +230,24 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         result.position_data = match_position_data;
 
-        // Extract per-player stats and calculate match ratings
+        // Extract per-player stats and calculate match ratings.
+        //
+        // Two passes are needed because the contextual (public) rating
+        // reads team-behaviour summaries folded from EVERY player's stat
+        // line — who shot, who held the ball, who had to defend. So we
+        // first materialise all the stat lines and physical snapshots
+        // (subs included), then build the per-side summaries, then score
+        // each player against their own / opponent summary plus their
+        // own physical snapshot.
         let score_ref = result.score.as_ref().unwrap();
         let home_goals = score_ref.home_team.get();
         let away_goals = score_ref.away_team.get();
         let home_team_id = score_ref.home_team.team_id;
 
+        // ── Pass 1: materialise stat lines + physical snapshots ──────────
         for player in &field.players {
-            let (player_team_goals, opponent_goals) = if player.team_id == home_team_id {
-                (home_goals, away_goals)
-            } else {
-                (away_goals, home_goals)
-            };
-
             let minutes = player.minutes_played_at(context.total_match_time);
-            let mut stats = player.to_match_end_stats(minutes);
-            let raw = RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
-            stats.match_rating = raw;
-            stats.raw_match_rating = raw;
-
+            let stats = player.to_match_end_stats(minutes);
             result.player_stats.insert(player.id, stats);
 
             // Final-whistle physical snapshot — every player still on the
@@ -255,31 +255,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // is the canonical "who was on the pitch when the whistle
             // blew" view, and the engine's in-match condition drain
             // has been applied to each `MatchPlayer` by now. Players
-            // who were substituted off are handled below from
+            // who were substituted off are folded in below from
             // `context.substituted_out_physical_snapshots` so the same
             // player never gets two snapshots.
             let phys_snapshot = player.to_physical_snapshot(context.total_match_time);
             result.physical_snapshots.insert(player.id, phys_snapshot);
         }
 
-        // Include stats from substituted-out players
-        for (player_id, mut stats) in context.substituted_out_stats.drain(..) {
-            let team_id = context
-                .substitutions
-                .iter()
-                .find(|s| s.player_out_id == player_id)
-                .map(|s| s.team_id);
-
-            let (player_team_goals, opponent_goals) = if team_id == Some(home_team_id) {
-                (home_goals, away_goals)
-            } else {
-                (away_goals, home_goals)
-            };
-
-            let raw = RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
-            stats.match_rating = raw;
-            stats.raw_match_rating = raw;
-
+        // Stat lines for substituted-out players (their snapshot was taken
+        // at the swap minute; folded in just below). Ratings are filled
+        // in Pass 2 alongside everyone else.
+        for (player_id, stats) in context.substituted_out_stats.drain(..) {
             result.player_stats.insert(player_id, stats);
         }
 
@@ -293,6 +279,70 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             result
                 .physical_snapshots
                 .insert(snapshot.player_id, snapshot);
+        }
+
+        // ── Pass 2a: per-side behaviour summaries ────────────────────────
+        // Fold each side's stat lines (starters + used subs) into the
+        // team summary the expectation layer reads.
+        let left_summary = {
+            let side = &result.left_team_players;
+            TeamRatingSummary::from_stats(
+                side.main
+                    .iter()
+                    .chain(side.substitutes_used.iter())
+                    .filter_map(|id| result.player_stats.get(id)),
+            )
+        };
+        let right_summary = {
+            let side = &result.right_team_players;
+            TeamRatingSummary::from_stats(
+                side.main
+                    .iter()
+                    .chain(side.substitutes_used.iter())
+                    .filter_map(|id| result.player_stats.get(id)),
+            )
+        };
+        let left_team_id = result.left_team_players.team_id;
+
+        // ── Pass 2b: raw (stat-line) + contextual (public) ratings ───────
+        // `raw_match_rating` stays the pure `calculate()` verdict; the
+        // public `match_rating` seed layers Stage-2 (team expectation)
+        // and Stage-3 (condition) on top. Reputation / personality
+        // shaping is added later by the league pipeline.
+        let rated_ids: Vec<u32> = result.player_stats.keys().copied().collect();
+        for pid in rated_ids {
+            let on_left = result.left_team_players.main.contains(&pid)
+                || result.left_team_players.substitutes_used.contains(&pid);
+            let team_id = if on_left {
+                left_team_id
+            } else {
+                result.right_team_players.team_id
+            };
+            let (team_goals, opponent_goals) = if team_id == home_team_id {
+                (home_goals, away_goals)
+            } else {
+                (away_goals, home_goals)
+            };
+            let (own_summary, opp_summary) = if on_left {
+                (&left_summary, &right_summary)
+            } else {
+                (&right_summary, &left_summary)
+            };
+            let expectation = RatingExpectationContext::from_match(
+                own_summary,
+                opp_summary,
+                team_goals,
+                opponent_goals,
+                result.physical_snapshots.get(&pid),
+            );
+            if let Some(stats) = result.player_stats.get_mut(&pid) {
+                let (raw, contextual) = {
+                    let ctx = RatingContext::new(stats, team_goals, opponent_goals);
+                    (ctx.calculate(), ctx.calculate_contextual(&expectation))
+                };
+                stats.raw_match_rating = raw;
+                stats.match_rating = contextual;
+            }
         }
 
         // Blowout diagnostic — off by default (see `match-logs` feature).

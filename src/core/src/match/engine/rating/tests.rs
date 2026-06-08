@@ -3125,3 +3125,455 @@ fn five_goal_one_assist_eight_app_scorer_clears_six_seven() {
         count,
     );
 }
+
+// ===========================================================
+// Contextual model (Stage 2 + Stage 3) — anti-robotic guards.
+//
+// These exercise `calculate_contextual`: the same stat line must
+// rate differently depending on how the TEAM played (possession /
+// shot / defensive-load share) and on the player's physical
+// condition. The deltas are deliberately modest — context separates
+// otherwise-identical lines, it never overturns the stat-line
+// verdict — so the assertions pin ordering + bounded magnitude,
+// which is exactly the de-clustering the rebalance targets.
+// Stat-line + team-behaviour + condition only; never reads ability.
+// ===========================================================
+
+use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
+
+/// Physical snapshot helper. Conditions are on the engine's 0..10000
+/// scale; `hi` is the 0..1 high-intensity load share.
+fn phys(start: i16, end: i16, hi: f32) -> PlayerMatchPhysicalSnapshot {
+    PlayerMatchPhysicalSnapshot {
+        player_id: 1,
+        minutes_played: 90.0,
+        starting_condition: start,
+        final_match_energy: end,
+        high_intensity_load_hint: hi,
+    }
+}
+
+/// Team behaviour summary helper (passes_attempted padded ~20% over
+/// completed so the proxy is realistic).
+fn team_summary(
+    shots: u32,
+    sot: u32,
+    xg: f32,
+    passes_completed: u32,
+    defensive_actions: u32,
+) -> TeamRatingSummary {
+    TeamRatingSummary {
+        shots_total: shots,
+        shots_on_target: sot,
+        xg,
+        passes_attempted: passes_completed + passes_completed / 5,
+        passes_completed,
+        defensive_actions,
+    }
+}
+
+#[test]
+fn dominant_team_tidy_recycler_does_not_rate_like_creator() {
+    // Same possession-dominant midfield, same 1-0 win. The tidy recycler
+    // keeps the ball but never progresses or creates; the creator opens
+    // the defence up. The contextual layer raises the bar for a dominant
+    // side, so the two must NOT print the same robotic number.
+    let own = team_summary(16, 7, 1.6, 560, 22); // bossed the game
+    let opp = team_summary(4, 1, 0.4, 250, 40); // pinned back
+    let ctx = RatingExpectationContext::from_match(&own, &opp, 1, 0, None);
+
+    let mut recycler = make_stats(
+        0,
+        0,
+        58,
+        53,
+        0,
+        0,
+        1,
+        1,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    recycler.minutes_played = 90;
+
+    let mut creator = make_stats(
+        0,
+        0,
+        52,
+        44,
+        0,
+        0,
+        1,
+        1,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    creator.minutes_played = 90;
+    creator.key_passes = 3;
+    creator.passes_into_box = 3;
+    creator.progressive_passes = 5;
+    creator.progressive_carries = 2;
+    creator.xg_buildup = 0.4;
+
+    let r_rec = RatingContext::new(&recycler, 1, 0).calculate_contextual(&ctx);
+    let r_cre = RatingContext::new(&creator, 1, 0).calculate_contextual(&ctx);
+    assert!(
+        r_cre > r_rec + 0.3,
+        "creator {} must clearly outrate dominant-team recycler {}",
+        r_cre,
+        r_rec
+    );
+    assert!(
+        r_rec < 6.9,
+        "tidy recycler in a dominant side rated {} — must not print a creator-like 7.1",
+        r_rec
+    );
+}
+
+#[test]
+fn low_block_defender_with_box_actions_outrates_clean_sheet_passenger() {
+    // A side defending a 1-0 lead under siege (heavy defensive load).
+    // The firefighter CB made real box interventions; the passenger CB
+    // coasted on the same clean sheet. High expected defensive
+    // contribution + the actual interventions separate them.
+    let own = team_summary(4, 1, 0.4, 250, 45); // under siege
+    let opp = team_summary(17, 7, 1.8, 560, 18); // attacked all match
+    let ctx = RatingExpectationContext::from_match(&own, &opp, 1, 0, None);
+
+    let mut passenger = make_stats(
+        0,
+        0,
+        22,
+        18,
+        0,
+        0,
+        1,
+        1,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Defender,
+    );
+    passenger.minutes_played = 90;
+
+    let mut firefighter = passenger.clone();
+    firefighter.tackles = 4;
+    firefighter.interceptions = 3;
+    firefighter.clearances = 6;
+    firefighter.blocks = 2;
+    firefighter.zone_stats.tackles_own_box = 2;
+    firefighter.zone_stats.clearances_own_box = 3;
+    firefighter.zone_stats.blocks_own_box = 1;
+
+    let r_pass = RatingContext::new(&passenger, 1, 0).calculate_contextual(&ctx);
+    let r_fire = RatingContext::new(&firefighter, 1, 0).calculate_contextual(&ctx);
+    assert!(
+        r_fire > r_pass + 0.5,
+        "firefighting CB {} must outrate coasting passenger {}",
+        r_fire,
+        r_pass
+    );
+    assert!(
+        r_fire > 7.0,
+        "firefighting CB in a backs-to-the-wall clean sheet rated {} — should clear 7.0",
+        r_fire
+    );
+}
+
+#[test]
+fn tired_player_sloppy_actions_amplify_negative_rating() {
+    // Same stat line (a few fouls + loose touches). Played fresh vs ran
+    // the tank to empty and got sloppy. The gassed-and-sloppy shift must
+    // rate lower — tiredness that CAUSED mistakes is punished, while the
+    // same mistakes at full energy are not amplified.
+    let mut s = make_stats(
+        0,
+        0,
+        40,
+        33,
+        0,
+        0,
+        2,
+        2,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    s.minutes_played = 90;
+    s.fouls = 3;
+    s.miscontrols = 3;
+    s.heavy_touches = 2;
+
+    let summary = team_summary(10, 4, 1.0, 400, 30);
+    let fresh = RatingExpectationContext::from_match(
+        &summary,
+        &summary,
+        1,
+        1,
+        Some(&phys(9500, 6000, 0.30)),
+    );
+    let gassed = RatingExpectationContext::from_match(
+        &summary,
+        &summary,
+        1,
+        1,
+        Some(&phys(9500, 2400, 0.30)),
+    );
+
+    let r_fresh = RatingContext::new(&s, 1, 1).calculate_contextual(&fresh);
+    let r_gassed = RatingContext::new(&s, 1, 1).calculate_contextual(&gassed);
+    assert!(
+        r_gassed < r_fresh - 0.1,
+        "gassed sloppy shift {} must rate below the same line played fresh {}",
+        r_gassed,
+        r_fresh
+    );
+}
+
+#[test]
+fn high_load_good_shift_gets_small_condition_respect_not_big_bonus() {
+    // A genuinely good shift (raw > 6.0) with a heavy high-intensity load
+    // earns a SMALL respect bump — never more than +0.10, and never
+    // enough to manufacture a good rating from a poor one.
+    let mut s = make_stats(
+        0,
+        0,
+        45,
+        38,
+        0,
+        0,
+        4,
+        3,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    s.minutes_played = 90;
+    s.successful_pressures = 5;
+    s.pressures = 11;
+    s.progressive_passes = 4;
+    s.key_passes = 1;
+
+    let summary = team_summary(11, 4, 1.1, 420, 28);
+    // Normal load vs heavy load (MID high-intensity default ≈ 0.30; the
+    // bump only fires above default + 0.12 = 0.42).
+    let normal = RatingExpectationContext::from_match(
+        &summary,
+        &summary,
+        1,
+        0,
+        Some(&phys(9000, 5000, 0.30)),
+    );
+    let heavy = RatingExpectationContext::from_match(
+        &summary,
+        &summary,
+        1,
+        0,
+        Some(&phys(9000, 5000, 0.55)),
+    );
+
+    let r_normal = RatingContext::new(&s, 1, 0).calculate_contextual(&normal);
+    let r_heavy = RatingContext::new(&s, 1, 0).calculate_contextual(&heavy);
+    assert!(
+        r_heavy > r_normal,
+        "heavy-load good shift {} should edge the same shift at normal load {}",
+        r_heavy,
+        r_normal
+    );
+    assert!(
+        r_heavy - r_normal <= 0.11,
+        "high-load respect must stay small (≤0.10), got {}",
+        r_heavy - r_normal
+    );
+}
+
+#[test]
+fn same_medium_statline_gets_context_separation_by_team_behavior() {
+    // The exact same medium defender line, same 1-1 draw, rated for a
+    // possession-dominant side vs a pinned-back side. The contextual
+    // layer must pull them apart — identical stat lines no longer print
+    // the identical robotic number. The separation is deliberately modest
+    // (context never overturns the verdict), so we pin a visible-but-small
+    // floor rather than a large swing.
+    let mut s = make_stats(
+        0,
+        0,
+        32,
+        27,
+        0,
+        0,
+        3,
+        3,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Defender,
+    );
+    s.minutes_played = 90;
+    s.clearances = 4;
+
+    let dominant_own = team_summary(16, 7, 1.7, 580, 18);
+    let pinned_opp = team_summary(4, 1, 0.4, 240, 46);
+    let dominant = RatingExpectationContext::from_match(&dominant_own, &pinned_opp, 1, 1, None);
+    let pinned = RatingExpectationContext::from_match(&pinned_opp, &dominant_own, 1, 1, None);
+
+    let r_dom = RatingContext::new(&s, 1, 1).calculate_contextual(&dominant);
+    let r_pin = RatingContext::new(&s, 1, 1).calculate_contextual(&pinned);
+    assert!(
+        (r_dom - r_pin).abs() > 0.04,
+        "identical medium defender line must separate by team behaviour: \
+         dominant {} vs pinned {}",
+        r_dom,
+        r_pin
+    );
+    // The under-siege defender (more expected, same modest actual) should
+    // be the lower of the two — context credits the firefighter, not the
+    // coaster, so a flat line in a pinned side reads worse, not better.
+    assert!(
+        r_pin < r_dom,
+        "a flat defensive line under siege ({}) should rate below the same \
+         line in a dominant side ({})",
+        r_pin,
+        r_dom
+    );
+}
+
+#[test]
+fn personality_variance_is_deterministic_and_bounded() {
+    // `texture_band` is the per-identity jitter amplitude the downstream
+    // pipeline multiplies by a seeded (player, date, team) hash. It must
+    // be deterministic, small, and ordered by evidence. The contextual
+    // rating itself must be a pure function of its inputs.
+    let mut passenger = make_stats(
+        0,
+        0,
+        20,
+        16,
+        0,
+        0,
+        1,
+        1,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    passenger.minutes_played = 90;
+    let mut modest = passenger.clone();
+    modest.key_passes = 1;
+    let mut strong = passenger.clone();
+    strong.key_passes = 3;
+    strong.passes_into_box = 2;
+    strong.zone_stats.pressures_won_final_third = 2;
+
+    let pb = RatingContext::new(&passenger, 1, 0).texture_band();
+    let mb = RatingContext::new(&modest, 1, 0).texture_band();
+    let sb = RatingContext::new(&strong, 1, 0).texture_band();
+    assert!(
+        pb < mb && mb <= sb,
+        "texture band must grow with evidence: {} < {} <= {}",
+        pb,
+        mb,
+        sb
+    );
+    assert!(
+        sb <= 0.08 + 1e-6 && pb >= 0.0,
+        "texture band must stay small / bounded: pb {} sb {}",
+        pb,
+        sb
+    );
+
+    // Determinism: identical inputs → bit-identical contextual rating.
+    let ctx = RatingExpectationContext::neutral();
+    let a = RatingContext::new(&strong, 1, 0).calculate_contextual(&ctx);
+    let b = RatingContext::new(&strong, 1, 0).calculate_contextual(&ctx);
+    assert_eq!(
+        a.to_bits(),
+        b.to_bits(),
+        "contextual rating must be deterministic"
+    );
+}
+
+#[test]
+fn public_rating_preserves_raw_match_rating() {
+    // `raw_match_rating` is the pure stat-line verdict; the public
+    // (contextual) rating layers Stage 2/3 on top WITHOUT mutating raw.
+    // At the rating layer: `calculate()` takes no context, so it returns
+    // the same number regardless of the context the public rating is
+    // built against — the diagnostic split holds.
+    let mut s = make_stats(
+        1,
+        0,
+        18,
+        14,
+        2,
+        3,
+        0,
+        0,
+        0,
+        0.6,
+        PlayerFieldPositionGroup::Forward,
+    );
+    s.minutes_played = 90;
+    let raw = RatingContext::new(&s, 2, 0).calculate();
+
+    let dominant = RatingExpectationContext::from_match(
+        &team_summary(15, 6, 1.8, 520, 20),
+        &team_summary(5, 2, 0.5, 300, 40),
+        2,
+        0,
+        Some(&phys(9000, 2500, 0.55)),
+    );
+    let public = RatingContext::new(&s, 2, 0).calculate_contextual(&dominant);
+    let raw_after = RatingContext::new(&s, 2, 0).calculate();
+
+    assert!(
+        (raw_after - raw).abs() < 1e-9,
+        "raw stat-line rating must be context-free and unchanged"
+    );
+    // The public rating is a real, bounded transform of raw — within the
+    // documented contextual budget (±0.25 expectation + 0.22 condition).
+    assert!(
+        (public - raw).abs() <= 0.25 + 0.22 + 1e-4,
+        "public rating must stay within the contextual budget of raw: raw {} public {}",
+        raw,
+        public
+    );
+}
+
+#[test]
+fn favorite_forward_held_to_higher_expectation_than_underdog() {
+    // Same goalless, low-threat forward line. As the heavy favourite
+    // (negative rep gap) more is expected of the attack, so the same
+    // empty shift rates a touch lower than it would for the same player
+    // as the underdog. Reputation shapes the EXPECTATION, never a free
+    // rating bonus — this is the spec's "ability shapes expected
+    // contribution, not the rating" principle, exercised via the
+    // downstream `with_rep_gap` builder.
+    let mut s = make_stats(
+        0,
+        0,
+        20,
+        15,
+        1,
+        3,
+        0,
+        0,
+        0,
+        0.4,
+        PlayerFieldPositionGroup::Forward,
+    );
+    s.minutes_played = 90;
+    let summary = team_summary(12, 5, 1.2, 450, 28);
+    let favorite =
+        RatingExpectationContext::from_match(&summary, &summary, 1, 0, None).with_rep_gap(-2.5);
+    let underdog =
+        RatingExpectationContext::from_match(&summary, &summary, 1, 0, None).with_rep_gap(2.5);
+    let r_fav = RatingContext::new(&s, 1, 0).calculate_contextual(&favorite);
+    let r_und = RatingContext::new(&s, 1, 0).calculate_contextual(&underdog);
+    assert!(
+        r_fav < r_und,
+        "favourite forward {} should be held to a higher bar than the same line as underdog {}",
+        r_fav,
+        r_und
+    );
+}

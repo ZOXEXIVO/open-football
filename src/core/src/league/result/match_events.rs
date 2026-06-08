@@ -19,6 +19,7 @@ use crate::club::team::{
 use crate::continent::competitions::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
 };
+use crate::r#match::engine::rating::RatingContext;
 use crate::r#match::engine::result::MatchResultRaw;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, MatchResult};
@@ -1694,22 +1695,53 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
             raw_chem_shift
         };
 
+        // Per-match deterministic date seed, shared by the two
+        // deterministic jitter sources below (consistency swing + routine
+        // texture). `num_days_from_ce` keeps the public rating fully
+        // reproducible for a given (player, date) pair — the spec's
+        // "deterministic noise seeded by real inputs" requirement.
+        let date_seed = now.num_days_from_ce() as f32;
+
         // Consistency × professionalism drive match-to-match volatility.
         // High consistency narrows the swing; high professionalism narrows
-        // it further (a pro keeps a routine even on off days). Band lifted
-        // to ×0.9 so upper-medium streaky players actually swing instead of
-        // averaging out into the same robotic ~6.8 every week.
+        // it further (a pro keeps a routine even on off days). Band tuned
+        // to ×0.45 (spec Section D — was ×0.9, which read as decorative on
+        // top of the new contextual seed) so streaky players still swing
+        // but the contextual model does the primary separating.
         let cons_band = (1.0 - (consistency / 20.0)).clamp(0.0, 1.0);
-        let prof_factor = (1.15 - (professionalism / 20.0) * 0.30).clamp(0.85, 1.15);
-        let variance_band = cons_band * prof_factor * 0.9;
+        let prof_factor = (1.05 - (professionalism / 20.0) * 0.20).clamp(0.85, 1.05);
+        let variance_band = cons_band * prof_factor * 0.45;
         if variance_band > 0.01 {
-            // Per-match deterministic seed: player_id + date so the same
-            // player gets a different swing every fixture, but a given
-            // (player, date) pair is reproducible for tests.
-            let date_seed = now.num_days_from_ce() as f32;
             let seed = ((*player_id as f32 * 0.618033) + (date_seed * 0.381966)).fract();
             let swing = (seed - 0.5) * 2.0 * variance_band;
             adjusted += swing;
+        }
+
+        // Routine texture (spec Section A) — a tiny, deterministic
+        // per-identity jitter that breaks otherwise-identical stat lines
+        // apart so two medium players on the same scoreline don't print
+        // the same robotic 7.10. Seeded by (player_id, date, team_id) and
+        // independent of the consistency swing above; the band scales with
+        // the stat-line evidence tier (passenger ≈0.03 … decisive ≈0.08)
+        // so it never changes the verdict, only the texture. Gated to real
+        // shifts (≥30 min) — a cameo hasn't earned a stat-line signature.
+        if stats.minutes_played >= 30 {
+            let player_team_id = if details.left_team_players.main.contains(player_id)
+                || details
+                    .left_team_players
+                    .substitutes_used
+                    .contains(player_id)
+            {
+                left_team_id
+            } else {
+                right_team_id
+            };
+            let band = RatingContext::new(stats, 0, 0).texture_band();
+            let tex_seed = ((*player_id as f32 * 0.754877)
+                + (date_seed * 0.569840)
+                + (player_team_id as f32 * 0.193147))
+                .fract();
+            adjusted += (tex_seed - 0.5) * 2.0 * band;
         }
 
         // Temperament — always-on smooth shape (was: only fires below 6.0

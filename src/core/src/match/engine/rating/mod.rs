@@ -306,8 +306,18 @@ impl<'a> RatingContext<'a> {
         let negative_event = event_damped.min(0.0);
 
         // Contribution-aware soft caps on the combined positive total.
+        // The `distinctiveness_bonus` rides INSIDE the cap on purpose: a
+        // passenger (cap +0.20) has its tiny texture absorbed so the
+        // "did nothing" verdict holds, while a Modest / Strong line has
+        // headroom for the varied-performance lift to register. This is
+        // the continuous, stat-derived half of the spec's de-clustering
+        // — it breaks identical-tier stat lines apart by how varied and
+        // role-complete the actual work was, never by ability.
         let tier = self.evidence_tier();
-        let positive_total = self.apply_soft_caps_for(positive_routine + positive_event, tier);
+        let positive_total = self.apply_soft_caps_for(
+            positive_routine + positive_event + self.distinctiveness_bonus(),
+            tier,
+        );
 
         let mut rating = BASE_RATING + positive_total + negative_routine + negative_event;
         // Positive team-result credit (win bonus, clean-sheet bonus) is
@@ -363,12 +373,134 @@ impl<'a> RatingContext<'a> {
             .shots_faced
             .max(self.stats.saves + self.opponent_goals as u16)
     }
+
+    /// Continuous, stat-derived "texture of a varied shift" lift, clamped
+    /// to 0..=0.12 (spec Section A). Three signals, none of which read
+    /// ability:
+    ///
+    ///   * `unique_positive_action_types` — how many *different* kinds of
+    ///     positive action the player registered. A one-note line (only
+    ///     clearances) scores low; a player who tackled, intercepted,
+    ///     progressed and created scores high. Logarithmic so the first
+    ///     few distinct actions matter most.
+    ///   * `role_core_action_balance` — did the player do *both* halves
+    ///     of their role (defend AND build, create AND finish)? Rewards a
+    ///     complete shift over a lopsided one.
+    ///   * `high_value_zone_share` — share of the player's actions that
+    ///     happened in high-danger / high-value zones.
+    ///
+    /// Damped by minute confidence so a cameo doesn't farm texture, and
+    /// (because it rides inside the tier soft cap upstream) a passenger's
+    /// lift is absorbed rather than lifting the "did nothing" verdict.
+    fn distinctiveness_bonus(&self) -> f32 {
+        let types = self.unique_positive_action_types() as f32;
+        // 0.04 · ln(1 + n): 0 at n=0, ≈0.044 at n=2, ≈0.083 at n=6.
+        let unique = 0.04 * (1.0 + types).ln();
+        let role_core = 0.03 * self.role_core_action_balance();
+        let high_value = 0.02 * self.high_value_zone_share();
+        ((unique + role_core + high_value) * self.confidence).clamp(0.0, 0.12)
+    }
+
+    /// Count of distinct *role dimensions* the player was active in —
+    /// finishing, creating, carrying, progressing, defending, keeping.
+    /// Measures the *breadth* of a performance (did the player do several
+    /// different KINDS of football?) rather than raw counter variety, so
+    /// a busy-but-one-note shift — e.g. a CB who only tackled and cleared —
+    /// reads as a single dimension, not five. This is what keeps routine
+    /// volume from buying a distinctiveness lift it hasn't earned.
+    fn unique_positive_action_types(&self) -> u32 {
+        let s = self.stats;
+        let z = s.zone_stats;
+        let dimensions = [
+            // finishing / direct goal threat
+            s.goals > 0 || s.assists > 0 || s.shots_on_target > 0,
+            // chance creation
+            s.key_passes > 0 || s.passes_into_box > 0 || s.crosses_completed > 0,
+            // ball-carrying
+            s.successful_dribbles > 0 || s.progressive_carries > 0,
+            // progressive passing
+            s.progressive_passes > 0,
+            // defending
+            s.tackles > 0
+                || s.interceptions > 0
+                || s.blocks > 0
+                || s.clearances > 0
+                || s.successful_pressures > 0,
+            // goalkeeping
+            s.saves > 0 || z.gk_command_actions > 0,
+        ];
+        dimensions.iter().filter(|d| **d).count() as u32
+    }
+
+    /// 0..1 measure of whether the player did both halves of their role.
+    /// `2·min / (a+b)` peaks at 1.0 when the two halves are balanced and
+    /// falls toward 0 for a one-sided contribution (or no contribution).
+    fn role_core_action_balance(&self) -> f32 {
+        let s = self.stats;
+        let (a, b) = match self.pos {
+            PlayerFieldPositionGroup::Forward => (
+                (s.goals + s.assists + s.shots_on_target) as f32,
+                (s.key_passes + s.passes_into_box + s.successful_dribbles) as f32,
+            ),
+            PlayerFieldPositionGroup::Midfielder => (
+                (s.key_passes + s.passes_into_box + s.progressive_passes + s.progressive_carries)
+                    as f32,
+                (s.tackles + s.interceptions + s.successful_pressures) as f32,
+            ),
+            PlayerFieldPositionGroup::Defender => (
+                (s.tackles + s.interceptions + s.blocks + s.clearances) as f32,
+                (s.progressive_passes + s.progressive_carries + s.passes_into_box) as f32,
+            ),
+            PlayerFieldPositionGroup::Goalkeeper => {
+                (s.saves as f32, s.zone_stats.gk_command_actions as f32)
+            }
+        };
+        let sum = a + b;
+        if sum <= 0.0 {
+            0.0
+        } else {
+            (2.0 * a.min(b) / sum).clamp(0.0, 1.0)
+        }
+    }
+
+    /// Share of the player's countable actions that happened in
+    /// high-value zones (own box / six-yard for defending, into-box /
+    /// final-third creation for attacking). `+1.0` in the denominator
+    /// keeps a low-volume line from reading as a misleading 100% share.
+    fn high_value_zone_share(&self) -> f32 {
+        let s = self.stats;
+        let z = s.zone_stats;
+        let high_value = (z.tackles_own_box
+            + z.tackles_own_six_yard
+            + z.interceptions_own_box
+            + z.interceptions_own_six_yard
+            + z.blocks_own_box
+            + z.blocks_own_six_yard
+            + z.clearances_own_box
+            + z.clearances_own_six_yard
+            + z.carries_into_box
+            + z.half_space_passes_into_box
+            + z.central_passes_into_box
+            + z.pressures_won_final_third
+            + z.tackles_final_third) as f32;
+        let baseline = (s.tackles
+            + s.interceptions
+            + s.blocks
+            + s.clearances
+            + s.passes_into_box
+            + s.key_passes
+            + s.successful_pressures) as f32;
+        (high_value / (high_value + baseline + 1.0)).clamp(0.0, 1.0)
+    }
 }
 
 mod calibration;
 mod context;
 mod defending;
+mod expectation;
 mod scoring;
+
+pub use expectation::{RatingExpectationContext, TeamRatingSummary};
 
 #[cfg(test)]
 mod tests;
