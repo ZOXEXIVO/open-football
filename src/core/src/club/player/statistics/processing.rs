@@ -215,12 +215,14 @@ impl Player {
         } else {
             PlayerStatistics::default()
         };
+        let is_loan = self.is_on_loan();
         self.statistics_history.record_intra_club_move(
             stats,
             from,
             to,
             from_senior,
             to_senior,
+            is_loan,
             date,
         );
     }

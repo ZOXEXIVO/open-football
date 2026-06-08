@@ -1254,7 +1254,7 @@ impl Player {
     /// becomes a free agent), drops transfer statuses that no longer apply,
     /// and logs a mild morale event — it's a blow to pride, but freedom
     /// plus a payout softens it considerably.
-    pub fn on_contract_terminated(&mut self, _date: NaiveDate) {
+    pub fn on_contract_terminated(&mut self, date: NaiveDate) {
         self.contract = None;
         self.contract_loan = None;
         for s in [
@@ -1266,6 +1266,9 @@ impl Player {
         ] {
             self.statuses.remove(s);
         }
+        // Mark as a club-driven release so the free-agent sweep records
+        // "released" rather than "contract expired" in transfer history.
+        self.statuses.add(date, PlayerStatusType::Frt);
         let cctx = ContractEventContext::new(ContractEventKind::Terminated);
         let happiness_ctx = HappinessEventContext::new(
             HappinessEventCause::Other,

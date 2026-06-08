@@ -310,6 +310,14 @@ impl PlayerStatisticsHistory {
     /// Always create a new entry — never merge with an existing one.
     /// Used for destination clubs on transfers/loans so each stint is a
     /// separate record and the initial entry is never overridden.
+    ///
+    /// Empty league fields on `team` are backfilled from any prior entry
+    /// at the same `team_slug` so intra-club move callers (which build
+    /// `TeamInfo` via `Team::history_info()` with empty league fields)
+    /// don't fork a (season, team) pair into two rows on the History
+    /// page — the `RowKey` projection groups by `(season, team_slug,
+    /// league_slug)`, so a blank slug here lands in a different bucket
+    /// than the seeded entry that already has the league resolved.
     fn push_new_entry(
         &mut self,
         team: &TeamInfo,
@@ -318,13 +326,15 @@ impl PlayerStatisticsHistory {
         fee: Option<f64>,
         date: NaiveDate,
     ) {
+        let (league_name, league_slug) =
+            self.resolve_league_for(&team.slug, &team.league_name, &team.league_slug);
         let seq = self.next_seq();
         self.current.push(CurrentSeasonEntry {
             team_name: team.name.clone(),
             team_slug: team.slug.clone(),
             team_reputation: team.reputation,
-            league_name: team.league_name.clone(),
-            league_slug: team.league_slug.clone(),
+            league_name,
+            league_slug,
             is_loan,
             transfer_fee: fee,
             statistics: stats,
@@ -332,6 +342,39 @@ impl PlayerStatisticsHistory {
             departed_date: None,
             seq_id: seq,
         });
+    }
+
+    /// Resolve the league name/slug for a new entry, preferring the
+    /// caller-provided value and falling back to any prior current /
+    /// frozen entry at the same `team_slug`. Lets storage absorb the
+    /// "intra-club move with empty league info" pattern without forking
+    /// the projection's row grouping.
+    fn resolve_league_for(
+        &self,
+        team_slug: &str,
+        league_name: &str,
+        league_slug: &str,
+    ) -> (String, String) {
+        if !league_slug.is_empty() {
+            return (league_name.to_string(), league_slug.to_string());
+        }
+        if let Some(prior) = self
+            .current
+            .iter()
+            .rev()
+            .find(|e| e.team_slug == team_slug && !e.league_slug.is_empty())
+        {
+            return (prior.league_name.clone(), prior.league_slug.clone());
+        }
+        if let Some(prior) = self
+            .items
+            .iter()
+            .rev()
+            .find(|i| i.team_slug == team_slug && !i.league_slug.is_empty())
+        {
+            return (prior.league_name.clone(), prior.league_slug.clone());
+        }
+        (league_name.to_string(), league_slug.to_string())
     }
 
     /// Freeze entries from previous seasons into `items` before a manual action.
@@ -469,11 +512,12 @@ impl PlayerStatisticsHistory {
         to: &TeamInfo,
         from_senior: bool,
         to_senior: bool,
+        is_loan: bool,
         date: NaiveDate,
     ) {
         let mut carried_fee: Option<f64> = None;
         if from_senior {
-            self.upsert_current(from, old_stats, false, None, date);
+            self.upsert_current(from, old_stats, is_loan, None, date);
 
             // A senior `from` spell with no games that the player is
             // leaving for another senior team is a pass-through stop —
@@ -483,13 +527,13 @@ impl PlayerStatisticsHistory {
             let from_pos = self
                 .current
                 .iter()
-                .rposition(|e| e.team_slug == from.slug && !e.is_loan);
+                .rposition(|e| e.team_slug == from.slug && e.is_loan == is_loan);
             match from_pos {
                 Some(pos) if to_senior && self.current[pos].statistics.total_games() == 0 => {
                     carried_fee = self.current[pos].transfer_fee;
                     self.current.remove(pos);
                 }
-                _ => self.mark_departed(&from.slug, false, date),
+                _ => self.mark_departed(&from.slug, is_loan, date),
             }
         }
         if to_senior {
@@ -499,14 +543,15 @@ impl PlayerStatisticsHistory {
             // to merge a stored snapshot with the live counter; the
             // (season, team, league, is_loan) grouping collapses them
             // back into one row at render and at season-end drain. Only
-            // skip the push when an active entry for this team already
-            // exists (defensive — the normal flow has none).
+            // skip the push when an active entry for this team — matching
+            // the player's current loan status — already exists
+            // (defensive — the normal flow has none).
             let has_active = self
                 .current
                 .iter()
-                .any(|e| e.team_slug == to.slug && !e.is_loan && e.departed_date.is_none());
+                .any(|e| e.team_slug == to.slug && e.is_loan == is_loan && e.departed_date.is_none());
             if !has_active {
-                self.push_new_entry(to, PlayerStatistics::default(), false, carried_fee, date);
+                self.push_new_entry(to, PlayerStatistics::default(), is_loan, carried_fee, date);
             }
         }
     }
@@ -2040,7 +2085,7 @@ mod club_career_apps_tests {
         pre_demotion.goals = 2;
 
         // Mid-season demotion to U21 (from_senior=true, to_senior=false).
-        hist.record_intra_club_move(pre_demotion, &main, &u21, true, false, d(2025, 12, 15));
+        hist.record_intra_club_move(pre_demotion, &main, &u21, true, false, false, d(2025, 12, 15));
 
         // Plays at U21 — those stats are intentionally not tracked.
         // Mid-season promotion back to Main.
@@ -2050,6 +2095,7 @@ mod club_career_apps_tests {
             &main,
             false,
             true,
+            false,
             d(2026, 2, 1),
         );
 
@@ -2105,7 +2151,7 @@ mod club_career_apps_tests {
         // First Main spell: 10 apps.
         let mut spell_one = PlayerStatistics::default();
         spell_one.played = 10;
-        hist.record_intra_club_move(spell_one, &main, &u21, true, false, d(2025, 12, 15));
+        hist.record_intra_club_move(spell_one, &main, &u21, true, false, false, d(2025, 12, 15));
 
         // Promotion back to Main, then more games (8 apps in spell two).
         hist.record_intra_club_move(
@@ -2114,6 +2160,7 @@ mod club_career_apps_tests {
             &main,
             false,
             true,
+            false,
             d(2026, 2, 1),
         );
 
@@ -2150,7 +2197,7 @@ mod club_career_apps_tests {
 
         let mut spell_one = PlayerStatistics::default();
         spell_one.played = 10;
-        hist.record_intra_club_move(spell_one, &main, &b, true, true, d(2025, 11, 1));
+        hist.record_intra_club_move(spell_one, &main, &b, true, true, false, d(2025, 11, 1));
 
         // Player joined B but never played a match before going back.
         hist.record_intra_club_move(
@@ -2159,6 +2206,7 @@ mod club_career_apps_tests {
             &main,
             true,
             true,
+            false,
             d(2025, 12, 1),
         );
 
@@ -2232,6 +2280,7 @@ mod club_career_apps_tests {
             &main,
             &season_team("zenit-u21"),
             true,
+            false,
             false,
             d(2025, 12, 15),
         );
@@ -2390,6 +2439,7 @@ mod club_career_apps_tests {
             &main,
             false,
             true,
+            false,
             d(2025, 11, 15),
         );
 
@@ -2698,6 +2748,7 @@ mod club_career_apps_tests {
             &second,
             true,
             true,
+            false,
             d(2026, 9, 1),
         );
 
@@ -2736,7 +2787,7 @@ mod club_career_apps_tests {
 
         let mut played = PlayerStatistics::default();
         played.played = 6;
-        hist.record_intra_club_move(played, &main, &second, true, true, d(2026, 11, 1));
+        hist.record_intra_club_move(played, &main, &second, true, true, false, d(2026, 11, 1));
 
         let main_entry = hist
             .current

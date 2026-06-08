@@ -1552,6 +1552,29 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
         side_for.insert(*pid, &right_ctx);
     }
 
+    // Per-side team reputation, resolved once so the pressure axis below
+    // (opponent-rep gap → personality-amplified swing) doesn't re-walk
+    // the team store per player.
+    let left_team_id = details.left_team_players.team_id;
+    let right_team_id = details.right_team_players.team_id;
+    let left_team_rep = data
+        .team(left_team_id)
+        .map(|t| t.reputation.overall_score())
+        .unwrap_or(0.0);
+    let right_team_rep = data
+        .team(right_team_id)
+        .map(|t| t.reputation.overall_score())
+        .unwrap_or(0.0);
+    let opponent_rep_for = |pid: &u32| -> f32 {
+        if details.left_team_players.main.contains(pid)
+            || details.left_team_players.substitutes_used.contains(pid)
+        {
+            right_team_rep
+        } else {
+            left_team_rep
+        }
+    };
+
     let mut out = HashMap::with_capacity(details.player_stats.len());
     for (player_id, stats) in &details.player_stats {
         let location = data
@@ -1643,28 +1666,27 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
             .and_then(|(_, _, _, team_id)| data.team(team_id))
             .map(|t| t.team_chemistry())
             .unwrap_or(50.0);
-        let (consistency, big_match, temperament, chemistry) = data
+        let (consistency, big_match, temperament, pressure, professionalism, chemistry) = data
             .player(*player_id)
             .map(|p| {
                 (
                     p.attributes.consistency,
                     p.attributes.important_matches,
                     p.attributes.temperament,
+                    p.attributes.pressure,
+                    p.attributes.professionalism,
                     team_chem,
                 )
             })
-            .unwrap_or((10.0, 10.0, 10.0, 50.0));
+            .unwrap_or((10.0, 10.0, 10.0, 10.0, 10.0, 50.0));
 
         const BASELINE: f32 = 6.0;
         let mut adjusted = adjusted_from_settlement;
 
         // Team chemistry shifts individual performance. Neutral at 50;
-        // ±0.10 at the extremes. A dysfunctional dressing room
-        // measurably drags everyone down; a tight squad gives a small
-        // lift, but only when the player already produced enough on the
-        // pitch to earn it. Asymmetric: positive chem only adds *above*
-        // baseline, so chemistry alone can't lift a goalless routine
-        // shift into the good-rating band over a 20-match average.
+        // ±0.10 at the extremes. Asymmetric: positive chem only adds
+        // *above* baseline, so chemistry alone can't lift a goalless
+        // routine shift into the good-rating band.
         let raw_chem_shift = ((chemistry - 50.0) / 50.0).clamp(-1.0, 1.0) * 0.10;
         adjusted += if raw_chem_shift > 0.0 && adjusted <= BASELINE {
             0.0
@@ -1672,23 +1694,14 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
             raw_chem_shift
         };
 
-        // Consistency drives match-to-match volatility. A high-consistency
-        // player drifts LESS from their stat-derived rating; a low-
-        // consistency ("streaky") player swings widely match-to-match —
-        // one excellent game, three quiet ones. Real football: a Finishing-7
-        // / Consistency-8 striker has the *occasional* hot match but
-        // can't string two 8.0s in a row.
-        //
-        // Previous implementation keyed the seed only on `player_id`, so
-        // a streaky player got the SAME swing every single game (a static
-        // bias compounding in one direction across the season). Combining
-        // with the match date produces a different swing per fixture —
-        // genuine volatility that averages toward zero over many apps.
-        //
-        // Band widened to ±0.6 max because the old ±0.4 wasn't enough to
-        // produce the "scored 2 in match A, anonymous in match B" shape
-        // that's the hallmark of low-consistency players.
-        let variance_band = (1.0 - (consistency / 20.0)).clamp(0.0, 1.0) * 0.6;
+        // Consistency × professionalism drive match-to-match volatility.
+        // High consistency narrows the swing; high professionalism narrows
+        // it further (a pro keeps a routine even on off days). Band lifted
+        // to ×0.9 so upper-medium streaky players actually swing instead of
+        // averaging out into the same robotic ~6.8 every week.
+        let cons_band = (1.0 - (consistency / 20.0)).clamp(0.0, 1.0);
+        let prof_factor = (1.15 - (professionalism / 20.0) * 0.30).clamp(0.85, 1.15);
+        let variance_band = cons_band * prof_factor * 0.9;
         if variance_band > 0.01 {
             // Per-match deterministic seed: player_id + date so the same
             // player gets a different swing every fixture, but a given
@@ -1699,29 +1712,53 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
             adjusted += swing;
         }
 
-        // Low-temperament players drop a touch when the game slipped away
-        // (stat rating below 6 already) — they let it affect them more.
-        if stats.match_rating < 6.0 && temperament < 10.0 {
-            let drop = ((10.0 - temperament) / 10.0) * 0.25;
-            adjusted -= drop;
+        // Temperament — always-on smooth shape (was: only fires below 6.0
+        // AND temperament<10, which left 80% of upper-medium players
+        // untouched). A short-fuse player loses focus when the game turns
+        // against them; a composed one rides the dip. Symmetric on the
+        // upside: high temperament holds form a touch better when the team
+        // is on top, but the lift is small (composure isn't a goal).
+        let temp_centered = (temperament - 10.0) / 10.0;
+        if stats.match_rating < BASELINE {
+            let deficit = (BASELINE - stats.match_rating).min(2.0);
+            adjusted -= deficit * 0.18 * (-temp_centered).max(0.0);
+            adjusted += deficit * 0.08 * temp_centered.max(0.0);
+        } else {
+            let surplus = (stats.match_rating - BASELINE).min(2.5);
+            adjusted += surplus * 0.05 * temp_centered.max(0.0);
+            adjusted -= surplus * 0.07 * (-temp_centered).max(0.0);
         }
 
-        // Big-match personality: small baseline lift for high
-        // `important_matches`. The caller passes these ratings into the
-        // MatchOutcome that already knows is_cup — but we can't see
-        // that here, so the effect is modest and always-on as a proxy.
-        // Heavily reduced from the previous ±0.15 because it stacked on
-        // every match for high-rated players, inflating season averages
-        // independently of actual performance. The negative side keeps
-        // its bite (low-importance players still drift downward).
-        if big_match >= 15.0 {
-            // Only lift above baseline so the always-on proxy can't
-            // ride routine into a good rating.
+        // Important-matches personality — always-on smooth gradient (was
+        // only firing at ≥15 or ≤5, which never touched the 8-14 band
+        // where most upper-medium players live). Amplified vs strong
+        // opponents: a +2 rep gap roughly doubles the effect; a routine
+        // mismatch barely touches it. Both signs stay asymmetric on the
+        // upside so the always-on proxy can't ride routine into the good
+        // band.
+        let opp_rep = opponent_rep_for(player_id);
+        let rep_gap = (opp_rep - club_rep).clamp(-3.0, 3.0);
+        let big_match_amp = 1.0 + (rep_gap / 3.0).max(0.0);
+        let big_centered = (big_match - 10.0) / 10.0;
+        if big_centered >= 0.0 {
             if adjusted > BASELINE {
-                adjusted += 0.05;
+                adjusted += big_centered * 0.10 * big_match_amp;
             }
-        } else if big_match <= 5.0 {
-            adjusted -= 0.1;
+        } else {
+            adjusted += big_centered * 0.12 * big_match_amp;
+        }
+
+        // Pressure axis — copes / folds under elevated opponent strength.
+        // Only fires when the opponent is meaningfully stronger (positive
+        // rep gap); a routine fixture vs a weaker side has no pressure to
+        // cope with, so the axis self-zeros there. High-pressure players
+        // step up, low-pressure ones shrink. Effect grows with the gap
+        // size, capped so a mid-tier side at Bernabéu doesn't see ±0.5
+        // mood swings on every player.
+        if rep_gap > 0.3 {
+            let pressure_centered = (pressure - 10.0) / 10.0;
+            let gap_scale = (rep_gap / 2.0).min(1.0);
+            adjusted += pressure_centered * 0.22 * gap_scale;
         }
 
         out.insert(*player_id, adjusted.clamp(1.0, 10.0));

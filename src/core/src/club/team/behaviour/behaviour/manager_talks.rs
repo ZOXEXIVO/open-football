@@ -675,12 +675,11 @@ fn evaluate_termination(
         return None;
     }
 
-    // Any player the squad really needs stays.
-    let unneeded = matches!(
-        contract.squad_status,
-        PlayerSquadStatus::NotNeeded | PlayerSquadStatus::NotYetSet
-    );
-    if !unneeded {
+    // Any player the squad really needs stays. `NotYetSet` is excluded
+    // because every freshly-installed contract starts there until the
+    // monthly squad-status pass computes a real role — terminating on
+    // it would tear up the deal of a player we just signed.
+    if !matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
         return None;
     }
 
