@@ -7,10 +7,17 @@ use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::zones::ZoneCoeffs;
 
 impl<'a> RatingContext<'a> {
-    /// Win / loss nudge.
+    /// Win / loss nudge. Win credit lifted 0.12 → 0.16 in the FM-parity
+    /// season calibration (see `season_tests.rs`): accumulated over a
+    /// 30+ match season the team-result share of an FM-style rating is
+    /// larger than a 0.12 nudge produced — high-output players at
+    /// winning clubs were averaging 0.2-0.4 below the believable band.
+    /// The passenger / goalless-forward damping in
+    /// `context_credit_factor` still discounts unearned result credit,
+    /// and losses stay at full -0.15 for everyone.
     pub(super) fn result_context(&self) -> f32 {
         if self.team_goals > self.opponent_goals {
-            0.12
+            0.16
         } else if self.team_goals < self.opponent_goals {
             -0.15
         } else {
@@ -50,12 +57,20 @@ impl<'a> RatingContext<'a> {
                 let saves = s.saves;
                 let command = z.gk_command_actions;
                 let xg_prev = s.xg_prevented;
+                // Tiers lifted 0.30/0.22/0.18 → 0.34/0.29/0.26 in the
+                // FM-parity season calibration: a 35-start keeper with
+                // 12 clean sheets was accumulating to ~6.46 (below the
+                // believable 6.6-7.0 band) because the engine's typical
+                // quiet shutout carried too little credit. The clean
+                // sheet is the GK's headline season currency — repeated
+                // CS credit, not save volume, is what separates a
+                // 12-CS league row from a 9-conceded continental row.
                 if saves >= 4 || command >= 2 || xg_prev > 0.5 {
-                    0.30
+                    0.34
                 } else if saves >= 2 || command >= 1 || xg_prev > 0.0 {
-                    0.22
+                    0.29
                 } else {
-                    0.18
+                    0.26
                 }
             }
             PlayerFieldPositionGroup::Defender => {
@@ -75,21 +90,21 @@ impl<'a> RatingContext<'a> {
                     .saturating_add(self.stats.blocks)
                     .saturating_add(self.stats.clearances)
                     .saturating_add(self.stats.successful_pressures);
-                // Tiers lifted from 0.25/0.15/0.08 → 0.32/0.20/0.13.
-                // Prior values were calibrated against synthetic test
-                // fixtures, but observed engine output (Cambiaso at
-                // 6.20-6.25, Thuram at 5.96-6.09) showed defenders
-                // weren't getting enough team-result credit when they
-                // held the CS together — defenders share the clean
-                // sheet with the keeper but the keeper's tier maxes at
-                // 0.30. A back-four player with 6+ defensive actions
-                // in a CS deserves a comparable share.
+                // Tiers lifted again 0.32/0.20/0.13 → 0.36/0.24/0.15
+                // (FM-parity DEF season pass — prior steps 0.25/0.15/
+                // 0.08 → 0.32/0.20/0.13 for the Cambiaso/Thuram
+                // under-credit). A 14-CS season with normal defensive
+                // volume must accumulate to the believable 6.60-6.95
+                // band, and the clean sheet is the back line's season
+                // currency just as it is the keeper's (GK top tier
+                // 0.34). The evidence gating keeps a do-nothing
+                // passenger at the bookkeeping tier.
                 if high_value >= 1 || routine >= 6 {
-                    0.32
+                    0.36
                 } else if routine >= 3 {
-                    0.20
+                    0.24
                 } else {
-                    0.13
+                    0.15
                 }
             }
             PlayerFieldPositionGroup::Midfielder => 0.05,
@@ -105,21 +120,34 @@ impl<'a> RatingContext<'a> {
         match self.pos {
             PlayerFieldPositionGroup::Goalkeeper => {
                 let g = self.opponent_goals as f32;
-                let base = 0.30 * g.min(2.0);
+                // First goal softened 0.30 → 0.16, second steepened to
+                // 0.40 (FM-parity season calibration). Shipping exactly
+                // one goal is the most common keeper match by far, and
+                // at -0.30 it cancelled the entire save credit of a
+                // routine 2-1 win — over 35 starts that single constant
+                // dragged a 0.83-conceded-per-start season to ~6.4.
+                // The marginal cost of the second goal rises (0.30 →
+                // 0.40) so multi-concession nights stay clearly worse
+                // than one-goal nights; cumulative totals from two
+                // conceded on sit 0.04 below the old curve, which the
+                // disaster-band and continental-cluster guards absorb.
+                let first = g.min(1.0) * 0.16;
+                let second = (g - 1.0).clamp(0.0, 1.0) * 0.40;
                 let mid = (g - 2.0).max(0.0) * 0.55;
                 let heavy = (g - 5.0).max(0.0) * 0.20;
-                -(base + mid + heavy)
+                -(first + second + mid + heavy)
             }
-            PlayerFieldPositionGroup::Defender if self.opponent_goals >= 3 => {
-                // Defenders share blame from the 3rd onward, smoothly.
-                // Softened (was sat(extra, 3.0) * 1.10): the prior
-                // calibration crushed a defender losing 0-3 to -0.31
-                // on top of the -0.15 loss penalty, dragging a routine
-                // shift on a bad day to sub-5.5. Real-football ratings
-                // for a defender in a 0-3 loss sit at 5.7-6.0; the
-                // softer curve preserves the order (4 GA worse than
-                // 3 GA worse than 0 GA) while pulling the floor up.
-                let extra = (self.opponent_goals as f32 - 2.0).max(0.0);
+            PlayerFieldPositionGroup::Defender if self.opponent_goals >= 2 => {
+                // Defenders share blame from the 2nd goal onward,
+                // smoothly (gate moved 3 → 2 in the FM-parity DEF
+                // season pass: a two-conceded match now costs the back
+                // line ≈ -0.10, which is what keeps a leaky-side season
+                // separated from a clean-sheet one once routine
+                // defending earns honest credit). The curve stays
+                // gentle — a defender losing 0-3 takes ≈ -0.27 on top
+                // of the loss penalty, landing in the real-football
+                // 5.7-6.0 band for a bad day, never the disaster band.
+                let extra = self.opponent_goals as f32 - 1.5;
                 -sat(extra, 4.0) * 0.85
             }
             _ => 0.0,

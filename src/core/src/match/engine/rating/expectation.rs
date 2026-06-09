@@ -296,6 +296,11 @@ impl<'a> RatingContext<'a> {
                 0.45 * routine + 0.35 * box_work + 0.20 * build
             }
             PlayerFieldPositionGroup::Midfielder => {
+                // Pass-volume weight lifted 0.25 → 0.30 (FM-parity
+                // DEF/MID season pass): high-volume circulation is the
+                // recycler role's actual contribution, and the prior
+                // weighting read a 60-pass shift as barely half of the
+                // expected midfield influence.
                 let pass_vol = sat(s.passes_completed as f32, 50.0);
                 let progression = sat(
                     (s.progressive_passes + s.progressive_carries) as f32,
@@ -303,7 +308,7 @@ impl<'a> RatingContext<'a> {
                 );
                 let creation = sat((s.key_passes + s.passes_into_box) as f32, 4.0);
                 let press = sat(s.successful_pressures as f32, 5.0);
-                0.25 * pass_vol + 0.30 * progression + 0.25 * creation + 0.20 * press
+                0.30 * pass_vol + 0.30 * progression + 0.25 * creation + 0.20 * press
             }
             PlayerFieldPositionGroup::Forward => {
                 let decisive = sat(s.goals as f32 + s.assists as f32 * 0.6, 1.5);
@@ -344,15 +349,25 @@ impl<'a> RatingContext<'a> {
             }
             PlayerFieldPositionGroup::Defender => {
                 let low_possession = (0.5 - ctx.team_possession_proxy).max(0.0) * 2.0;
-                0.30 + 0.35 * ctx.team_defensive_load + 0.10 * low_possession
+                // Baseline softened 0.30 → 0.28 (FM-parity DEF season
+                // pass): the routine clean-sheet defender was carrying
+                // a small permanent expectation drag in every match
+                // even when doing exactly the job the team's shape
+                // asked of them.
+                0.28 + 0.35 * ctx.team_defensive_load + 0.10 * low_possession
             }
             PlayerFieldPositionGroup::Midfielder => {
                 // Balanced midfields demand the most: a 50/50 possession
                 // split is where a midfielder's influence is most
                 // expected. Lopsided games (very high or very low share)
-                // relax the bar slightly.
+                // relax the bar slightly. Baseline 0.35 → 0.31 and
+                // balanced weight 0.15 → 0.12 (FM-parity MID season
+                // pass): the old bar sat near 0.62 for possession
+                // sides, a level only a heavy creator reaches, so every
+                // ordinary midfielder carried -0.06..-0.08 of
+                // expectation drag per match purely for existing.
                 let balanced = 1.0 - 2.0 * (ctx.team_possession_proxy - 0.5).abs();
-                0.35 + 0.25 * ctx.team_possession_proxy + 0.15 * balanced
+                0.31 + 0.25 * ctx.team_possession_proxy + 0.12 * balanced
             }
             PlayerFieldPositionGroup::Forward => {
                 0.35 + 0.30 * ctx.team_shot_share + 0.15 * favourite_factor

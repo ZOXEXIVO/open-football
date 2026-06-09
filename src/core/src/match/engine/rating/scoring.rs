@@ -28,18 +28,18 @@ impl<'a> RatingContext<'a> {
             return 0.0;
         }
         // sat(1, 1.6) ≈ 0.46; sat(2) ≈ 0.71; sat(3) ≈ 0.85.
-        // Coefficient lifted 2.55 → 2.80 in 2026-06 (round 3): observed
-        // forwards in main teams were posting season averages of 6.15
-        // despite 5g/8 apps with 25 SoT — the goal-event lift wasn't
-        // enough to balance the goalless-match drag over a season. A
-        // +0.12 per single-goal match lifts the 11g/13ap test from 6.95
-        // to 7.05 and the 5g/8ap shape from ~6.8 to ~6.92, in line with
-        // the real-football reference 7.0+ for high-volume scorers.
-        let goal_raw = sat(g, 1.6) * 2.80;
+        // Coefficient lifted 2.80 → 2.95 in the FM-parity season
+        // calibration (see season_tests.rs): a 15-21 goal season has to
+        // accumulate to 6.8-7.2 against ~60% goalless matches, and the
+        // goal event is the only lever that lifts scorers without
+        // lifting passengers. The OneGoalLowVolume soft cap absorbs
+        // most of the single-match effect, so per-match bands move by
+        // hundredths while the season aggregate gains the difference.
+        let goal_raw = sat(g, 1.6) * 2.95;
         // Assists ≈ 55% of a goal — decisive but not as decisive as
-        // putting it in. Lifted 1.40 → 1.55 in tandem for the same
+        // putting it in. Lifted 1.55 → 1.65 in tandem for the same
         // reason (assist-match rating proportional to goal-match).
-        let assist_raw = sat(a, 1.6) * 1.55;
+        let assist_raw = sat(a, 1.6) * 1.65;
         let raw = goal_raw + assist_raw;
 
         // Clinical-finisher bonus: goals beyond xG → premium for
@@ -75,17 +75,18 @@ impl<'a> RatingContext<'a> {
 
         let is_forward = self.pos == PlayerFieldPositionGroup::Forward;
 
-        // xG credit lifted 0.30 → 0.38 — chance creation is the active
-        // forward's secondary positive signal when goals don't come;
-        // dev_match showed even high-xG goalless forwards crushed by
-        // the multiple drag lanes.
-        let xg_value = sat(s.xg, 1.8) * 0.38;
-        // SoT credit lifted 0.22 → 0.28 → 0.34 — putting a shot on
-        // target IS the headline forward action even without scoring;
-        // dev_match goalless p90 was only 6.18 even for active 2-3 SOT
-        // forwards. The wasted-xg / shot-spam drags now bite less, so
-        // lifting the *positive* shooting signal balances the equation.
-        let sot_value = sat(s.shots_on_target as f32, 2.5) * 0.34;
+        // xG credit lifted 0.38 → 0.46 (FM-parity season calibration) —
+        // chance creation is the active forward's secondary positive
+        // signal when goals don't come. A 16-goal striker's blank
+        // matches still carry 0.4-0.8 xG; those shifts have to read
+        // ordinary (6.3-6.6), not poor, for the season band to hold.
+        let xg_value = sat(s.xg, 1.8) * 0.46;
+        // SoT credit lifted 0.34 → 0.42 in the same pass — putting a
+        // shot on target IS the headline forward action even without
+        // scoring. Together with the xG lift this moves an active
+        // goalless shift (~2 SOT, 0.5 xG) by ≈ +0.07 while a no-SOT
+        // passenger gains nothing.
+        let sot_value = sat(s.shots_on_target as f32, 2.5) * 0.42;
         let mut shooting = xg_value + sot_value;
 
         // Wasted high xG: created premium chances, scored nothing.
@@ -115,7 +116,11 @@ impl<'a> RatingContext<'a> {
         }
 
         // Shot accuracy band — small lift for hitting the target.
-        if s.shots_total > 0 {
+        // Gated to 2+ attempts: accuracy from a single shot is not a
+        // signal (one speculative miss was reading as a -0.07 "bad
+        // accuracy" verdict, one tidy finish as a +0.08 bonus on top
+        // of the SoT credit it already earned).
+        if s.shots_total >= 2 {
             let accuracy = s.shots_on_target as f32 / s.shots_total as f32;
             shooting += signed_sat(accuracy - 0.40, 0.30) * 0.08;
         }
@@ -135,11 +140,13 @@ impl<'a> RatingContext<'a> {
         }
 
         // No-goal, no-SOT spammer: drag scales with raw shot volume
-        // even when xG is small. Forward coef cut 0.50 → 0.30 — it
-        // was contributing ~-0.14 to -0.25 to goalless forwards with
-        // 2-3 missed shots, stacking with the shot-spam block above.
+        // even when xG is small. Forward coef cut 0.30 → 0.24 — the
+        // accuracy band above already reads the same 0-for-N signal
+        // negatively at 2+ shots, and the double-bite was holding
+        // quiet-forward shifts in the 5.5s instead of the FM-style
+        // "poor/quiet ≈ 6.0" anchor.
         if s.goals == 0 && s.shots_on_target == 0 && s.shots_total >= 2 {
-            let nosot_coef = if is_forward { 0.30 } else { 0.25 };
+            let nosot_coef = if is_forward { 0.24 } else { 0.25 };
             shooting -= sat(s.shots_total as f32 - 1.0, 3.0) * nosot_coef;
         }
 
@@ -267,11 +274,15 @@ impl<'a> RatingContext<'a> {
         }
         let pct = s.passes_completed as f32 / s.passes_attempted as f32;
         let volume = sat(s.passes_attempted as f32, 45.0); // saturates by ~90 attempts
-        // 0.74 is the league-average baseline. High pass completion alone
-        // should not be a large bonus — a tidy 90% recycler isn't elite.
-        // The coefficient is intentionally modest so that retention has
-        // to combine with progression / creation to push a rating up.
-        let pass_signal = signed_sat(pct - 0.74, 0.18) * volume * 0.30;
+        // 0.74 is the league-average baseline. Coefficient lifted
+        // 0.30 → 0.50 in the FM-parity DEF/MID season pass: the
+        // recycler archetype (60+ passes at ~90%) was accumulating to
+        // ~6.38 against the believable 6.50-6.75 band — high-volume
+        // accurate circulation is the role's primary output and FM
+        // credits it as solid. The elite band still needs progression
+        // / creation: the recycler guards (`safe_recycler...`,
+        // `high_pass_completion...`) hold tidy volume below 7.0.
+        let pass_signal = signed_sat(pct - 0.74, 0.18) * volume * 0.50;
         pass_signal + touch_drag
     }
 
@@ -369,11 +380,13 @@ impl<'a> RatingContext<'a> {
         // of ARE + shot-spam + no-SoT spam + wasted-xG. Threshold cut
         // to 1.0 so any forward with even one SoT or 0.3 xG clears the
         // gate completely; ARE only fires for genuinely zero-footprint
-        // shifts. Coef cut 0.30 → 0.20 so the residual drag is gentle.
-        // Saturation scale 3.0 → 2.0 keeps the bottom of the curve in
-        // line for footprint=0 (still −0.16).
+        // shifts. Coef cut 0.20 → 0.15 in the FM-parity season pass:
+        // the FM-style anchor for a quiet shift is "poor ≈ 6.0", and
+        // the remaining drag lanes (no-SoT spam, accuracy, context
+        // damping) already hold an anonymous forward below baseline —
+        // a zero-footprint 90 still loses ≈ −0.06 here plus the rest.
         let shortfall = (1.0 - footprint).max(0.0);
-        let lack_penalty = -sat(shortfall, 2.0) * 0.20;
+        let lack_penalty = -sat(shortfall, 2.0) * 0.15;
 
         // Wasted big-chance drag (ARE lane, separate from shooting()).
         // Threshold 0.8, coef cut 0.30 → 0.20 — the 200-match benchmark

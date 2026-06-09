@@ -212,9 +212,21 @@ impl<'a> RatingContext<'a> {
             // Caps lifted back toward an honest "did the job" ceiling
             // while keeping the second-tier-keeper guard from the
             // 2026-04 calibration pass.
-            EvidenceTier::GkBusy => soft_cap(positive_delta, 1.45, 0.35),
+            // GkBusy cap lifted 1.45 → 1.52 (FM-parity follow-up): the
+            // clean-sheet credit lifts pushed a routine 3-save shutout
+            // win to ~7.45, a dead heat with the heroic 8-save loss.
+            // Keeping the barrage keeper's headroom above the
+            // well-protected shutout preserves the "earned vs
+            // organised" ordering FM shows.
+            EvidenceTier::GkBusy => soft_cap(positive_delta, 1.52, 0.35),
             EvidenceTier::GkModest => soft_cap(positive_delta, 0.92, 0.30),
-            EvidenceTier::GkPassenger => soft_cap(positive_delta, 0.62, 0.20),
+            // GkPassenger cap lifted 0.62 → 0.70 (FM-parity season
+            // calibration): with the quiet-shutout credit at 0.25 the
+            // old cap clipped a 1-save clean sheet's honest routine sum,
+            // re-flattening exactly the matches the GK season band
+            // needed back. Still well under GkModest, so an untested
+            // keeper can't ride saves they never made.
+            EvidenceTier::GkPassenger => soft_cap(positive_delta, 0.70, 0.20),
             EvidenceTier::Uncapped => positive_delta,
         }
     }
@@ -238,11 +250,13 @@ impl<'a> RatingContext<'a> {
             // outfield passenger is. A GK who organised the back four
             // through a clean sheet — even without making a save —
             // is doing the job. Halving their CS/result credit to 0.50
-            // double-penalised them on top of the +0.62 cap and pulled
-            // TOP-GK season averages into the 6.2–6.4 band. 0.80 keeps
-            // a meaningful "didn't make a single decisive intervention"
-            // discount without collapsing the rating.
-            EvidenceTier::GkPassenger => 0.80,
+            // double-penalised them on top of the GkPassenger cap and
+            // pulled TOP-GK season averages into the 6.2–6.4 band.
+            // 0.85 (lifted from 0.80 in the FM-parity season
+            // calibration) keeps a meaningful "didn't make a single
+            // decisive intervention" discount without collapsing the
+            // 12-clean-sheet season the credit exists to reward.
+            EvidenceTier::GkPassenger => 0.85,
             _ => 1.0,
         };
         if self.pos == PlayerFieldPositionGroup::Forward
@@ -250,15 +264,16 @@ impl<'a> RatingContext<'a> {
             && self.stats.assists == 0
             && self.stats.minutes_played >= 30
         {
-            // Cap the goalless-forward damping at 0.55 (lifted from
-            // 0.40 in 2026-06 round 5). The dev_match benchmark showed
-            // active goalless forwards in wins capped at 0.40 lost ~6%
-            // of the result-credit lift — combined with the multiple
-            // shot-side drags this pushed even busy non-converters
-            // below 6.0. The 0.55 cap still meaningfully discounts a
-            // goalless forward riding the team's win (no full credit)
-            // but lets the lift register.
-            return base.min(0.55);
+            // Cap the goalless-forward damping at 0.65 (lifted from
+            // 0.55 in the FM-parity season calibration). A 16-goal
+            // striker spends ~60% of his season goalless; with the win
+            // credit at 0.16 the 0.55 cap kept those matches reading
+            // poor instead of ordinary and dragged the season average
+            // below the believable band. 0.65 still meaningfully
+            // discounts a goalless forward riding the team's win (no
+            // full credit), and a true passenger stays at the 0.50
+            // tier base below this cap.
+            return base.min(0.65);
         }
         base
     }

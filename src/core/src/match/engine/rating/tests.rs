@@ -536,8 +536,13 @@ fn busy_gk_outrates_quiet_gk() {
     let busy = make_gk(8, 9);
     let quiet_r = RatingContext::new(&quiet, 1, 0).calculate();
     let busy_r = RatingContext::new(&busy, 0, 1).calculate();
+    // Margin relaxed 0.5 → 0.35 in the FM-parity season calibration:
+    // the quiet side here is a clean-sheet WIN (now properly credited
+    // at ~7.0) while the busy side is a heroic 8-save LOSS (~7.4).
+    // FM shows exactly that 0.3-0.5 gap — ordering must hold, but a
+    // half-point gulf would mean shutouts are under-credited again.
     assert!(
-        busy_r > quiet_r + 0.5,
+        busy_r > quiet_r + 0.35,
         "busy {} vs quiet {}",
         busy_r,
         quiet_r
@@ -801,12 +806,13 @@ fn xg_buildup_lifts_midfielder() {
 // ===========================================================
 
 #[test]
-fn low_impact_routine_cb_with_clean_sheet_stays_below_seven() {
+fn low_impact_routine_cb_with_clean_sheet_stays_below_seven_two() {
     // 12 routine defensive actions, 80% completion on 30 safe
     // passes, no own-box / six-yard interventions, no progressive
     // passes / carries / dribbles, no key passes. Clean-sheet win.
-    // This is the engine's typical low-HQ CB output shape — the
-    // rating must NOT report this as a 7.0+ shift.
+    // A busy back-line shutout reads solid-good (~7.1 after the
+    // FM-parity calibration) but must never drift toward the elite
+    // band on routine volume alone.
     let mut s = make_stats(
         0,
         0,
@@ -826,9 +832,17 @@ fn low_impact_routine_cb_with_clean_sheet_stays_below_seven() {
     s.pressures = 8;
     s.minutes_played = 90;
     let r = RatingContext::new(&s, 1, 0).calculate();
+    // Ceiling moved 7.0 → 7.2 across the FM-parity calibration (win
+    // credit 0.16, defensive routine 0.34/0.34/0.30/0.18, defender CS
+    // tier 0.36): a 12-action CB holding a 1-0 clean-sheet win at
+    // ~7.1 matches the FM reference for a genuinely busy shutout.
+    // The 7.4-cluster symptom is pinned where it actually lives now:
+    // `season_tests::clean_sheet_defender_season_lands_in_fm_band`
+    // caps a realistic 14-CS season mix at 6.95, and the ordinary
+    // draw/loss lines below stay strict.
     assert!(
-        r < 7.0,
-        "low-impact routine CB with clean sheet rated {} — must stay < 7.0",
+        r < 7.2,
+        "low-impact routine CB with clean sheet rated {} — must stay < 7.2",
         r
     );
     assert!(
@@ -1057,9 +1071,9 @@ fn clean_sheet_credit_tiered_by_defensive_evidence() {
     assert!(qctx.clean_sheet_context() < bctx.clean_sheet_context());
     assert!(qctx.clean_sheet_context() < zctx.clean_sheet_context());
     assert!(
-        (zctx.clean_sheet_context() - 0.32).abs() < 0.001,
-        "own-box intervention earns full clean-sheet bonus (0.32 after \
-         2026-06 defender CS bonus uplift)"
+        (zctx.clean_sheet_context() - 0.36).abs() < 0.001,
+        "own-box intervention earns full clean-sheet bonus (0.36 after \
+         the FM-parity defender season calibration)"
     );
 }
 
@@ -1302,7 +1316,7 @@ fn high_pass_completion_alone_does_not_unlock_seven() {
 }
 
 #[test]
-fn busy_routine_defender_without_decisive_evidence_stays_sub_seven() {
+fn busy_routine_defender_without_decisive_evidence_stays_below_seven_five() {
     // 7/7/7/5 routine defensive actions — a very busy CB by
     // per-90 standards. No zone events, no creative output,
     // clean-sheet win. Routine volume alone may not produce a
@@ -1325,14 +1339,16 @@ fn busy_routine_defender_without_decisive_evidence_stays_sub_seven() {
     s.pressures = 12;
     s.minutes_played = 90;
     let r = RatingContext::new(&s, 1, 0).calculate();
-    // A very busy routine CB on a clean sheet IS allowed to nudge
-    // marginally past 7.0 because the team kept a shutout + win,
-    // but never to the elite band. We pin the upper bound below
-    // 7.3 — anything more would mean routine volume is unlocking
-    // a "good performer" rating, which is the inflation symptom.
+    // A very busy routine CB on a clean sheet IS allowed past 7.0 —
+    // the team kept a shutout + win behind 26 defensive actions.
+    // Bound lifted 7.3 → 7.5 in the FM-parity defender pass: this
+    // volume is a siege, not the ordinary-line inflation symptom,
+    // and the realistic season mix is pinned at ≤ 6.95 by
+    // `season_tests::clean_sheet_defender_season_lands_in_fm_band`.
+    // 7.5 still keeps routine volume out of the elite (8.0) band.
     assert!(
-        r < 7.3,
-        "very busy passenger CB rated {} — must not breach 7.3 without decisive evidence",
+        r < 7.5,
+        "very busy passenger CB rated {} — must not breach 7.5 without decisive evidence",
         r
     );
 }
@@ -2110,9 +2126,15 @@ fn busy_routine_defender_without_big_moments_not_overrewarded() {
     s.pressures = 10;
     s.minutes_played = 90;
     let r = RatingContext::new(&s, 1, 0).calculate();
+    // Ceiling lifted 7.3 → 7.5 (FM-parity defender season pass): a
+    // 19-action clean-sheet win is a siege survived, not routine
+    // volume — FM rates that shift 7.3-7.7. The engine's typical CB
+    // emits 2-3 routine actions, so this line is rare; the cluster
+    // guard for realistic season mixes lives in
+    // `season_tests::clean_sheet_defender_season_lands_in_fm_band`.
     assert!(
-        r < 7.3,
-        "busy routine DEF rated {} — no big moments must keep this below 7.3",
+        r < 7.5,
+        "busy routine DEF rated {} — no big moments must keep this below 7.5",
         r
     );
 }
@@ -2382,7 +2404,7 @@ fn goalless_forward_modest_line_winning_season_averages_in_mid_sixes() {
 // +0.30 CS bonus stacked on GkModest's +1.05 routine cap.
 
 #[test]
-fn moderate_workload_clean_sheet_gk_stays_under_seven_four() {
+fn moderate_workload_clean_sheet_gk_stays_under_seven_five() {
     // 3 saves, 4 shots faced, clean sheet, win. Typical "did the job"
     // GK shift — enough saves to qualify for the modest CS bonus,
     // not enough to clear the busy bar. Should land around 7.2-7.3,
@@ -2392,10 +2414,16 @@ fn moderate_workload_clean_sheet_gk_stays_under_seven_four() {
     let mut gk = make_gk(3, 4);
     gk.minutes_played = 90;
     let r = RatingContext::new(&gk, 1, 0).calculate();
+    // Ceiling lifted 7.4 → 7.5 with the FM-parity GK clean-sheet
+    // recalibration: a 3-save shutout win lands ~7.45 (WhoScored /
+    // FM reference 7.2-7.5). The second-tier-robot symptom this test
+    // guarded is now pinned harder at season scale by
+    // `season_tests::top_gk_league_season_lands_in_fm_band` (a 12-CS
+    // season must stay ≤ 7.00 overall).
     assert!(
-        r < 7.4,
-        "moderate-workload CS GK rated {} — should land in the 7.2-7.3 \
-             band, not drift past 7.4",
+        r < 7.5,
+        "moderate-workload CS GK rated {} — should land in the 7.2-7.45 \
+             band, not drift past 7.5",
         r
     );
 }
@@ -2436,6 +2464,47 @@ fn busy_clean_sheet_gk_still_rewards_real_work() {
         r > 7.1,
         "busy CS GK rated {} — a 5-save shutout must remain a clearly \
              good rating after the GK tier rebalance",
+        r
+    );
+}
+
+#[test]
+fn heroic_loss_gk_outrates_routine_shutout_gk() {
+    // The "earned vs organised" ordering: an 8-save keeper who lost
+    // 0-1 behind a sieve must outrate a 3-save keeper behind a solid
+    // 1-0 shutout. The FM-parity clean-sheet lifts pulled these two
+    // within ~0.05 of each other — this guard pins the model-level
+    // ordering so a future CS-credit nudge can't silently invert it.
+    let mut heroic = make_gk(8, 9);
+    heroic.minutes_played = 90;
+    let mut shutout = make_gk(3, 4);
+    shutout.minutes_played = 90;
+    let heroic_r = RatingContext::new(&heroic, 0, 1).calculate();
+    let shutout_r = RatingContext::new(&shutout, 1, 0).calculate();
+    assert!(
+        heroic_r > shutout_r,
+        "heroic 8-save loss GK ({}) must outrate the routine 3-save \
+             shutout-win GK ({})",
+        heroic_r,
+        shutout_r
+    );
+}
+
+#[test]
+fn four_save_shutout_win_stays_below_elite_band() {
+    // The GkBusy tier gate (saves >= 4) flips both the soft cap
+    // (0.92 → 1.52) and the top CS tier (0.29 → 0.34) at once, so a
+    // 4-save shutout win sits a clear step above the 3-save one
+    // (~8.2 vs ~7.45). FM shows 7.5-8.0 for that line; this pins the
+    // cell below 8.3 so the tier cliff can't drift into routine
+    // 8.5+ keeper matches.
+    let mut gk = make_gk(4, 4);
+    gk.minutes_played = 90;
+    let r = RatingContext::new(&gk, 1, 0).calculate();
+    assert!(
+        r < 8.3,
+        "4-save shutout-win GK rated {} — the GkBusy tier step must \
+             stay below 8.3",
         r
     );
 }
@@ -2840,7 +2909,7 @@ fn defensive_midfielder_season_average_lands_in_real_football_band() {
 }
 
 #[test]
-fn goalless_forward_near_strong_line_winning_season_averages_below_six_eight() {
+fn goalless_forward_near_strong_line_stays_below_good_band() {
     // Near-Strong-tier shift: 2 SOT, xG 0.5, 2 KP, 1 box pass, 2
     // dribbles, light defensive work, a clean-sheet win. Previously
     // this stat-line could pile up routine positives to +0.95 and
@@ -2868,10 +2937,17 @@ fn goalless_forward_near_strong_line_winning_season_averages_below_six_eight() {
     s.progressive_passes = 2;
     s.progressive_carries = 2;
     let r = RatingContext::new(&s, 2, 0).calculate();
+    // Ceiling lifted 6.8 → 6.95 in the FM-parity calibration: this is
+    // the best-case single match (2 SOT + 2 KP + 2 dribbles in a 2-0
+    // clean-sheet win), and FM rates that shift solid-high-six. The
+    // season-scale guard this test was written for now lives in
+    // `season_tests` — a goalless forward's season mixes draws,
+    // losses, and quiet shifts and stays in the low-mid sixes. The
+    // "good performer" line at 7.0 still requires a goal contribution.
     assert!(
-        r < 6.8,
+        r < 6.95,
         "goalless near-Strong FWD rated {} on a 2-0 win — busy routine \
-             without a goal contribution must stay below 6.8",
+             without a goal contribution must stay below 6.95",
         r
     );
 }
@@ -3026,10 +3102,16 @@ fn eleven_goal_league_scorer_season_average_clears_six_nine() {
         avg,
         count,
     );
+    // Ceiling lifted 7.6 → 7.7 in the FM-parity calibration (goal
+    // event 2.80 → 2.95 + win credit 0.16): this 13-match sample is a
+    // red-hot stretch with four braces, so ~7.6 is a believable
+    // short-window average. Full-season scale is pinned tighter by
+    // `season_tests::twentyone_goal_striker_season_clears_seven`
+    // (≤ 7.30 across 31 apps).
     assert!(
-        avg < 7.6,
+        avg < 7.7,
         "11-goal league scorer season average rated {} across {} \
-             matches — must stay under 7.6 so a high-volume scorer \
+             matches — must stay under 7.7 so a high-volume scorer \
              doesn't drift into the elite hat-trick band on volume alone",
         avg,
         count,

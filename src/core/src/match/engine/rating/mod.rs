@@ -503,4 +503,6 @@ mod scoring;
 pub use expectation::{RatingExpectationContext, TeamRatingSummary};
 
 #[cfg(test)]
+mod season_tests;
+#[cfg(test)]
 mod tests;

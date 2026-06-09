@@ -30,15 +30,23 @@ impl<'a> RatingContext<'a> {
         // match, but observed output sits closer to 2-3, leaving the
         // routine work under-credited and dragging defender season
         // averages (Cambiaso 6.20, Thuram 6.09).
+        // Coefficients lifted 0.30/0.30/0.28/0.16 → 0.34/0.34/0.30/0.18
+        // in the FM-parity DEF/MID season pass: a clean-sheet CB season
+        // with normal volume (2-3 tackles/ints, 3-5 clearances) was
+        // accumulating to ~6.49 against the believable 6.60-6.95 band.
+        // Routine honest defending is the back-line's primary output;
+        // the saturation scales keep extraordinary volume from running
+        // away, and the busy-CB cluster guards in tests.rs bound the
+        // top end.
         let effective_tackles = (s.tackles as f32 - s.fouls as f32 * 0.5).max(0.0);
-        let tackles = sat(effective_tackles, 4.5) * 0.30;
-        let interceptions = sat(s.interceptions as f32, 4.5) * 0.30;
-        let blocks = sat(s.blocks as f32, 3.5) * 0.28;
+        let tackles = sat(effective_tackles, 4.5) * 0.34;
+        let interceptions = sat(s.interceptions as f32, 4.5) * 0.34;
+        let blocks = sat(s.blocks as f32, 3.5) * 0.30;
         // Clearances saturation scale tightened 7.5 → 6.0: 3 clearances
         // — a typical CB / fullback match — now registers at 39% rather
         // than 33% saturation. Same calibration motive as the tackles
         // / interceptions tighten above.
-        let clearances = sat(s.clearances as f32, 6.0) * 0.16;
+        let clearances = sat(s.clearances as f32, 6.0) * 0.18;
 
         let succ_pressure = sat(s.successful_pressures as f32, 5.5) * 0.16;
         let raw_pressure = s.pressures.saturating_sub(s.successful_pressures);
@@ -95,10 +103,14 @@ impl<'a> RatingContext<'a> {
         // hard zero in the 50%-70% dead-zone to keep a "made the saves
         // they were supposed to" keeper at baseline.
         let shots_faced = self.shots_faced();
+        // Positive slope lifted 2.7 → 3.0 (FM-parity season calibration)
+        // so a genuinely high save percentage under real volume pays a
+        // touch more — the busy-keeper-in-a-loss archetype was compressing
+        // toward the quiet-clean-sheet keeper once CS credit was lifted.
         let save_pct_v = if shots_faced >= 3 {
             let pct = s.saves as f32 / shots_faced as f32;
             if pct > 0.70 {
-                ((pct - 0.70) * 2.7).min(0.80)
+                ((pct - 0.70) * 3.0).min(0.80)
             } else if pct < 0.50 {
                 ((pct - 0.50) * 2.0).max(-0.80)
             } else {
@@ -128,8 +140,14 @@ impl<'a> RatingContext<'a> {
 
         // Quiet-shutout credit — keeper who organised the line and
         // never had to make a save still earned the clean sheet.
+        // Lifted 0.12 → 0.30 (FM-parity season calibration): the
+        // engine's typical top-club shutout arrives with 0-2 on-target
+        // shots, and at 0.12 a 12-CS season read like a string of
+        // non-events. FM-style season credit rewards repeated quiet
+        // shutouts; the heavy continental cluster is untouched because
+        // this only fires on clean sheets with low shot volume.
         let dominant_defense = if self.opponent_goals == 0 && shots_faced < 3 {
-            0.12
+            0.30
         } else {
             0.0
         };
