@@ -143,6 +143,7 @@ pub use player::{
     PlayerDecision,
     PlayerDecisionHistory,
     PlayerFieldPositionGroup,
+    PlayerFoots,
     PlayerGenerator,
     PlayerHappiness,
     PlayerHistoryRow,

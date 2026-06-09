@@ -44,13 +44,25 @@ pub struct OdbPlayer {
 
     #[serde(default)]
     pub preferred_foot: Option<String>,
+    /// Per-foot ownership level, 0-100 (100 = fully natural foot). Optional —
+    /// when absent, blank, or zeroed, levels are derived from `preferred_foot`
+    /// at hydration time (right-footed when that is missing too).
+    #[serde(default)]
+    pub foots: Option<OdbFoots>,
     #[serde(default)]
     pub height: Option<u8>,
     #[serde(default)]
     pub weight: Option<u8>,
 
     pub current_ability: u8,
-    pub potential_ability: u8,
+    /// Potential ability. Positive values (1..=200) are authoritative.
+    /// Negative values follow the Football Manager convention — a scouting
+    /// band resolved to a random PA inside its range at hydration time.
+    /// Whole bands -1..=-10 step the range by 20 (-10 → 170-200, -9 →
+    /// 150-180, … -2 → 10-40, -1 → 0-20); half bands are encoded ×10
+    /// (-95 reads "-9.5" → 160-190, -15 → 0-30). Full table in
+    /// `generators::player::PotentialAbility`.
+    pub potential_ability: i16,
 
     /// Market value in whole currency units (USD). When omitted the value
     /// calculator derives one from CA/age/reputation.
@@ -84,6 +96,15 @@ pub struct OdbPlayer {
     /// Empty/missing means "use age-based placement".
     #[serde(default)]
     pub team_type_hint: Option<String>,
+}
+
+/// Per-foot ownership levels on a 0-100 scale.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OdbFoots {
+    #[serde(default)]
+    pub left: u8,
+    #[serde(default)]
+    pub right: u8,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -316,6 +337,7 @@ mod tests {
                 level: 18,
             }],
             preferred_foot: None,
+            foots: None,
             height: None,
             weight: None,
             current_ability: 120,

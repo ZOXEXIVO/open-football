@@ -7,9 +7,10 @@ use core::shared::FullName;
 use core::utils::{FloatUtils, IntegerUtils};
 use core::{
     ContractType, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
-    PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType, PlayerPositions,
-    PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
-    PlayerStatisticsHistoryItem, PositionWeights, TeamType, Technical, WageCalculator,
+    PlayerAttributes, PlayerClubContract, PlayerFoots, PlayerPosition, PlayerPositionType,
+    PlayerPositions, PlayerPreferredFoot, PlayerSkills, PlayerStatistics,
+    PlayerStatisticsHistory, PlayerStatisticsHistoryItem, PositionWeights, TeamType, Technical,
+    WageCalculator,
 };
 
 // ── Skill index constants (flat array order) ────────────────────────────
@@ -1560,11 +1561,16 @@ impl PlayerGenerator {
         // ODB record's authoritative numbers flow straight through.
         let _ = pos_type; // bucket no longer needed — pipeline picks weights from exact position
         let rep_factor = (record.current_ability as f32 / 200.0).clamp(0.05, 1.0);
+        // Negative PA records carry an FM-style scouting band; roll the
+        // concrete value once so skills and attributes agree on the same PA,
+        // and never let it land below the recorded CA.
+        let potential_ability =
+            PotentialAbility::resolve(record.potential_ability).max(record.current_ability);
         let mut skills = Self::generate_skills(
             primary,
             age,
             rep_factor,
-            record.potential_ability,
+            potential_ability,
             record.current_ability,
             continent_id,
             country_code,
@@ -1573,12 +1579,29 @@ impl PlayerGenerator {
         skills.physical.match_readiness = FitnessState::match_readiness(age);
 
         let full_name = build_full_name(record);
-        let preferred_foot = parse_preferred_foot(record.preferred_foot.as_deref());
+
+        // Per-foot levels: record values win; an explicit preferred_foot
+        // label wins over the level-derived one; records carrying neither
+        // default to right-footed with derived levels. A blank/zeroed foots
+        // block carries no data and falls through to the same default.
+        let foots = record
+            .foots
+            .as_ref()
+            .filter(|f| f.left > 0 || f.right > 0)
+            .map(|f| PlayerFoots::new(f.left, f.right));
+        let preferred_foot = match record.preferred_foot.as_deref() {
+            Some(label) => parse_preferred_foot(Some(label)),
+            None => foots
+                .as_ref()
+                .map_or(PlayerPreferredFoot::Right, |f| f.preferred()),
+        };
+        let foots = foots.unwrap_or_else(|| PlayerFoots::from_preferred(&preferred_foot));
 
         let contract = build_main_contract(record, age, primary, data);
         let contract_loan = build_loan_contract(record, data);
 
-        let player_attributes = build_player_attributes(record, age, primary, &skills);
+        let player_attributes =
+            build_player_attributes(record, age, primary, &skills, potential_ability);
 
         let native_languages: Vec<core::PlayerLanguage> =
             core::Language::from_country_code(country_code)
@@ -1599,6 +1622,7 @@ impl PlayerGenerator {
             .contract(contract)
             .contract_loan(contract_loan)
             .preferred_foot(preferred_foot)
+            .foots(foots)
             .positions(positions)
             .languages(native_languages);
 
@@ -1609,6 +1633,52 @@ impl PlayerGenerator {
         builder
             .build()
             .expect("Failed to build Player from ODB record")
+    }
+}
+
+/// Resolves the ODB `potential_ability` field into a concrete 0..=200 value.
+///
+/// Positive values are authoritative and pass through unchanged. Negative
+/// values follow the Football Manager convention — a scouting band that
+/// rolls a random PA inside its range at hydration time. Whole bands are
+/// -1..=-10; half bands are encoded ×10 (-95 reads "-9.5").
+pub struct PotentialAbility;
+
+impl PotentialAbility {
+    /// Static band map: raw negative code → inclusive (min, max) PA range.
+    const BANDS: [(i16, u8, u8); 19] = [
+        (-10, 170, 200),
+        (-95, 160, 190),
+        (-9, 150, 180),
+        (-85, 140, 170),
+        (-8, 130, 160),
+        (-75, 120, 150),
+        (-7, 110, 140),
+        (-65, 100, 130),
+        (-6, 90, 120),
+        (-55, 80, 110),
+        (-5, 70, 100),
+        (-45, 60, 90),
+        (-4, 50, 80),
+        (-35, 40, 70),
+        (-3, 30, 60),
+        (-25, 20, 50),
+        (-2, 10, 40),
+        (-15, 0, 30),
+        (-1, 0, 20),
+    ];
+
+    pub fn resolve(raw: i16) -> u8 {
+        if raw >= 0 {
+            return raw.min(200) as u8;
+        }
+        // Unknown negative codes fall back to the lowest band; the CA clamp
+        // at the call site keeps the player coherent either way.
+        let (min, max) = Self::BANDS
+            .iter()
+            .find(|(band, _, _)| *band == raw)
+            .map_or((0, 20), |(_, min, max)| (*min as i32, *max as i32));
+        IntegerUtils::random(min, max + 1) as u8
     }
 }
 
@@ -2036,6 +2106,7 @@ fn build_player_attributes(
     age: u32,
     primary: PlayerPositionType,
     skills: &PlayerSkills,
+    potential_ability: u8,
 ) -> PlayerAttributes {
     // Reputation: any record-supplied value wins for its own field;
     // every missing field falls back to an ability-curve derivation so
@@ -2061,7 +2132,7 @@ fn build_player_attributes(
     } else {
         derived_ca
     };
-    let potential_ability = record.potential_ability.max(current_ability);
+    let potential_ability = potential_ability.max(current_ability);
 
     let physical = PhysicalProfile::for_position(primary, record.country_id);
     let state = FitnessState::for_age(age);
@@ -3290,6 +3361,73 @@ mod generator_validation_tests {
                 mr,
                 p.player_attributes.current_ability
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod potential_ability_tests {
+    use super::*;
+
+    #[test]
+    fn positive_values_pass_through() {
+        assert_eq!(PotentialAbility::resolve(0), 0);
+        assert_eq!(PotentialAbility::resolve(1), 1);
+        assert_eq!(PotentialAbility::resolve(130), 130);
+        assert_eq!(PotentialAbility::resolve(200), 200);
+        assert_eq!(PotentialAbility::resolve(250), 200, "capped at 200");
+    }
+
+    #[test]
+    fn negative_bands_roll_inside_fm_ranges() {
+        let bands: [(i16, u8, u8); 19] = [
+            (-10, 170, 200),
+            (-95, 160, 190),
+            (-9, 150, 180),
+            (-85, 140, 170),
+            (-8, 130, 160),
+            (-75, 120, 150),
+            (-7, 110, 140),
+            (-65, 100, 130),
+            (-6, 90, 120),
+            (-55, 80, 110),
+            (-5, 70, 100),
+            (-45, 60, 90),
+            (-4, 50, 80),
+            (-35, 40, 70),
+            (-3, 30, 60),
+            (-25, 20, 50),
+            (-2, 10, 40),
+            (-15, 0, 30),
+            (-1, 0, 20),
+        ];
+        for (raw, min, max) in bands {
+            for _ in 0..200 {
+                let pa = PotentialAbility::resolve(raw);
+                assert!(
+                    pa >= min && pa <= max,
+                    "band {} rolled {} outside {}-{}",
+                    raw,
+                    pa,
+                    min,
+                    max
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn negative_band_rolls_vary() {
+        let first = PotentialAbility::resolve(-10);
+        let varied = (0..100).any(|_| PotentialAbility::resolve(-10) != first);
+        assert!(varied, "band -10 must roll random values, not a constant");
+    }
+
+    #[test]
+    fn unknown_negative_code_falls_back_to_lowest_band() {
+        for _ in 0..50 {
+            let pa = PotentialAbility::resolve(-42);
+            assert!(pa <= 20, "unknown code must roll the 0-20 band, got {pa}");
         }
     }
 }

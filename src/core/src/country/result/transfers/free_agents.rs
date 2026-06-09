@@ -2,9 +2,13 @@ use super::config::TransferConfig;
 use super::free_agent_market_calc::{BuyerRoleFit, FreeAgentMarketCalculator};
 use super::types::{TransferActivitySummary, can_club_accept_player};
 use crate::club::player::calculators::WageCalculator;
+use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
+use crate::club::player::mailbox::handlers::contract_proposal::ProcessContractHandler;
+use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::simulator::SimulatorData;
+use crate::utils::FormattingUtils;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationStatus, TransferNegotiation};
 use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferOffer};
 use crate::transfers::pipeline::{
@@ -18,7 +22,10 @@ use crate::transfers::squad_needs::{
 };
 use crate::transfers::{CompletedTransfer, TransferType};
 use crate::utils::IntegerUtils;
-use crate::{Country, Person, PlayerFieldPositionGroup, PlayerStatusType, TeamInfo};
+use crate::{
+    Country, Person, PlayerContractProposal, PlayerFieldPositionGroup, PlayerResult,
+    PlayerStatusType, TeamInfo,
+};
 use chrono::NaiveDate;
 use log::debug;
 use rayon::prelude::*;
@@ -318,6 +325,15 @@ impl CountryResult {
             }
         }
 
+        // Final-chance renewal: before the release sweep clears expired
+        // contracts, the owning club makes one synchronous renewal attempt
+        // (real clubs don't watch a player they want walk out on expiry day
+        // without a last offer). Accepted players carry a fresh contract and
+        // leave the free-agent flow entirely; rejected ones continue into
+        // the release sweep unchanged.
+        let renewed_player_ids = Self::run_expiry_day_renewals(country, date, &expired_player_ids);
+        candidates.retain(|c| !renewed_player_ids.contains(&c.player_id));
+
         // Pass 1b: Include the global "Move on Free" pool — players who live
         // outside any country's roster in `sim.free_agents`. Without this
         // step, manually-released players are invisible to club AI: only
@@ -354,8 +370,14 @@ impl CountryResult {
             });
         }
 
-        // Release players with expired contracts
+        // Release players with expired contracts. Players who accepted the
+        // expiry-day renewal above are no longer expired — skip them, and
+        // keep their shortlist/scouting interest intact (they're still
+        // legitimate transfer targets under contract).
         for player_id in expired_player_ids {
+            if renewed_player_ids.contains(&player_id) {
+                continue;
+            }
             for club in &mut country.clubs {
                 for team in &mut club.teams.teams {
                     if let Some(player) =
@@ -859,6 +881,139 @@ impl CountryResult {
         }
 
         global_signings
+    }
+
+    /// One synchronous last-chance renewal attempt for every player whose
+    /// contract has expired today, run BEFORE the release sweep clears the
+    /// contract. Returns the ids of players who accepted — the caller
+    /// excludes them from both the release sweep and the free-agent
+    /// candidate pool for this tick.
+    ///
+    /// Two-phase to satisfy the borrow checker: Phase A scans immutably
+    /// and builds proposals with the owning club's wage context; Phase B
+    /// applies them mutably, recording the offer in decision history and
+    /// running `ProcessContractHandler::process` in place. The mailbox is
+    /// deliberately bypassed — its drain runs after the release sweep,
+    /// which would clear the contract before the offer is ever read.
+    fn run_expiry_day_renewals(
+        country: &mut Country,
+        date: NaiveDate,
+        expired_player_ids: &[u32],
+    ) -> HashSet<u32> {
+        let mut renewed: HashSet<u32> = HashSet::new();
+        if expired_player_ids.is_empty() {
+            return renewed;
+        }
+        let expired_set: HashSet<u32> = expired_player_ids.iter().copied().collect();
+
+        struct ExpiryRenewalOffer {
+            player_id: u32,
+            proposal: PlayerContractProposal,
+            coach_name: String,
+        }
+        let mut offers: Vec<ExpiryRenewalOffer> = Vec::new();
+
+        // Phase A (immutable): build proposals. The main team anchors the
+        // wage structure / staff context — same convention as the proactive
+        // monthly pass and the parent-loanee pass.
+        for club in &country.clubs {
+            let Some(main_team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
+                continue;
+            };
+            // Cheap pre-check before snapshotting the wage structure.
+            let club_has_expired = club.teams.teams.iter().any(|t| {
+                t.players
+                    .players
+                    .iter()
+                    .any(|p| expired_set.contains(&p.id))
+            });
+            if !club_has_expired {
+                continue;
+            }
+
+            let wage_budget = club
+                .finance
+                .wage_budget
+                .as_ref()
+                .map(|b| b.amount.max(0.0) as u32);
+            let league_reputation = main_team
+                .league_id
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| l.reputation)
+                .unwrap_or(0);
+            let structure = WageStructureSnapshot::from_team(main_team);
+
+            for team in &club.teams.teams {
+                for player in &team.players.players {
+                    if !expired_set.contains(&player.id) {
+                        continue;
+                    }
+                    if let Some((proposal, coach_name)) =
+                        ContractRenewalManager::try_build_expiry_day_offer(
+                            main_team,
+                            player,
+                            date,
+                            wage_budget,
+                            league_reputation,
+                            &structure,
+                        )
+                    {
+                        offers.push(ExpiryRenewalOffer {
+                            player_id: player.id,
+                            proposal,
+                            coach_name,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Phase B (mutable): record the offer and run acceptance in place.
+        for offer in offers {
+            'apply: for club in country.clubs.iter_mut() {
+                for team in club.teams.teams.iter_mut() {
+                    if let Some(player) = team
+                        .players
+                        .players
+                        .iter_mut()
+                        .find(|p| p.id == offer.player_id)
+                    {
+                        let movement = format!(
+                            "{}y · ${}/y",
+                            offer.proposal.years,
+                            FormattingUtils::format_money(offer.proposal.salary as f64)
+                        );
+                        player.decision_history.add(
+                            date,
+                            movement,
+                            RENEWAL_OFFERED_LABEL.to_string(),
+                            offer.coach_name.clone(),
+                        );
+
+                        let mut result = PlayerResult::new(player.id);
+                        ProcessContractHandler::process(player, offer.proposal, date, &mut result);
+
+                        // Accepted iff a live contract is now installed —
+                        // rejection leaves the lapsed one in place.
+                        let renewed_now = player
+                            .contract
+                            .as_ref()
+                            .map(|c| c.expiration > date)
+                            .unwrap_or(false);
+                        if renewed_now {
+                            renewed.insert(player.id);
+                            debug!(
+                                "Expiry-day renewal accepted: player {} ({}) stays at {}",
+                                player.full_name, player.id, club.name
+                            );
+                        }
+                        break 'apply;
+                    }
+                }
+            }
+        }
+
+        renewed
     }
 
     /// Emergency squad-fill pass. Walks the country's clubs, finds any
@@ -3420,4 +3575,370 @@ mod emergency_fill_tests {
         );
     }
 
+}
+
+#[cfg(test)]
+mod expiry_renewal_tests {
+    //! Expiry-day last-chance renewal: a player whose contract lapses must
+    //! get one synchronous offer from his club before the release sweep
+    //! clears the contract. Acceptance keeps him under a fresh deal and out
+    //! of the same-day free-agent flow; rejection falls through to the
+    //! existing release path.
+
+    use super::*;
+    use crate::club::academy::ClubAcademy;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::contract::RENEWAL_REJECTED_LABEL;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
+        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerSquadStatus, StaffCollection,
+        Team, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    struct ExpiryRenewalFixtures;
+
+    impl ExpiryRenewalFixtures {
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn attrs(ambition: f32, loyalty: f32) -> PersonAttributes {
+            PersonAttributes {
+                adaptability: 12.0,
+                ambition,
+                controversy: 5.0,
+                loyalty,
+                pressure: 12.0,
+                professionalism: 12.0,
+                sportsmanship: 12.0,
+                temperament: 12.0,
+                consistency: 12.0,
+                important_matches: 12.0,
+                dirtiness: 5.0,
+            }
+        }
+
+        fn player(
+            id: u32,
+            position: PlayerPositionType,
+            attrs: PersonAttributes,
+            salary: u32,
+            squad_status: PlayerSquadStatus,
+            expiration: NaiveDate,
+        ) -> Player {
+            let mut player_attributes = PlayerAttributes::default();
+            player_attributes.current_ability = 100;
+            player_attributes.potential_ability = 110;
+            let mut p = PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Test".to_string(), format!("P{id}")))
+                .birth_date(Self::d(1998, 1, 1))
+                .country_id(1)
+                .attributes(attrs)
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition { position, level: 16 }],
+                })
+                .player_attributes(player_attributes)
+                .build()
+                .unwrap();
+            let mut contract = PlayerClubContract::new(salary, expiration);
+            contract.squad_status = squad_status;
+            p.contract = Some(contract);
+            p
+        }
+
+        fn team(id: u32, club_id: u32, players: Vec<Player>) -> Team {
+            Team::builder()
+                .id(id)
+                .league_id(Some(1))
+                .club_id(club_id)
+                .name(format!("Team{id}"))
+                .slug(format!("team-{id}"))
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(2000, 2000, 4000))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        fn club(id: u32, main: Team) -> Club {
+            Club::new(
+                id,
+                format!("Club{id}"),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![main]),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn country(clubs: Vec<Club>) -> Country {
+            Country::builder()
+                .id(1)
+                .code("en".to_string())
+                .slug("england".to_string())
+                .name("England".to_string())
+                .continent_id(1)
+                .reputation(5000)
+                .leagues(LeagueCollection::new(vec![League::new(
+                    1,
+                    "L".to_string(),
+                    "english".to_string(),
+                    1,
+                    5000,
+                    LeagueSettings {
+                        season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                        season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                        tier: 1,
+                        promotion_spots: 0,
+                        relegation_spots: 0,
+                        league_group: None,
+                    },
+                    false,
+                )]))
+                .clubs(clubs)
+                .build()
+                .unwrap()
+        }
+
+        fn run(country: &mut Country, date: NaiveDate) -> Vec<GlobalFreeAgentSigning> {
+            let mut summary = TransferActivitySummary::new();
+            let config = TransferConfig::default();
+            let mut domestic_signed_ids = Vec::new();
+            let mut global_offered_ids = Vec::new();
+            let mut global_rejected_ids = Vec::new();
+            CountryResult::handle_free_agents(
+                country,
+                date,
+                &mut summary,
+                &[],
+                &config,
+                &mut domestic_signed_ids,
+                &mut global_offered_ids,
+                &mut global_rejected_ids,
+            )
+        }
+
+        fn find_player(country: &Country, club_id: u32, player_id: u32) -> &Player {
+            country
+                .clubs
+                .iter()
+                .find(|c| c.id == club_id)
+                .expect("club exists")
+                .teams
+                .teams
+                .iter()
+                .flat_map(|t| t.players.players.iter())
+                .find(|p| p.id == player_id)
+                .expect("player still in roster")
+        }
+
+        fn history_count(player: &Player, label: &str) -> usize {
+            player
+                .decision_history
+                .items
+                .iter()
+                .filter(|d| d.decision == label)
+                .count()
+        }
+    }
+
+    #[test]
+    fn accepted_expiry_offer_renews_contract_and_keeps_player() {
+        let date = ExpiryRenewalFixtures::d(2026, 6, 10);
+        // Low current salary against a 100k top earner: the offer is a
+        // big raise that the acceptance handler takes deterministically.
+        let renewer = ExpiryRenewalFixtures::player(
+            1,
+            PlayerPositionType::MidfielderCenter,
+            ExpiryRenewalFixtures::attrs(8.0, 12.0),
+            10_000,
+            PlayerSquadStatus::FirstTeamRegular,
+            date,
+        );
+        let anchor = ExpiryRenewalFixtures::player(
+            2,
+            PlayerPositionType::Striker,
+            ExpiryRenewalFixtures::attrs(8.0, 12.0),
+            100_000,
+            PlayerSquadStatus::KeyPlayer,
+            ExpiryRenewalFixtures::d(2028, 6, 30),
+        );
+        let main = ExpiryRenewalFixtures::team(10, 100, vec![renewer, anchor]);
+        let club = ExpiryRenewalFixtures::club(100, main);
+        let mut country = ExpiryRenewalFixtures::country(vec![club]);
+
+        let global_signings = ExpiryRenewalFixtures::run(&mut country, date);
+
+        assert!(global_signings.is_empty());
+        let p = ExpiryRenewalFixtures::find_player(&country, 100, 1);
+        let contract = p
+            .contract
+            .as_ref()
+            .expect("accepted expiry offer must install a fresh contract");
+        assert!(
+            contract.expiration > date,
+            "renewed contract must run past today, got {}",
+            contract.expiration
+        );
+        assert_eq!(
+            ExpiryRenewalFixtures::history_count(p, RENEWAL_OFFERED_LABEL),
+            1,
+            "expiry-day offer must be recorded in decision history"
+        );
+        assert_eq!(
+            ExpiryRenewalFixtures::history_count(p, RENEWAL_REJECTED_LABEL),
+            0
+        );
+    }
+
+    #[test]
+    fn rejected_expiry_offer_falls_through_to_release() {
+        let date = ExpiryRenewalFixtures::d(2026, 6, 10);
+        // The player is his own top earner, so the wage-structure cap
+        // turns the final offer into a pay cut; loyalty 5 rejects every
+        // pay-cut branch deterministically.
+        let leaver = ExpiryRenewalFixtures::player(
+            1,
+            PlayerPositionType::Striker,
+            ExpiryRenewalFixtures::attrs(8.0, 5.0),
+            100_000,
+            PlayerSquadStatus::FirstTeamRegular,
+            date,
+        );
+        let main = ExpiryRenewalFixtures::team(10, 100, vec![leaver]);
+        let club = ExpiryRenewalFixtures::club(100, main);
+        let mut country = ExpiryRenewalFixtures::country(vec![club]);
+
+        ExpiryRenewalFixtures::run(&mut country, date);
+
+        let p = ExpiryRenewalFixtures::find_player(&country, 100, 1);
+        assert!(
+            p.contract.is_none(),
+            "rejected expiry offer must still end in release"
+        );
+        assert_eq!(
+            ExpiryRenewalFixtures::history_count(p, RENEWAL_OFFERED_LABEL),
+            1,
+            "the final offer must be on record even when it fails"
+        );
+        assert_eq!(
+            ExpiryRenewalFixtures::history_count(p, RENEWAL_REJECTED_LABEL),
+            1,
+            "rejection must use the existing rejection label"
+        );
+    }
+
+    #[test]
+    fn loaned_in_expired_parent_contract_is_not_renewed_by_borrower() {
+        let date = ExpiryRenewalFixtures::d(2026, 6, 10);
+        let mut loanee = ExpiryRenewalFixtures::player(
+            1,
+            PlayerPositionType::Striker,
+            ExpiryRenewalFixtures::attrs(8.0, 12.0),
+            50_000,
+            PlayerSquadStatus::FirstTeamRegular,
+            date,
+        );
+        // Parent club 99 owns the (expired) permanent contract; the
+        // borrower (club 100) only holds the loan agreement.
+        loanee.contract_loan = Some(PlayerClubContract::new_loan(
+            20_000,
+            ExpiryRenewalFixtures::d(2026, 12, 31),
+            99,
+            1,
+            100,
+        ));
+        let main = ExpiryRenewalFixtures::team(10, 100, vec![loanee]);
+        let club = ExpiryRenewalFixtures::club(100, main);
+        let mut country = ExpiryRenewalFixtures::country(vec![club]);
+
+        ExpiryRenewalFixtures::run(&mut country, date);
+
+        let p = ExpiryRenewalFixtures::find_player(&country, 100, 1);
+        assert_eq!(
+            ExpiryRenewalFixtures::history_count(p, RENEWAL_OFFERED_LABEL),
+            0,
+            "the borrower must not make an expiry-day offer on a loanee"
+        );
+        let parent_contract = p
+            .contract
+            .as_ref()
+            .expect("parent contract is not the borrower's to clear");
+        assert_eq!(
+            parent_contract.expiration, date,
+            "parent contract must be left exactly as it was"
+        );
+    }
+
+    #[test]
+    fn renewed_player_is_excluded_from_same_day_free_agent_flow() {
+        let date = ExpiryRenewalFixtures::d(2026, 6, 10);
+        let renewer = ExpiryRenewalFixtures::player(
+            1,
+            PlayerPositionType::Goalkeeper,
+            ExpiryRenewalFixtures::attrs(8.0, 12.0),
+            10_000,
+            PlayerSquadStatus::FirstTeamRegular,
+            date,
+        );
+        let anchor = ExpiryRenewalFixtures::player(
+            2,
+            PlayerPositionType::Striker,
+            ExpiryRenewalFixtures::attrs(8.0, 12.0),
+            100_000,
+            PlayerSquadStatus::KeyPlayer,
+            ExpiryRenewalFixtures::d(2028, 6, 30),
+        );
+        let club_a = ExpiryRenewalFixtures::club(
+            100,
+            ExpiryRenewalFixtures::team(10, 100, vec![renewer, anchor]),
+        );
+        // Club B has an empty main squad — the hungriest possible buyer:
+        // the emergency pass would grab any available free-agent keeper.
+        let club_b =
+            ExpiryRenewalFixtures::club(200, ExpiryRenewalFixtures::team(20, 200, Vec::new()));
+        let mut country = ExpiryRenewalFixtures::country(vec![club_a, club_b]);
+
+        let global_signings = ExpiryRenewalFixtures::run(&mut country, date);
+
+        assert!(global_signings.is_empty());
+        let p = ExpiryRenewalFixtures::find_player(&country, 100, 1);
+        assert!(
+            p.contract.as_ref().is_some_and(|c| c.expiration > date),
+            "player must have renewed at his own club"
+        );
+        let club_b_roster: usize = country
+            .clubs
+            .iter()
+            .find(|c| c.id == 200)
+            .unwrap()
+            .teams
+            .teams
+            .iter()
+            .map(|t| t.players.players.len())
+            .sum();
+        assert_eq!(
+            club_b_roster, 0,
+            "a renewed player must not be signable as a same-day free agent"
+        );
+        assert!(
+            country.transfer_market.transfer_history.is_empty(),
+            "no free transfer may be recorded for a renewed player"
+        );
+    }
 }

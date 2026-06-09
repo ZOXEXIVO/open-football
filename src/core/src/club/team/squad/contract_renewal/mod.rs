@@ -1,5 +1,6 @@
 use crate::ContractClauseType;
 use crate::club::player::calculators::{ContractValuation, ValuationContext};
+use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
 use crate::club::player::mailbox::RejectionReason;
 use crate::club::player::mailbox::handlers::contract_proposal::{
     ProcessContractHandler, RENEWAL_REJECTED_LABEL,
@@ -32,7 +33,7 @@ const MAX_RENEWAL_ATTEMPTS_PER_YEAR: usize = 3;
 const BOSMAN_PRESSURE_DAYS: i64 = 180;
 /// Final-month panic. No cap, maximum sweeteners.
 const FINAL_PANIC_DAYS: i64 = 30;
-const DECISION_LABEL: &str = "dec_contract_renewal_offered";
+const DECISION_LABEL: &str = RENEWAL_OFFERED_LABEL;
 
 pub struct ContractRenewalManager;
 
@@ -352,6 +353,52 @@ impl ContractRenewalManager {
     /// is incidental to the renewal question.
     fn evaluate_for_parent(player: &Player, date: NaiveDate) -> Option<RenewalCandidate> {
         Self::evaluate_inner(player, date, true)
+    }
+
+    /// Expiry-day evaluation: the contract has already lapsed
+    /// (`days_remaining <= 0`), which `evaluate_inner` treats as "not a
+    /// renewal candidate". This path exists for the synchronous last-chance
+    /// offer the release sweep makes before clearing the contract — the
+    /// club's final attempt to keep the player from walking for free.
+    /// Always `final_panic` and never capped on attempts: there is no
+    /// later tick to defer to.
+    fn evaluate_for_expiry(player: &Player, date: NaiveDate) -> Option<RenewalCandidate> {
+        // A loaned-in player's permanent contract belongs to the parent
+        // club; the borrower gets no expiry-day claim on him.
+        if player.is_on_loan() || player.is_retired() {
+            return None;
+        }
+
+        let contract = player.contract.as_ref()?;
+        let days_remaining = (contract.expiration - date).num_days();
+        if days_remaining > 0 {
+            return None;
+        }
+
+        let statuses = player.statuses.get();
+        if statuses.contains(&PlayerStatusType::Req)
+            || statuses.contains(&PlayerStatusType::Lst)
+            || statuses.contains(&PlayerStatusType::Frt)
+        {
+            return None;
+        }
+
+        let has_market_interest = statuses.iter().any(|s| {
+            matches!(
+                s,
+                PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
+            )
+        });
+
+        Some(RenewalCandidate {
+            player_id: player.id,
+            effective_status: Self::effective_squad_status(player, &contract.squad_status),
+            has_market_interest,
+            final_panic: true,
+            bosman_pressure: false,
+            override_attempts_cap: true,
+            months_remaining: 0,
+        })
     }
 
     fn evaluate_inner(
@@ -691,6 +738,56 @@ impl ContractRenewalManager {
             // match-highest-earner is allowed in isolation. The parent's
             // monthly proactive pass already used (or didn't use) the slot
             // for in-house candidates; loanees shouldn't be starved of it.
+            false,
+        )?;
+        Some((proposal, coach_name))
+    }
+
+    /// Build the synchronous last-chance proposal for a player whose
+    /// contract expires today (or has already lapsed). Called by the
+    /// release sweep BEFORE it clears the contract, so the club gets one
+    /// final renewal attempt instead of silently losing the player.
+    ///
+    /// Returns the proposal and the coach's name for the decision-history
+    /// row. The caller wires both up and runs the acceptance handler
+    /// in-place — pushing to the mailbox would race the release sweep,
+    /// which can clear the contract before the mailbox is drained.
+    pub fn try_build_expiry_day_offer(
+        team: &Team,
+        player: &Player,
+        date: NaiveDate,
+        wage_budget: Option<u32>,
+        league_reputation: u16,
+        structure: &WageStructureSnapshot,
+    ) -> Option<(PlayerContractProposal, String)> {
+        let candidate = Self::evaluate_for_expiry(player, date)?;
+
+        // No attempts-cap gate: expiry candidates always carry
+        // `override_attempts_cap`. Prior attempts still feed escalation
+        // inside `build_offer`, so count them anyway.
+        let attempts = player
+            .decision_history
+            .items
+            .iter()
+            .filter(|d| d.decision == DECISION_LABEL && (date - d.date).num_days() < 365)
+            .count();
+
+        let (coach_name, negotiation_skill, judging_ability) = Self::resolve_staff(team);
+        let team_rep_factor = team.reputation.overall_score();
+
+        let proposal = Self::build_offer(
+            player,
+            negotiation_skill,
+            judging_ability,
+            date,
+            attempts,
+            team_rep_factor,
+            league_reputation,
+            wage_budget,
+            structure,
+            &candidate,
+            // Same one-at-a-time reasoning as the loanee wrapper:
+            // match-highest-earner is allowed in isolation here.
             false,
         )?;
         Some((proposal, coach_name))
@@ -1202,5 +1299,103 @@ mod loanee_evaluate_tests {
         // squad-status threshold. No renewal pressure even on parent side.
         let p = make_loanee(d(2030, 6, 30), d(2027, 5, 31));
         assert!(ContractRenewalManager::evaluate_for_parent(&p, today).is_none());
+    }
+}
+
+#[cfg(test)]
+mod expiry_evaluate_tests {
+    //! The expiry-day path fires only for already-lapsed contracts and
+    //! must always carry the final-panic / cap-override flags — the
+    //! release sweep gives the club exactly one shot before clearing
+    //! the contract.
+
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
+    };
+
+    struct ExpiryFixtures;
+
+    impl ExpiryFixtures {
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn player_with_expiration(expiration: NaiveDate) -> Player {
+            let mut p = PlayerBuilder::new()
+                .id(1)
+                .full_name(FullName::new("Test".into(), "Expiry".into()))
+                .birth_date(Self::d(1998, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap();
+            let mut contract = PlayerClubContract::new(100_000, expiration);
+            contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+            p.contract = Some(contract);
+            p
+        }
+    }
+
+    #[test]
+    fn evaluate_for_expiry_fires_with_panic_flags_on_expiry_day() {
+        let today = ExpiryFixtures::d(2026, 6, 10);
+        let p = ExpiryFixtures::player_with_expiration(today);
+        let candidate =
+            ContractRenewalManager::evaluate_for_expiry(&p, today).expect("expired → candidate");
+        assert!(candidate.final_panic, "expiry-day offer is always panic");
+        assert!(
+            candidate.override_attempts_cap,
+            "the last chance cannot be attempt-capped"
+        );
+        assert_eq!(candidate.months_remaining, 0);
+    }
+
+    #[test]
+    fn evaluate_for_expiry_silent_while_contract_still_runs() {
+        let today = ExpiryFixtures::d(2026, 6, 10);
+        let p = ExpiryFixtures::player_with_expiration(ExpiryFixtures::d(2026, 6, 11));
+        assert!(
+            ContractRenewalManager::evaluate_for_expiry(&p, today).is_none(),
+            "a live contract belongs to the normal renewal paths"
+        );
+    }
+
+    #[test]
+    fn evaluate_for_expiry_skips_loaned_in_player() {
+        let today = ExpiryFixtures::d(2026, 6, 10);
+        let mut p = ExpiryFixtures::player_with_expiration(today);
+        // Borrower club 2 holds the player; parent club 99 owns the
+        // expired permanent contract — not the borrower's to renew.
+        p.contract_loan = Some(PlayerClubContract::new_loan(
+            50_000,
+            ExpiryFixtures::d(2026, 12, 31),
+            99,
+            1,
+            2,
+        ));
+        assert!(ContractRenewalManager::evaluate_for_expiry(&p, today).is_none());
+    }
+
+    #[test]
+    fn evaluate_for_expiry_skips_listed_player() {
+        let today = ExpiryFixtures::d(2026, 6, 10);
+        let mut p = ExpiryFixtures::player_with_expiration(today);
+        p.statuses.add(today, PlayerStatusType::Lst);
+        assert!(
+            ContractRenewalManager::evaluate_for_expiry(&p, today).is_none(),
+            "the club already decided to move a listed player on"
+        );
     }
 }

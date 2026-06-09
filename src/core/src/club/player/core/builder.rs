@@ -9,8 +9,8 @@ use crate::club::{
 };
 use crate::shared::fullname::FullName;
 use crate::{
-    PersonAttributes, Player, PlayerDecisionHistory, PlayerHappiness, PlayerPositions,
-    PlayerPreferredFoot, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
+    PersonAttributes, Player, PlayerDecisionHistory, PlayerFoots, PlayerHappiness,
+    PlayerPositions, PlayerPreferredFoot, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
     PlayerTrainingHistory, Relations,
 };
 use chrono::NaiveDate;
@@ -31,6 +31,7 @@ pub struct PlayerBuilder {
     contract_loan: Option<Option<PlayerClubContract>>,
     positions: Option<PlayerPositions>,
     preferred_foot: Option<PlayerPreferredFoot>,
+    foots: Option<PlayerFoots>,
     player_attributes: Option<PlayerAttributes>,
     mailbox: Option<PlayerMailbox>,
     training: Option<PlayerTraining>,
@@ -117,6 +118,11 @@ impl PlayerBuilder {
         self
     }
 
+    pub fn foots(mut self, foots: PlayerFoots) -> Self {
+        self.foots = Some(foots);
+        self
+    }
+
     pub fn player_attributes(mut self, player_attributes: PlayerAttributes) -> Self {
         self.player_attributes = Some(player_attributes);
         self
@@ -190,6 +196,10 @@ impl PlayerBuilder {
                 player_attributes.current_ability,
             )
         });
+        let preferred_foot = self.preferred_foot.unwrap_or(PlayerPreferredFoot::Right);
+        let foots = self
+            .foots
+            .unwrap_or_else(|| PlayerFoots::from_preferred(&preferred_foot));
         Ok(Player {
             id: self.id.ok_or("id is required")?,
             full_name: self.full_name.ok_or("full_name is required")?,
@@ -204,7 +214,8 @@ impl PlayerBuilder {
             contract: self.contract.unwrap_or(None),
             contract_loan: self.contract_loan.unwrap_or(None),
             positions,
-            preferred_foot: self.preferred_foot.unwrap_or(PlayerPreferredFoot::Right),
+            preferred_foot,
+            foots,
             player_attributes,
             mailbox: self.mailbox.unwrap_or_else(PlayerMailbox::new),
             training: self.training.unwrap_or_else(PlayerTraining::new),

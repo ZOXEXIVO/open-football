@@ -6,10 +6,10 @@ use crate::shared::FullName;
 use crate::utils::IntegerUtils;
 use crate::{
     Mental, PeopleNameGeneratorData, PersonAttributes, PersonBehaviour, PersonBehaviourState,
-    Physical, Player, PlayerAttributes, PlayerClubContract, PlayerDecisionHistory, PlayerHappiness,
-    PlayerMailbox, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerPreferredFoot,
-    PlayerSkills, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerTraining,
-    PlayerTrainingHistory, Relations, Technical,
+    Physical, Player, PlayerAttributes, PlayerClubContract, PlayerDecisionHistory, PlayerFoots,
+    PlayerHappiness, PlayerMailbox, PlayerPosition, PlayerPositionType, PlayerPositions,
+    PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
+    PlayerTraining, PlayerTrainingHistory, Relations, Technical,
 };
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
@@ -1064,6 +1064,19 @@ impl PlayerGenerator {
             1..=3 => PlayerPreferredFoot::Left,
             _ => PlayerPreferredFoot::Right,
         };
+        // Natural foot is fully owned; the weak foot varies per player.
+        let foots = match preferred_foot {
+            PlayerPreferredFoot::Left => {
+                PlayerFoots::new(100, IntegerUtils::random(25, 61) as u8)
+            }
+            PlayerPreferredFoot::Right => {
+                PlayerFoots::new(IntegerUtils::random(25, 61) as u8, 100)
+            }
+            PlayerPreferredFoot::Both => PlayerFoots::new(
+                IntegerUtils::random(85, 101) as u8,
+                IntegerUtils::random(85, 101) as u8,
+            ),
+        };
 
         let birth_date = NaiveDate::from_ymd_opt(year as i32, month, day).unwrap();
 
@@ -1102,6 +1115,7 @@ impl PlayerGenerator {
             contract_loan: None,
             positions,
             preferred_foot,
+            foots,
             player_attributes: PlayerAttributes {
                 is_banned: false,
                 is_injured: false,

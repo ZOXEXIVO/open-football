@@ -13,10 +13,10 @@ use crate::shared::FullName;
 use crate::utils::IntegerUtils;
 use crate::{
     Mental, PersonAttributes, PersonBehaviour, PersonBehaviourState, Physical, Player,
-    PlayerAttributes, PlayerDecisionHistory, PlayerHappiness, PlayerMailbox, PlayerPosition,
-    PlayerPositionType, PlayerPositions, PlayerPreferredFoot, PlayerSkills, PlayerStatistics,
-    PlayerStatisticsHistory, PlayerStatus, PlayerTraining, PlayerTrainingHistory, Relations,
-    Technical,
+    PlayerAttributes, PlayerDecisionHistory, PlayerFoots, PlayerHappiness, PlayerMailbox,
+    PlayerPosition, PlayerPositionType, PlayerPositions, PlayerPreferredFoot, PlayerSkills,
+    PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerTraining,
+    PlayerTrainingHistory, Relations, Technical,
 };
 use chrono::{Datelike, NaiveDate};
 
@@ -222,6 +222,7 @@ impl NationalTeam {
                 }],
             },
             preferred_foot: PlayerPreferredFoot::Right,
+            foots: PlayerFoots::from_preferred(&PlayerPreferredFoot::Right),
             player_attributes: PlayerAttributes {
                 is_banned: false,
                 is_injured: false,

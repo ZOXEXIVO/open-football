@@ -94,6 +94,7 @@ pub struct Player {
     pub contract_loan: Option<PlayerClubContract>,
     pub positions: PlayerPositions,
     pub preferred_foot: PlayerPreferredFoot,
+    pub foots: PlayerFoots,
     pub player_attributes: PlayerAttributes,
     pub mailbox: PlayerMailbox,
     pub training: PlayerTraining,
@@ -1322,6 +1323,45 @@ pub enum PlayerPreferredFoot {
     Both,
 }
 
+/// Per-foot ownership on a 0-100 scale (100 = fully natural foot).
+#[derive(Debug, Clone)]
+pub struct PlayerFoots {
+    pub left: u8,
+    pub right: u8,
+}
+
+impl PlayerFoots {
+    pub fn new(left: u8, right: u8) -> Self {
+        PlayerFoots {
+            left: left.min(100),
+            right: right.min(100),
+        }
+    }
+
+    /// Default levels for a player whose record only carries a preferred-foot
+    /// label: the natural foot is fully owned, the weak foot serviceable.
+    pub fn from_preferred(foot: &PlayerPreferredFoot) -> Self {
+        match foot {
+            PlayerPreferredFoot::Left => PlayerFoots::new(100, 45),
+            PlayerPreferredFoot::Right => PlayerFoots::new(45, 100),
+            PlayerPreferredFoot::Both => PlayerFoots::new(95, 95),
+        }
+    }
+
+    /// Derive the preferred-foot label from the levels — near-equal feet
+    /// read as two-footed.
+    pub fn preferred(&self) -> PlayerPreferredFoot {
+        let diff = self.left as i16 - self.right as i16;
+        if diff.abs() <= 15 {
+            PlayerPreferredFoot::Both
+        } else if diff > 0 {
+            PlayerPreferredFoot::Left
+        } else {
+            PlayerPreferredFoot::Right
+        }
+    }
+}
+
 //DISPLAY
 impl Display for Player {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
@@ -1337,8 +1377,49 @@ impl PartialEq for Player {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn player_is_correct() {
         assert_eq!(10, 10);
+    }
+
+    #[test]
+    fn foots_levels_clamp_to_100() {
+        let foots = PlayerFoots::new(120, 200);
+        assert_eq!(foots.left, 100);
+        assert_eq!(foots.right, 100);
+    }
+
+    #[test]
+    fn foots_derive_preferred_label() {
+        assert!(matches!(
+            PlayerFoots::new(100, 50).preferred(),
+            PlayerPreferredFoot::Left
+        ));
+        assert!(matches!(
+            PlayerFoots::new(40, 100).preferred(),
+            PlayerPreferredFoot::Right
+        ));
+        assert!(matches!(
+            PlayerFoots::new(95, 90).preferred(),
+            PlayerPreferredFoot::Both
+        ));
+    }
+
+    #[test]
+    fn foots_from_preferred_round_trips() {
+        for foot in [
+            PlayerPreferredFoot::Left,
+            PlayerPreferredFoot::Right,
+            PlayerPreferredFoot::Both,
+        ] {
+            let derived = PlayerFoots::from_preferred(&foot).preferred();
+            assert_eq!(
+                std::mem::discriminant(&derived),
+                std::mem::discriminant(&foot),
+                "from_preferred({foot:?}) → preferred() must return {foot:?}, got {derived:?}"
+            );
+        }
     }
 }

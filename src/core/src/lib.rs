@@ -202,6 +202,7 @@ pub use club::{
     PlayerDecision,
     PlayerDecisionHistory,
     PlayerFieldPositionGroup,
+    PlayerFoots,
     PlayerGenerator,
     PlayerHappiness,
     PlayerHistoryRow,
