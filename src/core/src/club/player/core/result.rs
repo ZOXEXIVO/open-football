@@ -24,7 +24,16 @@ pub struct PlayerResult {
     pub transfer_requests: Vec<u32>,
     pub injury_occurred: Option<InjuryType>,
     pub injury_recovered: bool,
+    /// Mirrors the formal `PlayerStatusType::Unh` status — true iff the
+    /// player holds the hard "Unhappy" status after this tick. This is the
+    /// authoritative grievance signal; it is NOT a soft per-tick mood read.
     pub unhappy: bool,
+    /// Softer per-tick signal: morale dipped below the happy threshold but
+    /// has NOT hardened into the formal `Unh` status (e.g. a fresh signing
+    /// still settling, or a low mood riding out the persistence window).
+    /// Distinct from `unhappy` so consumers can tell "concerned" from
+    /// "officially unhappy".
+    pub morale_concern: bool,
     pub wants_to_leave: bool,
 }
 
@@ -50,6 +59,7 @@ impl PlayerResult {
             injury_occurred: None,
             injury_recovered: false,
             unhappy: false,
+            morale_concern: false,
             wants_to_leave: false,
         }
     }

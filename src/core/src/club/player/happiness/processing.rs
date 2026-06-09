@@ -1,4 +1,5 @@
 use crate::PlayerPositionType;
+use crate::club::player::adaptation::ReputationGap;
 use crate::club::player::calculators::{
     ContractValuation, ValuationContext, expected_annual_value, package_inputs_from_contract,
 };
@@ -6,7 +7,10 @@ use crate::club::player::interaction::InteractionTopic;
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
 use crate::utils::DateUtils;
-use crate::{ContractType, HappinessEventType, PlayerSquadStatus};
+use crate::{
+    ContractType, HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope,
+    HappinessEventSeverity, HappinessEventType, PlayerSquadStatus,
+};
 use chrono::NaiveDate;
 
 /// Club / coaching context fed into the six derived morale factors.
@@ -223,6 +227,172 @@ impl PlayingTimeFrustrationConfig {
     }
 }
 
+/// Post-transfer "honeymoon" ramp applied to the soft *settling-in* morale
+/// factors (role clarity, coach credibility, dressing-room status, club fit,
+/// pressure load). For the first few weeks at a new club these axes are
+/// noisy — the player is still finding his feet — so their *negative*
+/// contribution is scaled down and recovers linearly to full weight by
+/// [`Self::RAMP_DAYS`]. The hard, real signals (wages, ambition fit, playing
+/// time, broken promises) are deliberately NOT routed through here: a genuine
+/// wage betrayal or a no-role formation still bites on day one.
+#[derive(Debug, Clone, Copy)]
+struct TransferHoneymoon {
+    negative_scale: f32,
+}
+
+impl TransferHoneymoon {
+    /// Days over which the damp recovers from [`Self::DAY0_SCALE`] to 1.0.
+    const RAMP_DAYS: i64 = 28;
+    /// Scale applied to negative settling factors on the day of the move.
+    const DAY0_SCALE: f32 = 0.25;
+
+    /// Build the ramp from days elapsed since the last transfer. No recent
+    /// transfer (or a long-settled player) → no damping.
+    fn since(days_since_transfer: Option<i64>) -> Self {
+        let negative_scale = match days_since_transfer {
+            Some(d) if (0..Self::RAMP_DAYS).contains(&d) => {
+                let progress = d as f32 / Self::RAMP_DAYS as f32;
+                Self::DAY0_SCALE + progress * (1.0 - Self::DAY0_SCALE)
+            }
+            _ => 1.0,
+        };
+        TransferHoneymoon { negative_scale }
+    }
+
+    /// Scale a settling factor's *negative* magnitude by the ramp. Positive
+    /// values pass through untouched — a newcomer who's already a respected
+    /// dressing-room presence keeps that lift.
+    fn damp_negative(&self, value: f32) -> f32 {
+        if value < 0.0 {
+            value * self.negative_scale
+        } else {
+            value
+        }
+    }
+}
+
+/// Verdict on whether a player should hold the formal `Unh` status this
+/// weekly tick. Separates three concerns the old inline check conflated:
+///   * **eligibility** — is morale low enough, and is there a real concern
+///     behind it (rather than a transient settling dip)?
+///   * **severity** — is a *major* trigger present (broken promise, severe
+///     wage betrayal, public conflict, repeated official-match omission)
+///     that should harden the status immediately, skipping the persistence
+///     wait?
+///   * **recovery** — has morale climbed clear of the unhappy band?
+#[derive(Debug, Clone, Copy)]
+struct UnhappyAssessment {
+    eligible: bool,
+    major_trigger: bool,
+    recover: bool,
+}
+
+impl UnhappyAssessment {
+    /// Below this morale the player is eligible for `Unh` on its own.
+    const CRITICAL_MORALE: f32 = 30.0;
+    /// In the `[CRITICAL_MORALE, CONCERN_MORALE)` band a serious concern
+    /// factor/event must also be present for eligibility.
+    const CONCERN_MORALE: f32 = 35.0;
+    /// Morale above this clears the status outright.
+    const RECOVER_MORALE: f32 = 50.0;
+    /// …or above this with the player visibly getting his minutes.
+    const RECOVER_WITH_MINUTES_MORALE: f32 = 40.0;
+    /// Weekly ticks an ordinary low mood must persist before it hardens.
+    const PERSISTENCE_TICKS: u8 = 2;
+
+    fn evaluate(player: &Player, playing_time_factor: f32) -> Self {
+        let h = &player.happiness;
+        let morale = h.morale;
+        let f = &h.factors;
+        let major_trigger =
+            Self::has_major_event(player) || playing_time_factor <= -12.0;
+
+        // A "serious concern" is a hard, real grievance — not the soft
+        // settling factors the honeymoon already damps. Severe wage
+        // betrayal, repeated benching, a major ambition/role mismatch, a
+        // broken-down manager relationship, or eroded promise trust.
+        let serious_concern = major_trigger
+            || f.salary_satisfaction <= -8.0
+            || playing_time_factor <= -8.0
+            || f.ambition_fit <= -8.0
+            || f.manager_relationship <= -8.0
+            || f.promise_trust <= -6.0;
+
+        let eligible = morale < Self::CRITICAL_MORALE
+            || (morale < Self::CONCERN_MORALE && serious_concern);
+
+        let recover = morale > Self::RECOVER_MORALE
+            || (morale > Self::RECOVER_WITH_MINUTES_MORALE && playing_time_factor >= 10.0);
+
+        UnhappyAssessment {
+            eligible,
+            major_trigger,
+            recover,
+        }
+    }
+
+    /// Lookback window (days) for a "fresh" major trigger — short enough
+    /// that the bypass reflects a recent shock, not a stale one already
+    /// priced into morale.
+    const MAJOR_EVENT_WINDOW_DAYS: u16 = 14;
+
+    /// A genuinely major morale trigger that justifies hardening `Unh`
+    /// without waiting out the persistence window. Deliberately tight —
+    /// these are the "real triggers" the design calls out, not routine
+    /// settling friction. `ConflictWithTeammate` is handled separately
+    /// because a single routine private row must NOT bypass persistence.
+    fn has_major_event(player: &Player) -> bool {
+        const MAJOR: [HappinessEventType; 5] = [
+            HappinessEventType::PromiseBroken,
+            HappinessEventType::SalaryShock,
+            HappinessEventType::ContractTerminated,
+            HappinessEventType::SquadRegistrationOmitted,
+            HappinessEventType::ControversyIncident,
+        ];
+        if MAJOR
+            .iter()
+            .any(|t| player.happiness.has_recent_event(t, Self::MAJOR_EVENT_WINDOW_DAYS))
+        {
+            return true;
+        }
+        Self::has_serious_conflict(player)
+    }
+
+    /// True when a recent teammate conflict is serious enough to bypass the
+    /// persistence wait. A lone routine private row (a `-2` "had words")
+    /// does NOT qualify — only a serious/major-severity blow-up, a public
+    /// (media) incident, a flagged dressing-room-damage follow-up, an
+    /// explicitly repeated incident, or simply more than one conflict row in
+    /// the window. Severity falls back to magnitude (|mag| >= 4 → Serious+)
+    /// when the legacy emit site attached no structured context.
+    fn has_serious_conflict(player: &Player) -> bool {
+        let mut count = 0u32;
+        let mut any_serious = false;
+        for e in player.happiness.recent_events.iter().filter(|e| {
+            e.event_type == HappinessEventType::ConflictWithTeammate
+                && e.days_ago <= Self::MAJOR_EVENT_WINDOW_DAYS
+        }) {
+            count += 1;
+            if any_serious {
+                continue;
+            }
+            let serious_by_magnitude = e.magnitude.abs() >= 4.0;
+            let serious_by_context = e.context.as_ref().is_some_and(|c| {
+                matches!(
+                    c.severity,
+                    HappinessEventSeverity::Serious | HappinessEventSeverity::Major
+                ) || c.scope == HappinessEventScope::Media
+                    || c.follow_up == Some(HappinessEventFollowUp::DressingRoomDamageRisk)
+                    || c.evidence.contains(&HappinessEventEvidence::RepeatedIncident)
+                    || c.evidence.contains(&HappinessEventEvidence::MediaIncident)
+            });
+            any_serious = serious_by_magnitude || serious_by_context;
+        }
+        // Repeated conflict (≥2 rows in the window) is serious on its own.
+        count >= 2 || any_serious
+    }
+}
+
 impl Player {
     /// Build the post-transfer playing-time opportunity snapshot for this
     /// player. The `since_join` counters live on `happiness` and reset on
@@ -360,13 +530,28 @@ impl Player {
         }
 
         // ── Derived factors ───────────────────────────────────
-        self.happiness.factors.role_clarity = self.calculate_role_clarity();
-        self.happiness.factors.coach_credibility = self.calculate_coach_credibility(&club_ctx);
-        self.happiness.factors.dressing_room_status = self.calculate_dressing_room_status();
-        self.happiness.factors.club_fit =
-            self.calculate_club_fit(team_reputation, season_state.league_reputation, &club_ctx);
-        self.happiness.factors.pressure_load =
-            self.calculate_pressure_load(team_reputation, season_state.league_reputation);
+        // The five soft "settling-in" axes pass through the transfer
+        // honeymoon ramp — their negative contribution is scaled down for
+        // the first few weeks at a new club so a fresh signing isn't tipped
+        // into a formal grievance by noise he hasn't had a chance to settle.
+        // promise_trust is a hard, real signal and is left undamped.
+        let honeymoon = TransferHoneymoon::since(self.days_since_transfer(now));
+        self.happiness.factors.role_clarity =
+            honeymoon.damp_negative(self.calculate_role_clarity());
+        self.happiness.factors.coach_credibility =
+            honeymoon.damp_negative(self.calculate_coach_credibility(&club_ctx));
+        self.happiness.factors.dressing_room_status =
+            honeymoon.damp_negative(self.calculate_dressing_room_status());
+        self.happiness.factors.club_fit = honeymoon.damp_negative(self.calculate_club_fit(
+            team_reputation,
+            season_state.league_reputation,
+            &club_ctx,
+        ));
+        self.happiness.factors.pressure_load = honeymoon.damp_negative(self.calculate_pressure_load(
+            team_reputation,
+            season_state.league_reputation,
+            now,
+        ));
         self.happiness.factors.promise_trust = self.calculate_promise_trust(now);
 
         // Recalculate overall morale (now uses dampened salary factor + derived axes)
@@ -400,23 +585,49 @@ impl Player {
         self.maybe_emit_manager_trust_arc();
         self.maybe_emit_asked_for_private_talk();
 
-        // Set Unh status if morale < 35. Recovery back to "normal" happens
-        // when morale climbs above 50 — OR when morale is above 40 and the
-        // player is clearly getting the match minutes they expect (the
-        // manager's visible trust is enough to pull them out of the slump).
-        if self.happiness.morale < 35.0 {
-            if !self.statuses.get().contains(&PlayerStatusType::Unh) {
-                self.statuses.add(now, PlayerStatusType::Unh);
+        // Unhappy-status verdict with hysteresis. The formal `Unh` status
+        // is no longer a bare `morale < 35` flag: a fresh signing's
+        // first-week settling dip must either be backed by a *serious*
+        // concern AND persist across two weekly ticks, or be driven by a
+        // genuinely major trigger (broken promise, severe wage betrayal,
+        // public conflict, repeated official-match omission). Recovery
+        // hysteresis is unchanged — the status clears only once morale
+        // climbs clear of the unhappy band (or above 40 with real minutes).
+        let assessment = UnhappyAssessment::evaluate(self, playing_time_factor);
+        let already_unhappy = self.statuses.get().contains(&PlayerStatusType::Unh);
+
+        // `formal_unhappy` is the single source of truth for the hard `Unh`
+        // status after this tick. `result.unhappy` mirrors it exactly;
+        // `result.morale_concern` is the softer "low mood, not yet a
+        // grievance" signal so consumers can tell the two apart.
+        let formal_unhappy = if assessment.eligible {
+            self.happiness.unhappy_streak = self.happiness.unhappy_streak.saturating_add(1);
+            let persisted = self.happiness.unhappy_streak >= UnhappyAssessment::PERSISTENCE_TICKS;
+            if already_unhappy || assessment.major_trigger || persisted {
+                if !already_unhappy {
+                    self.statuses.add(now, PlayerStatusType::Unh);
+                }
+                true
+            } else {
+                // Concern building but not yet a formal grievance — let the
+                // mood ride for another tick before it hardens.
+                false
             }
-            result.unhappy = true;
-        } else if self.happiness.morale > 50.0
-            || (self.happiness.morale > 40.0 && playing_time_factor >= 10.0)
-        {
-            self.statuses.remove(PlayerStatusType::Unh);
-            result.unhappy = false;
         } else {
-            result.unhappy = !self.happiness.is_happy();
-        }
+            self.happiness.unhappy_streak = 0;
+            if assessment.recover {
+                self.statuses.remove(PlayerStatusType::Unh);
+                false
+            } else {
+                // Middle band: don't harden, and don't auto-clear an existing
+                // Unh (recovery still needs morale above 50). The status, and
+                // therefore `result.unhappy`, is whatever it already was.
+                already_unhappy
+            }
+        };
+
+        result.unhappy = formal_unhappy;
+        result.morale_concern = !formal_unhappy && !self.happiness.is_happy();
     }
 
     /// Playing-time morale factor, built on the match-opportunity model
@@ -849,6 +1060,23 @@ impl Player {
         }
 
         let is_gk = matches!(self.position(), PlayerPositionType::Goalkeeper);
+
+        // Source guard: the caller builds `ClubMoraleContext` via
+        // `unwrap_or_default()` when the player has no resolved club context
+        // this tick, leaving every coach score at 0. Zero is "unknown", not
+        // "amateur hour" — without it we'd punish an elite player up to -8
+        // for coaching we never actually measured. Treat an all-zero
+        // discipline as unknown and stay neutral; only judge once there's
+        // real coach data behind the club context.
+        let coach_data_known = if is_gk {
+            ctx.coach_best_goalkeeping > 0
+        } else {
+            ctx.coach_best_technical > 0 || ctx.coach_best_mental > 0
+        };
+        if !coach_data_known {
+            return 0.0;
+        }
+
         let coach_score = if is_gk {
             ctx.coach_best_goalkeeping as f32
         } else {
@@ -975,8 +1203,12 @@ impl Player {
     /// crack first. Outlier-above players (e.g. Messi at a small club)
     /// get an extra spotlight multiplier — the press follows them
     /// regardless of where the badge sits.
-    fn calculate_pressure_load(&self, team_reputation: f32, league_reputation: u16) -> f32 {
-        use crate::club::player::adaptation::ReputationGap;
+    fn calculate_pressure_load(
+        &self,
+        team_reputation: f32,
+        league_reputation: u16,
+        now: NaiveDate,
+    ) -> f32 {
         let rep_gap = ReputationGap::compute(self, team_reputation, league_reputation);
         let pressure = self.attributes.pressure;
         let player_rep = self.player_attributes.current_reputation as f32;
@@ -1020,6 +1252,31 @@ impl Player {
         } else {
             (-(index_gap / 12.0) + form_penalty - outlier_pull * 0.5).clamp(-8.0, 0.0)
         };
+
+        // Early-window framing: in the first month at a new club the
+        // spotlight a high-profile signing draws is *attention/pressure*,
+        // not a settled morale collapse. Floor the negative at a mild level
+        // unless the player is genuinely struggling — poor recent form or
+        // actual public criticism — which is real on-pitch evidence that the
+        // pressure has started to bite. The outlier-above spotlight (Messi
+        // at a small club) still shows through as a visible concern.
+        let in_early_window = self
+            .days_since_transfer(now)
+            .map(|d| d < 30)
+            .unwrap_or(false);
+        let public_criticism = self
+            .happiness
+            .has_recent_event(&HappinessEventType::MediaCriticism, 30)
+            || self
+                .happiness
+                .has_recent_event(&HappinessEventType::FanCriticism, 30);
+        let poor_form = form > 0.0 && form < 6.0;
+        let raw = if in_early_window && !poor_form && !public_criticism {
+            raw.max(-3.0)
+        } else {
+            raw
+        };
+
         raw.clamp(-8.0, 3.0)
     }
 
@@ -1064,7 +1321,6 @@ impl Player {
     /// and an underperformance signal when the player's form is poor
     /// at a smaller club (the loan isn't working out).
     fn process_loan_morale(&mut self, now: NaiveDate, team_reputation: f32, league_reputation: u16) {
-        use crate::club::player::adaptation::ReputationGap;
         let gap = ReputationGap::compute(self, team_reputation, league_reputation);
         // Match-opportunity gate: a loanee at a club that hasn't given him
         // a competitive fixture yet has no playing-time grievance to voice,
@@ -1429,5 +1685,881 @@ mod playing_time_opportunity_tests {
         let opp = p.playing_time_opportunity(now());
         assert!(opp.frustration_multiplier(&cfg()) == 0.0);
         assert!(opp.can_judge(Some(&PlayerSquadStatus::KeyPlayer), &cfg(), None).is_none());
+    }
+}
+
+#[cfg(test)]
+mod morale_timeline_tests {
+    //! Realistic post-transfer morale timelines. These exercise the full
+    //! weekly pipeline (day-one `process_transfer_shock` → first weekly
+    //! `process_happiness_full`) the way the simulator runs it, and pin the
+    //! "8 days and already unhappy" behaviour the rebalance targets:
+    //! ordinary signings settle, foreign signings carry a visible settling
+    //! concern without collapsing, and only genuinely extreme moves (huge pay
+    //! cut, no role) drop morale hard early.
+    use super::*;
+    use crate::club::player::adaptation::PendingSigning;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::context::{GlobalContext, SimulationContext};
+    use crate::shared::fullname::FullName;
+    use crate::{
+        HappinessEventCause, HappinessEventContext, PersonAttributes, PlayerAttributes,
+        PlayerClubContract, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
+    };
+    use chrono::Duration;
+
+    /// A configurable "fresh signing" timeline. Stage the pending signing,
+    /// fire the day-one transfer shock, then run one or more weekly happiness
+    /// ticks starting `days_since` after the move. Every knob has a calm,
+    /// fair-move default so a test only sets what it is probing.
+    struct Signing {
+        world_rep: i16,
+        current_ability: u8,
+        ambition: f32,
+        adaptability: f32,
+        pressure: f32,
+        controversy: f32,
+        squad_status: PlayerSquadStatus,
+        speaks_local: bool,
+        previous_salary: u32,
+        new_salary: u32,
+        club_rep: f32,
+        league_rep: u16,
+        source_club_rep: u16,
+        source_league_rep: u16,
+        fits_formation: bool,
+        coach_score: u8,
+        facility: f32,
+        days_since: i64,
+    }
+
+    impl Default for Signing {
+        fn default() -> Self {
+            // Calm, fair mid-table move: a CA-120 player whose level fits a
+            // league-rep-7000 division, on a market-fair wage (the contract
+            // valuation prices CA-120 at roughly 2.0M/yr at this tier).
+            Signing {
+                world_rep: 3_000,
+                current_ability: 120,
+                ambition: 12.0,
+                adaptability: 12.0,
+                pressure: 12.0,
+                controversy: 8.0,
+                squad_status: PlayerSquadStatus::FirstTeamRegular,
+                speaks_local: true,
+                previous_salary: 2_000_000,
+                new_salary: 2_000_000,
+                club_rep: 0.55,
+                league_rep: 7_000,
+                source_club_rep: 5_500,
+                source_league_rep: 7_000,
+                fits_formation: true,
+                coach_score: 12,
+                facility: 0.6,
+                days_since: 8,
+            }
+        }
+    }
+
+    impl Signing {
+        fn now() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap()
+        }
+
+        /// High-ambition key player at a tiny club on a fair (tiny) wage. A
+        /// real ambition concern drags morale into the unhappy-eligible band
+        /// with no major trigger — so the formal status must wait out the
+        /// persistence window. Coach context kept unknown to isolate the
+        /// ambition signal.
+        fn ambitious_at_tiny_club() -> Self {
+            Signing {
+                world_rep: 5_000,
+                current_ability: 120,
+                ambition: 20.0,
+                squad_status: PlayerSquadStatus::KeyPlayer,
+                previous_salary: 80_000,
+                new_salary: 80_000,
+                club_rep: 0.10,
+                league_rep: 1_500,
+                source_club_rep: 1_500,
+                source_league_rep: 1_500,
+                coach_score: 0,
+                facility: 0.0,
+                ..Default::default()
+            }
+        }
+
+        /// Elite key player (CA 165, world-rep 7500) joining a much smaller
+        /// club from a good-but-not-elite one, on a market-fair marquee wage
+        /// (~5.0M — the valuation prices a CA-165 key player above a
+        /// regular's). Tests override `new_salary` to model a pay cut.
+        fn elite_star_at_small_club() -> Self {
+            Signing {
+                world_rep: 7_500,
+                current_ability: 165,
+                ambition: 17.0,
+                pressure: 11.0,
+                squad_status: PlayerSquadStatus::KeyPlayer,
+                previous_salary: 5_000_000,
+                new_salary: 5_000_000,
+                club_rep: 0.48,
+                league_rep: 4_500,
+                source_club_rep: 6_800,
+                source_league_rep: 6_000,
+                coach_score: 10,
+                facility: 0.5,
+                ..Default::default()
+            }
+        }
+
+        fn country_code(&self) -> &'static str {
+            // Empty code → `speaks_local_language` returns true (domestic).
+            // "es" maps to Spanish, which our test players never speak.
+            if self.speaks_local { "" } else { "es" }
+        }
+
+        /// All-10 personality with the four axes a scenario varies pulled out.
+        fn person_attributes(&self) -> PersonAttributes {
+            PersonAttributes {
+                adaptability: self.adaptability,
+                ambition: self.ambition,
+                controversy: self.controversy,
+                loyalty: 10.0,
+                pressure: self.pressure,
+                professionalism: 10.0,
+                sportsmanship: 10.0,
+                temperament: 10.0,
+                consistency: 10.0,
+                important_matches: 10.0,
+                dirtiness: 10.0,
+            }
+        }
+
+        /// 4-4-2 containing the player's natural MidfielderCenter slot, or a
+        /// back-five + five-forward shape with no midfield at all when the
+        /// move offers no natural role.
+        fn formation(&self) -> [PlayerPositionType; 11] {
+            if self.fits_formation {
+                [
+                    PlayerPositionType::Goalkeeper,
+                    PlayerPositionType::DefenderLeft,
+                    PlayerPositionType::DefenderCenter,
+                    PlayerPositionType::DefenderCenter,
+                    PlayerPositionType::DefenderRight,
+                    PlayerPositionType::MidfielderLeft,
+                    PlayerPositionType::MidfielderCenter,
+                    PlayerPositionType::MidfielderCenter,
+                    PlayerPositionType::MidfielderRight,
+                    PlayerPositionType::Striker,
+                    PlayerPositionType::Striker,
+                ]
+            } else {
+                [
+                    PlayerPositionType::Goalkeeper,
+                    PlayerPositionType::DefenderLeft,
+                    PlayerPositionType::DefenderCenter,
+                    PlayerPositionType::DefenderCenter,
+                    PlayerPositionType::DefenderCenter,
+                    PlayerPositionType::DefenderRight,
+                    PlayerPositionType::Striker,
+                    PlayerPositionType::Striker,
+                    PlayerPositionType::Striker,
+                    PlayerPositionType::Striker,
+                    PlayerPositionType::Striker,
+                ]
+            }
+        }
+
+        fn club_ctx(&self) -> ClubMoraleContext {
+            ClubMoraleContext {
+                coach_best_technical: self.coach_score,
+                coach_best_mental: self.coach_score,
+                coach_best_fitness: self.coach_score,
+                coach_best_goalkeeping: self.coach_score,
+                training_facility_quality: self.facility,
+                youth_facility_quality: self.facility,
+            }
+        }
+
+        fn build_player(&self) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.world_reputation = self.world_rep;
+            attrs.current_reputation = self.world_rep;
+            attrs.current_ability = self.current_ability;
+            attrs.potential_ability = self.current_ability;
+
+            let mut player = PlayerBuilder::new()
+                .id(301)
+                .full_name(FullName::new("Fresh".into(), "Signing".into()))
+                .birth_date(NaiveDate::from_ymd_opt(1999, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(self.person_attributes())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .build()
+                .unwrap();
+
+            let mut contract = PlayerClubContract::new(
+                self.new_salary,
+                NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+            );
+            contract.squad_status = self.squad_status.clone();
+            player.contract = Some(contract);
+            player
+        }
+
+        fn pending_signing(&self) -> PendingSigning {
+            PendingSigning {
+                previous_salary: Some(self.previous_salary),
+                fee: 1_000_000.0,
+                is_loan: false,
+                destination_club_id: 999,
+                had_return_home_desire: false,
+                had_european_desire: false,
+                had_libertadores_desire: false,
+                source_club_reputation: self.source_club_rep,
+                source_league_reputation: self.source_league_rep,
+                dest_position_depth_rank: Some(2),
+            }
+        }
+
+        fn stage(&self, player: &mut Player, join: NaiveDate) {
+            player.last_transfer_date = Some(join);
+            player.pending_signing = Some(self.pending_signing());
+            let formation = self.formation();
+            player.process_transfer_shock(
+                join,
+                self.club_rep,
+                self.league_rep,
+                self.country_code(),
+                Some(&formation),
+            );
+        }
+
+        /// Run `n` weekly happiness ticks, the first `days_since` after the
+        /// move and each subsequent one a week later. Returns the processed
+        /// player plus the final weekly result.
+        fn run_ticks(&self, n: u32) -> (Player, PlayerResult) {
+            let now = Self::now();
+            let join = now - Duration::days(self.days_since);
+            let mut player = self.build_player();
+            self.stage(&mut player, join);
+
+            // Season state carries the club's real league reputation (as the
+            // production caller does) so the salary / club-fit / pressure
+            // valuations are evaluated against the same league the move used.
+            let season_state = TeamSeasonState {
+                league_reputation: self.league_rep,
+                ..Default::default()
+            };
+            let mut result = PlayerResult::new(player.id);
+            for i in 0..n {
+                let tick_now = now + Duration::days(7 * i as i64);
+                result = PlayerResult::new(player.id);
+                player.process_happiness_full(
+                    &mut result,
+                    tick_now,
+                    self.club_rep,
+                    season_state,
+                    self.club_ctx(),
+                );
+            }
+            (player, result)
+        }
+
+        /// The common case — a single first weekly tick.
+        fn run(&self) -> (Player, PlayerResult) {
+            self.run_ticks(1)
+        }
+
+        fn is_unhappy(player: &Player) -> bool {
+            player.statuses.get().contains(&PlayerStatusType::Unh)
+        }
+
+        /// Total negative magnitude of every first-tick transfer-shock event
+        /// still on the log (used to assert the stacking budget held).
+        fn shock_event_load(player: &Player) -> f32 {
+            const SHOCK: [HappinessEventType; 13] = [
+                HappinessEventType::AmbitionShock,
+                HappinessEventType::SalaryShock,
+                HappinessEventType::RoleMismatch,
+                HappinessEventType::FeelingIsolated,
+                HappinessEventType::OverawedByEliteClub,
+                HappinessEventType::RolePathBlockedAtEliteClub,
+                HappinessEventType::DressingRoomStatusShock,
+                HappinessEventType::TooGoodForLevel,
+                HappinessEventType::StepDownEmbarrassment,
+                HappinessEventType::TrainingStandardFrustration,
+                HappinessEventType::FanExpectationBurden,
+                HappinessEventType::MediaSpotlightPressure,
+                HappinessEventType::LoanLevelMismatch,
+            ];
+            player
+                .happiness
+                .recent_events
+                .iter()
+                .filter(|e| SHOCK.contains(&e.event_type) && e.magnitude < 0.0)
+                .map(|e| e.magnitude)
+                .sum()
+        }
+    }
+
+    // ── Acceptance: ordinary domestic signing settles ──────────────
+    #[test]
+    fn same_country_fair_salary_signing_stays_settled() {
+        let (player, result) = Signing::default().run();
+        let morale = player.happiness.morale;
+        assert!(
+            morale >= 45.0,
+            "fair domestic signing should stay settled at 8 days, morale was {morale}"
+        );
+        assert!(
+            !Signing::is_unhappy(&player),
+            "fair domestic signing must not be formally Unhappy at 8 days"
+        );
+        assert!(!result.unhappy);
+    }
+
+    // ── Acceptance: foreign, no language, low adaptability ─────────
+    #[test]
+    fn foreign_low_adaptability_settles_with_concern_not_collapse() {
+        let signing = Signing {
+            speaks_local: false,
+            adaptability: 5.0,
+            ambition: 10.0, // neutral ambition → isolate the language signal
+            ..Default::default()
+        };
+        let (player, _) = signing.run();
+        let morale = player.happiness.morale;
+
+        // A real settling concern is surfaced...
+        assert!(
+            player
+                .happiness
+                .has_recent_event(&HappinessEventType::FeelingIsolated, 30),
+            "foreign signing with no local language should show a settling concern"
+        );
+        // ...but morale holds up and the status does not harden.
+        assert!(
+            morale >= 40.0,
+            "foreign settling signing should stay >= 40 at 8 days, morale was {morale}"
+        );
+        assert!(
+            !Signing::is_unhappy(&player),
+            "settling foreign signing must not be Unhappy at 8 days, morale {morale}"
+        );
+    }
+
+    // ── Acceptance: elite star joins a much smaller club, fair terms ─
+    #[test]
+    fn elite_star_smaller_club_fair_salary_stays_above_floor() {
+        let signing = Signing::elite_star_at_small_club();
+        let (player, _) = signing.run();
+        let morale = player.happiness.morale;
+        let f = &player.happiness.factors;
+
+        // The status mismatch is *visible* — pressure/ambition concerns show.
+        assert!(
+            f.pressure_load < 0.0 || f.ambition_fit < 0.0,
+            "elite star at a smaller club should show a pressure/ambition concern \
+             (pressure {}, ambition {})",
+            f.pressure_load,
+            f.ambition_fit
+        );
+        // ...without a fair, voluntary move collapsing morale.
+        assert!(
+            morale >= 35.0,
+            "elite star, fair salary, normal role should stay >= 35 at 8 days, morale was {morale}"
+        );
+        assert!(
+            !Signing::is_unhappy(&player),
+            "elite star on fair terms must not be Unhappy at 8 days, morale {morale}"
+        );
+    }
+
+    // ── Acceptance: elite star + huge pay cut drops hard ───────────
+    #[test]
+    fn elite_star_huge_pay_cut_drops_hard_and_wants_improvement() {
+        // Was on a 5.0M deal; the new club can only offer 1.0M — an 80% pay
+        // cut, well past the SalaryShock floor.
+        let signing = Signing {
+            new_salary: 1_000_000,
+            ..Signing::elite_star_at_small_club()
+        };
+        let (player, result) = signing.run();
+        let morale = player.happiness.morale;
+
+        assert!(
+            morale < 35.0,
+            "an ~80% pay cut for an elite star should drop morale hard, morale was {morale}"
+        );
+        assert!(
+            result.contract.want_improve_contract,
+            "a huge wage cut should make the player ask for a better contract"
+        );
+        // The wage cut is a hard signal that lands in full.
+        assert!(
+            player
+                .happiness
+                .has_recent_event(&HappinessEventType::SalaryShock, 14),
+            "an 80% pay cut should record a SalaryShock"
+        );
+        // …but the move does not automatically become a transfer request.
+        assert!(
+            !player.statuses.get().contains(&PlayerStatusType::Req),
+            "a pay-cut grievance should not auto-escalate to a transfer request"
+        );
+    }
+
+    // ── Acceptance: playing-time guard at 0-1 official matches ─────
+    #[test]
+    fn key_player_zero_official_matches_has_no_playing_time_complaint() {
+        // 8 days in, club has played 0 (and separately 1) official matches.
+        let signing = Signing {
+            squad_status: PlayerSquadStatus::KeyPlayer,
+            current_ability: 130,
+            ..Default::default()
+        };
+        let now = Signing::now();
+        let mut player = signing.build_player();
+        player.last_transfer_date = Some(now - Duration::days(8));
+
+        // 0 official matches → no complaint.
+        assert_eq!(
+            player.calculate_playing_time_factor(1.0, now),
+            0.0,
+            "0 official matches: playing-time factor must be neutral"
+        );
+
+        // 1 official match (sub-sample): still no complaint.
+        player.happiness.eligible_official_matches_since_join = 1;
+        player.happiness.left_out_since_join = 1;
+        assert_eq!(
+            player.calculate_playing_time_factor(1.0, now),
+            0.0,
+            "1 official match is below the sample floor: still neutral"
+        );
+    }
+
+    // ── Acceptance: real frustration once there's a real sample ────
+    #[test]
+    fn key_player_benched_after_grace_is_meaningfully_negative() {
+        let signing = Signing {
+            squad_status: PlayerSquadStatus::KeyPlayer,
+            current_ability: 130,
+            ..Default::default()
+        };
+        let now = Signing::now();
+        let mut player = signing.build_player();
+        // Past the grace window with a real, full sample of fixtures missed.
+        player.last_transfer_date = Some(now - Duration::days(60));
+        player.happiness.eligible_official_matches_since_join = 10;
+        player.happiness.left_out_since_join = 10;
+
+        let factor = player.calculate_playing_time_factor(1.0, now);
+        assert!(
+            factor <= -8.0,
+            "a benched key player with 10 missed eligible matches should be \
+             meaningfully unhappy about minutes, factor was {factor}"
+        );
+    }
+
+    // ── Acceptance: coach-credibility source guard ─────────────────
+    #[test]
+    fn coach_credibility_neutral_when_context_unknown() {
+        let signing = Signing {
+            current_ability: 170,
+            ..Default::default()
+        };
+        let player = signing.build_player();
+        // The caller builds this via `unwrap_or_default()` when the player has
+        // no resolved club context — every coach score is 0.
+        let unknown = ClubMoraleContext::default();
+        assert_eq!(
+            player.calculate_coach_credibility(&unknown),
+            0.0,
+            "unknown (all-zero) coach context must read neutral, not contempt"
+        );
+    }
+
+    #[test]
+    fn coach_credibility_negative_when_context_is_real() {
+        let signing = Signing {
+            current_ability: 170,
+            ..Default::default()
+        };
+        let player = signing.build_player();
+        // Real, weak coaching for a top player → genuine contempt.
+        let weak = ClubMoraleContext {
+            coach_best_technical: 8,
+            coach_best_mental: 8,
+            coach_best_fitness: 8,
+            coach_best_goalkeeping: 8,
+            ..Default::default()
+        };
+        assert!(
+            player.calculate_coach_credibility(&weak) < 0.0,
+            "a top player under genuinely weak coaching should lose credibility"
+        );
+    }
+
+    // ── Honeymoon ramp shape ───────────────────────────────────────
+    #[test]
+    fn transfer_honeymoon_damps_early_negatives_and_recovers() {
+        let day0 = TransferHoneymoon::since(Some(0));
+        let day_late = TransferHoneymoon::since(Some(40));
+        let settled = TransferHoneymoon::since(None);
+
+        // Day 0 strongly damps a negative settling factor...
+        assert!(day0.damp_negative(-10.0) > -5.0);
+        // ...positives always pass through untouched...
+        assert_eq!(day0.damp_negative(6.0), 6.0);
+        // ...the damp eases monotonically as the player settles...
+        assert!(
+            TransferHoneymoon::since(Some(5)).damp_negative(-10.0)
+                > TransferHoneymoon::since(Some(20)).damp_negative(-10.0)
+        );
+        // ...and past the ramp (or with no recent move) there is no damping.
+        assert_eq!(day_late.damp_negative(-10.0), -10.0);
+        assert_eq!(settled.damp_negative(-10.0), -10.0);
+    }
+
+    // ── Unhappy hysteresis: persistence required, except majors ────
+    #[test]
+    fn unhappy_status_needs_persistence_without_a_major_trigger() {
+        // High-ambition player at a tiny club, fair wage, domestic, normal
+        // role: a real ambition concern drags morale into the unhappy band,
+        // but there is no major trigger — so the status must wait a second
+        // weekly tick before it hardens.
+        let signing = Signing::ambitious_at_tiny_club();
+
+        let (after_one, _) = signing.run_ticks(1);
+        assert!(
+            !Signing::is_unhappy(&after_one),
+            "a single low-mood tick without a major trigger must not harden to Unhappy \
+             (morale {})",
+            after_one.happiness.morale
+        );
+
+        let (after_two, _) = signing.run_ticks(2);
+        assert!(
+            Signing::is_unhappy(&after_two),
+            "a persistent low mood (two ticks) with a serious concern should harden to Unhappy \
+             (morale {})",
+            after_two.happiness.morale
+        );
+    }
+
+    // ── First-tick stacking budget ─────────────────────────────────
+    #[test]
+    fn ordinary_star_move_caps_first_tick_shock_stack() {
+        // Star at a weaker club, fair wage, normal role — not an extreme move,
+        // so the combined soft-shock load is held within the ordinary budget.
+        let signing = Signing::elite_star_at_small_club();
+        let now = Signing::now();
+        let join = now - Duration::days(8);
+        let mut player = signing.build_player();
+        signing.stage(&mut player, join);
+
+        let load = Signing::shock_event_load(&player);
+        assert!(
+            load >= -10.5,
+            "ordinary star move first-tick shock load should be capped near -10, was {load}"
+        );
+    }
+
+    #[test]
+    fn extreme_pay_cut_unlocks_higher_ceiling_and_keeps_salary_shock_full() {
+        // 5.0M → 1.0M is an 80% cut: huge_salary_cut unlocks the extreme
+        // ceiling and the SalaryShock is a hard event.
+        let signing = Signing {
+            new_salary: 1_000_000,
+            ..Signing::elite_star_at_small_club()
+        };
+        let now = Signing::now();
+        let join = now - Duration::days(8);
+        let mut player = signing.build_player();
+        signing.stage(&mut player, join);
+
+        // The hard SalaryShock is never scaled — it lands at its full
+        // (severity-scaled) magnitude.
+        let salary_shock = player
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::SalaryShock)
+            .expect("an 80% pay cut must record a SalaryShock");
+        assert!(
+            salary_shock.magnitude <= -6.0,
+            "SalaryShock should land in full, was {}",
+            salary_shock.magnitude
+        );
+
+        // The extreme ceiling allows a deeper total load than an ordinary
+        // move would (which the previous test pinned near -10).
+        let load = Signing::shock_event_load(&player);
+        assert!(
+            load < -10.5,
+            "an extreme move should be allowed a deeper first-tick load than the \
+             ordinary cap, was {load}"
+        );
+    }
+
+    // ── Formal-Unh semantics: concern vs hard verdict ──────────────
+    #[test]
+    fn first_low_morale_tick_reports_concern_not_formal_unhappy() {
+        // The first low-mood tick (no major trigger) must NOT apply the
+        // formal Unh status, and `result.unhappy` must mirror that — it stays
+        // false. The softer `morale_concern` flag carries the settling signal.
+        let signing = Signing::ambitious_at_tiny_club();
+        let (player, result) = signing.run_ticks(1);
+
+        assert!(
+            !Signing::is_unhappy(&player),
+            "no formal Unh after a single low-mood tick (morale {})",
+            player.happiness.morale
+        );
+        assert!(
+            !result.unhappy,
+            "result.unhappy mirrors the formal status — must stay false before it hardens"
+        );
+        assert!(
+            result.morale_concern,
+            "a settling low mood should surface as a soft concern (morale {})",
+            player.happiness.morale
+        );
+    }
+
+    // ── Morale-composition audit helper ────────────────────────────
+    #[test]
+    fn morale_breakdown_components_stay_in_sane_bands() {
+        // Elite star at a smaller club on fair terms — a known, exercised
+        // scenario. The breakdown must reconstruct morale and no single
+        // component should dominate pathologically.
+        let signing = Signing::elite_star_at_small_club();
+        let (player, _) = signing.run();
+        let b = player.happiness.morale_breakdown();
+
+        // Internally consistent: the components reconstruct the morale, and
+        // match the committed value on the player.
+        let reconstructed =
+            50.0 + b.core_factor_sum + b.derived_factor_sum + b.event_sum + b.hidden_pressure;
+        assert!(
+            (reconstructed - b.morale).abs() < 0.01,
+            "breakdown components must reconstruct morale: {reconstructed} vs {}",
+            b.morale
+        );
+        assert!((b.morale - player.happiness.morale).abs() < 0.01);
+
+        // Sane bands — no component runaway.
+        assert!(
+            b.core_factor_sum.abs() <= 20.0,
+            "core factor sum out of band: {}",
+            b.core_factor_sum
+        );
+        assert!(
+            (-10.0..=6.0).contains(&b.derived_factor_sum),
+            "derived factor sum out of band: {}",
+            b.derived_factor_sum
+        );
+        assert!(
+            (-20.0..=0.0).contains(&b.event_sum),
+            "event sum out of band: {}",
+            b.event_sum
+        );
+        assert_eq!(b.hidden_pressure, 0.0, "no hidden form pressure expected here");
+        assert!(
+            (35.0..=55.0).contains(&b.morale),
+            "morale out of band: {}",
+            b.morale
+        );
+    }
+
+    // ── Simulator-cadence integration test (Goal 4) ────────────────
+    #[test]
+    fn simulator_cadence_normal_signing_no_unh_first_week() {
+        // Drive the real weekly pipeline through `Player::simulate_with_options`
+        // over the player's first eight days at the club, one tick per day, so
+        // the day-one transfer shock and the Monday week-beginning happiness
+        // tick fire exactly as the simulator schedules them.
+        let signing = Signing::default();
+        // Tuesday 2026-02-24 → the first week-beginning lands on Monday
+        // 2026-03-02 (day six); the loop runs through day eight.
+        let join = NaiveDate::from_ymd_opt(2026, 2, 24).unwrap();
+        let mut player = signing.build_player();
+        player.last_transfer_date = Some(join);
+        player.pending_signing = Some(signing.pending_signing());
+
+        let mut saw_week_beginning = false;
+        let mut day = join;
+        let end = join + Duration::days(8);
+        while day <= end {
+            let dt = day.and_hms_opt(0, 0, 0).unwrap();
+            let ctx = GlobalContext::new(SimulationContext::new(dt))
+                .with_country(1)
+                .with_team_reputation(1, signing.club_rep)
+                .with_club(1, "Test FC");
+            saw_week_beginning |= ctx.simulation.is_week_beginning();
+            // skip_natural_development = true keeps the tick focused on the
+            // morale pipeline.
+            let _ = player.simulate_with_options(ctx, true);
+            day += Duration::days(1);
+        }
+
+        assert!(
+            saw_week_beginning,
+            "the eight-day window must contain at least one Monday happiness tick"
+        );
+        assert!(
+            player.pending_signing.is_none(),
+            "day-one simulate should consume the pending signing via transfer shock"
+        );
+        assert!(
+            !Signing::is_unhappy(&player),
+            "a normal signing must not be formally Unhappy in its first week (morale {})",
+            player.happiness.morale
+        );
+        assert!(
+            player.happiness.morale >= 45.0,
+            "a normal signing's morale should stay stable in week one, was {}",
+            player.happiness.morale
+        );
+    }
+
+    /// Adds a single `ConflictWithTeammate` row with the given severity /
+    /// scope / follow-up so the conflict-trigger tests can dial each axis.
+    struct ConflictRow;
+    impl ConflictRow {
+        fn add(
+            player: &mut Player,
+            magnitude: f32,
+            severity: HappinessEventSeverity,
+            scope: HappinessEventScope,
+            follow_up: Option<HappinessEventFollowUp>,
+            partner: u32,
+        ) {
+            let mut ctx =
+                HappinessEventContext::new(HappinessEventCause::PersonalityClash, severity, scope);
+            if let Some(f) = follow_up {
+                ctx = ctx.with_follow_up(f);
+            }
+            player.happiness.add_event_with_partner_context_and_cooldown(
+                HappinessEventType::ConflictWithTeammate,
+                magnitude,
+                partner,
+                ctx,
+                0,
+            );
+        }
+    }
+
+    // ── Conflict major-trigger gating (Goal 2) ─────────────────────
+    #[test]
+    fn minor_private_conflict_is_not_a_major_trigger() {
+        let mut p = Signing::default().build_player();
+        ConflictRow::add(
+            &mut p,
+            -2.0,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::DressingRoom,
+            None,
+            99,
+        );
+        assert!(
+            !UnhappyAssessment::has_major_event(&p),
+            "a lone routine -2 private conflict must not bypass the persistence window"
+        );
+    }
+
+    #[test]
+    fn serious_repeated_or_public_conflict_is_a_major_trigger() {
+        // Serious by magnitude (|mag| >= 4).
+        let mut by_magnitude = Signing::default().build_player();
+        ConflictRow::add(
+            &mut by_magnitude,
+            -5.0,
+            HappinessEventSeverity::Serious,
+            HappinessEventScope::DressingRoom,
+            None,
+            1,
+        );
+        assert!(
+            UnhappyAssessment::has_major_event(&by_magnitude),
+            "a serious-magnitude conflict should bypass persistence"
+        );
+
+        // Serious by context severity, even at a routine magnitude.
+        let mut by_severity = Signing::default().build_player();
+        ConflictRow::add(
+            &mut by_severity,
+            -2.0,
+            HappinessEventSeverity::Serious,
+            HappinessEventScope::DressingRoom,
+            None,
+            1,
+        );
+        assert!(
+            UnhappyAssessment::has_major_event(&by_severity),
+            "a serious-severity conflict should bypass persistence"
+        );
+
+        // Public (media) blow-up.
+        let mut public = Signing::default().build_player();
+        ConflictRow::add(
+            &mut public,
+            -2.0,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::Media,
+            None,
+            1,
+        );
+        assert!(
+            UnhappyAssessment::has_major_event(&public),
+            "a public conflict should bypass persistence"
+        );
+
+        // Dressing-room-damage follow-up.
+        let mut dressing_room = Signing::default().build_player();
+        ConflictRow::add(
+            &mut dressing_room,
+            -2.0,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::DressingRoom,
+            Some(HappinessEventFollowUp::DressingRoomDamageRisk),
+            1,
+        );
+        assert!(
+            UnhappyAssessment::has_major_event(&dressing_room),
+            "a flagged dressing-room-damage conflict should bypass persistence"
+        );
+
+        // Repeated — two routine private rows in the window.
+        let mut repeated = Signing::default().build_player();
+        ConflictRow::add(
+            &mut repeated,
+            -2.0,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::DressingRoom,
+            None,
+            1,
+        );
+        ConflictRow::add(
+            &mut repeated,
+            -2.0,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::DressingRoom,
+            None,
+            2,
+        );
+        assert!(
+            UnhappyAssessment::has_major_event(&repeated),
+            "two conflict rows in the window should bypass persistence"
+        );
     }
 }

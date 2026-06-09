@@ -3015,6 +3015,94 @@ mod drain_invariants_tests {
                 && e.competition_kind != PlayerStatCompetitionKind::League));
     }
 
+    // ── Loan out of a B/Second squad surfaces the loan club ───────────
+    //
+    // Reproduces the web-layer bug where a player loaned out of the Second
+    // team ("Rodina 2") never appeared at the borrowing club on the History
+    // page. The stats layer keys spells by `team_slug`; the loan must depart
+    // the squad's OWN spell (own slug for B/Second). Passing the club Main
+    // team — which the web action used to do unconditionally — leaves the
+    // real spell active, so the projection protects it as the live spell and
+    // the genuinely-new loan club is dropped as phantom noise.
+
+    /// Helper: build the History rows for a player with no live stats left.
+    fn history_rows(p: &crate::Player, date: NaiveDate) -> Vec<String> {
+        let empty = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &empty,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        PlayerStatisticsProjection::player_history_rows(&p.statistics_history, &live, date)
+            .iter()
+            .map(|r| r.team_slug.clone())
+            .collect()
+    }
+
+    /// Set up: 2 Main games, then an intra-club move down to the Second team
+    /// where 3 more games accrue — leaving the player on an active "rodina-2"
+    /// spell, exactly the state at loan time.
+    fn player_on_second_team() -> (crate::Player, TeamInfo, TeamInfo) {
+        let mut p = player();
+        let main = team("Rodina", "rodina", "first-division");
+        let second = team("Rodina 2", "rodina-2", "second-division");
+        p.statistics_history.seed_initial_team(&main, d(2027, 8, 1), false);
+        p.statistics = stats(2, 0);
+        p.on_intra_club_move(&main, &second, true, true, d(2027, 9, 1));
+        p.statistics = stats(3, 0);
+        (p, main, second)
+    }
+
+    #[test]
+    fn loan_out_of_second_team_shows_loan_club_in_history() {
+        let (mut p, _main, second) = player_on_second_team();
+        let barca = team("Barcelona", "barcelona", "la-liga");
+
+        // Correct web behaviour: depart the squad the player actually plays
+        // for (own slug "rodina-2"), not the club Main team.
+        p.on_manual_loan(&second, &second, &barca, d(2027, 11, 7));
+
+        let rodina2 = p
+            .statistics_history
+            .current
+            .iter()
+            .find(|e| e.team_slug == "rodina-2")
+            .expect("rodina-2 spell must exist");
+        assert!(
+            rodina2.departed_date.is_some(),
+            "loaning out of the Second team must mark its spell departed"
+        );
+
+        let rows = history_rows(&p, d(2027, 11, 20));
+        assert!(
+            rows.iter().any(|s| s == "barcelona"),
+            "the loan club must appear on the History page (rows: {rows:?})"
+        );
+        assert!(
+            rows.iter().any(|s| s == "rodina-2"),
+            "the source Second-team spell must stay in history (rows: {rows:?})"
+        );
+    }
+
+    #[test]
+    fn loan_with_main_team_as_source_hides_loan_club() {
+        // Characterizes the bug: passing the club Main team (the old web
+        // behaviour) instead of the squad the player occupies leaves the
+        // "rodina-2" spell active, so the borrowing club is hidden.
+        let (mut p, main, _second) = player_on_second_team();
+        let barca = team("Barcelona", "barcelona", "la-liga");
+
+        p.on_manual_loan(&main, &main, &barca, d(2027, 11, 7));
+
+        let rows = history_rows(&p, d(2027, 11, 20));
+        assert!(
+            !rows.iter().any(|s| s == "barcelona"),
+            "with the wrong (Main) source the loan club is hidden — this is the \
+             bug the web fix prevents (rows: {rows:?})"
+        );
+    }
+
     #[test]
     fn on_cancel_loan_freezes_borrowing_friendly_and_cup_under_borrowing_team() {
         let mut p = player();
@@ -3059,6 +3147,44 @@ mod drain_invariants_tests {
             .iter()
             .any(|e| e.team_slug == "spartak"
                 && e.competition_kind != PlayerStatCompetitionKind::League));
+    }
+
+    #[test]
+    fn release_then_same_season_free_signing_shows_both_clubs() {
+        use crate::club::player::statistics::ledger::PlayerLiveStatsInput;
+        use crate::club::player::statistics::projection::PlayerStatisticsProjection;
+        // End-to-end of the user repro (Fakel → Stumbras): a player at
+        // Fakel from the start of 2026/27 is released in July 2027 (still
+        // 2026/27 under the Aug-1 season boundary) and signs Stumbras two
+        // days later. A complete release marks the Fakel spell departed,
+        // so Stumbras — the player's actual current club — surfaces on
+        // History instead of being hidden as a same-season phantom.
+        let mut p = player();
+        let fakel = team("Fakel", "fakel", "first-division");
+        p.statistics_history.seed_initial_team(&fakel, d(2026, 8, 1), false);
+        p.on_release(&fakel, d(2027, 7, 3));
+        let stumbras = team("Stumbras", "stumbras", "a-lyga");
+        p.on_free_agent_signing(&stumbras, d(2027, 7, 5));
+
+        let live = PlayerLiveStatsInput {
+            league: &p.statistics,
+            friendly: &p.friendly_statistics,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let rows = PlayerStatisticsProjection::player_history_rows(
+            &p.statistics_history,
+            &live,
+            d(2027, 7, 20),
+        );
+        assert!(
+            rows.iter().any(|r| r.team_slug == "stumbras"),
+            "the player's current club must appear in History"
+        );
+        assert!(
+            rows.iter().any(|r| r.team_slug == "fakel"),
+            "the prior club must still appear in History"
+        );
     }
 
     #[test]

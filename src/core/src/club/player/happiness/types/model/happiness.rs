@@ -82,6 +82,18 @@ pub struct PlayerHappiness {
     /// single bad week alone never triggers a transfer request.
     /// Saturates at u8::MAX.
     pub conflict_risk_streak: u8,
+
+    /// Consecutive weekly happiness ticks the player has been *eligible*
+    /// for the formal `Unh` status (morale below the unhappy band with a
+    /// real concern, or morale critically low). Reset to 0 the moment a
+    /// tick is no longer eligible. Drives the unhappy-status hysteresis:
+    /// ordinary negative mood must persist across at least two weekly
+    /// ticks before it hardens into `Unh`, so a brand-new signing's
+    /// first-week settling dip never trips the status. A genuinely major
+    /// trigger (broken promise, severe wage betrayal, public conflict,
+    /// repeated official-match omission) bypasses the wait. Saturates at
+    /// u8::MAX.
+    pub unhappy_streak: u8,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -119,6 +131,24 @@ pub struct HappinessFactors {
     /// general manager_relationship. Built from kept-vs-broken
     /// promises and recent broken-promise count. Range roughly -10..+6.
     pub promise_trust: f32,
+}
+
+/// Read-only decomposition of a player's morale into the components that
+/// [`PlayerHappiness::recalculate_morale`] sums. Audit/debug aid only — keep
+/// it out of the UI. See [`PlayerHappiness::morale_breakdown`].
+#[derive(Debug, Clone, Copy)]
+pub struct MoraleBreakdown {
+    /// Sum of the seven core factors (unweighted).
+    pub core_factor_sum: f32,
+    /// Sum of the six derived "life in the team" factors, already scaled by
+    /// the 0.6 weight `recalculate_morale` applies.
+    pub derived_factor_sum: f32,
+    /// Decay-weighted sum of all recent events.
+    pub event_sum: f32,
+    /// Hidden form-pressure contribution (clamped, non-positive).
+    pub hidden_pressure: f32,
+    /// Final clamped morale these components produce.
+    pub morale: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +203,7 @@ impl PlayerHappiness {
             left_out_since_join: 0,
             hidden_form_pressure: 0.0,
             conflict_risk_streak: 0,
+            unhappy_streak: 0,
         }
     }
 
@@ -205,6 +236,17 @@ impl PlayerHappiness {
     }
 
     pub fn recalculate_morale(&mut self) {
+        // Single source of truth for the morale math lives in
+        // [`Self::morale_breakdown`]; recalculation just commits the result.
+        self.morale = self.morale_breakdown().morale;
+    }
+
+    /// Read-only decomposition of morale into the four summed components
+    /// `recalculate_morale` blends, plus the resulting clamped morale. This
+    /// is an audit/debug aid — it is NOT surfaced in the UI — so tests and
+    /// debug assertions can confirm no single component is silently
+    /// dominating the verdict.
+    pub fn morale_breakdown(&self) -> MoraleBreakdown {
         let cfg = HappinessConfig::default();
         let core_factor_sum = self.factors.playing_time
             + self.factors.salary_satisfaction
@@ -218,7 +260,7 @@ impl PlayerHappiness {
         // raw range so they enrich morale without dominating the core
         // axes the audit already balances around. Each factor is
         // independently clamped at compute time.
-        let derived_sum = (self.factors.role_clarity
+        let derived_factor_sum = (self.factors.role_clarity
             + self.factors.coach_credibility
             + self.factors.dressing_room_status
             + self.factors.club_fit
@@ -239,9 +281,17 @@ impl PlayerHappiness {
         // an emitted event would have.
         let hidden_pressure = self.hidden_form_pressure.clamp(-10.0, 0.0);
 
-        self.morale = cfg.clamp_morale(
-            cfg.default_morale + core_factor_sum + derived_sum + event_sum + hidden_pressure,
+        let morale = cfg.clamp_morale(
+            cfg.default_morale + core_factor_sum + derived_factor_sum + event_sum + hidden_pressure,
         );
+
+        MoraleBreakdown {
+            core_factor_sum,
+            derived_factor_sum,
+            event_sum,
+            hidden_pressure,
+            morale,
+        }
     }
 
     /// Record a suppressed poor-match criticism into the hidden
@@ -615,6 +665,7 @@ impl PlayerHappiness {
         self.left_out_since_join = 0;
         self.hidden_form_pressure = 0.0;
         self.conflict_risk_streak = 0;
+        self.unhappy_streak = 0;
     }
 
     /// Backward compatible: morale >= happy_threshold means happy.

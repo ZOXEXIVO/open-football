@@ -426,11 +426,18 @@ impl SimulatorData {
                     .collect();
                 let country_id = country.id;
                 let country_reputation = country.reputation;
+                // Per-club main-team identity resolver — the same one the
+                // history seeder uses, so a released player's spell is
+                // marked departed under the exact slug it was seeded with
+                // (youth / Reserve squads alias to the parent Main team).
+                let league_lookup = build_league_lookup(country);
                 let mut released_in_country: Vec<Player> = Vec::new();
                 let mut new_history: Vec<CompletedTransfer> = Vec::new();
                 for club in &mut country.clubs {
                     let club_id = club.id;
+                    let club_ctx = ClubSeedingContext::resolve(club, &league_lookup);
                     for team in &mut club.teams.teams {
+                        let release_team_info = club_ctx.team_info_for(team);
                         let team_id = team.id;
                         let team_name = team.name.clone();
                         let team_reputation_world = team.reputation.world;
@@ -487,6 +494,17 @@ impl SimulatorData {
                                     club_score,
                                     team_league_reputation,
                                 );
+                                // A complete release fires BOTH halves: the
+                                // stats-history side (snapshot in-flight match
+                                // stats onto the source-club spell and mark it
+                                // departed) and the market-state side below.
+                                // Skipping `on_release` leaves the current-club
+                                // entry `departed_date: None`, so a later
+                                // same-season signing becomes a second "active"
+                                // spell the History projection hides as a
+                                // phantom — and the un-drained cup / friendly
+                                // buckets trip `on_free_agent_signing`.
+                                p.on_release(&release_team_info, date);
                                 if p.free_agent_state().is_none() {
                                     p.enter_free_agent_market(ReleaseContext {
                                         date,

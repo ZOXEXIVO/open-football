@@ -349,6 +349,54 @@ mod tests {
     }
 
     #[test]
+    fn release_to_free_agents_marks_source_spell_departed() {
+        // Regression (user repro: Vladislav Tereshkin, Fakel → Stumbras):
+        // `sweep_released_to_free_agents` used to fire only the
+        // market-state half of a release and skip the stats-history half
+        // (`on_release`). That left the player's current-club spell with
+        // `departed_date: None`, so a later same-season signing became a
+        // second "active" spell the History projection dropped as a
+        // phantom — the player's real new club vanished from History.
+        let mut player = make_player(1, 0, 0);
+        // Contract expired → eligible for the release sweep.
+        player.contract = None;
+        let main_team = make_team(
+            10,
+            100,
+            "Fakel",
+            "fakel",
+            TeamType::Main,
+            Some(1),
+            vec![player],
+        );
+        let club = make_club(100, "Fakel", vec![main_team]);
+        let league = make_league(1, "First Division", "first-division", false);
+        let country = make_country(vec![club], vec![league]);
+
+        // `SimulatorData::new` seeds the player's current-season spell at
+        // Fakel (departed_date None).
+        let mut data = make_simulator_data(make_date(2027, 7, 3), country);
+
+        data.sweep_released_to_free_agents();
+
+        let released = data
+            .free_agents
+            .iter()
+            .find(|p| p.id == 1)
+            .expect("released player should land in the global free-agent pool");
+        let fakel_entry = released
+            .statistics_history
+            .current
+            .iter()
+            .find(|e| e.team_slug == "fakel")
+            .expect("Fakel current-season spell missing");
+        assert!(
+            fakel_entry.departed_date.is_some(),
+            "a complete release must mark the source-club spell departed"
+        );
+    }
+
+    #[test]
     fn snapshot_resets_player_stats_and_creates_history() {
         let player = make_player(1, 20, 5);
         let main_team = make_team(

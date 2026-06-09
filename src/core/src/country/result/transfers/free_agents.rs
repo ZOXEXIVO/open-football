@@ -2201,6 +2201,11 @@ mod emergency_fill_tests {
 
     #[test]
     fn club_short_one_gk_signs_a_gk_first() {
+        // Test-isolation: seed the global RandomEngine so the probabilistic
+        // acceptance roll is deterministic regardless of how many RNG draws
+        // preceding tests consumed (mirrors the seeded sibling tests above).
+        // Without this the outcome is execution-order dependent.
+        crate::utils::random::engine::RandomEngine::set_seed(0xE11E_C7AB_u64);
         // Squad has 0 GK and a handful of outfield bodies — emergency
         // pass must reach for the goalkeeper before anything else.
         let players: Vec<Player> = (0..8)

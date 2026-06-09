@@ -487,6 +487,32 @@ fn get_morale(player: &Player, i18n: &I18n) -> MoraleDto {
     }
 }
 
+/// Sentiment bucket for a single happiness *factor*. A factor is one
+/// per-axis enrichment, not the player's overall verdict — so a lone axis
+/// sitting at -5 is a "Major concern", never "Very Unhappy". The player's
+/// overall mood is the morale label; the factors only explain *why*. Keeping
+/// the factor labels in the concern/positive register (rather than the
+/// happy/unhappy register the morale line uses) stops a single moderate axis
+/// from reading as a dressing-room crisis when total morale is fine.
+struct FactorSentiment;
+
+impl FactorSentiment {
+    /// i18n key for the label describing a factor of the given value.
+    fn i18n_key(value: f32) -> &'static str {
+        if value > 5.0 {
+            "factor_strong_positive"
+        } else if value > 1.0 {
+            "factor_positive"
+        } else if value >= -1.0 {
+            "factor_neutral"
+        } else if value > -5.0 {
+            "factor_concern"
+        } else {
+            "factor_major_concern"
+        }
+    }
+}
+
 fn get_happiness_factors(player: &Player, i18n: &I18n) -> Vec<HappinessFactorDto> {
     let f = &player.happiness.factors;
     // Core seven factors (existing) plus the six derived "life in the
@@ -510,17 +536,7 @@ fn get_happiness_factors(player: &Player, i18n: &I18n) -> Vec<HappinessFactorDto
         .iter()
         .filter(|(_, val)| val.abs() > 0.5)
         .map(|(key, val)| {
-            let label = if *val > 5.0 {
-                i18n.t("factor_very_happy")
-            } else if *val > 1.0 {
-                i18n.t("factor_happy")
-            } else if *val > -1.0 {
-                i18n.t("factor_neutral")
-            } else if *val > -5.0 {
-                i18n.t("factor_unhappy")
-            } else {
-                i18n.t("factor_very_unhappy")
-            };
+            let label = i18n.t(FactorSentiment::i18n_key(*val));
             HappinessFactorDto {
                 name: i18n.t(key).to_string(),
                 value: val.round().clamp(-10.0, 10.0) as i8,
@@ -678,4 +694,41 @@ fn get_neighbor_teams(
             .map(|(_, name, slug)| (name, slug))
             .collect(),
     ))
+}
+
+#[cfg(test)]
+mod factor_sentiment_tests {
+    use super::FactorSentiment;
+
+    // A single moderate negative factor must read as a "Concern", not as a
+    // "Very Unhappy"-style verdict — that register is reserved for overall
+    // morale, never one per-axis enrichment.
+    #[test]
+    fn moderate_negative_factor_is_a_concern_not_a_verdict() {
+        assert_eq!(FactorSentiment::i18n_key(-3.0), "factor_concern");
+        assert_eq!(FactorSentiment::i18n_key(-4.0), "factor_concern");
+        // The factor labels never use the morale "very unhappy" register.
+        for v in [-3.0_f32, -4.0, -4.9] {
+            assert_ne!(FactorSentiment::i18n_key(v), "factor_very_unhappy");
+        }
+    }
+
+    #[test]
+    fn severe_negative_factor_is_a_major_concern() {
+        assert_eq!(FactorSentiment::i18n_key(-5.0), "factor_major_concern");
+        assert_eq!(FactorSentiment::i18n_key(-9.0), "factor_major_concern");
+    }
+
+    #[test]
+    fn neutral_band_around_zero() {
+        assert_eq!(FactorSentiment::i18n_key(0.0), "factor_neutral");
+        assert_eq!(FactorSentiment::i18n_key(-1.0), "factor_neutral");
+        assert_eq!(FactorSentiment::i18n_key(1.0), "factor_neutral");
+    }
+
+    #[test]
+    fn positive_bands() {
+        assert_eq!(FactorSentiment::i18n_key(3.0), "factor_positive");
+        assert_eq!(FactorSentiment::i18n_key(6.0), "factor_strong_positive");
+    }
 }

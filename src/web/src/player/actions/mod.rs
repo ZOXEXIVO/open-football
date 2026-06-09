@@ -59,6 +59,48 @@ fn get_team_info_by_club_id(sim: &core::SimulatorData, club_id: u32) -> Option<E
     get_team_info(sim, ci, coi, cli)
 }
 
+/// Stats-history identity of the team a player physically occupies
+/// (`teams[ti]`), mirroring the seeder's rule (`ClubSeedingContext::
+/// team_info_for`): Main / B / Second compete under their own brand, so
+/// they keep their own slug + league, while Reserve / U18..U23 squads
+/// alias to the club's Main team.
+///
+/// The history layer keys every career spell by `team_slug`, so a release
+/// / transfer / loan must mark the player's OWN active spell departed. The
+/// plain `get_team_info` always returns the club Main team — correct for an
+/// aliased youth/Reserve player, but WRONG for a B/Second player: it leaves
+/// that player's real spell `departed_date: None`, so the projection treats
+/// it as the still-active spell and hides the genuinely-new destination club
+/// on the History page as phantom noise.
+fn get_source_history_info(
+    sim: &core::SimulatorData,
+    ci: usize,
+    coi: usize,
+    cli: usize,
+    ti: usize,
+) -> Option<core::TeamInfo> {
+    let team = sim.continents[ci].countries[coi].clubs[cli]
+        .teams
+        .teams
+        .get(ti)?;
+    if !team.team_type.is_own_team() {
+        // Aliased squad — same identity the seeder gave the spell: the
+        // club's Main team.
+        return get_team_info(sim, ci, coi, cli).map(|t| t.info);
+    }
+    let league = team
+        .league_id
+        .and_then(|lid| sim.league(lid))
+        .map(|l| (l.name.clone(), l.slug.clone()));
+    Some(core::TeamInfo {
+        name: team.name.clone(),
+        slug: team.slug.clone(),
+        reputation: team.reputation.world,
+        league_name: league.as_ref().map(|l| l.0.clone()).unwrap_or_default(),
+        league_slug: league.map(|l| l.1).unwrap_or_default(),
+    })
+}
+
 /// Reputation inputs needed to install a permanent contract for a signing:
 /// `(club_main_team_world_rep, league_rep)`. Drives `WageCalculator` via
 /// `Player::install_permanent_contract`. Missing data falls through to 0
@@ -100,8 +142,10 @@ pub async fn move_on_free_action(
             None => return StatusCode::NOT_FOUND,
         };
 
-        let from_info = match get_team_info(sim, ci, coi, cli) {
-            Some(t) => t.info,
+        // Identity of the team the player actually plays for — a B/Second
+        // player departs their own spell, not the club Main team.
+        let from_info = match get_source_history_info(sim, ci, coi, cli, ti) {
+            Some(t) => t,
             None => return StatusCode::NOT_FOUND,
         };
 
@@ -312,6 +356,12 @@ pub async fn transfer_action(
         // Try to take player from a team, or from the free agents pool
         let from_team = sim.find_player_position(params.player_id);
 
+        // Identity of the team the player actually plays for (own slug for
+        // B/Second, Main alias for Reserve/youth) — the spell that must be
+        // marked departed. `None` for a free-agent signing.
+        let source_history = from_team
+            .and_then(|(ci, coi, cli, ti)| get_source_history_info(sim, ci, coi, cli, ti));
+
         let (mut player, source_info) = if let Some((ci, coi, cli, ti)) = from_team {
             let source = match get_team_info(sim, ci, coi, cli) {
                 Some(t) => t,
@@ -366,7 +416,10 @@ pub async fn transfer_action(
             .unwrap_or(0);
 
         if let Some((_, _, ref source)) = source_info {
-            player.on_manual_transfer(&source.info, &dest.info, Some(fee), date);
+            // Depart the player's OWN spell (B/Second keep their slug);
+            // fall back to the club Main team if resolution failed.
+            let from = source_history.as_ref().unwrap_or(&source.info);
+            player.on_manual_transfer(from, &dest.info, Some(fee), date);
         } else {
             // Free agent: no source club, so a phantom "transfer from
             // dest to dest" would record the destination row twice.
@@ -564,6 +617,16 @@ pub async fn loan_action(
             None => return StatusCode::NOT_FOUND,
         };
 
+        // History identity of the squad the player is actually loaned out OF
+        // (own slug for B/Second, Main alias for Reserve/youth). The stats
+        // layer must depart THIS spell — using the club Main team would leave
+        // a reserve player's real spell active and hide the loan club from the
+        // History page.
+        let source_history = match get_source_history_info(sim, ci, coi, cli, ti) {
+            Some(t) => t,
+            None => return StatusCode::NOT_FOUND,
+        };
+
         let parent = match get_team_info_by_club_id(sim, parent_club_id) {
             Some(t) => t,
             None => return StatusCode::NOT_FOUND,
@@ -634,7 +697,7 @@ pub async fn loan_action(
             + 1)
         .min(255) as u8;
 
-        player.on_manual_loan(&source.info, &parent.info, &dest.info, date);
+        player.on_manual_loan(&source_history, &parent.info, &dest.info, date);
 
         // Clear transfer-related statuses
         player.statuses.remove(core::PlayerStatusType::Lst);

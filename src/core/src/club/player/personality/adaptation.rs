@@ -8,7 +8,8 @@ use crate::{
     CareerDesireEventContext, CareerDesireEvidence, CareerDesireKind, ContractEventContext,
     ContractEventEvidence, ContractEventKind, HappinessEventCause, HappinessEventContext,
     HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
-    PersonalAdaptationEventContext, PersonalAdaptationKind, RoleStatusEventContext, RoleStatusKind,
+    PersonalAdaptationEventContext, PersonalAdaptationKind, PlayerHappiness, RoleStatusEventContext,
+    RoleStatusKind,
 };
 use chrono::NaiveDate;
 use std::cmp::Reverse;
@@ -186,6 +187,162 @@ pub struct PendingSigning {
 // `AdaptationConfig`. The functions below pull them via `default()` —
 // future per-save overrides can be threaded through without touching the
 // call sites.
+
+/// Which (if any) extreme conditions a fresh transfer carries. Any one of
+/// these unlocks the higher first-tick shock ceiling in
+/// [`TransferShockBudget`] — they're the moves where a heavy negative day
+/// one is *realistic* rather than over-modelling.
+#[derive(Debug, Clone, Copy, Default)]
+struct TransferShockExtremes {
+    /// New wage is half (or less) of the previous one.
+    huge_salary_cut: bool,
+    /// No natural slot in the destination formation at all.
+    no_tactical_role: bool,
+    /// Elite player dropping several tiers below his stature.
+    dramatic_step_down: bool,
+    /// Volatile personality — the move is more likely to turn into a saga.
+    high_controversy: bool,
+}
+
+impl TransferShockExtremes {
+    fn any(&self) -> bool {
+        self.huge_salary_cut
+            || self.no_tactical_role
+            || self.dramatic_step_down
+            || self.high_controversy
+    }
+}
+
+/// Bounds the total negative morale-event contribution a single transfer's
+/// first-tick shock events may apply. The candidate machinery already caps
+/// *how many* environment events fire (1 Primary + 1 Flavor + universals),
+/// but the upstream shocks (ambition / salary / isolation / role mismatch)
+/// stack on top uncapped — so an ordinary move could still pile on a brutal
+/// day one. This scales the *soft* shock events down so their combined sting
+/// fits the budget, while leaving hard signals (a massive wage cut) at full
+/// strength.
+#[derive(Debug, Clone, Copy)]
+struct TransferShockBudget {
+    ordinary_cap: f32,
+    extreme_cap: f32,
+}
+
+impl Default for TransferShockBudget {
+    fn default() -> Self {
+        TransferShockBudget {
+            ordinary_cap: -10.0,
+            extreme_cap: -22.0,
+        }
+    }
+}
+
+impl TransferShockBudget {
+    /// First-tick shock events that may be scaled down to fit the budget.
+    /// `SalaryShock` is deliberately excluded — a massive pay cut is a hard
+    /// signal that must land in full (and only fires below a 40% wage ratio
+    /// anyway).
+    const SOFT_SHOCK_EVENTS: [HappinessEventType; 12] = [
+        HappinessEventType::AmbitionShock,
+        HappinessEventType::RoleMismatch,
+        HappinessEventType::FeelingIsolated,
+        HappinessEventType::OverawedByEliteClub,
+        HappinessEventType::RolePathBlockedAtEliteClub,
+        HappinessEventType::DressingRoomStatusShock,
+        HappinessEventType::TooGoodForLevel,
+        HappinessEventType::StepDownEmbarrassment,
+        HappinessEventType::TrainingStandardFrustration,
+        HappinessEventType::FanExpectationBurden,
+        HappinessEventType::MediaSpotlightPressure,
+        HappinessEventType::LoanLevelMismatch,
+    ];
+
+    /// Magnitude at/below which a `RoleMismatch` is the complete *no natural
+    /// role* variant (`emit_role_mismatch_if_unfit` emits -8 when the player
+    /// has neither his exact position nor any same-group slot, -4 for a
+    /// partial group mismatch). The no-role variant is a hard, specific
+    /// grievance and is protected from budget scaling; the partial one stays
+    /// soft.
+    const NO_ROLE_MISMATCH_THRESHOLD: f32 = -6.0;
+
+    /// Hard (exempt) shock events — left at full magnitude and consuming the
+    /// budget first. A massive `SalaryShock` (only fires below a 40% wage
+    /// ratio) and a complete no-role `RoleMismatch` are specific, earned
+    /// grievances that must land in full.
+    fn is_hard_shock(event_type: &HappinessEventType, magnitude: f32) -> bool {
+        match event_type {
+            HappinessEventType::SalaryShock => true,
+            HappinessEventType::RoleMismatch => magnitude <= Self::NO_ROLE_MISMATCH_THRESHOLD,
+            _ => false,
+        }
+    }
+
+    fn is_soft_shock(event_type: &HappinessEventType, magnitude: f32) -> bool {
+        if Self::is_hard_shock(event_type, magnitude) {
+            return false;
+        }
+        Self::SOFT_SHOCK_EVENTS.contains(event_type)
+    }
+
+    /// Scale this tick's soft first-tick shock events so the *total* negative
+    /// shock load (hard + soft) does not exceed the applicable cap. Hard
+    /// events (a massive `SalaryShock`, a complete no-role `RoleMismatch`)
+    /// are left untouched and consume budget first; whatever allowance
+    /// remains is shared proportionally across the soft events. No-op when
+    /// the load is already within budget.
+    fn cap_first_tick(&self, happiness: &mut PlayerHappiness, extremes: TransferShockExtremes) {
+        let cap = if extremes.any() {
+            self.extreme_cap
+        } else {
+            self.ordinary_cap
+        };
+
+        // Hard (exempt) negative load emitted this tick.
+        let hard_neg: f32 = happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                e.days_ago == 0
+                    && e.magnitude < 0.0
+                    && Self::is_hard_shock(&e.event_type, e.magnitude)
+            })
+            .map(|e| e.magnitude)
+            .sum();
+
+        // Soft (dampable) negative load emitted this tick.
+        let soft_neg: f32 = happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                e.days_ago == 0
+                    && e.magnitude < 0.0
+                    && Self::is_soft_shock(&e.event_type, e.magnitude)
+            })
+            .map(|e| e.magnitude)
+            .sum();
+
+        if soft_neg >= 0.0 {
+            return; // nothing soft to scale
+        }
+
+        // Budget left for soft events after the hard ones are accounted for.
+        // `cap` and the loads are all <= 0; `remaining` is the (negative)
+        // allowance, floored at 0 if the hard load alone already exceeds it.
+        let remaining = (cap - hard_neg).min(0.0);
+        if soft_neg >= remaining {
+            return; // already within budget
+        }
+
+        let scale = (remaining / soft_neg).clamp(0.0, 1.0);
+        for event in happiness.recent_events.iter_mut() {
+            if event.days_ago == 0
+                && event.magnitude < 0.0
+                && Self::is_soft_shock(&event.event_type, event.magnitude)
+            {
+                event.magnitude *= scale;
+            }
+        }
+    }
+}
 
 impl Player {
     /// Days elapsed since the player's most recent transfer/loan, if any.
@@ -746,6 +903,37 @@ impl Player {
             league_reputation,
         );
         self.apply_first_tick_environment_events(now, &profile);
+
+        // Bound the *total* negative morale-event load this single move may
+        // apply on its first tick. Without this an ordinary signing can stack
+        // language isolation + role mismatch + ambition shock + fan burden +
+        // too-good-for-level at full force on day one and tip straight into a
+        // grievance. Genuinely extreme moves unlock a much higher ceiling so
+        // the drama survives where it's earned. Computed from immutable reads
+        // before the mutable handle on `happiness` is taken.
+        let dest_club_rep = (club_rep_0_to_1.clamp(0.0, 1.0) * 10000.0) as i32;
+        let extremes = TransferShockExtremes {
+            huge_salary_cut: match (
+                pending.previous_salary,
+                self.contract.as_ref().map(|c| c.salary),
+            ) {
+                (Some(prev), Some(new)) if prev > 0 => (new as f32 / prev as f32) <= 0.5,
+                _ => false,
+            },
+            no_tactical_role: formation
+                .map(|f| {
+                    let primary = self.position();
+                    !f.iter().any(|p| *p == primary)
+                        && !f
+                            .iter()
+                            .any(|p| p.position_group() == primary.position_group())
+                })
+                .unwrap_or(false),
+            dramatic_step_down: (pending.source_club_reputation as i32 - dest_club_rep >= 4000)
+                || (self.player_attributes.world_reputation as i32 - dest_club_rep >= 5000),
+            high_controversy: self.attributes.controversy >= 15.0,
+        };
+        TransferShockBudget::default().cap_first_tick(&mut self.happiness, extremes);
     }
 
     /// Stage `ContinentalAmbitionSatisfied` when a player who carried a
@@ -4109,6 +4297,76 @@ mod settlement_rating_tests {
         assert!(
             adj_under.bypass_reason != Some(SettlementBypassReason::EnoughAppearances),
             "4 starts + 7 sub apps = 7.5 must stay just under the 8.0 bar"
+        );
+    }
+}
+
+#[cfg(test)]
+mod shock_budget_tests {
+    //! Direct unit tests for [`TransferShockBudget`] classification — in
+    //! particular that a *complete* no-role `RoleMismatch` is treated as a
+    //! hard, protected grievance while a *partial* group mismatch is soft and
+    //! scalable.
+    use super::*;
+
+    fn happiness_with(events: &[(HappinessEventType, f32)]) -> PlayerHappiness {
+        let mut h = PlayerHappiness::new();
+        for (event_type, magnitude) in events {
+            h.add_event(event_type.clone(), *magnitude);
+        }
+        h
+    }
+
+    fn magnitude_of(h: &PlayerHappiness, event_type: HappinessEventType) -> f32 {
+        h.recent_events
+            .iter()
+            .find(|e| e.event_type == event_type)
+            .map(|e| e.magnitude)
+            .unwrap_or(0.0)
+    }
+
+    #[test]
+    fn no_role_mismatch_is_hard_and_protected_from_scaling() {
+        // Complete no-natural-role mismatch (-8) alongside soft shocks heavy
+        // enough to force scaling. The -8 is hard and stays at full strength
+        // while the soft events shrink.
+        let mut h = happiness_with(&[
+            (HappinessEventType::RoleMismatch, -8.0),
+            (HappinessEventType::AmbitionShock, -8.0),
+            (HappinessEventType::TooGoodForLevel, -8.0),
+        ]);
+        let extremes = TransferShockExtremes {
+            no_tactical_role: true,
+            ..Default::default()
+        };
+        TransferShockBudget::default().cap_first_tick(&mut h, extremes);
+
+        assert_eq!(
+            magnitude_of(&h, HappinessEventType::RoleMismatch),
+            -8.0,
+            "a complete no-role RoleMismatch must be protected from budget scaling"
+        );
+        assert!(
+            magnitude_of(&h, HappinessEventType::AmbitionShock) > -8.0,
+            "soft shocks must absorb the scaling instead"
+        );
+    }
+
+    #[test]
+    fn partial_role_mismatch_is_soft_and_scaled() {
+        // Partial group mismatch (-4) is soft. With the soft load over the
+        // ordinary cap, it scales down toward zero like the other soft events.
+        let mut h = happiness_with(&[
+            (HappinessEventType::RoleMismatch, -4.0),
+            (HappinessEventType::AmbitionShock, -8.0),
+            (HappinessEventType::TooGoodForLevel, -8.0),
+        ]);
+        TransferShockBudget::default().cap_first_tick(&mut h, TransferShockExtremes::default());
+
+        let rm = magnitude_of(&h, HappinessEventType::RoleMismatch);
+        assert!(
+            rm > -4.0 && rm < 0.0,
+            "a partial group RoleMismatch should be soft-scaled toward zero, was {rm}"
         );
     }
 }
