@@ -127,6 +127,10 @@ impl PipelineProcessor {
                 .filter(|r| {
                     r.status == TransferRequestStatus::Pending
                         && !assigned_request_ids.contains(&r.id)
+                        // Emergency depth requests are free-agent-only:
+                        // zero budget, no scouting intent. Assigning a
+                        // scout would pull them into the paid pipeline.
+                        && !r.is_emergency_free_agent_depth()
                 })
                 .collect();
 

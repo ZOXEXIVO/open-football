@@ -7,8 +7,11 @@
 //! see one namespace rather than free `fn`s scattered through the
 //! transfer module — the project convention is "no global helpers".
 
+use super::free_agents::{EmergencySignedTerms, FreeAgentCandidate};
 use crate::PlayerFieldPositionGroup;
+use crate::club::player::calculators::WageCalculator;
 use crate::transfers::pipeline::PipelineProcessor;
+use crate::transfers::squad_needs::EmergencyContractTermsPolicy;
 
 /// Inferred role the buyer is signing the player for. Drives wage
 /// asks, role-fit scoring, and acceptance. The matcher rarely knows
@@ -21,6 +24,75 @@ pub enum BuyerRoleFit {
     Rotation,
     Backup,
     Emergency,
+}
+
+/// One candidate priced for one buyer: inferred role, the player's
+/// reservation wage, and the buyer's role-weighted offer. Single
+/// implementation of the wage chain shared by the normal request-driven
+/// matcher, the urgent emergency fill, and the staged depth negotiation
+/// — so role inference, the wage model, and the contract-length policy
+/// cannot drift between entry points.
+pub(super) struct FreeAgentOfferPricing {
+    pub role: BuyerRoleFit,
+    pub reservation_wage: u32,
+    pub offer_wage: u32,
+}
+
+impl FreeAgentOfferPricing {
+    /// Price one candidate for one slot at one buyer: market wage →
+    /// reservation (decays with career pressure) → role-weighted offer.
+    pub(super) fn compute(
+        candidate: &FreeAgentCandidate,
+        group: PlayerFieldPositionGroup,
+        buyer_club_score: f32,
+        buyer_league_reputation: u16,
+        buyer_negotiator_skill: u8,
+        buyer_country_reputation: u16,
+    ) -> Self {
+        let role =
+            FreeAgentMarketCalculator::infer_buyer_role(candidate.ability, buyer_club_score, group);
+        let market_wage = WageCalculator::expected_annual_wage_raw(
+            candidate.ability,
+            candidate.current_reputation,
+            group == PlayerFieldPositionGroup::Forward,
+            group == PlayerFieldPositionGroup::Goalkeeper,
+            candidate.age,
+            buyer_club_score,
+            buyer_league_reputation,
+        );
+        let reservation_wage = FreeAgentMarketCalculator::reservation_wage(
+            market_wage,
+            candidate.last_salary,
+            candidate.career_pressure,
+            buyer_country_reputation,
+        );
+        let offer_wage = FreeAgentMarketCalculator::offer_wage(
+            market_wage,
+            role,
+            buyer_negotiator_skill,
+            buyer_country_reputation,
+            reservation_wage,
+            candidate.career_pressure,
+        );
+        FreeAgentOfferPricing {
+            role,
+            reservation_wage,
+            offer_wage,
+        }
+    }
+
+    /// Render the priced offer into the signed-terms shape execution
+    /// installs (wage + length + role promise).
+    pub(super) fn signed_terms(&self, candidate: &FreeAgentCandidate) -> EmergencySignedTerms {
+        EmergencySignedTerms {
+            annual_wage: self.offer_wage,
+            contract_years: EmergencyContractTermsPolicy::contract_years(
+                candidate.age,
+                candidate.ability,
+            ),
+            role: self.role,
+        }
+    }
 }
 
 pub struct FreeAgentMarketCalculator;

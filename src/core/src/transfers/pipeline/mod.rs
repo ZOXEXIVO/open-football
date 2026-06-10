@@ -219,6 +219,20 @@ impl TransferRequestStatus {
 // The coach says WHAT position and WHY; the DoF decides HOW (buy/loan)
 // ============================================================
 
+/// Where a transfer request originated. Most requests come from the
+/// weekly squad evaluation (or staff recommendations) and flow through
+/// the full paid pipeline. Emergency free-agent depth requests are
+/// staged by the country-level emergency planner with zero budget and
+/// must only ever be serviced by the free-agent matcher — the scouting,
+/// market-shortlist, and loan paths skip them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferRequestSource {
+    /// Weekly evaluation / staff recommendation — full paid pipeline.
+    Evaluation,
+    /// Emergency depth shortfall routed to the free-agent market only.
+    EmergencyFreeAgentDepth,
+}
+
 #[derive(Debug, Clone)]
 pub struct TransferRequest {
     pub id: u32,
@@ -239,6 +253,10 @@ pub struct TransferRequest {
     /// for generic requests. `Some(true)` = approved; `Some(false)` =
     /// vetoed (also sets status to Abandoned).
     pub board_approved: Option<bool>,
+    /// Which flow created the request — see [`TransferRequestSource`].
+    /// `TransferRequest::new` defaults to `Evaluation`; the emergency
+    /// depth planner overrides it after construction.
+    pub source: TransferRequestSource,
 }
 
 impl TransferRequest {
@@ -286,7 +304,18 @@ impl TransferRequest {
             status: TransferRequestStatus::Pending,
             named_target: None,
             board_approved: None,
+            source: TransferRequestSource::Evaluation,
         }
+    }
+
+    /// True for emergency-planner depth requests that are serviced from
+    /// the free-agent market only. The paid pipeline (scout assignment,
+    /// market shortlists, staff-recommendation attachment, loan scans)
+    /// must skip these: they carry no budget and no scouting intent,
+    /// and a normal evaluated `DepthCover` request must NOT take the
+    /// staged free-agent negotiation path by accident.
+    pub fn is_emergency_free_agent_depth(&self) -> bool {
+        self.source == TransferRequestSource::EmergencyFreeAgentDepth
     }
 }
 

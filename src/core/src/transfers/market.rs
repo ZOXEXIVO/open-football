@@ -590,8 +590,12 @@ impl TransferMarket {
         }
     }
 
-    /// Cancel all active negotiations for a player, except the completed one
-    fn cancel_negotiations_for_player(&mut self, player_id: u32, except_negotiation_id: u32) {
+    /// Cancel all active negotiations for a player, except the completed
+    /// one. Public because the free-agent pool completion path closes a
+    /// deal without going through [`Self::complete_transfer`] (the
+    /// history row is written by the deferred executor instead) and
+    /// still needs the losing bids swept.
+    pub fn cancel_negotiations_for_player(&mut self, player_id: u32, except_negotiation_id: u32) {
         for (id, negotiation) in &mut self.negotiations {
             if negotiation.player_id == player_id
                 && *id != except_negotiation_id

@@ -251,6 +251,13 @@ impl PipelineProcessor {
                 {
                     continue;
                 }
+                // Emergency depth requests are serviced exclusively by
+                // the free-agent matcher — a market shortlist would
+                // point the paid negotiation path at a zero-budget
+                // request.
+                if request.is_emergency_free_agent_depth() {
+                    continue;
+                }
                 if existing_shortlist_request_ids.contains(&request.id) {
                     continue;
                 }

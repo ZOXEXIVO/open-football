@@ -1232,11 +1232,15 @@ impl PipelineProcessor {
                     }
                 }
 
-                // Check if an existing unfulfilled request covers the same position group
+                // Check if an existing unfulfilled request covers the same position group.
+                // Emergency free-agent depth requests don't count — attaching a paid
+                // recommendation to their shortlist would route a zero-budget request
+                // into the paid negotiation path.
                 let matching_request = plan.transfer_requests.iter().find(|r| {
                     r.position.position_group() == player_pos_group
                         && r.status != TransferRequestStatus::Fulfilled
                         && r.status != TransferRequestStatus::Abandoned
+                        && !r.is_emergency_free_agent_depth()
                 });
 
                 if let Some(req) = matching_request {

@@ -1,7 +1,12 @@
 use super::config::TransferConfig;
-use super::free_agent_market_calc::{BuyerRoleFit, FreeAgentMarketCalculator};
-use super::types::{TransferActivitySummary, can_club_accept_player};
-use crate::club::player::calculators::WageCalculator;
+use super::free_agent_depth::{
+    DepthNegotiationAction, EmergencyDepthRequestIntent, EmergencyDepthRequestPlanner,
+    FreeAgentNegotiationStager,
+};
+use super::free_agent_market_calc::{
+    BuyerRoleFit, FreeAgentMarketCalculator, FreeAgentOfferPricing,
+};
+use super::types::{TransferActivitySummary, can_club_accept_player, find_player_in_country};
 use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
 use crate::club::player::mailbox::handlers::contract_proposal::ProcessContractHandler;
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
@@ -16,9 +21,8 @@ use crate::transfers::pipeline::{
 };
 use crate::transfers::scouting_region::ScoutingRegion;
 use crate::transfers::squad_needs::{
-    EmergencyBuyerContext, EmergencyCandidateView, EmergencyContractTermsPolicy,
-    EmergencyGroupSlot, EmergencyProjectedSquad, EmergencySlotStrictness, EmergencyStrictness,
-    EmergencySquadFillStrategy, FirstTeamSquadNeeds,
+    EmergencyBuyerContext, EmergencyCandidateView, EmergencyGroupSlot, EmergencyProjectedSquad,
+    EmergencySlotStrictness, EmergencyStrictness, EmergencySquadFillStrategy, FirstTeamSquadNeeds,
 };
 use crate::transfers::{CompletedTransfer, TransferType};
 use crate::utils::IntegerUtils;
@@ -412,7 +416,13 @@ impl CountryResult {
         // `signings` vec so Pass 3 executes them through the existing
         // path and the normal matcher's `signings.iter().any(...)`
         // dedup naturally skips already-claimed candidates.
-        Self::handle_free_agents_emergency_pass(
+        //
+        // Depth shortfalls are NOT signed here — the pass returns them
+        // as intents and they become DepthCover pipeline requests
+        // below, serviced through the staged-negotiation flow like any
+        // other recruitment need. Only the "cannot field a side /
+        // group below minimum" rescue slots keep the direct path.
+        let depth_intents = Self::handle_free_agents_emergency_pass(
             country,
             &candidates,
             config,
@@ -420,14 +430,22 @@ impl CountryResult {
             global_offered_ids,
             global_rejected_ids,
         );
+        EmergencyDepthRequestPlanner::stage_requests(country, &depth_intents);
 
         let max_signings_per_day = config.max_free_agent_signings_per_day;
         let ability_slack = config.free_agent_ability_slack;
         let buyer_country_reputation = country.reputation;
+        let buyer_country_code = country.code.clone();
         // Mirrors `scan_foreign_loan_market`: same region the country sits
         // in, used as the prestige anchor for cross-region gating.
         let buyer_region = ScoutingRegion::from_country(country.continent_id, &country.code);
         let buyer_region_prestige = buyer_region.league_prestige();
+        // Depth-type requests (DepthCover / SquadPadding) never sign
+        // instantly — they collect staged offers here and the stager
+        // below turns each one into a real Pending negotiation that
+        // resolves over the following days via
+        // `resolve_pending_negotiations` (personal terms → medical).
+        let mut depth_offers: Vec<DepthNegotiationAction> = Vec::new();
         // Snapshot the emergency-pass headcount so the normal cap
         // measures only ITS own signings — otherwise an emergency
         // pass that already added 5 picks would starve every
@@ -491,6 +509,18 @@ impl CountryResult {
 
                 let group = request.position.position_group();
 
+                // Emergency-planner depth requests route through the
+                // staged-negotiation flow below instead of instant
+                // signing. Explicitly marker-driven: a normal evaluated
+                // DepthCover / SquadPadding request keeps the legacy
+                // instant path. One pursuit in flight per request:
+                // Negotiating means the resolver already owns it —
+                // re-approaching daily would stack offers on the need.
+                let is_depth_request = request.is_emergency_free_agent_depth();
+                if is_depth_request && request.status == TransferRequestStatus::Negotiating {
+                    continue;
+                }
+
                 // Filter pass — replaces the legacy hard country-rep
                 // and region-prestige gates with sliding tolerances
                 // driven by career pressure. In-country candidates pass
@@ -510,6 +540,9 @@ impl CountryResult {
                         if signings.iter().any(|s| s.player_id == c.player_id) {
                             return false;
                         }
+                        if depth_offers.iter().any(|d| d.player_id == c.player_id) {
+                            return false;
+                        }
                         // Quality fit: replace `min_ability - slack`
                         // with a tier-anchored band. Slack still pays
                         // off — the buyer accepts a free agent slightly
@@ -525,6 +558,14 @@ impl CountryResult {
                             group,
                             c.career_pressure,
                         );
+                        // Depth fills run the strict band: no star-
+                        // overreach above the buyer's tier ceiling —
+                        // same trim the Strict emergency gate applies.
+                        let max_ca = if is_depth_request {
+                            max_ca.saturating_sub(5)
+                        } else {
+                            max_ca
+                        };
                         let nominal_floor = request.min_ability.saturating_sub(ability_slack);
                         if c.ability < min_ca.min(nominal_floor) {
                             return false;
@@ -570,7 +611,22 @@ impl CountryResult {
                         }
                         true
                     })
-                    .max_by_key(|c| c.ability as u16 + c.potential as u16);
+                    .max_by_key(|c| {
+                        let quality = c.ability as u16 + c.potential as u16;
+                        if is_depth_request {
+                            // Depth signings are the realistic local
+                            // pick, not the strongest available player:
+                            // domestic nationality first, then in-country
+                            // availability, raw quality last.
+                            let domestic = c
+                                .nationality_country_code
+                                .eq_ignore_ascii_case(&buyer_country_code);
+                            let in_country = !c.is_global_pool;
+                            (domestic as u16, in_country as u16, quality)
+                        } else {
+                            (0, 0, quality)
+                        }
+                    });
 
                 let Some(best) = best else { continue };
 
@@ -608,6 +664,76 @@ impl CountryResult {
                     continue; // Not today — player stays on the market
                 }
 
+                // Depth-type request: stage a real negotiation instead
+                // of an instant signing. The player's acceptance is NOT
+                // rolled here — `resolve_personal_terms` owns it when
+                // the PersonalTerms phase matures, exactly like any
+                // pipeline pursuit. Wage / role / contract length are
+                // staged now so the offer the player evaluates is the
+                // offer that gets installed on completion.
+                if is_depth_request {
+                    if country
+                        .transfer_market
+                        .has_active_negotiation_for(best.player_id, club.id)
+                    {
+                        continue;
+                    }
+                    let pricing = FreeAgentOfferPricing::compute(
+                        best,
+                        group,
+                        buyer_club_score,
+                        buyer_league_reputation,
+                        buyer_negotiator_skill,
+                        buyer_country_reputation,
+                    );
+                    let terms = pricing.signed_terms(best);
+                    // Player-side anchor for the rep-diff logic in
+                    // `resolve_personal_terms`: in-country candidates
+                    // use their current club's standing, pool players
+                    // their own reference reputation — a big name at a
+                    // tiny buyer reads as a downward move and resists.
+                    let selling_rep = if best.is_global_pool {
+                        (best.reference_reputation as f32 / 10_000.0).clamp(0.0, 1.0)
+                    } else {
+                        country
+                            .clubs
+                            .iter()
+                            .find(|c| c.id == best.club_id)
+                            .and_then(|c| c.teams.teams.first())
+                            .map(|t| (t.reputation.world as f32 / 10_000.0).clamp(0.0, 1.0))
+                            .unwrap_or(0.3)
+                    };
+                    let player_ambition = if best.is_global_pool {
+                        0.5
+                    } else {
+                        find_player_in_country(country, best.player_id)
+                            .map(|p| p.attributes.ambition)
+                            .unwrap_or(0.5)
+                    };
+                    let negotiator_staff_id =
+                        main_team.and_then(|t| t.staffs.find_negotiator().map(|s| s.id));
+
+                    depth_offers.push(DepthNegotiationAction {
+                        player_id: best.player_id,
+                        player_name: best.player_name.clone(),
+                        from_club_id: best.club_id,
+                        from_club_name: best.club_name.clone(),
+                        to_club_id: club.id,
+                        request_id: request.id,
+                        terms,
+                        selling_rep,
+                        buying_rep: buyer_club_score,
+                        buying_league_reputation: buyer_league_reputation,
+                        negotiator_staff_id,
+                        player_age: best.age,
+                        player_ambition,
+                        is_global_pool: best.is_global_pool,
+                        reason: PipelineProcessor::transfer_need_reason_text(&request.reason)
+                            .to_string(),
+                    });
+                    continue;
+                }
+
                 // Acceptance: would the player actually sign this
                 // particular offer? Wage / role / prestige / quality
                 // fit weighted into a single score, sigmoid against a
@@ -615,33 +741,13 @@ impl CountryResult {
                 // expiring contracts (no career pressure; pre-decay
                 // behaviour keeps the existing balance).
                 if best.is_global_pool {
-                    let role = FreeAgentMarketCalculator::infer_buyer_role(
-                        best.ability,
-                        buyer_club_score,
+                    let pricing = FreeAgentOfferPricing::compute(
+                        best,
                         group,
-                    );
-                    let market_wage = WageCalculator::expected_annual_wage_raw(
-                        best.ability,
-                        best.current_reputation,
-                        group == PlayerFieldPositionGroup::Forward,
-                        group == PlayerFieldPositionGroup::Goalkeeper,
-                        best.age,
                         buyer_club_score,
                         buyer_league_reputation,
-                    );
-                    let reservation = FreeAgentMarketCalculator::reservation_wage(
-                        market_wage,
-                        best.last_salary,
-                        best.career_pressure,
-                        buyer_country_reputation,
-                    );
-                    let offer = FreeAgentMarketCalculator::offer_wage(
-                        market_wage,
-                        role,
                         buyer_negotiator_skill,
                         buyer_country_reputation,
-                        reservation,
-                        best.career_pressure,
                     );
                     let rep_drop = FreeAgentMarketCalculator::rep_drop_allowed(
                         best.career_pressure,
@@ -659,8 +765,11 @@ impl CountryResult {
                         best.career_pressure,
                     );
                     let score = FreeAgentMarketCalculator::acceptance_score(
-                        FreeAgentMarketCalculator::wage_score(offer, reservation),
-                        FreeAgentMarketCalculator::role_score(role),
+                        FreeAgentMarketCalculator::wage_score(
+                            pricing.offer_wage,
+                            pricing.reservation_wage,
+                        ),
+                        FreeAgentMarketCalculator::role_score(pricing.role),
                         FreeAgentMarketCalculator::prestige_score(
                             buyer_country_reputation,
                             best.reference_reputation,
@@ -703,6 +812,12 @@ impl CountryResult {
                 });
             }
         }
+
+        // Pass 2b: turn the staged depth offers into real Pending
+        // negotiations (PersonalTerms phase). Runs after the matcher
+        // loop because creating a negotiation needs the mutable
+        // country borrow the loop's club iteration holds immutably.
+        FreeAgentNegotiationStager::stage(country, depth_offers, date, global_offered_ids);
 
         // Split signings: in-country (player still has a from-club row)
         // versus global pool (player lives in `sim.free_agents`, signaled
@@ -1043,6 +1158,12 @@ impl CountryResult {
     /// candidate pushes to `offered`, and failed acceptance rolls also
     /// push to `rejected`. Phase C consumes these to bump the player's
     /// `FreeAgentMarketState` counters.
+    ///
+    /// Returns the depth shortfalls the pass refused to fill directly:
+    /// `emergency_squad_fill_depth` slots are routine recruitment, not
+    /// rescue, so they become DepthCover pipeline requests (staged by
+    /// the caller via [`EmergencyDepthRequestPlanner`]) and resolve
+    /// through normal negotiations instead of instant signings.
     pub(super) fn handle_free_agents_emergency_pass(
         country: &Country,
         candidates: &[FreeAgentCandidate],
@@ -1050,14 +1171,15 @@ impl CountryResult {
         signings: &mut Vec<FreeAgentSigning>,
         global_offered_ids: &mut Vec<u32>,
         global_rejected_ids: &mut Vec<u32>,
-    ) {
+    ) -> Vec<EmergencyDepthRequestIntent> {
+        let mut depth_intents: Vec<EmergencyDepthRequestIntent> = Vec::new();
         if candidates.is_empty() {
-            return;
+            return depth_intents;
         }
         let country_cap = config.emergency_max_signings_per_country_per_day;
         let base_per_club_cap = config.emergency_max_signings_per_club_per_day;
         if country_cap == 0 || base_per_club_cap == 0 {
-            return;
+            return depth_intents;
         }
         let mut country_signed = 0usize;
         let buyer_country_code = country.code.clone();
@@ -1166,6 +1288,19 @@ impl CountryResult {
                 let slot = EmergencySlotPlanner::next_slot(&projected, &empty_groups);
                 let Some(slot) = slot else { break };
 
+                // Depth slots never sign directly. The shortfall turns
+                // into a DepthCover pipeline request and the staged-
+                // negotiation flow takes it from there. Depth is the
+                // planner's terminal state for this club (group
+                // minimums met or unfillable this tick), so stop here.
+                if slot.reason == "emergency_squad_fill_depth" {
+                    depth_intents.push(EmergencyDepthRequestIntent {
+                        club_id: club.id,
+                        group: slot.group,
+                    });
+                    break;
+                }
+
                 // Strictness is derived per-slot from the reason tag
                 // so the depth slot can fire the realism gates at full
                 // strength while a no-keeper GK fill stays permissive.
@@ -1200,37 +1335,17 @@ impl CountryResult {
                 };
 
                 // Stage wage / role / terms — emergency offers are
-                // realistic short deals, so we compute the same wage
-                // model the global free-agent matcher uses then run
-                // the acceptance roll lifted by the emergency
-                // multiplier.
-                let role = FreeAgentMarketCalculator::infer_buyer_role(
-                    best.ability,
-                    buyer_club_score,
+                // realistic short deals, priced through the same
+                // shared wage chain as the regular matcher and the
+                // staged depth flow, then run through the acceptance
+                // roll lifted by the emergency multiplier.
+                let pricing = FreeAgentOfferPricing::compute(
+                    best,
                     slot.group,
-                );
-                let market_wage = WageCalculator::expected_annual_wage_raw(
-                    best.ability,
-                    best.current_reputation,
-                    slot.group == PlayerFieldPositionGroup::Forward,
-                    slot.group == PlayerFieldPositionGroup::Goalkeeper,
-                    best.age,
                     buyer_club_score,
                     buyer_league_reputation,
-                );
-                let reservation = FreeAgentMarketCalculator::reservation_wage(
-                    market_wage,
-                    best.last_salary,
-                    best.career_pressure,
-                    buyer_rep,
-                );
-                let offer = FreeAgentMarketCalculator::offer_wage(
-                    market_wage,
-                    role,
                     buyer_negotiator_skill,
                     buyer_rep,
-                    reservation,
-                    best.career_pressure,
                 );
 
                 // Acceptance: same composition as the regular matcher
@@ -1257,8 +1372,11 @@ impl CountryResult {
                     best.career_pressure,
                 );
                 let score = FreeAgentMarketCalculator::acceptance_score(
-                    FreeAgentMarketCalculator::wage_score(offer, reservation),
-                    FreeAgentMarketCalculator::role_score(role),
+                    FreeAgentMarketCalculator::wage_score(
+                        pricing.offer_wage,
+                        pricing.reservation_wage,
+                    ),
+                    FreeAgentMarketCalculator::role_score(pricing.role),
                     FreeAgentMarketCalculator::prestige_score(
                         buyer_rep,
                         best.reference_reputation,
@@ -1301,14 +1419,6 @@ impl CountryResult {
                     continue;
                 }
 
-                let terms = EmergencySignedTerms {
-                    annual_wage: offer,
-                    contract_years: EmergencyContractTermsPolicy::contract_years(
-                        best.age, best.ability,
-                    ),
-                    role,
-                };
-
                 signings.push(FreeAgentSigning {
                     player_id: best.player_id,
                     player_name: best.player_name.clone(),
@@ -1316,7 +1426,7 @@ impl CountryResult {
                     from_club_name: best.club_name.clone(),
                     to_club_id: club.id,
                     reason: slot.reason.to_string(),
-                    terms: Some(terms),
+                    terms: Some(pricing.signed_terms(best)),
                     fills_group: Some(slot.group),
                 });
                 projected.apply_signing(slot.group);
@@ -1324,10 +1434,12 @@ impl CountryResult {
                 country_signed += 1;
                 debug!(
                     "Emergency squad fill: club {} → player {} ({:?}, {}, wage={})",
-                    club.id, best.player_id, slot.group, slot.reason, offer
+                    club.id, best.player_id, slot.group, slot.reason, pricing.offer_wage
                 );
             }
         }
+
+        depth_intents
     }
 }
 
@@ -2015,10 +2127,14 @@ mod emergency_fill_tests {
     use super::*;
     use crate::club::academy::ClubAcademy;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::continent::Continent;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
-    use crate::transfers::pipeline::TransferNeedPriority;
+    use crate::transfers::market::TransferListingStatus;
+    use crate::transfers::pipeline::{ShortlistCandidateStatus, TransferNeedPriority};
+    use crate::transfers::squad_needs::EmergencyContractTermsPolicy;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
         Player, PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType,
@@ -2301,60 +2417,6 @@ mod emergency_fill_tests {
     }
 
     #[test]
-    fn zzz_temp_measure_gk_accept_rate() {
-        use crate::utils::random::engine::RandomEngine;
-        for cp in [0.6_f32, 0.8, 0.9, 0.95, 0.99] {
-            let mut empties = 0;
-            let mut not_gk_first = 0;
-            let trials = 5000u64;
-            for s in 0..trials {
-                RandomEngine::set_seed(s + 1);
-                let players: Vec<Player> = (0..8)
-                    .map(|i| EmergencyFillFixtures::player(i, PlayerPositionType::DefenderCenter))
-                    .chain((0..6).map(|i| {
-                        EmergencyFillFixtures::player(20 + i, PlayerPositionType::MidfielderCenter)
-                    }))
-                    .chain(
-                        (0..4).map(|i| EmergencyFillFixtures::player(40 + i, PlayerPositionType::Striker)),
-                    )
-                    .collect();
-                let main = EmergencyFillFixtures::team(10, "FC", "fc", players);
-                let club = EmergencyFillFixtures::club(100, "FC", main);
-                let country = EmergencyFillFixtures::country(vec![club]);
-                let candidates: Vec<FreeAgentCandidate> = (0..3)
-                    .map(|i| {
-                        EmergencyFillFixtures::candidate_with(
-                            500 + i,
-                            70,
-                            26,
-                            PlayerFieldPositionGroup::Goalkeeper,
-                            true,
-                            cp,
-                            4000,
-                        )
-                    })
-                    .collect();
-                let mut signings = Vec::new();
-                EmergencyFillFixtures::run_emergency(
-                    &country,
-                    &candidates,
-                    &TransferConfig::default(),
-                    &mut signings,
-                );
-                if signings.is_empty() {
-                    empties += 1;
-                } else if signings[0].reason != "emergency_squad_fill_gk" {
-                    not_gk_first += 1;
-                }
-            }
-            RandomEngine::set_seed(0);
-            println!(
-                "cp={cp}: empties={empties}/{trials} not_gk_first={not_gk_first}/{trials}"
-            );
-        }
-    }
-
-    #[test]
     fn club_short_one_gk_signs_a_gk_first() {
         // Test-isolation: seed the global RandomEngine so the probabilistic
         // acceptance roll is deterministic regardless of how many RNG draws
@@ -2378,14 +2440,18 @@ mod emergency_fill_tests {
         let country = EmergencyFillFixtures::country(vec![club]);
 
         // Candidate pool: GKs only (everything else already filled).
+        // Full career pressure pins the acceptance roll near-certain —
+        // the assertion is about slot ordering, not willingness.
         let candidates: Vec<FreeAgentCandidate> = (0..3)
             .map(|i| {
-                EmergencyFillFixtures::candidate(
+                EmergencyFillFixtures::candidate_with(
                     500 + i,
                     70,
                     26,
                     PlayerFieldPositionGroup::Goalkeeper,
                     true,
+                    1.0,
+                    3500,
                 )
             })
             .collect();
@@ -2473,32 +2539,41 @@ mod emergency_fill_tests {
         let club = EmergencyFillFixtures::club(100, "FC", main);
         let country = EmergencyFillFixtures::country(vec![club]);
 
+        // Full career pressure keeps the per-candidate acceptance roll
+        // near-certain — the assertion is about cap behaviour, not
+        // player willingness, and must not flake on the shared stream.
         let mut candidates: Vec<FreeAgentCandidate> = Vec::new();
         for i in 0..2 {
-            candidates.push(EmergencyFillFixtures::candidate(
+            candidates.push(EmergencyFillFixtures::candidate_with(
                 700 + i,
                 70,
                 26,
                 PlayerFieldPositionGroup::Goalkeeper,
                 true,
+                1.0,
+                3500,
             ));
         }
         for i in 0..8 {
-            candidates.push(EmergencyFillFixtures::candidate(
+            candidates.push(EmergencyFillFixtures::candidate_with(
                 710 + i,
                 75,
                 26,
                 PlayerFieldPositionGroup::Defender,
                 true,
+                1.0,
+                3500,
             ));
         }
         for i in 0..5 {
-            candidates.push(EmergencyFillFixtures::candidate(
+            candidates.push(EmergencyFillFixtures::candidate_with(
                 720 + i,
                 80,
                 26,
                 PlayerFieldPositionGroup::Forward,
                 true,
+                1.0,
+                3500,
             ));
         }
 
@@ -2515,6 +2590,11 @@ mod emergency_fill_tests {
 
     #[test]
     fn zero_transfer_budget_does_not_block_emergency_fill() {
+        // Seed + full career pressure: what's under test is the budget
+        // independence, not the acceptance roll — with cp 0.6 each
+        // candidate accepted only ~40% of the time and all five could
+        // decline on an unlucky stream.
+        crate::utils::random::engine::RandomEngine::set_seed(0x0B0D_6E70);
         // Construct a club whose finance balance is zero / negative —
         // emergency fill should still proceed because free-agent fee
         // is 0 and the emergency pass doesn't gate on transfer budget.
@@ -2530,12 +2610,14 @@ mod emergency_fill_tests {
 
         let candidates: Vec<FreeAgentCandidate> = (0..5)
             .map(|i| {
-                EmergencyFillFixtures::candidate(
+                EmergencyFillFixtures::candidate_with(
                     800 + i,
                     70,
                     27,
                     PlayerFieldPositionGroup::Defender,
                     true,
+                    1.0,
+                    3500,
                 )
             })
             .collect();
@@ -2725,41 +2807,51 @@ mod emergency_fill_tests {
         let club = EmergencyFillFixtures::club(100, "FC", main);
         let country = EmergencyFillFixtures::country(vec![club]);
 
+        // Full career pressure pins each acceptance roll near-certain;
+        // the assertion measures the adaptive cap, not willingness.
         let mut candidates = Vec::new();
         for i in 0..3 {
-            candidates.push(EmergencyFillFixtures::candidate(
+            candidates.push(EmergencyFillFixtures::candidate_with(
                 3000 + i,
                 70,
                 28,
                 PlayerFieldPositionGroup::Goalkeeper,
                 true,
+                1.0,
+                3500,
             ));
         }
         for i in 0..8 {
-            candidates.push(EmergencyFillFixtures::candidate(
+            candidates.push(EmergencyFillFixtures::candidate_with(
                 3100 + i,
                 75,
                 28,
                 PlayerFieldPositionGroup::Defender,
                 true,
+                1.0,
+                3500,
             ));
         }
         for i in 0..8 {
-            candidates.push(EmergencyFillFixtures::candidate(
+            candidates.push(EmergencyFillFixtures::candidate_with(
                 3200 + i,
                 75,
                 28,
                 PlayerFieldPositionGroup::Midfielder,
                 true,
+                1.0,
+                3500,
             ));
         }
         for i in 0..5 {
-            candidates.push(EmergencyFillFixtures::candidate(
+            candidates.push(EmergencyFillFixtures::candidate_with(
                 3300 + i,
                 75,
                 28,
                 PlayerFieldPositionGroup::Forward,
                 true,
+                1.0,
+                3500,
             ));
         }
 
@@ -3575,6 +3667,661 @@ mod emergency_fill_tests {
         );
     }
 
+    /// Fixtures for the depth-through-pipeline tests. Separate struct
+    /// so the squad / pool-snapshot builders the new flow needs don't
+    /// bloat the shared [`EmergencyFillFixtures`] helpers.
+    struct DepthPipelineFixtures;
+
+    impl DepthPipelineFixtures {
+        /// Balanced 20-man squad (2 GK / 7 DEF / 7 MID / 4 FWD): every
+        /// group minimum met and total above the emergency threshold,
+        /// so the emergency pass skips the club entirely and only the
+        /// staged DepthCover request drives market activity.
+        fn balanced_squad() -> Vec<Player> {
+            let mut players: Vec<Player> = Vec::new();
+            for i in 0..2 {
+                players.push(EmergencyFillFixtures::player(
+                    i,
+                    PlayerPositionType::Goalkeeper,
+                ));
+            }
+            for i in 0..7 {
+                players.push(EmergencyFillFixtures::player(
+                    10 + i,
+                    PlayerPositionType::DefenderCenter,
+                ));
+            }
+            for i in 0..7 {
+                players.push(EmergencyFillFixtures::player(
+                    20 + i,
+                    PlayerPositionType::MidfielderCenter,
+                ));
+            }
+            for i in 0..4 {
+                players.push(EmergencyFillFixtures::player(
+                    30 + i,
+                    PlayerPositionType::Striker,
+                ));
+            }
+            players
+        }
+
+        /// Snapshot row for the global free-agent pool input of
+        /// `handle_free_agents`.
+        fn pool_summary(
+            player_id: u32,
+            ability: u8,
+            age: u8,
+            group: PlayerFieldPositionGroup,
+            same_country: bool,
+            career_pressure: f32,
+            reference_reputation: u16,
+        ) -> GlobalFreeAgentSummary {
+            let code = if same_country { "en" } else { "ar" };
+            GlobalFreeAgentSummary {
+                player_id,
+                player_name: format!("Pool{player_id}"),
+                ability,
+                potential: ability.saturating_add(5),
+                age,
+                position_group: group,
+                nationality_country_reputation: reference_reputation,
+                nationality_continent_id: if same_country { 1 } else { 3 },
+                nationality_country_code: code.to_string(),
+                career_pressure,
+                reference_reputation,
+                last_salary: 50_000,
+                last_country_reputation: reference_reputation,
+                last_league_reputation: ((reference_reputation as f32) * 0.85) as u16,
+                world_reputation: 1500,
+                current_reputation: 1500,
+            }
+        }
+
+        /// Drive `handle_free_agents` until the staged-negotiation
+        /// matcher fires (the daily-chance roll is probabilistic) or
+        /// `max_ticks` pass. Returns the pool signings the calls
+        /// produced plus the offered / rejected side-channels.
+        fn run_until_negotiation(
+            country: &mut Country,
+            pool: &[GlobalFreeAgentSummary],
+            max_ticks: usize,
+        ) -> (Vec<GlobalFreeAgentSigning>, Vec<u32>, Vec<u32>) {
+            let date = EmergencyFillFixtures::d(2026, 6, 10);
+            let config = TransferConfig::default();
+            let mut all_signings = Vec::new();
+            let mut offered = Vec::new();
+            let mut rejected = Vec::new();
+            for _ in 0..max_ticks {
+                let mut summary = TransferActivitySummary::new();
+                let mut domestic = Vec::new();
+                let signings = CountryResult::handle_free_agents(
+                    country,
+                    date,
+                    &mut summary,
+                    pool,
+                    &config,
+                    &mut domestic,
+                    &mut offered,
+                    &mut rejected,
+                );
+                all_signings.extend(signings);
+                if !country.transfer_market.negotiations.is_empty() {
+                    break;
+                }
+            }
+            (all_signings, offered, rejected)
+        }
+
+        /// Balanced club + staged midfield DepthCover request + one
+        /// domestic pool journeyman — the canonical "depth fill should
+        /// negotiate" setup the flow tests share.
+        fn staged_depth_country() -> (Country, Vec<GlobalFreeAgentSummary>) {
+            let main = EmergencyFillFixtures::team(
+                10,
+                "FC",
+                "fc",
+                DepthPipelineFixtures::balanced_squad(),
+            );
+            let club = EmergencyFillFixtures::club(100, "FC", main);
+            let mut country = EmergencyFillFixtures::country(vec![club]);
+            country.clubs[0].transfer_plan.initialized = true;
+            EmergencyDepthRequestPlanner::stage_requests(
+                &mut country,
+                &[EmergencyDepthRequestIntent {
+                    club_id: 100,
+                    group: PlayerFieldPositionGroup::Midfielder,
+                }],
+            );
+            let pool = vec![DepthPipelineFixtures::pool_summary(
+                9000,
+                80,
+                28,
+                PlayerFieldPositionGroup::Midfielder,
+                true,
+                0.6,
+                4000,
+            )];
+            (country, pool)
+        }
+    }
+
+    #[test]
+    fn depth_slot_stages_pipeline_request_instead_of_direct_signing() {
+        // Squad of 14: MID six short, every other group at its minimum.
+        // The candidate pool carries no midfielders, so the MID slot is
+        // dead this tick and the planner falls to the depth tail —
+        // which previously direct-signed a defender under
+        // `emergency_squad_fill_depth`. Now it must return an intent
+        // and sign nothing.
+        let mut players: Vec<Player> = Vec::new();
+        for i in 0..2 {
+            players.push(EmergencyFillFixtures::player(
+                i,
+                PlayerPositionType::Goalkeeper,
+            ));
+        }
+        for i in 0..7 {
+            players.push(EmergencyFillFixtures::player(
+                10 + i,
+                PlayerPositionType::DefenderCenter,
+            ));
+        }
+        players.push(EmergencyFillFixtures::player(
+            20,
+            PlayerPositionType::MidfielderCenter,
+        ));
+        for i in 0..4 {
+            players.push(EmergencyFillFixtures::player(
+                30 + i,
+                PlayerPositionType::Striker,
+            ));
+        }
+
+        let main = EmergencyFillFixtures::team(10, "FC", "fc", players);
+        let club = EmergencyFillFixtures::club(100, "FC", main);
+        let mut country = EmergencyFillFixtures::country(vec![club]);
+
+        let candidates: Vec<FreeAgentCandidate> = (0..5)
+            .map(|i| {
+                EmergencyFillFixtures::candidate(
+                    7000 + i,
+                    75,
+                    28,
+                    PlayerFieldPositionGroup::Defender,
+                    true,
+                )
+            })
+            .collect();
+
+        let mut signings = Vec::new();
+        let mut offered = Vec::new();
+        let mut rejected = Vec::new();
+        let intents = CountryResult::handle_free_agents_emergency_pass(
+            &country,
+            &candidates,
+            &TransferConfig::default(),
+            &mut signings,
+            &mut offered,
+            &mut rejected,
+        );
+
+        assert!(
+            signings.is_empty(),
+            "depth tail must not direct-sign, got {:?}",
+            signings
+                .iter()
+                .map(|s| (s.player_id, &s.reason))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            intents.len(),
+            1,
+            "depth shortfall must surface as an intent"
+        );
+        assert_eq!(intents[0].group, PlayerFieldPositionGroup::Defender);
+
+        EmergencyDepthRequestPlanner::stage_requests(&mut country, &intents);
+        {
+            let plan = &country.clubs[0].transfer_plan;
+            let request = plan
+                .transfer_requests
+                .iter()
+                .find(|r| r.reason == TransferNeedReason::DepthCover)
+                .expect("depth intent must stage a DepthCover request");
+            assert_eq!(request.priority, TransferNeedPriority::Optional);
+            assert_eq!(request.position, PlayerPositionType::DefenderCenter);
+            assert_eq!(request.status, TransferRequestStatus::Pending);
+        }
+
+        // Re-staging while the request is open must not duplicate it.
+        EmergencyDepthRequestPlanner::stage_requests(&mut country, &intents);
+        let depth_count = country.clubs[0]
+            .transfer_plan
+            .transfer_requests
+            .iter()
+            .filter(|r| r.reason == TransferNeedReason::DepthCover)
+            .count();
+        assert_eq!(depth_count, 1, "open depth request must dedup re-staging");
+    }
+
+    #[test]
+    fn depth_request_creates_pending_personal_terms_negotiation() {
+        crate::utils::random::engine::RandomEngine::set_seed(0xDE91_07F1);
+        let (mut country, pool) = DepthPipelineFixtures::staged_depth_country();
+
+        let (signings, offered, _rejected) =
+            DepthPipelineFixtures::run_until_negotiation(&mut country, &pool, 400);
+
+        assert!(
+            signings.is_empty(),
+            "depth request must not produce an instant pool signing"
+        );
+        let negotiation = country
+            .transfer_market
+            .negotiations
+            .values()
+            .next()
+            .expect("plausible domestic candidate must enter negotiation within 400 ticks");
+        assert_eq!(negotiation.status, NegotiationStatus::Pending);
+        assert!(
+            matches!(negotiation.phase, NegotiationPhase::PersonalTerms { .. }),
+            "staged depth negotiation must enter PersonalTerms, got {:?}",
+            negotiation.phase
+        );
+        assert_eq!(negotiation.player_id, 9000);
+        assert_eq!(
+            negotiation.selling_club_id, 0,
+            "pool free agents negotiate from the synthetic club-0 seller"
+        );
+        assert!(negotiation.offered_salary.unwrap_or(0) > 0);
+        assert!(negotiation.current_offer.personal_terms.is_some());
+        assert_eq!(
+            negotiation.reason,
+            PipelineProcessor::transfer_need_reason_text(&TransferNeedReason::DepthCover),
+            "history reason must be the human-readable depth text, not a raw emergency tag"
+        );
+        assert!(
+            country
+                .transfer_market
+                .negotiations
+                .values()
+                .all(|n| n.status != NegotiationStatus::Accepted),
+            "depth path must never insert a pre-accepted negotiation"
+        );
+        assert!(country.transfer_market.transfer_history.is_empty());
+        assert!(
+            offered.contains(&9000),
+            "negotiated offer must bump the offered counter"
+        );
+
+        let plan = &country.clubs[0].transfer_plan;
+        let request = plan
+            .transfer_requests
+            .iter()
+            .find(|r| r.reason == TransferNeedReason::DepthCover)
+            .unwrap();
+        assert_eq!(request.status, TransferRequestStatus::Negotiating);
+        let shortlist = plan
+            .shortlists
+            .iter()
+            .find(|s| s.transfer_request_id == request.id)
+            .expect("staging must wire a shortlist for the request");
+        assert!(shortlist.candidates.iter().any(
+            |c| c.player_id == 9000 && c.status == ShortlistCandidateStatus::CurrentlyPursuing
+        ));
+    }
+
+    #[test]
+    fn low_rep_club_cannot_depth_sign_high_rep_foreign_free_agent() {
+        crate::utils::random::engine::RandomEngine::set_seed(0x10F_FA11);
+        // 800-rep country, routine pressure, CA-165 foreign star with a
+        // 7500 reference reputation: the strict depth gates (tier CA
+        // ceiling without overreach + pressure-scaled rep drop) must
+        // filter the candidate before any offer or negotiation exists.
+        let main =
+            EmergencyFillFixtures::team(10, "FC", "fc", DepthPipelineFixtures::balanced_squad());
+        let club = EmergencyFillFixtures::club(100, "FC", main);
+        let mut country = EmergencyFillFixtures::country_with_reputation(vec![club], 800);
+        country.clubs[0].transfer_plan.initialized = true;
+        EmergencyDepthRequestPlanner::stage_requests(
+            &mut country,
+            &[EmergencyDepthRequestIntent {
+                club_id: 100,
+                group: PlayerFieldPositionGroup::Midfielder,
+            }],
+        );
+
+        let pool = vec![DepthPipelineFixtures::pool_summary(
+            9100,
+            165,
+            27,
+            PlayerFieldPositionGroup::Midfielder,
+            false,
+            0.3,
+            7500,
+        )];
+        let (signings, offered, _rejected) =
+            DepthPipelineFixtures::run_until_negotiation(&mut country, &pool, 300);
+
+        assert!(signings.is_empty(), "no pool signing may be staged");
+        assert!(
+            country.transfer_market.negotiations.is_empty(),
+            "implausible star must never enter a depth negotiation at a low-rep club"
+        );
+        assert!(country.transfer_market.transfer_history.is_empty());
+        assert!(
+            !offered.contains(&9100),
+            "filtered candidates must not be counted as offered"
+        );
+    }
+
+    #[test]
+    fn depth_personal_terms_rejection_updates_request_and_shortlist() {
+        crate::utils::random::engine::RandomEngine::set_seed(0xBAD_7E55);
+        let (mut country, pool) = DepthPipelineFixtures::staged_depth_country();
+        DepthPipelineFixtures::run_until_negotiation(&mut country, &pool, 400);
+        assert!(!country.transfer_market.negotiations.is_empty());
+
+        // Mirror what `resolve_personal_terms` does on a declined offer
+        // — the staged shortlist wiring must respond like any pipeline
+        // pursuit: candidate marked failed, Optional request abandoned,
+        // negotiation slot released.
+        PipelineProcessor::on_negotiation_resolved(&mut country, 100, 9000, false);
+
+        let plan = &country.clubs[0].transfer_plan;
+        let request = plan
+            .transfer_requests
+            .iter()
+            .find(|r| r.reason == TransferNeedReason::DepthCover)
+            .unwrap();
+        assert_eq!(
+            request.status,
+            TransferRequestStatus::Abandoned,
+            "Optional depth request with an exhausted shortlist must be abandoned"
+        );
+        let shortlist = plan
+            .shortlists
+            .iter()
+            .find(|s| s.transfer_request_id == request.id)
+            .unwrap();
+        assert!(shortlist.candidates.iter().any(
+            |c| c.player_id == 9000 && c.status == ShortlistCandidateStatus::NegotiationFailed
+        ));
+        assert_eq!(plan.active_negotiation_count, 0);
+    }
+
+    #[test]
+    fn pool_depth_medical_completion_defers_global_signing_without_direct_history() {
+        crate::utils::random::engine::RandomEngine::set_seed(0xD0C7_0001);
+        let (mut country, pool) = DepthPipelineFixtures::staged_depth_country();
+        DepthPipelineFixtures::run_until_negotiation(&mut country, &pool, 400);
+        let neg_id = *country
+            .transfer_market
+            .negotiations
+            .keys()
+            .next()
+            .expect("staging must have created the negotiation");
+
+        // Fast-forward the negotiation to a mature medical phase so a
+        // single resolver tick completes it.
+        let date = EmergencyFillFixtures::d(2026, 6, 10);
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.phase = NegotiationPhase::MedicalAndFinalization { started: date };
+            negotiation.phase_expiry = date;
+        }
+
+        // A second club has a competing pool bid in flight (not yet
+        // phase-ready, so the resolver doesn't touch it directly) —
+        // completion must sweep it like `complete_transfer` would.
+        let competing_id = country.transfer_market.next_negotiation_id;
+        country.transfer_market.next_negotiation_id += 1;
+        country.transfer_market.negotiations.insert(
+            competing_id,
+            TransferNegotiation::new(
+                competing_id,
+                9000,
+                0,
+                0,
+                200,
+                TransferOffer::new(CurrencyValue::new(0.0, Currency::Usd), 200, date),
+                date,
+                0.4,
+                0.3,
+                28,
+                0.5,
+            ),
+        );
+
+        crate::utils::random::engine::RandomEngine::set_seed(42);
+        let mut summary = TransferActivitySummary::new();
+        let outcomes =
+            CountryResult::resolve_pending_negotiations(&mut country, date, &mut summary);
+
+        assert!(
+            outcomes.deferred.is_empty(),
+            "pool free agents must not enter the club-to-club execution queue"
+        );
+        assert_eq!(
+            outcomes.free_agent_signings.len(),
+            1,
+            "cleared medical must defer exactly one global pool signing"
+        );
+        let signing = &outcomes.free_agent_signings[0];
+        assert_eq!(signing.player_id, 9000);
+        assert_eq!(signing.buying_club_id, 100);
+        assert_eq!(
+            signing.reason,
+            PipelineProcessor::transfer_need_reason_text(&TransferNeedReason::DepthCover)
+        );
+        assert!(
+            signing.terms.is_some(),
+            "negotiated wage / length / role must travel to execution"
+        );
+        assert!(
+            country.transfer_market.transfer_history.is_empty(),
+            "the resolver must not write history — the deferred executor owns that row"
+        );
+        assert_eq!(
+            country.transfer_market.negotiations[&neg_id].status,
+            NegotiationStatus::Accepted
+        );
+        assert_eq!(
+            country.transfer_market.negotiations[&competing_id].status,
+            NegotiationStatus::Rejected,
+            "competing pool negotiations must be cancelled on completion"
+        );
+        assert!(
+            country
+                .transfer_market
+                .listings
+                .iter()
+                .filter(|l| l.player_id == 9000)
+                .all(|l| l.status == TransferListingStatus::Completed),
+            "pool player's listings must be marked completed on medical success"
+        );
+        let request = country.clubs[0]
+            .transfer_plan
+            .transfer_requests
+            .iter()
+            .find(|r| r.reason == TransferNeedReason::DepthCover)
+            .unwrap();
+        assert_eq!(
+            request.status,
+            TransferRequestStatus::Fulfilled,
+            "request is fulfilled only once the negotiation actually completes"
+        );
+    }
+
+    #[test]
+    fn unmarked_depth_cover_request_keeps_legacy_instant_signing() {
+        crate::utils::random::engine::RandomEngine::set_seed(0x1E6A_C001);
+        // A DepthCover request from the weekly evaluation (no
+        // EmergencyFreeAgentDepth marker) must keep the legacy instant
+        // free-agent path — the staged-negotiation flow is reserved
+        // for emergency-planner depth requests.
+        let main = EmergencyFillFixtures::team(
+            10,
+            "FC",
+            "fc",
+            DepthPipelineFixtures::balanced_squad(),
+        );
+        let club = EmergencyFillFixtures::club(100, "FC", main);
+        let mut country = EmergencyFillFixtures::country(vec![club]);
+        country.clubs[0].transfer_plan.initialized = true;
+        country.clubs[0]
+            .transfer_plan
+            .transfer_requests
+            .push(TransferRequest::new(
+                1,
+                PlayerPositionType::MidfielderCenter,
+                TransferNeedPriority::Optional,
+                TransferNeedReason::DepthCover,
+                60,
+                80,
+                0.0,
+            ));
+
+        let pool = vec![DepthPipelineFixtures::pool_summary(
+            9300,
+            80,
+            28,
+            PlayerFieldPositionGroup::Midfielder,
+            true,
+            1.0,
+            3500,
+        )];
+
+        let date = EmergencyFillFixtures::d(2026, 6, 10);
+        let config = TransferConfig::default();
+        let mut signings = Vec::new();
+        for _ in 0..400 {
+            let mut summary = TransferActivitySummary::new();
+            let mut domestic = Vec::new();
+            let mut offered = Vec::new();
+            let mut rejected = Vec::new();
+            signings = CountryResult::handle_free_agents(
+                &mut country,
+                date,
+                &mut summary,
+                &pool,
+                &config,
+                &mut domestic,
+                &mut offered,
+                &mut rejected,
+            );
+            if !signings.is_empty() {
+                break;
+            }
+        }
+
+        assert!(
+            !signings.is_empty(),
+            "unmarked DepthCover must still instant-sign within 400 ticks"
+        );
+        assert_eq!(signings[0].player_id, 9300);
+        assert!(
+            country.transfer_market.negotiations.is_empty(),
+            "normal evaluated DepthCover requests must not enter the staged-negotiation flow"
+        );
+    }
+
+    #[test]
+    fn pool_executor_writes_single_history_row_on_success() {
+        let date = EmergencyFillFixtures::d(2026, 6, 10);
+        let mut pool_player =
+            EmergencyFillFixtures::player(9400, PlayerPositionType::MidfielderCenter);
+        pool_player.ensure_free_agent_state(date, 4000);
+        let main = EmergencyFillFixtures::team(10, "FC", "fc", Vec::new());
+        let club = EmergencyFillFixtures::club(100, "FC", main);
+        let country = EmergencyFillFixtures::country(vec![club]);
+        let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+        let mut data = SimulatorData::new(
+            date.and_hms_opt(12, 0, 0).unwrap(),
+            vec![continent],
+            GlobalCompetitions::new(Vec::new()),
+        );
+        data.free_agents.push(pool_player);
+
+        let signing = GlobalFreeAgentSigning {
+            player_id: 9400,
+            player_name: "Pool P9400".to_string(),
+            buying_country_id: 1,
+            buying_club_id: 100,
+            reason: "Squad depth — need backup for position group".to_string(),
+            terms: None,
+        };
+        let executed = execute_global_free_agent_signing(
+            &mut data,
+            &signing,
+            date,
+            &TransferConfig::default(),
+        );
+
+        assert!(executed, "unclaimed pool player must be signable");
+        assert!(data.free_agents.is_empty(), "player leaves the pool");
+        let country = data.country(1).unwrap();
+        let rows: Vec<_> = country
+            .transfer_market
+            .transfer_history
+            .iter()
+            .filter(|t| t.player_id == 9400)
+            .collect();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the executor is the single writer of the history row"
+        );
+        assert_eq!(rows[0].reason, "Squad depth — need backup for position group");
+        assert!(
+            country.clubs[0]
+                .teams
+                .teams
+                .iter()
+                .any(|t| t.players.players.iter().any(|p| p.id == 9400)),
+            "player must land on the buying club's roster"
+        );
+    }
+
+    #[test]
+    fn pool_executor_writes_no_history_when_player_already_claimed() {
+        let date = EmergencyFillFixtures::d(2026, 6, 10);
+        let main = EmergencyFillFixtures::team(10, "FC", "fc", Vec::new());
+        let club = EmergencyFillFixtures::club(100, "FC", main);
+        let country = EmergencyFillFixtures::country(vec![club]);
+        let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+        let mut data = SimulatorData::new(
+            date.and_hms_opt(12, 0, 0).unwrap(),
+            vec![continent],
+            GlobalCompetitions::new(Vec::new()),
+        );
+        // Pool is empty — another country claimed the player earlier in
+        // the same tick. The executor must fail silently.
+        let signing = GlobalFreeAgentSigning {
+            player_id: 9400,
+            player_name: "Pool P9400".to_string(),
+            buying_country_id: 1,
+            buying_club_id: 100,
+            reason: "Squad depth — need backup for position group".to_string(),
+            terms: None,
+        };
+        let executed = execute_global_free_agent_signing(
+            &mut data,
+            &signing,
+            date,
+            &TransferConfig::default(),
+        );
+
+        assert!(!executed, "claimed player cannot be signed twice");
+        assert!(
+            data.country(1)
+                .unwrap()
+                .transfer_market
+                .transfer_history
+                .is_empty(),
+            "no phantom history row may be written for a claimed player"
+        );
+    }
 }
 
 #[cfg(test)]

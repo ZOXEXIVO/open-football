@@ -1,3 +1,5 @@
+use super::free_agent_market_calc::BuyerRoleFit;
+use super::free_agents::{EmergencySignedTerms, GlobalFreeAgentSigning};
 use super::types::{
     DeferredTransfer, NegotiationData, TransferActivitySummary, find_player_in_country,
     find_player_in_country_mut,
@@ -16,7 +18,7 @@ use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::market::TransferListingOrigin;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason, TransferNegotiation};
-use crate::transfers::offer::TransferClause;
+use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
 use crate::transfers::pipeline::PipelineProcessor;
 use crate::transfers::pipeline::plausibility::{
     TransferPlausibilityBuilder, TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
@@ -29,13 +31,63 @@ use crate::{
 };
 use chrono::NaiveDate;
 
+/// Everything one resolution tick produced beyond in-place market
+/// mutations. `deferred` is the classic club-to-club execution queue;
+/// the free-agent fields exist because pool players live in
+/// `SimulatorData.free_agents` and their negotiations can't complete
+/// (or update market state) inside the country borrow.
+pub(crate) struct NegotiationOutcomes {
+    pub(crate) deferred: Vec<DeferredTransfer>,
+    /// Pool free agents whose negotiation cleared medical today —
+    /// executed in Phase C via `execute_global_free_agent_signing`,
+    /// which also writes the "Free Agent" history row (only when the
+    /// player is still unclaimed, so no phantom entries).
+    pub(crate) free_agent_signings: Vec<GlobalFreeAgentSigning>,
+    /// Pool free agents who turned down personal terms today — bumps
+    /// their `FreeAgentMarketState` rejected counter in Phase C.
+    pub(crate) free_agent_rejected_ids: Vec<u32>,
+}
+
+/// Maps the negotiated `PersonalTermsOffer` back into the
+/// `EmergencySignedTerms` shape `execute_global_free_agent_signing`
+/// installs. Round-trips cleanly with
+/// `EmergencySignedTerms::to_personal_terms`: the role only feeds the
+/// squad-status promise, so a missing promise maps to `Backup` and
+/// regenerates the same (absent) promise on install.
+struct PoolSigningTerms;
+
+impl PoolSigningTerms {
+    fn from_personal(
+        personal_terms: Option<&PersonalTermsOffer>,
+        offered_annual_wage: Option<u32>,
+    ) -> Option<EmergencySignedTerms> {
+        let terms = personal_terms?;
+        let annual_wage = terms.annual_wage.or(offered_annual_wage)?;
+        let role = match terms.squad_status_promise {
+            Some(PromisedSquadStatus::KeyPlayer) => BuyerRoleFit::KeyPlayer,
+            Some(PromisedSquadStatus::FirstTeamRegular) => BuyerRoleFit::Starter,
+            Some(PromisedSquadStatus::FirstTeamSquadRotation) => BuyerRoleFit::Rotation,
+            _ => BuyerRoleFit::Backup,
+        };
+        Some(EmergencySignedTerms {
+            annual_wage,
+            contract_years: terms.contract_years.unwrap_or(1),
+            role,
+        })
+    }
+}
+
 impl CountryResult {
     pub(crate) fn resolve_pending_negotiations(
         country: &mut Country,
         date: NaiveDate,
         summary: &mut TransferActivitySummary,
-    ) -> Vec<DeferredTransfer> {
-        let mut deferred: Vec<DeferredTransfer> = Vec::new();
+    ) -> NegotiationOutcomes {
+        let mut outcomes = NegotiationOutcomes {
+            deferred: Vec::new(),
+            free_agent_signings: Vec::new(),
+            free_agent_rejected_ids: Vec::new(),
+        };
         let country_id = country.id;
 
         // When multiple buyers have bids in flight for the same player,
@@ -160,7 +212,7 @@ impl CountryResult {
                     Self::resolve_club_negotiation(country, neg_id, &neg_data, round, date);
                 }
                 NegotiationPhase::PersonalTerms { .. } => {
-                    Self::resolve_personal_terms(country, neg_id, &neg_data, date);
+                    Self::resolve_personal_terms(country, neg_id, &neg_data, date, &mut outcomes);
                 }
                 NegotiationPhase::MedicalAndFinalization { .. } => {
                     Self::resolve_medical(
@@ -170,13 +222,13 @@ impl CountryResult {
                         &neg_data,
                         date,
                         summary,
-                        &mut deferred,
+                        &mut outcomes,
                     );
                 }
             }
         }
 
-        deferred
+        outcomes
     }
 
     /// Build the transfer-interest signal that the player owner needs
@@ -647,6 +699,7 @@ impl CountryResult {
         neg_id: u32,
         neg_data: &NegotiationData,
         date: NaiveDate,
+        outcomes: &mut NegotiationOutcomes,
     ) {
         let is_foreign = neg_data.selling_country_id.is_some();
 
@@ -959,6 +1012,13 @@ impl CountryResult {
                     .reject_with_reason(NegotiationRejectionReason::PlayerRejectedPersonalTerms);
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
+            // A pool free agent (selling_club_id == 0) who declined the
+            // terms gets it counted against his market state — this is
+            // the "player actually rejected a negotiated offer" moment,
+            // not the candidate scan.
+            if neg_data.selling_country_id.is_none() && neg_data.selling_club_id == 0 {
+                outcomes.free_agent_rejected_ids.push(neg_data.player_id);
+            }
             PipelineProcessor::on_negotiation_resolved(
                 country,
                 neg_data.buying_club_id,
@@ -975,9 +1035,14 @@ impl CountryResult {
         neg_data: &NegotiationData,
         date: NaiveDate,
         summary: &mut TransferActivitySummary,
-        deferred: &mut Vec<DeferredTransfer>,
+        outcomes: &mut NegotiationOutcomes,
     ) {
         let is_foreign = neg_data.selling_country_id.is_some();
+        // A staged free-agent negotiation for a player in the global
+        // pool — there is no selling club (id 0) and the player isn't
+        // on any roster in this country, so the at-club verification
+        // and the club-to-club execution path don't apply.
+        let is_pool_free_agent = !is_foreign && neg_data.selling_club_id == 0;
 
         // Cross-country route policy: the plausibility evaluator does not
         // run on cross-country negotiations (it operates inside one
@@ -1010,7 +1075,33 @@ impl CountryResult {
         // already claimed by another deferred transfer (foreign)
         if is_foreign {
             // Reject if another negotiation for this player is already deferred
-            if deferred.iter().any(|d| d.player_id == neg_data.player_id) {
+            if outcomes
+                .deferred
+                .iter()
+                .any(|d| d.player_id == neg_data.player_id)
+            {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation
+                        .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
+                }
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    false,
+                );
+                return;
+            }
+        } else if is_pool_free_agent {
+            // Pool membership can't be verified from country scope —
+            // first-come-first-served dedup happens at execution time
+            // in `execute_global_free_agent_signing`. Only guard
+            // against a second pool signing staged this same tick.
+            if outcomes
+                .free_agent_signings
+                .iter()
+                .any(|s| s.player_id == neg_data.player_id)
+            {
                 if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                     negotiation
                         .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
@@ -1060,6 +1151,46 @@ impl CountryResult {
         if roll >= fail_chance {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation.accept();
+            }
+
+            // Pool free agent: completion runs in Phase C through
+            // `execute_global_free_agent_signing`, which removes the
+            // player from `data.free_agents` and writes the "Free
+            // Agent" history row itself — writing one here as well
+            // would duplicate it (or leave a phantom row when another
+            // country claimed the player first).
+            if is_pool_free_agent {
+                let reason = country
+                    .transfer_market
+                    .negotiations
+                    .get(&neg_id)
+                    .map(|n| n.reason.clone())
+                    .unwrap_or_default();
+                outcomes.free_agent_signings.push(GlobalFreeAgentSigning {
+                    player_id: neg_data.player_id,
+                    player_name: neg_data.player_name.clone(),
+                    buying_country_id: country_id,
+                    buying_club_id: neg_data.buying_club_id,
+                    reason,
+                    terms: PoolSigningTerms::from_personal(
+                        neg_data.personal_terms.as_ref(),
+                        neg_data.offered_annual_wage,
+                    ),
+                });
+                country
+                    .transfer_market
+                    .complete_listings_for_player(neg_data.player_id);
+                country
+                    .transfer_market
+                    .cancel_negotiations_for_player(neg_data.player_id, neg_id);
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    true,
+                );
+                PipelineProcessor::clear_player_interest(country, neg_data.player_id);
+                return;
             }
 
             // Resolve names: domestic from country, foreign from cached names
@@ -1114,7 +1245,7 @@ impl CountryResult {
                     .get(&neg_id)
                     .map(|n| n.current_offer.clauses.clone())
                     .unwrap_or_default();
-                deferred.push(DeferredTransfer {
+                outcomes.deferred.push(DeferredTransfer {
                     player_id: neg_data.player_id,
                     selling_country_id,
                     selling_club_id: neg_data.selling_club_id,

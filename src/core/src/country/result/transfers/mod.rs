@@ -1,5 +1,6 @@
 pub(crate) mod config;
 pub(crate) mod execution;
+mod free_agent_depth;
 pub(crate) mod free_agent_market_calc;
 mod free_agents;
 mod listings;
@@ -18,6 +19,7 @@ use free_agents::{GlobalFreeAgentSigning, execute_global_free_agent_signing};
 pub(crate) use free_agents::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use log::debug;
 use settlement::TransferClauseSettler;
+use std::collections::HashSet;
 use types::DeferredTransfer;
 use types::TransferActivitySummary;
 
@@ -114,9 +116,15 @@ impl CountryResult {
         // any stranded listings and expires pending negotiations.
         country.transfer_market.check_transfer_window(window_open);
 
-        // Resolve pending negotiations — returns all completed transfers for deferred execution
-        let deferred = Self::resolve_pending_negotiations(country, current_date, &mut summary);
-        ops.deferred_transfers = deferred;
+        // Resolve pending negotiations — club-to-club moves for the
+        // deferred execution queue, plus free-agent negotiation
+        // outcomes: pool signings whose medical just cleared (executed
+        // against `data.free_agents` in Phase C) and rejected-offer
+        // counters for pool players who declined personal terms.
+        let outcomes = Self::resolve_pending_negotiations(country, current_date, &mut summary);
+        ops.deferred_transfers = outcomes.deferred;
+        ops.global_signings = outcomes.free_agent_signings;
+        ops.global_rejected_ids = outcomes.free_agent_rejected_ids;
 
         // Expire stale negotiations
         let expired = country.transfer_market.update(current_date);
@@ -133,8 +141,9 @@ impl CountryResult {
 
         // Free agents and contract expirations. Returns deferred
         // signings sourced from the global pool (`data.free_agents`),
-        // which we execute after the country borrow ends.
-        ops.global_signings = Self::handle_free_agents(
+        // which we execute after the country borrow ends — appended to
+        // the negotiation-driven pool signings collected above.
+        let pool_signings = Self::handle_free_agents(
             country,
             current_date,
             &mut summary,
@@ -144,6 +153,7 @@ impl CountryResult {
             &mut ops.global_offered_ids,
             &mut ops.global_rejected_ids,
         );
+        ops.global_signings.extend(pool_signings);
 
         if window_open {
             debug!("Transfer window is OPEN - simulating pipeline-driven market activity");
@@ -196,12 +206,19 @@ impl CountryResult {
 
         // Apply free-agent market state — bump 30-day window / rejected
         // counters on each global-pool player that fielded an offer.
+        // Collapsed to one bump per player per tick: the emergency
+        // pass, the staged-negotiation flow, and the resolver can each
+        // record the same player on the same day (retries at a second
+        // club, offer + rejection chains), and double-counting would
+        // inflate the pressure signals the decay model reads.
         if !ops.global_offered_ids.is_empty() || !ops.global_rejected_ids.is_empty() {
+            let offered: HashSet<u32> = ops.global_offered_ids.iter().copied().collect();
+            let rejected: HashSet<u32> = ops.global_rejected_ids.iter().copied().collect();
             for player in data.free_agents.iter_mut() {
-                if ops.global_offered_ids.contains(&player.id) {
+                if offered.contains(&player.id) {
                     player.on_offer_received(current_date);
                 }
-                if ops.global_rejected_ids.contains(&player.id) {
+                if rejected.contains(&player.id) {
                     player.on_offer_rejected();
                 }
             }
@@ -327,7 +344,10 @@ impl CountryResult {
             country.transfer_market.check_transfer_window(window_open);
 
             // Resolve pending negotiations — returns all completed transfers for deferred execution
-            let deferred = Self::resolve_pending_negotiations(country, current_date, &mut summary);
+            let outcomes = Self::resolve_pending_negotiations(country, current_date, &mut summary);
+            global_signings.extend(outcomes.free_agent_signings);
+            global_rejected_ids.extend(outcomes.free_agent_rejected_ids);
+            let deferred = outcomes.deferred;
 
             // Expire stale negotiations
             let expired = country.transfer_market.update(current_date);
@@ -349,7 +369,7 @@ impl CountryResult {
             // Free agents and contract expirations. Returns deferred
             // signings sourced from the global pool (`sim.free_agents`),
             // which we execute after the country borrow ends.
-            global_signings = Self::handle_free_agents(
+            global_signings.extend(Self::handle_free_agents(
                 country,
                 current_date,
                 &mut summary,
@@ -358,7 +378,7 @@ impl CountryResult {
                 &mut domestic_signed_ids,
                 &mut global_offered_ids,
                 &mut global_rejected_ids,
-            );
+            ));
 
             if window_open {
                 debug!("Transfer window is OPEN - simulating pipeline-driven market activity");
@@ -432,12 +452,16 @@ impl CountryResult {
         // signing executor because signing clears the player's state
         // anyway, so updating both for a successful candidate is harmless
         // but updating after would race against `clear_free_agent_state`.
+        // De-duplicated to one bump per player per tick, mirroring the
+        // Phase-C path above.
         if !global_offered_ids.is_empty() || !global_rejected_ids.is_empty() {
+            let offered: HashSet<u32> = global_offered_ids.iter().copied().collect();
+            let rejected: HashSet<u32> = global_rejected_ids.iter().copied().collect();
             for player in data.free_agents.iter_mut() {
-                if global_offered_ids.contains(&player.id) {
+                if offered.contains(&player.id) {
                     player.on_offer_received(current_date);
                 }
-                if global_rejected_ids.contains(&player.id) {
+                if rejected.contains(&player.id) {
                     player.on_offer_rejected();
                 }
             }
@@ -487,5 +511,118 @@ impl CountryResult {
         }
 
         summary
+    }
+}
+
+#[cfg(test)]
+mod side_channel_tests {
+    //! The offered / rejected side channels are collected as plain vecs
+    //! across the emergency pass, the staged-negotiation flow, and the
+    //! resolver — the same player can legitimately appear several times
+    //! in one tick (retry at a second club, offer + rejection chain).
+    //! Phase C must collapse them to one market-state bump per player
+    //! per tick.
+
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::continent::Continent;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::fullname::FullName;
+    use crate::{
+        Country, PersonAttributes, Player, PlayerAttributes, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
+    };
+    use chrono::NaiveDate;
+
+    struct SideChannelFixtures;
+
+    impl SideChannelFixtures {
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn pool_player(id: u32, date: NaiveDate) -> Player {
+            let mut player = PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Pool".to_string(), format!("P{id}")))
+                .birth_date(Self::d(1996, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 16,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap();
+            player.ensure_free_agent_state(date, 4000);
+            player
+        }
+
+        fn simulator(date: NaiveDate, free_agents: Vec<Player>) -> SimulatorData {
+            let country = Country::builder()
+                .id(1)
+                .code("en".to_string())
+                .slug("england".to_string())
+                .name("England".to_string())
+                .continent_id(1)
+                .reputation(5000)
+                .leagues(LeagueCollection::new(vec![League::new(
+                    1,
+                    "L".to_string(),
+                    "english".to_string(),
+                    1,
+                    5000,
+                    LeagueSettings {
+                        season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                        season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                        tier: 1,
+                        promotion_spots: 0,
+                        relegation_spots: 0,
+                        league_group: None,
+                    },
+                    false,
+                )]))
+                .clubs(Vec::new())
+                .build()
+                .unwrap();
+            let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+            let mut data = SimulatorData::new(
+                date.and_hms_opt(12, 0, 0).unwrap(),
+                vec![continent],
+                GlobalCompetitions::new(Vec::new()),
+            );
+            data.free_agents = free_agents;
+            data
+        }
+    }
+
+    #[test]
+    fn duplicate_same_day_offer_and_rejection_ids_bump_market_state_once() {
+        let date = SideChannelFixtures::d(2026, 6, 10);
+        let player = SideChannelFixtures::pool_player(900, date);
+        let mut data = SideChannelFixtures::simulator(date, vec![player]);
+
+        let mut ops = DeferredTransferOps::empty(1);
+        ops.global_offered_ids = vec![900, 900, 900];
+        ops.global_rejected_ids = vec![900, 900];
+        CountryResult::apply_deferred_transfer_ops(&mut data, ops, date);
+
+        let state = data.free_agents[0]
+            .free_agent_state()
+            .expect("pool player keeps market state when no signing executed");
+        assert_eq!(
+            state.offers_received_30d(date),
+            1,
+            "repeated same-day attempts must count as one received offer"
+        );
+        assert_eq!(
+            state.offers_rejected_total, 1,
+            "repeated same-day rejections must count once"
+        );
     }
 }

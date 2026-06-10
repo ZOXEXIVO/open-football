@@ -219,10 +219,13 @@ impl PipelineProcessor {
                 }
             };
 
-            // Check unfulfilled transfer requests first
+            // Check unfulfilled transfer requests first. Emergency
+            // free-agent depth requests are excluded — they're
+            // serviced by the free-agent matcher only, not by loans.
             let unfulfilled = plan.transfer_requests.iter().filter(|r| {
                 r.status != TransferRequestStatus::Fulfilled
                     && r.status != TransferRequestStatus::Abandoned
+                    && !r.is_emergency_free_agent_depth()
             });
 
             for request in unfulfilled {
@@ -549,10 +552,13 @@ impl PipelineProcessor {
                 .flat_map(|s| s.staff_attributes.knowledge.known_regions.iter().copied())
                 .collect();
 
-            // Check unfulfilled transfer requests
+            // Check unfulfilled transfer requests. Emergency
+            // free-agent depth requests are excluded — they're
+            // serviced by the free-agent matcher only, not by loans.
             let unfulfilled = plan.transfer_requests.iter().filter(|r| {
                 r.status != TransferRequestStatus::Fulfilled
                     && r.status != TransferRequestStatus::Abandoned
+                    && !r.is_emergency_free_agent_depth()
             });
 
             let mut scans = 0usize;
