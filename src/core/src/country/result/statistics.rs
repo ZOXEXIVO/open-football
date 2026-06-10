@@ -222,8 +222,9 @@ mod tests {
     use crate::shared::Location;
     use crate::{
         Club, ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
-        PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
-        StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+        PlayerCollection, PlayerHappiness, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, PlayerStatusType, StaffCollection, TeamBuilder, TeamCollection,
+        TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::NaiveDate;
 
@@ -393,6 +394,76 @@ mod tests {
         assert!(
             fakel_entry.departed_date.is_some(),
             "a complete release must mark the source-club spell departed"
+        );
+    }
+
+    #[test]
+    fn release_sweep_clears_transfer_statuses_and_unhappiness() {
+        // Regression (user repro: Vladislav Panteleev, Juventus → pool):
+        // the early-release pipelines (mutual termination, positional
+        // surplus, unresolved salary) and the expiry sweep only clear the
+        // contract, so the player used to enter the free-agent pool still
+        // flagged Lst / Loa / Frt / Unh — rendering a clubless player as
+        // "Listed · Loan Listed · Wants Free Transfer" and unhappy. The
+        // sweep must reset that state, while still consuming `Frt` for
+        // the released-early history reason.
+        let date = make_date(2027, 7, 3);
+        let mut player = make_player(1, 0, 0);
+        player.contract = None;
+        player.statuses.add(date, PlayerStatusType::Lst);
+        player.statuses.add(date, PlayerStatusType::Loa);
+        player.statuses.add(date, PlayerStatusType::Unh);
+        player.statuses.add(date, PlayerStatusType::Frt);
+        player.happiness.adjust_morale(-30.0);
+
+        let main_team = make_team(
+            10,
+            100,
+            "Fakel",
+            "fakel",
+            TeamType::Main,
+            Some(1),
+            vec![player],
+        );
+        let club = make_club(100, "Fakel", vec![main_team]);
+        let league = make_league(1, "First Division", "first-division", false);
+        let country = make_country(vec![club], vec![league]);
+        let mut data = make_simulator_data(date, country);
+
+        data.sweep_released_to_free_agents();
+
+        let released = data
+            .free_agents
+            .iter()
+            .find(|p| p.id == 1)
+            .expect("released player should land in the global free-agent pool");
+        let statuses = released.statuses.get();
+        for status in [
+            PlayerStatusType::Lst,
+            PlayerStatusType::Loa,
+            PlayerStatusType::Frt,
+            PlayerStatusType::Unh,
+        ] {
+            assert!(
+                !statuses.contains(&status),
+                "pool free agent must not carry the {:?} status of his old club",
+                status
+            );
+        }
+        assert_eq!(
+            released.happiness.morale,
+            PlayerHappiness::new().morale,
+            "unhappiness must not follow the player into the pool"
+        );
+        let history = &data
+            .country(1)
+            .expect("country 1 must exist")
+            .transfer_market
+            .transfer_history;
+        assert_eq!(history.len(), 1, "the sweep logs exactly one departure");
+        assert_eq!(
+            history[0].reason, "dec_reason_released_free",
+            "the Frt released-early marker must drive the history reason before the reset consumes it"
         );
     }
 

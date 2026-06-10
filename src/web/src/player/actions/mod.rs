@@ -165,16 +165,10 @@ pub async fn move_on_free_action(
 
         player.contract = None;
         player.contract_loan = None;
-        player.statuses.remove(core::PlayerStatusType::Lst);
-        player.statuses.remove(core::PlayerStatusType::Trn);
-        player.statuses.remove(core::PlayerStatusType::Bid);
-        player.statuses.remove(core::PlayerStatusType::Enq);
-        player.statuses.remove(core::PlayerStatusType::Wnt);
-        player.statuses.remove(core::PlayerStatusType::Req);
-        player.statuses.remove(core::PlayerStatusType::Frt);
-        player.statuses.remove(core::PlayerStatusType::Unh);
-        player.statuses.remove(core::PlayerStatusType::Loa);
-        player.happiness.clear();
+        // Canonical end-of-spell reset — the same one the AI release
+        // sweep and transfer completion paths run: transient transfer
+        // statuses (Lst / Loa / Frt / Req / Unh / ...) plus happiness.
+        player.reset_on_club_change();
 
         sim.free_agents.push(player);
         sim.rebuild_indexes();
@@ -426,16 +420,6 @@ pub async fn transfer_action(
             player.on_free_agent_signing(&dest.info, date);
         }
 
-        // Clear transfer-related statuses: player is joining a new club
-        player.statuses.remove(core::PlayerStatusType::Lst);
-        player.statuses.remove(core::PlayerStatusType::Trn);
-        player.statuses.remove(core::PlayerStatusType::Bid);
-        player.statuses.remove(core::PlayerStatusType::Enq);
-        player.statuses.remove(core::PlayerStatusType::Wnt);
-        player.statuses.remove(core::PlayerStatusType::Req);
-        player.statuses.remove(core::PlayerStatusType::Frt);
-        player.statuses.remove(core::PlayerStatusType::Unh);
-
         // Stage the pending signing BEFORE clearing happiness so the
         // desire-carry snapshot can read recent `WantsReturnHome` /
         // `WantsEuropeanCompetition` / `WantsCopaLibertadores` moods and
@@ -474,12 +458,12 @@ pub async fn transfer_action(
             Some(depth_rank),
         );
 
-        // Fresh start at new club: reset happiness so old salary/playing-time
-        // frustrations don't carry over from the previous club.
-        // Drop the cumulative buffer but preserve the most recent
-        // `WantsReturnHome` etc. through the staged `desire_carry` we
-        // captured above.
-        player.happiness.clear();
+        // Fresh start at new club — the canonical end-of-spell reset the
+        // AI pipeline runs on completion: transfer statuses plus
+        // happiness, so old salary/playing-time frustrations don't carry
+        // over. The most recent `WantsReturnHome` etc. moods survive
+        // through the staged `desire_carry` captured above.
+        player.reset_on_club_change();
 
         // Wage and length come from the canonical contract policy on
         // `Player` — the same one the AI pipeline uses. `agreed_wage =
@@ -699,17 +683,7 @@ pub async fn loan_action(
 
         player.on_manual_loan(&source_history, &parent.info, &dest.info, date);
 
-        // Clear transfer-related statuses
-        player.statuses.remove(core::PlayerStatusType::Lst);
-        player.statuses.remove(core::PlayerStatusType::Trn);
-        player.statuses.remove(core::PlayerStatusType::Bid);
-        player.statuses.remove(core::PlayerStatusType::Enq);
-        player.statuses.remove(core::PlayerStatusType::Wnt);
-        player.statuses.remove(core::PlayerStatusType::Req);
-        player.statuses.remove(core::PlayerStatusType::Loa);
-        player.statuses.remove(core::PlayerStatusType::Unh);
-
-        // Stage the loan pending-signing BEFORE happiness.clear() so the
+        // Stage the loan pending-signing BEFORE the club-change reset so the
         // desire-carry snapshot captures recent home/EU/Libertadores moods.
         // For a loan the destination is the borrowing club; previous
         // salary is the parent contract's salary (process_transfer_shock
@@ -723,9 +697,10 @@ pub async fn loan_action(
             Some(depth_rank),
         );
 
-        // Fresh start at new club: reset happiness so old frustrations
-        // don't carry over from the previous club.
-        player.happiness.clear();
+        // Fresh start at the borrowing club — the same canonical reset
+        // the AI loan completion runs: transfer statuses plus happiness,
+        // so old frustrations don't carry over.
+        player.reset_on_club_change();
 
         // Loan contract with original parent — expiration from league season end
         let seasons = body.seasons.unwrap_or(1).clamp(1, 5) as i32;

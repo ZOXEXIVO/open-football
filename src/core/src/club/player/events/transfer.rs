@@ -228,7 +228,17 @@ struct DesireCarry {
 }
 
 impl Player {
-    fn reset_on_club_change(&mut self) {
+    /// Canonical transient-state reset for the end of a club spell. Every
+    /// path that moves the player off a roster — the AI completion
+    /// methods above, the released-to-free-agents sweep, and the manual
+    /// web transfer / loan / release actions — must run this so transfer
+    /// statuses (`Lst` / `Loa` / `Frt` / `Req` / `Unh` / ...) and the
+    /// unhappiness they were attached to never outlive the club they
+    /// described. Keep a single list here: parallel copies drift.
+    ///
+    /// Callers that branch on `Frt` (the "released early" marker) must
+    /// read it BEFORE calling — this consumes it.
+    pub fn reset_on_club_change(&mut self) {
         const TRANSIENT: [PlayerStatusType; 10] = [
             PlayerStatusType::Lst,
             PlayerStatusType::Loa,

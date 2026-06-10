@@ -397,6 +397,12 @@ impl SimulatorData {
     /// (mutual / surplus / unresolved-salary path); otherwise the
     /// contract simply expired.
     ///
+    /// Once the reason is read, the player's club-transient state is
+    /// reset (`reset_on_club_change`): the upstream release pipelines
+    /// only clear the contract, so without this the player would sit in
+    /// the pool still flagged "Listed / Loan Listed / Wants Free
+    /// Transfer / Unhappy" about a club he no longer belongs to.
+    ///
     /// Loanees are skipped (their `contract` is the parent-club contract
     /// and stays `Some` during the loan), as are retired players (already
     /// removed from team rosters by the retirement pipeline). Sets
@@ -517,6 +523,14 @@ impl SimulatorData {
                                         last_squad_status,
                                     });
                                 }
+                                // The spell at the old club is over —
+                                // strip transfer statuses and the
+                                // unhappiness they were attached to,
+                                // exactly like a completed transfer
+                                // would. `released_early` consumed the
+                                // `Frt` marker above, so nothing here
+                                // still needs it.
+                                p.reset_on_club_change();
                                 released_in_country.push(p);
                             }
                         }
