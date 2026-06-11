@@ -186,6 +186,18 @@ impl SubScoring {
         s += (1.0 - cond_pct) * 0.32;
         s += jaded * 0.14;
 
+        // Match-load dimension. The fatigue-normalized engine now aims
+        // to leave an average starter around 70-76% late in the match
+        // instead of collapsing toward the old floor range. Absolute
+        // condition alone no longer makes those players clear the routine
+        // substitution threshold, so add urgency when a long-stint player
+        // has materially drained from their own kickoff tank.
+        let starting_cond =
+            (player.starting_condition as f32 / 10_000.0).clamp(cond_pct, 1.0);
+        let condition_drop = (starting_cond - cond_pct).max(0.0);
+        let long_stint = ((live.minutes_played as f32 - 50.0) / 30.0).clamp(0.0, 1.0);
+        s += condition_drop * long_stint * 0.85;
+
         // Performance dimension — clamp so we can't punish a 6.0 player
         // who simply hasn't done anything.
         let perf = ((6.2 - live.live_rating) / 2.0).clamp(0.0, 1.0);

@@ -1656,6 +1656,46 @@ mod tests {
     }
 
     #[test]
+    fn process_substitutions_rotates_normalized_late_match_fatigue() {
+        // After the fatigue-rate normalization, ordinary late-match
+        // starters sit around 70-76% condition instead of falling into
+        // the old 35%/floor range. A full-stint wide midfielder at that
+        // level should still be a routine fatigue-sub candidate.
+        let (mut field, mut context) = make_match_context(1, 1, 78 * 60_000);
+
+        let winger_id = field
+            .players
+            .iter()
+            .find(|p| {
+                p.team_id == 1
+                    && p.tactical_position.current_position == PlayerPositionType::MidfielderLeft
+            })
+            .map(|p| p.id)
+            .expect("home left mid exists");
+
+        for p in field.players.iter_mut() {
+            if p.id == winger_id {
+                p.player_attributes.condition = 7600;
+            }
+        }
+
+        process_substitutions(&mut field, &mut context, 5, d(2025, 1, 1));
+
+        let subbed_out_ids: Vec<u32> = context
+            .substituted_out_stats
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        assert!(
+            subbed_out_ids.contains(&winger_id),
+            "process_substitutions should rotate the normalized late-match fatigue case \
+             ({}); subbed out = {:?}",
+            winger_id,
+            subbed_out_ids
+        );
+    }
+
+    #[test]
     fn process_substitutions_forces_off_critical_condition_scorer() {
         // Sanity check the critical-injury override: even a goal
         // scorer with high rating is pulled off when condition drops
