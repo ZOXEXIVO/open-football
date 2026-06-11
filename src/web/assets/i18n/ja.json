@@ -369,6 +369,7 @@
   "dec_reason_player_requested": "選手が退団を要求",
   "dec_reason_player_unhappy": "選手がクラブに不満",
   "dec_reason_post_injury_fitness": "長期離脱後、試合勘を取り戻す必要あり",
+  "dec_reason_development_pathway": "育成プラン — 実戦経験のためレンタル移籍",
   "dec_reason_released_failed_renewal": "契約更新交渉決裂により解雇",
   "dec_reason_released_free": "合意による契約解除",
   "dec_reason_squad_oversized": "チーム人数過多、平均以下の能力",

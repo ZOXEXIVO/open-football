@@ -564,8 +564,25 @@ impl PlayerStatisticsProjection {
         // even when they were loaned out immediately ("where the career
         // began"). Later full-loan seasons don't get that protection.
         let debut_year: Option<u16> = snapshot.iter().map(|r| r.season.start_year).min();
+        // The career-origin row: the earliest spell of the debut season.
+        // The season-end drain keeps it forever (`is_initial_record` —
+        // "the very first career record is always kept, even with 0
+        // games — it's the player's starting club") and the projection
+        // must agree. The `initial_seq` protection above only covers the
+        // pre-freeze window (`items` still empty); without this, a player
+        // sold before his first senior appearance loses the origin club
+        // from the page at the first season-end freeze, while the
+        // transfers page still shows the move.
+        let origin_seq: Option<u32> = snapshot
+            .iter()
+            .filter(|r| Some(r.season.start_year) == debut_year)
+            .map(|r| r.seq_id)
+            .min();
         rows.retain(|_, row| {
             if protected_seqs.contains(&row.seq_id) {
+                return true;
+            }
+            if Some(row.season.start_year) == debut_year && Some(row.seq_id) == origin_seq {
                 return true;
             }
             if row.statistics.total_games() > 0 {
@@ -3119,5 +3136,99 @@ mod projection_invariants_tests {
         // the slug rather than echoing the raw kebab string.
         let name = PlayerStatisticsProjection::resolve_cup_name("copa-paraguay", &live, None);
         assert_eq!(name, "Copa Paraguay");
+    }
+
+    #[test]
+    fn origin_club_survives_transfer_out_before_first_senior_game() {
+        // Kokarev case: seeded at the origin club at game start, zero
+        // senior apps there (youth keeper — only friendlies), sold
+        // mid-season, played at the new club, season frozen, page
+        // rendered a year later. The origin row is kept by the freeze
+        // (`is_initial_record`) and the projection must not re-drop it
+        // as a phantom alongside the new club's played row.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.seed_initial_team(&team("krylya", "rpl"), d(2026, 7, 1), false);
+        hist.record_transfer(
+            PlayerStatistics::default(),
+            &team("krylya", "rpl"),
+            &team("spartak", "rpl"),
+            1_600_000.0,
+            d(2026, 9, 2),
+        );
+        hist.record_season_end(
+            Season::new(2026),
+            stats(2, 0),
+            &team("spartak", "rpl"),
+            false,
+            Some(d(2026, 9, 2)),
+        );
+
+        let empty = PlayerStatistics::default();
+        let live = empty_live(&empty);
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2027, 12, 12));
+
+        let origin = rows
+            .iter()
+            .find(|r| r.team_slug == "krylya")
+            .expect("origin club row must survive the season-end freeze");
+        assert_eq!(origin.season.start_year, 2026);
+        assert_eq!(origin.statistics.total_games(), 0);
+
+        let destination = rows
+            .iter()
+            .find(|r| r.team_slug == "spartak" && r.season.start_year == 2026)
+            .expect("destination row missing");
+        assert_eq!(destination.statistics.total_games(), 2);
+        assert_eq!(destination.transfer_fee, Some(1_600_000.0));
+    }
+
+    #[test]
+    fn origin_protection_does_not_keep_later_season_phantoms() {
+        // The origin carve-out applies to the debut season only: a
+        // 0-app no-fee spell in a LATER season, alongside a sibling
+        // that actually played, is still the intra-club bounce phantom
+        // the filter exists for.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.seed_initial_team(&team("krylya", "rpl"), d(2025, 7, 1), false);
+        hist.record_season_end(
+            Season::new(2025),
+            stats(12, 0),
+            &team("krylya", "rpl"),
+            false,
+            None,
+        );
+        // 2026/27: a phantom 0-app re-registration at a second club in
+        // the same season the player demonstrably spent at Krylya.
+        hist.append_to_ledger(
+            2026,
+            &team("krylya", "rpl"),
+            PlayerStatCompetitionKind::League,
+            false,
+            None,
+            stats(20, 1),
+        );
+        hist.append_to_ledger(
+            2026,
+            &team("dynamo", "rpl"),
+            PlayerStatCompetitionKind::League,
+            false,
+            None,
+            stats(0, 0),
+        );
+
+        let empty = PlayerStatistics::default();
+        let live = empty_live(&empty);
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2027, 12, 12));
+
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.team_slug == "dynamo" && r.season.start_year == 2026),
+            "later-season 0-app phantom must still be dropped"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.team_slug == "krylya" && r.season.start_year == 2026),
+        );
     }
 }

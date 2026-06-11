@@ -1,4 +1,5 @@
 use super::Club;
+use crate::club::staff::perception::PotentialEstimator;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::pipeline::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
 use crate::transfers::window::PlayerValuationCalculator;
@@ -87,7 +88,9 @@ impl Club {
 
                 let age = player.age(date);
                 let ca = player.player_attributes.current_ability;
-                let pa = player.player_attributes.potential_ability;
+                // Board decisions read the observable ceiling — the
+                // hidden biological PA is not visible to clubs.
+                let pa = PotentialEstimator::observable_ceiling(player, date);
 
                 // Compare player CA to the main team average —
                 // don't list players who are still competitive with the first team

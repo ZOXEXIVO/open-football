@@ -24,6 +24,13 @@ pub struct PlayerAttributes {
 
     //ability
     pub current_ability: u8,
+    /// HIDDEN biological ceiling. Clubs, scouts, and coaches can never
+    /// read this directly — AI scouting / transfer / loan / development
+    /// decisions must use estimates built from observable signals only
+    /// (matches, training, age, mentals): `PotentialEstimator`
+    /// (`estimate_for_staff` / `observable_ceiling`), scouting-report
+    /// `assessed_potential`, or monitoring rows. Raw PA is reserved for
+    /// the growth simulation, database generation, and debug surfaces.
     pub potential_ability: u8,
 
     //international expirience

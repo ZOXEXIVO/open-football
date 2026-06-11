@@ -26,9 +26,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub(super) fn evaluate_situational_shape(field: &mut MatchField, context: &mut MatchContext) {
         use crate::club::team::tactics::tactics::TacticsSelector;
         let minutes = (context.total_match_time / 60_000).min(120) as u8;
-        let home_diff = (context.score.home_team.get() as i16
-            - context.score.away_team.get() as i16)
-            .clamp(-100, 100) as i8;
+        // Shape changes are score-reactive behavior — same visibility
+        // gate as coach instructions / tactics (final ~28 min only).
+        let home_diff = if !context.behavioral_score_visible() {
+            0
+        } else {
+            (context.score.home_team.get() as i16 - context.score.away_team.get() as i16)
+                .clamp(-100, 100) as i8
+        };
         let away_diff = -home_diff;
 
         // Hysteresis: skip the probe entirely if the last shape change
@@ -100,8 +105,18 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     }
 
     pub(super) fn evaluate_coaches(field: &MatchField, context: &mut MatchContext) {
-        let home_goals = context.score.home_team.get() as i8;
-        let away_goals = context.score.away_team.get() as i8;
+        // Coaches see the real scoreline only once score-reactive
+        // football engages (final ~28 min — see
+        // `SCORE_REACTION_FROM_MINUTE`); before that, and under the
+        // OF_SCORE_BLIND diagnostic, they coach as if level.
+        let (home_goals, away_goals) = if !context.behavioral_score_visible() {
+            (0i8, 0i8)
+        } else {
+            (
+                context.score.home_team.get() as i8,
+                context.score.away_team.get() as i8,
+            )
+        };
         let current_tick = context.current_tick();
 
         // Regulation progress capped at 1.0. In extra time `total_match_time`
@@ -399,7 +414,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let home_goals = context.score.home_team.get() as i16;
         let away_goals = context.score.away_team.get() as i16;
-        let home_score_diff = (home_goals - away_goals).clamp(-100, 100) as i8;
+        // Tactics see the real scoreline only once score-reactive
+        // football engages (see `SCORE_REACTION_FROM_MINUTE`).
+        let home_score_diff = if !context.behavioral_score_visible() {
+            0
+        } else {
+            (home_goals - away_goals).clamp(-100, 100) as i8
+        };
 
         // Tactics are stored on the field side-keyed (left/right). Map
         // them to home/away by checking which side the home squad
@@ -431,6 +452,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             away_tactics,
             home_skills: home_skill_aggregates,
             away_skills: away_skill_aggregates,
+            home_edge: context.environment.crowd_intensity * context.environment.home_advantage,
         };
         TeamTacticalState::refresh(
             &mut context.tactical_home,

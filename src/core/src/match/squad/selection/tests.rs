@@ -1,5 +1,5 @@
-use super::*;
 use super::scoring::ScoringEngine;
+use super::*;
 use crate::PlayerPositions;
 use crate::StaffStub;
 use crate::Team;
@@ -1126,7 +1126,17 @@ impl Contest {
                 continue;
             }
             players.push(DevPlayer::with_skill(
-                DevPlayer::build(id, pos, 16, PlayerSquadStatus::FirstTeamRegular, 26, 160, 162, 5, 12),
+                DevPlayer::build(
+                    id,
+                    pos,
+                    16,
+                    PlayerSquadStatus::FirstTeamRegular,
+                    26,
+                    160,
+                    162,
+                    5,
+                    12,
+                ),
                 14.0,
             ));
             id += 1;
@@ -1227,11 +1237,31 @@ fn weak_young_player_does_not_displace_senior_player() {
     // Clearly better senior (strong skills) vs a weak youngster (low CA & PA,
     // weak raw skills) who can still nominally fill the slot.
     let senior = DevPlayer::with_skill(
-        DevPlayer::build(1, slot, 16, PlayerSquadStatus::FirstTeamRegular, 27, 168, 170, 5, 20),
+        DevPlayer::build(
+            1,
+            slot,
+            16,
+            PlayerSquadStatus::FirstTeamRegular,
+            27,
+            168,
+            170,
+            5,
+            20,
+        ),
         16.0,
     );
     let weak_youth = DevPlayer::with_skill(
-        DevPlayer::build(2, slot, 14, PlayerSquadStatus::DecentYoungster, 18, 75, 88, 7, 0),
+        DevPlayer::build(
+            2,
+            slot,
+            14,
+            PlayerSquadStatus::DecentYoungster,
+            18,
+            75,
+            88,
+            7,
+            0,
+        ),
         6.0,
     );
     let pool: Vec<&Player> = vec![&senior, &weak_youth];
@@ -1336,18 +1366,32 @@ fn coach_poor_with_youngsters_prefers_senior_in_same_context() {
 fn high_judging_potential_identifies_high_potential_player() {
     let date = Utc::now().date_naive();
     let slot = Contest::SLOT;
-    // High potential, only modest current ability — invisible to a poor judge.
-    let prospect = DevPlayer::build(
-        1,
-        slot,
-        14,
-        PlayerSquadStatus::HotProspectForTheFuture,
-        18,
-        110,
-        200,
-        7,
-        0,
+    // High potential, only modest current ability — invisible to a poor
+    // judge. The upside must be OBSERVABLE (the scorer reads the
+    // estimated ceiling, never hidden PA): flatten skills near today's
+    // level, then raise the growth signals scouts and coaches read.
+    let mut prospect = DevPlayer::with_skill(
+        DevPlayer::build(
+            1,
+            slot,
+            14,
+            PlayerSquadStatus::HotProspectForTheFuture,
+            18,
+            110,
+            200,
+            7,
+            0,
+        ),
+        11.0,
     );
+    prospect.skills.mental.determination = 17.0;
+    prospect.skills.mental.work_rate = 16.0;
+    prospect.skills.mental.composure = 16.0;
+    prospect.skills.mental.decisions = 16.0;
+    prospect.skills.mental.anticipation = 16.0;
+    prospect.skills.mental.concentration = 16.0;
+    prospect.attributes.ambition = 16.0;
+    prospect.attributes.professionalism = 16.0;
     let high_potential = TestCoach::build(14, 18, 12, 12, 12, 12, 10, 10);
     let low_potential = TestCoach::build(14, 2, 12, 12, 12, 12, 10, 10);
     let credible_high = ScoringEngine::from_staff_for_team(&high_potential, None, true)
@@ -1521,7 +1565,17 @@ fn future_pathway_bonus_is_position_group_aware() {
     let engine = ScoringEngine::from_staff_for_team(&TestCoach::good_youth(), None, true);
     let slot = Contest::SLOT;
     let youth_forward = DevPlayer::with_skill(
-        DevPlayer::build(1, slot, 14, PlayerSquadStatus::HotProspectForTheFuture, 19, 130, 185, 7, 0),
+        DevPlayer::build(
+            1,
+            slot,
+            14,
+            PlayerSquadStatus::HotProspectForTheFuture,
+            19,
+            130,
+            185,
+            7,
+            0,
+        ),
         10.0,
     );
     let strong_centre_back = DevPlayer::with_skill(
@@ -1539,17 +1593,29 @@ fn future_pathway_bonus_is_position_group_aware() {
         16.0,
     );
     let strong_forward = DevPlayer::with_skill(
-        DevPlayer::build(3, slot, 15, PlayerSquadStatus::KeyPlayer, 27, 175, 175, 5, 20),
+        DevPlayer::build(
+            3,
+            slot,
+            15,
+            PlayerSquadStatus::KeyPlayer,
+            27,
+            175,
+            175,
+            5,
+            20,
+        ),
         16.0,
     );
     // A strong senior in another unit must not gate the forward prospect.
-    let gap_other_group = engine.same_role_quality_gap(&youth_forward, slot, date, &[&strong_centre_back]);
+    let gap_other_group =
+        engine.same_role_quality_gap(&youth_forward, slot, date, &[&strong_centre_back]);
     assert!(
         gap_other_group <= 0.0001,
         "a defender must not gate a forward prospect: {gap_other_group}"
     );
     // A strong senior in the SAME unit does.
-    let gap_same_group = engine.same_role_quality_gap(&youth_forward, slot, date, &[&strong_forward]);
+    let gap_same_group =
+        engine.same_role_quality_gap(&youth_forward, slot, date, &[&strong_forward]);
     assert!(
         gap_same_group > 0.5,
         "a strong same-role senior gates the prospect: {gap_same_group}"
@@ -1607,7 +1673,17 @@ fn not_needed_player_does_not_gain_pathway_priority() {
         Some(ClubPhilosophy::DevelopAndSell),
         true,
     );
-    let not_needed = DevPlayer::build(1, slot, 15, PlayerSquadStatus::NotNeeded, 19, 150, 195, 7, 0);
+    let not_needed = DevPlayer::build(
+        1,
+        slot,
+        15,
+        PlayerSquadStatus::NotNeeded,
+        19,
+        150,
+        195,
+        7,
+        0,
+    );
     let prospect = DevPlayer::build(
         2,
         slot,
@@ -1737,7 +1813,11 @@ fn bench_includes_same_team_backup_goalkeeper_when_available() {
 
     let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
 
-    assert_eq!(starting_goalkeeper_id(&result), Some(1), "the #1 keeper starts");
+    assert_eq!(
+        starting_goalkeeper_id(&result),
+        Some(1),
+        "the #1 keeper starts"
+    );
     assert!(
         benched_as_goalkeeper(&result, 2),
         "the second keeper is named on the bench"
@@ -1994,8 +2074,9 @@ fn full_bench_replaces_lowest_outfield_sub_with_backup_gk() {
         "bench size stays at the cap"
     );
     assert!(
-        subs.iter().any(|s| s.id == 9
-            && s.tactical_position.current_position == PlayerPositionType::Goalkeeper),
+        subs.iter()
+            .any(|s| s.id == 9
+                && s.tactical_position.current_position == PlayerPositionType::Goalkeeper),
         "the keeper replaced an outfield substitute on the full bench"
     );
     let outfield_left = subs.iter().filter(|s| s.id >= 100).count();
@@ -2057,8 +2138,9 @@ fn force_selected_outfield_sub_is_not_dropped_for_backup_gk() {
     scx.ensure_backup_goalkeeper(1, &mut subs, &mut used_ids, &remaining);
 
     assert!(
-        subs.iter().any(|s| s.id == 9
-            && s.tactical_position.current_position == PlayerPositionType::Goalkeeper),
+        subs.iter()
+            .any(|s| s.id == 9
+                && s.tactical_position.current_position == PlayerPositionType::Goalkeeper),
         "the keeper is benched on the full bench"
     );
     for id in 100..last {
@@ -2296,7 +2378,10 @@ fn rotation_skips_unavailable_keepers_for_real_keeper() {
         .map(|p| p.id)
         .collect();
     assert!(!all_ids.contains(&1), "injured keeper not selected");
-    assert!(!all_ids.contains(&2), "international-duty keeper not selected");
+    assert!(
+        !all_ids.contains(&2),
+        "international-duty keeper not selected"
+    );
 }
 
 // ========== Bench role coverage ==========
@@ -2427,7 +2512,16 @@ fn cohesion_t442_starters() -> Vec<Player> {
     slots
         .iter()
         .map(|(id, pos)| {
-            make_cup_player(*id, *pos, 15, PlayerSquadStatus::FirstTeamRegular, 27, 5, 15, 100.0)
+            make_cup_player(
+                *id,
+                *pos,
+                15,
+                PlayerSquadStatus::FirstTeamRegular,
+                27,
+                5,
+                15,
+                100.0,
+            )
         })
         .collect()
 }
@@ -2532,12 +2626,7 @@ mod game_model_tests {
     }
 
     fn slow_cb(id: u32) -> Player {
-        let mut p = make_test_player(
-            id,
-            &[(PlayerPositionType::DefenderCenter, 18)],
-            150,
-            date(),
-        );
+        let mut p = make_test_player(id, &[(PlayerPositionType::DefenderCenter, 18)], 150, date());
         p.skills.physical.pace = 6.0;
         p.skills.physical.acceleration = 6.0;
         p.skills.mental.positioning = 17.0;
@@ -2547,12 +2636,7 @@ mod game_model_tests {
     }
 
     fn fast_cb(id: u32) -> Player {
-        let mut p = make_test_player(
-            id,
-            &[(PlayerPositionType::DefenderCenter, 16)],
-            130,
-            date(),
-        );
+        let mut p = make_test_player(id, &[(PlayerPositionType::DefenderCenter, 16)], 130, date());
         p.skills.physical.pace = 18.0;
         p.skills.physical.acceleration = 17.0;
         p.skills.mental.positioning = 14.0;
@@ -2583,19 +2667,15 @@ mod game_model_tests {
 
     #[test]
     fn role_profile_resolver_picks_stopper_for_defend_duty() {
-        let role = RoleProfileResolver::resolve(
-            PlayerPositionType::DefenderCenter,
-            TacticalDuty::Defend,
-        );
+        let role =
+            RoleProfileResolver::resolve(PlayerPositionType::DefenderCenter, TacticalDuty::Defend);
         assert_eq!(role, SelectionRoleProfile::StopperCentreBack);
     }
 
     #[test]
     fn role_profile_resolver_picks_ball_playing_for_attack_duty() {
-        let role = RoleProfileResolver::resolve(
-            PlayerPositionType::DefenderCenter,
-            TacticalDuty::Attack,
-        );
+        let role =
+            RoleProfileResolver::resolve(PlayerPositionType::DefenderCenter, TacticalDuty::Attack);
         assert_eq!(role, SelectionRoleProfile::BallPlayingCentreBack);
     }
 
@@ -2633,8 +2713,16 @@ mod game_model_tests {
             TacticalDuty::Defend,
         );
 
-        assert!(playmaker_fit > 0.45, "playmaker fits playmaker duty: {}", playmaker_fit);
-        assert!(destroyer_fit > 0.45, "destroyer fits destroyer duty: {}", destroyer_fit);
+        assert!(
+            playmaker_fit > 0.45,
+            "playmaker fits playmaker duty: {}",
+            playmaker_fit
+        );
+        assert!(
+            destroyer_fit > 0.45,
+            "destroyer fits destroyer duty: {}",
+            destroyer_fit
+        );
     }
 
     #[test]
@@ -2676,7 +2764,10 @@ mod game_model_tests {
             is_friendly: true,
             ..SelectionContext::default()
         };
-        assert_eq!(MatchTypeClassifier::classify(&ctx), MatchTypeSignal::Friendly);
+        assert_eq!(
+            MatchTypeClassifier::classify(&ctx),
+            MatchTypeSignal::Friendly
+        );
     }
 
     #[test]
@@ -2691,12 +2782,16 @@ mod game_model_tests {
             match_importance: 1.0,
             ..SelectionContext::default()
         };
-        assert_eq!(MatchTypeClassifier::classify(&ctx), MatchTypeSignal::CupFinal);
+        assert_eq!(
+            MatchTypeClassifier::classify(&ctx),
+            MatchTypeSignal::CupFinal
+        );
     }
 
     #[test]
     fn bench_scenario_plan_for_cup_final_includes_shootout() {
-        let plan = BenchScenarioPlan::build(MatchTypeSignal::CupFinal, TacticalObjective::WinNowBalanced);
+        let plan =
+            BenchScenarioPlan::build(MatchTypeSignal::CupFinal, TacticalObjective::WinNowBalanced);
         let has_shootout = plan
             .weights
             .iter()
@@ -2706,15 +2801,21 @@ mod game_model_tests {
 
     #[test]
     fn bench_scenario_plan_for_underdog_away_protects_lead() {
-        let plan =
-            BenchScenarioPlan::build(MatchTypeSignal::LeagueRoutine, TacticalObjective::UnderdogAway);
+        let plan = BenchScenarioPlan::build(
+            MatchTypeSignal::LeagueRoutine,
+            TacticalObjective::UnderdogAway,
+        );
         let protect = plan
             .weights
             .iter()
             .find(|(s, _)| matches!(s, BenchScenario::ProtectLead))
             .map(|(_, w)| *w)
             .unwrap_or(0.0);
-        assert!(protect >= 0.18, "underdog plan must weight ProtectLead heavily: {}", protect);
+        assert!(
+            protect >= 0.18,
+            "underdog plan must weight ProtectLead heavily: {}",
+            protect
+        );
     }
 
     #[test]
@@ -2724,7 +2825,11 @@ mod game_model_tests {
         p.skills.physical.jumping = 18.0;
         p.skills.physical.strength = 17.0;
         let cover = BenchScenarioScorer::coverage(&p, BenchScenario::AerialPlanB, date());
-        assert!(cover >= 0.8, "aerial target should cover AerialPlanB: {}", cover);
+        assert!(
+            cover >= 0.8,
+            "aerial target should cover AerialPlanB: {}",
+            cover
+        );
     }
 
     #[test]
@@ -2761,10 +2866,16 @@ mod game_model_tests {
         let player_by_id: std::collections::HashMap<u32, &Player> =
             team.players.players().iter().map(|p| (p.id, *p)).collect();
 
-        let security =
-            LineupBalanceScorer::score(&result.main_squad, &player_by_id, TacticalObjective::ProtectLead);
-        let creation =
-            LineupBalanceScorer::score(&result.main_squad, &player_by_id, TacticalObjective::ChaseGame);
+        let security = LineupBalanceScorer::score(
+            &result.main_squad,
+            &player_by_id,
+            TacticalObjective::ProtectLead,
+        );
+        let creation = LineupBalanceScorer::score(
+            &result.main_squad,
+            &player_by_id,
+            TacticalObjective::ChaseGame,
+        );
 
         // The same XI evaluated under two different objectives yields
         // different totals — the per-objective weight tables actually
@@ -2781,8 +2892,11 @@ mod game_model_tests {
 // ========== National-team constraints ==========
 
 mod national_callup_tests {
-    use crate::country::{NationalCallupConstraints, NationalEligibilityIssue, NationalSquadStage, NationalTournamentRequirements};
     use crate::CallUpWindowType;
+    use crate::country::{
+        NationalCallupConstraints, NationalEligibilityIssue, NationalSquadStage,
+        NationalTournamentRequirements,
+    };
 
     #[test]
     fn national_constraints_block_cap_tied_player() {
@@ -2806,8 +2920,10 @@ mod national_callup_tests {
 
     #[test]
     fn national_squad_stage_preliminary_then_final() {
-        let preliminary = NationalSquadStage::target_size(CallUpWindowType::TournamentFinals, false);
-        let near_deadline = NationalSquadStage::target_size(CallUpWindowType::TournamentFinals, true);
+        let preliminary =
+            NationalSquadStage::target_size(CallUpWindowType::TournamentFinals, false);
+        let near_deadline =
+            NationalSquadStage::target_size(CallUpWindowType::TournamentFinals, true);
         assert!(preliminary > near_deadline);
         assert_eq!(near_deadline, NationalSquadStage::FINAL_TOURNAMENT);
     }

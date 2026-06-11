@@ -289,6 +289,15 @@ pub struct Ball {
     pub last_shot_xg: f32,
     pub last_shot_shooter_id: Option<u32>,
 
+    /// Tick of the most recent live rebound — a dangerous GK parry or
+    /// a loose shot-block deflection that left the ball contestable in
+    /// front of goal. Read by the team shot gate: within the rebound
+    /// window (~3 s) the team-level shot SPACING and build-up gates
+    /// are suspended so the box scramble / tap-in — one of football's
+    /// core goal patterns — can actually fire. The per-possession shot
+    /// cap (2) still rules out machine-gun scrambles. 0 = no rebound.
+    pub last_rebound_tick: u64,
+
     /// Last meaningful giveaway: the player who lost possession via a
     /// misplaced pass that was intercepted by an opponent. Read by the
     /// "errors leading to shot/goal" linker — when an opponent shoots
@@ -413,6 +422,7 @@ impl Ball {
             pressers_at_pass_count: 0,
             last_shot_xg: 0.0,
             last_shot_shooter_id: None,
+            last_rebound_tick: 0,
             last_giveaway_player_id: None,
             last_giveaway_team_id: None,
             last_giveaway_tick: 0,

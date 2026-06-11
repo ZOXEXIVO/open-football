@@ -93,6 +93,40 @@ impl PotentialEstimator {
             .calculate_ability_for_position(player.position())
     }
 
+    /// Staff-free observable ceiling — the "any reasonable observer"
+    /// baseline: visible ability plus an age/mentals/training growth
+    /// allowance. Deterministic (no judging noise, no staff biases) and
+    /// built ONLY from visible signals, so club decision paths with no
+    /// staff context (market snapshots, listing decisions, contract
+    /// packages) get a potential proxy without ever touching the hidden
+    /// biological PA. Prefer scout-assessed values when a dossier
+    /// exists; this is the fallback.
+    pub fn observable_ceiling(player: &Player, date: NaiveDate) -> u8 {
+        let visible_ca = Self::visible_ability(player);
+        let age = DateUtils::age(player.birth_date, date);
+        let group = player.position().position_group();
+        let age_room = Self::age_growth_room(age, group);
+
+        let mentals = &player.skills.mental;
+        let attitude_avg = (mentals.determination
+            + player.attributes.professionalism
+            + mentals.work_rate
+            + player.attributes.ambition)
+            / 4.0;
+        let attitude_factor = ((attitude_avg - 8.0) / 12.0).clamp(0.0, 1.0);
+        let ceiling_avg =
+            (mentals.composure + mentals.decisions + mentals.anticipation + mentals.concentration)
+                / 4.0;
+        let ceiling_factor = ((ceiling_avg - 8.0) / 12.0).clamp(0.0, 1.0);
+        let trend = Self::training_trend_signal(player);
+
+        let realisation = (attitude_factor * 0.55 + trend * 0.15).clamp(0.0, 1.0);
+        let combined = (realisation * 0.55 + ceiling_factor * 0.45).clamp(0.0, 1.0);
+
+        let projected = visible_ca as f32 + age_room * combined;
+        (projected.round() as i16).clamp(visible_ca as i16, 200) as u8
+    }
+
     fn estimate_inner(
         player: &Player,
         profile: &CoachProfile,

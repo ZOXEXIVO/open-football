@@ -163,6 +163,12 @@ fn late_game_mental_extra(player: &MatchPlayer, ctx: ActionContext) -> f32 {
 /// Apply the full fatigue model to a base skill value (1–20 scale).
 /// Returned value stays in 1–20 space so callers can treat the result
 /// like any other skill read.
+///
+/// Also folds in `crowd_arousal` — the home-advantage multiplier
+/// stamped at match start (±~1.5% at a default crowd, scaling with
+/// crowd intensity). Living here means home advantage shifts every
+/// skill-mediated action (duels, passing, saves, finishing) by the
+/// same small continuous factor instead of dialling one outcome.
 pub fn effective_skill(player: &MatchPlayer, base: f32, ctx: ActionContext) -> f32 {
     let cond_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
     let band = band_multipliers(cond_pct, ctx.category);
@@ -173,7 +179,7 @@ pub fn effective_skill(player: &MatchPlayer, base: f32, ctx: ActionContext) -> f
     let cap = mitigation_cap(cond_pct);
     let recovered = 1.0 - (1.0 - band) * (1.0 - mitigation * cap);
     let extra = late_game_mental_extra(player, ctx);
-    (base * recovered * extra).clamp(1.0, 20.0)
+    (base * recovered * extra * player.crowd_arousal).clamp(1.0, 20.0)
 }
 
 /// Convenience: read a skill from the player and apply the fatigue model.

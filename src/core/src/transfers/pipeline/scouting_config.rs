@@ -730,6 +730,7 @@ mod tests {
                 world_reputation: self.world_rep,
                 country_reputation: 7000,
                 club_world_reputation: self.club_world_rep,
+                club_best_in_group: 150,
                 is_injured: false,
                 contract_months_remaining: self.contract_months,
                 salary: self.salary,

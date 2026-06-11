@@ -649,7 +649,6 @@ impl PipelineProcessor {
 
         // Youth development signings: philosophy-driven.
         // DevelopAndSell clubs aggressively sign young prospects.
-        // SignToCompete clubs rarely invest in youth (they buy ready-made).
         // LoanFocused clubs borrow young players instead.
         let wants_youth = match philosophy {
             ClubPhilosophy::DevelopAndSell => true,
@@ -658,7 +657,17 @@ impl PipelineProcessor {
                 ReputationLevel::Elite | ReputationLevel::Continental | ReputationLevel::National
             ),
             ClubPhilosophy::LoanFocused => false, // they borrow, not buy
-            ClubPhilosophy::SignToCompete => false, // they buy proven players
+            // Compete-now giants with money in the bank run a prospect-
+            // ownership desk on the side (Chelsea / Man City model): buy
+            // high-upside teenagers, farm them out on loan, promote or
+            // sell later. Smaller SignToCompete clubs still buy only
+            // ready-made players.
+            ClubPhilosophy::SignToCompete => {
+                matches!(
+                    rep_level,
+                    ReputationLevel::Elite | ReputationLevel::Continental
+                ) && club.finance.balance.balance >= 0
+            }
         };
         if wants_youth {
             let position_groups = [
@@ -859,8 +868,14 @@ impl PipelineProcessor {
         // explicitly excludes. A club with 8 GKs needs to *eject* the
         // worst, not wait for a deficit signal that never fires when
         // the surplus itself is dragging the average down.
-        let force_transfer_list =
+        let mut force_transfer_list =
             Self::identify_position_glut(&squad, date, players, &mut loan_outs);
+
+        // Repeated-loan stagnation sweep: a player already farmed out
+        // twice (the loan path refuses a third spell) who still sits
+        // below his position-group level is no longer a development
+        // asset — sell rather than hold.
+        Self::identify_repeated_loan_stagnation(&squad, players, &mut force_transfer_list);
 
         SquadEvaluation {
             club_id: club.id,
@@ -995,6 +1010,62 @@ impl PipelineProcessor {
 
         let _ = date; // reserved for future age-window tweaks
         force_list
+    }
+
+    /// Loan-return re-evaluation, sell branch: players with two loan
+    /// spells behind them (the loan path refuses a third) who are 23+
+    /// and still clearly below their position-group average get
+    /// transfer-listed. Repeatedly loaned and not progressing means the
+    /// development bet failed — realistic clubs cash out. Under-23s
+    /// keep their runway; 30+ players are the glut sweep's job.
+    fn identify_repeated_loan_stagnation(
+        squad: &[SquadPlayerInfo],
+        players: &[Player],
+        force_list: &mut Vec<u32>,
+    ) {
+        for info in squad {
+            if !(23..30).contains(&info.age) {
+                continue;
+            }
+            let Some(player) = players.iter().find(|p| p.id == info.player_id) else {
+                continue;
+            };
+            if player.is_on_loan() {
+                continue;
+            }
+            if player.is_force_match_selection && player.contract.is_some() {
+                continue;
+            }
+            let loan_spells = player
+                .statistics_history
+                .items
+                .iter()
+                .filter(|h| h.is_loan)
+                .count();
+            if loan_spells < 2 {
+                continue;
+            }
+            let group = info.primary_position.position_group();
+            let peers: Vec<u32> = squad
+                .iter()
+                .filter(|p| p.primary_position.position_group() == group)
+                .map(|p| p.current_ability as u32)
+                .collect();
+            if peers.is_empty() {
+                continue;
+            }
+            let group_avg = (peers.iter().sum::<u32>() / peers.len() as u32) as u8;
+            if (info.current_ability as i16) < group_avg as i16 - 10
+                && !player.statuses.get().contains(&PlayerStatusType::Lst)
+                && !force_list.contains(&info.player_id)
+            {
+                debug!(
+                    "Repeated-loan stagnation: listing player {} (age {}, CA {}, {} loan spells)",
+                    info.player_id, info.age, info.current_ability, loan_spells
+                );
+                force_list.push(info.player_id);
+            }
+        }
     }
 
     /// Get formation positions, falling back to T442 for unmapped formations.

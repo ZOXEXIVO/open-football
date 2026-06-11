@@ -93,6 +93,12 @@ mod processor {
         /// — a second-tier club shouldn't be filing reports on a top-flight
         /// starter they could never realistically sign.
         pub club_world_reputation: i16,
+        /// Best current ability at the player's position group on his
+        /// club's main roster. Rawness anchor for the loan reputation-
+        /// drop gate: a player far below his own club's best at the
+        /// position is a raw development case who tolerates a much
+        /// bigger step down on loan.
+        pub club_best_in_group: u8,
         /// True if the player is currently injured.
         pub is_injured: bool,
         /// Months left on contract; 0 if no contract (free agent).
@@ -664,6 +670,10 @@ pub enum LoanOutReason {
     LackOfPlayingTime,
     /// Returning from long injury, needs match fitness via loan
     PostInjuryFitness,
+    /// Prospect bought permanently with a development plan — the parent
+    /// club sends them straight out for first-team minutes. The only
+    /// reason allowed to bypass same-window loan-out protection.
+    DevelopmentPathway,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -785,6 +795,18 @@ pub struct ClubTransferPlan {
 
     pub loan_out_candidates: Vec<LoanOutCandidate>,
 
+    /// COMPLETED permanent prospect purchases (DevelopmentSigning buys)
+    /// this window. Together with [`Self::prospect_pursuits_active`] this
+    /// is the hoarding control — capped per window by club tier so elite
+    /// clubs can't stockpile teenagers.
+    pub prospect_buys_this_window: u8,
+
+    /// Prospect-purchase negotiations currently in flight. Incremented
+    /// when the negotiation opens, released on resolution — so a failed
+    /// bid frees the slot instead of permanently consuming the window
+    /// cap. Cap checks gate on `buys + active`.
+    pub prospect_pursuits_active: u8,
+
     pub staff_recommendations: Vec<StaffRecommendation>,
 
     pub scout_match_assignments: Vec<ScoutMatchAssignment>,
@@ -849,6 +871,8 @@ impl ClubTransferPlan {
             scouting_reports: Vec::new(),
             shortlists: Vec::new(),
             loan_out_candidates: Vec::new(),
+            prospect_buys_this_window: 0,
+            prospect_pursuits_active: 0,
             staff_recommendations: Vec::new(),
             scout_match_assignments: Vec::new(),
             max_concurrent_negotiations: 2,
@@ -929,6 +953,8 @@ impl ClubTransferPlan {
         self.scouting_reports.clear();
         self.shortlists.clear();
         self.loan_out_candidates.clear();
+        self.prospect_buys_this_window = 0;
+        self.prospect_pursuits_active = 0;
         self.staff_recommendations.clear();
         self.scout_match_assignments.clear();
         self.active_negotiation_count = 0;

@@ -478,7 +478,16 @@ impl Ball {
 
         if roll < p_loose {
             // Loose central rebound — ball trickles in front of the
-            // defender, often producing a second-ball contest.
+            // defender, often producing a second-ball contest. Arms the
+            // rebound window (team shot-spacing exemption) so the
+            // second ball can actually be struck. The blocker is the
+            // last player the ball came off — recording him as previous
+            // owner makes the ATTACKERS the intercept-eligible side
+            // during the flight window (the spill is the defender's
+            // touch, not the shooter's pass), restoring the two-sided
+            // second-ball race.
+            self.last_rebound_tick = tick;
+            self.previous_owner = Some(blocker_id);
             let loose_speed = (ball_velocity_2d * 0.30).clamp(1.0, 2.8);
             self.velocity.x = rev_x * loose_speed;
             self.velocity.y = rev_y * loose_speed;
@@ -492,7 +501,10 @@ impl Ball {
         // Unlucky deflection: ball loses pace but keeps drifting toward
         // goal. The shot flag is already cleared, so the keeper save
         // pipeline won't credit a phantom save — but the ball is still
-        // live and can be a tap-in opportunity.
+        // live and can be a tap-in opportunity. Arms the rebound window;
+        // blocker booked as previous owner (see the loose branch above).
+        self.last_rebound_tick = tick;
+        self.previous_owner = Some(blocker_id);
         let unlucky_speed = (ball_velocity_2d * 0.50).clamp(1.5, 3.5);
         self.velocity.x = shot_dir_x * unlucky_speed * 0.7;
         self.velocity.y = shot_dir_y * unlucky_speed * 0.7;
@@ -806,7 +818,10 @@ impl Ball {
             return;
         }
 
-        // Dangerous parry — ball spills off the keeper's hands.
+        // Dangerous parry — ball spills off the keeper's hands. Arms the
+        // rebound window so the attacking team's follow-up shot isn't
+        // killed by the team shot-spacing gate.
+        self.last_rebound_tick = tick;
         // Real goalkeepers under pressure push the ball toward the side
         // they're already diving, not back into the central goalmouth
         // where the attacking team gets a free tap-in. The previous
@@ -842,12 +857,34 @@ impl Ball {
         let dx = drop_x - self.position.x;
         let dy = drop_y - self.position.y;
         let dist = (dx * dx + dy * dy).sqrt().max(1.0);
-        let parry_speed = 3.5_f32;
+        // Spill speed: energy shed off the hands, NOT a clearance. The
+        // previous constant 3.5 u/tick (43.75 m/s — harder than the
+        // engine's hardest shot, capped at 3.2) carried the ball ~10m
+        // through the box during the protected flight window, so every
+        // "dangerous" parry physically exited the danger zone before
+        // anyone could touch it. A real spill comes off the gloves at a
+        // fraction of shot speed, worse for keepers with poor handling:
+        // ~0.7-1.2 u/tick lands the ball in the 1.5-3.75m drop zone the
+        // direction model already aims for, where the box contest can
+        // actually happen.
+        let parry_speed =
+            (ball_speed * (0.22 + 0.18 * (1.0 - scaled_handling))).clamp(0.6, 1.3);
         self.velocity.x = (dx / dist) * parry_speed;
         self.velocity.y = (dy / dist) * parry_speed;
         self.velocity.z = 0.0;
         self.current_owner = None;
-        self.flags.in_flight_state = 30;
+        // Flight window 30 → 10 ticks: the genuine time a spilled ball
+        // is ungatherable. At 30 the entire rebound lived inside the
+        // claims-locked window — and because `previous_owner` stayed the
+        // SHOOTER, try_intercept treated the spill as an attacker pass,
+        // making DEFENDERS the only players able to win it. Setting the
+        // keeper as previous owner (he is physically the last player the
+        // ball came off) flips the intercept population to its realistic
+        // one — attackers pouncing on the spill — through the untouched
+        // existing gate, and the keeper's own bounce-back reclaim still
+        // lets him smother a ball that dies at his feet.
+        self.previous_owner = Some(keeper_id);
+        self.flags.in_flight_state = 10;
         self.claim_cooldown = 0;
         self.record_touch(keeper_id, keeper_team, tick, false);
         events.add_ball_event(BallEvent::Intercepted(keeper_id, self.previous_owner));

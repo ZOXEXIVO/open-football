@@ -371,6 +371,7 @@
   "dec_reason_player_requested": "Игрок попросил об уходе",
   "dec_reason_player_unhappy": "Игрок недоволен в клубе",
   "dec_reason_post_injury_fitness": "Нуждается в игровой форме после длительной травмы",
+  "dec_reason_development_pathway": "Программа развития — отдан в аренду за игровой практикой",
   "dec_reason_released_failed_renewal": "Освобождён после провала переговоров о продлении",
   "dec_reason_released_free": "Расторжение по обоюдному согласию",
   "dec_reason_squad_oversized": "Состав перегружен, ниже среднего уровня",

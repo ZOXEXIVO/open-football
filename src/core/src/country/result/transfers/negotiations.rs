@@ -17,12 +17,14 @@ use crate::transfers::TransferListingStatus;
 use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::market::TransferListingOrigin;
-use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason, TransferNegotiation};
+use crate::transfers::negotiation::{
+    NegotiationPhase, NegotiationRejectionReason, TransferNegotiation,
+};
 use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
-use crate::transfers::pipeline::PipelineProcessor;
 use crate::transfers::pipeline::plausibility::{
     TransferPlausibilityBuilder, TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
 };
+use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor};
 use crate::transfers::scouting_region::ScoutingRegion;
 use crate::utils::{FloatUtils, FormattingUtils};
 use crate::{
@@ -334,8 +336,25 @@ impl CountryResult {
         if neg_data.selling_country_id.is_none() {
             let window_mgr = TransferWindowManager::for_country(country, date);
             let current_window = window_mgr.current_window_dates(country.id, date);
+            // Development-pathway bypass: the owner club itself listed
+            // this same-window signing for a development loan, so loan
+            // approaches are welcome. Permanent bids for the fresh
+            // signing stay blocked — the protection is only relaxed for
+            // the explicit pathway the owner opened.
+            let development_loan_listed = neg_data.is_loan
+                && country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == neg_data.selling_club_id)
+                    .map(|c| {
+                        c.transfer_plan.loan_out_candidates.iter().any(|cand| {
+                            cand.player_id == neg_data.player_id
+                                && cand.reason == LoanOutReason::DevelopmentPathway
+                        })
+                    })
+                    .unwrap_or(false);
             if let Some(player) = find_player_in_country(country, neg_data.player_id) {
-                if player.is_transfer_protected(date, current_window) {
+                if !development_loan_listed && player.is_transfer_protected(date, current_window) {
                     if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
                     {
                         negotiation
@@ -1051,16 +1070,10 @@ impl CountryResult {
         // it before the medical roll so a stale negotiation, restored save,
         // or alternate creation path can't complete a closed route.
         if is_foreign
-            && TransferRoutePolicy::is_blocked(
-                &neg_data.selling_country_code,
-                &country.code,
-                date,
-            )
+            && TransferRoutePolicy::is_blocked(&neg_data.selling_country_code, &country.code, date)
         {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation.reject_with_reason(
-                    NegotiationRejectionReason::CountryPairRouteBlocked,
-                );
+                negotiation.reject_with_reason(NegotiationRejectionReason::CountryPairRouteBlocked);
             }
             PipelineProcessor::on_negotiation_resolved(
                 country,
@@ -1554,7 +1567,8 @@ impl SellerBidValuation {
         let offer = &negotiation.current_offer;
         let base = offer.base_fee.amount.max(0.0);
         let total = offer.total_potential_value().max(0.0);
-        let buyer_rep_factor = 1.0 + (negotiation.buying_club_reputation as f64).clamp(0.0, 1.0) * 0.15;
+        let buyer_rep_factor =
+            1.0 + (negotiation.buying_club_reputation as f64).clamp(0.0, 1.0) * 0.15;
 
         // Up-front discount: heavy installment plans get a small
         // haircut because the seller carries time-value risk.
@@ -1688,7 +1702,8 @@ mod seller_bid_valuation_tests {
         if has_installments {
             offer = offer.with_clause(TransferClause::Installments(money(amount * 0.5), 3));
         }
-        let mut n = TransferNegotiation::new(1, 10, 0, 1, 2, offer, d(2026, 7, 1), 0.5, 0.5, 24, 0.5);
+        let mut n =
+            TransferNegotiation::new(1, 10, 0, 1, 2, offer, d(2026, 7, 1), 0.5, 0.5, 24, 0.5);
         n.is_loan = is_loan;
         n
     }
@@ -1721,6 +1736,259 @@ mod seller_bid_valuation_tests {
         assert!(
             SellerBidValuation::score(&permanent) > SellerBidValuation::score(&loan),
             "permanent bid should outrank a loan bid for the same player"
+        );
+    }
+}
+
+#[cfg(test)]
+mod development_pathway_protection_tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::fullname::FullName;
+    use crate::shared::{Currency, CurrencyValue, Location};
+    use crate::transfers::offer::TransferOffer;
+    use crate::transfers::pipeline::{LoanOutCandidate, LoanOutStatus};
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
+        PlayerAttributes, PlayerCollection, PlayerPlan, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, StaffCollection, Team, TeamCollection, TeamReputation,
+        TeamType, TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    /// Fixtures for the same-window / signing-plan protection bypass.
+    /// Wrapped in a unit struct per the project's no-free-helpers rule.
+    struct ProtectionFixtures;
+
+    impl ProtectionFixtures {
+        const SELLER_ID: u32 = 1;
+        const BUYER_ID: u32 = 2;
+        const PLAYER_ID: u32 = 100;
+        const NEG_ID: u32 = 50;
+
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn date() -> NaiveDate {
+            Self::d(2026, 7, 10)
+        }
+
+        /// Fresh signing under an active Development plan — protected
+        /// from outbound moves by `is_transfer_protected`.
+        fn protected_prospect() -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = 60;
+            let mut player = PlayerBuilder::new()
+                .id(Self::PLAYER_ID)
+                .full_name(FullName::new("Dev".to_string(), "Prospect".to_string()))
+                .birth_date(Self::d(2008, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Striker,
+                        level: 16,
+                    }],
+                })
+                .player_attributes(attrs)
+                .build()
+                .unwrap();
+            player.plan = Some(PlayerPlan::from_signing(
+                18,
+                2_000_000.0,
+                Self::d(2026, 7, 1),
+            ));
+            player
+        }
+
+        fn club(id: u32, name: &str, players: Vec<Player>) -> Club {
+            let team = Team::builder()
+                .id(id * 10)
+                .league_id(Some(10))
+                .club_id(id)
+                .name(name.to_string())
+                .slug(format!("club-{id}"))
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(5000, 5000, 5000))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap();
+            Club::new(
+                id,
+                name.to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![team]),
+                ClubFacilities::default(),
+            )
+        }
+
+        /// Country with the protected prospect at the seller plus an open
+        /// loan negotiation from the buyer. `dev_listed` controls whether
+        /// the seller has staged the DevelopmentPathway candidate.
+        fn world(dev_listed: bool) -> Country {
+            let seller = {
+                let mut club =
+                    Self::club(Self::SELLER_ID, "Seller", vec![Self::protected_prospect()]);
+                if dev_listed {
+                    club.transfer_plan
+                        .loan_out_candidates
+                        .push(LoanOutCandidate {
+                            player_id: Self::PLAYER_ID,
+                            reason: LoanOutReason::DevelopmentPathway,
+                            status: LoanOutStatus::Listed,
+                            loan_fee: 0.0,
+                        });
+                }
+                club
+            };
+            let buyer = Self::club(Self::BUYER_ID, "Borrower", Vec::new());
+
+            let league = League::new(
+                10,
+                "L".to_string(),
+                "league".to_string(),
+                1,
+                5000,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            );
+            let mut country = Country::builder()
+                .id(1)
+                .code("en".to_string())
+                .slug("england".to_string())
+                .name("england".to_string())
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(vec![seller, buyer])
+                .build()
+                .unwrap();
+
+            let offer = TransferOffer::new(
+                CurrencyValue::new(50_000.0, Currency::Usd),
+                Self::BUYER_ID,
+                Self::date(),
+            );
+            let mut neg = TransferNegotiation::new(
+                Self::NEG_ID,
+                Self::PLAYER_ID,
+                0,
+                Self::SELLER_ID,
+                Self::BUYER_ID,
+                offer,
+                Self::date(),
+                500.0,
+                500.0,
+                18,
+                10.0,
+            );
+            neg.is_loan = true;
+            country
+                .transfer_market
+                .negotiations
+                .insert(Self::NEG_ID, neg);
+
+            country
+        }
+
+        fn neg_data(country: &Country) -> NegotiationData {
+            let phase = country.transfer_market.negotiations[&Self::NEG_ID]
+                .phase
+                .clone();
+            NegotiationData {
+                player_id: Self::PLAYER_ID,
+                selling_club_id: Self::SELLER_ID,
+                buying_club_id: Self::BUYER_ID,
+                offer_amount: 50_000.0,
+                is_loan: true,
+                has_option_to_buy: false,
+                is_unsolicited: false,
+                phase,
+                selling_rep: 500.0,
+                buying_rep: 500.0,
+                player_age: 18,
+                player_ambition: 10.0,
+                asking_price: 60_000.0,
+                has_market_listing: true,
+                player_is_available: true,
+                listing_origin: None,
+                selling_country_id: None,
+                selling_continent_id: None,
+                selling_country_code: String::new(),
+                player_sold_from: None,
+                player_name: "Dev Prospect".to_string(),
+                selling_club_name: "Seller".to_string(),
+                offered_annual_wage: Some(50_000),
+                buying_league_reputation: 5000,
+                sell_on_percentage: None,
+                loan_future_fee: None,
+                personal_terms: None,
+            }
+        }
+    }
+
+    /// Without the owner-staged development candidate, the protected
+    /// fresh signing refuses every approach — including loans.
+    #[test]
+    fn protected_signing_without_dev_listing_rejects_loan_approach() {
+        let mut country = ProtectionFixtures::world(false);
+        let neg_data = ProtectionFixtures::neg_data(&country);
+
+        CountryResult::resolve_initial_approach(
+            &mut country,
+            ProtectionFixtures::NEG_ID,
+            &neg_data,
+            ProtectionFixtures::date(),
+        );
+
+        let neg = &country.transfer_market.negotiations[&ProtectionFixtures::NEG_ID];
+        assert_eq!(
+            neg.rejection_reason,
+            Some(NegotiationRejectionReason::PlayerTooImportant),
+            "same-window/plan protection must reject loans for non-listed signings"
+        );
+    }
+
+    /// With the DevelopmentPathway candidate staged by the owner, the
+    /// loan approach gets past the protection gate. The negotiation may
+    /// still resolve either way downstream (acceptance chance rolls),
+    /// but it must never die on PlayerTooImportant.
+    #[test]
+    fn dev_listed_signing_lets_loan_approach_past_protection() {
+        let mut country = ProtectionFixtures::world(true);
+        let neg_data = ProtectionFixtures::neg_data(&country);
+
+        CountryResult::resolve_initial_approach(
+            &mut country,
+            ProtectionFixtures::NEG_ID,
+            &neg_data,
+            ProtectionFixtures::date(),
+        );
+
+        let neg = &country.transfer_market.negotiations[&ProtectionFixtures::NEG_ID];
+        assert_ne!(
+            neg.rejection_reason,
+            Some(NegotiationRejectionReason::PlayerTooImportant),
+            "owner-listed development loan must bypass the protection gate"
         );
     }
 }

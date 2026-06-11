@@ -7,9 +7,10 @@
 
 use super::TeamBehaviour;
 use crate::club::player::ManagerPromiseKind;
-use crate::club::player::interaction::{InteractionTone, InteractionTopic};
 use crate::club::player::happiness::{PlayingTimeFrustrationConfig, PlayingTimeOpportunityContext};
+use crate::club::player::interaction::{InteractionTone, InteractionTopic};
 use crate::club::staff::CoachPlayerBond;
+use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::behaviour::topic_for_talk;
 use crate::club::team::behaviour::{
     ContractTermination, ManagerTalkResult, ManagerTalkType, TeamBehaviourResult,
@@ -453,8 +454,7 @@ impl TeamBehaviour {
                     .as_ref()
                     .map(|c| c.league_matches_played > 0)
                     .unwrap_or(false);
-                let long_idle =
-                    opp.days_since_join >= 60 && season_active && had_opportunity;
+                let long_idle = opp.days_since_join >= 60 && season_active && had_opportunity;
 
                 if (desire > threshold && had_opportunity)
                     || (age >= 21 && had_opportunity && gate.is_some())
@@ -667,9 +667,11 @@ fn evaluate_termination(
     }
 
     // Promising youngsters stay even when squad-status says NotNeeded.
+    // Termination is a club decision — judge the upside from the
+    // observable ceiling, never the hidden biological PA.
     let age = DateUtils::age(player.birth_date, date);
     let ca = player.player_attributes.current_ability;
-    let pa = player.player_attributes.potential_ability;
+    let pa = PotentialEstimator::observable_ceiling(player, date);
     let is_prospect = age <= 23 && pa > ca + 15;
     if is_prospect {
         return None;
@@ -948,9 +950,17 @@ impl ConflictTalkGate {
     /// reading rather than from a status flag.
     fn candidate_for(player_id: u32, conflict_risk: f32) -> Option<(u32, ManagerTalkType, u8)> {
         if conflict_risk > 0.80 {
-            Some((player_id, ManagerTalkType::MoraleTalk, Self::ELEVATED_RISK_PRIORITY))
+            Some((
+                player_id,
+                ManagerTalkType::MoraleTalk,
+                Self::ELEVATED_RISK_PRIORITY,
+            ))
         } else if conflict_risk > 0.65 {
-            Some((player_id, ManagerTalkType::MoraleTalk, Self::SOFT_WARNING_PRIORITY))
+            Some((
+                player_id,
+                ManagerTalkType::MoraleTalk,
+                Self::SOFT_WARNING_PRIORITY,
+            ))
         } else {
             None
         }

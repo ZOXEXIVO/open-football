@@ -369,6 +369,7 @@
   "dec_reason_player_requested": "Le joueur a demandé à partir",
   "dec_reason_player_unhappy": "Le joueur est mécontent au club",
   "dec_reason_post_injury_fitness": "A besoin de retrouver la forme après une longue blessure",
+  "dec_reason_development_pathway": "Parcours de développement — prêté pour gagner du temps de jeu",
   "dec_reason_released_failed_renewal": "Libéré après l'échec des négociations de prolongation",
   "dec_reason_released_free": "Libéré d'un commun accord",
   "dec_reason_squad_oversized": "Effectif surdimensionné, niveau inférieur à la moyenne",

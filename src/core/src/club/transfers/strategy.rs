@@ -1,5 +1,6 @@
 use crate::club::board::{ClubVision, FinancialStance, SigningPreference, VisionYouthFocus};
 use crate::club::player::calculators::WageCalculator;
+use crate::club::staff::perception::PotentialEstimator;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::offer::{
     PersonalTermsOffer, PromisedSquadStatus, TransferClause, TransferOffer,
@@ -713,15 +714,16 @@ impl ClubTransferStrategy {
         // produce visibly different shapes for the same target.
         let age = player.age(ctx.date);
 
-        // Assessed potential gap — never use hidden PA when
-        // scouting context is present.
+        // Assessed potential gap — hidden PA is never used: the
+        // scouting context when present, the staff-free observable
+        // ceiling otherwise.
         let assessed_ability =
             ctx.scout_assessed_ability
                 .unwrap_or(player.player_attributes.current_ability) as i16;
         let assessed_potential = ctx
             .scout_assessed_potential
             .map(|p| p as i16)
-            .unwrap_or(player.player_attributes.potential_ability as i16);
+            .unwrap_or_else(|| PotentialEstimator::observable_ceiling(player, ctx.date) as i16);
         let potential_gap = assessed_potential - assessed_ability;
 
         // Sell-on for young high-upside players. Stronger pull
@@ -1130,8 +1132,12 @@ impl PersonalTermsPackager {
         contract_years: u8,
         age: u8,
     ) -> PersonalTermsOffer {
-        let wage =
-            WageCalculator::expected_annual_wage(player, age, ctx.buyer_reputation_score, ctx.league_reputation);
+        let wage = WageCalculator::expected_annual_wage(
+            player,
+            age,
+            ctx.buyer_reputation_score,
+            ctx.league_reputation,
+        );
         let wage_discount = match strategy.recruitment.financial_stance {
             FinancialStance::Austerity => 0.88,
             FinancialStance::Conservative => 0.95,
@@ -1142,8 +1148,12 @@ impl PersonalTermsPackager {
 
         let ca = player.player_attributes.current_ability;
         let star = ca >= 150 || player.player_attributes.world_reputation >= 6000;
-        let prospect = age <= 23
-            && player.player_attributes.potential_ability as i16 - ca as i16 >= 15;
+        // Prospect framing reads the scouts' belief (or the observable
+        // ceiling), never the hidden biological PA.
+        let assessed_potential = ctx
+            .scout_assessed_potential
+            .unwrap_or_else(|| PotentialEstimator::observable_ceiling(player, ctx.date));
+        let prospect = age <= 23 && assessed_potential as i16 - ca as i16 >= 15;
 
         // Signing bonus: 0–35% of annual wage depending on star quality
         // and the buyer's addon preference. Cash-poor buyers don't pay

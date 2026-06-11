@@ -877,9 +877,7 @@ mod tests {
         let v = TransferPlausibilityEvaluator::evaluate(&inputs);
         assert!(matches!(
             v,
-            TransferPlausibilityVerdict::HardReject(
-                TransferPlausibilityReason::CountryPairBlocked
-            )
+            TransferPlausibilityVerdict::HardReject(TransferPlausibilityReason::CountryPairBlocked)
         ));
     }
 

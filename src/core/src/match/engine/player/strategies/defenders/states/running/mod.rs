@@ -52,8 +52,13 @@ impl StateProcessingHandler for DefenderRunningState {
             let coach = ctx.team().coach_instruction();
 
             // COACH INSTRUCTION: When told to waste time or slow down,
-            // hold the ball longer before passing (unless under pressure)
-            if coach.prefer_possession() && !self.is_opponent_closing_fast(ctx) {
+            // hold the ball longer before passing (unless under pressure
+            // or a counter window is open — the break beats the
+            // instruction; see TeamOps::counter_window).
+            if coach.prefer_possession()
+                && !self.is_opponent_closing_fast(ctx)
+                && !ctx.team().counter_window()
+            {
                 let ownership_ticks = ctx.tick_context.ball.ownership_duration;
                 let min_hold = coach.min_possession_ticks();
                 if ownership_ticks < min_hold && !ctx.players().opponents().exists(15.0) {

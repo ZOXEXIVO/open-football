@@ -201,7 +201,11 @@ fn develop_and_sell_attaches_sell_on_for_young_high_upside() {
         0.6,
     );
 
-    let ctx = ctx_for(date, 10_000_000.0);
+    let mut ctx = ctx_for(date, 10_000_000.0);
+    // The upside is the SCOUTS' belief — clubs can't read hidden PA, so
+    // the pursuing club knows about the 50pt gap via its dossier.
+    ctx.scout_assessed_ability = Some(110);
+    ctx.scout_assessed_potential = Some(160);
     let offer = s.calculate_initial_offer_with_context(&player, &asking, &ctx);
 
     assert!(

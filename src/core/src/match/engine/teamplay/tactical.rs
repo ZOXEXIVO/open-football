@@ -184,6 +184,12 @@ pub struct TacticalRefreshInputs<'a> {
     /// _ability` average.
     pub home_skills: TeamSkillAggregates,
     pub away_skills: TeamSkillAggregates,
+    /// Home-crowd edge in [0, 1]: `crowd_intensity × home_advantage`
+    /// from the match environment. Drives the front-foot home lift
+    /// (press / risk / tempo) and the away caution drop in `refresh` —
+    /// the play-quality half of home advantage (the referee
+    /// marginal-call half lives in `RefereeProfile::home_bias`).
+    pub home_edge: f32,
 }
 
 /// Team-level tactical context, shared across all eleven players. Cheap
@@ -514,10 +520,34 @@ impl TeamTacticalState {
         // dominant signal.
         let home_gk_lift = Self::gk_line_lift(inputs.home_skills.gk_quality, field_width);
         let away_gk_lift = Self::gk_line_lift(inputs.away_skills.gk_quality, field_width);
-        home.defensive_line_x =
-            (home_base_line - home_line_drop_units + home_gk_lift).clamp(0.0, field_width);
-        away.defensive_line_x =
-            (away_base_line + away_line_drop_units - away_gk_lift).clamp(0.0, field_width);
+        // Game-management line drop: a side protecting a result actually
+        // sits DEEPER, not just slower. Before this, game management only
+        // reduced the leader's own tempo/risk/press — their block stayed
+        // at phase height, so "parking the bus" parked nothing: the
+        // chasing side's risk lift met an unchanged defensive structure
+        // and conceding teams scored the next goal 72% of the time over
+        // 10+ minute horizons (equal-strength dev_match), feeding the
+        // engine's chronic equalizer/draw inflation. Up to 8% of pitch
+        // width at full GM pulls extra bodies between ball and goal so
+        // the existing shot-clarity, block-corridor and xG channels make
+        // the lead genuinely harder to break down — defense by geometry,
+        // not by a hidden modifier.
+        // History: 0.08 → 0.12 → 0.05. The deeper block A/B-measured
+        // COUNTERPRODUCTIVE in this engine: depth invites permanent
+        // siege territory, and siege volume (more willingness rolls
+        // against) outweighs the chance-quality reduction the extra
+        // bodies buy — post-62' trailing rate went UP, not down. The
+        // engine's effective lead-protection is a MODERATE line (keep
+        // the trailer's build-up further from goal) plus the counter
+        // window; not a six-yard-box bus.
+        let home_gm_drop = field_width * 0.05 * home.game_management_intensity;
+        let away_gm_drop = field_width * 0.05 * away.game_management_intensity;
+        home.defensive_line_x = (home_base_line - home_line_drop_units + home_gk_lift
+            - home_gm_drop)
+            .clamp(0.0, field_width);
+        away.defensive_line_x = (away_base_line + away_line_drop_units - away_gk_lift
+            + away_gm_drop)
+            .clamp(0.0, field_width);
 
         // ── Phase-dependent signals ──────────────────────────────────
         home.press_intensity = Self::compute_press_intensity(
@@ -565,6 +595,38 @@ impl TeamTacticalState {
             away.phase,
             away.game_management_intensity,
         );
+
+        // ── Home advantage (play-quality half) ───────────────────────
+        // Real equal-strength matches split ~45/25/30 toward the home
+        // side — home teams take ~15-20% more shots and score ~+0.35
+        // goals, driven by crowd-backed front-foot play and away-side
+        // caution. Until now the engine modelled NONE of this in play
+        // (only the referee marginal-call bias), so equal teams played
+        // neutral-venue football and piled up draws. The edge scales
+        // continuously with `crowd_intensity × home_advantage` from the
+        // match environment: a full derby crowd pushes the home side
+        // visibly forward, an empty-stadium friendly does nothing.
+        // Kept SMALL: a 3× sign-test (press +0.40×edge etc.) measured no
+        // home-outcome shift at all — attacking-volume signals don't
+        // convert to wins in this engine (winning teams take FEWER
+        // shots; score-state drives volume, not the reverse). The
+        // outcome-bearing half of home advantage therefore lives in the
+        // `crowd_arousal` effective-skill multiplier (player.rs /
+        // effective_skill.rs); this block just adds the visible
+        // front-foot flavour — home sides pressing a touch higher and
+        // playing a touch quicker — without pretending to be the edge.
+        let home_edge = inputs.home_edge.clamp(0.0, 1.0);
+        if home_edge > 0.0 {
+            home.press_intensity = (home.press_intensity + 0.14 * home_edge).clamp(0.0, 1.0);
+            home.risk_appetite = (home.risk_appetite + 0.10 * home_edge).clamp(0.0, 1.0);
+            home.tempo = (home.tempo + 0.06 * home_edge).clamp(0.10, 1.0);
+            // Away side: slightly more cautious on the road — lower
+            // risk, a touch less press. Smaller than the home lift so
+            // the NET effect matches the documented home edge without
+            // turning away sides passive.
+            away.risk_appetite = (away.risk_appetite - 0.06 * home_edge).clamp(0.0, 1.0);
+            away.press_intensity = (away.press_intensity - 0.05 * home_edge).clamp(0.0, 1.0);
+        }
 
         // Attacking-quality bias: a side with elite finishers chasing
         // a goal late should bias slightly more direct (higher tempo
@@ -757,10 +819,33 @@ impl TeamTacticalState {
             // 0.48 puts an equal-squad 1-goal lead at minute 90 at 0.70,
             // crossing the 0.55 prefer_possession threshold so coaches
             // and per-tick decisions both shift to "protect".
+            //
+            // The flat lead_base used to apply from minute 1 — a team
+            // going 1-0 up in minute 10 sat off (tempo -9%, risk -12%,
+            // press -12%) for eighty minutes while the trailer got the
+            // chasing risk lift. That persistent asymmetry was the
+            // equal-strength equalizer machine: 12v12 dev_match measured
+            // 56% draws (real ~25%) with conceding teams scoring at ~3×
+            // their baseline rate inside 15 minutes of falling behind.
+            // Real teams keep playing after an early goal and only start
+            // protecting around the hour mark — so the score-state part
+            // of the signal now ramps with time (25% before HT, full at
+            // minute 75) while the late_bonus keeps its existing shape.
             let lead_base = 0.22 + 0.18 * ((score_diff - 1).clamp(0, 2) as f32);
             let weaker_bonus = 0.25 * ability_gap.max(0.0);
-            let late_bonus = 0.48 * late_factor;
-            (lead_base + weaker_bonus + late_bonus).clamp(0.0, 0.95)
+            let manage_ramp = (0.25 + 0.75 * ((minute - 45.0).max(0.0) / 30.0).min(1.0))
+                .clamp(0.25, 1.0);
+            // Late bonus 0.48 → 0.30: at 0.48 an equal-squad 1-goal lead
+            // hit 0.70 at minute 90 — deep into "protect" (the 0.55
+            // prefer_possession threshold) — so leaders stopped scoring
+            // entirely late while trailers pushed, compressing score
+            // differences toward 0 (47% equal-strength draws) and
+            // starving the 75-90min goal band (12% vs real 26%). At
+            // 0.30 the same lead peaks at 0.52: cautious, slower, but
+            // still capable of scoring the counter-punch goal that
+            // kills real games off.
+            let late_bonus = 0.30 * late_factor;
+            ((lead_base + weaker_bonus) * manage_ramp + late_bonus).clamp(0.0, 0.95)
         } else if score_diff == 0 && ability_gap > 0.2 && late_factor > 0.5 {
             // Weaker team late in a draw plays for the point.
             (0.15 + 0.20 * late_factor).clamp(0.0, 0.5)
@@ -882,17 +967,32 @@ impl TeamTacticalState {
         // Base from tactic — attacking tactics start more risk-tolerant.
         let base = 0.45 + tactic_pressing * 0.20;
         // Chasing late = take risks. Symmetric with game-management.
+        // Early floor trimmed 0.4 → 0.25: a team conceding in minute 15
+        // doesn't abandon its structure — real urgency arrives with the
+        // clock. Pairs with the game-management time ramp above to break
+        // the lead→equalizer feedback loop at equal strength.
+        // Magnitude trimmed (0.20+0.10d → 0.14+0.07d) as part of making
+        // the score-reactive regime net-neutral in goal expectation: a
+        // score-blind A/B run measured the regime carrying the ENTIRE
+        // +17pp equal-strength draw-correlation surplus (rho +0.49 with
+        // score reactions on, −0.05 blind). Real chasing pressure exists
+        // but converts poorly — the volume lift here is paired with the
+        // desperation conversion penalty in the shot resolver.
         let chasing_factor = if score_diff < 0 {
             let late_factor = ((minute - 60.0).max(0.0) / 30.0).min(1.0);
             let deficit = (-score_diff).min(3) as f32;
-            (0.20 + deficit * 0.10) * (0.4 + late_factor * 0.6)
+            (0.08 + deficit * 0.04) * (0.25 + late_factor * 0.75)
         } else {
             0.0
         };
         let base_with_chase = base + chasing_factor;
-        // Game-management directly suppresses risk. A 0.7 GM signal
-        // cuts risk_appetite roughly in half.
-        (base_with_chase - game_management_intensity * 0.55).clamp(0.05, 1.0)
+        // Game-management suppresses risk — slope 0.55 → 0.38: a
+        // protecting team plays safer but keeps genuine counter intent
+        // (the post-62' state-rate instrument showed leaders collapsing
+        // to 0.61 goals/90 vs real ~1.4 — real leads are killed off on
+        // the break, and the risk slope was the leader's main forward-
+        // pass suppressor through the pass evaluator's 0.7-1.3x bias).
+        (base_with_chase - game_management_intensity * 0.38).clamp(0.05, 1.0)
     }
 
     /// Rest-defence count — how many players the team keeps as a

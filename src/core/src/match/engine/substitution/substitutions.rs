@@ -1032,8 +1032,12 @@ mod tests {
         // into a measurable difference. The processor reads
         // `starting_recovery_debt` every tick, so the
         // heavy-legs sub should accumulate a larger fatigue
-        // total.
-        for tick in 0..400 {
+        // total. 400 → 2500 ticks after the 2026-06-11 fatigue
+        // normalization (FATIGUE_RATE_MULTIPLIER 0.024 → 0.0035)
+        // rescaled per-tick drain ~7× down; the debt mechanism is
+        // unchanged, so the same visible gap just needs a
+        // proportionally longer running stretch (~25 sim-seconds).
+        for tick in 0..2500 {
             let fresh_ctx = ConditionContext {
                 in_state_time: tick,
                 player: &mut fresh,

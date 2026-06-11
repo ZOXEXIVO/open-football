@@ -90,6 +90,21 @@ impl<'b> TeamOperationsImpl<'b> {
     ///      team ahead or drawing plays safer than earlier.
     pub fn should_play_possession(&self) -> bool {
         let ctx = self.ctx;
+        // A LIVE COUNTER OVERRIDES EVERY SLOW-DOWN TRIGGER. The first
+        // seconds after winning the ball against an overcommitted
+        // opponent are real football's single best attacking moment —
+        // the entire point of absorbing pressure in a low block is the
+        // break that follows. The previous shape of this helper had
+        // transitions BACKWARDS: trigger (1) forced possession-recycle
+        // mode for 3 s after every ball-win (precisely the counter
+        // window), and `prefer_possession()` extended that to the whole
+        // match for game-managing leaders — so a team protecting a lead
+        // could never score the classic 2-0 counter goal, and trailing
+        // teams pushed without risk. That one-way late-game traffic was
+        // a measured +18pp draw-correlation surplus at equal strength.
+        if self.counter_window() {
+            return false;
+        }
         let coach = self.coach_instruction();
         if coach.prefer_possession() {
             return true;
@@ -98,6 +113,8 @@ impl<'b> TeamOperationsImpl<'b> {
         // (1) Just won the ball — stabilize window. The coach tracks
         // `last_possession_gain_tick`; for the first ~300 ticks (3 s)
         // after winning, keep possession rather than counter-rushing.
+        // (Bypassed above when the opponent is overcommitted — then
+        // these seconds are for breaking, not stabilizing.)
         let current_tick = ctx.context.current_tick();
         let ticks_since_gain = current_tick.saturating_sub(self.coach().last_possession_gain_tick);
         if ticks_since_gain < 300 && ctx.team().is_control_ball() {
@@ -129,6 +146,46 @@ impl<'b> TeamOperationsImpl<'b> {
 
         // (4) Attack not set up downfield.
         !self.is_attack_ready()
+    }
+
+    /// True when a genuine counter-attack window is open: we won the
+    /// ball within the last ~4 s AND the opponent is overcommitted
+    /// upfield (5+ of their players in OUR half — the same commitment
+    /// signal the defender counter-outlet pass uses). While open, the
+    /// possession-stabilize window, the coach's prefer-possession mode
+    /// and the minimum-hold gates all stand down: real teams break at
+    /// full speed in this window regardless of instruction, tiredness
+    /// or scoreline — it is where 2-0 counter goals and tired late
+    /// winners come from.
+    pub fn counter_window(&self) -> bool {
+        let ctx = self.ctx;
+        let current_tick = ctx.context.current_tick();
+        let ticks_since_gain =
+            current_tick.saturating_sub(self.coach().last_possession_gain_tick);
+        // 400 → 600 ticks (6 s): a real break from deep needs 6-10 s
+        // to reach the opposite box; the shorter window expired while
+        // the outlet ball was still in flight.
+        if ticks_since_gain >= 600 {
+            return false;
+        }
+        if !ctx.team().is_control_ball() {
+            return false;
+        }
+        let half_x = ctx.context.field_size.width as f32 * 0.5;
+        let committed = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|o| match ctx.player.side {
+                Some(PlayerSide::Left) => o.position.x < half_x,
+                Some(PlayerSide::Right) => o.position.x > half_x,
+                None => false,
+            })
+            .count();
+        // ≥4 committed opponents (was 5): with keeper excluded from
+        // upfield positions a 4-man commitment already leaves the
+        // back line outnumbered against a 3-man break.
+        committed >= 4
     }
 
     /// Game-management intensity from this team's perspective. Rises
@@ -188,14 +245,32 @@ impl<'b> TeamOperationsImpl<'b> {
         self.tactical().counterpress_window
     }
 
-    /// Whether the team's coach allows shooting right now (team-level cooldown)
+    /// Whether the team's coach allows shooting right now (team-level cooldown).
+    ///
+    /// A live rebound (dangerous parry / loose block deflection within
+    /// the last ~3 s) suspends the team shot-SPACING and build-up
+    /// gates: real box scrambles produce shot–parry–tap-in sequences
+    /// inside 2-3 seconds, which the 7.5 s spacing gate made
+    /// structurally impossible (contradicting the per-possession cap's
+    /// own design note that exists to allow exactly that pattern). The
+    /// 2-shots-per-possession cap still applies during rebounds.
     pub fn can_shoot(&self) -> bool {
         let current_tick = self.ctx.context.current_tick();
-        self.coach().can_shoot(current_tick)
+        const REBOUND_WINDOW_TICKS: u64 = 300;
+        let rebound_tick = self.ctx.tick_context.ball.last_rebound_tick;
+        let rebound_live = rebound_tick > 0
+            && current_tick.saturating_sub(rebound_tick) < REBOUND_WINDOW_TICKS;
+        self.coach().can_shoot(current_tick, rebound_live)
     }
 
-    /// Score difference from this team's perspective (positive = leading)
+    /// Score difference from this team's perspective (positive =
+    /// leading) — as BEHAVIOR is allowed to see it: level before
+    /// score-reactive football engages (final ~28 min, see
+    /// `MatchContext::SCORE_REACTION_FROM_MINUTE`), real after.
     pub fn score_diff(&self) -> i8 {
+        if !self.ctx.context.behavioral_score_visible() {
+            return 0;
+        }
         let home_goals = self.ctx.context.score.home_team.get() as i8;
         let away_goals = self.ctx.context.score.away_team.get() as i8;
         if self.ctx.player.team_id == self.ctx.context.field_home_team_id {
@@ -306,7 +381,15 @@ impl<'b> TeamOperationsImpl<'b> {
         !self.is_loosing()
     }
 
+    /// Behavioral "are we behind?" — like `score_diff`, players act on
+    /// the scoreline only once score-reactive football engages (final
+    /// ~28 min). Before that a trailing side keeps playing its game —
+    /// the from-minute-1 reaction was part of the measured equalizer
+    /// machine (trailing teams scored at 2.35/90 vs leaders' 1.08).
     pub fn is_loosing(&self) -> bool {
+        if !self.ctx.context.behavioral_score_visible() {
+            return false;
+        }
         if self.ctx.player.team_id == self.ctx.context.score.home_team.team_id {
             self.ctx.context.score.home_team < self.ctx.context.score.away_team
         } else {

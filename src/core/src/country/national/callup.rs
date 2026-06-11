@@ -31,6 +31,7 @@ use super::types::{
     NationalCoachProfile, NationalSelectionPolicy, NationalSquadPlayer, NationalTeamLevel,
     TOURNAMENT_SQUAD_SIZE,
 };
+use crate::club::staff::perception::PotentialEstimator;
 use crate::{
     Country, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatistics,
     PlayerStatusType, Tactics,
@@ -259,7 +260,11 @@ impl NationalTeam {
         policy: &NationalSelectionPolicy,
     ) -> Option<CallUpCandidate> {
         let ability = player.player_attributes.current_ability;
-        let potential = player.player_attributes.potential_ability;
+        // Single hidden-PA boundary for the entire call-up pipeline: the
+        // candidate's `potential_ability` field is the SELECTORS' belief
+        // (observable ceiling), so every downstream scoring/quota read
+        // stays clean of the hidden biological PA.
+        let potential = PotentialEstimator::observable_ceiling(player, date);
         let age = date.year() - player.birth_date.year();
         let total_games = player.statistics.played + player.statistics.played_subs;
 

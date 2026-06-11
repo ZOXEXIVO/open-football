@@ -6,7 +6,7 @@ use crate::transfers::ScoutingRegion;
 use crate::transfers::market::{TransferListing, TransferListingStatus, TransferListingType};
 use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
-use crate::transfers::pipeline::{LoanOutStatus, TransferRequestStatus};
+use crate::transfers::pipeline::{LoanOutReason, LoanOutStatus, TransferRequestStatus};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
@@ -36,6 +36,17 @@ impl PipelineProcessor {
             ability: u8,
             age: u8,
             position_group: PlayerFieldPositionGroup,
+            /// Parent club's main-team world reputation — drives the
+            /// reputation-drop realism gate on the borrower side.
+            parent_rep: u16,
+            /// Best CA at the player's position group on the parent's
+            /// main roster. A player far below it is "very raw" and
+            /// tolerates a much bigger reputation drop.
+            parent_best_in_group: u8,
+            /// Parent listed this player via the development pathway —
+            /// the loan exists to buy minutes, so the borrower-side
+            /// expected-minutes gate runs at its stricter bar.
+            is_development: bool,
         }
 
         let mut loan_listings: Vec<LoanListing> = Vec::new();
@@ -52,13 +63,39 @@ impl PipelineProcessor {
                 if player.is_on_loan() {
                     continue;
                 }
+                let group = player.position().position_group();
+                let parent_club = country.clubs.iter().find(|c| c.id == listing.club_id);
+                let parent_team =
+                    parent_club.and_then(|c| c.teams.main().or(c.teams.teams.first()));
+                let parent_rep = parent_team.map(|t| t.reputation.world).unwrap_or(0);
+                let parent_best_in_group = parent_team
+                    .map(|t| {
+                        t.players
+                            .iter()
+                            .filter(|p| p.position().position_group() == group)
+                            .map(|p| p.player_attributes.current_ability)
+                            .max()
+                            .unwrap_or(0)
+                    })
+                    .unwrap_or(0);
+                let is_development = parent_club
+                    .map(|c| {
+                        c.transfer_plan.loan_out_candidates.iter().any(|cand| {
+                            cand.player_id == listing.player_id
+                                && cand.reason == LoanOutReason::DevelopmentPathway
+                        })
+                    })
+                    .unwrap_or(false);
                 loan_listings.push(LoanListing {
                     player_id: listing.player_id,
                     club_id: listing.club_id,
                     asking_price: listing.asking_price.amount,
                     ability: player.player_attributes.current_ability,
                     age: player.age(date),
-                    position_group: player.position().position_group(),
+                    position_group: group,
+                    parent_rep,
+                    parent_best_in_group,
+                    is_development,
                 });
             }
         }
@@ -173,50 +210,14 @@ impl PipelineProcessor {
             // to avoid starting multiple negotiations for the same position
             let mut scanned_position_groups: Vec<PlayerFieldPositionGroup> = Vec::new();
 
-            // Track position group depth + best ability to prevent bloat
-            // while still allowing upgrades. A club with 3 mediocre GKs should
-            // still loan a world-class GK, but not a 4th mediocre one.
-            struct PositionDepth {
-                group: PlayerFieldPositionGroup,
-                count: usize,
-                max: usize,
-                best_ability: u8,
-            }
-
-            let position_depth: Vec<PositionDepth> = [
-                (PlayerFieldPositionGroup::Goalkeeper, 3usize),
-                (PlayerFieldPositionGroup::Defender, 8),
-                (PlayerFieldPositionGroup::Midfielder, 8),
-                (PlayerFieldPositionGroup::Forward, 6),
-            ]
-            .iter()
-            .map(|&(group, max)| {
-                let (count, best_ability) = team
-                    .players
-                    .iter()
-                    .filter(|p| p.position().position_group() == group)
-                    .map(|p| p.player_attributes.current_ability)
-                    .fold((0usize, 0u8), |(c, b), a| (c + 1, b.max(a)));
-                PositionDepth {
-                    group,
-                    count,
-                    max,
-                    best_ability,
-                }
-            })
-            .collect();
+            // Borrower-side depth snapshot — shared with the foreign
+            // scan. A club with 3 mediocre GKs should still loan a
+            // world-class GK, but not a 4th mediocre one.
+            let borrower_depth = BorrowerPositionDepth::snapshot(team);
+            let borrower_world_rep = team.reputation.world;
 
             let should_skip_loan = |group: PlayerFieldPositionGroup, loan_ability: u8| -> bool {
-                if let Some(depth) = position_depth.iter().find(|d| d.group == group) {
-                    if depth.count < depth.max {
-                        return false; // Still have room — always allow
-                    }
-                    // Position is full — only allow if the loan player is clearly
-                    // better than the best we have (upgrade, not bloat)
-                    loan_ability <= depth.best_ability
-                } else {
-                    false
-                }
+                !borrower_depth.has_room_for(group, loan_ability)
             };
 
             // Check unfulfilled transfer requests first. Emergency
@@ -267,6 +268,20 @@ impl PipelineProcessor {
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
                             && !actions.iter().any(|a| a.player_id == l.player_id)
+                            // Development realism: the move must buy
+                            // minutes, and the reputation drop from the
+                            // parent must stay plausible.
+                            && borrower_depth.would_get_loan_minutes(
+                                l.position_group,
+                                l.ability,
+                                l.is_development,
+                            )
+                            && Self::loan_reputation_drop_ok(
+                                borrower_world_rep,
+                                l.parent_rep,
+                                l.ability,
+                                l.parent_best_in_group,
+                            )
                     })
                     .max_by_key(|l| l.ability)
                 {
@@ -314,6 +329,17 @@ impl PipelineProcessor {
                             && !actions.iter().any(|a| a.player_id == l.player_id)
                             && !scanned_position_groups.contains(&l.position_group)
                             && !should_skip_loan(l.position_group, l.ability)
+                            && borrower_depth.would_get_loan_minutes(
+                                l.position_group,
+                                l.ability,
+                                l.is_development,
+                            )
+                            && Self::loan_reputation_drop_ok(
+                                borrower_world_rep,
+                                l.parent_rep,
+                                l.ability,
+                                l.parent_best_in_group,
+                            )
                     })
                     .collect();
                 opps.sort_by(|a, b| b.ability.cmp(&a.ability));
@@ -347,6 +373,17 @@ impl PipelineProcessor {
                             && !actions.iter().any(|a| a.player_id == l.player_id)
                             && !scanned_position_groups.contains(&l.position_group)
                             && !should_skip_loan(l.position_group, l.ability)
+                            && borrower_depth.would_get_loan_minutes(
+                                l.position_group,
+                                l.ability,
+                                l.is_development,
+                            )
+                            && Self::loan_reputation_drop_ok(
+                                borrower_world_rep,
+                                l.parent_rep,
+                                l.ability,
+                                l.parent_best_in_group,
+                            )
                     })
                     .max_by_key(|l| l.ability)
                 {
@@ -630,48 +667,41 @@ impl PipelineProcessor {
                             // `should_skip_loan` shape so we don't
                             // import a 4th mid-tier GK on top of three.
                             && borrower_position_depth.has_room_for(p.position_group, p.skill_ability)
+                            // The loan must buy minutes — not a bench
+                            // seat behind a wall of better players.
+                            // Young loanees (the development profile)
+                            // need the stricter expected-minutes bar.
+                            && borrower_position_depth.would_get_loan_minutes(
+                                p.position_group,
+                                p.skill_ability,
+                                p.age <= 22,
+                            )
+                            // Parent-club reputation drop — same realism
+                            // gate as the domestic scan, anchored on the
+                            // player's own club rather than his personal
+                            // reputation.
+                            && Self::loan_reputation_drop_ok(
+                                team_rep,
+                                p.club_world_reputation.max(0) as u16,
+                                p.skill_ability,
+                                p.club_best_in_group,
+                            )
                     })
-                    .max_by_key(|p| p.skill_ability)
+                    .max_by_key(|p| {
+                        // Prefer culturally closer destinations: a club in
+                        // the borrower's own region outranks a marginally
+                        // better-rated alternative on another continent.
+                        let same_region =
+                            ScoutingRegion::from_country(p.continent_id, &p.country_code)
+                                == club_region;
+                        (same_region as u8, p.skill_ability)
+                    })
                 {
                     let loan_fee = FormattingUtils::round_fee(best.estimated_value * 0.1 * 0.8);
                     let reason = format!("Loan signing",);
                     actions.push(ForeignLoanAction {
                         club_id: club.id,
-                        player: PlayerSummary {
-                            player_id: best.player_id,
-                            club_id: best.club_id,
-                            country_id: best.country_id,
-                            continent_id: best.continent_id,
-                            country_code: best.country_code.clone(),
-                            player_name: best.player_name.clone(),
-                            club_name: best.club_name.clone(),
-                            position: best.position,
-                            position_group: best.position_group,
-                            age: best.age,
-                            estimated_value: best.estimated_value,
-                            is_listed: best.is_listed,
-                            is_loan_listed: best.is_loan_listed,
-                            skill_ability: best.skill_ability,
-                            average_rating: best.average_rating,
-                            goals: best.goals,
-                            assists: best.assists,
-                            appearances: best.appearances,
-                            determination: best.determination,
-                            work_rate: best.work_rate,
-                            composure: best.composure,
-                            anticipation: best.anticipation,
-                            technical_avg: best.technical_avg,
-                            mental_avg: best.mental_avg,
-                            physical_avg: best.physical_avg,
-                            current_reputation: best.current_reputation,
-                            home_reputation: best.home_reputation,
-                            world_reputation: best.world_reputation,
-                            country_reputation: best.country_reputation,
-                            club_world_reputation: best.club_world_reputation,
-                            is_injured: best.is_injured,
-                            contract_months_remaining: best.contract_months_remaining,
-                            salary: best.salary,
-                        },
+                        player: (*best).clone(),
                         offer_amount: loan_fee,
                         reason,
                     });
@@ -749,148 +779,397 @@ impl PipelineProcessor {
         }
     }
 
+    /// Realism gate for the borrower side of a domestic loan: players
+    /// don't drop from a giant to a minnow for a bit-part role.
+    /// `borrower_rep` / `parent_rep` are main-team world reputations
+    /// (0..10000). Very raw players — far below the parent's best at
+    /// their position — tolerate a much bigger drop, because for them
+    /// ANY senior football is the point of the loan.
+    fn loan_reputation_drop_ok(
+        borrower_rep: u16,
+        parent_rep: u16,
+        player_ability: u8,
+        parent_best_in_group: u8,
+    ) -> bool {
+        if parent_rep == 0 {
+            return true;
+        }
+        let very_raw = player_ability.saturating_add(25) <= parent_best_in_group;
+        let floor = if very_raw { 0.12 } else { 0.25 };
+        borrower_rep as f32 >= parent_rep as f32 * floor
+    }
+
     /// List loan-out candidates on the transfer market.
-    pub(super) fn process_loan_out_listings(country: &mut Country, date: NaiveDate) {
-        let price_level = country.settings.pricing.price_level;
-        let mut listings_to_add: Vec<(u32, TransferListing)> = Vec::new();
-
-        for club in &country.clubs {
-            for candidate in &club.transfer_plan.loan_out_candidates {
-                if candidate.status != LoanOutStatus::Identified {
-                    continue;
-                }
-
-                if country
-                    .transfer_market
-                    .get_listing_by_player(candidate.player_id)
-                    .is_some()
-                {
-                    continue;
-                }
-
-                if let Some(player) = Self::find_player_in_club(club, candidate.player_id) {
-                    if player.is_on_loan() {
-                        continue;
-                    }
-
-                    let team_id = club.teams.teams.first().map(|t| t.id).unwrap_or(0);
-
-                    let asking_price = if candidate.loan_fee > 0.0 {
-                        CurrencyValue {
-                            amount: candidate.loan_fee,
-                            currency: Currency::Usd,
-                        }
-                    } else {
-                        // Loan fee is ~10% of player value, not full value
-                        let (seller_league_rep, seller_club_rep) =
-                            PlayerValuationCalculator::seller_context(country, club);
-                        let full_value =
-                            PlayerValuationCalculator::calculate_value_with_price_level(
-                                player,
-                                date,
-                                price_level,
-                                seller_league_rep,
-                                seller_club_rep,
-                            );
-                        CurrencyValue {
-                            amount: FormattingUtils::round_fee(full_value.amount * 0.10),
-                            currency: full_value.currency,
-                        }
-                    };
-
-                    let listing = TransferListing::new(
-                        candidate.player_id,
-                        club.id,
-                        team_id,
-                        asking_price,
-                        date,
-                        TransferListingType::Loan,
-                    );
-
-                    listings_to_add.push((club.id, listing));
-                }
-            }
-        }
-
-        for (club_id, listing) in listings_to_add {
-            let player_id = listing.player_id;
-            country.transfer_market.add_listing(listing);
-
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
-                if let Some(candidate) = club
-                    .transfer_plan
+    pub(crate) fn process_loan_out_listings(country: &mut Country, date: NaiveDate) {
+        let pending: Vec<(u32, u32)> = country
+            .clubs
+            .iter()
+            .flat_map(|club| {
+                club.transfer_plan
                     .loan_out_candidates
-                    .iter_mut()
-                    .find(|c| c.player_id == player_id)
-                {
-                    candidate.status = LoanOutStatus::Listed;
-                }
+                    .iter()
+                    .filter(|c| c.status == LoanOutStatus::Identified)
+                    .map(move |c| (club.id, c.player_id))
+            })
+            .collect();
 
-                for team in &mut club.teams.teams {
-                    if let Some(player) =
-                        team.players.players.iter_mut().find(|p| p.id == player_id)
-                    {
-                        if !player.statuses.get().contains(&PlayerStatusType::Loa) {
-                            player.statuses.add(date, PlayerStatusType::Loa);
-                        }
+        for (club_id, player_id) in pending {
+            Self::list_loan_out_candidate(country, club_id, player_id, date);
+        }
+    }
+
+    /// List ONE identified loan-out candidate on the market. Returns
+    /// true when a new listing was created. Deduped against existing
+    /// listings, so the daily pipeline pass and the Phase-C development-
+    /// pathway staging can both call it without double-listing.
+    pub(crate) fn list_loan_out_candidate(
+        country: &mut Country,
+        club_id: u32,
+        player_id: u32,
+        date: NaiveDate,
+    ) -> bool {
+        if country
+            .transfer_market
+            .get_listing_by_player(player_id)
+            .is_some()
+        {
+            return false;
+        }
+
+        let price_level = country.settings.pricing.price_level;
+        let listing = {
+            let Some(club) = country.clubs.iter().find(|c| c.id == club_id) else {
+                return false;
+            };
+            let Some(candidate) = club
+                .transfer_plan
+                .loan_out_candidates
+                .iter()
+                .find(|c| c.player_id == player_id && c.status == LoanOutStatus::Identified)
+            else {
+                return false;
+            };
+            let Some(player) = Self::find_player_in_club(club, player_id) else {
+                return false;
+            };
+            if player.is_on_loan() {
+                return false;
+            }
+
+            let team_id = club.teams.teams.first().map(|t| t.id).unwrap_or(0);
+
+            let asking_price = if candidate.loan_fee > 0.0 {
+                CurrencyValue {
+                    amount: candidate.loan_fee,
+                    currency: Currency::Usd,
+                }
+            } else {
+                // Loan fee is ~10% of player value, not full value
+                let (seller_league_rep, seller_club_rep) =
+                    PlayerValuationCalculator::seller_context(country, club);
+                let full_value = PlayerValuationCalculator::calculate_value_with_price_level(
+                    player,
+                    date,
+                    price_level,
+                    seller_league_rep,
+                    seller_club_rep,
+                );
+                CurrencyValue {
+                    amount: FormattingUtils::round_fee(full_value.amount * 0.10),
+                    currency: full_value.currency,
+                }
+            };
+
+            TransferListing::new(
+                player_id,
+                club.id,
+                team_id,
+                asking_price,
+                date,
+                TransferListingType::Loan,
+            )
+        };
+
+        country.transfer_market.add_listing(listing);
+
+        if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
+            if let Some(candidate) = club
+                .transfer_plan
+                .loan_out_candidates
+                .iter_mut()
+                .find(|c| c.player_id == player_id)
+            {
+                candidate.status = LoanOutStatus::Listed;
+            }
+
+            for team in &mut club.teams.teams {
+                if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
+                    if !player.statuses.get().contains(&PlayerStatusType::Loa) {
+                        player.statuses.add(date, PlayerStatusType::Loa);
                     }
                 }
             }
         }
+
+        true
     }
 }
 
-/// Snapshot of the borrowing club's position-group depth — count of
-/// players + best ability per group. Used by the loan scans so the
-/// borrower doesn't pile a fourth mid-tier player onto a position
-/// that's already three deep with comparable quality. Mirrors the
-/// `position_depth` shape inside `scan_loan_market`, factored out so
-/// the foreign-scan path can reuse the same realism gate.
+/// Snapshot of the borrowing club's position-group depth — per-group
+/// ability lists plus squad caps. Used by every loan scan (domestic and
+/// foreign) for two realism gates: `has_room_for` stops the borrower
+/// piling a fourth mid-tier player onto a position that's already three
+/// deep, and `would_get_minutes` rejects destinations where the player
+/// would sit behind a wall of clearly better names — a development loan
+/// must buy pitch time, not a bench seat.
 struct BorrowerPositionDepth {
-    rows: [(PlayerFieldPositionGroup, usize, usize, u8); 4],
+    rows: Vec<(PlayerFieldPositionGroup, usize, Vec<u8>)>,
 }
 
 impl BorrowerPositionDepth {
     fn snapshot(team: &Team) -> Self {
-        let groups = [
+        let caps = [
             (PlayerFieldPositionGroup::Goalkeeper, 3usize),
             (PlayerFieldPositionGroup::Defender, 8),
             (PlayerFieldPositionGroup::Midfielder, 8),
             (PlayerFieldPositionGroup::Forward, 6),
         ];
-        let mut rows = [
-            (PlayerFieldPositionGroup::Goalkeeper, 0usize, 3usize, 0u8),
-            (PlayerFieldPositionGroup::Defender, 0, 8, 0),
-            (PlayerFieldPositionGroup::Midfielder, 0, 8, 0),
-            (PlayerFieldPositionGroup::Forward, 0, 6, 0),
-        ];
-        for (i, (group, max)) in groups.iter().enumerate() {
-            let (count, best) = team
-                .players
-                .iter()
-                .filter(|p| p.position().position_group() == *group)
-                .map(|p| p.player_attributes.current_ability)
-                .fold((0usize, 0u8), |(c, b), a| (c + 1, b.max(a)));
-            rows[i] = (*group, count, *max, best);
-        }
+        let rows = caps
+            .iter()
+            .map(|&(group, max)| {
+                let abilities: Vec<u8> = team
+                    .players
+                    .iter()
+                    .filter(|p| p.position().position_group() == group)
+                    .map(|p| p.player_attributes.current_ability)
+                    .collect();
+                (group, max, abilities)
+            })
+            .collect();
         BorrowerPositionDepth { rows }
+    }
+
+    fn row(
+        &self,
+        group: PlayerFieldPositionGroup,
+    ) -> Option<&(PlayerFieldPositionGroup, usize, Vec<u8>)> {
+        self.rows.iter().find(|(g, _, _)| *g == group)
     }
 
     /// True when adding a loan player at `group` makes sense — either
     /// there's room (count < max) or the incoming player is clearly
     /// stronger than the existing best in that group.
     fn has_room_for(&self, group: PlayerFieldPositionGroup, candidate_ability: u8) -> bool {
-        for (g, count, max, best) in &self.rows {
-            if *g == group {
-                if *count < *max {
+        match self.row(group) {
+            Some((_, max, abilities)) => {
+                if abilities.len() < *max {
                     return true;
                 }
                 // Group is full — only accept if the incoming player
                 // would clearly upgrade the position (≥10 CA over the
                 // current best).
-                return candidate_ability >= best.saturating_add(10);
+                let best = abilities.iter().copied().max().unwrap_or(0);
+                candidate_ability >= best.saturating_add(10)
             }
+            None => true,
         }
-        true
+    }
+
+    /// True when the incoming player would realistically see the pitch
+    /// here. GK loans must arrive as plausible first choice (nobody
+    /// clearly better); outfield loans tolerate up to two clearly
+    /// better names ahead of them in the pecking order.
+    fn would_get_minutes(&self, group: PlayerFieldPositionGroup, candidate_ability: u8) -> bool {
+        self.would_get_loan_minutes(group, candidate_ability, false)
+    }
+
+    /// Minutes gate with a development-strictness switch. Development
+    /// loans exist to buy PLAYING time, so a young development loanee
+    /// tolerates at most ONE clearly better outfielder ahead of him;
+    /// generic squad/emergency cover keeps the looser bar of two. GK
+    /// loans must always arrive as plausible first choice.
+    fn would_get_loan_minutes(
+        &self,
+        group: PlayerFieldPositionGroup,
+        candidate_ability: u8,
+        development: bool,
+    ) -> bool {
+        match self.row(group) {
+            Some((_, _, abilities)) => {
+                let clearly_better = abilities
+                    .iter()
+                    .filter(|&&a| a >= candidate_ability.saturating_add(8))
+                    .count();
+                match group {
+                    PlayerFieldPositionGroup::Goalkeeper => clearly_better == 0,
+                    _ => clearly_better < if development { 2 } else { 3 },
+                }
+            }
+            None => true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod borrower_gate_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, Player, PlayerAttributes, PlayerCollection, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection, TeamReputation,
+        TeamType, TrainingSchedule,
+    };
+    use chrono::{NaiveDate, NaiveTime};
+
+    /// Borrower-side fixtures. Wrapped in a unit struct per the
+    /// project's no-free-helpers convention.
+    struct BorrowerFixtures;
+
+    impl BorrowerFixtures {
+        fn player(id: u32, position: PlayerPositionType, ca: u8) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ca;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Loan".to_string(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 16,
+                    }],
+                })
+                .player_attributes(attrs)
+                .build()
+                .unwrap()
+        }
+
+        fn team(players: Vec<Player>) -> Team {
+            Team::builder()
+                .id(1)
+                .league_id(Some(1))
+                .club_id(1)
+                .name("Borrower".to_string())
+                .slug("borrower".to_string())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(2000, 2000, 2000))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+    }
+
+    #[test]
+    fn full_group_rejects_comparable_loan_but_accepts_clear_upgrade() {
+        // Three keepers fill the GK cap; a comparable 4th is bloat, a
+        // clear upgrade still gets through.
+        let team = BorrowerFixtures::team(vec![
+            BorrowerFixtures::player(1, PlayerPositionType::Goalkeeper, 80),
+            BorrowerFixtures::player(2, PlayerPositionType::Goalkeeper, 70),
+            BorrowerFixtures::player(3, PlayerPositionType::Goalkeeper, 60),
+        ]);
+        let depth = BorrowerPositionDepth::snapshot(&team);
+        assert!(
+            !depth.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 85),
+            "comparable keeper into a full group is squad bloat"
+        );
+        assert!(
+            depth.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 95),
+            "a clear upgrade (≥10 over the best) is still allowed"
+        );
+    }
+
+    #[test]
+    fn gk_loan_blocked_when_clearly_better_keeper_present() {
+        let team = BorrowerFixtures::team(vec![BorrowerFixtures::player(
+            1,
+            PlayerPositionType::Goalkeeper,
+            80,
+        )]);
+        let depth = BorrowerPositionDepth::snapshot(&team);
+        assert!(
+            !depth.would_get_minutes(PlayerFieldPositionGroup::Goalkeeper, 70),
+            "a dev keeper behind a clearly better #1 plays zero minutes"
+        );
+        assert!(
+            depth.would_get_minutes(PlayerFieldPositionGroup::Goalkeeper, 75),
+            "a keeper close to the incumbent can compete for the shirt"
+        );
+    }
+
+    #[test]
+    fn outfield_loan_blocked_behind_three_clearly_better_players() {
+        let blocked_team = BorrowerFixtures::team(vec![
+            BorrowerFixtures::player(1, PlayerPositionType::MidfielderCenter, 90),
+            BorrowerFixtures::player(2, PlayerPositionType::MidfielderCenter, 90),
+            BorrowerFixtures::player(3, PlayerPositionType::MidfielderCenter, 90),
+        ]);
+        let depth = BorrowerPositionDepth::snapshot(&blocked_team);
+        assert!(
+            !depth.would_get_minutes(PlayerFieldPositionGroup::Midfielder, 70),
+            "three clearly better midfielders leave no realistic minutes"
+        );
+
+        let open_team = BorrowerFixtures::team(vec![
+            BorrowerFixtures::player(1, PlayerPositionType::MidfielderCenter, 90),
+            BorrowerFixtures::player(2, PlayerPositionType::MidfielderCenter, 90),
+            BorrowerFixtures::player(3, PlayerPositionType::MidfielderCenter, 72),
+        ]);
+        let depth = BorrowerPositionDepth::snapshot(&open_team);
+        assert!(
+            depth.would_get_minutes(PlayerFieldPositionGroup::Midfielder, 70),
+            "with only two clearly better names the loanee can rotate in"
+        );
+    }
+
+    #[test]
+    fn development_loans_demand_stricter_minutes_than_generic_cover() {
+        // Two clearly better midfielders: fine for emergency cover,
+        // not for a development loan that exists to buy starts.
+        let team = BorrowerFixtures::team(vec![
+            BorrowerFixtures::player(1, PlayerPositionType::MidfielderCenter, 90),
+            BorrowerFixtures::player(2, PlayerPositionType::MidfielderCenter, 90),
+        ]);
+        let depth = BorrowerPositionDepth::snapshot(&team);
+        assert!(
+            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, false),
+            "generic cover tolerates two better names"
+        );
+        assert!(
+            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, true),
+            "a development loanee behind two starters won't get his minutes"
+        );
+    }
+
+    #[test]
+    fn reputation_drop_gate_blocks_giant_to_minnow_unless_player_is_raw() {
+        // Established player (close to the parent's best): a 2000-rep
+        // borrower is too far below a 9000-rep parent.
+        assert!(!PipelineProcessor::loan_reputation_drop_ok(
+            2000, 9000, 120, 130
+        ));
+        // Same borrower is fine for a very raw player — any senior
+        // football is the point of the loan.
+        assert!(PipelineProcessor::loan_reputation_drop_ok(
+            2000, 9000, 90, 130
+        ));
+        // A mid-table borrower clears the floor for the established
+        // player too.
+        assert!(PipelineProcessor::loan_reputation_drop_ok(
+            3000, 9000, 120, 130
+        ));
+        // Unknown parent reputation never blocks.
+        assert!(PipelineProcessor::loan_reputation_drop_ok(
+            2000, 0, 120, 130
+        ));
     }
 }

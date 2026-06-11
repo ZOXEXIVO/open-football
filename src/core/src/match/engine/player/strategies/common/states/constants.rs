@@ -7,19 +7,42 @@ pub const MAX_CONDITION: i16 = 10000;
 pub const MATCH_CONDITION_FLOOR: i16 = 1500;
 
 /// Global fatigue rate multiplier (lower = slower condition decrease).
-/// Raised another 20% (0.020 → 0.024) so stamina changes hit harder
-/// per tick — sprints now drain visibly faster and a tired late-game
-/// defender really does lose half a step. Paired with a matching 20%
-/// bump to recovery so the sprint:rest ratio stays realistic.
-pub const FATIGUE_RATE_MULTIPLIER: f32 = 0.024;
+///
+/// Recalibrated 0.024 → 0.0035 after the dev_match condition-trajectory
+/// diagnostic showed outfield players collapsing from 100% to the 15%
+/// floor inside the first ~20 minutes and playing the remaining 70 as
+/// zombies. That cliff was THE driver of the goal-timing anomaly (36%
+/// of all goals in minutes 0-15 vs real ~11%): fresh-legs attack volume
+/// in band 0 ran ~3× the late-match rate, then everything sagged once
+/// every outfielder hit the floor.
+///
+/// Why the old value was an order of magnitude hot: the velocity-band
+/// occupancy counter (`time_band_diag::VELOCITY_BAND_TICKS`) shows the
+/// engine's movement layer keeps outfielders at >85% of max speed for
+/// ~46% of ticks and 60-85% for another ~22% — real players sprint
+/// ~2-4% of match time. The drain coefficients assumed a realistic
+/// sprint share, so against the engine's actual movement profile they
+/// produced ~4.5%/min net drain (floor in ~19 min) instead of the real
+/// ~0.33%/min (finish at ~70%). Until the off-ball movement layer
+/// learns to walk, the rate multipliers below are calibrated to the
+/// engine's metabolic scale, not real-world band rates.
+///
+/// Target trajectory (FM convention, average-stamina starter):
+///   minute 15 ≈ 95% / HT ≈ 88% / minute 75 ≈ 76% / FT ≈ 70%.
+/// Stamina still differentiates: the 0.5-1.5× stamina factor and the
+/// late-match ramp (1.15→1.50×) are unchanged, so pressing sides and
+/// low-stamina squads genuinely fade while elite-stamina players keep
+/// their legs deep into the second half.
+pub const FATIGUE_RATE_MULTIPLIER: f32 = 0.0035;
 
 /// Recovery rate multiplier (lower = slower condition recovery).
-/// Tuned down 30% (0.048 → 0.0336) so recovery lags behind drain —
-/// fatigued players stay fatigued longer, sprints leave a bigger
-/// lasting mark. Combined with the 20% drain bump, the sprint:rest
-/// break-even now favours the fatigue side of the ledger, so a
-/// player who presses hard early in the match genuinely fades later.
-pub const RECOVERY_RATE_MULTIPLIER: f32 = 0.0336;
+/// Scaled down with the fatigue multiplier (0.0336 → 0.0080) to keep
+/// the drain:recovery break-even on the fatigue side of the ledger —
+/// the ~25% of ticks players spend near-stationary must not refill
+/// what running burns, or nobody ever tires. Ratio chosen so the
+/// equilibrium net drain lands on the target trajectory above given
+/// the measured ~68% running/sprinting occupancy.
+pub const RECOVERY_RATE_MULTIPLIER: f32 = 0.0080;
 
 /// Condition threshold below which jadedness increases (35%)
 pub const LOW_CONDITION_THRESHOLD: i16 = 3500;

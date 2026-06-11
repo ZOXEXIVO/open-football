@@ -118,6 +118,20 @@ pub struct MatchPlayer {
     /// than reaching back through `PlayerLoad`) so the hot per-tick
     /// path doesn't touch the persisted simulator data.
     pub starting_recovery_debt: f32,
+
+    /// Home-crowd arousal multiplier applied inside `effective_skill`
+    /// (1.0 = neutral). Stamped once at match start from the match
+    /// environment: home players slightly above 1.0, away players
+    /// slightly below, both scaled by `crowd_intensity ×
+    /// home_advantage`. This is the play-quality half of home
+    /// advantage (the documented crowd-arousal / travel-discomfort
+    /// effect, worth ~+0.35 home goals at equal strength in real
+    /// football); the officiating half lives in
+    /// `RefereeProfile::home_bias`. Flows through every skill-mediated
+    /// action via `effective_skill`, so it shifts duels, passing,
+    /// saves and finishing continuously instead of dialling any single
+    /// outcome.
+    pub crowd_arousal: f32,
 }
 
 impl MatchPlayer {
@@ -238,6 +252,7 @@ impl MatchPlayer {
             last_pressure_tick: 0,
             starting_condition: player.player_attributes.condition,
             starting_recovery_debt: player.load.recovery_debt,
+            crowd_arousal: 1.0,
         }
     }
 
@@ -297,6 +312,9 @@ impl MatchPlayer {
             last_pressure_tick: 0,
             starting_condition,
             starting_recovery_debt,
+            // Wire payloads predate the arousal field; the worker
+            // re-stamps it at match start like the local path does.
+            crowd_arousal: 1.0,
         }
     }
 

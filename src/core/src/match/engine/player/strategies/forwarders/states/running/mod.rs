@@ -306,7 +306,10 @@ impl StateProcessingHandler for ForwardRunningState {
             // 0.35 → 0.55 after the gate-waterfall showed this gate was
             // rejecting 50% of shooting-range forward ticks — half of a
             // normal 0-0 match was being classified as "game-managing".
-            let prefer_possession = coach.prefer_possession() || gm_intensity > 0.55;
+            let prefer_possession = (coach.prefer_possession() || gm_intensity > 0.55)
+                // A live counter window beats the slow-down preference —
+                // the forward leading the break must not stop to recycle.
+                && !ctx.team().counter_window();
 
             if prefer_possession && distance_to_goal > POINT_BLANK_DISTANCE {
                 // Longer hold when game management is high — stretches

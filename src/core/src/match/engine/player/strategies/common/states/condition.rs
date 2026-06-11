@@ -76,6 +76,28 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
             0.0
         };
 
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;
+            use std::sync::atomic::Ordering;
+            let band = if intensity_ratio_sq < 0.0025 {
+                0
+            } else if intensity_ratio_sq < 0.09 {
+                1
+            } else if intensity_ratio_sq < 0.36 {
+                2
+            } else if intensity_ratio_sq < 0.7225 {
+                3
+            } else {
+                4
+            };
+            // Outfield only — GK condition is near-constant and would
+            // drown the signal this counter exists to expose.
+            if T::sprint_multiplier() > 1.4 {
+                time_band_diag::VELOCITY_BAND_TICKS[band].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
         // Compare against squared thresholds: 0.05² = 0.0025, 0.3² = 0.09, 0.6² = 0.36, 0.85² = 0.7225
         let velocity_fatigue = if intensity_ratio_sq < 0.0025 {
             -4.0 * 1.5 // Nearly stationary - recovery

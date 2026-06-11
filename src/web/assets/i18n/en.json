@@ -374,6 +374,7 @@
   "dec_reason_player_requested": "Player requested to leave",
   "dec_reason_player_unhappy": "Player unhappy at the club",
   "dec_reason_post_injury_fitness": "Needs match fitness after long injury",
+  "dec_reason_development_pathway": "Development pathway — loaned out for first-team experience",
   "dec_reason_released_failed_renewal": "Released after failed renewal talks",
   "dec_reason_released_free": "Released by mutual agreement",
   "dec_reason_squad_oversized": "Squad oversized, below average ability",

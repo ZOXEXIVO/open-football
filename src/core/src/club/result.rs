@@ -4,6 +4,7 @@ use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::player::contract::{
     AffordabilityInput, ContractStalemate, RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL,
 };
+use crate::club::staff::perception::PotentialEstimator;
 use crate::club::{BoardResult, ClubFinanceResult};
 use crate::league::result::LeagueProcessAccess;
 use crate::shared::{Currency, CurrencyValue};
@@ -13,6 +14,7 @@ use crate::{
     Player, PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerResult,
     PlayerSquadStatus, PlayerStatusType, SimulationResult, StaffStatus, TeamResult, TransferItem,
 };
+use chrono::NaiveDate;
 
 enum UnresolvedSalaryDecision {
     TransferList,
@@ -404,7 +406,8 @@ impl ClubResult {
                     offered_salary
                 };
 
-            let years = negotiate_contract_years(player, age, negotiation_skill);
+            let years =
+                negotiate_contract_years(player, age, negotiation_skill, data.date().date());
 
             // Reactive path stays lean on sweeteners — the player has
             // asked for the renewal themselves, so greed is usually not
@@ -473,7 +476,12 @@ impl ClubResult {
         /// - Ambition: ambitious players push for longer deals (higher commitment)
         /// - Other club interest (Wnt/Enq/Bid statuses): gives player leverage for longer deals
         /// - Staff negotiation skill: better negotiator → result closer to club's preference
-        fn negotiate_contract_years(player: &Player, age: u8, negotiation_skill: u8) -> u8 {
+        fn negotiate_contract_years(
+            player: &Player,
+            age: u8,
+            negotiation_skill: u8,
+            date: NaiveDate,
+        ) -> u8 {
             let ability = player.player_attributes.current_ability;
             let reputation = player.player_attributes.current_reputation;
             let loyalty = player.attributes.loyalty;
@@ -496,8 +504,12 @@ impl ClubResult {
                 player_years += 0.5;
             }
 
-            // Young players with high potential want long-term deals
-            if age < 24 && player.player_attributes.potential_ability > ability + 20 {
+            // Young players whose VISIBLE trajectory points up want
+            // long-term deals — agent and club negotiate on the
+            // observable ceiling, not the hidden biological PA.
+            if age < 24
+                && PotentialEstimator::observable_ceiling(player, date) > ability.saturating_add(20)
+            {
                 player_years += 1.0;
             }
 

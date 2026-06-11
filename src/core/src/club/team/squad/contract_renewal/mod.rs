@@ -6,6 +6,7 @@ use crate::club::player::mailbox::handlers::contract_proposal::{
     ProcessContractHandler, RENEWAL_REJECTED_LABEL,
 };
 use crate::club::player::player::Player;
+use crate::club::staff::perception::PotentialEstimator;
 use crate::utils::DateUtils;
 use crate::utils::FormattingUtils;
 use crate::{
@@ -284,7 +285,9 @@ impl ContractRenewalManager {
                 .map(|c| c.is_transfer_listed)
                 .unwrap_or(false);
             let ca = player.player_attributes.current_ability;
-            let pa = player.player_attributes.potential_ability.max(ca);
+            // Observable ceiling — the club judges decline from what it
+            // can see, never the hidden biological PA.
+            let pa = PotentialEstimator::observable_ceiling(player, date).max(ca);
             let declining = pa > 0 && (ca as f32 / pa as f32) < 0.60;
 
             let should_extend = in_final_year && is_contributor && !unsettled && !declining;
@@ -608,7 +611,8 @@ impl ContractRenewalManager {
             date,
         );
 
-        let profile = PlayerProfile::classify(player, age, ability, &candidate.effective_status);
+        let profile =
+            PlayerProfile::classify(player, age, ability, &candidate.effective_status, date);
         let budget_pressure = wage_budget
             .map(|b| {
                 let target_delta = offered.saturating_sub(contract.salary);
@@ -908,9 +912,17 @@ enum PlayerProfile {
 }
 
 impl PlayerProfile {
-    fn classify(player: &Player, age: u8, ability: u8, status: &PlayerSquadStatus) -> Self {
+    fn classify(
+        player: &Player,
+        age: u8,
+        ability: u8,
+        status: &PlayerSquadStatus,
+        date: NaiveDate,
+    ) -> Self {
         let rep = player.player_attributes.current_reputation;
-        let potential = player.player_attributes.potential_ability;
+        // Renewal packages are a club decision — the prospect profile
+        // reads the observable ceiling, never the hidden biological PA.
+        let potential = PotentialEstimator::observable_ceiling(player, date);
 
         if age <= 23
             && (potential >= 130 || matches!(status, PlayerSquadStatus::HotProspectForTheFuture))

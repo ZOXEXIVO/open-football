@@ -422,6 +422,8 @@ pub use crate::r#match::engine::player::strategies::forwarders::states::running:
 pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::helper_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;
 
 static STORE_MATCH_EVENTS_MODE: AtomicBool = AtomicBool::new(false);
 static MATCH_RECORDINGS_MODE: AtomicBool = AtomicBool::new(false);

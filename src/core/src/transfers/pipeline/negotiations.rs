@@ -39,6 +39,33 @@ fn buying_aggressiveness_from_rep(buying_score: f32, selling_score: f32) -> f32 
     (base + ratio_adj).clamp(0.25, 0.90)
 }
 
+/// Buyer-side context for the prospect buy-vs-loan decision. Bundles the
+/// scouts' read on the target, the hoarding-cap usage, seller-vs-buyer
+/// standing, and wage room — everything observable; the hidden biological
+/// PA never feeds this.
+pub(in crate::transfers::pipeline) struct ProspectSigningContext {
+    /// Scouts' believed (ability, potential) from monitoring rows or
+    /// scouting reports. `None` = no dossier → no basis to commit a fee.
+    pub scout_assessed: Option<(u8, u8)>,
+    /// Confidence of that read (0..1). A one-look dossier doesn't
+    /// justify buying a teenager.
+    pub scout_confidence: Option<f32>,
+    /// Window-cap usage: completed prospect buys + pursuits in flight.
+    pub prospect_slots_used: u8,
+    /// Seller / buyer reputation `overall_score`s (0..1).
+    pub seller_rep_score: f32,
+    pub buyer_rep_score: f32,
+    /// Target is realistically gettable from a peer/bigger seller:
+    /// listed, loan-listed, transfer-requested, unhappy, or barely
+    /// playing. Smaller sellers don't need this escape hatch.
+    pub target_available: bool,
+    /// Annual wage headroom under the board's wage budget, when a
+    /// mandate is set. `None` = no budget to respect.
+    pub wage_headroom: Option<f64>,
+    /// Expected annual wage of the target at the buyer.
+    pub expected_wage: u32,
+}
+
 struct NegotiationAction {
     club_id: u32,
     player_id: u32,
@@ -46,6 +73,9 @@ struct NegotiationAction {
     offer: TransferOffer,
     is_loan: bool,
     has_option_to_buy: bool,
+    /// Permanent buy of a DevelopmentSigning target — counted against
+    /// the per-window prospect-purchase cap when the negotiation opens.
+    is_prospect_purchase: bool,
     shortlist_request_id: u32,
     negotiator_staff_id: Option<u32>,
     reason: String,
@@ -131,6 +161,20 @@ impl PipelineProcessor {
                 if avg == 0 { 50 } else { avg }
             };
 
+            // Board wage mandate headroom — annual wages committed across
+            // all squads vs the season wage budget. None when no mandate
+            // has been set (fresh worlds, test fixtures).
+            let committed_wages: f64 = club
+                .teams
+                .iter()
+                .map(|t| t.get_annual_salary() as f64)
+                .sum();
+            let wage_headroom = club
+                .board
+                .season_targets
+                .as_ref()
+                .map(|t| (t.wage_budget.max(0) as f64 - committed_wages).max(0.0));
+
             let slots_available = plan
                 .max_concurrent_negotiations
                 .saturating_sub(actual_active) as usize;
@@ -210,20 +254,91 @@ impl PipelineProcessor {
                     .iter()
                     .find(|r| r.id == shortlist.transfer_request_id);
 
+                // Scout-side context for this candidate — believed
+                // ability/potential from monitoring rows or reports.
+                // Drives both the buy/loan decision and (further down)
+                // the offer strategy. Hidden PA is never consulted.
+                let monitoring = plan
+                    .scout_monitoring
+                    .iter()
+                    .find(|m| m.player_id == player_id);
+                let scouting_report = plan
+                    .scouting_reports
+                    .iter()
+                    .find(|r| r.player_id == player_id);
+                let scout_assessed = monitoring
+                    .map(|m| (m.current_assessed_ability, m.current_assessed_potential))
+                    .or_else(|| {
+                        scouting_report.map(|r| (r.assessed_ability, r.assessed_potential))
+                    });
+                let scout_confidence = monitoring
+                    .map(|m| m.confidence)
+                    .or_else(|| scouting_report.map(|r| r.confidence));
+
+                let target = Self::find_player_in_country(country, player_id);
+                let player_age = target.map(|p| p.age(date)).unwrap_or(25);
+                // "Gettable" signals: a peer/bigger seller only parts with
+                // a prospect who is listed, wants out, or barely plays.
+                let target_available = target
+                    .map(|p| {
+                        let statuses = p.statuses.get();
+                        statuses.contains(&PlayerStatusType::Lst)
+                            || statuses.contains(&PlayerStatusType::Loa)
+                            || statuses.contains(&PlayerStatusType::Req)
+                            || statuses.contains(&PlayerStatusType::Unh)
+                            || (p.statistics.played + p.statistics.played_subs) < 10
+                    })
+                    .unwrap_or(false);
+                let expected_wage = target
+                    .map(|p| {
+                        WageCalculator::expected_annual_wage(
+                            p,
+                            player_age,
+                            buying_rep_score,
+                            buying_league_reputation,
+                        )
+                    })
+                    .unwrap_or(0);
+                let selling_rep_score = country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == selling_club_id)
+                    .and_then(|c| c.teams.teams.first())
+                    .map(|t| t.reputation.overall_score())
+                    .unwrap_or(0.3);
+
+                let prospect_ctx = ProspectSigningContext {
+                    scout_assessed,
+                    scout_confidence,
+                    prospect_slots_used: plan
+                        .prospect_buys_this_window
+                        .saturating_add(plan.prospect_pursuits_active),
+                    seller_rep_score: selling_rep_score,
+                    buyer_rep_score: buying_rep_score,
+                    target_available,
+                    wage_headroom,
+                    expected_wage,
+                };
+
                 let approach = Self::determine_transfer_approach(
                     &rep_level,
                     budget,
                     candidate.estimated_fee,
                     request,
-                    country,
-                    player_id,
+                    player_age,
                     date,
                     club.finance.balance.balance,
                     &club.philosophy,
+                    &prospect_ctx,
                 );
 
                 let is_loan = !matches!(approach, TransferApproach::PermanentTransfer);
                 let has_option_to_buy = matches!(approach, TransferApproach::LoanWithOption);
+                let is_prospect_purchase = !is_loan
+                    && matches!(
+                        request.map(|r| &r.reason),
+                        Some(TransferNeedReason::DevelopmentSigning)
+                    );
 
                 if let Some(player) = Self::find_player_in_country(country, player_id) {
                     let selling_club = country
@@ -231,12 +346,6 @@ impl PipelineProcessor {
                         .iter()
                         .find(|c| c.id == selling_club_id)
                         .unwrap();
-                    let selling_rep_score = selling_club
-                        .teams
-                        .teams
-                        .first()
-                        .map(|t| t.reputation.overall_score())
-                        .unwrap_or(0.3);
 
                     let buying_aggressiveness =
                         buying_aggressiveness_from_rep(buying_rep_score, selling_rep_score);
@@ -280,19 +389,11 @@ impl PipelineProcessor {
                         asking_price.clone()
                     };
 
-                    // Pull scout-side context for this candidate so the
-                    // strategy can use assessed potential instead of
-                    // hidden PA, and respect dossier risk flags. Both
+                    // Dossier built from the scout context hoisted above
+                    // — strategy uses assessed potential instead of
+                    // hidden PA, and respects dossier risk flags. Both
                     // sources are optional — minimal context falls back
                     // to the previous behaviour.
-                    let monitoring = plan
-                        .scout_monitoring
-                        .iter()
-                        .find(|m| m.player_id == player_id);
-                    let scouting_report = plan
-                        .scouting_reports
-                        .iter()
-                        .find(|r| r.player_id == player_id);
                     let dossier = if monitoring.is_some() || scouting_report.is_some() {
                         Some(Self::build_board_dossier(
                             plan,
@@ -355,6 +456,24 @@ impl PipelineProcessor {
                         &actual_asking,
                         &strategy_ctx,
                     );
+
+                    // Prospect purchases compensate the development club
+                    // with a sell-on share — bigger when the seller is
+                    // clearly the smaller selling/development side of the
+                    // deal. Skipped when the strategy already pledged one.
+                    if is_prospect_purchase
+                        && !offer
+                            .clauses
+                            .iter()
+                            .any(|c| matches!(c, TransferClause::SellOnClause(_)))
+                    {
+                        let pct = if selling_rep_score < buying_rep_score * 0.75 {
+                            0.15
+                        } else {
+                            0.10
+                        };
+                        offer.clauses.push(TransferClause::SellOnClause(pct));
+                    }
 
                     // Add appearance fee clause for loans from high-reputation sellers
                     if is_loan {
@@ -447,6 +566,7 @@ impl PipelineProcessor {
                         offer,
                         is_loan,
                         has_option_to_buy,
+                        is_prospect_purchase,
                         shortlist_request_id: shortlist.transfer_request_id,
                         negotiator_staff_id,
                         reason,
@@ -562,6 +682,12 @@ impl PipelineProcessor {
                     }
 
                     plan.active_negotiation_count += 1;
+                    if action.is_prospect_purchase {
+                        // Pursuit slot taken; converted into a completed
+                        // buy (or released) in on_negotiation_resolved.
+                        plan.prospect_pursuits_active =
+                            plan.prospect_pursuits_active.saturating_add(1);
+                    }
                 }
 
                 debug!(
@@ -610,24 +736,28 @@ impl PipelineProcessor {
     /// - National clubs: Buy affordable targets, loan expensive ones
     /// - Regional/Local: Loan most players, only buy cheap or free agents
     /// - If player is loan-listed by their club: always loan
-    /// - Development signings: always loan
+    /// - Development signings: big/wealthy clubs buy the prospect outright
+    ///   (Chelsea / Man City / Benfica model), everyone else loans
     /// - January window and negative balance rules bias toward loans
+    ///
+    /// `prospect` carries the scouts' read, cap usage, seller standing,
+    /// and wage room for the DevelopmentSigning branch — all observable
+    /// signals, never the hidden biological PA.
+    #[allow(clippy::too_many_arguments)]
     fn determine_transfer_approach(
         rep_level: &ReputationLevel,
         budget: f64,
         estimated_fee: f64,
         request: Option<&TransferRequest>,
-        country: &Country,
-        player_id: u32,
+        player_age: u8,
         date: NaiveDate,
         buying_club_balance: i64,
         philosophy: &ClubPhilosophy,
+        prospect: &ProspectSigningContext,
     ) -> TransferApproach {
         let is_january = Self::is_january_window(date);
 
-        let age = Self::find_player_in_country(country, player_id)
-            .map(|p| p.age(date))
-            .unwrap_or(25);
+        let age = player_age;
 
         // Philosophy-based overrides
         match philosophy {
@@ -659,11 +789,28 @@ impl PipelineProcessor {
             }
         }
 
-        // Reasons that always result in loan approach
+        // Reason-driven approaches
         if let Some(req) = request {
             match req.reason {
-                TransferNeedReason::DevelopmentSigning
-                | TransferNeedReason::LoanToFillSquad
+                TransferNeedReason::DevelopmentSigning => {
+                    // Big/wealthy clubs acquire the prospect outright and
+                    // develop them via loans; smaller or financially
+                    // stressed clubs keep the original borrow behaviour.
+                    return if Self::prefers_prospect_purchase(
+                        rep_level,
+                        philosophy,
+                        budget,
+                        estimated_fee,
+                        buying_club_balance,
+                        age,
+                        prospect,
+                    ) {
+                        TransferApproach::PermanentTransfer
+                    } else {
+                        TransferApproach::Loan
+                    };
+                }
+                TransferNeedReason::LoanToFillSquad
                 | TransferNeedReason::InjuryCoverLoan
                 | TransferNeedReason::OpportunisticLoanUpgrade
                 | TransferNeedReason::SquadPadding => {
@@ -764,12 +911,120 @@ impl PipelineProcessor {
         }
     }
 
+    /// DoF decision for a DevelopmentSigning target: buy the prospect
+    /// outright instead of borrowing one. Mirrors the Chelsea / Man City /
+    /// Benfica model — wealthy clubs acquire high-upside teenagers
+    /// permanently, then develop them through loans. The upside read comes
+    /// exclusively from the scouts' believed ability/potential
+    /// (`prospect.scout_assessed`), never the hidden biological PA: with
+    /// no dossier the club has no basis to commit a fee and falls back to
+    /// a loan.
+    fn prefers_prospect_purchase(
+        rep_level: &ReputationLevel,
+        philosophy: &ClubPhilosophy,
+        budget: f64,
+        estimated_fee: f64,
+        buying_club_balance: i64,
+        player_age: u8,
+        prospect: &ProspectSigningContext,
+    ) -> bool {
+        // Prospect-ownership profile: develop-and-sell clubs at any size
+        // (it's their business model), Balanced clubs from National tier
+        // up, and the Elite/Continental end of sign-to-compete clubs.
+        // Loan-focused clubs borrow — they never stockpile assets.
+        let profile_fits = match philosophy {
+            ClubPhilosophy::LoanFocused => false,
+            ClubPhilosophy::DevelopAndSell => true,
+            ClubPhilosophy::Balanced => matches!(
+                rep_level,
+                ReputationLevel::Elite | ReputationLevel::Continental | ReputationLevel::National
+            ),
+            ClubPhilosophy::SignToCompete => matches!(
+                rep_level,
+                ReputationLevel::Elite | ReputationLevel::Continental
+            ),
+        };
+        if !profile_fits {
+            return false;
+        }
+
+        // Hoarding control: per-window cap counts completed buys plus
+        // pursuits still in flight; a failed bid releases its slot on
+        // resolution (see on_negotiation_resolved).
+        if prospect.prospect_slots_used >= Self::prospect_buy_cap(rep_level) {
+            return false;
+        }
+
+        // Financial discipline: no prospect shopping in the red, and the
+        // fee must fit the transfer budget with headroom to spare —
+        // prospect buys are optional investments, not squad needs.
+        if buying_club_balance < 0 || estimated_fee > budget * 0.8 {
+            return false;
+        }
+
+        // Wage discipline: the board's wage mandate must absorb the new
+        // contract too, not just the fee.
+        if let Some(headroom) = prospect.wage_headroom {
+            if prospect.expected_wage as f64 > headroom {
+                return false;
+            }
+        }
+
+        // Development purchases target teenagers / early-twenties only.
+        if player_age > 21 {
+            return false;
+        }
+
+        // Seller standing: equal-or-bigger clubs don't part with happy,
+        // playing prospects — require a gettable signal (listed, wants
+        // out, barely plays). Smaller development/selling clubs sell
+        // their talents as a matter of course.
+        if prospect.seller_rep_score >= prospect.buyer_rep_score * 0.9 && !prospect.target_available
+        {
+            return false;
+        }
+
+        // The scouts must believe in a meaningful ceiling above today's
+        // level — a confident visible-estimate gap, not raw PA.
+        let confident = prospect
+            .scout_confidence
+            .map(|c| c >= 0.35)
+            .unwrap_or(false);
+        match prospect.scout_assessed {
+            Some((ability, potential)) if confident => potential as i16 - ability as i16 >= 12,
+            _ => false,
+        }
+    }
+
+    /// Per-window cap on permanent prospect purchases by club tier.
+    /// Elite clubs run the widest development programmes but still can't
+    /// buy unlimited teenagers.
+    fn prospect_buy_cap(rep_level: &ReputationLevel) -> u8 {
+        match rep_level {
+            ReputationLevel::Elite => 3,
+            ReputationLevel::Continental => 2,
+            _ => 1,
+        }
+    }
+
     pub fn on_negotiation_resolved(
         country: &mut Country,
         buying_club_id: u32,
         player_id: u32,
         accepted: bool,
     ) {
+        // Was the just-resolved negotiation a permanent move? Read the
+        // loan flag off the (still stored) negotiation before the club
+        // borrow; the newest entry for the pair is the one resolving.
+        // None when no negotiation ever existed (plausibility rejects).
+        let resolved_was_loan = country
+            .transfer_market
+            .negotiations
+            .values()
+            .filter(|n| n.player_id == player_id && n.buying_club_id == buying_club_id)
+            .max_by_key(|n| n.id)
+            .map(|n| n.is_loan);
+
         let mut manager_satisfaction_hit: f32 = 0.0;
         if let Some(club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             let plan = &mut club.transfer_plan;
@@ -781,6 +1036,26 @@ impl PipelineProcessor {
                 plan.set_monitoring_status_for_player(player_id, ScoutMonitoringStatus::Signed);
             } else {
                 plan.set_monitoring_status_for_player(player_id, ScoutMonitoringStatus::Lost);
+            }
+
+            // Prospect-purchase slot accounting: a resolved permanent
+            // DevelopmentSigning pursuit releases its in-flight slot;
+            // only completed buys keep consuming the window cap, so a
+            // failed bid doesn't block later prospect buying.
+            let prospect_purchase_resolved = resolved_was_loan == Some(false)
+                && plan.shortlists.iter().any(|s| {
+                    s.candidates.iter().any(|c| c.player_id == player_id)
+                        && plan.transfer_requests.iter().any(|r| {
+                            r.id == s.transfer_request_id
+                                && r.reason == TransferNeedReason::DevelopmentSigning
+                        })
+                });
+            if prospect_purchase_resolved {
+                plan.prospect_pursuits_active = plan.prospect_pursuits_active.saturating_sub(1);
+                if accepted {
+                    plan.prospect_buys_this_window =
+                        plan.prospect_buys_this_window.saturating_add(1);
+                }
             }
 
             for shortlist in &mut plan.shortlists {
@@ -870,6 +1145,12 @@ impl PipelineProcessor {
     /// stale scouting/shortlist entries don't linger.
     pub fn clear_player_interest(country: &mut Country, player_id: u32) {
         for club in &mut country.clubs {
+            // Ownership check BEFORE the plan borrow: loan-out candidates
+            // only survive at the club that currently rosters the player.
+            // The development pathway stages a candidate on the buyer in
+            // the same tick this sweep runs — wiping it would kill the
+            // same-window development loan.
+            let owns_player = club.teams.contains_player(player_id);
             let plan = &mut club.transfer_plan;
 
             // Scouting assignments: drop observations for this player
@@ -889,10 +1170,11 @@ impl PipelineProcessor {
             plan.staff_recommendations
                 .retain(|r| r.player_id != player_id);
 
-            // Loan-out candidates: a free-agent / moved player is no longer
-            // at this club's disposal to be loaned out.
+            // Loan-out candidates: a moved player is no longer at this
+            // club's disposal to be loaned out — unless this IS the club
+            // that now owns him.
             plan.loan_out_candidates
-                .retain(|c| c.player_id != player_id);
+                .retain(|c| c.player_id != player_id || owns_player);
 
             // Drop active monitoring rows so the player no longer
             // appears as "watched" by clubs that didn't sign them.
@@ -950,6 +1232,16 @@ impl PipelineProcessor {
             .flat_map(|c| c.countries.par_iter_mut())
             .for_each(|country| {
                 for club in &mut country.clubs {
+                    // Signed players this club now rosters keep their
+                    // loan-out candidates — the development pathway
+                    // stages them on the buyer in the same tick this
+                    // batch sweep runs. Every other club's stale
+                    // candidates are still dropped.
+                    let owned_signed: Vec<u32> = signed
+                        .iter()
+                        .copied()
+                        .filter(|id| club.teams.contains_player(*id))
+                        .collect();
                     let plan = &mut club.transfer_plan;
                     for assignment in &mut plan.scouting_assignments {
                         assignment
@@ -965,8 +1257,9 @@ impl PipelineProcessor {
                     }
                     plan.staff_recommendations
                         .retain(|r| !signed.contains(&r.player_id));
-                    plan.loan_out_candidates
-                        .retain(|c| !signed.contains(&c.player_id));
+                    plan.loan_out_candidates.retain(|c| {
+                        !signed.contains(&c.player_id) || owned_signed.contains(&c.player_id)
+                    });
                     plan.scout_monitoring
                         .retain(|m| !signed.contains(&m.player_id));
                 }
@@ -1119,6 +1412,7 @@ impl PipelineProcessor {
             player_id: u32,
             is_loan: bool,
             has_option_to_buy: bool,
+            is_prospect_purchase: bool,
             offer: TransferOffer,
             reason: String,
             shortlist_request_id: u32,
@@ -1258,20 +1552,95 @@ impl PipelineProcessor {
                 .iter()
                 .find(|r| r.id == cand.shortlist_request_id);
 
+            // Scout-side context for the foreign target. Monitoring rows
+            // live with the buying club's plan; believed ability/potential
+            // feeds the buy/loan decision and the offer strategy — hidden
+            // PA is never consulted.
+            let monitoring = buy_club
+                .transfer_plan
+                .scout_monitoring
+                .iter()
+                .find(|m| m.player_id == cand.player_id);
+            let scouting_report = buy_club
+                .transfer_plan
+                .scouting_reports
+                .iter()
+                .find(|r| r.player_id == cand.player_id);
+            let scout_assessed = monitoring
+                .map(|m| (m.current_assessed_ability, m.current_assessed_potential))
+                .or_else(|| scouting_report.map(|r| (r.assessed_ability, r.assessed_potential)));
+            let scout_confidence = monitoring
+                .map(|m| m.confidence)
+                .or_else(|| scouting_report.map(|r| r.confidence));
+
+            let buying_league_reputation = buy_club
+                .teams
+                .teams
+                .first()
+                .and_then(|t| t.league_id)
+                .and_then(|lid| buy_country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| l.reputation)
+                .unwrap_or(0);
+
+            // Same "gettable" / wage-room signals as the domestic path.
+            let target_available = {
+                let statuses = player.statuses.get();
+                statuses.contains(&PlayerStatusType::Lst)
+                    || statuses.contains(&PlayerStatusType::Loa)
+                    || statuses.contains(&PlayerStatusType::Req)
+                    || statuses.contains(&PlayerStatusType::Unh)
+                    || (player.statistics.played + player.statistics.played_subs) < 10
+            };
+            let committed_wages: f64 = buy_club
+                .teams
+                .iter()
+                .map(|t| t.get_annual_salary() as f64)
+                .sum();
+            let wage_headroom = buy_club
+                .board
+                .season_targets
+                .as_ref()
+                .map(|t| (t.wage_budget.max(0) as f64 - committed_wages).max(0.0));
+            let expected_wage = WageCalculator::expected_annual_wage(
+                player,
+                player_age,
+                buying_rep,
+                buying_league_reputation,
+            );
+
+            let prospect_ctx = ProspectSigningContext {
+                scout_assessed,
+                scout_confidence,
+                prospect_slots_used: buy_club
+                    .transfer_plan
+                    .prospect_buys_this_window
+                    .saturating_add(buy_club.transfer_plan.prospect_pursuits_active),
+                seller_rep_score: selling_rep,
+                buyer_rep_score: buying_rep,
+                target_available,
+                wage_headroom,
+                expected_wage,
+            };
+
             let approach = Self::determine_transfer_approach(
                 &rep_level,
                 budget,
                 asking_price.amount,
                 request,
-                sell_country,
-                cand.player_id,
+                player_age,
                 date,
                 buy_club.finance.balance.balance,
                 &buy_club.philosophy,
+                &prospect_ctx,
             );
 
             let is_loan = !matches!(approach, TransferApproach::PermanentTransfer);
             let has_option_to_buy = matches!(approach, TransferApproach::LoanWithOption);
+            let is_prospect_purchase = !is_loan
+                && matches!(
+                    request.map(|r| &r.reason),
+                    Some(TransferNeedReason::DevelopmentSigning)
+                );
 
             let actual_asking = if is_loan {
                 let salary_proxy = player
@@ -1300,15 +1669,6 @@ impl PipelineProcessor {
                 })
                 .unwrap_or(50);
 
-            let buying_league_reputation = buy_club
-                .teams
-                .teams
-                .first()
-                .and_then(|t| t.league_id)
-                .and_then(|lid| buy_country.leagues.leagues.iter().find(|l| l.id == lid))
-                .map(|l| l.reputation)
-                .unwrap_or(0);
-
             let strategy = ClubTransferStrategy::from_club_context(
                 cand.buying_club_id,
                 Some(CurrencyValue {
@@ -1322,19 +1682,8 @@ impl PipelineProcessor {
                 buying_aggressiveness_from_rep(buying_rep, selling_rep),
             );
 
-            // Pull scout-side context for the foreign target.
-            // Monitoring rows live with the buying club's plan; the
+            // Dossier built from the scout context hoisted above — the
             // dossier helper resolves the rest from the same plan.
-            let monitoring = buy_club
-                .transfer_plan
-                .scout_monitoring
-                .iter()
-                .find(|m| m.player_id == cand.player_id);
-            let scouting_report = buy_club
-                .transfer_plan
-                .scouting_reports
-                .iter()
-                .find(|r| r.player_id == cand.player_id);
             let dossier = if monitoring.is_some() || scouting_report.is_some() {
                 Some(Self::build_board_dossier(
                     &buy_club.transfer_plan,
@@ -1378,6 +1727,22 @@ impl PipelineProcessor {
                 &strategy_ctx,
             );
 
+            // Foreign prospect purchases carry the same sell-on
+            // compensation as domestic ones — see initiate_negotiations.
+            if is_prospect_purchase
+                && !offer
+                    .clauses
+                    .iter()
+                    .any(|c| matches!(c, TransferClause::SellOnClause(_)))
+            {
+                let pct = if selling_rep < buying_rep * 0.75 {
+                    0.15
+                } else {
+                    0.10
+                };
+                offer.clauses.push(TransferClause::SellOnClause(pct));
+            }
+
             if has_option_to_buy {
                 let option_price = FormattingUtils::round_fee(asking_price.amount * 0.7);
                 offer
@@ -1410,6 +1775,7 @@ impl PipelineProcessor {
                 player_id: cand.player_id,
                 is_loan,
                 has_option_to_buy,
+                is_prospect_purchase,
                 offer,
                 reason,
                 shortlist_request_id: cand.shortlist_request_id,
@@ -1497,6 +1863,12 @@ impl PipelineProcessor {
                         req.status = TransferRequestStatus::Negotiating;
                     }
                     plan.active_negotiation_count += 1;
+                    if action.is_prospect_purchase {
+                        // Pursuit slot taken; converted into a completed
+                        // buy (or released) in on_negotiation_resolved.
+                        plan.prospect_pursuits_active =
+                            plan.prospect_pursuits_active.saturating_add(1);
+                    }
                 }
 
                 debug!(
@@ -1527,7 +1899,8 @@ mod cleanup_tests {
     };
     use crate::transfers::{CompletedTransfer, TransferType};
     use crate::{
-        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, TeamCollection,
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PlayerPositionType,
+        TeamCollection,
     };
     use chrono::NaiveDate;
 
@@ -1894,6 +2267,84 @@ mod cleanup_tests {
         }
     }
 
+    /// Stage a DevelopmentSigning request + shortlist + in-flight
+    /// negotiation so the slot-accounting tests can resolve it.
+    fn put_prospect_pursuit(
+        country: &mut Country,
+        club_idx: usize,
+        request_id: u32,
+        player_id: u32,
+        neg_id: u32,
+    ) {
+        let club_id = country.clubs[club_idx].id;
+        put_shortlist_candidate(&mut country.clubs[club_idx], request_id, player_id);
+        country.clubs[club_idx]
+            .transfer_plan
+            .transfer_requests
+            .push(TransferRequest::new(
+                request_id,
+                PlayerPositionType::Striker,
+                TransferNeedPriority::Optional,
+                TransferNeedReason::DevelopmentSigning,
+                40,
+                70,
+                2_000_000.0,
+            ));
+        country.clubs[club_idx]
+            .transfer_plan
+            .prospect_pursuits_active = 1;
+        put_negotiation(
+            country,
+            neg_id,
+            player_id,
+            club_id,
+            99, // arbitrary selling club id
+            NegotiationStatus::Rejected,
+        );
+    }
+
+    /// A failed prospect-purchase bid must release the in-flight slot
+    /// without consuming the window cap — otherwise one collapsed
+    /// negotiation permanently blocks later prospect buying.
+    #[test]
+    fn failed_prospect_purchase_releases_window_slot() {
+        let player_id: u32 = 600;
+        let buyer = make_club(1, "Buyer");
+        let mut country = make_country(1, "EN", "england", vec![buyer]);
+        put_prospect_pursuit(&mut country, 0, 7, player_id, 10);
+
+        PipelineProcessor::on_negotiation_resolved(&mut country, 1, player_id, false);
+
+        let plan = &country.clubs[0].transfer_plan;
+        assert_eq!(
+            plan.prospect_pursuits_active, 0,
+            "failed bid must release the pursuit slot"
+        );
+        assert_eq!(
+            plan.prospect_buys_this_window, 0,
+            "failed bid is not a completed buy"
+        );
+    }
+
+    /// An accepted prospect purchase converts the in-flight slot into a
+    /// completed buy that keeps consuming the window cap.
+    #[test]
+    fn accepted_prospect_purchase_converts_slot_into_completed_buy() {
+        let player_id: u32 = 601;
+        let buyer = make_club(1, "Buyer");
+        let mut country = make_country(1, "EN", "england", vec![buyer]);
+        put_prospect_pursuit(&mut country, 0, 7, player_id, 11);
+
+        PipelineProcessor::on_negotiation_resolved(&mut country, 1, player_id, true);
+
+        let plan = &country.clubs[0].transfer_plan;
+        assert_eq!(plan.prospect_pursuits_active, 0);
+        assert_eq!(
+            plan.prospect_buys_this_window, 1,
+            "completed buy must keep consuming the window cap"
+        );
+    }
+
     #[test]
     fn cleanup_preserves_unrelated_player_interest() {
         // Two players: 400 has been signed; 500 is unrelated. The sweep
@@ -1941,5 +2392,518 @@ mod cleanup_tests {
             .iter()
             .any(|s| s.candidates.iter().any(|c| c.player_id == other_id));
         assert!(still_shortlisted, "unrelated player removed from shortlist");
+    }
+}
+
+#[cfg(test)]
+mod prospect_approach_tests {
+    use super::*;
+    use crate::PlayerPositionType;
+    use crate::transfers::pipeline::TransferApproach;
+    use chrono::NaiveDate;
+
+    /// Fixtures for the prospect buy-vs-loan decision matrix. Grouped on
+    /// a unit struct per the project's no-free-helpers convention.
+    struct ApproachFixtures;
+
+    impl ApproachFixtures {
+        fn summer() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()
+        }
+
+        fn development_request() -> TransferRequest {
+            TransferRequest::new(
+                1,
+                PlayerPositionType::Striker,
+                TransferNeedPriority::Optional,
+                TransferNeedReason::DevelopmentSigning,
+                40,
+                70,
+                2_000_000.0,
+            )
+        }
+
+        fn loan_fill_request() -> TransferRequest {
+            TransferRequest::new(
+                2,
+                PlayerPositionType::Striker,
+                TransferNeedPriority::Important,
+                TransferNeedReason::LoanToFillSquad,
+                40,
+                70,
+                0.0,
+            )
+        }
+
+        /// Prospect context with healthy defaults: a confident dossier,
+        /// no slots used, a small development-club seller, no wage
+        /// mandate. Negative tests perturb individual fields.
+        fn ctx(
+            rep: &ReputationLevel,
+            scout: Option<(u8, u8)>,
+            slots_used: u8,
+        ) -> ProspectSigningContext {
+            let buyer_rep_score = match rep {
+                ReputationLevel::Elite => 0.90,
+                ReputationLevel::Continental => 0.72,
+                ReputationLevel::National => 0.57,
+                ReputationLevel::Regional => 0.40,
+                _ => 0.20,
+            };
+            ProspectSigningContext {
+                scout_assessed: scout,
+                scout_confidence: scout.map(|_| 0.6),
+                prospect_slots_used: slots_used,
+                seller_rep_score: 0.30,
+                buyer_rep_score,
+                target_available: false,
+                wage_headroom: None,
+                expected_wage: 250_000,
+            }
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn decide_with_ctx(
+            rep: ReputationLevel,
+            philosophy: ClubPhilosophy,
+            budget: f64,
+            fee: f64,
+            balance: i64,
+            age: u8,
+            prospect: &ProspectSigningContext,
+            request: &TransferRequest,
+        ) -> TransferApproach {
+            PipelineProcessor::determine_transfer_approach(
+                &rep,
+                budget,
+                fee,
+                Some(request),
+                age,
+                Self::summer(),
+                balance,
+                &philosophy,
+                prospect,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn decide(
+            rep: ReputationLevel,
+            philosophy: ClubPhilosophy,
+            budget: f64,
+            fee: f64,
+            balance: i64,
+            age: u8,
+            scout: Option<(u8, u8)>,
+            slots_used: u8,
+            request: &TransferRequest,
+        ) -> TransferApproach {
+            let prospect = Self::ctx(&rep, scout, slots_used);
+            Self::decide_with_ctx(
+                rep, philosophy, budget, fee, balance, age, &prospect, request,
+            )
+        }
+
+        /// Elite Balanced buyer with everything in order — the baseline
+        /// "should buy" configuration the negative tests perturb.
+        #[allow(clippy::too_many_arguments)]
+        fn elite_buy_with(
+            balance: i64,
+            fee: f64,
+            age: u8,
+            scout: Option<(u8, u8)>,
+            slots_used: u8,
+        ) -> TransferApproach {
+            Self::decide(
+                ReputationLevel::Elite,
+                ClubPhilosophy::Balanced,
+                20_000_000.0,
+                fee,
+                balance,
+                age,
+                scout,
+                slots_used,
+                &Self::development_request(),
+            )
+        }
+
+        /// Elite Balanced baseline with a custom prospect context.
+        fn elite_buy_with_ctx(prospect: &ProspectSigningContext) -> TransferApproach {
+            Self::decide_with_ctx(
+                ReputationLevel::Elite,
+                ClubPhilosophy::Balanced,
+                20_000_000.0,
+                2_000_000.0,
+                5_000_000,
+                18,
+                prospect,
+                &Self::development_request(),
+            )
+        }
+    }
+
+    #[test]
+    fn elite_club_buys_development_prospect_permanently() {
+        assert_eq!(
+            ApproachFixtures::elite_buy_with(5_000_000, 2_000_000.0, 18, Some((60, 90)), 0),
+            TransferApproach::PermanentTransfer,
+            "wealthy elite club must buy the prospect outright, not borrow him"
+        );
+    }
+
+    #[test]
+    fn continental_sign_to_compete_buys_prospect() {
+        let approach = ApproachFixtures::decide(
+            ReputationLevel::Continental,
+            ClubPhilosophy::SignToCompete,
+            15_000_000.0,
+            3_000_000.0,
+            8_000_000,
+            19,
+            Some((70, 95)),
+            0,
+            &ApproachFixtures::development_request(),
+        );
+        assert_eq!(
+            approach,
+            TransferApproach::PermanentTransfer,
+            "wealthy compete-now giant runs a prospect-ownership desk"
+        );
+    }
+
+    #[test]
+    fn loan_focused_club_keeps_borrowing_prospects() {
+        let approach = ApproachFixtures::decide(
+            ReputationLevel::National,
+            ClubPhilosophy::LoanFocused,
+            10_000_000.0,
+            2_000_000.0,
+            5_000_000,
+            18,
+            Some((60, 90)),
+            0,
+            &ApproachFixtures::development_request(),
+        );
+        assert_eq!(approach, TransferApproach::Loan);
+    }
+
+    #[test]
+    fn small_balanced_club_keeps_borrowing_prospects() {
+        let approach = ApproachFixtures::decide(
+            ReputationLevel::Regional,
+            ClubPhilosophy::Balanced,
+            3_000_000.0,
+            500_000.0,
+            1_000_000,
+            18,
+            Some((60, 90)),
+            0,
+            &ApproachFixtures::development_request(),
+        );
+        assert_eq!(
+            approach,
+            TransferApproach::Loan,
+            "small clubs lack the profile for prospect ownership"
+        );
+    }
+
+    #[test]
+    fn negative_balance_blocks_prospect_purchase() {
+        assert_eq!(
+            ApproachFixtures::elite_buy_with(-1_000_000, 2_000_000.0, 18, Some((60, 90)), 0),
+            TransferApproach::Loan,
+            "no prospect shopping in the red"
+        );
+    }
+
+    #[test]
+    fn window_cap_forces_loan_after_enough_prospect_buys() {
+        assert_eq!(
+            ApproachFixtures::elite_buy_with(5_000_000, 2_000_000.0, 18, Some((60, 90)), 3),
+            TransferApproach::Loan,
+            "elite per-window prospect cap is 3 — the 4th must not be a purchase"
+        );
+    }
+
+    #[test]
+    fn missing_scout_dossier_forces_loan() {
+        assert_eq!(
+            ApproachFixtures::elite_buy_with(5_000_000, 2_000_000.0, 18, None, 0),
+            TransferApproach::Loan,
+            "no scouted potential estimate → no basis to commit a fee"
+        );
+    }
+
+    #[test]
+    fn thin_assessed_potential_gap_forces_loan() {
+        assert_eq!(
+            ApproachFixtures::elite_buy_with(5_000_000, 2_000_000.0, 18, Some((80, 86)), 0),
+            TransferApproach::Loan,
+            "scouts see no meaningful upside → borrow, don't buy"
+        );
+    }
+
+    #[test]
+    fn fee_exceeding_budget_headroom_forces_loan() {
+        assert_eq!(
+            ApproachFixtures::elite_buy_with(5_000_000, 19_000_000.0, 18, Some((60, 90)), 0),
+            TransferApproach::Loan,
+            "prospect buys are optional investments — fee must leave budget headroom"
+        );
+    }
+
+    #[test]
+    fn over_age_target_forces_loan() {
+        assert_eq!(
+            ApproachFixtures::elite_buy_with(5_000_000, 2_000_000.0, 24, Some((90, 110)), 0),
+            TransferApproach::Loan,
+            "development purchases target ≤21 only"
+        );
+    }
+
+    #[test]
+    fn loan_to_fill_squad_remains_loan_first_even_for_elite() {
+        let approach = ApproachFixtures::decide(
+            ReputationLevel::Elite,
+            ClubPhilosophy::Balanced,
+            20_000_000.0,
+            1_000_000.0,
+            5_000_000,
+            24,
+            Some((80, 90)),
+            0,
+            &ApproachFixtures::loan_fill_request(),
+        );
+        assert_eq!(
+            approach,
+            TransferApproach::Loan,
+            "LoanToFillSquad must stay loan-first regardless of buyer wealth"
+        );
+    }
+
+    #[test]
+    fn low_scout_confidence_forces_loan() {
+        let mut prospect = ApproachFixtures::ctx(&ReputationLevel::Elite, Some((60, 90)), 0);
+        prospect.scout_confidence = Some(0.20);
+        assert_eq!(
+            ApproachFixtures::elite_buy_with_ctx(&prospect),
+            TransferApproach::Loan,
+            "a one-look dossier must not justify buying a teenager"
+        );
+    }
+
+    #[test]
+    fn peer_seller_without_gettable_signal_forces_loan() {
+        let mut prospect = ApproachFixtures::ctx(&ReputationLevel::Elite, Some((60, 90)), 0);
+        prospect.seller_rep_score = 0.88; // effectively a peer of the elite buyer
+        prospect.target_available = false;
+        assert_eq!(
+            ApproachFixtures::elite_buy_with_ctx(&prospect),
+            TransferApproach::Loan,
+            "peers don't sell happy, playing prospects — no purchase attempt"
+        );
+    }
+
+    #[test]
+    fn peer_seller_with_listed_player_allows_purchase() {
+        let mut prospect = ApproachFixtures::ctx(&ReputationLevel::Elite, Some((60, 90)), 0);
+        prospect.seller_rep_score = 0.88;
+        prospect.target_available = true; // listed / unhappy / fringe
+        assert_eq!(
+            ApproachFixtures::elite_buy_with_ctx(&prospect),
+            TransferApproach::PermanentTransfer,
+            "a gettable signal unlocks peer-club prospect purchases"
+        );
+    }
+
+    #[test]
+    fn exhausted_wage_headroom_forces_loan() {
+        let mut prospect = ApproachFixtures::ctx(&ReputationLevel::Elite, Some((60, 90)), 0);
+        prospect.wage_headroom = Some(100_000.0);
+        prospect.expected_wage = 250_000;
+        assert_eq!(
+            ApproachFixtures::elite_buy_with_ctx(&prospect),
+            TransferApproach::Loan,
+            "the board's wage mandate must absorb the new contract too"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dev_pathway_cleanup_tests {
+    use super::*;
+    use crate::club::academy::ClubAcademy;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::continent::Continent;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::transfers::pipeline::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
+        Player, PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, StaffCollection, Team, TeamCollection, TeamReputation,
+        TeamType, TrainingSchedule,
+    };
+    use chrono::{NaiveDate, NaiveTime};
+
+    /// Fixtures for the ownership-aware cleanup behaviour. Wrapped in a
+    /// unit struct per the project's no-free-helpers convention.
+    struct OwnershipFixtures;
+
+    impl OwnershipFixtures {
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn player(id: u32) -> Player {
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Dev".to_string(), format!("P{id}")))
+                .birth_date(Self::d(2008, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Striker,
+                        level: 16,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap()
+        }
+
+        fn team(id: u32, club_id: u32, players: Vec<Player>) -> Team {
+            Team::builder()
+                .id(id)
+                .league_id(Some(10))
+                .club_id(club_id)
+                .name(format!("Team {id}"))
+                .slug(format!("team-{id}"))
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(5000, 5000, 5000))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        fn club(id: u32, name: &str, teams: Vec<Team>) -> Club {
+            Club::new(
+                id,
+                name.to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(teams),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn dev_candidate(player_id: u32) -> LoanOutCandidate {
+            LoanOutCandidate {
+                player_id,
+                reason: LoanOutReason::DevelopmentPathway,
+                status: LoanOutStatus::Identified,
+                loan_fee: 0.0,
+            }
+        }
+
+        fn world(clubs: Vec<Club>) -> SimulatorData {
+            let league = League::new(
+                10,
+                "L".to_string(),
+                "league".to_string(),
+                1,
+                500,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            );
+            let country = Country::builder()
+                .id(1)
+                .code("en".to_string())
+                .slug("england".to_string())
+                .name("england".to_string())
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(clubs)
+                .build()
+                .unwrap();
+            let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+            SimulatorData::new(
+                Self::d(2026, 7, 5).and_hms_opt(12, 0, 0).unwrap(),
+                vec![continent],
+                GlobalCompetitions::new(Vec::new()),
+            )
+        }
+    }
+
+    /// The buyer staged a DevelopmentPathway candidate for a player it
+    /// now rosters; another club holds a stale candidate for the same
+    /// id. The post-transfer interest sweep must keep the owner's
+    /// candidate (otherwise the same-window development loan dies in
+    /// the same tick it's staged) and drop the stale one.
+    #[test]
+    fn loan_out_candidate_survives_cleanup_only_at_owning_club() {
+        let player_id: u32 = 700;
+        let mut owner = OwnershipFixtures::club(
+            1,
+            "Owner",
+            vec![OwnershipFixtures::team(
+                11,
+                1,
+                vec![OwnershipFixtures::player(player_id)],
+            )],
+        );
+        owner
+            .transfer_plan
+            .loan_out_candidates
+            .push(OwnershipFixtures::dev_candidate(player_id));
+
+        let mut stale = OwnershipFixtures::club(2, "Stale", vec![]);
+        stale
+            .transfer_plan
+            .loan_out_candidates
+            .push(OwnershipFixtures::dev_candidate(player_id));
+
+        let mut data = OwnershipFixtures::world(vec![owner, stale]);
+
+        PipelineProcessor::cleanup_player_transfer_interest(&mut data, player_id);
+
+        let country = data.country(1).unwrap();
+        let owner = country.clubs.iter().find(|c| c.id == 1).unwrap();
+        assert!(
+            owner
+                .transfer_plan
+                .loan_out_candidates
+                .iter()
+                .any(|c| c.player_id == player_id && c.reason == LoanOutReason::DevelopmentPathway),
+            "owning club's development-pathway candidate must survive the sweep"
+        );
+        let stale = country.clubs.iter().find(|c| c.id == 2).unwrap();
+        assert!(
+            stale
+                .transfer_plan
+                .loan_out_candidates
+                .iter()
+                .all(|c| c.player_id != player_id),
+            "non-owning club's stale candidate must be dropped"
+        );
     }
 }

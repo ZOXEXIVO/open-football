@@ -27,38 +27,21 @@ impl StateProcessingHandler for MidfielderDribblingState {
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
         let has_clear_shot = ctx.player().has_clear_shot();
 
-        // AM carve-out: forward helper picks the trigger so a low-skill
-        // #10 can still finish their own dribble. The standard gate
-        // below requires mid_shot_selection >= 0.42 which a 10-skill
-        // AM never reaches.
-        if ctx
-            .player
-            .tactical_position
-            .current_position
-            .is_attacking_midfielder()
-        {
-            if let ShotDecision::Shoot { reason } =
-                evaluate_forward_shot_decision(ctx, "AM_DRIB_FWD")
-            {
-                return Some(
-                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
-                        .with_shot_reason(reason),
-                );
-            }
-        }
-
-        // Shooting from dribble — gated on midfielder shot selection
-        // and the unified shot profile, not raw distance bands. A 5/20
-        // midfielder shouldn't pivot to a shot just because they ended
-        // up in their personal "in_shooting_range" band.
-        if has_clear_shot
-            && distance_to_goal <= 32.0
-            && shot_profile.expected_xg(distance_to_goal, true) >= 0.12
-            && (mid_profile.mid_shot_selection >= 0.34 || shot_profile.execution_skill >= 0.50)
-        {
+        // Shot pivot from a dribble — every midfielder (AM and CM alike)
+        // consults the shared forward helper, which scales the decision
+        // continuously with selection / execution / composure, applies
+        // the xG floor, the anti-monopoly cap and the willingness roll.
+        // The old deterministic side-door here (clear shot + ≤32u +
+        // xG ≥ 0.12 + a binary mid_shot_selection bar) fired on every
+        // tick those conditions held; once the fatigue-normalization fix
+        // let midfielders keep their legs past minute 20, that election
+        // alone produced ~26% of all MID shots and helped balloon the
+        // MID goal share to 45% (target 32%). Routing through the helper
+        // keeps the chance-quality logic in ONE place.
+        if let ShotDecision::Shoot { reason } = evaluate_forward_shot_decision(ctx, "MID_DRIB") {
             return Some(
                 StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
-                    .with_shot_reason("MID_DRIB_IN_RANGE"),
+                    .with_shot_reason(reason),
             );
         }
 

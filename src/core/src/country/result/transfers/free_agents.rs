@@ -1,4 +1,5 @@
 use super::config::TransferConfig;
+use super::execution::DevelopmentLoanPathway;
 use super::free_agent_depth::{
     DepthNegotiationAction, EmergencyDepthRequestIntent, EmergencyDepthRequestPlanner,
     FreeAgentNegotiationStager,
@@ -9,11 +10,11 @@ use super::free_agent_market_calc::{
 use super::types::{TransferActivitySummary, can_club_accept_player, find_player_in_country};
 use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
 use crate::club::player::mailbox::handlers::contract_proposal::ProcessContractHandler;
+use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::simulator::SimulatorData;
-use crate::utils::FormattingUtils;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationStatus, TransferNegotiation};
 use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferOffer};
 use crate::transfers::pipeline::{
@@ -22,9 +23,10 @@ use crate::transfers::pipeline::{
 use crate::transfers::scouting_region::ScoutingRegion;
 use crate::transfers::squad_needs::{
     EmergencyBuyerContext, EmergencyCandidateView, EmergencyGroupSlot, EmergencyProjectedSquad,
-    EmergencySlotStrictness, EmergencyStrictness, EmergencySquadFillStrategy, FirstTeamSquadNeeds,
+    EmergencySlotStrictness, EmergencySquadFillStrategy, EmergencyStrictness, FirstTeamSquadNeeds,
 };
 use crate::transfers::{CompletedTransfer, TransferType};
+use crate::utils::FormattingUtils;
 use crate::utils::IntegerUtils;
 use crate::{
     Country, Person, PlayerContractProposal, PlayerFieldPositionGroup, PlayerResult,
@@ -285,7 +287,9 @@ impl CountryResult {
                             club_id: club.id,
                             club_name: club.name.clone(),
                             ability: player.player_attributes.current_ability,
-                            potential: player.player_attributes.potential_ability,
+                            // Signing decisions read the observable
+                            // ceiling, never hidden biological PA.
+                            potential: PotentialEstimator::observable_ceiling(player, date),
                             age: player.age(date),
                             position_group: player.position().position_group(),
                             days_to_expiry: days_left,
@@ -957,6 +961,19 @@ impl CountryResult {
                 continue;
             }
 
+            // A young free signing at a big club is development material
+            // too — same pathway as paid prospect purchases. Foreign
+            // loanee count is unavailable from a single-country borrow;
+            // the domestic count still enforces the cap.
+            DevelopmentLoanPathway::stage_after_purchase(
+                country,
+                signing.to_club_id,
+                signing.player_id,
+                None,
+                date,
+                0,
+            );
+
             country.transfer_market.transfer_history.push(
                 CompletedTransfer::new(
                     signing.player_id,
@@ -1387,9 +1404,9 @@ impl CountryResult {
                 );
                 let threshold =
                     FreeAgentMarketCalculator::acceptance_threshold(best.career_pressure);
-                let base_prob =
-                    FreeAgentMarketCalculator::acceptance_probability(score, threshold);
-                let prob = (base_prob * EmergencySquadFillStrategy::EMERGENCY_ACCEPTANCE_MULTIPLIER)
+                let base_prob = FreeAgentMarketCalculator::acceptance_probability(score, threshold);
+                let prob = (base_prob
+                    * EmergencySquadFillStrategy::EMERGENCY_ACCEPTANCE_MULTIPLIER)
                     .clamp(0.0, 1.0);
 
                 if best.is_global_pool {
@@ -1526,9 +1543,7 @@ impl EmergencySlotPlanner {
             PlayerFieldPositionGroup::Goalkeeper,
         ];
         candidates.sort_by_key(|g| -Self::gap_for(projected, *g));
-        candidates
-            .into_iter()
-            .find(|g| !empty_groups.contains(g))
+        candidates.into_iter().find(|g| !empty_groups.contains(g))
     }
 
     fn gap_for(projected: &EmergencyProjectedSquad, group: PlayerFieldPositionGroup) -> i32 {
@@ -1927,7 +1942,9 @@ pub(crate) fn snapshot_global_free_agents(
                 player_id: player.id,
                 player_name: player.full_name.to_string(),
                 ability: player.player_attributes.current_ability,
-                potential: player.player_attributes.potential_ability,
+                // Observable ceiling — pool matchers are club decisions
+                // and must not see hidden biological PA.
+                potential: PotentialEstimator::observable_ceiling(player, date),
                 age: player.age(date),
                 position_group: player.position().position_group(),
                 nationality_country_reputation: nationality_rep,
@@ -2133,6 +2150,7 @@ mod emergency_fill_tests {
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
     use crate::transfers::market::TransferListingStatus;
+    use crate::transfers::negotiation::NegotiationRejectionReason;
     use crate::transfers::pipeline::{ShortlistCandidateStatus, TransferNeedPriority};
     use crate::transfers::squad_needs::EmergencyContractTermsPolicy;
     use crate::{
@@ -2162,7 +2180,10 @@ mod emergency_fill_tests {
                 .attributes(PersonAttributes::default())
                 .skills(PlayerSkills::default())
                 .positions(PlayerPositions {
-                    positions: vec![PlayerPosition { position, level: 16 }],
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 16,
+                    }],
                 })
                 .player_attributes(PlayerAttributes::default())
                 .build()
@@ -2287,8 +2308,7 @@ mod emergency_fill_tests {
             career_pressure: f32,
             reference_reputation: u16,
         ) -> FreeAgentCandidate {
-            let mut c =
-                Self::candidate(player_id, ability, age, position_group, same_country);
+            let mut c = Self::candidate(player_id, ability, age, position_group, same_country);
             c.career_pressure = career_pressure;
             c.reference_reputation = reference_reputation;
             c
@@ -2427,9 +2447,9 @@ mod emergency_fill_tests {
         // pass must reach for the goalkeeper before anything else.
         let players: Vec<Player> = (0..8)
             .map(|i| EmergencyFillFixtures::player(i, PlayerPositionType::DefenderCenter))
-            .chain(
-                (0..6).map(|i| EmergencyFillFixtures::player(20 + i, PlayerPositionType::MidfielderCenter)),
-            )
+            .chain((0..6).map(|i| {
+                EmergencyFillFixtures::player(20 + i, PlayerPositionType::MidfielderCenter)
+            }))
             .chain(
                 (0..4).map(|i| EmergencyFillFixtures::player(40 + i, PlayerPositionType::Striker)),
             )
@@ -2481,7 +2501,10 @@ mod emergency_fill_tests {
         // candidates available.
         let mut players: Vec<Player> = Vec::new();
         for i in 0..2 {
-            players.push(EmergencyFillFixtures::player(i, PlayerPositionType::Goalkeeper));
+            players.push(EmergencyFillFixtures::player(
+                i,
+                PlayerPositionType::Goalkeeper,
+            ));
         }
         for i in 0..8 {
             players.push(EmergencyFillFixtures::player(
@@ -2496,7 +2519,10 @@ mod emergency_fill_tests {
             ));
         }
         for i in 0..6 {
-            players.push(EmergencyFillFixtures::player(40 + i, PlayerPositionType::Striker));
+            players.push(EmergencyFillFixtures::player(
+                40 + i,
+                PlayerPositionType::Striker,
+            ));
         }
 
         let main = EmergencyFillFixtures::team(10, "FC", "fc", players);
@@ -2648,20 +2674,10 @@ mod emergency_fill_tests {
         let club = EmergencyFillFixtures::club(100, "FC", main);
         let country = EmergencyFillFixtures::country(vec![club]);
 
-        let candidate = EmergencyFillFixtures::candidate(
-            900,
-            70,
-            26,
-            PlayerFieldPositionGroup::Defender,
-            true,
-        );
-        let already = EmergencyFillFixtures::candidate(
-            901,
-            70,
-            26,
-            PlayerFieldPositionGroup::Defender,
-            true,
-        );
+        let candidate =
+            EmergencyFillFixtures::candidate(900, 70, 26, PlayerFieldPositionGroup::Defender, true);
+        let already =
+            EmergencyFillFixtures::candidate(901, 70, 26, PlayerFieldPositionGroup::Defender, true);
         let candidates = vec![candidate, already];
 
         // Mark player 900 as already signed in this tick.
@@ -2683,10 +2699,7 @@ mod emergency_fill_tests {
             &mut signings,
         );
         assert!(
-            !signings
-                .iter()
-                .skip(1)
-                .any(|s| s.player_id == 900),
+            !signings.iter().skip(1).any(|s| s.player_id == 900),
             "emergency pass must not re-pick a player already signed this tick"
         );
     }
@@ -2785,7 +2798,10 @@ mod emergency_fill_tests {
             first_def.map(|s| s.player_id),
             Some(2000),
             "domestic candidate should win the defender slot, signings={:?}",
-            signings.iter().map(|s| (s.player_id, &s.reason)).collect::<Vec<_>>()
+            signings
+                .iter()
+                .map(|s| (s.player_id, &s.reason))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -3000,7 +3016,10 @@ mod emergency_fill_tests {
             terms.contract_years <= EmergencyContractTermsPolicy::YOUNG_USEFUL_YEARS,
             "emergency contract length must stay short"
         );
-        assert_eq!(staged.fills_group, Some(PlayerFieldPositionGroup::Midfielder));
+        assert_eq!(
+            staged.fills_group,
+            Some(PlayerFieldPositionGroup::Midfielder)
+        );
     }
 
     #[test]
@@ -3071,15 +3090,17 @@ mod emergency_fill_tests {
         let main = EmergencyFillFixtures::team(10, "FC", "fc", Vec::new());
         let mut club = EmergencyFillFixtures::club(100, "FC", main);
         club.transfer_plan.initialized = true;
-        club.transfer_plan.transfer_requests.push(TransferRequest::new(
-            1,
-            PlayerPositionType::DefenderCenter,
-            TransferNeedPriority::Critical,
-            TransferNeedReason::SquadPadding,
-            50,
-            80,
-            0.0,
-        ));
+        club.transfer_plan
+            .transfer_requests
+            .push(TransferRequest::new(
+                1,
+                PlayerPositionType::DefenderCenter,
+                TransferNeedPriority::Critical,
+                TransferNeedReason::SquadPadding,
+                50,
+                80,
+                0.0,
+            ));
         let mut country = EmergencyFillFixtures::country(vec![club]);
 
         let candidate = EmergencyFillFixtures::candidate_with(
@@ -3315,18 +3336,22 @@ mod emergency_fill_tests {
         // below the `Strict + cross-continent` cutoff of 0.85.
         let buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Strict, false);
         let russian = CrossRegionFixtures::candidate(
-            1, 75, 27, PlayerFieldPositionGroup::Defender, "ru", 1, 3000, 3500, 0.5,
+            1,
+            75,
+            27,
+            PlayerFieldPositionGroup::Defender,
+            "ru",
+            1,
+            3000,
+            3500,
+            0.5,
         );
         assert!(
             !EmergencyRealismGates::passes_region(&russian, &buyer),
             "Strict + cross-continent + pressure 0.5 must fail the region gate"
         );
         assert!(
-            !EmergencyRealismGates::passes(
-                &russian,
-                &buyer,
-                PlayerFieldPositionGroup::Defender
-            ),
+            !EmergencyRealismGates::passes(&russian, &buyer, PlayerFieldPositionGroup::Defender),
             "the composite gate must reject the same case"
         );
     }
@@ -3339,7 +3364,15 @@ mod emergency_fill_tests {
         // checks; the test isolates the region behaviour.
         let buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Strict, false);
         let russian = CrossRegionFixtures::candidate(
-            2, 70, 33, PlayerFieldPositionGroup::Defender, "ru", 1, 1800, 1700, 0.92,
+            2,
+            70,
+            33,
+            PlayerFieldPositionGroup::Defender,
+            "ru",
+            1,
+            1800,
+            1700,
+            0.92,
         );
         assert!(
             EmergencyRealismGates::passes_region(&russian, &buyer),
@@ -3486,14 +3519,8 @@ mod emergency_fill_tests {
             missing: 1,
             reason: "emergency_squad_fill_depth",
         };
-        let pick = EmergencyCandidatePicker::pick(
-            &candidates,
-            &signings,
-            &rejected,
-            slot,
-            &buyer,
-            999,
-        );
+        let pick =
+            EmergencyCandidatePicker::pick(&candidates, &signings, &rejected, slot, &buyer, 999);
         let picked = pick.expect("at least one candidate must clear all gates");
         assert_eq!(
             picked.player_id, 10,
@@ -3527,14 +3554,8 @@ mod emergency_fill_tests {
             missing: 1,
             reason: "emergency_squad_fill_depth",
         };
-        let pick = EmergencyCandidatePicker::pick(
-            &candidates,
-            &signings,
-            &rejected,
-            slot,
-            &buyer,
-            999,
-        );
+        let pick =
+            EmergencyCandidatePicker::pick(&candidates, &signings, &rejected, slot, &buyer, 999);
         assert!(
             pick.is_none(),
             "depth slot must skip rather than fall back to an unrealistic cross-region pick"
@@ -3618,7 +3639,15 @@ mod emergency_fill_tests {
         // floor (0.75) instead of 0.85.
         let buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Standard, true);
         let russian = CrossRegionFixtures::candidate(
-            50, 75, 27, PlayerFieldPositionGroup::Defender, "ru", 1, 3000, 3500, 0.5,
+            50,
+            75,
+            27,
+            PlayerFieldPositionGroup::Defender,
+            "ru",
+            1,
+            3000,
+            3500,
+            0.5,
         );
         assert!(
             !EmergencyRealismGates::passes_region(&russian, &buyer),
@@ -3633,7 +3662,15 @@ mod emergency_fill_tests {
         // the Strict path's "verge of retiring" carve-out.
         let buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Standard, true);
         let russian = CrossRegionFixtures::candidate(
-            51, 70, 33, PlayerFieldPositionGroup::Defender, "ru", 1, 1800, 1700, 0.80,
+            51,
+            70,
+            33,
+            PlayerFieldPositionGroup::Defender,
+            "ru",
+            1,
+            1800,
+            1700,
+            0.80,
         );
         assert!(
             EmergencyRealismGates::passes_region(&russian, &buyer),
@@ -4053,104 +4090,122 @@ mod emergency_fill_tests {
 
     #[test]
     fn pool_depth_medical_completion_defers_global_signing_without_direct_history() {
-        crate::utils::random::engine::RandomEngine::set_seed(0xD0C7_0001);
-        let (mut country, pool) = DepthPipelineFixtures::staged_depth_country();
-        DepthPipelineFixtures::run_until_negotiation(&mut country, &pool, 400);
-        let neg_id = *country
-            .transfer_market
-            .negotiations
-            .keys()
-            .next()
-            .expect("staging must have created the negotiation");
-
-        // Fast-forward the negotiation to a mature medical phase so a
-        // single resolver tick completes it.
-        let date = EmergencyFillFixtures::d(2026, 6, 10);
-        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-            negotiation.phase = NegotiationPhase::MedicalAndFinalization { started: date };
-            negotiation.phase_expiry = date;
-        }
-
-        // A second club has a competing pool bid in flight (not yet
-        // phase-ready, so the resolver doesn't touch it directly) —
-        // completion must sweep it like `complete_transfer` would.
-        let competing_id = country.transfer_market.next_negotiation_id;
-        country.transfer_market.next_negotiation_id += 1;
-        country.transfer_market.negotiations.insert(
-            competing_id,
-            TransferNegotiation::new(
-                competing_id,
-                9000,
-                0,
-                0,
-                200,
-                TransferOffer::new(CurrencyValue::new(0.0, Currency::Usd), 200, date),
-                date,
-                0.4,
-                0.3,
-                28,
-                0.5,
-            ),
-        );
-
-        crate::utils::random::engine::RandomEngine::set_seed(42);
-        let mut summary = TransferActivitySummary::new();
-        let outcomes =
-            CountryResult::resolve_pending_negotiations(&mut country, date, &mut summary);
-
-        assert!(
-            outcomes.deferred.is_empty(),
-            "pool free agents must not enter the club-to-club execution queue"
-        );
-        assert_eq!(
-            outcomes.free_agent_signings.len(),
-            1,
-            "cleared medical must defer exactly one global pool signing"
-        );
-        let signing = &outcomes.free_agent_signings[0];
-        assert_eq!(signing.player_id, 9000);
-        assert_eq!(signing.buying_club_id, 100);
-        assert_eq!(
-            signing.reason,
-            PipelineProcessor::transfer_need_reason_text(&TransferNeedReason::DepthCover)
-        );
-        assert!(
-            signing.terms.is_some(),
-            "negotiated wage / length / role must travel to execution"
-        );
-        assert!(
-            country.transfer_market.transfer_history.is_empty(),
-            "the resolver must not write history — the deferred executor owns that row"
-        );
-        assert_eq!(
-            country.transfer_market.negotiations[&neg_id].status,
-            NegotiationStatus::Accepted
-        );
-        assert_eq!(
-            country.transfer_market.negotiations[&competing_id].status,
-            NegotiationStatus::Rejected,
-            "competing pool negotiations must be cancelled on completion"
-        );
-        assert!(
-            country
+        // The medical phase keeps an unconditional 1% collapse roll even
+        // for healthy players, and the seeded RNG stream is mixed with a
+        // per-test-thread id — so any single seed can land in the 1%
+        // band depending on suite composition. Retry across a few seeds:
+        // a genuine completion-path regression fails every attempt,
+        // while the 1% artifact cannot survive eight (P ≈ 1e-16).
+        for attempt in 0..8u64 {
+            crate::utils::random::engine::RandomEngine::set_seed(0xD0C7_0001 + attempt);
+            let (mut country, pool) = DepthPipelineFixtures::staged_depth_country();
+            DepthPipelineFixtures::run_until_negotiation(&mut country, &pool, 400);
+            let neg_id = *country
                 .transfer_market
-                .listings
+                .negotiations
+                .keys()
+                .next()
+                .expect("staging must have created the negotiation");
+
+            // Fast-forward the negotiation to a mature medical phase so a
+            // single resolver tick completes it.
+            let date = EmergencyFillFixtures::d(2026, 6, 10);
+            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                negotiation.phase = NegotiationPhase::MedicalAndFinalization { started: date };
+                negotiation.phase_expiry = date;
+            }
+
+            // A second club has a competing pool bid in flight (not yet
+            // phase-ready, so the resolver doesn't touch it directly) —
+            // completion must sweep it like `complete_transfer` would.
+            let competing_id = country.transfer_market.next_negotiation_id;
+            country.transfer_market.next_negotiation_id += 1;
+            country.transfer_market.negotiations.insert(
+                competing_id,
+                TransferNegotiation::new(
+                    competing_id,
+                    9000,
+                    0,
+                    0,
+                    200,
+                    TransferOffer::new(CurrencyValue::new(0.0, Currency::Usd), 200, date),
+                    date,
+                    0.4,
+                    0.3,
+                    28,
+                    0.5,
+                ),
+            );
+
+            crate::utils::random::engine::RandomEngine::set_seed(42 + attempt);
+            let mut summary = TransferActivitySummary::new();
+            let outcomes =
+                CountryResult::resolve_pending_negotiations(&mut country, date, &mut summary);
+
+            // 1% medical collapse — the RNG artifact, not the behaviour
+            // under test. Re-roll the scenario with the next seed.
+            if country.transfer_market.negotiations[&neg_id].rejection_reason
+                == Some(NegotiationRejectionReason::MedicalFailed)
+            {
+                continue;
+            }
+
+            assert!(
+                outcomes.deferred.is_empty(),
+                "pool free agents must not enter the club-to-club execution queue"
+            );
+            assert_eq!(
+                outcomes.free_agent_signings.len(),
+                1,
+                "cleared medical must defer exactly one global pool signing"
+            );
+            let signing = &outcomes.free_agent_signings[0];
+            assert_eq!(signing.player_id, 9000);
+            assert_eq!(signing.buying_club_id, 100);
+            assert_eq!(
+                signing.reason,
+                PipelineProcessor::transfer_need_reason_text(&TransferNeedReason::DepthCover)
+            );
+            assert!(
+                signing.terms.is_some(),
+                "negotiated wage / length / role must travel to execution"
+            );
+            assert!(
+                country.transfer_market.transfer_history.is_empty(),
+                "the resolver must not write history — the deferred executor owns that row"
+            );
+            assert_eq!(
+                country.transfer_market.negotiations[&neg_id].status,
+                NegotiationStatus::Accepted
+            );
+            assert_eq!(
+                country.transfer_market.negotiations[&competing_id].status,
+                NegotiationStatus::Rejected,
+                "competing pool negotiations must be cancelled on completion"
+            );
+            assert!(
+                country
+                    .transfer_market
+                    .listings
+                    .iter()
+                    .filter(|l| l.player_id == 9000)
+                    .all(|l| l.status == TransferListingStatus::Completed),
+                "pool player's listings must be marked completed on medical success"
+            );
+            let request = country.clubs[0]
+                .transfer_plan
+                .transfer_requests
                 .iter()
-                .filter(|l| l.player_id == 9000)
-                .all(|l| l.status == TransferListingStatus::Completed),
-            "pool player's listings must be marked completed on medical success"
-        );
-        let request = country.clubs[0]
-            .transfer_plan
-            .transfer_requests
-            .iter()
-            .find(|r| r.reason == TransferNeedReason::DepthCover)
-            .unwrap();
-        assert_eq!(
-            request.status,
-            TransferRequestStatus::Fulfilled,
-            "request is fulfilled only once the negotiation actually completes"
-        );
+                .find(|r| r.reason == TransferNeedReason::DepthCover)
+                .unwrap();
+            assert_eq!(
+                request.status,
+                TransferRequestStatus::Fulfilled,
+                "request is fulfilled only once the negotiation actually completes"
+            );
+            return;
+        }
+        panic!("medical collapsed on every seed — the completion path is broken, not unlucky");
     }
 
     #[test]
@@ -4160,12 +4215,8 @@ mod emergency_fill_tests {
         // EmergencyFreeAgentDepth marker) must keep the legacy instant
         // free-agent path — the staged-negotiation flow is reserved
         // for emergency-planner depth requests.
-        let main = EmergencyFillFixtures::team(
-            10,
-            "FC",
-            "fc",
-            DepthPipelineFixtures::balanced_squad(),
-        );
+        let main =
+            EmergencyFillFixtures::team(10, "FC", "fc", DepthPipelineFixtures::balanced_squad());
         let club = EmergencyFillFixtures::club(100, "FC", main);
         let mut country = EmergencyFillFixtures::country(vec![club]);
         country.clubs[0].transfer_plan.initialized = true;
@@ -4272,13 +4323,16 @@ mod emergency_fill_tests {
             1,
             "the executor is the single writer of the history row"
         );
-        assert_eq!(rows[0].reason, "Squad depth — need backup for position group");
+        assert_eq!(
+            rows[0].reason,
+            "Squad depth — need backup for position group"
+        );
         assert!(
-            country.clubs[0]
-                .teams
-                .teams
+            country.clubs[0].teams.teams.iter().any(|t| t
+                .players
+                .players
                 .iter()
-                .any(|t| t.players.players.iter().any(|p| p.id == 9400)),
+                .any(|p| p.id == 9400)),
             "player must land on the buying club's roster"
         );
     }
@@ -4341,9 +4395,9 @@ mod expiry_renewal_tests {
     use crate::shared::fullname::FullName;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
-        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerSquadStatus, StaffCollection,
-        Team, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, PlayerSquadStatus, StaffCollection, Team, TeamCollection,
+        TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::NaiveTime;
 
@@ -4389,7 +4443,10 @@ mod expiry_renewal_tests {
                 .attributes(attrs)
                 .skills(PlayerSkills::default())
                 .positions(PlayerPositions {
-                    positions: vec![PlayerPosition { position, level: 16 }],
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 16,
+                    }],
                 })
                 .player_attributes(player_attributes)
                 .build()

@@ -128,6 +128,16 @@ pub fn handle_goal_reset(field: &mut MatchField, context: &mut MatchContext) {
     field.ball.goal_scored = false;
     field.ball.kickoff_team_side = None;
     context.record_goal_tick();
+    // Post-goal dead time: celebration + walk-back + the referee's
+    // restart — 45-75 s of match clock during which the engine loop
+    // advances only time (see `MatchContext::dead_ball_until_ms`).
+    // Everything is already reset and the kicker stands on the ball,
+    // so when the clock crosses the threshold play resumes instantly —
+    // against a fully SET defense, which is the realism point: the
+    // engine's freshly-reset formations were measurably easy to attack
+    // and goals begat goals through that window.
+    context.dead_ball_until_ms =
+        context.total_match_time + context.rng.range_u64(45, 75) * 1000;
     // The side kicking off after a goal IS the side that just conceded.
     // Mark them so the forward shot-decision dampens willingness in the
     // ~1-minute post-concede window — breaks the equalizer cascade that

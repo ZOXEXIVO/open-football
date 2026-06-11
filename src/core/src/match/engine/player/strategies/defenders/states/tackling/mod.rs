@@ -5,7 +5,7 @@ use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
@@ -276,24 +276,63 @@ impl DefenderTacklingState {
         // concentration/tackling blend) instead of raw composure +
         // aggression. Tired defenders foul more (low def_condition_mult
         // adds to foul rate). Failed tackles roughly double the rate.
-        let mut base_foul = 0.030 + aggression01 * 0.11 - def_profile.discipline * 0.075;
+        //
+        // Base 0.030 → 0.052 (2026-06 discipline recalibration): the
+        // engine whistled 6.3 fouls/team vs real ~12 — duel contact was
+        // committing too cleanly given the volume of attempts. Raising
+        // the contact-foul rate (paired with the referee Normal-band
+        // lift) brings whistled fouls, free kicks, and the
+        // persistent-infringement card pipeline toward real rates.
+        // Second lift 0.052 → 0.075: the first round's gain was eaten by
+        // the Reckless probability gate reclassifying card-fouls into
+        // normal contact (whistled at ~0.5 instead of ~0.85), netting
+        // only +10% whistles. Real per-duel foul rates are ~15-16%; the
+        // engine sat at ~10% after round one.
+        let mut base_foul = 0.075 + aggression01 * 0.12 - def_profile.discipline * 0.075;
         if !tackle_success {
             base_foul *= 1.80;
         }
         base_foul += (1.0 - def_profile.def_condition_mult).max(0.0) * 0.08;
-        let foul_chance = base_foul.clamp(0.006, 0.28);
+        // Own-box restraint: real defenders stay on their feet inside
+        // their own penalty area — they jockey, contain and block
+        // rather than commit, because the downside is a spot kick.
+        // Without this, the foul-rate lift would inflate penalties
+        // (already over real rate before the lift). Uses the actual
+        // penalty-area RECTANGLE (the same one the restart award
+        // checks) — an earlier radius-from-goal proxy missed the box
+        // corners and let wide-channel box fouls escape the restraint.
+        let in_own_box = ctx
+            .context
+            .penalty_area(ctx.player.side == Some(PlayerSide::Left))
+            .contains(&ctx.tick_context.positions.ball.position);
+        if in_own_box {
+            base_foul *= 0.30;
+        }
+        // Self-preservation on a booking: a player carrying a yellow
+        // measurably tones the challenges down (and managers hook the
+        // ones who can't).
+        if ctx.player.yellow_cards > 0 {
+            base_foul *= 0.70;
+        }
+        let foul_chance = base_foul.clamp(0.006, 0.30);
 
         let committed_foul = rng.random::<f32>() < foul_chance;
 
         // Severity classification stays driven by aggression — discipline
         // already gates whether a foul fires at all, so we don't need to
-        // double-dip here. Reckless/violent stay tied to aggression +
-        // miss-context the same as before.
+        // double-dip here.
+        //
+        // Violent gate 0.12 → 0.02 and a 0.35 probability gate on
+        // Reckless (2026-06): the old shape classified most failed
+        // aggressive contact as Reckless and produced ~1.0 red
+        // cards/match (real ~0.15) — violent conduct is a
+        // once-in-ten-matches event, not an every-match one, and the
+        // typical failed tackle is just a normal foul.
         let severity = if !committed_foul {
             FoulSeverity::Normal
-        } else if aggression01 > 0.75 && !tackle_success && rng.random::<f32>() < 0.12 {
+        } else if aggression01 > 0.75 && !tackle_success && rng.random::<f32>() < 0.008 {
             FoulSeverity::Violent
-        } else if !tackle_success && aggression01 > 0.55 {
+        } else if !tackle_success && aggression01 > 0.55 && rng.random::<f32>() < 0.35 {
             FoulSeverity::Reckless
         } else {
             FoulSeverity::Normal

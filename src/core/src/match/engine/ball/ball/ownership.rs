@@ -3,13 +3,31 @@
 //! ownership claim that decides who is on the ball.
 
 use super::Ball;
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
+use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
 #[cfg(feature = "match-logs")]
 use crate::match_log_debug;
 use nalgebra::Vector3;
+
+/// Result of the first-touch resolution at the moment a pass target
+/// receives the ball. `Clean` keeps the legacy instant-control flow;
+/// the other two leave the ball live and contestable.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum FirstTouchOutcome {
+    /// Ball killed instantly — receiver takes ownership.
+    Clean,
+    /// Touch pushes the ball on several units along its line of travel.
+    /// Usually re-collected by the receiver, occasionally stolen by a
+    /// closing defender.
+    Heavy,
+    /// Ball bounces off the boot at a wide angle — a genuine loss of
+    /// control that often becomes a turnover.
+    Miscontrol,
+}
 
 impl Ball {
     pub fn process_ownership(
@@ -21,7 +39,7 @@ impl Ball {
         if self.flags.in_flight_state > 0 {
             self.flags.in_flight_state -= 1;
             // Allow pass target to claim during flight
-            self.try_pass_target_claim(players, events);
+            self.try_pass_target_claim(context, players, events);
         } else {
             self.check_ball_ownership(context, players, events);
         }
@@ -29,7 +47,157 @@ impl Ball {
         self.flags.running_for_ball = self.is_players_running_to_ball(players);
     }
 
-    fn try_pass_target_claim(&mut self, players: &[MatchPlayer], events: &mut EventCollection) {
+    /// Skill-rolled first touch at pass reception — the producer for the
+    /// `miscontrols` / `heavy_touches` stat counters the rating helper
+    /// has been reading since the counters were added ("deferred
+    /// producer" in their docs). Probability flows from the
+    /// `receiving_first_touch` composite (first_touch / technique /
+    /// composure / anticipation / balance / agility, fatigue-aware via
+    /// `effective_skill`), the arrival difficulty (hot passes, aerial
+    /// drops, a closing defender) and in-match nervousness
+    /// (`SkillModifiers::miscontrol_add` — its first live consumer).
+    /// All terms are continuous curves; no skill cliffs.
+    ///
+    /// Calibration: an average receiver (~0.5 composite) on a routine
+    /// ground pass under no pressure rolls ~0.7-0.9% miscontrol and
+    /// ~2× that heavy-touch; an elite receiver is ~4× cleaner, a tired
+    /// low-skill one under pressure several times worse. At the
+    /// engine's ~800 completed receptions/team this lands near the
+    /// real-football miscontrol band (~8-15/team/match).
+    fn roll_first_touch(
+        &self,
+        context: &MatchContext,
+        receiver: &MatchPlayer,
+        players: &[MatchPlayer],
+    ) -> FirstTouchOutcome {
+        // Keepers gathering back-passes essentially never mis-control
+        // in a way the outfield model represents; modelling it would
+        // only destabilise GK distribution calibration.
+        if receiver.tactical_position.current_position.position_group()
+            == PlayerFieldPositionGroup::Goalkeeper
+        {
+            return FirstTouchOutcome::Clean;
+        }
+
+        let minute = sc::minute_from_ticks(self.current_tick_cached);
+        let quality = sc::receiving_first_touch(receiver, minute);
+
+        // Arrival difficulty — every term continuous in [0, 1].
+        let speed01 = ((self.velocity.norm() - 1.5) / 5.0).clamp(0.0, 1.0);
+        let aerial01 = (self.position.z / 2.8).clamp(0.0, 1.0);
+        let mut nearest_opp_dist = f32::MAX;
+        for p in players.iter().filter(|p| p.team_id != receiver.team_id) {
+            let d = (p.position - receiver.position).norm();
+            if d < nearest_opp_dist {
+                nearest_opp_dist = d;
+            }
+        }
+        let pressure01 = (1.0 - nearest_opp_dist / 10.0).clamp(0.0, 1.0);
+        let difficulty = speed01 * 0.40 + pressure01 * 0.40 + aerial01 * 0.20;
+
+        // Nervousness bump — high-pressure psych state spills more
+        // first touches (the modifier is additive probability already).
+        let psych_add = context
+            .psychology
+            .get(receiver.id)
+            .map(|s| Psychology::skill_modifiers(s).miscontrol_add)
+            .unwrap_or(0.0);
+
+        // First dev_match pass (300 matches) measured 2.6 miscontrols +
+        // 7.1 heavy touches/team — below the real ~8-15 band, expected
+        // since this producer only fires at targeted-pass receptions
+        // (dribble losses are booked by the dribble-duel system).
+        // Coefficients lifted to land receptions at ~4-5 + ~10/team,
+        // the reception share of the real band.
+        let p_miscontrol = ((0.006 + difficulty * 0.060) * (1.15 - quality).powf(1.6)
+            + psych_add * 0.25)
+            .clamp(0.0005, 0.15);
+        let p_heavy = (p_miscontrol * 2.2).min(0.25);
+
+        let roll = context.rng.unit_f32();
+        if roll < p_miscontrol {
+            FirstTouchOutcome::Miscontrol
+        } else if roll < p_miscontrol + p_heavy {
+            FirstTouchOutcome::Heavy
+        } else {
+            FirstTouchOutcome::Clean
+        }
+    }
+
+    /// Apply a failed first touch: the receiver gets a touch (last-
+    /// toucher bookkeeping) but NOT ownership — the ball squirts loose
+    /// from their feet and normal claiming decides who comes up with
+    /// it. A heavy touch runs on along the line of travel (the classic
+    /// "took it in stride but too far"); a miscontrol bounces off at a
+    /// wide angle. `FirstTouchFailed` carries the stat + pass-accounting
+    /// credit to the dispatcher.
+    fn apply_failed_first_touch(
+        &mut self,
+        context: &MatchContext,
+        receiver_id: u32,
+        receiver_team: u32,
+        receiver_position: Vector3<f32>,
+        passer_id: u32,
+        outcome: FirstTouchOutcome,
+        events: &mut EventCollection,
+    ) {
+        let arrival_speed = self.velocity.norm();
+        let dir = if arrival_speed > 0.05 {
+            self.velocity / arrival_speed
+        } else {
+            Vector3::new(1.0, 0.0, 0.0)
+        };
+
+        let (out_dir, out_speed) = match outcome {
+            FirstTouchOutcome::Heavy => {
+                // Damped continuation — ball rolls 8-20u ahead of the
+                // receiver before friction kills it.
+                (dir, (arrival_speed * 0.40).clamp(0.8, 2.0))
+            }
+            _ => {
+                // Miscontrol: wide deflection off the boot, ±40-110°
+                // either side of the line of travel.
+                let sign = if context.rng.unit_f32() < 0.5 { -1.0 } else { 1.0 };
+                let angle = sign * (0.7 + context.rng.unit_f32() * 1.2);
+                let (sin, cos) = angle.sin_cos();
+                let rotated = Vector3::new(
+                    dir.x * cos - dir.y * sin,
+                    dir.x * sin + dir.y * cos,
+                    0.0,
+                );
+                (rotated, (arrival_speed * 0.50).clamp(1.0, 2.6))
+            }
+        };
+
+        self.position = receiver_position;
+        self.position.z = 0.0;
+        self.velocity = out_dir * out_speed;
+        self.velocity.z = 0.0;
+        self.previous_owner = Some(receiver_id);
+        self.current_owner = None;
+        self.pass_target_player_id = None;
+        // Brief protection window so the squirting ball separates from
+        // the receiver before claiming resumes — without it the very
+        // next tick re-claims in place and the failure is invisible.
+        self.flags.in_flight_state = 12;
+        self.claim_cooldown = 0;
+        let tick = self.current_tick_cached;
+        self.record_touch(receiver_id, receiver_team, tick, false);
+        self.offside_snapshot = None;
+        self.pass_origin_restart = PassOriginRestart::OpenPlay;
+        events.add_ball_event(BallEvent::FirstTouchFailed(
+            receiver_id,
+            passer_id,
+            outcome == FirstTouchOutcome::Miscontrol,
+        ));
+    }
+
+    fn try_pass_target_claim(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
         // Check if pass target can claim the ball
         if let Some(target_id) = self.pass_target_player_id {
             if let Some(target_player) = players.iter().find(|p| p.id == target_id) {
@@ -86,6 +254,25 @@ impl Ball {
                     }
                     let passer_id = self.previous_owner;
                     let target_team = target_player.team_id;
+                    // First-touch resolution before control is granted.
+                    // Only a genuine teammate pass rolls — self-passes
+                    // and passer-less claims keep the legacy flow.
+                    if let Some(pid) = passer_id.filter(|&id| id != target_id) {
+                        let outcome = self.roll_first_touch(context, target_player, players);
+                        if outcome != FirstTouchOutcome::Clean {
+                            let receiver_position = target_player.position;
+                            self.apply_failed_first_touch(
+                                context,
+                                target_id,
+                                target_team,
+                                receiver_position,
+                                pid,
+                                outcome,
+                                events,
+                            );
+                            return;
+                        }
+                    }
                     self.current_owner = Some(target_id);
                     self.pass_target_player_id = None;
                     self.ownership_duration = 0;
@@ -650,6 +837,26 @@ impl Ball {
                 if dist_sq < RECEIVER_PRIORITY_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT
                 {
                     let passer_id = self.current_owner.or(self.previous_owner);
+                    // First-touch resolution on the post-flight priority
+                    // claim as well — same roll as the in-flight site so
+                    // a slow arriving pass isn't a free clean control.
+                    if let Some(pid) = passer_id.filter(|&id| id != target_id) {
+                        let outcome = self.roll_first_touch(context, target_player, players);
+                        if outcome != FirstTouchOutcome::Clean {
+                            let receiver_position = target_player.position;
+                            let receiver_team = target_player.team_id;
+                            self.apply_failed_first_touch(
+                                context,
+                                target_id,
+                                receiver_team,
+                                receiver_position,
+                                pid,
+                                outcome,
+                                events,
+                            );
+                            return;
+                        }
+                    }
                     self.previous_owner = self.current_owner;
                     self.current_owner = Some(target_id);
                     self.pass_target_player_id = None;

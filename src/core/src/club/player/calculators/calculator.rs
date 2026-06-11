@@ -1,3 +1,4 @@
+use crate::club::staff::perception::PotentialEstimator;
 use crate::{Person, Player, PlayerPositionType, PlayerSquadStatus, PlayerStatusType};
 use chrono::NaiveDate;
 
@@ -131,7 +132,11 @@ impl PlayerValueCalculator {
     fn determine_potential_factor(player: &Player, date: NaiveDate) -> f64 {
         let age = player.age(date);
         let current = player.player_attributes.current_ability as f64;
-        let potential = player.player_attributes.potential_ability as f64;
+        // Market value is the WORLD's belief about the player — priced
+        // off the observable ceiling, never the hidden biological PA. A
+        // gem whose upside isn't visible yet is genuinely cheap; that's
+        // where smart buyers profit.
+        let potential = PotentialEstimator::observable_ceiling(player, date) as f64;
 
         if age > 28 || current >= potential {
             return 1.0;
@@ -149,13 +154,16 @@ impl PlayerValueCalculator {
         // Base potential gap: adds 1-40% value for young players
         let gap_factor = 1.0 + (gap / 200.0) * age_bonus * 0.4;
 
-        // Wonderkid premium: amplifies value for the rare ≤21yo with very
-        // high absolute PA. Age-weights were strengthened when the base-value
-        // cap was lowered from 175M to 80M; without this rebalance, elite
-        // young prospects (CA 110 / PA 180) would slip below the realistic
-        // 10–25M wonderkid band that market-leading clubs pay.
-        let wonderkid_factor = if age <= 21 && potential >= 150.0 {
-            let pa_excess = (potential - 150.0).min(50.0); // 0..50
+        // Wonderkid premium: amplifies value for the rare ≤21yo whose
+        // OBSERVABLE ceiling is exceptional. Believed ceilings compress
+        // relative to the old raw-PA scale (an 18yo's estimate rarely
+        // exceeds visible ability +30), so the band starts at 135 — an
+        // observably elite teenager (visible ~135, ceiling ~160) still
+        // prices in the realistic 10–25M wonderkid band market-leading
+        // clubs pay. A gem whose ceiling isn't visible yet stays cheap;
+        // that's the hidden-information model working as intended.
+        let wonderkid_factor = if age <= 21 && potential >= 135.0 {
+            let pa_excess = (potential - 135.0).min(50.0); // 0..50
             let age_weight = match age {
                 0..=17 => 5.0,
                 18 => 4.5,
@@ -730,21 +738,77 @@ mod tests {
         );
     }
 
+    /// Flatten every skill to `value` so the observable profile is
+    /// deterministic — the generator scatters skills, and valuation now
+    /// prices the OBSERVABLE ceiling rather than hidden PA.
+    fn flatten_skills(player: &mut Player, value: f32) {
+        let technical = &mut player.skills.technical;
+        technical.corners = value;
+        technical.crossing = value;
+        technical.dribbling = value;
+        technical.finishing = value;
+        technical.first_touch = value;
+        technical.free_kicks = value;
+        technical.heading = value;
+        technical.long_shots = value;
+        technical.long_throws = value;
+        technical.marking = value;
+        technical.passing = value;
+        technical.penalty_taking = value;
+        technical.tackling = value;
+        technical.technique = value;
+        let mental = &mut player.skills.mental;
+        mental.aggression = value;
+        mental.anticipation = value;
+        mental.bravery = value;
+        mental.composure = value;
+        mental.concentration = value;
+        mental.decisions = value;
+        mental.determination = value;
+        mental.flair = value;
+        mental.leadership = value;
+        mental.off_the_ball = value;
+        mental.positioning = value;
+        mental.teamwork = value;
+        mental.vision = value;
+        mental.work_rate = value;
+        let physical = &mut player.skills.physical;
+        physical.acceleration = value;
+        physical.agility = value;
+        physical.balance = value;
+        physical.jumping = value;
+        physical.natural_fitness = value;
+        physical.pace = value;
+        physical.stamina = value;
+        physical.strength = value;
+    }
+
     #[test]
     fn elite_wonderkid_is_not_undervalued_by_age_factor() {
-        // 18yo with PA 180, CA 110 at a top club: the old age_factor
-        // (0.40) without a wonderkid premium left this player priced
-        // like a journeyman. With the strengthened wonderkid weights
-        // compensating for the 80M base cap, value should still reach
-        // realistic wonderkid territory.
+        // An OBSERVABLY elite 18yo: visible ability ~135-140 plus the
+        // growth signals scouts read (strong determination, work rate,
+        // game intelligence). The market can't see hidden PA any more —
+        // an invisible ceiling no longer commands a fee, but a visible
+        // wonderkid must still clear realistic wonderkid pricing despite
+        // the steep age factor (0.40 at 18).
         let now = d(2025);
-        let player = make_valuation_player(now, 110, 180, 18, PlayerPositionType::MidfielderCenter);
+        let mut player =
+            make_valuation_player(now, 135, 180, 18, PlayerPositionType::MidfielderCenter);
+        flatten_skills(&mut player, 13.5);
+        player.skills.mental.determination = 17.0;
+        player.skills.mental.work_rate = 16.0;
+        player.skills.mental.composure = 16.0;
+        player.skills.mental.decisions = 16.0;
+        player.skills.mental.anticipation = 16.0;
+        player.skills.mental.concentration = 16.0;
+        player.attributes.ambition = 16.0;
+        player.attributes.professionalism = 16.0;
 
         let value = PlayerValueCalculator::calculate(&player, now, 1.0, 9000, 9000);
 
         assert!(
             value >= 12_000_000.0,
-            "elite wonderkid value {} too low — age factor should not flatten high-PA youth",
+            "elite wonderkid value {} too low — age factor should not flatten observably elite youth",
             value
         );
     }

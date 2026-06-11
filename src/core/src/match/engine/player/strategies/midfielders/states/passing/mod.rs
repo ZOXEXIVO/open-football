@@ -27,29 +27,19 @@ impl StateProcessingHandler for MidfielderPassingState {
             ));
         }
 
-        // AM carve-out: route the "shoot instead of pass" pivot through
-        // the forward helper. The default `should_shoot_instead_of_pass`
-        // scales max_range with `mid_shot_selection`, which collapses
-        // to 20u for a 10-skill #10 — they never pivot to a shot from
-        // the passing state, no matter how clear the lane.
-        if ctx
-            .player
-            .tactical_position
-            .current_position
-            .is_attacking_midfielder()
+        // "Shoot instead of pass" pivot — every midfielder routes through
+        // the shared forward helper. Was AM-only, with non-AMs using the
+        // legacy `should_shoot_instead_of_pass` deterministic election;
+        // that side-door fired on hardcoded range / selection bars and
+        // bypassed the helper's willingness roll, xG floor and
+        // anti-monopoly cap. Unified (2026-06-11) with the rest of the
+        // MID shot paths during the fatigue-normalization rebalance so
+        // chance-quality logic lives in one place.
+        if let ShotDecision::Shoot { reason } = evaluate_forward_shot_decision(ctx, "MID_PASS_FWD")
         {
-            if let ShotDecision::Shoot { reason } =
-                evaluate_forward_shot_decision(ctx, "AM_PASS_FWD")
-            {
-                return Some(
-                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
-                        .with_shot_reason(reason),
-                );
-            }
-        } else if self.should_shoot_instead_of_pass(ctx) {
             return Some(
                 StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
-                    .with_shot_reason("MID_PASS_SHOOT_INSTEAD"),
+                    .with_shot_reason(reason),
             );
         }
 
@@ -485,51 +475,6 @@ impl MidfielderPassingState {
                 });
 
         advances_toward_goal && !teammate_will_be_pressured
-    }
-
-    /// Determine if should shoot instead of pass
-    fn should_shoot_instead_of_pass(&self, ctx: &StateProcessingContext) -> bool {
-        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
-        let shot_profile = ctx.player().shooting().shot_profile();
-
-        // Pivot from passing only when both the midfielder's shot
-        // selection profile AND the unified shot quality profile agree
-        // it's a real chance. Distance bands scale with selection,
-        // replacing the raw long_shots/finishing thresholds.
-        let max_range = if mid_profile.mid_shot_selection >= 0.62 {
-            50.0
-        } else if mid_profile.mid_shot_selection >= 0.46 {
-            35.0
-        } else if mid_profile.mid_shot_selection >= 0.32 {
-            25.0
-        } else {
-            20.0
-        };
-        if distance_to_goal >= max_range {
-            return false;
-        }
-        if shot_profile.expected_xg(distance_to_goal, true) < 0.10 {
-            return false;
-        }
-
-        // Additionally require the shooter not to be running across
-        // goal (velocity must be roughly goal-ward). Prevents passing-
-        // state pivot when the midfielder is moving laterally / back.
-        let player_pos = ctx.player.position;
-        let goal_pos = ctx.player().opponent_goal_position();
-        let to_goal = (goal_pos - player_pos).normalize();
-        let vel = ctx.player.velocity;
-        let body_facing_goal = if vel.magnitude() > 0.1 {
-            vel.normalize().dot(&to_goal) > 0.2 // within ~80° of goal
-        } else {
-            true // stationary is fine
-        };
-
-        distance_to_goal < max_range
-            && body_facing_goal
-            && ctx.player().has_clear_shot()
-            && ctx.player().shooting().has_good_angle()
     }
 
     /// Check if under heavy pressure

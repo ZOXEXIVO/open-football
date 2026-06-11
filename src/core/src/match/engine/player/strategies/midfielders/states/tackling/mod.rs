@@ -4,7 +4,7 @@ use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderC
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
@@ -193,21 +193,41 @@ impl MidfielderTacklingState {
 
         // Foul model driven by discipline (composure/decisions/tackling/
         // concentration blend) instead of raw composure/aggression.
-        let mut base_foul = 0.025 + aggression01 * 0.10 - mid_profile.discipline * 0.07;
+        // Base 0.025 → 0.044 — see defenders/tackling for the 2026-06
+        // discipline recalibration rationale (fouls ran at half the
+        // real rate; reds at ~6× it).
+        // 0.044 → 0.062 in the second lift — see defenders/tackling.
+        let mut base_foul = 0.062 + aggression01 * 0.11 - mid_profile.discipline * 0.07;
         if !tackle_success {
             base_foul *= 1.75;
         }
         // Tired midfielders foul more.
         base_foul += (1.0 - mid_profile.mid_condition_mult).max(0.0) * 0.08;
+        // Own-box restraint — same rationale as the defender model:
+        // nobody dives in inside their own penalty area. Rectangle
+        // check matches the restart-award geometry.
+        let in_own_box = ctx
+            .context
+            .penalty_area(ctx.player.side == Some(PlayerSide::Left))
+            .contains(&ctx.tick_context.positions.ball.position);
+        if in_own_box {
+            base_foul *= 0.30;
+        }
+        // Self-preservation on a booking — see defenders/tackling.
+        if ctx.player.yellow_cards > 0 {
+            base_foul *= 0.70;
+        }
         let foul_chance = base_foul.max(0.005);
 
         let committed_foul = rng.random::<f32>() < foul_chance;
 
+        // Violent 0.10 → 0.02, Reckless gated at 0.35 — most failed
+        // contact is a plain foul, not a card-worthy lunge.
         let severity = if !committed_foul {
             FoulSeverity::Normal
-        } else if aggression01 > 0.75 && !tackle_success && rng.random::<f32>() < 0.10 {
+        } else if aggression01 > 0.75 && !tackle_success && rng.random::<f32>() < 0.008 {
             FoulSeverity::Violent
-        } else if !tackle_success && aggression01 > 0.55 {
+        } else if !tackle_success && aggression01 > 0.55 && rng.random::<f32>() < 0.35 {
             FoulSeverity::Reckless
         } else {
             FoulSeverity::Normal

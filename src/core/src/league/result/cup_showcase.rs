@@ -27,6 +27,7 @@ use super::data_access::LeagueProcessAccess;
 use crate::Person;
 use crate::club::Club;
 use crate::club::StaffPosition;
+use crate::club::staff::perception::PotentialEstimator;
 use crate::r#match::{FieldSquad, MatchResultRaw};
 use crate::transfers::pipeline::scouting_config::ScoutingConfig;
 use crate::transfers::pipeline::{KnownPlayerMemory, ScoutMonitoringSource, TransferRequestStatus};
@@ -462,12 +463,32 @@ impl LeagueResult {
             return;
         }
 
-        let (weaker_team_id, weaker_rep, weaker_goals, opponent_team_id, opponent_rep, opponent_goals) =
-            if home_rep <= away_rep {
-                (home_team_id, home_rep, home_goals, away_team_id, away_rep, away_goals)
-            } else {
-                (away_team_id, away_rep, away_goals, home_team_id, home_rep, home_goals)
-            };
+        let (
+            weaker_team_id,
+            weaker_rep,
+            weaker_goals,
+            opponent_team_id,
+            opponent_rep,
+            opponent_goals,
+        ) = if home_rep <= away_rep {
+            (
+                home_team_id,
+                home_rep,
+                home_goals,
+                away_team_id,
+                away_rep,
+                away_goals,
+            )
+        } else {
+            (
+                away_team_id,
+                away_rep,
+                away_goals,
+                home_team_id,
+                home_rep,
+                home_goals,
+            )
+        };
 
         if Showcase::band_for_ratio(weaker_rep / opponent_rep).is_none() {
             return;
@@ -533,7 +554,12 @@ impl LeagueResult {
             };
             let (seller_league_rep, seller_club_rep) =
                 PlayerValuationCalculator::seller_context(country, weaker_club);
-            let weaker_team = match weaker_club.teams.teams.iter().find(|t| t.id == weaker_team_id) {
+            let weaker_team = match weaker_club
+                .teams
+                .teams
+                .iter()
+                .find(|t| t.id == weaker_team_id)
+            {
                 Some(t) => t,
                 None => return,
             };
@@ -604,13 +630,15 @@ impl LeagueResult {
                     None => continue,
                 };
 
-                let skill_ability =
-                    player.skills.calculate_ability_for_position(position) as i32;
+                let skill_ability = player.skills.calculate_ability_for_position(position) as i32;
                 let assessed_ability = (skill_ability
                     + ShowcaseAssessment::rating_ability_bonus(stats.match_rating))
                 .clamp(1, 200) as u8;
-                let assessed_potential = ((player.player_attributes.potential_ability as i32)
-                    .max(assessed_ability as i32)
+                // Scouts in the stands can't see biological PA — the
+                // assessment anchors on the observable ceiling (visible
+                // ability + age/mentals projection) instead.
+                let observable_ceiling = PotentialEstimator::observable_ceiling(player, now) as i32;
+                let assessed_potential = (observable_ceiling.max(assessed_ability as i32)
                     + ShowcaseAssessment::youth_potential_bonus(age))
                 .clamp(1, 200) as u8;
 
@@ -821,9 +849,18 @@ mod tests {
 
     #[test]
     fn band_only_triggers_for_clear_underdogs() {
-        assert_eq!(Showcase::band_for_ratio(0.40), Some(ShowcaseBand::GiantKilling));
-        assert_eq!(Showcase::band_for_ratio(0.50), Some(ShowcaseBand::StrongUnderdog));
-        assert_eq!(Showcase::band_for_ratio(0.55), Some(ShowcaseBand::StrongUnderdog));
+        assert_eq!(
+            Showcase::band_for_ratio(0.40),
+            Some(ShowcaseBand::GiantKilling)
+        );
+        assert_eq!(
+            Showcase::band_for_ratio(0.50),
+            Some(ShowcaseBand::StrongUnderdog)
+        );
+        assert_eq!(
+            Showcase::band_for_ratio(0.55),
+            Some(ShowcaseBand::StrongUnderdog)
+        );
         assert_eq!(Showcase::band_for_ratio(0.70), Some(ShowcaseBand::Normal));
         assert_eq!(Showcase::band_for_ratio(0.75), Some(ShowcaseBand::Normal));
         // Equal-reputation / mild-gap top-flight matches never trigger.
@@ -1037,7 +1074,11 @@ mod tests {
         // Second cup showcase → same row, more matches watched, ReportReady.
         apply(&mut plan);
         let m = plan.find_monitoring(scout, player).unwrap();
-        assert_eq!(plan.scout_monitoring.len(), 1, "must not spawn a duplicate row");
+        assert_eq!(
+            plan.scout_monitoring.len(),
+            1,
+            "must not spawn a duplicate row"
+        );
         assert_eq!(m.matches_watched, 2);
         assert!(m.confidence >= ScoutPlayerMonitoring::MEETING_READY_CONFIDENCE);
         assert_eq!(m.status, ScoutMonitoringStatus::ReportReady);

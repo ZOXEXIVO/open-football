@@ -253,6 +253,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // state (the CB's AttackingCorner, or a forward's run→heading).
             // Loose so they head it; keep the Corner origin so the CB stays
             // in AttackingCorner through the strike.
+            //
+            // Drop kinematics = apex-of-flick hang time. The previous
+            // (z 2.2, vz −1.0, 4.0 u/tick drift) fell through the entire
+            // heading band [1.4, 2.5] in ONE tick and drifted out of
+            // 6u header reach almost as fast — so only a CB already in
+            // AttackingCorner (whose same-tick path runs right after
+            // this resolver) ever struck it; a FORWARD winner spent the
+            // only valid tick transitioning Running→Heading and found
+            // the ball below threshold, and the loose ball was then
+            // vacuumed by the intercept gate (z ≤ 2.5). Real contested
+            // headers hang ~0.3-0.4 s at the apex: z 2.55 (one tick
+            // above the intercept window) with vz −0.35 and a modest
+            // 1.8 u/tick goalward drift keeps the ball in the heading
+            // band and within reach for ~3 ticks — enough for ANY
+            // winner's state machine to strike, which is what the
+            // contest already decided should happen.
             let winner_pos = field.players[att_idx].position;
             let to_goal = attacked_goal - winner_pos;
             let dir = if to_goal.magnitude() > 0.01 {
@@ -261,14 +277,25 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 Vector3::new(1.0, 0.0, 0.0)
             };
             let b = &mut field.ball;
-            b.position = Vector3::new(winner_pos.x - dir.x * 2.0, winner_pos.y - dir.y * 2.0, 2.2);
-            b.velocity = Vector3::new(dir.x * 4.0, dir.y * 4.0, -1.0);
+            b.position =
+                Vector3::new(winner_pos.x - dir.x * 2.0, winner_pos.y - dir.y * 2.0, 2.55);
+            b.velocity = Vector3::new(dir.x * 1.8, dir.y * 1.8, -0.35);
             b.current_owner = None;
             b.previous_owner = taker;
             b.flags.in_flight_state = 1;
         }
         // Otherwise the cross plays out — the keeper claims or a defender
         // clears (the realistic majority outcome).
+
+        // The contest IS the resolution of the delivery — clear the
+        // stale cross-target so the original aim point (often the OTHER
+        // pushed-up CB) can't auto-claim the dropped ball through the
+        // 100u receiver-priority radius. Before this, won headers were
+        // routinely converted into a different player's chest-trap →
+        // slow foot-shot, and "lost" contests were caught by the
+        // attacking CB instead of playing out as GK claims/clearances.
+        field.ball.pass_target_player_id = None;
+        field.ball.clear_pending_pass_metadata();
 
         // Persist this corner's routine + estimated xG into the team's
         // history so `pick_corner_routine` can vary future deliveries.

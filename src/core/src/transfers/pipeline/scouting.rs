@@ -793,6 +793,10 @@ impl PipelineProcessor {
                         world_reputation: player.player_attributes.world_reputation,
                         country_reputation,
                         club_world_reputation: club_world_rep,
+                        club_best_in_group: Self::best_ca_in_group(
+                            club,
+                            player.position().position_group(),
+                        ),
                         is_injured: player.player_attributes.is_injured,
                         contract_months_remaining,
                         salary,

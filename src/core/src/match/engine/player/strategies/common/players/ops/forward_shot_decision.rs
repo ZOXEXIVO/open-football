@@ -91,6 +91,11 @@ pub mod mid_run_diag {
     pub static BLOCK_CORNER_FIRED: AtomicU64 = AtomicU64::new(0);
     /// Times the keeper SAFE-PARRY "palm wide for a corner" branch fired.
     pub static SAVE_PARRY_FIRED: AtomicU64 = AtomicU64::new(0);
+    /// Penalties awarded (box foul whistled → spot kick restart).
+    /// Real football ≈ 0.25-0.30 per match.
+    pub static PENALTY_AWARDED: AtomicU64 = AtomicU64::new(0);
+    /// Direct free kicks awarded for fouls outside the box.
+    pub static DIRECT_FK_AWARDED: AtomicU64 = AtomicU64::new(0);
     pub fn reset() {
         for c in [
             &RUNNER_BOX_TICKS,
@@ -109,6 +114,8 @@ pub mod mid_run_diag {
             &CORNER_CONTEST_WON,
             &BLOCK_CORNER_FIRED,
             &SAVE_PARRY_FIRED,
+            &PENALTY_AWARDED,
+            &DIRECT_FK_AWARDED,
         ] {
             c.store(0, Ordering::Relaxed);
         }
@@ -131,6 +138,123 @@ pub mod mid_run_diag {
             CORNER_CONTEST_WON.load(Ordering::Relaxed),
             BLOCK_CORNER_FIRED.load(Ordering::Relaxed),
             SAVE_PARRY_FIRED.load(Ordering::Relaxed),
+        ]
+    }
+}
+
+/// Time-of-match production diagnostics (`match-logs` only). Everything
+/// is bucketed into six 15-minute bands (index = minute/15, clamped to
+/// band 5 so stoppage time folds into 75-90). The dev harness's
+/// goals-by-minute histogram showed scoring DECAYING across the match
+/// (36% of goals in minutes 0-15 vs real ~11%, rising to ~26% late);
+/// these counters split that into volume (shots/band) vs quality
+/// (xG/shot) vs conversion (goals/shot) so the calibration lever is
+/// identifiable instead of guessed.
+#[cfg(feature = "match-logs")]
+pub mod time_band_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub const BANDS: usize = 6;
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+
+    /// Shots struck (handle_shoot_event reached trajectory resolution).
+    pub static SHOTS_BY_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Shots whose final aim threatened the frame (same flag the
+    /// shooter's on-target memory uses).
+    pub static ON_TARGET_BY_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Sum of shooter xG ×1000 (location/skill chance value at strike).
+    pub static XG_X1000_BY_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Real goals (own goals excluded — they carry no shooter xG).
+    pub static GOALS_BY_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Willingness-roll attempts reaching the RNG in the forward shot
+    /// helper — the volume signal BEFORE gates fire.
+    pub static ROLL_REACHED_BY_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Condition samples per band per position group (0=GK 1=DEF 2=MID
+    /// 3=FWD): summed condition (0..10000) and sample count. Sampled at
+    /// a coarse cadence from the engine loop so the harness can print
+    /// the average condition trajectory by role — the suspected driver
+    /// of the early-match attack-volume decay.
+    const ZERO_ROW: [AtomicU64; 4] = [ZERO; 4];
+    pub static COND_SUM_BY_BAND_GROUP: [[AtomicU64; 4]; BANDS] = [ZERO_ROW; BANDS];
+    pub static COND_N_BY_BAND_GROUP: [[AtomicU64; 4]; BANDS] = [ZERO_ROW; BANDS];
+    /// Outfield velocity-band occupancy from the condition processor:
+    /// 0=stationary(<5% max speed) 1=walking(5-30%) 2=jogging(30-60%)
+    /// 3=running(60-85%) 4=sprinting(>85%). The fatigue calibration is
+    /// a function of this distribution — net drain per tick =
+    /// Σ band_share × band_rate — so the harness prints it to make
+    /// drain/recovery retuning analytic instead of trial-and-error.
+    pub static VELOCITY_BAND_TICKS: [AtomicU64; 5] = [ZERO; 5];
+
+    pub fn band_for_minute(minute: u32) -> usize {
+        ((minute / 15) as usize).min(BANDS - 1)
+    }
+
+    pub fn reset() {
+        for arr in [
+            &SHOTS_BY_BAND,
+            &ON_TARGET_BY_BAND,
+            &XG_X1000_BY_BAND,
+            &GOALS_BY_BAND,
+            &ROLL_REACHED_BY_BAND,
+        ] {
+            for a in arr.iter() {
+                a.store(0, Ordering::Relaxed);
+            }
+        }
+        for band in 0..BANDS {
+            for g in 0..4 {
+                COND_SUM_BY_BAND_GROUP[band][g].store(0, Ordering::Relaxed);
+                COND_N_BY_BAND_GROUP[band][g].store(0, Ordering::Relaxed);
+            }
+        }
+        for a in VELOCITY_BAND_TICKS.iter() {
+            a.store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub fn velocity_band_snapshot() -> [u64; 5] {
+        let mut out = [0u64; 5];
+        for (o, a) in out.iter_mut().zip(VELOCITY_BAND_TICKS.iter()) {
+            *o = a.load(Ordering::Relaxed);
+        }
+        out
+    }
+
+    /// (avg_condition_pct, n) per band per group.
+    pub fn condition_snapshot() -> [[(f64, u64); 4]; BANDS] {
+        let mut out = [[(0.0, 0u64); 4]; BANDS];
+        for band in 0..BANDS {
+            for g in 0..4 {
+                let n = COND_N_BY_BAND_GROUP[band][g].load(Ordering::Relaxed);
+                let sum = COND_SUM_BY_BAND_GROUP[band][g].load(Ordering::Relaxed);
+                out[band][g] = (
+                    if n > 0 {
+                        sum as f64 / n as f64 / 100.0
+                    } else {
+                        0.0
+                    },
+                    n,
+                );
+            }
+        }
+        out
+    }
+
+    /// [shots, on_target, xg_x1000, goals, roll_reached] per band.
+    pub fn snapshot() -> [[u64; BANDS]; 5] {
+        let load = |arr: &[AtomicU64; BANDS]| {
+            let mut out = [0u64; BANDS];
+            for (o, a) in out.iter_mut().zip(arr.iter()) {
+                *o = a.load(Ordering::Relaxed);
+            }
+            out
+        };
+        [
+            load(&SHOTS_BY_BAND),
+            load(&ON_TARGET_BY_BAND),
+            load(&XG_X1000_BY_BAND),
+            load(&GOALS_BY_BAND),
+            load(&ROLL_REACHED_BY_BAND),
         ]
     }
 }
@@ -486,8 +610,25 @@ pub fn evaluate_forward_shot_decision(
     //   G (base 0.012, xg_boost floor 0.20): goals 2.91, line 47/40/13
     //   H (base 0.018, xg_boost floor 0.42): goals 3.28, line 52/36/12
     //   I (base 0.012, xg_boost floor 0.30): aiming goals ~2.6, line 55/33/12
+    // Halved across the board (0.013/0.045/0.020/0.025 → below) as the
+    // volume half of the fatigue-normalization rebalance (2026-06-11).
+    // FATIGUE_RATE_MULTIPLIER's order-of-magnitude correction stopped
+    // outfielders from flatlining at the 15% condition floor by minute
+    // 20 — which un-suppressed shot volume for the remaining 70 minutes
+    // and pushed goals/match from 3.3 to 5.3. The willingness trim is
+    // the memory-approved lever for shot volume (NOT the intercept
+    // gate); halving restores ~18 shots/team while keeping the now-flat
+    // xG/shot and goal-timing profile the fatigue fix bought.
+    // Second trim pass (×0.78) after the condition-slope softening and
+    // settle-window extension put goals at 3.41, then a final ×0.9 once
+    // the 600-match validation read 2.97 — lands the total in the
+    // 2.6-2.8 real band at ~18 shots/team.
+    // Third trim (×0.85, 2026-06 regime-neutralization round): gating
+    // score-reactive behavior to the final ~28 minutes un-suppressed
+    // the first hour of play and lifted totals to 3.48 — this rebases
+    // to ~2.9-3.0 at the new flat game-state profile.
     let base_willingness =
-        0.013 + selection * 0.045 + composure_skill * 0.020 + execution_skill * 0.025;
+        0.0038 + selection * 0.0134 + composure_skill * 0.0061 + execution_skill * 0.0077;
     // xg_boost — floor 0.30 (vs prior 0.50). Mid-range chance with
     // xG=0.06 gets 0.30 boost (was 0.50 — ~40% reduction). Clear-shot
     // xG=0.10 gets 0.50 (was 0.50 — no change). High-xG xG≥0.28 gets
@@ -497,7 +638,18 @@ pub fn evaluate_forward_shot_decision(
     let xg_boost = (xg / 0.20).clamp(0.30, 1.40);
     let clarity_mult = 0.50 + clarity * 0.50;
     let body_control_mult = (0.65 + body_control * 0.40).clamp(0.60, 1.05);
-    let condition_mult = (1.0 - low_condition_penalty * 0.55).clamp(0.40, 1.05);
+    // Condition slope softened 0.55 → 0.25. Fatigue already hits this
+    // same decision three other ways — the effective-skill composites
+    // inside selection/execution, the shot profile's condition discount
+    // on expected_xg (raising the floor-gate kill rate), and the
+    // balance factor — so a steep willingness slope made tired players
+    // stop ATTEMPTING shots entirely, which is why engine scoring
+    // decayed across the match (25%→11% per band) while real football
+    // RISES late (~11%→26%): in reality tired strikers keep shooting
+    // and finish worse (already modeled via execution), while tired
+    // defenders give up better chances. Keep a mild attempt penalty,
+    // let the execution-side fatigue do the realistic damage.
+    let condition_mult = (1.0 - low_condition_penalty * 0.25).clamp(0.40, 1.05);
     let gk_context_mult = gk_proximity;
     // Marginal-chance gate: when xg < min_xg + 0.05 a high-selection
     // player damps willingness; a low-selection player lifts it.
@@ -527,17 +679,21 @@ pub fn evaluate_forward_shot_decision(
     // shot all game and team-mates demand the ball. This tapers a single
     // player's willingness once they've shot a few times in the match.
     //
-    // Threshold tightened >5 → >3 and slope 0.12 → 0.15 because the
-    // looser previous values let strong forwards comfortably reach 8-10
-    // shots/match and post strong-side totals of 33+ shots/team (real
-    // PL top: 17). Starting the taper at the 4th attempt — instead of
-    // the 6th — pulls average forwards back to 4-5 shots/match without
-    // touching the 1-3-shot weak-side strikers at all. A point-blank
-    // tap-in is exempt: nobody passes up an open net.
+    // Threshold history: >5 → >3 (when strong forwards reached 8-10
+    // shots/match at the old, pre-fatigue-normalization volume) → >5
+    // again with a gentler 0.10 slope. With the global willingness now
+    // halved, team volume sits at ~19 shots and the tight >3 taper was
+    // over-correcting: league-mode top scorers projected ~17.5
+    // goals/season vs the real 25-30 band, and capping every team's
+    // hot striker compresses per-team match totals toward the mean —
+    // one more draw-inflation source at equal strength. Real prolific
+    // strikers genuinely take 5-8 shots; the taper now only bites the
+    // true monopoly tail. A point-blank tap-in stays exempt: nobody
+    // passes up an open net.
     if !inside_six {
         let shots_so_far = ctx.memory().shots_taken;
-        if shots_so_far > 3 {
-            let hog_damp = (1.0 - (shots_so_far - 3) as f32 * 0.15).clamp(0.20, 1.0);
+        if shots_so_far > 5 {
+            let hog_damp = (1.0 - (shots_so_far - 5) as f32 * 0.10).clamp(0.20, 1.0);
             willingness *= hog_damp;
         }
     }
@@ -571,16 +727,26 @@ pub fn evaluate_forward_shot_decision(
     // has structural limits because at equal skill BOTH teams convert
     // their reduced chances at similar rates, leaving the draw share
     // largely unchanged.
+    // Window pair retilted (scorer 0.75/conceder 0.85 → 0.85/0.78):
+    // the old shape damped the SCORING team harder than the conceding
+    // one, which — stacked with the from-minute-1 game-management lead
+    // signal — actively manufactured equalizers (12v12 dev_match: 56%
+    // draws, conceders scoring at ~3× baseline within 15 min). Real
+    // psychology runs the other way: the scorer carries momentum, the
+    // conceder is rattled while they reorganise. Kept mild on the
+    // conceder per the [[strength-curve-calibration]] note — heavy
+    // conceder dampening at big strength gaps hands the strong side a
+    // free hand and inflates high-scoring draws.
     if let Some(side) = ctx.player.side {
         let opp_side = match side {
             PlayerSide::Left => PlayerSide::Right,
             PlayerSide::Right => PlayerSide::Left,
         };
         if ctx.context.conceded_recently(opp_side, 6000) {
-            willingness *= 0.75;
+            willingness *= 0.85;
         }
         if ctx.context.conceded_recently(side, 4500) {
-            willingness *= 0.85;
+            willingness *= 0.78;
         }
     }
     // Match-start settle window — extended after dev_match stats showed
@@ -591,15 +757,23 @@ pub fn evaluate_forward_shot_decision(
     // (state-machine shooting decisions outside this helper, fresh-
     // player condition multiplier) still contribute and would need
     // their own dampeners for a full fix.
-    let settle_window: u64 = 720_000;
+    // Window 720s → 900s and floor 0.35 → 0.30 after the fatigue
+    // normalization: with players keeping their legs all match the
+    // opening band is the ONLY remaining hot spot (fresh-legs sprint
+    // volume + zero skill penalties above 80% condition), so the
+    // feel-out suppression carries more of the early-goal correction
+    // than before.
+    let settle_window: u64 = 900_000;
     if ctx.context.total_match_time < settle_window {
         let progress = ctx.context.total_match_time as f32 / settle_window as f32;
-        willingness *= 0.35 + 0.65 * progress;
+        willingness *= 0.30 + 0.70 * progress;
     }
 
-    // Cap trimmed 0.48/0.60 → 0.34/0.44. Floor dropped 0.012 → 0.006.
+    // Cap trimmed 0.48/0.60 → 0.34/0.44. Floor dropped 0.012 → 0.006,
+    // then halved with the base coefficients (→ 0.003) so the floor
+    // doesn't swallow the global trim for low-willingness rolls.
     let cap = if xg >= 0.35 { 0.44 } else { 0.34 };
-    willingness = willingness.clamp(0.006, cap);
+    willingness = willingness.clamp(0.0021, cap);
 
     #[cfg(feature = "match-logs")]
     {
@@ -608,6 +782,9 @@ pub fn evaluate_forward_shot_decision(
         helper_diag::SUM_XG_X1000.fetch_add((xg * 1000.0) as u64, Ordering::Relaxed);
         helper_diag::SUM_WILLINGNESS_X1000
             .fetch_add((willingness * 1000.0) as u64, Ordering::Relaxed);
+        let band =
+            time_band_diag::band_for_minute(sc::minute_from_ms(ctx.context.total_match_time));
+        time_band_diag::ROLL_REACHED_BY_BAND[band].fetch_add(1, Ordering::Relaxed);
     }
 
     if ctx.context.rng.unit_f32() < willingness {

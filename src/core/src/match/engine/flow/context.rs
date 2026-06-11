@@ -183,6 +183,17 @@ pub struct MatchContext {
     /// after a single goal. Initialised to `u64::MAX` so the first
     /// change is always allowed.
     pub last_shape_change_tick: u64,
+    /// Match-clock timestamp (ms) until which play is DEAD after a
+    /// goal — celebration, walk-back, reorganisation, the referee's
+    /// restart. While `total_match_time` is below this, the engine
+    /// loop advances only the clock: no ball physics, no player AI,
+    /// no events. Real matches lose 45-75 s per goal here, and the
+    /// pause is load-bearing for realism in two ways: it consumes the
+    /// post-goal window in which the engine's freshly-reset formations
+    /// were measurably easy to attack (goals begat goals — the
+    /// equalizer-within-5-minutes rate ran 2.5x real), and it means
+    /// play always resumes against a SET defense. 0 = play is live.
+    pub dead_ball_until_ms: u64,
     /// Sim-minute at which the FIRST shape change fired in this match
     /// (any side). Stamped once and never overwritten so the result
     /// summary can show the moment the manager pivoted. `None` while
@@ -356,6 +367,7 @@ impl MatchContext {
             tactical_familiarity_home: TacticalFamiliarity::default(),
             tactical_familiarity_away: TacticalFamiliarity::default(),
             last_shape_change_tick: u64::MAX,
+            dead_ball_until_ms: 0,
             first_shape_change_minute: None,
             starting_home_tactic: None,
             starting_away_tactic: None,
@@ -477,6 +489,50 @@ impl MatchContext {
 
     pub fn current_tick(&self) -> u64 {
         self.total_match_time / 10
+    }
+
+    /// Diagnostic switch: when the `OF_SCORE_BLIND` env var is set, all
+    /// BEHAVIORAL reads of the scoreline return neutral (0-0) — coach
+    /// instructions, tactical game management, chasing/protect lifts
+    /// and desperation all act as if the match were level, while the
+    /// real score still accumulates for the result. Used by the dev
+    /// harness to measure how much of the engine's draw-correlation
+    /// surplus is carried by the score-reactive regime versus emergent
+    /// match state. Read once per process; keep for future calibration
+    /// rounds (debug infrastructure — do not remove).
+    pub fn score_blind() -> bool {
+        use std::sync::OnceLock;
+        static BLIND: OnceLock<bool> = OnceLock::new();
+        *BLIND.get_or_init(|| std::env::var("OF_SCORE_BLIND").is_ok())
+    }
+
+    /// Match minute before which BEHAVIORAL score reactions stay off —
+    /// teams play their football regardless of the scoreline until the
+    /// final quarter, exactly like real sides do (managers don't park
+    /// the bus at minute 30 or go all-out at minute 40; reactive
+    /// game-state football is a post-~65' phenomenon, which is also
+    /// where real substitution/instruction activity clusters).
+    ///
+    /// Why this gate is load-bearing: a score-blind A/B run measured
+    /// the engine at rho = −0.05 / 23.5% draws (real: ~0 / 25%) with
+    /// reactions off, versus rho = +0.51 / 43-46% draws with them on —
+    /// the score-reactive regime, running from minute 1, carried the
+    /// ENTIRE equal-strength draw surplus (trailing teams scored 2.35
+    /// goals/90 vs leaders' 1.08; real football keeps game-state rates
+    /// nearly equal). Bounding the regime to the final ~28 minutes
+    /// keeps its realistic late-game drama while capping its
+    /// correlation budget.
+    pub const SCORE_REACTION_FROM_MINUTE: u32 = 62;
+
+    /// The scoreline as BEHAVIOR is allowed to see it: 0-0 (level)
+    /// before `SCORE_REACTION_FROM_MINUTE`, the real difference after.
+    /// All tactical / coach / desperation score reads route through
+    /// the three aggregation points that consume this.
+    pub fn behavioral_score_visible(&self) -> bool {
+        if Self::score_blind() {
+            return false;
+        }
+        (self.total_match_time / 60_000) as u32 >= Self::SCORE_REACTION_FROM_MINUTE
     }
 
     pub fn can_shoot_after_goal(&self) -> bool {

@@ -8,7 +8,7 @@ use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
 use crate::club::player::events::{MatchOutcome, MatchParticipation};
 use crate::club::player::personality::adaptation::AdaptationSquadContext;
 use crate::club::player::player::Player;
-use crate::r#match::PlayerMatchEndStats;
+use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::reputation::{
     CompetitionType as RepCompetition, MatchOutcome as RepOutcome,
 };
@@ -19,6 +19,7 @@ use crate::club::team::{
 use crate::continent::competitions::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
 };
+use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::engine::rating::RatingContext;
 use crate::r#match::engine::result::MatchResultRaw;
 use crate::r#match::player::statistics::MatchStatisticType;
@@ -283,10 +284,10 @@ impl LeagueResult {
                     0
                 };
                 let assessed_ability = (skill_ability as i32 + rating_bonus).clamp(1, 200) as u8;
-                let assessed_potential = player
-                    .player_attributes
-                    .potential_ability
-                    .max(assessed_ability);
+                // Scouts in the stands assess from observables — never
+                // the hidden biological PA.
+                let assessed_potential =
+                    PotentialEstimator::observable_ceiling(player, date).max(assessed_ability);
                 // Use the host club's blended reputation as the seller
                 // proxy for memory snapshots — the player is appearing
                 // in this country, so the local league/club context is
@@ -1805,10 +1806,7 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
 struct PlayerOfTheMatch;
 
 impl PlayerOfTheMatch {
-    fn pick(
-        details: &MatchResultRaw,
-        effective_ratings: &HashMap<u32, f32>,
-    ) -> Option<u32> {
+    fn pick(details: &MatchResultRaw, effective_ratings: &HashMap<u32, f32>) -> Option<u32> {
         Self::pick_from_ratings(&details.player_stats, effective_ratings)
     }
 

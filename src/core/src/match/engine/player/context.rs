@@ -80,6 +80,11 @@ pub struct BallMetadata {
     /// logic (taker waits for the box to load; centre-backs push up to
     /// attack the delivery).
     pub pass_origin_restart: PassOriginRestart,
+
+    /// Tick of the most recent live rebound (dangerous parry / loose
+    /// block deflection). Read by the team shot gate to suspend the
+    /// shot-spacing cooldown during box scrambles. 0 = none yet.
+    pub last_rebound_tick: u64,
 }
 
 impl BallMetadata {
@@ -118,6 +123,7 @@ impl BallMetadata {
 
         self.cached_shot_target = field.ball.cached_shot_target;
         self.pass_origin_restart = field.ball.pass_origin_restart;
+        self.last_rebound_tick = field.ball.last_rebound_tick;
     }
 }
 
@@ -135,6 +141,7 @@ impl From<&MatchField> for BallMetadata {
             recent_len: 0,
             cached_shot_target: None,
             pass_origin_restart: PassOriginRestart::OpenPlay,
+            last_rebound_tick: 0,
         };
         meta.update(field);
         meta

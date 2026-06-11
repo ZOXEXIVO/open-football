@@ -31,6 +31,37 @@ impl StateProcessingHandler for ForwardHeadingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
+        // Corner-contest carve-out: when the discrete corner aerial
+        // contest (engine `resolve_corner_contest`) has ALREADY decided
+        // this player won the jump and dropped the ball on their head,
+        // rolling a second full aerial duel here is double jeopardy —
+        // the same bug the CB AttackingCorner state documents and fixes
+        // with a clean-contact floor (0.62-0.95). Mirror that fix:
+        // contact-only roll, with the header's accuracy still graded by
+        // the shooting pipeline. Open-play crosses (no corner origin)
+        // keep the full duel below — there, no upstream contest decided
+        // anything.
+        if ctx.ball().is_team_attacking_corner() {
+            let heading = ctx.player.skills.technical.heading / 20.0;
+            let jumping = ctx.player.skills.physical.jumping / 20.0;
+            let p = (0.62 + (heading + jumping) * 0.5 * 0.30).clamp(0.55, 0.95);
+            return if ctx.context.rng.unit_f32() < p {
+                Some(StateChangeResult::with_forward_state_and_event(
+                    ForwardState::Running,
+                    Event::PlayerEvent(PlayerEvent::Shoot(
+                        ShootingEventContext::new()
+                            .with_player_id(ctx.player.id)
+                            .with_target(ctx.player().shooting_direction())
+                            .with_reason("FWD_HEADING_ON_GOAL")
+                            .with_shot_type(ShotType::Header)
+                            .build(ctx),
+                    )),
+                ))
+            } else {
+                Some(StateChangeResult::with_forward_state(ForwardState::Running))
+            };
+        }
+
         // Aerial duel against the closest defender first — losing the
         // duel means no header attempt at all. Goalkeepers handle their
         // own claim/punch in the GK state machine; we only resolve

@@ -3,7 +3,7 @@ use crate::club::player::load::{
     RECOVERY_DEBT_HEAVY,
 };
 use crate::club::staff::CoachPlayerBond;
-use crate::club::staff::perception::CoachProfile;
+use crate::club::staff::perception::{CoachProfile, PotentialEstimator};
 use crate::club::{
     ClubPhilosophy, PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, Staff,
 };
@@ -1236,10 +1236,10 @@ impl ScoringEngine {
         };
 
         let ca = player.player_attributes.current_ability as f32;
-        let pa = player.player_attributes.potential_ability as f32;
-
-        // Perceived potential gap, discounted by how well the coach reads
-        // potential. A poor judge barely sees the upside.
+        // The coach can't see biological PA — the youth-pathway score
+        // reads the observable ceiling, then discounts by how well this
+        // coach reads potential. A poor judge barely sees the upside.
+        let pa = PotentialEstimator::observable_ceiling(player, date) as f32;
         let confidence = self.coach_potential_confidence(player);
         let potential_gap = ((pa - ca).max(0.0) / 50.0).clamp(0.0, 1.2) * confidence;
 
@@ -1803,11 +1803,9 @@ mod relationship_score_tests {
         let engine = ScoringEngine::from_staff(&staff);
         for _ in 0..20 {
             let positive = RelationshipChange::positive(ChangeType::CoachingSuccess, 2.0);
-            player.relations.update_staff_relationship(
-                staff.id,
-                positive,
-                Fixture::d(),
-            );
+            player
+                .relations
+                .update_staff_relationship(staff.id, positive, Fixture::d());
         }
         let score = engine.relationship_score(&player, &staff, Fixture::d());
         assert!(
@@ -1815,7 +1813,10 @@ mod relationship_score_tests {
             "score {} must stay inside design band -0.8..+0.6",
             score
         );
-        assert!(score > 0.0, "stack of positive updates should still tilt positive");
+        assert!(
+            score > 0.0,
+            "stack of positive updates should still tilt positive"
+        );
     }
 
     #[test]

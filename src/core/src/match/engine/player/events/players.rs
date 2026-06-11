@@ -21,6 +21,8 @@ use crate::r#match::{
 };
 #[cfg(feature = "match-logs")]
 use crate::match_log_info;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;
 use log::debug;
 use nalgebra::Vector3;
 
@@ -836,8 +838,15 @@ impl PlayerEventDispatcher {
         if !is_auto_goal {
             player.memory.credit_shot_on_target();
             #[cfg(feature = "match-logs")]
-            save_accounting_stats::ON_TARGET_FROM_GOAL
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            {
+                save_accounting_stats::ON_TARGET_FROM_GOAL
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let band = time_band_diag::band_for_minute(sc::minute_from_ms(
+                    context.total_match_time,
+                ));
+                time_band_diag::GOALS_BY_BAND[band]
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
         }
 
         // Credit the conceding goalkeeper's `shots_faced` so the rating
@@ -2351,6 +2360,8 @@ impl PlayerEventDispatcher {
             technique_skill,
             finishing_skill,
             long_shot_skill,
+            shooter_team_id,
+            composure01,
         ) = {
             let player = field.get_player(shoot_event_model.from_player_id).unwrap();
             (
@@ -2360,7 +2371,41 @@ impl PlayerEventDispatcher {
                 (player.skills.technical.technique / 20.0).clamp(0.1, 1.0),
                 (player.skills.technical.finishing / 20.0).clamp(0.1, 1.0),
                 (player.skills.technical.long_shots / 20.0).clamp(0.1, 1.0),
+                player.team_id,
+                (player.skills.mental.composure / 20.0).clamp(0.0, 1.0),
             )
+        };
+
+        // Desperation factor — the missing half of the chasing dynamic.
+        // The tactical layer already makes trailing teams shoot MORE
+        // (risk lift, PushForward/AllOutAttack); real football's
+        // counterweight is that they convert WORSE — snatched first-time
+        // finishes, shots through traffic, hero-ball from bad angles.
+        // (Documented as systematic xG underperformance when chasing.)
+        // Without the counterweight, the trailer's volume push converts
+        // at full quality, which manufactures equalizers and is one of
+        // the levers behind the measured +18pp draw-correlation surplus
+        // at equal strength. Continuous in deficit and clock; calm
+        // finishers (composure) shed up to half the penalty.
+        let desperation = if !context.behavioral_score_visible() {
+            0.0
+        } else {
+            let home_goals = context.score.home_team.get() as i16;
+            let away_goals = context.score.away_team.get() as i16;
+            let own_diff = if shooter_team_id == context.field_home_team_id {
+                home_goals - away_goals
+            } else {
+                away_goals - home_goals
+            };
+            let deficit01 = ((-own_diff).max(0) as f32 / 2.0).min(1.0);
+            // Onset aligned with the coach's PushForward window (55')
+            // so every minute of elevated chasing VOLUME carries the
+            // conversion counterweight. Score-blind A/B measurement
+            // showed the score-reactive regime alone carries the whole
+            // +17pp draw-correlation surplus — the volume half of the
+            // chase was modeled without the quality half.
+            let late01 = ((minute as f32 - 55.0) / 30.0).clamp(0.0, 1.0);
+            deficit01 * late01 * (1.0 - composure01 * 0.5)
         };
 
         // Pressure counts: scan opposing-side players close to the
@@ -2524,6 +2569,7 @@ impl PlayerEventDispatcher {
             * body_error
             * condition_error
             * random_error_scale
+            * (1.0 + desperation * 0.38)
             * (1.0 - adjusted_accuracy * 0.55);
         let min_error = if horizontal_distance < 18.0 {
             3.0 + poor_penalty * 3.0
@@ -2565,7 +2611,8 @@ impl PlayerEventDispatcher {
             + (1.0 - execution_skill) * 0.05
             + poor_penalty * 0.03
             + pressure_penalty * 0.04
-            + low_condition_penalty * 0.03;
+            + low_condition_penalty * 0.03
+            + desperation * 0.08;
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
             let extra_wide = rng.random_range(GOAL_WIDTH * 0.2..GOAL_WIDTH * 1.5);
             if rng.random_range(0.0f32..1.0) < 0.5 {
@@ -2837,6 +2884,17 @@ impl PlayerEventDispatcher {
                 .memory
                 .record_shot(shoot_event_model.tick, on_target);
             shooter.memory.record_shot_xg(shoot_event_model.tick, xg);
+        }
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering;
+            let band = time_band_diag::band_for_minute(minute);
+            time_band_diag::SHOTS_BY_BAND[band].fetch_add(1, Ordering::Relaxed);
+            if on_target {
+                time_band_diag::ON_TARGET_BY_BAND[band].fetch_add(1, Ordering::Relaxed);
+            }
+            time_band_diag::XG_X1000_BY_BAND[band]
+                .fetch_add((xg * 1000.0) as u64, Ordering::Relaxed);
         }
 
         // ── xG chain / buildup distribution ──────────────────────────
@@ -3264,6 +3322,13 @@ impl PlayerEventDispatcher {
             0.0
         };
 
+        // Second-booking reluctance: real referees demand a clearly
+        // card-worthy offence before showing a booked player the
+        // second yellow — game management, not box-ticking. Without
+        // this, mechanically-booked repeat foulers pushed reds to
+        // ~0.65/match (real ~0.15) once the foul-rate fix landed.
+        let booked_damp = if player.yellow_cards >= 1 { 0.40 } else { 1.0 };
+
         let aggressor_factor = (aggression * 0.40 - composure * 0.12 - teamwork * 0.08
             + dirtiness * 0.18
             + (1.0 - temperament) * 0.10
@@ -3275,19 +3340,24 @@ impl PlayerEventDispatcher {
                 (0.04 + aggressor_factor * 0.18 + persistent * 0.6).clamp(0.02, 0.18),
                 0.0_f32,
             ),
+            // Reckless direct-red ceiling 0.18 → 0.08: reckless is
+            // yellow-card territory in real officiating — direct reds
+            // from a reckless (not violent) challenge are rare. Part of
+            // the 2026-06 discipline recalibration that brought reds
+            // down from ~1.0/match toward the real ~0.15.
             FoulSeverity::Reckless => (
                 (0.45 + aggressor_factor * 0.30 + persistent * 0.8).clamp(0.30, 0.85),
-                (0.04 + aggressor_factor * 0.12 + persistent).clamp(0.01, 0.18),
+                (0.03 + aggressor_factor * 0.08 + persistent * 0.5).clamp(0.01, 0.08),
             ),
             FoulSeverity::Violent => (0.10_f32, (0.70 + aggressor_factor * 0.30).clamp(0.60, 1.0)),
         };
         let (lo_y, hi_y, lo_r, hi_r) = match severity {
             FoulSeverity::Normal => (0.02, 0.18, 0.0, 0.0),
-            FoulSeverity::Reckless => (0.30, 0.85, 0.01, 0.18),
+            FoulSeverity::Reckless => (0.30, 0.85, 0.01, 0.08),
             FoulSeverity::Violent => (0.0, 0.20, 0.60, 1.0),
         };
         Some((
-            (y * card_modifier).clamp(lo_y, hi_y),
+            (y * card_modifier * booked_damp).clamp(lo_y * booked_damp, hi_y),
             (r * card_modifier).clamp(lo_r, hi_r),
         ))
     }
@@ -3873,6 +3943,16 @@ impl PlayerEventDispatcher {
         };
         let foul_pos = field.ball.position;
         let in_penalty_area = pa.contains(&foul_pos);
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag;
+            use std::sync::atomic::Ordering;
+            if in_penalty_area {
+                mid_run_diag::PENALTY_AWARDED.fetch_add(1, Ordering::Relaxed);
+            } else {
+                mid_run_diag::DIRECT_FK_AWARDED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
 
         // Tag the fouler's stats with the zone-aware bumps the rating
         // helper consumes. Penalty-conceded fouls and DEF/GK fouls in

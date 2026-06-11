@@ -378,12 +378,19 @@ impl ForwardTacklingState {
 
         // Forwards rarely go studs-up; tackling-from-behind (low angle factor)
         // or desperation-late-in-match pushes severity up.
+        // Violent 0.10 → 0.02, Reckless gated at 0.35 — aligned with the
+        // 2026-06 discipline recalibration (see defenders/tackling):
+        // the engine produced ~1.0 reds/match vs real ~0.15 because most
+        // failed aggressive contact escalated straight past Normal.
         let behind_tackle = tackle_angle_factor < 0.3;
         let severity = if !committed_foul {
             FoulSeverity::Normal
-        } else if behind_tackle && aggression > 0.7 && rng.random::<f32>() < 0.10 {
+        } else if behind_tackle && aggression > 0.7 && rng.random::<f32>() < 0.02 {
             FoulSeverity::Violent
-        } else if !tackle_success && (behind_tackle || aggression > 0.55) {
+        } else if !tackle_success
+            && (behind_tackle || aggression > 0.55)
+            && rng.random::<f32>() < 0.35
+        {
             FoulSeverity::Reckless
         } else {
             FoulSeverity::Normal

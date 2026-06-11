@@ -18,10 +18,11 @@ use crate::club::player::contract::contract::{
 };
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::player::{Player, SellOnObligation};
+use crate::club::staff::perception::PotentialEstimator;
 use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus};
 use crate::{
-    ContractBonusType, HappinessEventType, Person, PlayerHappiness, PlayerPlan, PlayerStatusType,
-    PlayerSquadStatus,
+    ContractBonusType, HappinessEventType, Person, PlayerHappiness, PlayerPlan, PlayerSquadStatus,
+    PlayerStatusType,
 };
 
 impl Player {
@@ -377,7 +378,7 @@ impl Player {
         // renewals. Without this every transfer signs a bare
         // salary/years deal and never pays a goal/clean-sheet/loyalty
         // bonus.
-        install_transfer_package(&mut contract, self, age, buying_club_reputation);
+        install_transfer_package(&mut contract, self, age, buying_club_reputation, date);
 
         // Honour the staged personal-terms additions.
         if let Some(terms) = personal_terms {
@@ -478,12 +479,15 @@ fn install_transfer_package(
     player: &Player,
     age: u8,
     buying_club_reputation: u16,
+    date: NaiveDate,
 ) {
     let salary = contract.salary;
     let pos = player.position();
     let rep = player.player_attributes.current_reputation;
     let ability = player.player_attributes.current_ability;
-    let potential = player.player_attributes.potential_ability;
+    // Contract shape is a club decision — the prospect profile reads the
+    // observable ceiling, never the hidden biological PA.
+    let potential = PotentialEstimator::observable_ceiling(player, date);
     let ambition = player.attributes.ambition;
     let loyalty = player.attributes.loyalty;
     let club_rep_score = (buying_club_reputation as f32 / 10_000.0).clamp(0.0, 1.0);
@@ -600,9 +604,7 @@ fn release_clause_value(ability: u8, current_reputation: i16, scale: f32) -> u32
 mod free_agent_source_aware_tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
-    use crate::club::player::statistics::{
-        CurrentSeasonEntry, PlayerStatistics,
-    };
+    use crate::club::player::statistics::{CurrentSeasonEntry, PlayerStatistics};
     use crate::league::Season;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -712,13 +714,7 @@ mod free_agent_source_aware_tests {
         let mut p = FreeAgentFixtures::player(22, 15.0, 2000);
         FreeAgentFixtures::attach_released_from(&mut p, 1500);
         let date = FreeAgentFixtures::d(2026, 6, 1);
-        p.complete_free_agent_signing(
-            &FreeAgentFixtures::dest(9500),
-            date,
-            42,
-            9500,
-            Some(80_000),
-        );
+        p.complete_free_agent_signing(&FreeAgentFixtures::dest(9500), date, 42, 9500, Some(80_000));
         p.process_transfer_shock(date, 0.95, 9500, "es", None);
         assert!(
             FreeAgentFixtures::count(&p, HappinessEventType::DreamMove) >= 1,
@@ -760,17 +756,8 @@ mod free_agent_source_aware_tests {
         assert!(p.statistics_history.current.is_empty());
         assert!(p.statistics_history.items.is_empty());
         let date = FreeAgentFixtures::d(2026, 6, 1);
-        p.complete_free_agent_signing(
-            &FreeAgentFixtures::dest(9500),
-            date,
-            42,
-            9500,
-            Some(80_000),
-        );
-        let pending = p
-            .pending_signing
-            .as_ref()
-            .expect("pending signing staged");
+        p.complete_free_agent_signing(&FreeAgentFixtures::dest(9500), date, 42, 9500, Some(80_000));
+        let pending = p.pending_signing.as_ref().expect("pending signing staged");
         assert_eq!(
             pending.source_club_reputation, 0,
             "unknown history must leave source rep at zero"
@@ -806,17 +793,8 @@ mod free_agent_source_aware_tests {
                 seq_id: 7,
             });
         let date = FreeAgentFixtures::d(2026, 6, 1);
-        p.complete_free_agent_signing(
-            &FreeAgentFixtures::dest(9500),
-            date,
-            42,
-            9500,
-            Some(80_000),
-        );
-        let pending = p
-            .pending_signing
-            .as_ref()
-            .expect("pending signing staged");
+        p.complete_free_agent_signing(&FreeAgentFixtures::dest(9500), date, 42, 9500, Some(80_000));
+        let pending = p.pending_signing.as_ref().expect("pending signing staged");
         assert_eq!(pending.source_club_reputation, 2_000);
     }
 }

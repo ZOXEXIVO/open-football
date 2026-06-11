@@ -117,6 +117,33 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let field_h = field.size.height as f32;
         context.chemistry.seed_from_roster(&chemistry_roster, field_h);
 
+        // Home-crowd arousal — the play-quality half of home advantage.
+        // Stamped once on every match player (starters AND bench, so
+        // substitutes carry it on) and consumed inside `effective_skill`.
+        // Scaled by the environment so an empty-stadium friendly confers
+        // ~nothing (matching the COVID ghost-game finding that home
+        // advantage largely vanishes without crowds) and a packed derby
+        // confers the full edge. At the default environment (crowd 0.55
+        // × home_advantage 0.50 → edge 0.275) this is home ≈ +3.3% /
+        // away ≈ −2.75% effective skill. Magnitude was titrated against
+        // the engine's measured response: ±(+1.7/−1.4)% produced a
+        // +5.5pp home-win gap at equal strength; the documented real
+        // split (~45/25/30, +0.35 home goals) needs roughly double
+        // that, landing here. The officiating half (referee marginal
+        // calls) stacks on top via `RefereeProfile::home_bias`.
+        let home_edge =
+            (context.environment.crowd_intensity * context.environment.home_advantage).clamp(0.0, 1.0);
+        let home_arousal = 1.0 + 0.12 * home_edge;
+        let away_arousal = 1.0 - 0.07 * home_edge;
+        let home_team_id = field.home_team_id;
+        for p in field.players.iter_mut().chain(field.substitutes.iter_mut()) {
+            p.crowd_arousal = if p.team_id == home_team_id {
+                home_arousal
+            } else {
+                away_arousal
+            };
+        }
+
         if MatchRuntime::events_mode() {
             context.enable_logging();
         }
@@ -717,6 +744,19 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         while context.increment_time() {
             tick_count += 1;
+
+            // Post-goal dead time: only the match clock advances while
+            // the players celebrate / walk back / wait for the restart
+            // whistle. No ball physics, no AI, no events, no coach
+            // evals — the world is already reset and frozen in
+            // formation, so skipping the tick body IS the celebration.
+            // See `MatchContext::dead_ball_until_ms` for why this pause
+            // is load-bearing (it consumed the post-goal hot window
+            // that made goals beget goals).
+            if context.total_match_time < context.dead_ball_until_ms {
+                continue;
+            }
+
             tick_parity += 1;
             coach_eval_counter += 1;
             tactical_eval_counter += 1;
@@ -734,6 +774,30 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // single match arm and an equality check against the
                 // current type per side.
                 Self::evaluate_situational_shape(field, &mut *context);
+                // Condition-trajectory sampling for the dev harness —
+                // average condition per position group per 15-min band.
+                // Rides the coach cadence so it costs one 22-player walk
+                // every 5 sim-seconds, match-logs builds only.
+                #[cfg(feature = "match-logs")]
+                {
+                    use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;
+                    use std::sync::atomic::Ordering;
+                    let band = time_band_diag::band_for_minute(
+                        (context.total_match_time / 60_000) as u32,
+                    );
+                    for p in field.players.iter().filter(|p| !p.is_sent_off) {
+                        let group = match p.tactical_position.current_position.position_group() {
+                            crate::PlayerFieldPositionGroup::Goalkeeper => 0,
+                            crate::PlayerFieldPositionGroup::Defender => 1,
+                            crate::PlayerFieldPositionGroup::Midfielder => 2,
+                            crate::PlayerFieldPositionGroup::Forward => 3,
+                        };
+                        time_band_diag::COND_SUM_BY_BAND_GROUP[band][group]
+                            .fetch_add(p.player_attributes.condition.max(0) as u64, Ordering::Relaxed);
+                        time_band_diag::COND_N_BY_BAND_GROUP[band][group]
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
             }
 
             // Team-level tactical state (phase, possession timers, line

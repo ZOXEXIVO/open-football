@@ -5,10 +5,16 @@ use crate::club::player::events::{LoanCompletion, TransferCompletion};
 use crate::club::player::language::Language;
 use crate::simulator::SimulatorData;
 use crate::transfers::TransferRoutePolicy;
+use crate::transfers::TransferWindowManager;
 use crate::transfers::market::{ClauseTrigger, TransferMarket};
-use crate::transfers::offer::TransferClause;
-use crate::transfers::pipeline::PipelineProcessor;
-use crate::{Country, Player, PlayerClubContract, PlayerSquadStatus, TeamInfo, TeamType};
+use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
+use crate::transfers::pipeline::{
+    LoanOutCandidate, LoanOutReason, LoanOutStatus, PipelineProcessor,
+};
+use crate::{
+    ClubPhilosophy, Country, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerPlanRole,
+    PlayerSquadStatus, ReputationLevel, TeamInfo, TeamType,
+};
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
@@ -65,7 +71,11 @@ impl ArrivalThreatProfile {
 /// direct competition. Gated to avoid noise — only same positional
 /// group AND at least one sharp threat axis (status overlap, ability
 /// bump, wage shock, fringe status) qualifies.
-fn fire_new_signing_threats(buying_club: &mut crate::Club, arrival: &ArrivalThreatProfile, date: NaiveDate) {
+fn fire_new_signing_threats(
+    buying_club: &mut crate::Club,
+    arrival: &ArrivalThreatProfile,
+    date: NaiveDate,
+) {
     for team in &mut buying_club.teams.teams {
         for existing in team.players.iter_mut() {
             if existing.id == arrival.player_id {
@@ -178,10 +188,9 @@ fn fire_squad_investment_signal(
             if !cares {
                 continue;
             }
-            let mut ctx =
-                crate::ClubDirectionContext::new(crate::ClubDirectionKind::Encouragement)
-                    .with_focal_player(arrival.player_id)
-                    .with_evidence(evidence);
+            let mut ctx = crate::ClubDirectionContext::new(crate::ClubDirectionKind::Encouragement)
+                .with_focal_player(arrival.player_id)
+                .with_evidence(evidence);
             if existing.attributes.ambition >= 15.0 {
                 ctx = ctx.with_evidence(crate::ClubDirectionEvidence::HighAmbition);
             }
@@ -309,11 +318,7 @@ pub(crate) fn execute_transfer(
             .unwrap_or_default();
         if !selling_country_code.is_empty()
             && !buying_country_code.is_empty()
-            && TransferRoutePolicy::is_blocked(
-                &selling_country_code,
-                &buying_country_code,
-                date,
-            )
+            && TransferRoutePolicy::is_blocked(&selling_country_code, &buying_country_code, date)
         {
             debug!(
                 "Blocked by country-pair route policy: player {} from country {} ({}) to country {} ({}) on {} (is_loan={})",
@@ -355,6 +360,22 @@ pub(crate) fn execute_transfer(
     // country, but clubs elsewhere keep stale rows until this cleanup.
     if success {
         PipelineProcessor::cleanup_player_transfer_interest(data, player_id);
+        // Development pathway: a young Development-plan signing at a big
+        // club may go straight onto the loan list for first-team minutes.
+        // Runs AFTER the interest sweep — the sweep completes every open
+        // listing for the player, which would kill the fresh loan listing
+        // the staging creates. Data-level so the hoarding cap also counts
+        // the buyer's cross-country loanees.
+        if !is_loan {
+            DevelopmentLoanPathway::stage_after_purchase_global(
+                data,
+                buying_country_id,
+                buying_club_id,
+                player_id,
+                transfer.personal_terms.as_ref(),
+                date,
+            );
+        }
     }
     success
 }
@@ -639,6 +660,10 @@ pub(crate) fn execute_transfer_within_country(
                 .loan_out_candidates
                 .retain(|c| c.player_id != player_id);
         }
+        // Development-pathway staging runs at the `execute_transfer`
+        // level (after the global interest sweep) so the hoarding cap
+        // can count cross-country loanees too.
+        //
         // Schedule any installment / performance / promotion clauses
         // so the buyer pays the seller over time as the events fire.
         TransferClauseScheduler::schedule_for_transfer(
@@ -770,13 +795,19 @@ fn execute_loan_within_country(
             .map(|t| t.reputation.world as f32 / 10_000.0)
             .unwrap_or(0.4);
         // Parent develops loanees more aggressively if the player is
-        // young or has high potential.
-        let parent_desire =
-            if player.age(date) <= 22 || player.player_attributes.potential_ability >= 130 {
-                0.7
-            } else {
-                0.3
-            };
+        // young or was signed as a development project. The plan role is
+        // the club's own stated intent — clubs can't see biological PA.
+        let parent_desire = if player.age(date) <= 22
+            || player
+                .plan
+                .as_ref()
+                .map(|p| p.role == PlayerPlanRole::Development)
+                .unwrap_or(false)
+        {
+            0.7
+        } else {
+            0.3
+        };
         let loan_contract = build_loan_contract(
             loan_fee,
             loan_end,
@@ -1132,6 +1163,10 @@ fn execute_transfer_across_countries(
         fire_squad_investment_signal(buying_club, &arrival_threat, fee);
     }
 
+    // Development-pathway staging runs at the `execute_transfer` level
+    // (after the global interest sweep) so the hoarding cap can count
+    // cross-country loanees too.
+
     // Settle obligations across countries: locate each beneficiary globally
     // and credit them. The seller's finance was already incremented by the
     // full fee in `take_player_from_selling_country`, so we debit the share
@@ -1279,12 +1314,19 @@ fn execute_loan_across_countries(
         .and_then(|c| c.teams.main())
         .map(|t| t.reputation.world as f32 / 10_000.0)
         .unwrap_or(0.4);
-    let parent_desire =
-        if player.age(date) <= 22 || player.player_attributes.potential_ability >= 130 {
-            0.7
-        } else {
-            0.3
-        };
+    // Same observable rule as the within-country path: plan role and
+    // age, never hidden PA.
+    let parent_desire = if player.age(date) <= 22
+        || player
+            .plan
+            .as_ref()
+            .map(|p| p.role == PlayerPlanRole::Development)
+            .unwrap_or(false)
+    {
+        0.7
+    } else {
+        0.3
+    };
     let loan_contract = build_loan_contract(
         loan_fee,
         loan_end,
@@ -1610,10 +1652,7 @@ impl TransferClauseScheduler {
                         // it only pays for the *next* promotion the
                         // buying club achieves, not a future one years
                         // down the line.
-                        Some(
-                            date.checked_add_signed(Duration::days(400))
-                                .unwrap_or(date),
-                        ),
+                        Some(date.checked_add_signed(Duration::days(400)).unwrap_or(date)),
                     );
                 }
                 // Sell-on / loan-option/obligation are already routed
@@ -1622,6 +1661,304 @@ impl TransferClauseScheduler {
                 TransferClause::SellOnClause(_)
                 | TransferClause::LoanOptionToBuy(_)
                 | TransferClause::LoanObligationToBuy(_) => {}
+            }
+        }
+    }
+}
+
+/// Post-purchase development loan staging. When a big club buys a young
+/// player whose signing plan is `Development`, the buyer may list him
+/// for a development loan in the SAME window — the Chelsea / Man City /
+/// Benfica model: own the asset, farm out the minutes. Candidates carry
+/// `LoanOutReason::DevelopmentPathway`, the only reason allowed past the
+/// same-window loan-out protection. All readiness checks use observable
+/// data (current ability vs the buyer's tier baseline, squad depth);
+/// hidden potential is never consulted.
+pub(crate) struct DevelopmentLoanPathway;
+
+impl DevelopmentLoanPathway {
+    /// Per-group ceiling on simultaneous loan-outs (active loans plus
+    /// already-staged candidates). Hoarding control: a club can't farm
+    /// half a position group at once.
+    fn group_loan_out_cap(group: PlayerFieldPositionGroup) -> usize {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 2,
+            _ => 3,
+        }
+    }
+
+    /// Number of clearly-better senior teammates at the prospect's
+    /// position group required before the club concludes "no minutes
+    /// here" and sends him out. Below this depth the prospect stays —
+    /// he is needed at home.
+    fn blocked_depth_for(group: PlayerFieldPositionGroup) -> usize {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 1,
+            PlayerFieldPositionGroup::Defender => 4,
+            PlayerFieldPositionGroup::Midfielder => 4,
+            PlayerFieldPositionGroup::Forward => 2,
+        }
+    }
+
+    /// Players the club has farmed out at `group` in countries OTHER
+    /// than `home_country_id`. Cross-country loanees live on foreign
+    /// rosters and are invisible to the single-country scan inside
+    /// [`Self::stage_after_purchase`] — without this a parent could
+    /// stack a whole position group abroad past its loan-out cap.
+    pub(crate) fn count_foreign_loanees_in_group(
+        data: &SimulatorData,
+        home_country_id: u32,
+        club_id: u32,
+        group: PlayerFieldPositionGroup,
+    ) -> usize {
+        data.continents
+            .iter()
+            .flat_map(|c| c.countries.iter())
+            .filter(|country| country.id != home_country_id)
+            .flat_map(|country| country.clubs.iter())
+            .flat_map(|c| c.teams.teams.iter())
+            .flat_map(|t| t.players.players.iter())
+            .filter(|p| {
+                p.contract_loan.as_ref().and_then(|cl| cl.loan_from_club_id) == Some(club_id)
+                    && p.position().position_group() == group
+            })
+            .count()
+    }
+
+    /// Data-level entry used by the deferred Phase-C executor: resolves
+    /// the buyer's country, counts the club's foreign loanees for the
+    /// hoarding cap, and runs the country-level staging.
+    pub(crate) fn stage_after_purchase_global(
+        data: &mut SimulatorData,
+        buying_country_id: u32,
+        buying_club_id: u32,
+        player_id: u32,
+        personal_terms: Option<&PersonalTermsOffer>,
+        date: NaiveDate,
+    ) {
+        let Some(group) = data
+            .country(buying_country_id)
+            .and_then(|country| country.clubs.iter().find(|c| c.id == buying_club_id))
+            .and_then(|club| {
+                club.teams
+                    .teams
+                    .iter()
+                    .flat_map(|t| t.players.players.iter())
+                    .find(|p| p.id == player_id)
+            })
+            .map(|p| p.position().position_group())
+        else {
+            return;
+        };
+        let foreign_loanees =
+            Self::count_foreign_loanees_in_group(data, buying_country_id, buying_club_id, group);
+        if let Some(country) = data.country_mut(buying_country_id) {
+            Self::stage_after_purchase(
+                country,
+                buying_club_id,
+                player_id,
+                personal_terms,
+                date,
+                foreign_loanees,
+            );
+        }
+    }
+
+    /// Evaluate the just-completed permanent transfer and stage a
+    /// `DevelopmentPathway` loan-out candidate on the buying club when
+    /// the prospect profile fits. No-op for seniors, promised starters,
+    /// small buyers, prospects near the buyer's first-team level, thin
+    /// position groups, or clubs at their loan-out cap.
+    ///
+    /// `foreign_loanees_in_group` is the club's loanee count in OTHER
+    /// countries at the prospect's position group (the country-level
+    /// scan below only sees domestic loanees). Callers without
+    /// SimulatorData access pass 0 — the domestic count still applies.
+    pub(crate) fn stage_after_purchase(
+        country: &mut Country,
+        buying_club_id: u32,
+        player_id: u32,
+        personal_terms: Option<&PersonalTermsOffer>,
+        date: NaiveDate,
+        foreign_loanees_in_group: usize,
+    ) {
+        // The buyer promised immediate regular football — honouring the
+        // promise excludes a same-window loan-out. Only an explicit
+        // prospect framing (or no promise at all) keeps the path open.
+        if let Some(terms) = personal_terms {
+            if matches!(
+                terms.squad_status_promise,
+                Some(PromisedSquadStatus::KeyPlayer)
+                    | Some(PromisedSquadStatus::FirstTeamRegular)
+                    | Some(PromisedSquadStatus::FirstTeamSquadRotation)
+            ) {
+                return;
+            }
+        }
+
+        // Phase 1: immutable gate evaluation.
+        let group = {
+            let Some(club) = country.clubs.iter().find(|c| c.id == buying_club_id) else {
+                return;
+            };
+            let Some(team) = club.teams.main().or(club.teams.teams.first()) else {
+                return;
+            };
+            let Some(player) = team.players.players.iter().find(|p| p.id == player_id) else {
+                return;
+            };
+
+            // Development-plan youngsters only — the plan role is the
+            // club's own stated intent, set at signing from observable
+            // facts (age, fee).
+            let is_development_plan = player
+                .plan
+                .as_ref()
+                .map(|p| p.role == PlayerPlanRole::Development)
+                .unwrap_or(false);
+            if !is_development_plan || player.age(date) > 22 {
+                return;
+            }
+
+            // Buyer profile: development loans are a big-club / selling-
+            // academy instrument. Small Balanced clubs buy teenagers to
+            // field them, not to farm them out.
+            let rep_level = team.reputation.level();
+            let big_buyer = matches!(
+                rep_level,
+                ReputationLevel::Elite | ReputationLevel::Continental | ReputationLevel::National
+            ) || matches!(club.philosophy, ClubPhilosophy::DevelopAndSell);
+            if !big_buyer {
+                return;
+            }
+
+            let group = player.position().position_group();
+            let player_ca = player.player_attributes.current_ability;
+
+            // First-team readiness: a prospect already near the buyer's
+            // tier baseline stays — he can compete for minutes now.
+            let rep_score = team.reputation.overall_score();
+            let baseline = PipelineProcessor::tier_starter_ca_score(rep_score, group);
+            if player_ca >= baseline.saturating_sub(10) {
+                return;
+            }
+
+            // Senior depth: enough clearly-better teammates at the same
+            // group that the prospect realistically won't play.
+            let blocked_by = team
+                .players
+                .players
+                .iter()
+                .filter(|p| {
+                    p.id != player_id
+                        && p.position().position_group() == group
+                        && p.player_attributes.current_ability >= player_ca.saturating_add(5)
+                })
+                .count();
+            if blocked_by < Self::blocked_depth_for(group) {
+                return;
+            }
+
+            // Loan-out cap: players already farmed out at this group —
+            // domestic loanees (visible in this country) plus the
+            // caller-supplied foreign count — plus staged candidates
+            // still on the roster.
+            let active_out = country
+                .clubs
+                .iter()
+                .flat_map(|c| c.teams.teams.iter())
+                .flat_map(|t| t.players.players.iter())
+                .filter(|p| {
+                    p.contract_loan.as_ref().and_then(|cl| cl.loan_from_club_id)
+                        == Some(buying_club_id)
+                        && p.position().position_group() == group
+                })
+                .count();
+            let pending = club
+                .transfer_plan
+                .loan_out_candidates
+                .iter()
+                .filter(|c| {
+                    club.teams
+                        .teams
+                        .iter()
+                        .flat_map(|t| t.players.players.iter())
+                        .find(|p| p.id == c.player_id)
+                        .map(|p| p.position().position_group() == group)
+                        .unwrap_or(false)
+                })
+                .count();
+            if active_out + foreign_loanees_in_group + pending >= Self::group_loan_out_cap(group) {
+                return;
+            }
+
+            group
+        };
+
+        // Phase 2: stage the candidate (deduped by player id) and stamp
+        // the decision on the player so the UI shows WHY the club is
+        // loaning out a player it just bought.
+        let mut staged = false;
+        if let Some(club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
+            let already_staged = club
+                .transfer_plan
+                .loan_out_candidates
+                .iter()
+                .any(|c| c.player_id == player_id);
+            if !already_staged {
+                debug!(
+                    "Development pathway: club {} stages player {} ({:?}) for a development loan",
+                    buying_club_id, player_id, group
+                );
+                club.transfer_plan
+                    .loan_out_candidates
+                    .push(LoanOutCandidate {
+                        player_id,
+                        reason: LoanOutReason::DevelopmentPathway,
+                        status: LoanOutStatus::Identified,
+                        loan_fee: 0.0,
+                    });
+                for team in &mut club.teams.teams {
+                    if let Some(player) =
+                        team.players.players.iter_mut().find(|p| p.id == player_id)
+                    {
+                        player.decision_history.add(
+                            date,
+                            "dec_board_loan_listed".to_string(),
+                            "dec_reason_development_pathway".to_string(),
+                            "dec_decided_board".to_string(),
+                        );
+                        break;
+                    }
+                }
+                staged = true;
+            }
+        }
+
+        // Same-window timing: the deferred Phase-C executor runs AFTER
+        // today's pipeline pass, so without an immediate listing the
+        // candidate would wait for the next open-window tick — too late
+        // for a deadline-day purchase. List now while the window is
+        // open; `list_loan_out_candidate` dedupes, so tomorrow's
+        // process_loan_out_listings pass won't double-list.
+        if staged {
+            let window_open = TransferWindowManager::for_country(country, date)
+                .current_window_dates(country.id, date)
+                .is_some();
+            if window_open {
+                PipelineProcessor::list_loan_out_candidate(
+                    country,
+                    buying_club_id,
+                    player_id,
+                    date,
+                );
+            } else {
+                // Deliberate deferral: registration windows are closed, so
+                // the loan listing waits for the next window's evaluation.
+                debug!(
+                    "Development pathway: window closed — loan listing for player {} deferred",
+                    player_id
+                );
             }
         }
     }
@@ -1757,7 +2094,14 @@ mod country_pair_execution_tests {
         /// Kyiv. Caller can flip `is_loan` and the source/destination ids.
         fn ru_to_ua_world(date: NaiveDate) -> (SimulatorData, DeferredTransfer) {
             let spartak_player = Self::player(200, 100);
-            let spartak_main = Self::team(11, 100, "Spartak Moscow", "spartak", 10, vec![spartak_player]);
+            let spartak_main = Self::team(
+                11,
+                100,
+                "Spartak Moscow",
+                "spartak",
+                10,
+                vec![spartak_player],
+            );
             let spartak = Self::club(100, "Spartak Moscow", spartak_main);
             let ru = Self::country(1, "ru", "russia", 10, vec![spartak]);
 
@@ -1951,6 +2295,729 @@ mod country_pair_execution_tests {
         assert!(
             success,
             "non-RU/UA cross-country route must complete regardless of the cutoff date"
+        );
+    }
+}
+
+#[cfg(test)]
+mod development_pathway_tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::continent::Continent;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::transfers::market::{TransferListingStatus, TransferListingType};
+    use crate::transfers::negotiation::NegotiationStatus;
+    use crate::transfers::pipeline::LoanOutReason as PipelineLoanOutReason;
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes,
+        PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, StaffCollection, Team, TeamCollection, TeamReputation, TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    /// Domestic prospect-purchase world: a National-tier seller holds the
+    /// young player; an Elite buyer with a deep forward group buys him.
+    /// Wrapped in a unit struct per the project's no-free-helpers rule.
+    struct DevPathwayFixtures;
+
+    impl DevPathwayFixtures {
+        const SELLER_ID: u32 = 100;
+        const BUYER_ID: u32 = 200;
+        const PROSPECT_ID: u32 = 500;
+
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn date() -> NaiveDate {
+            Self::d(2026, 7, 5)
+        }
+
+        fn player(id: u32, birth_year: i32, ca: u8) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ca;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Dev".to_string(), format!("P{id}")))
+                .birth_date(Self::d(birth_year, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Striker,
+                        level: 16,
+                    }],
+                })
+                .player_attributes(attrs)
+                .build()
+                .unwrap()
+        }
+
+        fn team(id: u32, club_id: u32, rep: u16, players: Vec<Player>) -> Team {
+            Team::builder()
+                .id(id)
+                .league_id(Some(10))
+                .club_id(club_id)
+                .name(format!("Team {id}"))
+                .slug(format!("team-{id}"))
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(rep, rep, rep))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        fn club(id: u32, name: &str, team: Team) -> Club {
+            Club::new(
+                id,
+                name.to_string(),
+                Location::new(1),
+                ClubFinances::new(50_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![team]),
+                ClubFacilities::default(),
+            )
+        }
+
+        /// Buyer roster: three senior forwards clearly above the
+        /// prospect's level, so the "blocked by depth" gate fires.
+        fn buyer(rep: u16) -> Club {
+            let forwards = vec![
+                Self::player(201, 1998, 130),
+                Self::player(202, 1999, 128),
+                Self::player(203, 2000, 125),
+            ];
+            Self::club(
+                Self::BUYER_ID,
+                "Buyer",
+                Self::team(21, Self::BUYER_ID, rep, forwards),
+            )
+        }
+
+        /// A player farmed out by the buyer: lives on a foreign roster
+        /// with a borrower-side loan contract pointing back at the buyer.
+        fn loaned_out_by_buyer(id: u32) -> Player {
+            let mut p = Self::player(id, 1999, 80);
+            p.contract_loan = Some(PlayerClubContract::new_loan(
+                100_000,
+                Self::d(2027, 5, 31),
+                Self::BUYER_ID,
+                21,
+                Self::FARM_CLUB_ID,
+            ));
+            p
+        }
+
+        const FARM_CLUB_ID: u32 = 300;
+
+        /// Second country whose club rosters `loanees` strikers the
+        /// buyer has farmed out cross-border.
+        fn foreign_country(loanees: usize) -> Country {
+            let players: Vec<Player> = (0..loanees)
+                .map(|i| Self::loaned_out_by_buyer(900 + i as u32))
+                .collect();
+            let club = Self::club(
+                Self::FARM_CLUB_ID,
+                "Farm",
+                Self::team(31, Self::FARM_CLUB_ID, 3000, players),
+            );
+            let league = League::new(
+                20,
+                "L2".to_string(),
+                "league-2".to_string(),
+                2,
+                3000,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            );
+            Country::builder()
+                .id(2)
+                .code("es".to_string())
+                .slug("spain".to_string())
+                .name("spain".to_string())
+                .continent_id(1)
+                .reputation(4000)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(vec![club])
+                .build()
+                .unwrap()
+        }
+
+        /// Like [`Self::world`], plus a second country whose club holds
+        /// `foreign_loanees` players the buyer already farmed out at the
+        /// prospect's position group.
+        fn world_with_foreign_loanees(foreign_loanees: usize) -> (SimulatorData, DeferredTransfer) {
+            Self::world_impl(
+                8500,
+                2008,
+                None,
+                vec![Self::foreign_country(foreign_loanees)],
+            )
+        }
+
+        /// Build the world and the staged permanent transfer for a
+        /// prospect born in `birth_year` (controls age at completion).
+        fn world(
+            buyer_rep: u16,
+            birth_year: i32,
+            personal_terms: Option<PersonalTermsOffer>,
+        ) -> (SimulatorData, DeferredTransfer) {
+            Self::world_impl(buyer_rep, birth_year, personal_terms, Vec::new())
+        }
+
+        fn world_impl(
+            buyer_rep: u16,
+            birth_year: i32,
+            personal_terms: Option<PersonalTermsOffer>,
+            extra_countries: Vec<Country>,
+        ) -> (SimulatorData, DeferredTransfer) {
+            let prospect = Self::player(Self::PROSPECT_ID, birth_year, 60);
+            let seller = Self::club(
+                Self::SELLER_ID,
+                "Seller",
+                Self::team(11, Self::SELLER_ID, 5000, vec![prospect]),
+            );
+            let buyer = Self::buyer(buyer_rep);
+
+            let league = League::new(
+                10,
+                "L".to_string(),
+                "league".to_string(),
+                1,
+                5500,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            );
+            let country = Country::builder()
+                .id(1)
+                .code("en".to_string())
+                .slug("england".to_string())
+                .name("england".to_string())
+                .continent_id(1)
+                .reputation(5500)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(vec![seller, buyer])
+                .build()
+                .unwrap();
+            let mut countries = vec![country];
+            countries.extend(extra_countries);
+            let continent = Continent::new(1, "Europe".to_string(), countries, Vec::new());
+            let data = SimulatorData::new(
+                Self::date().and_hms_opt(12, 0, 0).unwrap(),
+                vec![continent],
+                GlobalCompetitions::new(Vec::new()),
+            );
+
+            let transfer = DeferredTransfer {
+                player_id: Self::PROSPECT_ID,
+                selling_country_id: 1,
+                selling_club_id: Self::SELLER_ID,
+                buying_country_id: 1,
+                buying_club_id: Self::BUYER_ID,
+                fee: 2_000_000.0,
+                is_loan: false,
+                has_option_to_buy: false,
+                agreed_annual_wage: Some(100_000),
+                buying_league_reputation: 5500,
+                sell_on_percentage: Some(0.15),
+                loan_future_fee: None,
+                personal_terms,
+                offer_clauses: Vec::new(),
+            };
+            (data, transfer)
+        }
+
+        fn dev_candidates(data: &SimulatorData) -> usize {
+            data.country(1)
+                .unwrap()
+                .clubs
+                .iter()
+                .find(|c| c.id == Self::BUYER_ID)
+                .unwrap()
+                .transfer_plan
+                .loan_out_candidates
+                .iter()
+                .filter(|c| {
+                    c.player_id == Self::PROSPECT_ID
+                        && c.reason == PipelineLoanOutReason::DevelopmentPathway
+                })
+                .count()
+        }
+    }
+
+    /// Headline pathway: an 18-year-old bought permanently by an Elite
+    /// club lands on the buyer's loan list with the DevelopmentPathway
+    /// reason — and the candidate survives the post-transfer interest
+    /// sweep that `execute_transfer` runs (ownership-aware cleanup).
+    #[test]
+    fn bought_development_prospect_is_staged_for_loan_out() {
+        let (mut data, transfer) = DevPathwayFixtures::world(8500, 2008, None);
+        let date = DevPathwayFixtures::date();
+
+        let success = execute_transfer(&mut data, &transfer, date);
+        assert!(success, "domestic permanent transfer must complete");
+
+        let country = data.country(1).unwrap();
+        let buyer = country
+            .clubs
+            .iter()
+            .find(|c| c.id == DevPathwayFixtures::BUYER_ID)
+            .unwrap();
+        assert!(
+            buyer.teams.contains_player(DevPathwayFixtures::PROSPECT_ID),
+            "prospect must be on the buyer's roster"
+        );
+        assert_eq!(
+            DevPathwayFixtures::dev_candidates(&data),
+            1,
+            "buyer must stage exactly one DevelopmentPathway loan-out candidate"
+        );
+    }
+
+    /// A 27-year-old bought the same way gets a CompeteForStarting plan,
+    /// not Development — the same-window loan-out path stays closed for
+    /// normal senior signings.
+    #[test]
+    fn senior_signing_is_not_staged_for_development_loan() {
+        let (mut data, transfer) = DevPathwayFixtures::world(8500, 1999, None);
+        let date = DevPathwayFixtures::date();
+
+        assert!(execute_transfer(&mut data, &transfer, date));
+        assert_eq!(
+            DevPathwayFixtures::dev_candidates(&data),
+            0,
+            "senior signings must not enter the development-loan pathway"
+        );
+    }
+
+    /// A promised first-team role blocks the pathway — the buyer
+    /// committed minutes, so an immediate loan-out would break the
+    /// promise.
+    #[test]
+    fn promised_regular_football_blocks_staging() {
+        let terms = PersonalTermsOffer {
+            annual_wage: Some(100_000),
+            signing_bonus: None,
+            agent_fee: None,
+            contract_years: Some(5),
+            squad_status_promise: Some(PromisedSquadStatus::FirstTeamRegular),
+            release_clause_fee: None,
+        };
+        let (mut data, transfer) = DevPathwayFixtures::world(8500, 2008, Some(terms));
+        let date = DevPathwayFixtures::date();
+
+        assert!(execute_transfer(&mut data, &transfer, date));
+        assert_eq!(
+            DevPathwayFixtures::dev_candidates(&data),
+            0,
+            "a promised first-team role must keep the prospect at the club"
+        );
+    }
+
+    /// A small (Regional) buyer fields the teenager instead of farming
+    /// him out — the pathway is a big-club / selling-academy instrument.
+    #[test]
+    fn small_club_buyer_is_not_staged() {
+        let (mut data, transfer) = DevPathwayFixtures::world(3500, 2008, None);
+        let date = DevPathwayFixtures::date();
+
+        assert!(execute_transfer(&mut data, &transfer, date));
+        assert_eq!(
+            DevPathwayFixtures::dev_candidates(&data),
+            0,
+            "small clubs buy teenagers to play them, not to loan them out"
+        );
+    }
+
+    /// Re-running the staging for the same player must not duplicate the
+    /// candidate.
+    #[test]
+    fn staging_is_deduplicated_per_player() {
+        let (mut data, transfer) = DevPathwayFixtures::world(8500, 2008, None);
+        let date = DevPathwayFixtures::date();
+        assert!(execute_transfer(&mut data, &transfer, date));
+        assert_eq!(DevPathwayFixtures::dev_candidates(&data), 1);
+
+        let country = data.country_mut(1).unwrap();
+        DevelopmentLoanPathway::stage_after_purchase(
+            country,
+            DevPathwayFixtures::BUYER_ID,
+            DevPathwayFixtures::PROSPECT_ID,
+            None,
+            date,
+            0,
+        );
+        assert_eq!(
+            DevPathwayFixtures::dev_candidates(&data),
+            1,
+            "second staging pass must not duplicate the candidate"
+        );
+    }
+
+    /// Deadline-day purchase: the deferred Phase-C executor runs after
+    /// today's pipeline pass, so the staging must list the candidate
+    /// immediately while the window is still open — otherwise the loan
+    /// dies with the window. Also checks the decision-history surface.
+    #[test]
+    fn deadline_day_purchase_is_listed_for_loan_immediately() {
+        let (mut data, transfer) = DevPathwayFixtures::world(8500, 2008, None);
+        let date = DevPathwayFixtures::d(2026, 8, 31); // last day of the summer window
+
+        assert!(execute_transfer(&mut data, &transfer, date));
+
+        let country = data.country(1).unwrap();
+        let listing = country
+            .transfer_market
+            .get_listing_by_player(DevPathwayFixtures::PROSPECT_ID)
+            .expect("deadline-day staging must create the loan listing immediately");
+        assert_eq!(listing.listing_type, TransferListingType::Loan);
+
+        let buyer = country
+            .clubs
+            .iter()
+            .find(|c| c.id == DevPathwayFixtures::BUYER_ID)
+            .unwrap();
+        let candidate = buyer
+            .transfer_plan
+            .loan_out_candidates
+            .iter()
+            .find(|c| c.player_id == DevPathwayFixtures::PROSPECT_ID)
+            .unwrap();
+        assert_eq!(candidate.status, LoanOutStatus::Listed);
+
+        let player = buyer
+            .teams
+            .teams
+            .iter()
+            .flat_map(|t| t.players.players.iter())
+            .find(|p| p.id == DevPathwayFixtures::PROSPECT_ID)
+            .unwrap();
+        assert!(
+            player
+                .decision_history
+                .items
+                .iter()
+                .any(|d| d.decision == "dec_reason_development_pathway"),
+            "the development-pathway decision must be visible on the player"
+        );
+    }
+
+    /// A purchase executed outside any registration window stages the
+    /// candidate but deliberately defers the listing — the next open
+    /// window picks it up (or the window reset re-evaluates).
+    #[test]
+    fn closed_window_staging_defers_listing_with_candidate_intact() {
+        let (mut data, transfer) = DevPathwayFixtures::world(8500, 2008, None);
+        let date = DevPathwayFixtures::d(2026, 9, 10); // between windows
+
+        assert!(execute_transfer(&mut data, &transfer, date));
+
+        let country = data.country(1).unwrap();
+        assert!(
+            country
+                .transfer_market
+                .get_listing_by_player(DevPathwayFixtures::PROSPECT_ID)
+                .is_none(),
+            "no registration window open → listing must be deferred"
+        );
+        let buyer = country
+            .clubs
+            .iter()
+            .find(|c| c.id == DevPathwayFixtures::BUYER_ID)
+            .unwrap();
+        let candidate = buyer
+            .transfer_plan
+            .loan_out_candidates
+            .iter()
+            .find(|c| c.player_id == DevPathwayFixtures::PROSPECT_ID)
+            .unwrap();
+        assert_eq!(
+            candidate.status,
+            LoanOutStatus::Identified,
+            "deferred candidate stays Identified for the next listing pass"
+        );
+    }
+
+    /// The next daily pipeline pass must not double-list the candidate
+    /// the Phase-C staging already listed.
+    #[test]
+    fn next_pipeline_pass_does_not_duplicate_listing() {
+        let (mut data, transfer) = DevPathwayFixtures::world(8500, 2008, None);
+        let date = DevPathwayFixtures::d(2026, 8, 31);
+        assert!(execute_transfer(&mut data, &transfer, date));
+
+        let country = data.country_mut(1).unwrap();
+        PipelineProcessor::process_loan_out_listings(country, date);
+
+        let listings = country
+            .transfer_market
+            .listings
+            .iter()
+            .filter(|l| l.player_id == DevPathwayFixtures::PROSPECT_ID)
+            .count();
+        assert_eq!(
+            listings, 1,
+            "re-running the listing pass must not duplicate"
+        );
+    }
+
+    /// End-to-end pathway: an Elite club buys an 18-year-old
+    /// DevelopmentSigning target permanently; the staging lists him as a
+    /// DevelopmentPathway loan; a realistic smaller club's loan scan
+    /// picks him up and opens a loan negotiation; the loan executes;
+    /// parent ownership stays with the buyer while the borrower fields
+    /// him; and no stale interest rows survive anywhere. (The seller-
+    /// side protection bypass at resolve_initial_approach is covered by
+    /// `development_pathway_protection_tests` — here the agreed loan is
+    /// executed directly so no RNG phase rolls are involved.)
+    #[test]
+    fn elite_purchase_to_development_loan_full_lifecycle() {
+        const BORROWER_ID: u32 = 400;
+        let (mut data, purchase) = DevPathwayFixtures::world(8500, 2008, None);
+        let date = DevPathwayFixtures::date();
+
+        // A realistic borrower: small (Regional) club whose forwards sit
+        // at the prospect's level, so the development loan buys minutes.
+        let borrower = DevPathwayFixtures::club(
+            BORROWER_ID,
+            "Borrower",
+            DevPathwayFixtures::team(
+                41,
+                BORROWER_ID,
+                3000,
+                vec![
+                    DevPathwayFixtures::player(401, 1997, 55),
+                    DevPathwayFixtures::player(402, 1998, 52),
+                ],
+            ),
+        );
+        {
+            let country = data.country_mut(1).unwrap();
+            country.clubs.push(borrower);
+            let borrower = country
+                .clubs
+                .iter_mut()
+                .find(|c| c.id == BORROWER_ID)
+                .unwrap();
+            borrower.transfer_plan.initialized = true;
+        }
+
+        // 1. Permanent prospect purchase → staged AND listed (window open).
+        assert!(execute_transfer(&mut data, &purchase, date));
+        assert_eq!(DevPathwayFixtures::dev_candidates(&data), 1);
+        assert!(
+            data.country(1)
+                .unwrap()
+                .transfer_market
+                .get_listing_by_player(DevPathwayFixtures::PROSPECT_ID)
+                .is_some(),
+            "purchase inside the window must list the prospect for loan immediately"
+        );
+
+        // 2. The small club's loan scan finds the listed prospect and
+        // opens a loan negotiation.
+        {
+            let country = data.country_mut(1).unwrap();
+            PipelineProcessor::scan_loan_market(country, date);
+            let negotiation = country
+                .transfer_market
+                .negotiations
+                .values()
+                .find(|n| n.player_id == DevPathwayFixtures::PROSPECT_ID)
+                .expect("borrower's loan scan must open a negotiation for the listed prospect");
+            assert!(negotiation.is_loan, "the approach must be a loan");
+            assert_eq!(
+                negotiation.buying_club_id, BORROWER_ID,
+                "the realistic small club is the borrower"
+            );
+        }
+
+        // 3. Execute the agreed development loan: parent (buyer) → borrower.
+        let loan = DeferredTransfer {
+            player_id: DevPathwayFixtures::PROSPECT_ID,
+            selling_country_id: 1,
+            selling_club_id: DevPathwayFixtures::BUYER_ID,
+            buying_country_id: 1,
+            buying_club_id: BORROWER_ID,
+            fee: 50_000.0,
+            is_loan: true,
+            has_option_to_buy: false,
+            agreed_annual_wage: Some(80_000),
+            buying_league_reputation: 3000,
+            sell_on_percentage: None,
+            loan_future_fee: None,
+            personal_terms: None,
+            offer_clauses: Vec::new(),
+        };
+        assert!(execute_transfer(&mut data, &loan, date));
+
+        let country = data.country(1).unwrap();
+
+        // Borrower fields him; the parent no longer rosters him.
+        let borrower = country.clubs.iter().find(|c| c.id == BORROWER_ID).unwrap();
+        let player = borrower
+            .teams
+            .teams
+            .iter()
+            .flat_map(|t| t.players.players.iter())
+            .find(|p| p.id == DevPathwayFixtures::PROSPECT_ID)
+            .expect("borrower must receive the loanee");
+        let parent = country
+            .clubs
+            .iter()
+            .find(|c| c.id == DevPathwayFixtures::BUYER_ID)
+            .unwrap();
+        assert!(
+            !parent
+                .teams
+                .contains_player(DevPathwayFixtures::PROSPECT_ID),
+            "the loanee plays at the borrower, not the parent"
+        );
+
+        // Parent ownership intact: the permanent contract still points
+        // home, the borrower-side contract points back at the parent,
+        // and the sell-on owed to the original seller survives the loan.
+        assert!(player.is_on_loan());
+        let parent_contract = player.contract.as_ref().expect("parent contract survives");
+        assert_eq!(parent_contract.loan_to_club_id, Some(BORROWER_ID));
+        let loan_contract = player
+            .contract_loan
+            .as_ref()
+            .expect("loan contract installed");
+        assert_eq!(
+            loan_contract.loan_from_club_id,
+            Some(DevPathwayFixtures::BUYER_ID),
+            "loan contract must point back at the owning parent"
+        );
+        assert!(
+            player
+                .sell_on_obligations
+                .iter()
+                .any(|o| o.beneficiary_club_id == DevPathwayFixtures::SELLER_ID),
+            "the original seller's sell-on must survive purchase + loan"
+        );
+
+        // Career history reads cleanly: a permanent move to the buyer,
+        // then a loan spell at the borrower.
+        assert!(
+            player
+                .statistics_history
+                .current
+                .iter()
+                .any(|e| e.team_slug == "team-21" && !e.is_loan),
+            "history must show the permanent move to the parent"
+        );
+        assert!(
+            player
+                .statistics_history
+                .current
+                .iter()
+                .any(|e| e.team_slug == "team-41" && e.is_loan),
+            "history must show the development loan at the borrower"
+        );
+
+        // No stale market or interest rows anywhere.
+        assert!(
+            country
+                .transfer_market
+                .listings
+                .iter()
+                .filter(|l| l.player_id == DevPathwayFixtures::PROSPECT_ID)
+                .all(|l| l.status == TransferListingStatus::Completed),
+            "all listings for the loanee must be completed"
+        );
+        assert!(
+            country
+                .transfer_market
+                .negotiations
+                .values()
+                .filter(|n| n.player_id == DevPathwayFixtures::PROSPECT_ID)
+                .all(|n| n.status != NegotiationStatus::Pending
+                    && n.status != NegotiationStatus::Countered),
+            "no live negotiation may survive the completed loan"
+        );
+        for club in &country.clubs {
+            assert!(
+                club.transfer_plan
+                    .loan_out_candidates
+                    .iter()
+                    .all(|c| c.player_id != DevPathwayFixtures::PROSPECT_ID),
+                "club {} keeps a stale loan-out candidate",
+                club.id
+            );
+            assert!(
+                club.transfer_plan
+                    .scout_monitoring
+                    .iter()
+                    .all(|m| m.player_id != DevPathwayFixtures::PROSPECT_ID),
+                "club {} keeps a stale monitoring row",
+                club.id
+            );
+            assert!(
+                club.transfer_plan.shortlists.iter().all(|s| {
+                    s.candidates
+                        .iter()
+                        .all(|c| c.player_id != DevPathwayFixtures::PROSPECT_ID)
+                }),
+                "club {} keeps a stale shortlist candidate",
+                club.id
+            );
+        }
+    }
+
+    /// Cross-country loanees count against the per-group hoarding cap —
+    /// a parent with three strikers already farmed out abroad must not
+    /// stage a fourth, while two leave room for one more.
+    #[test]
+    fn foreign_loanees_count_against_group_loan_cap() {
+        let (mut data, transfer) = DevPathwayFixtures::world_with_foreign_loanees(3);
+        assert!(execute_transfer(
+            &mut data,
+            &transfer,
+            DevPathwayFixtures::date()
+        ));
+        assert_eq!(
+            DevPathwayFixtures::dev_candidates(&data),
+            0,
+            "three foreign loanees fill the Forward cap — no fourth"
+        );
+
+        let (mut data, transfer) = DevPathwayFixtures::world_with_foreign_loanees(2);
+        assert!(execute_transfer(
+            &mut data,
+            &transfer,
+            DevPathwayFixtures::date()
+        ));
+        assert_eq!(
+            DevPathwayFixtures::dev_candidates(&data),
+            1,
+            "two foreign loanees leave room under the cap of three"
         );
     }
 }

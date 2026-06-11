@@ -34,6 +34,16 @@ pub enum BallEvent {
     /// hands. The dispatcher classifies the carry as progressive,
     /// box-entry, or none and credits the carrier's stats.
     CarryEnded(u32, Vector3<f32>, Vector3<f32>),
+    /// Pass reached its man but the receiver's first touch failed:
+    /// `(receiver_id, passer_id, is_miscontrol)`. Emitted by the
+    /// first-touch resolver in `ownership.rs`. The pass itself is
+    /// credited complete (it found its target — Opta convention);
+    /// ownership is NOT granted and the ball squirts loose. The
+    /// dispatcher books `heavy_touches` / `miscontrols` on the
+    /// receiver and, for miscontrols, stamps the giveaway tracker so
+    /// an opposition shot inside the response window charges
+    /// `errors_leading_to_shot` to the RECEIVER, not the passer.
+    FirstTouchFailed(u32, u32, bool),
 }
 
 #[derive(Copy, Clone, Debug, PartialOrd, PartialEq)]
@@ -228,6 +238,52 @@ impl BallEventDispatcher {
             }
             BallEvent::CarryEnded(carrier_id, start, end) => {
                 Self::credit_carry(carrier_id, start, end, field, context);
+            }
+            BallEvent::FirstTouchFailed(receiver_id, passer_id, is_miscontrol) => {
+                // The pass found its man — credit the completion to the
+                // passer (and clear the pending-pass window so the
+                // loose-ball aftermath can't morph into an interception
+                // charged against the passer).
+                PlayerEventDispatcher::credit_completed_pass(
+                    receiver_id,
+                    passer_id,
+                    field,
+                    context,
+                );
+                let ball_pos = field.ball.position;
+                if is_miscontrol {
+                    // A genuine loss of control: stamp the giveaway
+                    // tracker on the RECEIVER so the error-to-shot /
+                    // error-to-goal pipeline charges the right player
+                    // if the opposition converts the loose ball.
+                    let meta = field.get_player(receiver_id).map(|p| {
+                        (
+                            p.team_id,
+                            PlayerEventDispatcher::zone_for_player(p, ball_pos, context),
+                        )
+                    });
+                    if let Some((team, zone)) = meta {
+                        let was_own_box = zone.map_or(false, |z| z.is_own_box());
+                        field.ball.stamp_giveaway(
+                            receiver_id,
+                            team,
+                            context.current_tick(),
+                            was_own_box,
+                        );
+                        if let Some(zone) = zone {
+                            if zone.is_own_box() || zone.is_own_third() {
+                                if let Some(receiver) = field.get_player_mut(receiver_id) {
+                                    receiver.statistics.note_dangerous_turnover(zone);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(receiver) = field.get_player_mut(receiver_id) {
+                        receiver.statistics.add_miscontrol();
+                    }
+                } else if let Some(receiver) = field.get_player_mut(receiver_id) {
+                    receiver.statistics.add_heavy_touch();
+                }
             }
         }
 

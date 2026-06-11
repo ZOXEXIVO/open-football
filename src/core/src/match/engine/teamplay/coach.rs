@@ -111,17 +111,28 @@ impl InstructionCoefficients {
                 defensive_line_units: -10.0,
                 width_units: -3.0,
             },
+            // PushForward / AllOutAttack lifts roughly halved
+            // (2026-06 regime neutralization): the scoring-rate-by-
+            // game-state instrument measured trailing teams scoring at
+            // 2.35 goals/90 vs leading 1.08 (real football: the three
+            // states are nearly equal) — the stacked chase lifts
+            // (these coefficients + tactical risk lift + late shape
+            // changes) made the desperate siege far MORE productive
+            // than settled play, which is backwards: real late sieges
+            // against a set deep block are mostly huff. The volume
+            // push stays visible (line up, tempo up) but no longer
+            // outscores normal football.
             CoachInstruction::PushForward => Self {
-                risk_appetite: 0.18,
-                tempo: 0.14,
-                defensive_line_units: 12.0,
-                width_units: 4.0,
+                risk_appetite: 0.10,
+                tempo: 0.10,
+                defensive_line_units: 7.0,
+                width_units: 3.0,
             },
             CoachInstruction::AllOutAttack => Self {
-                risk_appetite: 0.34,
-                tempo: 0.22,
-                defensive_line_units: 24.0,
-                width_units: 8.0,
+                risk_appetite: 0.10,
+                tempo: 0.10,
+                defensive_line_units: 8.0,
+                width_units: 5.0,
             },
             CoachInstruction::WasteTime => Self {
                 risk_appetite: -0.30,
@@ -273,12 +284,18 @@ impl MatchCoach {
                     CoachInstruction::Normal
                 }
             }
-            // Leading by 1 goal — don't fully park the bus until the final 10min.
-            // Parking too early creates 1-0 lock-ins that equalizers turn into draws.
+            // Leading by 1 goal — don't fully park the bus until the final
+            // minutes. Parking too early creates 1-0 lock-ins that
+            // equalizers turn into draws: with SlowDown from minute ~67
+            // the leader stopped creating while the trailer pushed, and
+            // equal-strength matches drew 47% (real ~25%). Real 1-goal
+            // leaders keep playing past the hour and only start killing
+            // the game around minute 80 — so protection now starts at
+            // ~minute 75 (progress 0.83) and the bus parks at ~minute 83.
             1 => {
-                if is_very_late {
+                if match_progress > 0.92 {
                     CoachInstruction::ParkTheBus
-                } else if is_late_game {
+                } else if match_progress > 0.83 {
                     CoachInstruction::SlowDown
                 } else if is_first_half_end {
                     CoachInstruction::SlowDown
@@ -352,7 +369,7 @@ impl MatchCoach {
     /// 0-5 and spam-shooting from anywhere). At 500, a losing team
     /// can still fire ~100 times (plenty) but can't rebound-spam the
     /// same possession four times per second.
-    pub fn can_shoot(&self, current_tick: u64) -> bool {
+    pub fn can_shoot(&self, current_tick: u64, rebound_live: bool) -> bool {
         // Per-team shot cadence — see type docs for the full rationale.
         // 500 → 750 ticks (~7.5s spacing). Briefly tried 1000 but it
         // disproportionately hurt weak teams: they shoot rarely already,
@@ -360,11 +377,21 @@ impl MatchCoach {
         // (rebounds, second-balls in the box) while barely throttling
         // strong sides who already pace their shots. 750 hits the
         // strong side enough to matter without crushing the upset tail.
-        let shot_spaced = current_tick.saturating_sub(self.last_shot_tick) >= 750;
+        //
+        // `rebound_live` (a dangerous parry / loose block deflection in
+        // the last ~3 s — see `TeamOps::can_shoot`) suspends the
+        // spacing and build-up gates: the rebound arrives 0.5-1.5 s
+        // after the original shot, so without the exemption the spacing
+        // gate blocked EVERY second-chance strike — contradicting the
+        // possession-cap design note below, and deleting one of
+        // football's core goal patterns (~4-6% of real goals).
+        let shot_spaced =
+            rebound_live || current_tick.saturating_sub(self.last_shot_tick) >= 750;
         // Build-up gate: a team that just won possession can't fire
         // within ~1 second. Real football: even elite counter-attacks
         // need at least one progressive pass before a shot arrives.
-        let settled = current_tick.saturating_sub(self.last_possession_gain_tick) >= 100;
+        let settled =
+            rebound_live || current_tick.saturating_sub(self.last_possession_gain_tick) >= 100;
         // Possession-phase shot cap: at most TWO shots per possession.
         // Real football: a possession typically produces ONE chance,
         // but rebounds (saved/blocked → ball comes back to attackers)

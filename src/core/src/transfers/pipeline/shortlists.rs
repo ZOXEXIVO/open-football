@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::club::BoardTransferProposal;
 use crate::club::board::{BoardDossierSummary, BoardTransferEconomics};
 use crate::club::staff::StaffEventType;
+use crate::club::staff::perception::PotentialEstimator;
 use crate::transfers::pipeline::ScoutMonitoringStatus;
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
@@ -429,7 +430,9 @@ impl PipelineProcessor {
                         PlayerApprovalSnapshot {
                             age: player.age(date),
                             ability: player.player_attributes.current_ability,
-                            potential: player.player_attributes.potential_ability,
+                            // Board approvals read the observable ceiling
+                            // — hidden biological PA stays hidden.
+                            potential: PotentialEstimator::observable_ceiling(player, date),
                             annual_salary: player.contract.as_ref().map(|c| c.salary).unwrap_or(0),
                             country_id: player.country_id,
                             injury_proneness: player.player_attributes.injury_proneness,

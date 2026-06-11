@@ -87,7 +87,18 @@ impl RefereeProfile {
             0.0
         };
 
-        let raw = 0.18
+        // Base 0.18 → 0.40 (2026-06 discipline recalibration): by the
+        // time this gate runs, the duel model has already decided that
+        // genuine foul contact OCCURRED — the referee question is
+        // marginal-call judgment, not detection from scratch. At 0.18
+        // the raw score for normal contact landed at ~0.28-0.35, so
+        // ~⅔ of real fouls were waved away and the engine ran at ~7
+        // fouls/team vs the real ~12 (starving free kicks and the
+        // persistent-infringement card pipeline). At 0.40 a typical
+        // normal foul resolves around 0.50-0.55 with the
+        // strict/lenient/crowd spread still swinging it inside the
+        // band.
+        let raw = 0.40
             + ctx.contact_severity * 0.22
             + self.strictness * 0.12
             + self.foul_detection * 0.10
@@ -97,9 +108,17 @@ impl RefereeProfile {
             + pen_strict_bonus;
 
         match ctx.location {
-            ContactLocation::Normal => raw.clamp(0.10, 0.55),
+            // Normal-contact band lifted [0.10, 0.55] → [0.25, 0.75]
+            // alongside the raw-base lift above.
+            ContactLocation::Normal => raw.clamp(0.25, 0.75),
             ContactLocation::ClearFoul => raw.clamp(0.70, 0.96),
-            ContactLocation::PenaltyBox => raw.clamp(0.18, 0.90),
+            // Box ceiling 0.90 → 0.50: real referees are demonstrably
+            // more reluctant to whistle in the penalty area — the same
+            // contact that draws a free kick at halfway is waved on in
+            // the box unless it's clear. Counterweights the raw-base
+            // lift so the penalty rate stays in the real ~0.27/match
+            // band instead of scaling with the foul-count fix.
+            ContactLocation::PenaltyBox => raw.clamp(0.12, 0.50),
         }
     }
 
@@ -170,11 +189,14 @@ mod tests {
 
     #[test]
     fn normal_contact_call_prob_stays_in_band() {
+        // Band [0.25, 0.75] per the 2026-06 discipline recalibration —
+        // genuine contact is mostly called; marginal-call spread lives
+        // inside the band.
         let env = MatchEnvironment::default();
         let r = RefereeProfile::default();
         for severity in [0.0, 0.3, 0.6, 1.0] {
             let p = r.foul_call_prob(&env, ctx(severity, ContactLocation::Normal));
-            assert!((0.10..=0.55).contains(&p), "severity {severity} -> {p}");
+            assert!((0.25..=0.75).contains(&p), "severity {severity} -> {p}");
         }
     }
 
@@ -188,6 +210,11 @@ mod tests {
 
     #[test]
     fn penalty_box_strictness_increases_call_prob() {
+        // Severity 0.5 → 0.0: after the raw-base lift (0.18 → 0.40) a
+        // mid-severity box contact saturates the new 0.50 box ceiling
+        // for BOTH profiles. At zero severity the strict-vs-soft spread
+        // is visible inside the band, which is the property this test
+        // exists to protect.
         let env = MatchEnvironment::default();
         let strict = RefereeProfile {
             penalty_strictness: 0.95,
@@ -197,7 +224,7 @@ mod tests {
             penalty_strictness: 0.10,
             ..Default::default()
         };
-        let c = ctx(0.5, ContactLocation::PenaltyBox);
+        let c = ctx(0.0, ContactLocation::PenaltyBox);
         assert!(strict.foul_call_prob(&env, c) > soft.foul_call_prob(&env, c));
     }
 

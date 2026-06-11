@@ -172,18 +172,26 @@ impl StateProcessingHandler for MidfielderRunningState {
                 // has hogged (>6 attempts) this falls through to the
                 // willingness roll like everyone else, so it can't be abused.
                 let sp = ctx.player().shooting().shot_profile();
-                // xG bar 0.085 → 0.110: a tighter Tier-1 keeps the box-to-box
-                // mid path open for genuinely high-quality central chances
-                // while letting the helper's willingness roll handle the
-                // grey zone (xG 0.085-0.110). With the forward willingness
-                // cut, the prior 0.085 bar overweighted MID share (32→40%
-                // of goals); 0.110 restores the 32% target. The anti-
-                // monopoly cap also tightens 6 → 4 to mirror the FWD path.
+                // xG bar 0.085 → 0.110 → 0.180: a tighter Tier-1 keeps the
+                // box-to-box mid path open for genuine sitters only while
+                // the helper's willingness roll handles the grey zone.
+                // 0.110 was tuned while the fatigue cliff silently
+                // flattened midfielders from ~minute 20 (they sprint the
+                // most box-to-box, so they hit the old 15%-condition floor
+                // first and stopped arriving in range at all). Fatigue
+                // normalization revived them and this deterministic tier —
+                // which bypasses the willingness roll entirely — ballooned
+                // MID share to 45% of goals (target 32%) at 0.110 and was
+                // still 55% of MID shot volume at 0.140. At 0.180 only a
+                // true big chance (penalty-spot central, keeper at mercy)
+                // fires deterministically — which is the realistic shape:
+                // nobody declines those. The anti-monopoly cap also
+                // tightens 6 → 4 to mirror the FWD path.
                 let clear_good = distance_to_goal <= STANDARD_SHOOTING_DISTANCE
                     && coach.shooting_reluctance() < 0.5
                     && ctx.player().has_clear_shot()
                     && ctx.player().shooting().has_good_angle()
-                    && sp.expected_xg(distance_to_goal, true) >= 0.110;
+                    && sp.expected_xg(distance_to_goal, true) >= 0.180;
                 if clear_good && ctx.memory().shots_taken <= 4 {
                     #[cfg(feature = "match-logs")]
                     {
@@ -236,8 +244,15 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            // Coach tempo: if wasting time or slowing down, prefer possession
-            if coach.prefer_possession() && distance_to_goal > POINT_BLANK_DISTANCE {
+            // Coach tempo: if wasting time or slowing down, prefer
+            // possession — UNLESS a counter window is open: a team
+            // protecting a lead that wins the ball against an
+            // overcommitted opponent breaks at full speed, instruction
+            // or not (see TeamOps::counter_window).
+            if coach.prefer_possession()
+                && distance_to_goal > POINT_BLANK_DISTANCE
+                && !ctx.team().counter_window()
+            {
                 let ownership_ticks = ctx.tick_context.ball.ownership_duration;
                 if ownership_ticks < coach.min_possession_ticks() {
                     return None;

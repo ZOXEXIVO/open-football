@@ -1,5 +1,6 @@
 use super::types::{SquadAnalysis, TransferActivitySummary};
 use crate::club::player::contract::{AffordabilityInput, ContractStalemate};
+use crate::club::staff::perception::PotentialEstimator;
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
@@ -437,7 +438,9 @@ impl CountryResult {
 
         let age = player.age(date);
         let ca = player.player_attributes.current_ability;
-        let pa = player.player_attributes.potential_ability;
+        // Clubs can't see biological PA — listing decisions read the
+        // observable ceiling (visible ability + age/mentals projection).
+        let pa = PotentialEstimator::observable_ceiling(player, date);
         let ca_i = ca as i16;
         let avg = analysis.quality_level as i16;
 
@@ -463,6 +466,7 @@ impl CountryResult {
                 LoanOutReason::FinancialRelief => "dec_reason_financial_relief",
                 LoanOutReason::LackOfPlayingTime => "dec_reason_lack_playing_time",
                 LoanOutReason::PostInjuryFitness => "dec_reason_post_injury_fitness",
+                LoanOutReason::DevelopmentPathway => "dec_reason_development_pathway",
             };
             return ListingDecision::Loan {
                 reason: reason.to_string(),
@@ -632,7 +636,9 @@ impl CountryResult {
     ) -> ListingDecision {
         let age = player.age(date);
         let ca = player.player_attributes.current_ability;
-        let pa = player.player_attributes.potential_ability;
+        // Observable ceiling, not hidden PA — same rule as the listing
+        // evaluation above.
+        let pa = PotentialEstimator::observable_ceiling(player, date);
 
         // Under 16: free transfer
         if age < 16 {

@@ -369,6 +369,7 @@
   "dec_reason_player_requested": "Oyuncu ayrılmak istedi",
   "dec_reason_player_unhappy": "Oyuncu kulüpte mutsuz",
   "dec_reason_post_injury_fitness": "Uzun sakatlık sonrası maç kondisyonuna ihtiyacı var",
+  "dec_reason_development_pathway": "Gelişim planı — maç tecrübesi için kiralık gönderildi",
   "dec_reason_released_failed_renewal": "Sözleşme uzatma görüşmeleri başarısız olduktan sonra serbest bırakıldı",
   "dec_reason_released_free": "Karşılıklı anlaşmayla serbest bırakıldı",
   "dec_reason_squad_oversized": "Kadro çok büyük, ortalamanın altında yetenek",

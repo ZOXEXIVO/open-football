@@ -445,6 +445,12 @@ struct TeamStats {
     prog_carries_into_final_third: u32,
     /// Completed passes ending in the opponent's final third from outside.
     prog_passes_into_final_third: u32,
+    /// First-touch resolver outputs (real ~8-15 miscontrols/team).
+    miscontrols: u32,
+    heavy_touches: u32,
+    /// Discipline (real: yellows ~1.8-2.2/team, reds ~0.08/team).
+    yellow_cards: u32,
+    red_cards: u32,
 }
 
 /// One match's row of output and aggregates. Produced inside the
@@ -535,6 +541,10 @@ fn team_stats(result: &core::r#match::MatchResultRaw, team_id: u32) -> TeamStats
         xg: 0.0,
         prog_carries_into_final_third: 0,
         prog_passes_into_final_third: 0,
+        miscontrols: 0,
+        heavy_touches: 0,
+        yellow_cards: 0,
+        red_cards: 0,
     };
     for id in ids {
         if let Some(s) = result.player_stats.get(&id) {
@@ -552,6 +562,10 @@ fn team_stats(result: &core::r#match::MatchResultRaw, team_id: u32) -> TeamStats
                 s.zone_stats.progressive_carries_into_final_third as u32;
             ts.prog_passes_into_final_third +=
                 s.zone_stats.progressive_passes_into_final_third as u32;
+            ts.miscontrols += s.miscontrols as u32;
+            ts.heavy_touches += s.heavy_touches as u32;
+            ts.yellow_cards += s.yellow_cards as u32;
+            ts.red_cards += s.red_cards as u32;
         }
     }
     ts
@@ -1235,6 +1249,38 @@ fn run_audit_engine_gap(n: usize, level_a: u8, level_b: u8) {
         }
     }
     let total = outcomes.len() as f32;
+
+    // Score-correlation fingerprint for UNIFORM squads (the generator
+    // is bypassed, every player carries identical per-level skills) —
+    // isolates the engine's intrinsic response correlation from the
+    // squad-shape variance the random generator adds in `stats` mode.
+    // If rho here is much lower than `stats N L L` shows, the surplus
+    // in stats mode is squad-tilt (attack-heavy squads are
+    // defense-light because the mean is pinned), a harness artifact
+    // rather than engine behavior.
+    {
+        let n_m = outcomes.len() as f64;
+        let mean_a = outcomes.iter().map(|o| o.ha as f64).sum::<f64>() / n_m;
+        let mean_b = outcomes.iter().map(|o| o.aa as f64).sum::<f64>() / n_m;
+        let mut cov = 0.0;
+        let mut va = 0.0;
+        let mut vb = 0.0;
+        for o in &outcomes {
+            let da = o.ha as f64 - mean_a;
+            let db = o.aa as f64 - mean_b;
+            cov += da * db;
+            va += da * da;
+            vb += db * db;
+        }
+        let rho = cov / (va * vb).sqrt().max(1e-9);
+        println!(
+            "  UNIFORM-SQUAD rho: {:+.3}  var/mean A {:.2} B {:.2}  (vs stats-mode rho — the gap is squad-tilt artifact)",
+            rho,
+            (va / n_m) / mean_a.max(1e-9),
+            (vb / n_m) / mean_b.max(1e-9),
+        );
+    }
+
     let (fav_label, fav_w, dog_w) = if target_a >= target_b {
         ("A (home)", a_wins, b_wins)
     } else {
@@ -1444,6 +1490,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::save_accounting_stats::reset();
     core::helper_diag::reset();
     core::mid_run_diag::reset();
+    core::time_band_diag::reset();
     {
         use std::sync::atomic::Ordering;
         core::save_accounting_stats::SAVE_TICKS_REACHED.store(0, Ordering::Relaxed);
@@ -1657,6 +1704,50 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         "fouls per team      : {:.1}  (real ~12)",
         total_fouls as f32 / (2.0 * n)
     );
+    let total_miscontrols: u32 = outcomes
+        .iter()
+        .map(|o| o.home.miscontrols + o.away.miscontrols)
+        .sum();
+    let total_heavy: u32 = outcomes
+        .iter()
+        .map(|o| o.home.heavy_touches + o.away.heavy_touches)
+        .sum();
+    println!(
+        "miscontrols/team    : {:.1}  (real ~8-15)",
+        total_miscontrols as f32 / (2.0 * n)
+    );
+    println!(
+        "heavy touches/team  : {:.1}  (first-touch resolver, ~2x miscontrols)",
+        total_heavy as f32 / (2.0 * n)
+    );
+    let total_yellows: u32 = outcomes
+        .iter()
+        .map(|o| o.home.yellow_cards + o.away.yellow_cards)
+        .sum();
+    let total_reds: u32 = outcomes
+        .iter()
+        .map(|o| o.home.red_cards + o.away.red_cards)
+        .sum();
+    println!(
+        "yellow cards/match  : {:.2}  (real ~3.5-4.5)",
+        total_yellows as f32 / n
+    );
+    println!(
+        "red cards/match     : {:.3}  (real ~0.15-0.20)",
+        total_reds as f32 / n
+    );
+    {
+        use std::sync::atomic::Ordering;
+        let pens = core::mid_run_diag::PENALTY_AWARDED.load(Ordering::Relaxed);
+        let dfks = core::mid_run_diag::DIRECT_FK_AWARDED.load(Ordering::Relaxed);
+        let corners = core::mid_run_diag::CORNERS_AWARDED.load(Ordering::Relaxed);
+        println!("penalties/match     : {:.3}  (real ~0.25-0.30)", pens as f32 / n);
+        println!("direct FKs/match    : {:.1}  (real ~20-24 total FKs)", dfks as f32 / n);
+        println!(
+            "corners per team    : {:.1}  (real ~10-11)",
+            corners as f32 / (2.0 * n)
+        );
+    }
     println!();
     println!("score total distribution (home+away goals per match):");
     for (total, count) in &score_histogram {
@@ -1923,6 +2014,386 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         matches_with_a_lead as f32 / total_n * 100.0,
     );
 
+    // ── ALL-GOALS BY MINUTE — kickoff-flood hunt ──────────────────────
+    //
+    // The first-goal distribution alone can't tell "early minutes are
+    // hot" apart from "scoring rate is uniform but high". This block
+    // buckets EVERY goal by absolute minute (15-min bands + per-minute
+    // fine grain over 0-15) and, separately, by time since the most
+    // recent kickoff restart (match start or the goal before it). If
+    // goals cluster within 1-3 minutes of a kickoff, the restart state
+    // itself is generating chances — defensive shape after the reset,
+    // not steady-state play, is what's broken.
+    //
+    // Real reference (Opta, big-5 leagues): goals per 15-min band rise
+    // monotonically — roughly 11% / 14% / 16% / 15% / 18% / 26% with
+    // injury time folded in. Minute 0-1 goals are ~0.5% of all goals.
+    let mut goals_by_band = [0u32; 6];
+    let mut goals_by_early_minute = [0u32; 15];
+    let mut since_kickoff_buckets = [0u32; 5]; // <1, 1-2, 2-5, 5-10, 10+ min
+    let mut total_goal_count = 0u32;
+    for o in &outcomes {
+        let mut prev_kickoff_ms: u64 = 0; // match start
+        for &(time, _) in &o.goal_events {
+            let min = (time / TICKS_PER_MIN) as usize;
+            goals_by_band[(min / 15).min(5)] += 1;
+            if min < 15 {
+                goals_by_early_minute[min] += 1;
+            }
+            let since_kickoff_min = (time.saturating_sub(prev_kickoff_ms)) as f32
+                / TICKS_PER_MIN as f32;
+            let b = if since_kickoff_min < 1.0 {
+                0
+            } else if since_kickoff_min < 2.0 {
+                1
+            } else if since_kickoff_min < 5.0 {
+                2
+            } else if since_kickoff_min < 10.0 {
+                3
+            } else {
+                4
+            };
+            since_kickoff_buckets[b] += 1;
+            total_goal_count += 1;
+            prev_kickoff_ms = time; // play restarts with a kickoff after each goal
+        }
+    }
+    println!();
+    println!("  ALL goals by 15-min band (real ref ~11/14/16/15/18/26%):");
+    for (i, label) in bucket_labels.iter().enumerate() {
+        let nb = goals_by_band[i];
+        println!(
+            "    {} : {:>4} ({:>5.1}%)",
+            label,
+            nb,
+            nb as f32 / total_goal_count.max(1) as f32 * 100.0
+        );
+    }
+    println!("  goals in minutes 0-14, per minute:");
+    let early_total: u32 = goals_by_early_minute.iter().sum();
+    for (m, nb) in goals_by_early_minute.iter().enumerate() {
+        let bar: String = std::iter::repeat('#')
+            .take((*nb as usize) / 3)
+            .collect();
+        println!(
+            "    min {:>2} : {:>4} ({:>4.1}% of all goals) {}",
+            m,
+            nb,
+            *nb as f32 / total_goal_count.max(1) as f32 * 100.0,
+            bar
+        );
+    }
+    println!(
+        "    minutes 0-14 hold {:.1}% of ALL goals (uniform would be ~16.7%)",
+        early_total as f32 / total_goal_count.max(1) as f32 * 100.0
+    );
+    println!("  time from kickoff restart (match start / previous goal) to goal:");
+    let kicklabels = ["< 1 min ", "1-2 min ", "2-5 min ", "5-10 min", "10+ min "];
+    for (i, label) in kicklabels.iter().enumerate() {
+        let nb = since_kickoff_buckets[i];
+        println!(
+            "    {} : {:>4} ({:>5.1}%)",
+            label,
+            nb,
+            nb as f32 / total_goal_count.max(1) as f32 * 100.0
+        );
+    }
+
+    // ── SCORE CORRELATION — the draw machine's fingerprint ───────────
+    // Decomposes draw inflation into its two distinct causes:
+    //   1. Within-match correlation of the two teams' goal counts
+    //      (equalizer dynamics, shared match state). Real football has
+    //      near-ZERO net correlation — independence + home asymmetry
+    //      lands almost exactly on the real ~25% draw share.
+    //   2. Marginal under-dispersion (variance/mean < 1 — compressed
+    //      team totals; Poisson = 1.0, real slightly above 1).
+    // "expected draws (indep)" recombines the OBSERVED marginals as if
+    // the teams were independent: the gap between observed draws and
+    // that number is pure correlation — the thing to kill.
+    {
+        let n_m = outcomes.len() as f64;
+        let mut sum_h = 0.0;
+        let mut sum_a = 0.0;
+        let mut sum_hh = 0.0;
+        let mut sum_aa = 0.0;
+        let mut sum_ha = 0.0;
+        let mut h_marg = [0f64; 12];
+        let mut a_marg = [0f64; 12];
+        for o in &outcomes {
+            let h = o.home_goals as f64;
+            let a = o.away_goals as f64;
+            sum_h += h;
+            sum_a += a;
+            sum_hh += h * h;
+            sum_aa += a * a;
+            sum_ha += h * a;
+            h_marg[(o.home_goals as usize).min(11)] += 1.0;
+            a_marg[(o.away_goals as usize).min(11)] += 1.0;
+        }
+        let mean_h = sum_h / n_m;
+        let mean_a = sum_a / n_m;
+        let var_h = sum_hh / n_m - mean_h * mean_h;
+        let var_a = sum_aa / n_m - mean_a * mean_a;
+        let cov = sum_ha / n_m - mean_h * mean_a;
+        let rho = cov / (var_h * var_a).sqrt().max(1e-9);
+        let indep_draws: f64 = (0..12)
+            .map(|k| (h_marg[k] / n_m) * (a_marg[k] / n_m))
+            .sum();
+        let observed_draws = outcomes
+            .iter()
+            .filter(|o| o.home_goals == o.away_goals)
+            .count() as f64
+            / n_m;
+        println!();
+        println!("--- SCORE CORRELATION (draw-machine fingerprint) ---");
+        println!(
+            "  team-goal correlation rho : {:+.3}  (real ~0.00)",
+            rho
+        );
+        println!(
+            "  variance/mean  home {:.2}  away {:.2}  (Poisson = 1.00, real ~1.0-1.1)",
+            var_h / mean_h.max(1e-9),
+            var_a / mean_a.max(1e-9)
+        );
+        println!(
+            "  observed draws {:>5.1}%  vs expected-if-independent {:>5.1}%  → correlation surplus {:+.1}pp",
+            observed_draws * 100.0,
+            indep_draws * 100.0,
+            (observed_draws - indep_draws) * 100.0
+        );
+
+        // Cross-half correlation decomposition. Splits each team's
+        // goals into first/second half and correlates all four pairs.
+        // RESPONSE dynamics (equalizer mechanics) only couple goals
+        // inside the same time window → within-half rho high, cross-
+        // half rho ≈ 0. A SHARED PER-MATCH FACTOR (e.g. squad
+        // attack/defense tilt, match "openness") couples everything →
+        // all four rhos similar. This tells us WHERE the remaining
+        // correlation surplus lives.
+        let mut h1a = Vec::with_capacity(outcomes.len());
+        let mut h2a = Vec::with_capacity(outcomes.len());
+        let mut h1b = Vec::with_capacity(outcomes.len());
+        let mut h2b = Vec::with_capacity(outcomes.len());
+        const HALF_MS: u64 = 45 * 60_000;
+        for o in &outcomes {
+            let (mut a1, mut a2, mut b1, mut b2) = (0f64, 0f64, 0f64, 0f64);
+            for &(t, home) in &o.goal_events {
+                match (home, t < HALF_MS) {
+                    (true, true) => a1 += 1.0,
+                    (true, false) => a2 += 1.0,
+                    (false, true) => b1 += 1.0,
+                    (false, false) => b2 += 1.0,
+                }
+            }
+            h1a.push(a1);
+            h2a.push(a2);
+            h1b.push(b1);
+            h2b.push(b2);
+        }
+        let pearson = |x: &[f64], y: &[f64]| -> f64 {
+            let n = x.len() as f64;
+            let mx = x.iter().sum::<f64>() / n;
+            let my = y.iter().sum::<f64>() / n;
+            let mut cov = 0.0;
+            let mut vx = 0.0;
+            let mut vy = 0.0;
+            for (a, b) in x.iter().zip(y) {
+                cov += (a - mx) * (b - my);
+                vx += (a - mx) * (a - mx);
+                vy += (b - my) * (b - my);
+            }
+            cov / (vx * vy).sqrt().max(1e-9)
+        };
+        println!("  cross-half decomposition (response → within high / cross ~0; shared factor → all similar):");
+        println!(
+            "    within-half : rho(H1a,H1b)={:+.3}  rho(H2a,H2b)={:+.3}",
+            pearson(&h1a, &h1b),
+            pearson(&h2a, &h2b)
+        );
+        println!(
+            "    cross-half  : rho(H1a,H2b)={:+.3}  rho(H2a,H1b)={:+.3}",
+            pearson(&h1a, &h2b),
+            pearson(&h2a, &h1b)
+        );
+        println!(
+            "    same-team   : rho(H1a,H2a)={:+.3}  rho(H1b,H2b)={:+.3}  (persistence of a team's scoring across halves)",
+            pearson(&h1a, &h2a),
+            pearson(&h1b, &h2b)
+        );
+    }
+
+    // ── SCORING RATE BY GAME STATE — the regime fingerprint ──────────
+    // Reconstructs, for every team-minute, whether the team was
+    // leading / level / trailing, and computes goals-per-90 in each
+    // state. Real football: the three rates are close (leading teams
+    // actually score slightly MORE per minute — counters; trailing
+    // slightly more volume but worse conversion nets out). A trailing
+    // rate far above the leading rate is the equalizer machine in one
+    // number.
+    {
+        // Indexed [state][era]: state 0=leading 1=level 2=trailing,
+        // era 0 = before the 62' behavioral-score gate, era 1 = after.
+        // The era split shows whether a state's rate elevation comes
+        // from the score-reactive regime (post-62 only) or persists
+        // even while behavior is score-blind (structural).
+        let mut time_in = [[0f64; 2]; 3];
+        let mut goals_in = [[0u32; 2]; 3];
+        const FULL_MS: u64 = 90 * 60_000;
+        const GATE_MS: u64 = 62 * 60_000;
+        for o in &outcomes {
+            let mut h = 0i32;
+            let mut a = 0i32;
+            let mut prev_t = 0u64;
+            let mut add_segment = |from: u64,
+                                   to: u64,
+                                   idx_home: usize,
+                                   time_in: &mut [[f64; 2]; 3]| {
+                // split [from, to) at the gate boundary
+                let pre = to.min(GATE_MS).saturating_sub(from.min(GATE_MS)) as f64;
+                let post = to.max(GATE_MS).saturating_sub(from.max(GATE_MS)) as f64;
+                time_in[idx_home][0] += pre;
+                time_in[2 - idx_home][0] += pre;
+                time_in[idx_home][1] += post;
+                time_in[2 - idx_home][1] += post;
+            };
+            for &(t, home_scored) in &o.goal_events {
+                let idx_home = if h > a { 0 } else if h == a { 1 } else { 2 };
+                add_segment(prev_t, t, idx_home, &mut time_in);
+                let era = if t < GATE_MS { 0 } else { 1 };
+                if home_scored {
+                    goals_in[idx_home][era] += 1;
+                    h += 1;
+                } else {
+                    goals_in[2 - idx_home][era] += 1;
+                    a += 1;
+                }
+                prev_t = t;
+            }
+            let idx_home = if h > a { 0 } else if h == a { 1 } else { 2 };
+            add_segment(prev_t, FULL_MS, idx_home, &mut time_in);
+        }
+        println!();
+        println!("--- SCORING RATE BY GAME STATE (goals per 90 team-minutes) ---");
+        let labels = ["leading ", "level   ", "trailing"];
+        for i in 0..3 {
+            let total_goals: u32 = goals_in[i].iter().sum();
+            let total_time: f64 = time_in[i].iter().sum();
+            let per90 = total_goals as f64 / (total_time / FULL_MS as f64).max(1e-9);
+            let pre90 = goals_in[i][0] as f64 / (time_in[i][0] / FULL_MS as f64).max(1e-9);
+            let post90 = goals_in[i][1] as f64 / (time_in[i][1] / FULL_MS as f64).max(1e-9);
+            println!(
+                "  {} : {:.2} goals/90 overall  |  pre-62' {:.2}  post-62' {:.2}   (real: states ≈ equal, ~1.3-1.5)",
+                labels[i], per90, pre90, post90
+            );
+        }
+    }
+
+    // ── NEXT-GOAL CONCEDER SHARE — locate the equalizer machine ──────
+    // For each consecutive goal pair, did the team that CONCEDED goal
+    // n score goal n+1? At equal strength a neutral engine should sit
+    // near 50% in every gap bucket. A structural restart advantage
+    // shows as conceder-share spiking in the short-gap buckets; a
+    // behavioral feedback loop (game management / chasing risk) shows
+    // as elevated share across ALL buckets.
+    let mut pair_total = [0u32; 5];
+    let mut pair_conceder_next = [0u32; 5];
+    for o in &outcomes {
+        for w in o.goal_events.windows(2) {
+            let gap_min = (w[1].0.saturating_sub(w[0].0)) as f32 / TICKS_PER_MIN as f32;
+            let b = if gap_min < 1.0 {
+                0
+            } else if gap_min < 2.0 {
+                1
+            } else if gap_min < 5.0 {
+                2
+            } else if gap_min < 10.0 {
+                3
+            } else {
+                4
+            };
+            pair_total[b] += 1;
+            // w[0].1 == home scored goal n; conceder scores next when
+            // the flags differ.
+            if w[0].1 != w[1].1 {
+                pair_conceder_next[b] += 1;
+            }
+        }
+    }
+    println!();
+    println!("  next-goal-by-conceder share per gap bucket (neutral = ~50%):");
+    for (i, label) in kicklabels.iter().enumerate() {
+        let nb = pair_total[i];
+        println!(
+            "    {} : {:>4} pairs, conceder scored next {:>5.1}%",
+            label,
+            nb,
+            pair_conceder_next[i] as f32 / nb.max(1) as f32 * 100.0
+        );
+    }
+
+    // ── PRODUCTION BY 15-MIN BAND (engine-side counters) ──────────────
+    // Splits the early-goal front-load into its factors: volume
+    // (roll-attempts and shots per band), chance quality (xG/shot), and
+    // conversion (goals/shot). Whichever column DECAYS across bands is
+    // the lever that's wrong — real-football columns are near-flat with
+    // a slight late rise.
+    {
+        let bands = core::time_band_diag::snapshot();
+        let [shots_b, on_target_b, xg_b, goals_b, rolls_b] = bands;
+        println!();
+        println!("--- PRODUCTION BY 15-MIN BAND (volume vs quality vs conversion) ---");
+        println!(
+            "  band       rolls    shots  on-tgt%   xG/shot  goals  goals/shot  conv-on-tgt%"
+        );
+        for i in 0..6 {
+            let shots = shots_b[i].max(1) as f64;
+            println!(
+                "  {:>2}-{:<2}min {:>8} {:>8}   {:>5.1}%    {:>5.3}  {:>5}      {:>5.3}        {:>5.1}%",
+                i * 15,
+                (i + 1) * 15,
+                rolls_b[i],
+                shots_b[i],
+                on_target_b[i] as f64 / shots * 100.0,
+                xg_b[i] as f64 / 1000.0 / shots,
+                goals_b[i],
+                goals_b[i] as f64 / shots,
+                goals_b[i] as f64 / on_target_b[i].max(1) as f64 * 100.0,
+            );
+        }
+        let cond = core::time_band_diag::condition_snapshot();
+        println!();
+        println!("  avg condition%% by band (GK / DEF / MID / FWD):");
+        for (i, row) in cond.iter().enumerate() {
+            println!(
+                "  {:>2}-{:<2}min   {:>5.1}  {:>5.1}  {:>5.1}  {:>5.1}",
+                i * 15,
+                (i + 1) * 15,
+                row[0].0,
+                row[1].0,
+                row[2].0,
+                row[3].0,
+            );
+        }
+        let vbands = core::time_band_diag::velocity_band_snapshot();
+        let vtotal: u64 = vbands.iter().sum();
+        println!();
+        println!("  outfield velocity-band occupancy (condition-processor ticks):");
+        let vlabels = [
+            "stationary (<5% max)  [recover -6.0]",
+            "walking    (5-30%)    [recover -2.0]",
+            "jogging    (30-60%)   [drain  +3.0]",
+            "running    (60-85%)   [drain  +6.0]",
+            "sprinting  (>85%)     [drain +9/10]",
+        ];
+        for (i, label) in vlabels.iter().enumerate() {
+            println!(
+                "    {} : {:>5.1}%",
+                label,
+                vbands[i] as f64 / vtotal.max(1) as f64 * 100.0
+            );
+        }
+    }
+
     // ── XG / SHOT EFFICIENCY BY OUTCOME — who deserved the draw? ──────
     // For each match, classify by result (home win / draw / away win)
     // and average the xG totals and shot counts. If draws cluster
@@ -1967,6 +2438,45 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         );
     }
     println!("  (if draws have similar xG-spread as decisive matches, the engine's xG→goal step is too noisy)");
+
+    // ── HOME ADVANTAGE (equal-level matches only) ─────────────────────
+    // Real-football reference at equal strength: ~45% home wins / ~25%
+    // draws / ~30% away wins, home goals ≈ +0.30-0.40. The engine's
+    // play-quality home edge (crowd-scaled press/risk/tempo lift in
+    // tactical.rs) plus the referee marginal-call bias should
+    // reproduce that split; a 33/33/33-ish line means home advantage
+    // is missing and equal-strength matches will over-draw relative
+    // to real leagues.
+    {
+        let mut hw = 0u32;
+        let mut dr = 0u32;
+        let mut aw = 0u32;
+        let mut hg = 0u32;
+        let mut ag = 0u32;
+        for o in outcomes.iter().filter(|o| o.level_a == o.level_b) {
+            match o.home_goals.cmp(&o.away_goals) {
+                std::cmp::Ordering::Greater => hw += 1,
+                std::cmp::Ordering::Equal => dr += 1,
+                std::cmp::Ordering::Less => aw += 1,
+            }
+            hg += o.home_goals as u32;
+            ag += o.away_goals as u32;
+        }
+        let n_eq = (hw + dr + aw).max(1);
+        println!();
+        println!("--- HOME ADVANTAGE (equal-level matches, n={}) ---", n_eq);
+        println!(
+            "  home win {:>5.1}% / draw {:>5.1}% / away win {:>5.1}%   (real ~45/25/30)",
+            hw as f32 / n_eq as f32 * 100.0,
+            dr as f32 / n_eq as f32 * 100.0,
+            aw as f32 / n_eq as f32 * 100.0
+        );
+        println!(
+            "  home goals/match {:.2} vs away {:.2}  (real diff ~+0.35)",
+            hg as f32 / n_eq as f32,
+            ag as f32 / n_eq as f32
+        );
+    }
 
     // ── UPSET FREQUENCY by level gap ──────────────────────────────────
     //
