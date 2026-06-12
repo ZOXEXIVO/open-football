@@ -1,10 +1,14 @@
 use chrono::NaiveDate;
 use log::debug;
+use rayon::prelude::*;
+use std::collections::HashSet;
 
 use crate::SimulatorData;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
-use crate::transfers::market::{TransferListing, TransferListingOrigin, TransferListingType};
+use crate::transfers::market::{
+    TransferListing, TransferListingOrigin, TransferListingStatus, TransferListingType,
+};
 use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::pipeline::ScoutMonitoringStatus;
@@ -1205,6 +1209,21 @@ impl PipelineProcessor {
         Self::cleanup_player_transfer_interest_batch(data, std::slice::from_ref(&player_id));
     }
 
+    /// Release-side variant of the world cleanup: same sweep, but open
+    /// listings end `Cancelled` instead of `Completed` — nothing was
+    /// sold, the club walked the player, and the player page renders the
+    /// listing's terminal status. Used by the free-agent release sweep
+    /// and the manual move-on-free editor action.
+    pub fn cleanup_player_release_interest(data: &mut SimulatorData, player_id: u32) {
+        Self::cleanup_player_release_interest_batch(data, std::slice::from_ref(&player_id));
+    }
+
+    /// Batched [`cleanup_player_release_interest`] — one world walk for
+    /// every player released this tick.
+    pub fn cleanup_player_release_interest_batch(data: &mut SimulatorData, player_ids: &[u32]) {
+        Self::cleanup_player_interest_batch_with(data, player_ids, TransferListingStatus::Cancelled);
+    }
+
     /// Batched version of [`cleanup_player_transfer_interest`]: walks
     /// every country once and strips interest for every id in
     /// `player_ids` in a single pass, in parallel across countries.
@@ -1217,11 +1236,22 @@ impl PipelineProcessor {
     /// per tick, collapsing O(countries × signings × countries) into
     /// O(countries) work.
     pub fn cleanup_player_transfer_interest_batch(data: &mut SimulatorData, player_ids: &[u32]) {
-        use crate::transfers::market::TransferListingStatus;
-        use crate::transfers::negotiation::NegotiationStatus;
-        use rayon::prelude::*;
-        use std::collections::HashSet;
+        Self::cleanup_player_interest_batch_with(
+            data,
+            player_ids,
+            TransferListingStatus::Completed,
+        );
+    }
 
+    /// Shared world walk behind the transfer- and release-flavoured
+    /// cleanups. `listing_terminal` is the status open listings end in:
+    /// `Completed` when the player was signed, `Cancelled` when he was
+    /// released with no deal.
+    fn cleanup_player_interest_batch_with(
+        data: &mut SimulatorData,
+        player_ids: &[u32],
+        listing_terminal: TransferListingStatus,
+    ) {
         if player_ids.is_empty() {
             return;
         }
@@ -1262,6 +1292,17 @@ impl PipelineProcessor {
                     });
                     plan.scout_monitoring
                         .retain(|m| !signed.contains(&m.player_id));
+
+                    // Team-level selling lists mirror market listings
+                    // (stalemate fallback, AI transfer-list manager). A
+                    // player who moved or was released must drop off them
+                    // too, or the team-transfers page keeps rendering a
+                    // stale asking-price row for him.
+                    for team in &mut club.teams.teams {
+                        for id in &signed {
+                            team.transfer_list.remove(*id);
+                        }
+                    }
                 }
 
                 for listing in country.transfer_market.listings.iter_mut() {
@@ -1269,7 +1310,7 @@ impl PipelineProcessor {
                         && listing.status != TransferListingStatus::Completed
                         && listing.status != TransferListingStatus::Cancelled
                     {
-                        listing.status = TransferListingStatus::Completed;
+                        listing.status = listing_terminal.clone();
                     }
                 }
 

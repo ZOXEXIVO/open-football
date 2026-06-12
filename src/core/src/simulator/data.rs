@@ -9,6 +9,7 @@ use crate::NationalTeam;
 use crate::PlayerSquadStatus;
 use crate::club::board::manager_market::ManagerApproach;
 use crate::club::player::calculators::WageCalculator;
+use crate::club::staff::perception::PotentialEstimator;
 use crate::competitions::GlobalCompetitions;
 use crate::continent::Continent;
 use crate::country::result::transfers::GlobalFreeAgentSummary;
@@ -16,7 +17,7 @@ use crate::country::result::transfers::free_agent_market_calc::FreeAgentMarketCa
 use crate::league::{LeagueTable, MatchStorage};
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::TransferPool;
-use crate::transfers::pipeline::PlayerSummary;
+use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use crate::utils::IntegerUtils;
 use crate::utils::random::engine as rng_engine;
 use crate::{Person, Player, Staff};
@@ -542,6 +543,16 @@ impl SimulatorData {
             .collect();
         if !released.is_empty() {
             self.dirty_player_index = true;
+            // Scrub the world of stale market state for the departed
+            // players: open listings end Cancelled, team transfer lists
+            // drop their rows, scouting/shortlist/monitoring interest is
+            // cleared and live negotiations rejected — the same
+            // chokepoint a completed transfer runs through, in its
+            // release flavour. Without this a released player kept an
+            // Available country-market listing pointing at a club he no
+            // longer plays for.
+            let released_ids: Vec<u32> = released.iter().map(|p| p.id).collect();
+            PipelineProcessor::cleanup_player_release_interest_batch(self, &released_ids);
             self.free_agents.extend(released);
         }
     }
@@ -551,6 +562,13 @@ impl SimulatorData {
     /// climbs with age, low quality, and time spent unemployed; high
     /// world-rep players resist longer (they're still names, clubs come
     /// looking).
+    ///
+    /// On top of the probabilistic roll there is a deterministic hard
+    /// bound (`deterministic_retirement_months`, 24–48 months by age /
+    /// CA / observable ceiling / world rep): a player whose monthly
+    /// rolls keep missing still resolves instead of haunting the pool
+    /// for half a decade. Young players with visible growth room get
+    /// the longest leash; old low-quality journeymen the shortest.
     ///
     /// Gated by the caller on `today.day() == 1`. The internal gate on
     /// `free_since` ≥ 12 months means a fresh database free agent
@@ -575,17 +593,30 @@ impl SimulatorData {
                 if days_free < 365 {
                     return None;
                 }
+                let months_without_club = (days_free / 30).max(0) as u16;
+                let age = player.age(date);
+                let ca = player.player_attributes.current_ability;
+                let world_rep = player.player_attributes.world_reputation;
+                // Observable ceiling, not hidden biological PA — the
+                // retirement judgement reads the same market-visible
+                // promise every club decision does.
+                let ceiling = PotentialEstimator::observable_ceiling(player, date);
+                let hard_bound = FreeAgentMarketCalculator::deterministic_retirement_months(
+                    age, ca, ceiling, world_rep,
+                );
+                if (months_without_club as u32) >= hard_bound {
+                    return Some((idx, true, months_without_club));
+                }
                 let months_after_12 = ((days_free - 365) / 30).max(0) as u32;
                 let prob = FreeAgentMarketCalculator::retirement_probability_per_month(
                     months_after_12,
-                    player.age(date),
-                    player.player_attributes.current_ability,
-                    player.player_attributes.world_reputation,
+                    age,
+                    ca,
+                    world_rep,
                 );
                 if prob <= 0.0 {
                     return None;
                 }
-                let months_without_club = (days_free / 30).max(0) as u16;
                 let roll = IntegerUtils::random(1, 1000) as f32 / 1000.0;
                 Some((idx, roll < prob, months_without_club))
             })
@@ -778,5 +809,141 @@ impl SimulatorData {
         }
         NationalTeam::release_callup_statuses_across_world(&mut self.continents);
         NationalTeam::release_u21_callup_statuses_across_world(&mut self.continents);
+    }
+}
+
+#[cfg(test)]
+mod free_agent_retirement_tests {
+    //! Deterministic coverage for the free-agent retirement pass: the
+    //! hard upper bound must resolve long sits without RNG, and young
+    //! players with rep / growth room must not be swept prematurely.
+
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::transfer::ReleaseContext;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::league::LeagueCollection;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        Country, PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
+    };
+
+    struct RetirementFixtures;
+
+    impl RetirementFixtures {
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn pool_player(
+            id: u32,
+            age_years: i64,
+            ca: u8,
+            world_reputation: i16,
+            free_since: NaiveDate,
+            today: NaiveDate,
+        ) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ca;
+            attrs.potential_ability = ca;
+            attrs.world_reputation = world_reputation;
+            let birth = today - Duration::days(age_years * 365 + 30);
+            let mut player = PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Pool".to_string(), format!("P{id}")))
+                .birth_date(birth)
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 16,
+                    }],
+                })
+                .player_attributes(attrs)
+                .build()
+                .unwrap();
+            player.enter_free_agent_market(ReleaseContext {
+                date: free_since,
+                last_club_id: Some(10),
+                last_country_id: Some(1),
+                last_country_reputation: 3000,
+                last_league_reputation: 2500,
+                last_club_reputation_score: 0.3,
+                last_salary: 40_000,
+                last_squad_status: PlayerSquadStatus::FirstTeamSquadRotation,
+            });
+            player
+        }
+
+        fn simulator(today: NaiveDate, free_agents: Vec<Player>) -> SimulatorData {
+            let country = Country::builder()
+                .id(1)
+                .code("en".to_string())
+                .slug("england".to_string())
+                .name("England".to_string())
+                .continent_id(1)
+                .reputation(5000)
+                .leagues(LeagueCollection::new(Vec::new()))
+                .clubs(Vec::new())
+                .build()
+                .unwrap();
+            let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+            let mut data = SimulatorData::new(
+                today.and_hms_opt(12, 0, 0).unwrap(),
+                vec![continent],
+                GlobalCompetitions::new(Vec::new()),
+            );
+            data.free_agents = free_agents;
+            data
+        }
+    }
+
+    #[test]
+    fn old_low_quality_free_agent_retires_deterministically_after_hard_bound() {
+        // 36yo CA-50 journeyman, 40 months without a club: well past
+        // the 24-month deterministic bound for the old/low-CA cohort.
+        // No RNG involved -- the hard bound fires before any roll.
+        let today = RetirementFixtures::d(2026, 6, 1);
+        let free_since = today - Duration::days(40 * 30);
+        let player = RetirementFixtures::pool_player(900, 36, 50, 0, free_since, today);
+        let mut data = RetirementFixtures::simulator(today, vec![player]);
+
+        data.process_free_agent_retirements(today);
+
+        assert!(
+            data.free_agents.is_empty(),
+            "hard-bound retirement must remove the player from the pool"
+        );
+        let country = data.country(1).unwrap();
+        assert!(
+            country.retired_players.iter().any(|p| p.id == 900),
+            "retired player must land in his nationality country"
+        );
+        assert!(country.retired_players[0].retired);
+    }
+
+    #[test]
+    fn young_free_agent_with_standing_is_not_prematurely_retired() {
+        // 21yo, 13 months free, decent world rep: the probabilistic
+        // curve nets out to zero (rep offsets the small time base) and
+        // every deterministic bound is years away -- the player must
+        // still be in the pool. Fully deterministic: prob <= 0 means
+        // no roll happens at all.
+        let today = RetirementFixtures::d(2026, 6, 1);
+        let free_since = today - Duration::days(395);
+        let player = RetirementFixtures::pool_player(901, 21, 70, 5000, free_since, today);
+        let mut data = RetirementFixtures::simulator(today, vec![player]);
+
+        data.process_free_agent_retirements(today);
+
+        assert_eq!(
+            data.free_agents.len(),
+            1,
+            "young free agent must not be swept at 13 months"
+        );
+        assert!(!data.free_agents[0].retired);
     }
 }

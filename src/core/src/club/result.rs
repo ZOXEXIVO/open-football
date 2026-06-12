@@ -1,6 +1,8 @@
 use crate::ai::PendingAiRequest;
 use crate::club::academy::result::ClubAcademyResult;
-use crate::club::player::calculators::{ContractValuation, ValuationContext};
+use crate::club::player::calculators::{
+    AutomaticReleaseEligibility, ContractValuation, ReleaseEligibilityContext, ValuationContext,
+};
 use crate::club::player::contract::{
     AffordabilityInput, ContractStalemate, RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL,
 };
@@ -15,6 +17,7 @@ use crate::{
     PlayerSquadStatus, PlayerStatusType, SimulationResult, StaffStatus, TeamResult, TransferItem,
 };
 use chrono::NaiveDate;
+use log::debug;
 
 enum UnresolvedSalaryDecision {
     TransferList,
@@ -650,7 +653,9 @@ impl ClubResult {
                 Some(t) => t,
                 None => return,
             };
-            let squad_avg = main_team.players.current_ability_avg() as i16;
+            let squad_avg_ability = main_team.players.current_ability_avg();
+            let squad_avg = squad_avg_ability as i16;
+            let annual_wage_bill: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
             let team_id = main_team.id;
             let club_rep = main_team.reputation.market_value_score();
             let league_rep = main_team
@@ -717,16 +722,42 @@ impl ClubResult {
                 return;
             }
 
-            // Low ability: release on free transfer
-            // Only release for age if truly past it (35+) or far below average
-            let decision = if ability < squad_avg - 25 || (age >= 35 && ability < squad_avg - 10) {
-                UnresolvedSalaryDecision::FreeTransfer
-            } else {
-                UnresolvedSalaryDecision::TransferList
+            // Free release only when the central eligibility gate agrees:
+            // clearly below team level, negligible market value, and a
+            // severance the club can shrug off. Anything it blocks —
+            // still useful, sellable, or expensive to pay off — goes to
+            // the transfer list instead of walking for free.
+            let market_value = player.value(date, league_rep, club_rep);
+            let release_ctx = ReleaseEligibilityContext {
+                date,
+                squad_avg_ability,
+                market_value,
+                annual_wage_bill,
+            };
+            let decision = match AutomaticReleaseEligibility::assess(player, &release_ctx) {
+                None => UnresolvedSalaryDecision::FreeTransfer,
+                Some(block) => {
+                    debug!(
+                        "salary-fallback free release blocked for {} (id={}): {:?} — CA {} vs \
+                         squad avg {}, value={:.0}, severance={} → transfer-listing instead",
+                        player.full_name,
+                        player_id,
+                        block,
+                        ability,
+                        squad_avg,
+                        market_value,
+                        player
+                            .contract
+                            .as_ref()
+                            .map(|c| c.termination_cost(date))
+                            .unwrap_or(0),
+                    );
+                    UnresolvedSalaryDecision::TransferList
+                }
             };
 
             let asking_price = CurrencyValue {
-                amount: FormattingUtils::round_fee(player.value(date, league_rep, club_rep)),
+                amount: FormattingUtils::round_fee(market_value),
                 currency: Currency::Usd,
             };
             (decision, asking_price, team_id)
@@ -1240,5 +1271,122 @@ mod tests {
         );
         let country = sim.country(1).unwrap();
         assert!(country.transfer_market.listings.is_empty());
+    }
+
+    #[test]
+    fn unresolved_salary_releases_cheap_fringe_player() {
+        let today = d(2026, 5, 1);
+        let history = make_decision_history(&[
+            (d(2026, 1, 10), RENEWAL_OFFERED_LABEL),
+            (d(2026, 1, 25), RENEWAL_REJECTED_LABEL),
+            (d(2026, 3, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 3, 18), RENEWAL_REJECTED_LABEL),
+            (d(2026, 4, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 4, 25), RENEWAL_REJECTED_LABEL),
+        ]);
+        // CA 40 vs squad avg 82, age 33, tiny salary, 3 months left:
+        // every eligibility gate passes → genuine mutual release.
+        let contract = make_contract(30_000, PlayerSquadStatus::MainBackupPlayer, d(2026, 8, 1));
+        let player = make_player(101, 40, d(1993, 1, 1), history, Some(contract));
+        let teammate = make_player(
+            102,
+            125,
+            d(1993, 1, 1),
+            PlayerDecisionHistory::new(),
+            Some(make_contract(
+                60_000,
+                PlayerSquadStatus::FirstTeamRegular,
+                d(2027, 7, 1),
+            )),
+        );
+        let team = make_team(10, 100, vec![player, teammate]);
+        let club = make_club(100, team, Some(120_000));
+        let country = make_country(club);
+        let mut sim = make_sim(country, today);
+
+        ClubResult::process_player_contract_interaction(&rejected_result(101), &mut sim, 100);
+
+        let p = sim.player(101).expect("player still present");
+        assert!(
+            p.statuses.get().contains(&PlayerStatusType::Frt),
+            "cheap fringe player must be released on a free"
+        );
+        assert!(
+            p.contract.is_none(),
+            "release must clear the contract for the free-agent sweep"
+        );
+        assert!(
+            p.decision_history
+                .items
+                .iter()
+                .any(|d| d.movement == "dec_free_transfer_listed"),
+            "release must be recorded in decision history"
+        );
+        let country = sim.country(1).unwrap();
+        assert!(
+            country.transfer_market.listings.is_empty(),
+            "a free release must not create a market listing"
+        );
+    }
+
+    #[test]
+    fn unresolved_salary_lists_when_compensation_too_high() {
+        let today = d(2026, 5, 1);
+        let history = make_decision_history(&[
+            (d(2026, 1, 10), RENEWAL_OFFERED_LABEL),
+            (d(2026, 1, 25), RENEWAL_REJECTED_LABEL),
+            (d(2026, 3, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 3, 18), RENEWAL_REJECTED_LABEL),
+            (d(2026, 4, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 4, 25), RENEWAL_REJECTED_LABEL),
+        ]);
+        // Same fringe quality (CA 40 vs avg 82) — the legacy rule would
+        // have torn the deal up — but two years of a 2M salary remain, so
+        // the severance gate forces a transfer listing instead.
+        let contract = make_contract(
+            2_000_000,
+            PlayerSquadStatus::MainBackupPlayer,
+            d(2028, 7, 1),
+        );
+        let player = make_player(101, 40, d(1995, 1, 1), history, Some(contract));
+        let teammate = make_player(
+            102,
+            125,
+            d(1993, 1, 1),
+            PlayerDecisionHistory::new(),
+            Some(make_contract(
+                60_000,
+                PlayerSquadStatus::FirstTeamRegular,
+                d(2027, 7, 1),
+            )),
+        );
+        let team = make_team(10, 100, vec![player, teammate]);
+        let club = make_club(100, team, Some(120_000));
+        let country = make_country(club);
+        let mut sim = make_sim(country, today);
+
+        ClubResult::process_player_contract_interaction(&rejected_result(101), &mut sim, 100);
+
+        let p = sim.player(101).expect("player still present");
+        assert!(
+            !p.statuses.get().contains(&PlayerStatusType::Frt),
+            "expensive contract must not be released for free"
+        );
+        assert!(
+            p.statuses.get().contains(&PlayerStatusType::Lst),
+            "blocked release must fall back to a transfer listing"
+        );
+        let contract = p
+            .contract
+            .as_ref()
+            .expect("listed player must keep his contract");
+        assert!(contract.is_transfer_listed);
+        let country = sim.country(1).unwrap();
+        assert_eq!(
+            country.transfer_market.listings.len(),
+            1,
+            "the fallback listing must reach the country market"
+        );
+        assert_eq!(country.transfer_market.listings[0].player_id, 101);
     }
 }

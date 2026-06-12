@@ -55,6 +55,29 @@ pub struct TransferConfig {
     /// fee, possibly lower wage) compensates.
     pub free_agent_ability_slack: u8,
 
+    /// How many ranked candidates the request-driven matcher tries per
+    /// request per tick before giving up. The legacy behaviour was 1 —
+    /// if the single best candidate failed its daily roll or rejected
+    /// terms the request was skipped for the day, which let one
+    /// unrealistic strong candidate starve every realistic one behind
+    /// them.
+    pub free_agent_attempts_per_request: usize,
+
+    // ── Long-term market clearing — runs AFTER the emergency and
+    //    request-driven passes. Resolves free agents who have sat so
+    //    long that waiting for an explicit transfer request is no
+    //    longer realistic: they take a modest squad-role deal at a
+    //    lower-tier club instead.
+    /// Career-pressure floor for market-clearing eligibility.
+    pub market_clearing_min_pressure: f32,
+    /// Days-free floor for market-clearing eligibility (either
+    /// criterion qualifies).
+    pub market_clearing_min_days_free: i64,
+    /// Per-country per-day cap on market-clearing signings, so the
+    /// fallback drains the long-tail pool gradually instead of mass-
+    /// clearing it the first day someone crosses the threshold.
+    pub market_clearing_max_signings_per_country_per_day: usize,
+
     // ── Emergency squad fill — runs BEFORE the normal request-driven
     //    matcher. Keeps a club below `MIN_FIRST_TEAM_SQUAD` from
     //    waiting weeks for the standard scouting / shortlist pipeline.
@@ -137,6 +160,10 @@ impl Default for TransferConfig {
             daily_chance_max_pct: 30.0,
             max_free_agent_signings_per_day: 2,
             free_agent_ability_slack: 5,
+            free_agent_attempts_per_request: 3,
+            market_clearing_min_pressure: 0.75,
+            market_clearing_min_days_free: 365,
+            market_clearing_max_signings_per_country_per_day: 2,
             emergency_max_signings_per_country_per_day: 20,
             emergency_max_signings_per_club_per_day: 5,
             // 18 keeps a small buffer below the 25 minimum so the

@@ -746,15 +746,16 @@ impl Player {
         // continental ban, or known non-participation), the false hint is
         // trustworthy and this reputation heuristic must not override it —
         // a banned elite club's star is legitimately frustrated.
-        if !ctx.continental_path_known_absent && ctx.club_reputation >= cfg.elite_club_rep_suppress {
+        if !ctx.continental_path_known_absent && ctx.club_reputation >= cfg.elite_club_rep_suppress
+        {
             return false;
         }
 
         // Cooldown.
-        if self
-            .happiness
-            .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, cfg.cooldown_days)
-        {
+        if self.happiness.has_recent_event(
+            &HappinessEventType::WantsEuropeanCompetition,
+            cfg.cooldown_days,
+        ) {
             return false;
         }
 

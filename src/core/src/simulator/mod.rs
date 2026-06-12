@@ -22,6 +22,7 @@ use crate::continent::ContinentAwardOutcome;
 use crate::continent::ContinentBuildOutput;
 use crate::continent::ContinentResult;
 use crate::continent::national::world as national_world;
+use crate::country::result::transfers::free_agent_audit::FreeAgentMarketAuditor;
 use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use crate::league::result::WorldSnapshot;
 use crate::performance::{PerfCounters, PerfPhase, TickEndContext};
@@ -328,8 +329,14 @@ impl FootballSimulator {
         if today.day() == 1 {
             loan_wages::settle_parent_residual_loan_wages(data);
             // Long-unemployed free agents eventually hang up the boots.
-            // Monthly check, gated internally on `free_since` >= 12mo.
+            // Monthly check, gated internally on `free_since` >= 12mo,
+            // with a deterministic hard bound so unlucky rolls can't
+            // strand anyone in the pool for multiple seasons.
             data.process_free_agent_retirements(today);
+            // Monthly visibility into the long tail: one debug line per
+            // 12-month-plus free agent explaining why they're unsigned
+            // (no-op unless debug logging is enabled).
+            FreeAgentMarketAuditor::log_long_term(data, today);
         }
 
         // Global competitions (Champions League, World Cup, etc.)

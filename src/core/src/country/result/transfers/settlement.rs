@@ -193,19 +193,21 @@ mod tests {
         let mut c = country(101, 202);
         let today = d(2026, 7, 1);
         // Buyer's market: schedule a tranche that pays *today*.
-        c.transfer_market.pending_clauses.push(PendingTransferClause {
-            id: 1,
-            buying_club_id: 101,
-            selling_club_id: 202,
-            player_id: 9999,
-            trigger: ClauseTrigger::Installment {
-                scheduled_date: today,
-            },
-            amount: 1_000_000.0,
-            max_fires: 1,
-            fires_so_far: 0,
-            expires_on: None,
-        });
+        c.transfer_market
+            .pending_clauses
+            .push(PendingTransferClause {
+                id: 1,
+                buying_club_id: 101,
+                selling_club_id: 202,
+                player_id: 9999,
+                trigger: ClauseTrigger::Installment {
+                    scheduled_date: today,
+                },
+                amount: 1_000_000.0,
+                max_fires: 1,
+                fires_so_far: 0,
+                expires_on: None,
+            });
         let buyer_before = c.clubs[0].finance.balance.balance;
         let seller_before = c.clubs[1].finance.balance.balance;
 
@@ -224,19 +226,21 @@ mod tests {
         let mut c = country(101, 202);
         let today = d(2026, 7, 1);
         let later = d(2027, 7, 1);
-        c.transfer_market.pending_clauses.push(PendingTransferClause {
-            id: 1,
-            buying_club_id: 101,
-            selling_club_id: 202,
-            player_id: 9999,
-            trigger: ClauseTrigger::Installment {
-                scheduled_date: later,
-            },
-            amount: 1_000_000.0,
-            max_fires: 1,
-            fires_so_far: 0,
-            expires_on: None,
-        });
+        c.transfer_market
+            .pending_clauses
+            .push(PendingTransferClause {
+                id: 1,
+                buying_club_id: 101,
+                selling_club_id: 202,
+                player_id: 9999,
+                trigger: ClauseTrigger::Installment {
+                    scheduled_date: later,
+                },
+                amount: 1_000_000.0,
+                max_fires: 1,
+                fires_so_far: 0,
+                expires_on: None,
+            });
 
         TransferClauseSettler::settle_due(&mut c, today);
 
@@ -249,19 +253,21 @@ mod tests {
         let mut c = country(101, 202);
         let today = d(2026, 7, 1);
         // No player on the roster, so `appearance_count` returns None.
-        c.transfer_market.pending_clauses.push(PendingTransferClause {
-            id: 1,
-            buying_club_id: 101,
-            selling_club_id: 202,
-            player_id: 555,
-            trigger: ClauseTrigger::AppearanceMilestone {
-                target_appearances: 10,
-            },
-            amount: 500_000.0,
-            max_fires: 1,
-            fires_so_far: 0,
-            expires_on: None,
-        });
+        c.transfer_market
+            .pending_clauses
+            .push(PendingTransferClause {
+                id: 1,
+                buying_club_id: 101,
+                selling_club_id: 202,
+                player_id: 555,
+                trigger: ClauseTrigger::AppearanceMilestone {
+                    target_appearances: 10,
+                },
+                amount: 500_000.0,
+                max_fires: 1,
+                fires_so_far: 0,
+                expires_on: None,
+            });
 
         TransferClauseSettler::settle_due(&mut c, today);
 
@@ -275,19 +281,21 @@ mod tests {
         let mut c = country(101, 202);
         let today = d(2026, 7, 1);
         let yesterday = d(2026, 6, 30);
-        c.transfer_market.pending_clauses.push(PendingTransferClause {
-            id: 1,
-            buying_club_id: 101,
-            selling_club_id: 202,
-            player_id: 9999,
-            trigger: ClauseTrigger::AppearanceMilestone {
-                target_appearances: 10,
-            },
-            amount: 500_000.0,
-            max_fires: 1,
-            fires_so_far: 0,
-            expires_on: Some(yesterday),
-        });
+        c.transfer_market
+            .pending_clauses
+            .push(PendingTransferClause {
+                id: 1,
+                buying_club_id: 101,
+                selling_club_id: 202,
+                player_id: 9999,
+                trigger: ClauseTrigger::AppearanceMilestone {
+                    target_appearances: 10,
+                },
+                amount: 500_000.0,
+                max_fires: 1,
+                fires_so_far: 0,
+                expires_on: Some(yesterday),
+            });
 
         TransferClauseSettler::settle_due(&mut c, today);
 

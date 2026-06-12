@@ -219,12 +219,13 @@ mod tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::competitions::global::GlobalCompetitions;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
-    use crate::shared::Location;
+    use crate::shared::{Currency, CurrencyValue, Location};
+    use crate::transfers::{TransferListing, TransferListingStatus, TransferListingType};
     use crate::{
         Club, ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
         PlayerCollection, PlayerHappiness, PlayerPosition, PlayerPositionType, PlayerPositions,
         PlayerSkills, PlayerStatusType, StaffCollection, TeamBuilder, TeamCollection,
-        TeamReputation, TeamType, TrainingSchedule,
+        TeamReputation, TeamType, TrainingSchedule, TransferItem,
     };
     use chrono::NaiveDate;
 
@@ -398,6 +399,48 @@ mod tests {
     }
 
     #[test]
+    fn expired_contract_without_frt_records_contract_expired_reason() {
+        // A contract that simply ran out (no `Frt` stamped by any release
+        // pipeline) must keep recording the plain-expiry reason — only
+        // club-driven early releases become "released by mutual
+        // agreement".
+        let date = make_date(2027, 7, 3);
+        let mut player = make_player(1, 0, 0);
+        player.contract = None;
+
+        let main_team = make_team(
+            10,
+            100,
+            "Fakel",
+            "fakel",
+            TeamType::Main,
+            Some(1),
+            vec![player],
+        );
+        let club = make_club(100, "Fakel", vec![main_team]);
+        let league = make_league(1, "First Division", "first-division", false);
+        let country = make_country(vec![club], vec![league]);
+        let mut data = make_simulator_data(date, country);
+
+        data.sweep_released_to_free_agents();
+
+        assert!(
+            data.free_agents.iter().any(|p| p.id == 1),
+            "expired player must land in the global free-agent pool"
+        );
+        let history = &data
+            .country(1)
+            .expect("country 1 must exist")
+            .transfer_market
+            .transfer_history;
+        assert_eq!(history.len(), 1, "the sweep logs exactly one departure");
+        assert_eq!(
+            history[0].reason, "dec_reason_contract_expired",
+            "plain expiry must not be recorded as a mutual-agreement release"
+        );
+    }
+
+    #[test]
     fn release_sweep_clears_transfer_statuses_and_unhappiness() {
         // Regression (user repro: Vladislav Panteleev, Juventus → pool):
         // the early-release pipelines (mutual termination, positional
@@ -464,6 +507,79 @@ mod tests {
         assert_eq!(
             history[0].reason, "dec_reason_released_free",
             "the Frt released-early marker must drive the history reason before the reset consumes it"
+        );
+    }
+
+    #[test]
+    fn release_sweep_scrubs_stale_market_state() {
+        // A released player must vanish from every market surface, not
+        // just the roster: his open country-market listing ends Cancelled
+        // (nothing was sold), the team's transfer list drops its row, and
+        // the market-state snapshot is seeded for the free-agent pool.
+        let date = make_date(2027, 7, 3);
+        let mut player = make_player(1, 0, 0);
+        player.contract = None;
+        player.statuses.add(date, PlayerStatusType::Frt);
+
+        let main_team = make_team(
+            10,
+            100,
+            "Fakel",
+            "fakel",
+            TeamType::Main,
+            Some(1),
+            vec![player],
+        );
+        let club = make_club(100, "Fakel", vec![main_team]);
+        let league = make_league(1, "First Division", "first-division", false);
+        let mut country = make_country(vec![club], vec![league]);
+
+        // Stale market state left over from an earlier listing pass.
+        country.transfer_market.add_listing(TransferListing::new(
+            1,
+            100,
+            10,
+            CurrencyValue::new(250_000.0, Currency::Usd),
+            make_date(2027, 6, 1),
+            TransferListingType::Transfer,
+        ));
+        country.clubs[0].teams.teams[0]
+            .transfer_list
+            .add(TransferItem::new(
+                1,
+                CurrencyValue::new(250_000.0, Currency::Usd),
+            ));
+
+        let mut data = make_simulator_data(date, country);
+        data.sweep_released_to_free_agents();
+
+        let country = data.country(1).expect("country 1 must exist");
+        let listing = country
+            .transfer_market
+            .listings
+            .iter()
+            .find(|l| l.player_id == 1)
+            .expect("the listing row stays on record");
+        assert_eq!(
+            listing.status,
+            TransferListingStatus::Cancelled,
+            "a release must cancel the open listing — not leave it Available or fake a sale"
+        );
+        assert!(
+            country.clubs[0].teams.teams[0]
+                .transfer_list
+                .listed_player_ids()
+                .is_empty(),
+            "the team transfer list must drop the released player"
+        );
+        let released = data
+            .free_agents
+            .iter()
+            .find(|p| p.id == 1)
+            .expect("released player must land in the global free-agent pool");
+        assert!(
+            released.free_agent_state().is_some(),
+            "the sweep must seed the free-agent market state"
         );
     }
 

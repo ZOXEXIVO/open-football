@@ -97,11 +97,7 @@ impl<'gc> WorldMatchdayResult<'gc> {
     /// Total `Match::make` count across every continent's build —
     /// the size of the single global batch `process` will dispatch.
     pub fn match_total(&self) -> usize {
-        self.builds
-            .iter()
-            .flatten()
-            .map(|b| b.matches.len())
-            .sum()
+        self.builds.iter().flatten().map(|b| b.matches.len()).sum()
     }
 
     /// Root-level dispatch + per-continent process. Aggregates EVERY
@@ -129,7 +125,8 @@ impl<'gc> WorldMatchdayResult<'gc> {
         //    so we can split results back without re-grouping by id.
         let mut global_matches: Vec<Match> = Vec::new();
         let mut continent_ranges: Vec<Range<usize>> = Vec::with_capacity(builds.len());
-        let mut build_states: Vec<Option<ContinentBuildState<'gc>>> = Vec::with_capacity(builds.len());
+        let mut build_states: Vec<Option<ContinentBuildState<'gc>>> =
+            Vec::with_capacity(builds.len());
         for build in builds {
             let start = global_matches.len();
             match build {

@@ -122,6 +122,51 @@ impl CountryResult {
                     }
                 }
             }
+
+            // Explicit club listings outside the main squad. The evaluation
+            // above deliberately reads only the main roster — its numeric
+            // triggers measure players against main-squad analysis and must
+            // not auto-list reserve/youth players — but other systems (the
+            // season-start surplus trim) flag players across every team via
+            // `contract.is_transfer_listed`. Those flags must still become
+            // market listings, carrying the player's real team, or the
+            // player is stranded flagged-but-invisible to every buyer.
+            for team in club.teams.teams.iter().skip(1) {
+                for player in &team.players.players {
+                    let flagged = player
+                        .contract
+                        .as_ref()
+                        .map(|c| c.is_transfer_listed)
+                        .unwrap_or(false);
+                    if !flagged || player.is_on_loan() || player.is_force_match_selection {
+                        continue;
+                    }
+                    let statuses = player.statuses.get();
+                    if statuses.contains(&PlayerStatusType::Lst)
+                        || statuses.contains(&PlayerStatusType::Loa)
+                        || statuses.contains(&PlayerStatusType::Frt)
+                    {
+                        continue;
+                    }
+                    let asking_price = Self::calculate_asking_price(
+                        player,
+                        club,
+                        date,
+                        price_level,
+                        league_reputation,
+                        club_reputation,
+                    );
+                    listings_to_add.push(PendingListing {
+                        player_id: player.id,
+                        club_id: club.id,
+                        team_id: team.id,
+                        asking_price,
+                        listing_type: TransferListingType::Transfer,
+                        reason: "dec_reason_club_listed".to_string(),
+                        decided_by: decided_by.clone(),
+                    });
+                }
+            }
         }
 
         // Cap club-decided listings so no position group on a main team
@@ -174,12 +219,21 @@ impl CountryResult {
                         if !player.statuses.get().contains(&status_type) {
                             player.statuses.add(date, status_type);
                         }
-                        player.decision_history.add(
-                            date,
-                            movement.to_string(),
-                            listing_data.reason.clone(),
-                            listing_data.decided_by.clone(),
-                        );
+                        // `dec_reason_club_listed` materializes a flag another
+                        // system set (`contract.is_transfer_listed`) — that
+                        // system already wrote the decision-history entry with
+                        // the real reason (surplus trim, salary fallback) when
+                        // it flagged the player. Adding a second, vaguer entry
+                        // here duplicated the decision on the player page; the
+                        // flag-setter owns the history.
+                        if listing_data.reason != "dec_reason_club_listed" {
+                            player.decision_history.add(
+                                date,
+                                movement.to_string(),
+                                listing_data.reason.clone(),
+                                listing_data.decided_by.clone(),
+                            );
+                        }
                     }
                 }
             }
@@ -238,16 +292,24 @@ impl CountryResult {
 
         let mut groups: HashMap<(u32, PlayerFieldPositionGroup), Vec<PendingListing>> =
             HashMap::new();
+        let mut off_main: Vec<PendingListing> = Vec::new();
         for listing in capped {
             if let Some(group) = player_group(listing.club_id, listing.player_id) {
                 groups
                     .entry((listing.club_id, group))
                     .or_default()
                     .push(listing);
+            } else {
+                // Not on the main roster (reserve/youth club listing):
+                // selling him can't thin the main team, so the depth cap
+                // doesn't apply. These used to fall out of `groups` and
+                // get silently dropped, stranding non-main listings.
+                off_main.push(listing);
             }
         }
 
         let mut result = exempt;
+        result.append(&mut off_main);
 
         for ((club_id, group), mut group_listings) in groups {
             let current_count = find_main(club_id)
@@ -473,7 +535,25 @@ impl CountryResult {
             };
         }
 
-        // Player-initiated departures
+        // Player-initiated departures outrank persisted club decisions: a
+        // player who formally requested out (or hardened into Unh) is
+        // listed under his own reason and exempted from the position-group
+        // minimums. The transfer-request handler also sets
+        // `contract.is_transfer_listed`, so checking the flag first used to
+        // mislabel these as "club listed".
+        if statuses.contains(&PlayerStatusType::Req) {
+            return ListingDecision::Transfer {
+                reason: "dec_reason_player_requested".to_string(),
+            };
+        }
+
+        if statuses.contains(&PlayerStatusType::Unh) {
+            return ListingDecision::Transfer {
+                reason: "dec_reason_player_unhappy".to_string(),
+            };
+        }
+
+        // Club decisions persisted on the contract.
         if let Some(ref contract) = player.contract {
             if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
                 return Self::decide_listing_type(
@@ -489,18 +569,6 @@ impl CountryResult {
                     reason: "dec_reason_club_listed".to_string(),
                 };
             }
-        }
-
-        if statuses.contains(&PlayerStatusType::Req) {
-            return ListingDecision::Transfer {
-                reason: "dec_reason_player_requested".to_string(),
-            };
-        }
-
-        if statuses.contains(&PlayerStatusType::Unh) {
-            return ListingDecision::Transfer {
-                reason: "dec_reason_player_unhappy".to_string(),
-            };
         }
 
         // Squad members the club wouldn't move on pure maths. Runs after
@@ -884,78 +952,116 @@ mod tests {
     use super::*;
     use crate::academy::ClubAcademy;
     use crate::club::player::core::builder::PlayerBuilder;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
     use crate::{
-        ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
-        PlayerClubContract, PlayerCollection, PlayerPositions, PlayerSkills, StaffCollection,
-        TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
+        PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, StaffCollection, Team, TeamBuilder, TeamCollection, TeamReputation, TeamType,
+        TrainingSchedule,
     };
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, NaiveTime};
 
-    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(y, m, day).unwrap()
-    }
+    /// Fixtures for the listing pass: one club (id 100) in one league
+    /// (id 1); teams and rosters vary per scenario.
+    struct Fixture;
 
-    fn training_schedule() -> TrainingSchedule {
-        use chrono::NaiveTime;
-        TrainingSchedule::new(
-            NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
-            NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
-        )
-    }
+    impl Fixture {
+        fn date(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
 
-    fn make_player(id: u32) -> Player {
-        use crate::{PlayerPosition, PlayerPositionType};
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = 130;
-        attrs.potential_ability = 140;
-        let mut contract = PlayerClubContract::new(50_000, d(2026, 9, 1));
-        contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
-        PlayerBuilder::new()
-            .id(id)
-            .full_name(FullName::new("Test".into(), format!("Player{}", id)))
-            .birth_date(d(1995, 1, 1))
-            .country_id(1)
-            .attributes(PersonAttributes::default())
-            .skills(PlayerSkills::default())
-            .positions(PlayerPositions {
-                positions: vec![PlayerPosition {
-                    position: PlayerPositionType::MidfielderCenter,
-                    level: 20,
-                }],
-            })
-            .player_attributes(attrs)
-            .contract(Some(contract))
-            .build()
-            .unwrap()
-    }
+        fn training_schedule() -> TrainingSchedule {
+            TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            )
+        }
 
-    fn make_club_with_player(player: Player) -> Club {
-        let team = TeamBuilder::new()
-            .id(10)
-            .league_id(Some(1))
-            .club_id(100)
-            .name("Main".to_string())
-            .slug("main".to_string())
-            .team_type(TeamType::Main)
-            .players(PlayerCollection::new(vec![player]))
-            .staffs(StaffCollection::new(Vec::new()))
-            .reputation(TeamReputation::new(500, 500, 500))
-            .training_schedule(training_schedule())
-            .build()
-            .unwrap();
-        Club::new(
-            100,
-            "Club".to_string(),
-            Location::new(1),
-            ClubFinances::new(1_000_000, Vec::new()),
-            ClubAcademy::new(3),
-            ClubStatus::Professional,
-            ClubColors::default(),
-            TeamCollection::new(vec![team]),
-            crate::ClubFacilities::default(),
-        )
+        fn team(id: u32, slug: &str, team_type: TeamType, players: Vec<Player>) -> Team {
+            TeamBuilder::new()
+                .id(id)
+                .league_id(Some(1))
+                .club_id(100)
+                .name(slug.to_string())
+                .slug(slug.to_string())
+                .team_type(team_type)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(500, 500, 500))
+                .training_schedule(Self::training_schedule())
+                .build()
+                .unwrap()
+        }
+
+        fn club(teams: Vec<Team>) -> Club {
+            Club::new(
+                100,
+                "Club".to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(teams),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn country(club: Club) -> Country {
+            let league = League::new(
+                1,
+                "L".to_string(),
+                "l".to_string(),
+                1,
+                500,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            );
+            Country::builder()
+                .id(1)
+                .code("EN".to_string())
+                .slug("en".to_string())
+                .name("England".to_string())
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(vec![club])
+                .build()
+                .unwrap()
+        }
+
+        fn player(id: u32) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = 130;
+            attrs.potential_ability = 140;
+            let mut contract = PlayerClubContract::new(50_000, Self::date(2026, 9, 1));
+            contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Test".into(), format!("Player{}", id)))
+                .birth_date(Self::date(1995, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(contract))
+                .build()
+                .unwrap()
+        }
     }
 
     /// Regression guard: a contract that's about to expire is NOT, on its
@@ -965,9 +1071,14 @@ mod tests {
     /// that condition.
     #[test]
     fn pure_expiry_without_rejection_history_does_not_list() {
-        let today = d(2026, 5, 1);
-        let player = make_player(101);
-        let club = make_club_with_player(player);
+        let today = Fixture::date(2026, 5, 1);
+        let player = Fixture::player(101);
+        let club = Fixture::club(vec![Fixture::team(
+            10,
+            "main",
+            TeamType::Main,
+            vec![player],
+        )]);
         let analysis = CountryResult::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
         let decision =
@@ -976,6 +1087,113 @@ mod tests {
             matches!(decision, ListingDecision::Keep),
             "pure expiry must not list — saw {:?}",
             decision
+        );
+    }
+
+    #[test]
+    fn flagged_reserve_player_reaches_market_with_own_team_id() {
+        // A player flagged `is_transfer_listed` on a non-main squad must
+        // still reach the country market — historically the listing pass
+        // only read the main roster and stranded him flagged-but-
+        // invisible. The listing must carry his real team id.
+        let today = Fixture::date(2026, 6, 12);
+        let main_player = Fixture::player(101);
+        let mut reserve_player = Fixture::player(201);
+        {
+            let contract = reserve_player.contract.as_mut().unwrap();
+            contract.is_transfer_listed = true;
+            contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        }
+        let club = Fixture::club(vec![
+            Fixture::team(10, "main", TeamType::Main, vec![main_player]),
+            Fixture::team(11, "reserve", TeamType::Reserve, vec![reserve_player]),
+        ]);
+        let mut country = Fixture::country(club);
+        let mut summary = TransferActivitySummary::new();
+
+        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+
+        let listing = country
+            .transfer_market
+            .listings
+            .iter()
+            .find(|l| l.player_id == 201)
+            .expect("flagged reserve player must reach the country market");
+        assert_eq!(
+            listing.team_id, 11,
+            "the listing must carry the player's real (reserve) team"
+        );
+        let player = country.clubs[0].teams.teams[1]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 201)
+            .unwrap();
+        assert!(player.statuses.get().contains(&PlayerStatusType::Lst));
+        assert_eq!(
+            player
+                .decision_history
+                .items
+                .iter()
+                .filter(|d| d.movement == "dec_transfer_listed")
+                .count(),
+            0,
+            "the listing pass must not write history for pre-flagged players — \
+             the flag-setter owns the entry"
+        );
+    }
+
+    #[test]
+    fn pre_flagged_main_player_listing_does_not_duplicate_history() {
+        // The surplus trim (or salary fallback) flags the contract AND
+        // writes the decision-history entry; when the listing pass later
+        // materializes the flag into a market listing it must not add a
+        // second, vaguer "club listed" entry.
+        let today = Fixture::date(2026, 5, 1);
+        // Seven midfielders so the position-group minimum (6) leaves one
+        // listing slot for the flagged player.
+        let mut players: Vec<Player> = (101..=107).map(Fixture::player).collect();
+        {
+            let flagged = &mut players[0];
+            let contract = flagged.contract.as_mut().unwrap();
+            contract.is_transfer_listed = true;
+            contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
+            flagged.decision_history.add(
+                Fixture::date(2026, 4, 30),
+                "dec_transfer_listed".to_string(),
+                "dec_reason_surplus_squad".to_string(),
+                "dec_decided_board".to_string(),
+            );
+        }
+        let club = Fixture::club(vec![Fixture::team(10, "main", TeamType::Main, players)]);
+        let mut country = Fixture::country(club);
+        let mut summary = TransferActivitySummary::new();
+
+        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+
+        let listing = country
+            .transfer_market
+            .listings
+            .iter()
+            .find(|l| l.player_id == 101)
+            .expect("pre-flagged main-team player must reach the market");
+        assert_eq!(listing.team_id, 10);
+        let player = country.clubs[0].teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 101)
+            .unwrap();
+        assert!(player.statuses.get().contains(&PlayerStatusType::Lst));
+        assert_eq!(
+            player
+                .decision_history
+                .items
+                .iter()
+                .filter(|d| d.movement == "dec_transfer_listed")
+                .count(),
+            1,
+            "exactly one listing decision — written when the player was flagged"
         );
     }
 }

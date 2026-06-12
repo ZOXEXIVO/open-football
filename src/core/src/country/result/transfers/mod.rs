@@ -1,5 +1,6 @@
 pub(crate) mod config;
 pub(crate) mod execution;
+pub(crate) mod free_agent_audit;
 mod free_agent_depth;
 pub(crate) mod free_agent_market_calc;
 mod free_agents;
@@ -10,6 +11,7 @@ pub(crate) mod types;
 
 use super::CountryResult;
 use crate::Country;
+use crate::club::player::transfer::FreeAgentBlockReason;
 use crate::simulator::SimulatorData;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
@@ -19,7 +21,7 @@ use free_agents::{GlobalFreeAgentSigning, execute_global_free_agent_signing};
 pub(crate) use free_agents::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use log::debug;
 use settlement::TransferClauseSettler;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use types::DeferredTransfer;
 use types::TransferActivitySummary;
 
@@ -43,6 +45,11 @@ pub struct DeferredTransferOps {
     /// Subset of `global_offered_ids` whose acceptance roll failed;
     /// bumps the rejected-total counter.
     pub global_rejected_ids: Vec<u32>,
+    /// Why each skipped global-pool candidate was passed over today —
+    /// highest-rank reason per player from this country's matcher.
+    /// Stamped onto `FreeAgentMarketState::last_block` in Phase C so
+    /// the audit layer can explain long sits.
+    pub global_block_reasons: Vec<(u32, FreeAgentBlockReason)>,
     /// Free-agent signings to execute against `data.free_agents` after
     /// the parallel pass joins.
     pub global_signings: Vec<GlobalFreeAgentSigning>,
@@ -67,6 +74,7 @@ impl DeferredTransferOps {
             domestic_signed_ids: Vec::new(),
             global_offered_ids: Vec::new(),
             global_rejected_ids: Vec::new(),
+            global_block_reasons: Vec::new(),
             global_signings: Vec::new(),
             deferred_transfers: Vec::new(),
             completed_before: 0,
@@ -152,6 +160,7 @@ impl CountryResult {
             &mut ops.domestic_signed_ids,
             &mut ops.global_offered_ids,
             &mut ops.global_rejected_ids,
+            &mut ops.global_block_reasons,
         );
         ops.global_signings.extend(pool_signings);
 
@@ -220,6 +229,29 @@ impl CountryResult {
                 }
                 if rejected.contains(&player.id) {
                     player.on_offer_rejected();
+                }
+            }
+        }
+
+        // Stamp the tick's block reasons. Merged to the highest-ranked
+        // (closest-to-signing) reason per player before applying;
+        // `on_market_blocked` keeps the same-day max across the other
+        // countries' ops that ran earlier this tick.
+        if !ops.global_block_reasons.is_empty() {
+            let mut merged: HashMap<u32, FreeAgentBlockReason> = HashMap::new();
+            for (player_id, reason) in &ops.global_block_reasons {
+                merged
+                    .entry(*player_id)
+                    .and_modify(|existing| {
+                        if reason.rank() > existing.rank() {
+                            *existing = *reason;
+                        }
+                    })
+                    .or_insert(*reason);
+            }
+            for player in data.free_agents.iter_mut() {
+                if let Some(reason) = merged.get(&player.id) {
+                    player.on_market_blocked(current_date, *reason);
                 }
             }
         }
@@ -338,6 +370,7 @@ impl CountryResult {
         // `FreeAgentMarketState` after the country borrow ends.
         let mut global_offered_ids: Vec<u32> = Vec::new();
         let mut global_rejected_ids: Vec<u32> = Vec::new();
+        let mut global_block_reasons: Vec<(u32, FreeAgentBlockReason)> = Vec::new();
         let deferred_transfers = if let Some(country) = data.country_mut(country_id) {
             // Sync market's window flag. On open→closed transitions this cancels
             // any stranded listings and expires pending negotiations.
@@ -378,6 +411,7 @@ impl CountryResult {
                 &mut domestic_signed_ids,
                 &mut global_offered_ids,
                 &mut global_rejected_ids,
+                &mut global_block_reasons,
             ));
 
             if window_open {
@@ -463,6 +497,26 @@ impl CountryResult {
                 }
                 if rejected.contains(&player.id) {
                     player.on_offer_rejected();
+                }
+            }
+        }
+
+        // Stamp the tick's block reasons, mirroring the Phase-C path.
+        if !global_block_reasons.is_empty() {
+            let mut merged: HashMap<u32, FreeAgentBlockReason> = HashMap::new();
+            for (player_id, reason) in &global_block_reasons {
+                merged
+                    .entry(*player_id)
+                    .and_modify(|existing| {
+                        if reason.rank() > existing.rank() {
+                            *existing = *reason;
+                        }
+                    })
+                    .or_insert(*reason);
+            }
+            for player in data.free_agents.iter_mut() {
+                if let Some(reason) = merged.get(&player.id) {
+                    player.on_market_blocked(current_date, *reason);
                 }
             }
         }

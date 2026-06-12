@@ -15,6 +15,101 @@ use crate::{Person, PlayerSquadStatus};
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 
+/// Why the matcher most recently passed over a free agent. One value
+/// per player, refreshed every time a country's matcher evaluates the
+/// candidate and skips them — the diagnosis layer reads it to answer
+/// "why is this long-term free agent still unsigned?". Ordered by
+/// `rank`: the closer the candidate got to an actual signing, the
+/// higher the rank, and the per-tick merge keeps only the
+/// highest-ranked reason so a near-miss isn't overwritten by a
+/// coarse early-gate rejection from another buyer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreeAgentBlockReason {
+    /// Nationality country could not be resolved — the snapshot
+    /// fail-closed fallback (`u16::MAX` reference reputation) blocks
+    /// every buyer. Data problem, not a market outcome.
+    UnknownNationality,
+    /// No club in any processed country holds an open transfer
+    /// request matching the player's position group.
+    NoMatchingRequest,
+    /// Candidate's position group didn't match the request under
+    /// evaluation.
+    PositionMismatch,
+    /// Another signing or staged negotiation already claimed the
+    /// player this tick.
+    AlreadySignedOrStaged,
+    /// Below the buyer tier's minimum acceptable CA.
+    BelowMinimumAbility,
+    /// Above the buyer tier's ceiling — a star slumming gate.
+    AboveMaximumAbility,
+    /// Buyer country reputation too far below the player's reference
+    /// reputation even with the pressure-widened allowance.
+    CountryReputationGap,
+    /// Cross-continent step-down blocked: career pressure below the
+    /// floor the hard gate requires.
+    CrossContinentPressureTooLow,
+    /// Player's home region too prestigious for the buyer's region.
+    RegionPrestigeGap,
+    /// Buying club has no roster room left.
+    ClubAtSquadCapacity,
+    /// The country's per-day free-agent signing cap was already
+    /// consumed before this candidate could be tried.
+    PerDaySigningCapReached,
+    /// The club's daily approach roll didn't come up — no offer made
+    /// today.
+    DailyChanceRollFailed,
+    /// Offer was made but the wage sat far below the player's
+    /// reservation — the dominant cause of the failed acceptance.
+    WageReservationMismatch,
+    /// Offer was made and declined on the overall acceptance roll.
+    AcceptanceRollFailed,
+}
+
+impl FreeAgentBlockReason {
+    /// How far through the matching funnel the candidate got before
+    /// being blocked. Higher = closer to signing = more informative.
+    pub fn rank(self) -> u8 {
+        match self {
+            FreeAgentBlockReason::UnknownNationality => 0,
+            FreeAgentBlockReason::NoMatchingRequest => 1,
+            FreeAgentBlockReason::PositionMismatch => 2,
+            FreeAgentBlockReason::AlreadySignedOrStaged => 3,
+            FreeAgentBlockReason::BelowMinimumAbility => 4,
+            FreeAgentBlockReason::AboveMaximumAbility => 5,
+            FreeAgentBlockReason::CountryReputationGap => 6,
+            FreeAgentBlockReason::CrossContinentPressureTooLow => 7,
+            FreeAgentBlockReason::RegionPrestigeGap => 8,
+            FreeAgentBlockReason::ClubAtSquadCapacity => 9,
+            FreeAgentBlockReason::PerDaySigningCapReached => 10,
+            FreeAgentBlockReason::DailyChanceRollFailed => 11,
+            FreeAgentBlockReason::WageReservationMismatch => 12,
+            FreeAgentBlockReason::AcceptanceRollFailed => 13,
+        }
+    }
+
+    /// Stable label for debug output / diagnosis dumps.
+    pub fn label(self) -> &'static str {
+        match self {
+            FreeAgentBlockReason::UnknownNationality => "unknown_nationality",
+            FreeAgentBlockReason::NoMatchingRequest => "no_matching_request",
+            FreeAgentBlockReason::PositionMismatch => "position_mismatch",
+            FreeAgentBlockReason::AlreadySignedOrStaged => "already_signed_or_staged",
+            FreeAgentBlockReason::BelowMinimumAbility => "below_minimum_ability",
+            FreeAgentBlockReason::AboveMaximumAbility => "above_maximum_ability",
+            FreeAgentBlockReason::CountryReputationGap => "country_reputation_gap",
+            FreeAgentBlockReason::CrossContinentPressureTooLow => {
+                "cross_continent_pressure_too_low"
+            }
+            FreeAgentBlockReason::RegionPrestigeGap => "region_prestige_gap",
+            FreeAgentBlockReason::ClubAtSquadCapacity => "club_at_squad_capacity",
+            FreeAgentBlockReason::PerDaySigningCapReached => "per_day_signing_cap_reached",
+            FreeAgentBlockReason::DailyChanceRollFailed => "daily_chance_roll_failed",
+            FreeAgentBlockReason::WageReservationMismatch => "wage_reservation_mismatch",
+            FreeAgentBlockReason::AcceptanceRollFailed => "acceptance_roll_failed",
+        }
+    }
+}
+
 /// Snapshot of where the player came from and how the market has treated
 /// them since. Populated when the player enters the free-agent pool;
 /// updated by `on_offer_*` while they sit there; cleared on signing.
@@ -43,6 +138,12 @@ pub struct FreeAgentMarketState {
     /// 30-day window without storing a separate stale counter.
     pub recent_offer_dates: Vec<NaiveDate>,
     pub offers_rejected_total: u16,
+
+    /// Most recent reason a matcher passed over this player, with the
+    /// date it was recorded. Same-day updates keep the highest-ranked
+    /// (closest-to-signing) reason; a new day overwrites. Diagnosis
+    /// only — no gate reads it.
+    pub last_block: Option<(NaiveDate, FreeAgentBlockReason)>,
 }
 
 impl FreeAgentMarketState {
@@ -160,6 +261,7 @@ impl Player {
             last_squad_status: ctx.last_squad_status,
             recent_offer_dates: Vec::new(),
             offers_rejected_total: 0,
+            last_block: None,
         });
     }
 
@@ -200,6 +302,7 @@ impl Player {
             last_squad_status: PlayerSquadStatus::FirstTeamSquadRotation,
             recent_offer_dates: Vec::new(),
             offers_rejected_total: 0,
+            last_block: None,
         });
     }
 
@@ -220,6 +323,20 @@ impl Player {
     pub fn on_offer_rejected(&mut self) {
         if let Some(state) = self.free_agent_state.as_mut() {
             state.offers_rejected_total = state.offers_rejected_total.saturating_add(1);
+        }
+    }
+
+    /// Record why a matcher skipped this player today. Same-day calls
+    /// keep the highest-ranked reason (the one closest to a signing);
+    /// a later date replaces the stale entry outright. No-op if the
+    /// player isn't a free agent.
+    pub fn on_market_blocked(&mut self, date: NaiveDate, reason: FreeAgentBlockReason) {
+        if let Some(state) = self.free_agent_state.as_mut() {
+            match state.last_block {
+                Some((existing_date, existing))
+                    if existing_date == date && existing.rank() >= reason.rank() => {}
+                _ => state.last_block = Some((date, reason)),
+            }
         }
     }
 
@@ -276,7 +393,12 @@ impl Player {
             _ => -0.15,
         };
 
-        let raw = 0.025 * months_free
+        // 0.03/month + 0.18/window: a journeyman with no offers sits
+        // around 0.55-0.60 by month six and 0.90+ by month twelve, so
+        // the rep/region step-down gates open on the timeline the
+        // market-clearing design expects (meaningful by 6 months,
+        // major step-downs accepted by 12).
+        let raw = 0.03 * months_free
             + 0.18 * windows_missed
             + 0.04 * offers_rejected
             + age_pressure
@@ -455,6 +577,30 @@ mod tests {
         assert_eq!(MarketStage::from_days_free(180), MarketStage::Desperate);
         assert_eq!(MarketStage::from_days_free(364), MarketStage::Desperate);
         assert_eq!(MarketStage::from_days_free(365), MarketStage::LastChance);
+    }
+
+    #[test]
+    fn on_market_blocked_keeps_highest_rank_same_day_and_resets_next_day() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 13).unwrap();
+        let mut p = make_player(80, 29, today);
+        p.ensure_free_agent_state(today, 4000);
+
+        // Same day: a funnel-deep reason must not be overwritten by a
+        // coarse early-gate one.
+        p.on_market_blocked(today, FreeAgentBlockReason::AcceptanceRollFailed);
+        p.on_market_blocked(today, FreeAgentBlockReason::CountryReputationGap);
+        assert_eq!(
+            p.free_agent_state().unwrap().last_block,
+            Some((today, FreeAgentBlockReason::AcceptanceRollFailed))
+        );
+
+        // New day: stale entry is replaced outright.
+        let tomorrow = today + chrono::Duration::days(1);
+        p.on_market_blocked(tomorrow, FreeAgentBlockReason::CountryReputationGap);
+        assert_eq!(
+            p.free_agent_state().unwrap().last_block,
+            Some((tomorrow, FreeAgentBlockReason::CountryReputationGap))
+        );
     }
 
     #[test]

@@ -6,9 +6,12 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::Datelike;
-use core::PlayerClubContract;
+use core::club::player::calculators::WageCalculator;
+use core::club::player::transfer::ReleaseContext;
 use core::shared::{Currency, CurrencyValue};
+use core::transfers::pipeline::PipelineProcessor;
 use core::transfers::{CompletedTransfer, TransferType};
+use core::{Person, PlayerClubContract, PlayerSquadStatus, SimulatorData};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -126,6 +129,143 @@ fn signing_reputation_inputs(
 
 // ── Move on free ───────────────────────────────────────────────
 
+/// Direct editor override: releases the player to the global free-agent
+/// pool unconditionally, deliberately bypassing the
+/// `AutomaticReleaseEligibility` gate the AI release pipelines must pass.
+/// Everything else matches the automatic sweep
+/// (`SimulatorData::sweep_released_to_free_agents`): the same
+/// `dec_reason_released_free` transfer-history entry, the same
+/// `ReleaseContext` market-state snapshot (so free-agent recruitment
+/// pressure and retirement logic treat the player identically), and the
+/// same release-flavoured cleanup of stale listings, team transfer
+/// lists, scouting interest, and live negotiations.
+///
+/// Returns `false` when the player isn't rostered on any team.
+pub(crate) fn execute_move_on_free(sim: &mut SimulatorData, player_id: u32) -> bool {
+    let date = sim.date.date();
+
+    let (ci, coi, cli, ti) = match sim.find_player_position(player_id) {
+        Some(pos) => pos,
+        None => return false,
+    };
+
+    // Identity of the team the player actually plays for — a B/Second
+    // player departs their own spell, not the club Main team.
+    let from_info = match get_source_history_info(sim, ci, coi, cli, ti) {
+        Some(t) => t,
+        None => return false,
+    };
+
+    // Physical-team identity for the transfer-history record (the same
+    // source the automatic sweep stamps on its departures) plus the
+    // reputation inputs the market-state snapshot needs — all captured
+    // before the player leaves the roster.
+    let (
+        from_club_id,
+        from_team_id,
+        from_team_name,
+        country_id,
+        country_reputation,
+        league_reputation,
+        team_reputation_world,
+    ) = {
+        let country = &sim.continents[ci].countries[coi];
+        let club = &country.clubs[cli];
+        let team = &club.teams.teams[ti];
+        let league_reputation = team
+            .league_id
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(country.reputation);
+        (
+            club.id,
+            team.id,
+            team.name.clone(),
+            country.id,
+            country.reputation,
+            league_reputation,
+            team.reputation.world,
+        )
+    };
+
+    let mut player = match sim.continents[ci].countries[coi].clubs[cli].teams.teams[ti]
+        .players
+        .take_player(&player_id)
+    {
+        Some(p) => p,
+        None => return false,
+    };
+
+    // Snapshot in-flight competitive stats onto the source club's
+    // career row before the player leaves it; otherwise those games
+    // would later be misattributed to the destination — or, in the
+    // global-pool path, to a synthetic "Free Agent" row.
+    player.on_release(&from_info, date);
+
+    // Market-state snapshot — the same `ReleaseContext` the automatic
+    // sweep stamps. Unlike the sweep (whose upstream pipelines already
+    // cleared the contract), the real contract is still present here, so
+    // salary and squad status are read off it; the sweep's wage-estimate
+    // fallback only covers a contractless edge case.
+    let club_score = (team_reputation_world as f32 / 10_000.0).clamp(0.0, 1.0);
+    let last_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or_else(|| {
+        WageCalculator::expected_annual_wage(&player, player.age(date), club_score, league_reputation)
+    });
+    let last_squad_status = player
+        .contract
+        .as_ref()
+        .map(|c| c.squad_status.clone())
+        .unwrap_or(PlayerSquadStatus::FirstTeamSquadRotation);
+    if player.free_agent_state().is_none() {
+        player.enter_free_agent_market(ReleaseContext {
+            date,
+            last_club_id: Some(from_club_id),
+            last_country_id: Some(country_id),
+            last_country_reputation: country_reputation,
+            last_league_reputation: league_reputation,
+            last_club_reputation_score: club_score,
+            last_salary,
+            last_squad_status,
+        });
+    }
+
+    player.contract = None;
+    player.contract_loan = None;
+    // Canonical end-of-spell reset — the same one the AI release
+    // sweep and transfer completion paths run: transient transfer
+    // statuses (Lst / Loa / Frt / Req / Unh / ...) plus happiness.
+    player.reset_on_club_change();
+
+    let completed = CompletedTransfer::new(
+        player_id,
+        player.full_name.to_string(),
+        from_club_id,
+        from_team_id,
+        from_team_name,
+        0,
+        String::from("Free Agent"),
+        date,
+        CurrencyValue::new(0.0, Currency::Usd),
+        TransferType::Free,
+    )
+    .with_reason("dec_reason_released_free".to_string());
+    sim.continents[ci].countries[coi]
+        .transfer_market
+        .transfer_history
+        .push(completed);
+
+    sim.free_agents.push(player);
+
+    // The departed player must vanish from every market surface — open
+    // listings end Cancelled, team transfer lists drop their rows,
+    // scouting interest is cleared, live negotiations are rejected —
+    // exactly like the automatic sweep's release cleanup.
+    PipelineProcessor::cleanup_player_release_interest(sim, player_id);
+
+    sim.rebuild_indexes();
+    true
+}
+
 pub async fn move_on_free_action(
     State(state): State<GameAppData>,
     Path(params): Path<PlayerPathParam>,
@@ -135,44 +275,9 @@ pub async fn move_on_free_action(
 
     if let Some(ref mut arc_data) = *guard {
         let sim = Arc::make_mut(arc_data);
-        let date = sim.date.date();
-
-        let (ci, coi, cli, ti) = match sim.find_player_position(params.player_id) {
-            Some(pos) => pos,
-            None => return StatusCode::NOT_FOUND,
-        };
-
-        // Identity of the team the player actually plays for — a B/Second
-        // player departs their own spell, not the club Main team.
-        let from_info = match get_source_history_info(sim, ci, coi, cli, ti) {
-            Some(t) => t,
-            None => return StatusCode::NOT_FOUND,
-        };
-
-        let mut player = match sim.continents[ci].countries[coi].clubs[cli].teams.teams[ti]
-            .players
-            .take_player(&params.player_id)
-        {
-            Some(p) => p,
-            None => return StatusCode::NOT_FOUND,
-        };
-
-        // Snapshot in-flight competitive stats onto the source club's
-        // career row before the player leaves it; otherwise those games
-        // would later be misattributed to the destination — or, in the
-        // global-pool path, to a synthetic "Free Agent" row.
-        player.on_release(&from_info, date);
-
-        player.contract = None;
-        player.contract_loan = None;
-        // Canonical end-of-spell reset — the same one the AI release
-        // sweep and transfer completion paths run: transient transfer
-        // statuses (Lst / Loa / Frt / Req / Unh / ...) plus happiness.
-        player.reset_on_club_change();
-
-        sim.free_agents.push(player);
-        sim.rebuild_indexes();
-        return StatusCode::OK;
+        if execute_move_on_free(sim, params.player_id) {
+            return StatusCode::OK;
+        }
     }
 
     StatusCode::NOT_FOUND
@@ -845,4 +950,203 @@ pub async fn list_clubs_action(
 
     clubs.sort_by(|a, b| a.name.cmp(&b.name));
     Json(clubs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{NaiveDate, NaiveTime};
+    use core::club::ClubAcademy;
+    use core::club::player::builder::PlayerBuilder;
+    use core::competitions::global::GlobalCompetitions;
+    use core::continent::Continent;
+    use core::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use core::shared::Location;
+    use core::shared::fullname::FullName;
+    use core::transfers::{TransferListing, TransferListingStatus, TransferListingType};
+    use core::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
+        PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TeamType,
+        TrainingSchedule, TransferItem,
+    };
+
+    /// World fixture for the manual-release action: one country (id 1)
+    /// with one league (id 1), one club (id 100) whose Main team (id 10)
+    /// rosters a single contracted player (id 1, salary 80k,
+    /// MainBackupPlayer).
+    struct Fixture;
+
+    impl Fixture {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 6, 12).unwrap()
+        }
+
+        fn sim() -> SimulatorData {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = 90;
+            attrs.potential_ability = 90;
+            let mut contract =
+                PlayerClubContract::new(80_000, NaiveDate::from_ymd_opt(2027, 6, 30).unwrap());
+            contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
+            let player = PlayerBuilder::new()
+                .id(1)
+                .full_name(FullName::new("Test".to_string(), "Player".to_string()))
+                .birth_date(NaiveDate::from_ymd_opt(1996, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(contract))
+                .build()
+                .unwrap();
+            let team = TeamBuilder::new()
+                .id(10)
+                .league_id(Some(1))
+                .club_id(100)
+                .name("Main".to_string())
+                .slug("main".to_string())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(vec![player]))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(500, 500, 4_000))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap();
+            let club = Club::new(
+                100,
+                "Club".to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![team]),
+                ClubFacilities::default(),
+            );
+            let league = League::new(
+                1,
+                "L".to_string(),
+                "l".to_string(),
+                1,
+                500,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            );
+            let country = Country::builder()
+                .id(1)
+                .code("EN".to_string())
+                .slug("en".to_string())
+                .name("England".to_string())
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(vec![club])
+                .build()
+                .unwrap();
+            let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+            SimulatorData::new(
+                Self::date().and_hms_opt(12, 0, 0).unwrap(),
+                vec![continent],
+                GlobalCompetitions::new(Vec::new()),
+            )
+        }
+    }
+
+    #[test]
+    fn move_on_free_seeds_market_state_history_and_cleanup() {
+        let mut sim = Fixture::sim();
+        // Stale market state pointing at the player: an open country
+        // listing and a team transfer-list row.
+        sim.continents[0].countries[0]
+            .transfer_market
+            .add_listing(TransferListing::new(
+                1,
+                100,
+                10,
+                CurrencyValue::new(250_000.0, Currency::Usd),
+                Fixture::date(),
+                TransferListingType::Transfer,
+            ));
+        sim.continents[0].countries[0].clubs[0].teams.teams[0]
+            .transfer_list
+            .add(TransferItem::new(
+                1,
+                CurrencyValue::new(250_000.0, Currency::Usd),
+            ));
+
+        assert!(execute_move_on_free(&mut sim, 1));
+
+        let released = sim
+            .free_agents
+            .iter()
+            .find(|p| p.id == 1)
+            .expect("manual release must move the player into the global pool");
+        assert!(released.contract.is_none());
+        let state = released
+            .free_agent_state()
+            .expect("manual release must seed the free-agent market state");
+        assert_eq!(state.last_club_id, Some(100));
+        assert_eq!(
+            state.last_salary, 80_000,
+            "the real contract salary is carried, not an estimate"
+        );
+        assert!(matches!(
+            state.last_squad_status,
+            PlayerSquadStatus::MainBackupPlayer
+        ));
+        assert_eq!(state.free_since, Fixture::date());
+
+        let country = &sim.continents[0].countries[0];
+        let entry = country
+            .transfer_market
+            .transfer_history
+            .iter()
+            .find(|t| t.player_id == 1)
+            .expect("manual release must record transfer history");
+        assert_eq!(entry.reason, "dec_reason_released_free");
+        assert_eq!(entry.from_club_id, 100);
+
+        // Same release-flavoured cleanup the automatic sweep runs.
+        let listing = country
+            .transfer_market
+            .listings
+            .iter()
+            .find(|l| l.player_id == 1)
+            .unwrap();
+        assert_eq!(
+            listing.status,
+            TransferListingStatus::Cancelled,
+            "the stale listing must end Cancelled, not stay Available"
+        );
+        assert!(
+            country.clubs[0].teams.teams[0]
+                .transfer_list
+                .listed_player_ids()
+                .is_empty(),
+            "the team transfer list must drop the released player"
+        );
+    }
+
+    #[test]
+    fn move_on_free_unknown_player_is_rejected() {
+        let mut sim = Fixture::sim();
+        assert!(!execute_move_on_free(&mut sim, 999));
+        assert!(sim.free_agents.is_empty());
+    }
 }

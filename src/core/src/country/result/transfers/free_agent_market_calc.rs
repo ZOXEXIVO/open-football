@@ -51,6 +51,31 @@ impl FreeAgentOfferPricing {
     ) -> Self {
         let role =
             FreeAgentMarketCalculator::infer_buyer_role(candidate.ability, buyer_club_score, group);
+        Self::compute_with_role(
+            candidate,
+            group,
+            role,
+            buyer_club_score,
+            buyer_league_reputation,
+            buyer_negotiator_skill,
+            buyer_country_reputation,
+        )
+    }
+
+    /// Same wage chain with an explicit role override. The market-
+    /// clearing pass prices its offers as Backup / Emergency squad
+    /// roles regardless of how well the player's CA fits the buyer's
+    /// tier — the pitch is "join the squad on a modest short deal",
+    /// never a starter's package.
+    pub(super) fn compute_with_role(
+        candidate: &FreeAgentCandidate,
+        group: PlayerFieldPositionGroup,
+        role: BuyerRoleFit,
+        buyer_club_score: f32,
+        buyer_league_reputation: u16,
+        buyer_negotiator_skill: u8,
+        buyer_country_reputation: u16,
+    ) -> Self {
         let market_wage = WageCalculator::expected_annual_wage_raw(
             candidate.ability,
             candidate.current_reputation,
@@ -369,8 +394,12 @@ impl FreeAgentMarketCalculator {
 
     /// Threshold the score must clear to accept. Drops as pressure
     /// rises so a desperate player accepts on weaker compositions.
+    /// The 0.30 slope (was 0.22) makes a year-unemployed player
+    /// accept the modest backup-role offers the market-clearing pass
+    /// makes — at 0.22 those compositions sat just under the line
+    /// and long sits never resolved.
     pub fn acceptance_threshold(career_pressure: f32) -> f32 {
-        0.72 - 0.22 * career_pressure.clamp(0.0, 1.0)
+        0.72 - 0.30 * career_pressure.clamp(0.0, 1.0)
     }
 
     /// Sigmoid-smoothed acceptance probability. Returns the chance
@@ -383,13 +412,51 @@ impl FreeAgentMarketCalculator {
         1.0 / (1.0 + (-z).exp())
     }
 
+    /// Combined priority score in [0,1] for ordering free-agent
+    /// candidates against one transfer request. Replaces the legacy
+    /// raw-quality `max_by_key` so a realistic, willing, affordable
+    /// local journeyman outranks a stronger player who will never
+    /// actually accept — the starvation pattern where one unrealistic
+    /// star blocked the whole request day after day.
+    ///
+    /// Weights: quality fit 0.30, locality 0.20, career pressure
+    /// 0.20, rep closeness 0.15, wage affordability 0.15. Quality
+    /// still matters most, but the four "will this deal actually
+    /// happen" signals together dominate it.
+    pub fn candidate_priority_score(
+        quality_fit: f32,
+        domestic: bool,
+        same_continent: bool,
+        rep_mismatch: i32,
+        career_pressure: f32,
+        wage_affordability: f32,
+    ) -> f32 {
+        let locality = if domestic {
+            1.0
+        } else if same_continent {
+            0.60
+        } else {
+            0.25
+        };
+        let rep_closeness = 1.0 - (rep_mismatch.unsigned_abs() as f32 / 5000.0).clamp(0.0, 1.0);
+        0.30 * quality_fit.clamp(0.0, 1.0)
+            + 0.20 * locality
+            + 0.20 * career_pressure.clamp(0.0, 1.0)
+            + 0.15 * rep_closeness
+            + 0.15 * wage_affordability.clamp(0.0, 1.0)
+    }
+
     /// Daily signing chance percentage (clamped 0.5..35.0). Replaces the
     /// CA-band-only `TransferConfig::daily_signing_chance` for free
     /// agents because elite players still move quickly while weak
     /// players eventually move when career pressure lifts the floor.
+    /// Pressure slope 10.0 (was 8.0): a fully-pressured journeyman
+    /// fields an approach roughly every week instead of every
+    /// fortnight, which is what lets the 12-month resolution targets
+    /// hold without touching the realism gates.
     pub fn daily_signing_chance(career_pressure: f32, ca: u8, urgency_bonus: f32) -> f32 {
         let cp = career_pressure.clamp(0.0, 1.0);
-        let raw = 0.5 + 8.0 * cp + 0.04 * (ca as f32) + urgency_bonus.max(0.0);
+        let raw = 0.5 + 10.0 * cp + 0.04 * (ca as f32) + urgency_bonus.max(0.0);
         raw.clamp(0.5, 35.0)
     }
 
@@ -410,19 +477,63 @@ impl FreeAgentMarketCalculator {
         } else if age < 32 {
             0.01
         } else if age < 35 {
-            0.04
+            0.05
         } else {
-            0.10
+            0.12
         };
         let quality_factor = if ca < 50 {
-            0.08
+            0.10
         } else if ca < 70 {
-            0.04
+            0.06
         } else {
             0.00
         };
         let rep_factor = (world_reputation.max(0) as f32 / 10_000.0) * 0.08;
-        (base + age_factor + quality_factor - rep_factor).clamp(0.0, 0.35)
+        // Old + low-quality stacks to ~0.34/month by 18 months free,
+        // so that cohort usually resolves inside the 18-24 month
+        // window; the deterministic bound below is the backstop, not
+        // the common path.
+        (base + age_factor + quality_factor - rep_factor).clamp(0.0, 0.40)
+    }
+
+    /// Hard upper bound, in months of unemployment, after which a
+    /// free agent retires deterministically — the backstop that
+    /// guarantees no player sits in the pool for multiple seasons
+    /// just because the monthly probability rolls kept missing.
+    ///
+    /// `observable_ceiling` is the staff-free potential proxy
+    /// (`PotentialEstimator::observable_ceiling`), never the hidden
+    /// biological PA — the bound is a market judgement, and the
+    /// market only sees observable promise.
+    ///
+    ///   - young with visible growth room: 48 months (they keep
+    ///     training and hoping; the market-clearing pass normally
+    ///     resolves them long before this)
+    ///   - renowned veterans (world rep ≥ 6000): 42 months — still
+    ///     names, clubs keep calling, but they too eventually stop
+    ///   - baseline: 36 months
+    ///   - old (33+) or low-quality (CA < 60): −6 months each,
+    ///     floored at 24
+    pub fn deterministic_retirement_months(
+        age: u8,
+        ca: u8,
+        observable_ceiling: u8,
+        world_reputation: i16,
+    ) -> u32 {
+        if age < 24 && observable_ceiling >= ca.saturating_add(15) {
+            return 48;
+        }
+        if world_reputation >= 6000 {
+            return 42;
+        }
+        let mut months: i32 = 36;
+        if age >= 33 {
+            months -= 6;
+        }
+        if ca < 60 {
+            months -= 6;
+        }
+        months.max(24) as u32
     }
 }
 
@@ -558,6 +669,71 @@ mod tests {
             FreeAgentMarketCalculator::retirement_probability_per_month(6, 26, 120, 5000);
         let old_weak = FreeAgentMarketCalculator::retirement_probability_per_month(6, 36, 50, 0);
         assert!(old_weak > young_strong);
+    }
+
+    #[test]
+    fn high_pressure_low_ca_player_can_sign_below_previous_reputation_tier() {
+        // 34yo CA-55 journeyman a year on the market: a buyer country
+        // 3000 points below his reference market must clear the rep
+        // gate at his pressure...
+        let desperate_drop = FreeAgentMarketCalculator::rep_drop_allowed(0.9, 34, 55);
+        assert!(
+            1500 + desperate_drop >= 4500,
+            "desperate journeyman must reach 3000-point step-downs, drop={desperate_drop}"
+        );
+        // ...while the same gap stays closed for a fresh prime-age
+        // quality player — pressure, not time alone, opens doors.
+        let fresh_drop = FreeAgentMarketCalculator::rep_drop_allowed(0.05, 27, 110);
+        assert!(
+            1500 + fresh_drop < 4500,
+            "fresh quality player must not step down 3000 points, drop={fresh_drop}"
+        );
+    }
+
+    #[test]
+    fn deterministic_retirement_bound_orders_cohorts_sensibly() {
+        // Old + low quality resolves fastest.
+        assert_eq!(
+            FreeAgentMarketCalculator::deterministic_retirement_months(36, 50, 50, 0),
+            24
+        );
+        // Baseline journeyman.
+        assert_eq!(
+            FreeAgentMarketCalculator::deterministic_retirement_months(29, 80, 85, 2000),
+            36
+        );
+        // Renowned veterans wait longer but still resolve.
+        assert_eq!(
+            FreeAgentMarketCalculator::deterministic_retirement_months(33, 120, 120, 8000),
+            42
+        );
+        // Young with visible growth room gets the longest leash.
+        assert_eq!(
+            FreeAgentMarketCalculator::deterministic_retirement_months(21, 70, 120, 1000),
+            48
+        );
+    }
+
+    #[test]
+    fn candidate_priority_prefers_signable_local_over_raw_quality() {
+        // The starvation case: a perfectly-fitting but unaffordable,
+        // pressure-free foreigner versus a domestic journeyman under
+        // real pressure with an affordable wage ask. The journeyman
+        // must rank first even with a slightly worse quality fit.
+        let unrealistic_star = FreeAgentMarketCalculator::candidate_priority_score(
+            1.0,   // quality fit
+            false, // domestic
+            true,  // same continent
+            1200,  // rep mismatch
+            0.0,   // career pressure
+            0.0,   // wage affordability
+        );
+        let signable_local =
+            FreeAgentMarketCalculator::candidate_priority_score(1.0, true, true, 1500, 0.7, 0.8);
+        assert!(
+            signable_local > unrealistic_star,
+            "local={signable_local} star={unrealistic_star}"
+        );
     }
 
     #[test]
