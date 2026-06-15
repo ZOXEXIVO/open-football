@@ -2045,7 +2045,149 @@ impl EmergencyCandidatePicker {
             .collect();
 
         scored.sort_by(|a, b| EmergencyCandidateOrdering::cmp(a, b, buyer_ctx, slot.group));
-        scored.into_iter().next().map(|(c, _)| c)
+        // Don't hard-lock onto the single deterministic top: among the
+        // genuinely interchangeable head of the ranking (same locality,
+        // score within an epsilon) make a weighted random pick so the
+        // same free agent doesn't funnel to the same club every tick.
+        EmergencyTopClusterSelector::choose(&scored, buyer_ctx, slot.group)
+    }
+}
+
+/// Picks one candidate from the interchangeable head of an already-sorted
+/// emergency candidate list. The deterministic ordering in
+/// [`EmergencyCandidateOrdering`] leaves a cluster of near-equal
+/// candidates (same locality tier, score within
+/// [`Self::SCORE_EPSILON`]) separated only by the continuous
+/// `career_pressure` tiebreak — which always crowned the same player,
+/// so the same club re-signed the same free agent season after season.
+///
+/// This selector keeps the full calibrated preference order (anyone who
+/// beats the leader on a locality key sorts ahead and is the leader; the
+/// cluster never reaches below it) but, *within* that already-near-equal
+/// tier, draws a weighted random pick. The weight still favours the most
+/// pressured / best-fitting candidate (the signals the deterministic
+/// tiebreak used) so the previous favourite stays the favourite — just
+/// not a certainty. A single-member cluster returns deterministically
+/// with no RNG draw, so unambiguous picks (and their tests) are
+/// unchanged.
+struct EmergencyTopClusterSelector;
+
+impl EmergencyTopClusterSelector {
+    /// Score window (in raw score points) within which two candidates
+    /// count as interchangeable. Sized below the gap between adjacent
+    /// ability/locality buckets in [`EmergencySquadFillStrategy::score`]
+    /// so the cluster never merges a meaningfully weaker fit with a
+    /// stronger one — only candidates the ordering already treats as a
+    /// near-tie are grouped.
+    const SCORE_EPSILON: f32 = 6.0;
+    /// Weight gain for a fully-pressured candidate. Keeps the most
+    /// desperate free agent the favourite (~4x the base weight at full
+    /// pressure) without the old 100% lock.
+    const W_PRESSURE: f32 = 3.0;
+    /// Weight gain for a perfect ability-fit candidate. Smaller than the
+    /// pressure term — fit already shaped the score that defined the
+    /// cluster; this just nudges ties.
+    const W_FIT: f32 = 1.5;
+
+    /// Length of the interchangeable prefix of `scored`. The list is
+    /// pre-sorted by score(desc) then the locality keys, so the cluster
+    /// is a contiguous run from index 0: every member is within
+    /// [`Self::SCORE_EPSILON`] of the leader's score and shares the
+    /// leader's three locality keys (domestic / in-country / continent).
+    fn cluster_len(
+        scored: &[(&FreeAgentCandidate, f32)],
+        buyer: &EmergencyBuyerContext,
+    ) -> usize {
+        let Some((leader, leader_score)) = scored.first() else {
+            return 0;
+        };
+        let leader_keys = Self::locality_keys(leader, buyer);
+        let mut len = 1;
+        for (candidate, score) in scored.iter().skip(1) {
+            if (score - leader_score).abs() > Self::SCORE_EPSILON {
+                break;
+            }
+            if Self::locality_keys(candidate, buyer) != leader_keys {
+                break;
+            }
+            len += 1;
+        }
+        len
+    }
+
+    /// The three categorical locality flags the ordering keys on, packed
+    /// so two candidates compare equal only when they sit in the same
+    /// locality tier relative to the buyer.
+    fn locality_keys(
+        candidate: &FreeAgentCandidate,
+        buyer: &EmergencyBuyerContext,
+    ) -> (bool, bool, bool) {
+        let domestic = candidate
+            .nationality_country_code
+            .eq_ignore_ascii_case(&buyer.country_code);
+        let in_country = !candidate.is_global_pool;
+        let same_continent = candidate.nationality_continent_id == buyer.continent_id;
+        (domestic, in_country, same_continent)
+    }
+
+    /// Soft version of the deterministic `career_pressure` / `ability_fit`
+    /// tiebreak: every cluster member keeps a nonzero base weight so it
+    /// genuinely competes, with the most pressured / best-fitting members
+    /// favoured.
+    fn weight(
+        candidate: &FreeAgentCandidate,
+        buyer: &EmergencyBuyerContext,
+        group: PlayerFieldPositionGroup,
+    ) -> f32 {
+        let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
+            buyer.club_reputation_score,
+            group,
+            candidate.career_pressure,
+        );
+        let max_ca = FreeAgentMarketCalculator::max_acceptable_ca(
+            buyer.club_reputation_score,
+            group,
+            candidate.career_pressure,
+        );
+        let ability_fit =
+            FreeAgentMarketCalculator::quality_fit_score(candidate.ability, min_ca, max_ca);
+        1.0 + candidate.career_pressure.clamp(0.0, 1.0) * Self::W_PRESSURE
+            + ability_fit.clamp(0.0, 1.0) * Self::W_FIT
+    }
+
+    /// Return the chosen candidate. Empty list → `None`; single-member
+    /// cluster → the leader with no RNG draw; otherwise a weighted
+    /// roulette pick over the cluster.
+    fn choose<'a>(
+        scored: &[(&'a FreeAgentCandidate, f32)],
+        buyer: &EmergencyBuyerContext,
+        group: PlayerFieldPositionGroup,
+    ) -> Option<&'a FreeAgentCandidate> {
+        let len = Self::cluster_len(scored, buyer);
+        if len == 0 {
+            return None;
+        }
+        if len == 1 {
+            return Some(scored[0].0);
+        }
+        let cluster = &scored[..len];
+        let total: f32 = cluster
+            .iter()
+            .map(|(c, _)| Self::weight(c, buyer, group))
+            .sum();
+        // `total` >= len >= 2 because every weight carries a 1.0 base, so
+        // the draw can't divide by zero or land outside the run.
+        let roll = IntegerUtils::random(1, 1_000_000) as f32 / 1_000_000.0;
+        let target = roll * total;
+        let mut acc = 0.0;
+        for (candidate, _) in cluster {
+            acc += Self::weight(candidate, buyer, group);
+            if acc >= target {
+                return Some(candidate);
+            }
+        }
+        // Float rounding fallback — return the last cluster member.
+        cluster.last().map(|(c, _)| *c)
     }
 }
 
@@ -2890,6 +3032,11 @@ mod emergency_fill_tests {
 
     #[test]
     fn empty_main_team_generates_emergency_signings_for_each_group() {
+        // Test-isolation: seed the shared RandomEngine so the per-slot
+        // weighted cluster pick + acceptance roll sequence is independent
+        // of how many RNG draws preceding tests consumed (mirrors the
+        // seeded sibling tests in this block).
+        crate::utils::random::engine::RandomEngine::set_seed(0xE11E_C7AB_u64);
         // Empty squad → urgent flag. Emergency pass should produce at
         // least one signing per missing group (GK/DEF/MID/FWD) up to
         // the per-club cap, before the normal request-driven matcher
@@ -3071,6 +3218,11 @@ mod emergency_fill_tests {
 
     #[test]
     fn underfilled_club_signs_multiple_despite_normal_daily_cap() {
+        // Test-isolation: seed the shared RandomEngine so the per-slot
+        // weighted cluster pick + acceptance roll sequence stays
+        // deterministic regardless of suite position (the cluster pick
+        // now draws RNG for multi-candidate slots).
+        crate::utils::random::engine::RandomEngine::set_seed(0xE11E_C7AB_u64);
         // Squad of 9 (urgent < 11). Normal max_free_agent_signings_per_day
         // is 2; the emergency pass uses a separate per-club cap (5
         // by default) so the underfilled club must be able to sign
