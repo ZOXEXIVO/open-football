@@ -3,9 +3,12 @@ use log::debug;
 
 use crate::transfers::ScoutingRegion;
 use crate::transfers::pipeline::plausibility::{
-    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
+    BuyerPlausibilityContext, TransferMoveStage, TransferPlausibilityBuilder,
+    TransferPlausibilityVerdict,
 };
-use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::processor::{
+    PipelineProcessor, PlayerSummary, SellerPlausibilityContext,
+};
 use crate::transfers::pipeline::recruitment::ScoutMonitoringSource;
 use crate::transfers::pipeline::scouting_config::ScoutingConfig;
 use crate::transfers::pipeline::{
@@ -16,7 +19,8 @@ use crate::transfers::pipeline::{
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;
 use crate::{
-    ClubPhilosophy, Country, Person, PlayerStatusType, StaffEventType, StaffPosition, TeamType,
+    ClubPhilosophy, Country, Person, PlayerSquadStatus, PlayerStatusType, StaffEventType,
+    StaffPosition, TeamType,
 };
 use chrono::Weekday;
 use std::cmp::Ordering;
@@ -733,6 +737,16 @@ impl PipelineProcessor {
             let (seller_league_rep, seller_club_rep) =
                 PlayerValuationCalculator::seller_context(country, club);
             let club_world_rep = Self::club_world_reputation(club);
+            // Staged-plausibility seller context, resolved once per club so a
+            // cross-country buyer can assess this player without re-walking
+            // the seller's roster. `overall_score` (not market value) matches
+            // the legacy single-country builder's `seller_rep`.
+            let main_team = club.teams.main();
+            let seller_club_rep_score = main_team
+                .map(|t| t.reputation.overall_score())
+                .unwrap_or(0.3);
+            let seller_league_id = main_team.and_then(|t| t.league_id);
+            let seller_in_debt = club.finance.balance.balance < 0;
 
             for team in &club.teams.teams {
                 for player in &team.players.players {
@@ -755,6 +769,16 @@ impl PipelineProcessor {
                             ((days / 30).min(i16::MAX as i64) as i16, c.salary)
                         })
                         .unwrap_or((0, 0));
+                    let pos_group = player.position().position_group();
+                    let seller_rank = match Self::position_group_rank(club, player.id, pos_group) {
+                        u8::MAX => 1,
+                        r => r,
+                    };
+                    let squad_status = player
+                        .contract
+                        .as_ref()
+                        .map(|c| c.squad_status.clone())
+                        .unwrap_or(PlayerSquadStatus::NotYetSet);
                     players.push(PlayerSummary {
                         player_id: player.id,
                         club_id: club.id,
@@ -800,6 +824,17 @@ impl PipelineProcessor {
                         is_injured: player.player_attributes.is_injured,
                         contract_months_remaining,
                         salary,
+                        seller_ctx: SellerPlausibilityContext {
+                            club_reputation_score: seller_club_rep_score,
+                            league_reputation: seller_league_rep,
+                            league_id: seller_league_id,
+                            position_group_rank: seller_rank,
+                            squad_status,
+                            is_transfer_requested: statuses
+                                .contains(&PlayerStatusType::Req),
+                            is_unhappy: statuses.contains(&PlayerStatusType::Unh),
+                            in_debt: seller_in_debt,
+                        },
                     });
                 }
             }
@@ -930,7 +965,6 @@ impl PipelineProcessor {
                     // scouting, not responding to a listing).
                     if let Some(TransferPlausibilityVerdict::HardReject(_)) =
                         TransferPlausibilityBuilder::evaluate_summary(
-                            country,
                             &buyer_plausibility_ctx,
                             p,
                             false,
@@ -1172,12 +1206,53 @@ impl PipelineProcessor {
                     if recommendation == ScoutingRecommendation::Pass {
                         rejected_events.push((club.id, target.player_id));
                     } else {
-                        // Mark Wnt only on meaningful interest — a non-Pass
-                        // report from a real assignment. The previous gate
-                        // (first observation regardless of outcome) lit up
-                        // every player a scout glanced at, even rejections.
-                        if !wanted_player_ids.contains(&target.player_id) {
-                            wanted_player_ids.push(target.player_id);
+                        // Public interest (`Wnt`) is separated from the
+                        // scouting report. A scout liking a player produces
+                        // a private report (which still feeds the internal
+                        // shortlist) — it does NOT, on its own, make the
+                        // interest public. `Wnt` is set only when:
+                        //   * the report is a Buy / StrongBuy (a Consider is
+                        //     private monitoring), AND
+                        //   * the move clears the public-interest stage of
+                        //     the shared plausibility model (the player /
+                        //     agent wouldn't immediately dismiss it — level,
+                        //     affordability and willingness are credible).
+                        // A lower club can therefore quietly scout a strong
+                        // first-team player at a bigger club without ever
+                        // setting `Wnt`.
+                        let buyable = matches!(
+                            recommendation,
+                            ScoutingRecommendation::StrongBuy | ScoutingRecommendation::Buy
+                        );
+                        let assessment = TransferPlausibilityBuilder::assess_summary(
+                            &buyer_plausibility_ctx,
+                            target,
+                            false,
+                            true,
+                            date,
+                        );
+                        let public_interest_ok = buyable
+                            && assessment
+                                .map(|a| a.reaches(TransferMoveStage::CanShowPublicInterest))
+                                .unwrap_or(false);
+
+                        if public_interest_ok {
+                            if !wanted_player_ids.contains(&target.player_id) {
+                                wanted_player_ids.push(target.player_id);
+                            }
+                        } else if buyable {
+                            // The scout rates him a buy, but the move can't
+                            // credibly go public yet — keep the private report
+                            // (it still feeds the internal shortlist) and
+                            // record WHY no public interest was shown.
+                            if let Some(a) = assessment {
+                                debug!(
+                                    "scouting: club {} watched player {} privately, no public interest — {}",
+                                    club.id,
+                                    target.player_id,
+                                    a.diagnostics.explain()
+                                );
+                            }
                         }
                         reports.push(ScoutingReportResult {
                             club_id: club.id,

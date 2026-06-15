@@ -1,5 +1,6 @@
 use super::Club;
 use crate::club::player::calculators::{AutomaticReleaseEligibility, ReleaseEligibilityContext};
+use crate::club::team::squad::SquadAssetContext;
 use crate::{
     ContractType, Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerStatusType,
     Team, TeamType,
@@ -515,6 +516,13 @@ impl Club {
         };
         let annual_wage_bill: u32 = self.teams.iter().map(|t| t.get_annual_salary()).sum();
 
+        // Central squad-asset classification, built once against the pre-trim
+        // squad. Threaded into the release gate so a player who is core /
+        // first-team / recognised / merely-unevaluated is never walked for
+        // free — only genuine surplus is. Owns its data, so the mutable trim
+        // loop below holds no borrow on it.
+        let asset_ctx = SquadAssetContext::build(self, date);
+
         for (group, max_count) in &limits {
             // Active players only: if a player has already been released
             // (no contract, Frt) they shouldn't count against the cap, or
@@ -575,6 +583,7 @@ impl Club {
                         squad_avg_ability,
                         market_value,
                         annual_wage_bill,
+                        asset_class: asset_ctx.classify(player, date),
                     };
                     match AutomaticReleaseEligibility::assess(player, &release_ctx) {
                         None => {

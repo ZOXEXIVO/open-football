@@ -32,6 +32,16 @@ impl Transfers {
         self.items.retain(|item| item.player_id != player_id);
     }
 
+    /// Remove and return the listing entry for `player_id`, if any. Used to
+    /// migrate a player's asking-price entry between a club's own teams on an
+    /// internal squad move (Main ↔ Reserve / B) so the listing follows the
+    /// player instead of being dropped — market discovery is status-based and
+    /// scans every team, so a desynced entry would only hide the asking price.
+    pub fn take(&mut self, player_id: u32) -> Option<TransferItem> {
+        let idx = self.items.iter().position(|i| i.player_id == player_id)?;
+        Some(self.items.remove(idx))
+    }
+
     pub fn contains(&self, player_id: u32) -> bool {
         self.items.iter().any(|i| i.player_id == player_id)
     }

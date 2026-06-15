@@ -1,7 +1,9 @@
 use chrono::{Datelike, NaiveDate};
 
 use crate::shared::CurrencyValue;
-use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::processor::{
+    PipelineProcessor, PlayerSummary, SellerPlausibilityContext,
+};
 use crate::transfers::pipeline::{
     DetailedScoutingReport, ReportRiskFlag, ScoutingRecommendation, TransferNeedReason,
     TransferRequest,
@@ -9,8 +11,8 @@ use crate::transfers::pipeline::{
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
-    Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
-    StaffPosition, TeamType,
+    Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType,
+    ReputationLevel, StaffPosition, TeamType,
 };
 use chrono::Weekday;
 
@@ -198,6 +200,30 @@ impl PipelineProcessor {
                             ((days / 30).min(i16::MAX as i64) as i16, c.salary)
                         })
                         .unwrap_or((0, 0));
+                    let statuses = player.statuses.get();
+                    let pos_group = player.position().position_group();
+                    let main_team = club.teams.main();
+                    let seller_ctx = SellerPlausibilityContext {
+                        club_reputation_score: main_team
+                            .map(|t| t.reputation.overall_score())
+                            .unwrap_or(0.3),
+                        league_reputation,
+                        league_id: main_team.and_then(|t| t.league_id),
+                        position_group_rank: match Self::position_group_rank(
+                            club, player.id, pos_group,
+                        ) {
+                            u8::MAX => 1,
+                            r => r,
+                        },
+                        squad_status: player
+                            .contract
+                            .as_ref()
+                            .map(|c| c.squad_status.clone())
+                            .unwrap_or(PlayerSquadStatus::NotYetSet),
+                        is_transfer_requested: statuses.contains(&PlayerStatusType::Req),
+                        is_unhappy: statuses.contains(&PlayerStatusType::Unh),
+                        in_debt: club.finance.balance.balance < 0,
+                    };
                     return Some(PlayerSummary {
                         player_id: player.id,
                         club_id: club.id,
@@ -241,6 +267,7 @@ impl PipelineProcessor {
                         is_injured: player.player_attributes.is_injured,
                         contract_months_remaining,
                         salary,
+                        seller_ctx,
                     });
                 }
             }
@@ -975,6 +1002,7 @@ mod tier_helper_tests {
 
 #[cfg(test)]
 mod group_need_tests {
+    use crate::club::team::squad::SquadAssetClass;
     use crate::transfers::pipeline::evaluation::{
         GroupNeed, NeedKind, compute_group_needs, group_depth_requirement,
     };
@@ -1002,9 +1030,11 @@ mod group_need_tests {
             age: 26,
             position_levels: levels,
             appearances: 10,
+            official_appearances: 10,
             is_injured: false,
             recovery_days: 0,
             injury_days: 0,
+            asset_class: SquadAssetClass::UnknownNeedsEvaluation,
         }
     }
 
@@ -1268,6 +1298,11 @@ mod group_need_tests {
             ambition: 0.7,
             parent_club_score: 0.40, // smaller club
             parent_club_in_debt: false,
+            days_available: 5,
+            contract_months_remaining: 24,
+            low_usage: false,
+            recent_interest_count: 0,
+            failed_scans: 0,
         };
 
         // Acceptance: weak group + an actual upgrade
@@ -1330,6 +1365,11 @@ mod group_need_tests {
             ambition: 0.5,
             parent_club_score: 0.55,
             parent_club_in_debt: false,
+            days_available: 5,
+            contract_months_remaining: 24,
+            low_usage: false,
+            recent_interest_count: 0,
+            failed_scans: 0,
         };
         assert_eq!(
             evaluate_listed_target(&pricey, &small_buyer),
@@ -1374,6 +1414,11 @@ mod group_need_tests {
             ambition: 0.5,
             parent_club_score: 0.55,
             parent_club_in_debt: false,
+            days_available: 5,
+            contract_months_remaining: 24,
+            low_usage: false,
+            recent_interest_count: 0,
+            failed_scans: 0,
         };
 
         assert_eq!(
@@ -1417,6 +1462,11 @@ mod group_need_tests {
             ambition: 0.7,
             parent_club_score: 0.85,
             parent_club_in_debt: false,
+            days_available: 5,
+            contract_months_remaining: 24,
+            low_usage: false,
+            recent_interest_count: 0,
+            failed_scans: 0,
         };
 
         let v = evaluate_listed_target(&world_class, &local_buyer);
@@ -1466,6 +1516,11 @@ mod group_need_tests {
             ambition: 0.5,
             parent_club_score: 0.55,
             parent_club_in_debt: false,
+            days_available: 5,
+            contract_months_remaining: 24,
+            low_usage: false,
+            recent_interest_count: 0,
+            failed_scans: 0,
         };
 
         let v = evaluate_listed_target(&modest_listed, &buyer);
@@ -1512,6 +1567,11 @@ mod group_need_tests {
             ambition: 0.5,
             parent_club_score: 0.50,
             parent_club_in_debt: false,
+            days_available: 5,
+            contract_months_remaining: 24,
+            low_usage: false,
+            recent_interest_count: 0,
+            failed_scans: 0,
         };
 
         // The sweep is the listed-star path — players without any
@@ -1546,6 +1606,139 @@ mod group_need_tests {
         assert_eq!(
             group_depth_requirement(t442, PlayerFieldPositionGroup::Forward),
             3
+        );
+    }
+
+    #[test]
+    fn stale_market_opportunity_unlocks_signing_without_open_request() {
+        use crate::PlayerFieldPositionGroup;
+        use crate::transfers::pipeline::recommendations::{
+            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
+            evaluate_listed_target,
+        };
+
+        // Continental club, well-stocked at the position (best above the
+        // tier baseline → not weak), no open request, no aging starter —
+        // so there is no conventional squad need. A FRESH listing here is
+        // correctly rejected as filler.
+        let buyer = BuyerContext {
+            buyer_rep_score: 0.72,
+            buyer_world_rep: 5800,
+            buyer_league_reputation: 5500,
+            buyer_total_wages: 20_000_000,
+            buyer_wage_budget: 60_000_000,
+            plan_total_budget: 40_000_000.0,
+            max_recommend_value: 0.0,
+            buyer_best_in_group: 135,
+            has_open_request: false,
+            has_aging_starter: false,
+        };
+
+        let mut player = ListedTargetView {
+            ability: 130,
+            estimated_potential: 138,
+            age: 25,
+            estimated_value: 8_000_000.0,
+            position_group: PlayerFieldPositionGroup::Forward,
+            is_listed: false,
+            is_transfer_requested: true,
+            is_unhappy: true,
+            world_reputation: 5200,
+            current_reputation: 5000,
+            ambition: 0.6,
+            parent_club_score: 0.40,
+            parent_club_in_debt: false,
+            days_available: 5,
+            contract_months_remaining: 24,
+            low_usage: false,
+            recent_interest_count: 0,
+            failed_scans: 0,
+        };
+
+        // Fresh: no need + only a sideways move → rejected. The
+        // opportunity route is gated on staleness, so a brand-new listing
+        // never bypasses the need check (existing behaviour preserved).
+        assert_eq!(
+            evaluate_listed_target(&player, &buyer),
+            ListedTargetVerdict::Reject(ListedRejectReason::NoSquadNeed)
+        );
+
+        // After months on the market, barely featuring, with dry scans
+        // behind him, the same affordable, in-tier player becomes a
+        // genuine depth/resale opportunity even without an open request.
+        player.days_available = 120;
+        player.low_usage = true;
+        player.failed_scans = 4;
+        assert!(
+            matches!(
+                evaluate_listed_target(&player, &buyer),
+                ListedTargetVerdict::Accept(_)
+            ),
+            "a stale, affordable, in-tier available player must become a market opportunity"
+        );
+    }
+
+    #[test]
+    fn staleness_softening_makes_borderline_fee_reachable() {
+        use crate::PlayerFieldPositionGroup;
+        use crate::transfers::pipeline::recommendations::{
+            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
+            evaluate_listed_target,
+        };
+
+        // Open request so the need / upgrade gates pass — we want to
+        // isolate the FEE gate and its staleness-driven softening.
+        let buyer = BuyerContext {
+            buyer_rep_score: 0.72,
+            buyer_world_rep: 5800,
+            buyer_league_reputation: 5500,
+            buyer_total_wages: 10_000_000,
+            buyer_wage_budget: 100_000_000,
+            plan_total_budget: 10_000_000.0, // reach = 14M
+            max_recommend_value: 0.0,
+            buyer_best_in_group: 110,
+            has_open_request: true,
+            has_aging_starter: false,
+        };
+
+        let mut player = ListedTargetView {
+            ability: 128,
+            estimated_potential: 132,
+            age: 27,
+            estimated_value: 17_000_000.0, // just beyond the fresh reach
+            position_group: PlayerFieldPositionGroup::Forward,
+            is_listed: true,
+            is_transfer_requested: false,
+            is_unhappy: false,
+            world_reputation: 4800,
+            current_reputation: 4500,
+            ambition: 0.5,
+            parent_club_score: 0.55,
+            parent_club_in_debt: false,
+            days_available: 5,
+            contract_months_remaining: 24,
+            low_usage: false,
+            recent_interest_count: 0,
+            failed_scans: 0,
+        };
+
+        // Fresh: a 17M asking sits above the ~14M reach → unaffordable.
+        assert_eq!(
+            evaluate_listed_target(&player, &buyer),
+            ListedTargetVerdict::Reject(ListedRejectReason::UnaffordableFee)
+        );
+
+        // A year unsold with a dozen dry scans: the seller has quietly
+        // dropped the asking enough to bring the deal into reach — but the
+        // softening stays bounded, so it never becomes a giveaway.
+        player.days_available = 365;
+        player.failed_scans = 12;
+        assert!(
+            matches!(
+                evaluate_listed_target(&player, &buyer),
+                ListedTargetVerdict::Accept(_)
+            ),
+            "asking-price softening after a long market failure must bring a borderline fee into reach"
         );
     }
 }

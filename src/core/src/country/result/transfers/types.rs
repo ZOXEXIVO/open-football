@@ -96,6 +96,13 @@ pub(crate) struct NegotiationData {
     /// `resolve_medical` can include the full package in the deferred
     /// transfer for execution to install.
     pub(crate) personal_terms: Option<PersonalTermsOffer>,
+    /// Foreign moves only: the player would refuse on willingness grounds
+    /// (clear step down, no availability signal), captured from the full
+    /// cross-border assessment at negotiation creation. Applied as the
+    /// foreign personal-terms hard floor — the buyer's country can't
+    /// recompute it (the seller-side data lives abroad). `false` for
+    /// domestic moves, whose floor is recomputed live.
+    pub(crate) foreign_terms_floor_blocked: bool,
 }
 
 /// A completed negotiation that needs execution at SimulatorData level.

@@ -38,6 +38,20 @@ Use the data fields to judge each player:
     - rejection_reason: why the last offer was turned down (low_salary, short_contract, status_below_expectation, no_release_clause, no_sweetener, ambition_mismatch)
     - affordable: true/false when wage budget context is available, null when unknown
 
+[LISTING IS A MARKET ACTION, NOT A MATCH DECISION]
+- Transfer-listing or loan-listing a player only advertises that the club will
+  sell or loan him. It does NOT remove him from the first team and does NOT mean
+  "stop playing him". A contracted player you list is still a club asset with
+  professional obligations and stays match-selectable.
+- Keep a valuable want-away player (REQ/UNH) in the first-team group: list him so
+  buyers know he is available, but the squad keeps using him to stay strong, keep
+  him sharp, protect his value and show him to buyers — especially while no buyer
+  exists yet.
+- Use the LOAN LIST / squad demotion only for genuine sporting reasons: surplus
+  fringe players, prospects who need development minutes elsewhere, or
+  disciplinary cases — never as the automatic consequence of listing a good
+  player.
+
 [LISTING RULES]
 TRANSFER LIST when:
 - Player has requested a transfer (REQ status)
@@ -74,6 +88,14 @@ LOAN LIST when:
 - Player is blocked by clearly better players at their position (compare skills)
 - Player returning from long injury needs match fitness elsewhere
 - Surplus player but has future value — loan rather than sell
+
+STALLED PROSPECT / ASSET VALUE (do NOT let a talented player rot unused):
+- A young or high-potential player with almost NO official minutes (league + cups) over a meaningful period must NOT be ignored — he needs a decision, not another silent season in the stands
+- If he is genuinely blocked by the depth ahead of him AND has future value, prefer LOAN LIST so he plays — being blocked and unused is reason enough; he does not have to be far below squad standard
+- If he is already close to first-team level, KEEP him and use him in low-risk fixtures (cup rounds, dead rubbers, late substitutions) rather than listing him
+- If he has had repeated FAILED loans (returned with barely any minutes) or is aging out of "prospect" age with no credible path, SELL — do not loan him out yet again
+- Protect resale value: for a valuable player on a SHORT contract, contract renewal comes first; only if renewal is clearly exhausted should you move him — and prefer a sale over a loan, so the value isn't lost running the deal down on loan
+- Do NOT loan-list a second-choice keeper or a credible rotation player the squad still needs for depth, and never act on a player who has no minutes only because he is injured, suspended, on international duty, or otherwise unavailable
 
 DELIST when:
 - Injury crisis means a listed player is now needed

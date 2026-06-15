@@ -170,6 +170,11 @@ impl CountryResult {
             PipelineProcessor::evaluate_squads(country, current_date);
             PipelineProcessor::generate_staff_recommendations(country, current_date);
             PipelineProcessor::process_staff_recommendations(country, current_date);
+            // Market-circulation / diagnosis: record interest in (or a
+            // coherent block reason for) every available signed player,
+            // right after the recommendation sweep so this tick's interest
+            // is already visible.
+            PipelineProcessor::circulate_available_players(country, current_date);
             PipelineProcessor::assign_scouts(country, current_date);
             PipelineProcessor::assign_scouts_to_matches(country, current_date);
             PipelineProcessor::process_match_scouting(country, current_date);
@@ -421,6 +426,9 @@ impl CountryResult {
                 PipelineProcessor::evaluate_squads(country, current_date);
                 PipelineProcessor::generate_staff_recommendations(country, current_date);
                 PipelineProcessor::process_staff_recommendations(country, current_date);
+                // Market-circulation / diagnosis pass — see the local
+                // pipeline path above for rationale.
+                PipelineProcessor::circulate_available_players(country, current_date);
                 PipelineProcessor::assign_scouts(country, current_date);
                 PipelineProcessor::assign_scouts_to_matches(country, current_date);
                 PipelineProcessor::process_match_scouting(country, current_date);

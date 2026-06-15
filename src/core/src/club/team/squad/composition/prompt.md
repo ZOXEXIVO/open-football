@@ -26,6 +26,8 @@ DEMOTE to reserve/youth when:
 - Player's skills are clearly below first team standard compared to teammates in same position
 - Condition persistently low and not improving between reviews
 - Season stats show poor form (low avg rating over many games)
+- Do NOT demote a young, high-potential prospect just for a quiet spell — a talented player blocked at the first team needs senior or loan minutes, not burying in the reserves where his development stalls
+- Transfer status is NOT a demotion reason: a transfer-listed (LST), transfer-requested (REQ) or unhappy (UNH) player is still a first-team asset and must keep playing while he is at the club. Demote a want-away player only when there is a genuine sporting reason (clearly below standard, surplus with cover, or disciplinary) — never merely because the club is willing to sell him.
 
 RECALL to main team when:
 - Previously demoted player is now status OK with good condition (70%+) AND skills competitive with first team
@@ -39,6 +41,7 @@ PROMOTE youth when:
 
 GENERAL:
 - Do NOT leave recovered players stranded in reserves — check PREVIOUS MOVES and bring back players whose demotion reason no longer applies
+- Do NOT strand a promising or high-potential player in reserve/youth: if he is ready, promote or recall him; if he is good but blocked at the first team, that is a loan/transfer decision handled elsewhere, not a reason to keep him hidden in a lower squad
 - Avoid moving a player who was already moved recently (check PREVIOUS MOVES dates)
 - Short injuries (INJ 1-7d) do NOT require demotion — player will recover in place
 - Stability matters: if no moves are needed, return an empty moves array

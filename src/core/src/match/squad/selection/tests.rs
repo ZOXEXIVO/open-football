@@ -5,9 +5,10 @@ use crate::StaffStub;
 use crate::Team;
 use crate::club::{ClubPhilosophy, PlayerFieldPositionGroup};
 use crate::{
-    IntegerUtils, MatchTacticType, PeopleNameGeneratorData, PlayerClubContract, PlayerCollection,
-    PlayerGenerator, PlayerPosition, PlayerSquadStatus, PlayerStatusType, SelectionOmissionReason,
-    StaffCollection, TeamBuilder, TeamReputation, TeamType, TrainingSchedule,
+    ChangeType, IntegerUtils, MatchTacticType, PeopleNameGeneratorData, PlayerClubContract,
+    PlayerCollection, PlayerGenerator, PlayerPosition, PlayerSquadStatus, PlayerStatusType,
+    RelationshipChange, SelectionOmissionReason, StaffCollection, TeamBuilder, TeamReputation,
+    TeamType, TrainingSchedule,
 };
 use chrono::NaiveDate;
 use chrono::{Datelike, Duration, NaiveTime, Utc};
@@ -206,6 +207,339 @@ fn score_player_for_slot_with_breakdown_total_matches_legacy() {
             );
         }
     }
+}
+
+#[test]
+fn stalled_prospect_gets_development_bias_in_low_risk_fixtures_only() {
+    // Requirement 4: the selector gives development minutes to a blocked,
+    // unused prospect in low-risk fixtures — but never pushes him into
+    // must-win matches.
+    let date = Utc::now().date_naive();
+    let staff = generate_test_staff();
+    let engine = ScoringEngine::from_staff(&staff);
+
+    // Blocked prospect: zero official minutes, long idle.
+    let mut prospect = make_test_player(1, &[(PlayerPositionType::Striker, 16)], 110, date);
+    prospect.player_attributes.days_since_last_match = 60;
+    prospect.statistics = Default::default();
+    prospect.cup_statistics = Default::default();
+
+    // Established regular: lots of minutes, just played.
+    let mut regular = make_test_player(2, &[(PlayerPositionType::Striker, 16)], 130, date);
+    regular.player_attributes.days_since_last_match = 3;
+    regular.statistics.played = 25;
+
+    // Low-importance fixture: the unused prospect gets a real development
+    // bias instead of being ignored...
+    let prospect_low = engine.development_minutes_bonus(&prospect, 0.1);
+    assert!(
+        prospect_low > 0.0,
+        "stalled prospect must get development minutes in low-risk fixtures, got {prospect_low}"
+    );
+    // ...more than an established regular who is already playing.
+    let regular_low = engine.development_minutes_bonus(&regular, 0.1);
+    assert!(
+        prospect_low > regular_low,
+        "unused prospect ({prospect_low}) should outrank a busy regular ({regular_low})"
+    );
+
+    // But NOT in a must-win match — prospects aren't pushed into finals.
+    let prospect_high = engine.development_minutes_bonus(&prospect, 0.9);
+    assert_eq!(
+        prospect_high, 0.0,
+        "no development bias in high-importance matches"
+    );
+}
+
+// ========== Want-away / transfer-status selection tests ==========
+
+#[test]
+fn transfer_status_does_not_block_match_availability() {
+    // Requirement 1/2: Lst, Req and Unh are soft signals, not hard
+    // availability blocks — a want-away contracted player is still selectable.
+    let date = Utc::now().date_naive();
+    let mut p = make_test_player(1, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
+    p.statuses.add(date, PlayerStatusType::Lst);
+    p.statuses.add(date, PlayerStatusType::Req);
+    p.statuses.add(date, PlayerStatusType::Unh);
+    assert!(
+        helpers::PlayerAvailability::is_available(&p, false),
+        "a transfer-listed, transfer-requested, unhappy player must still be available"
+    );
+}
+
+#[test]
+fn hard_availability_blocks_still_apply() {
+    // Requirement 8: the genuine availability gates are untouched.
+    let date = Utc::now().date_naive();
+
+    let mut injured = make_test_player(1, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
+    injured.player_attributes.is_injured = true;
+    assert!(!helpers::PlayerAvailability::is_available(&injured, false));
+
+    let mut banned = make_test_player(2, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
+    banned.player_attributes.is_banned = true;
+    assert!(!helpers::PlayerAvailability::is_available(&banned, false));
+    assert!(
+        helpers::PlayerAvailability::is_available(&banned, true),
+        "a ban does not apply in a friendly"
+    );
+
+    let mut intl = make_test_player(3, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
+    intl.statuses.add(date, PlayerStatusType::Int);
+    assert!(!helpers::PlayerAvailability::is_available(&intl, false));
+
+    let mut low = make_test_player(4, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
+    low.player_attributes.condition = 500; // ~5% — below HARD_CONDITION_FLOOR
+    assert!(!helpers::PlayerAvailability::is_available(&low, false));
+}
+
+#[test]
+fn listed_unhappy_player_gets_bounded_penalty_not_exclusion() {
+    // Requirement 4: a listed player with poor morale AND a poor manager
+    // relationship takes only a small, bounded penalty — never a hard exclusion.
+    let date = Utc::now().date_naive();
+    let staff = generate_test_staff();
+    let engine = ScoringEngine::from_staff(&staff);
+
+    let mut p = make_test_player(1, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
+    p.statuses.add(date, PlayerStatusType::Lst);
+    p.statuses.add(date, PlayerStatusType::Req);
+    p.statuses.add(date, PlayerStatusType::Unh);
+    p.happiness.morale = 5.0;
+    p.player_attributes.days_since_last_match = 2;
+    // Poor manager relationship.
+    let neg = RelationshipChange::negative(ChangeType::TacticalDisagreement, 2.0);
+    p.relations.update_staff_relationship(staff.id, neg, date);
+
+    let adj = engine.want_away_adjustment(&p, &staff, date, 0.7, false);
+    assert!(
+        adj < 0.0,
+        "a disaffected want-away player should take a penalty, got {adj}"
+    );
+    assert!(adj >= -2.0, "the penalty must stay bounded, got {adj}");
+    // ...and he is never excluded from the available pool by it.
+    assert!(helpers::PlayerAvailability::is_available(&p, false));
+}
+
+#[test]
+fn accepted_bid_player_rested_more_in_routine_than_must_win() {
+    // Requirement 6: a player with an accepted bid is rested for injury
+    // protection in routine games, but the protection fades in a must-win.
+    let date = Utc::now().date_naive();
+    let staff = generate_test_staff();
+    let engine = ScoringEngine::from_staff(&staff);
+
+    let mut p = make_test_player(1, &[(PlayerPositionType::Striker, 16)], 150, date);
+    p.statuses.add(date, PlayerStatusType::Bid);
+
+    let routine = engine.want_away_adjustment(&p, &staff, date, 0.2, false);
+    let must_win = engine.want_away_adjustment(&p, &staff, date, 0.95, false);
+    assert!(
+        routine < 0.0,
+        "a near-sold asset should be rested in a routine match, got {routine}"
+    );
+    assert!(
+        must_win > routine,
+        "injury protection must fade as the match matters more (routine {routine}, must-win {must_win})"
+    );
+}
+
+#[test]
+fn settled_player_has_zero_want_away_adjustment() {
+    // The modifier is dormant for the overwhelming majority of players, so it
+    // never perturbs normal selection.
+    let date = Utc::now().date_naive();
+    let staff = generate_test_staff();
+    let engine = ScoringEngine::from_staff(&staff);
+    let p = make_test_player(1, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
+    assert_eq!(engine.want_away_adjustment(&p, &staff, date, 0.5, false), 0.0);
+}
+
+#[test]
+fn listed_key_player_still_starts_important_match() {
+    // Requirement 3: a listed key player remains selectable for an important
+    // match — being on the market does not drop him from the XI.
+    let date = Utc::now().date_naive();
+    let staff = generate_test_staff();
+    let mut roster = paired_cup_roster();
+    // id 9 = DefenderRight, a KeyPlayer star whose fringe rival is a 24-year-old
+    // backup (no youth-pathway confound).
+    let listed_id = 9u32;
+    for p in roster.iter_mut() {
+        if p.id == listed_id {
+            p.statuses.add(date, PlayerStatusType::Lst);
+            if let Some(c) = p.contract.as_mut() {
+                c.is_transfer_listed = true;
+            }
+        }
+    }
+    let team = cup_team(roster);
+    let ctx = SelectionContext {
+        match_importance: 0.9,
+        ..SelectionContext::default()
+    };
+    assert_eq!(
+        SelectionPolicy::from_context(&ctx),
+        SelectionPolicy::BestEleven
+    );
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+    assert!(
+        result.main_squad.iter().any(|mp| mp.id == listed_id),
+        "a listed KeyPlayer must still start an important match"
+    );
+}
+
+#[test]
+fn agreed_transfer_protected_more_in_routine_than_must_win() {
+    // An agreed move (Trn) is handled by the selection layer's importance-aware
+    // injury protection — rested in routine games, available when it matters.
+    let date = Utc::now().date_naive();
+    let staff = generate_test_staff();
+    let engine = ScoringEngine::from_staff(&staff);
+    let mut p = make_test_player(1, &[(PlayerPositionType::Striker, 16)], 150, date);
+    p.statuses.add(date, PlayerStatusType::Trn);
+
+    let routine = engine.want_away_adjustment(&p, &staff, date, 0.2, false);
+    let must_win = engine.want_away_adjustment(&p, &staff, date, 0.95, false);
+    assert!(
+        routine < 0.0,
+        "an agreed-transfer player is rested in routine games, got {routine}"
+    );
+    assert!(
+        must_win > routine,
+        "protection fades as the match matters more (routine {routine}, must-win {must_win})"
+    );
+}
+
+#[test]
+fn agreed_transfer_player_still_starts_important_match() {
+    // An agreed-transfer key player remains selectable for a must-win — the
+    // injury protection fades to near zero at high importance.
+    let date = Utc::now().date_naive();
+    let staff = generate_test_staff();
+    let mut roster = paired_cup_roster();
+    let trn_id = 9u32; // DefenderRight star (one of four defender slots).
+    for p in roster.iter_mut() {
+        if p.id == trn_id {
+            p.statuses.add(date, PlayerStatusType::Trn);
+        }
+    }
+    let team = cup_team(roster);
+    let ctx = SelectionContext {
+        match_importance: 0.95,
+        ..SelectionContext::default()
+    };
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+    assert!(
+        result.main_squad.iter().any(|mp| mp.id == trn_id),
+        "an agreed-transfer player must remain selectable for a must-win match"
+    );
+}
+
+#[test]
+fn friendly_drops_disaffection_penalty() {
+    // A friendly is exactly where a manager hands a disaffected listed player
+    // minutes to stay sharp — the disaffection penalty is dropped.
+    let date = Utc::now().date_naive();
+    let staff = generate_test_staff();
+    let engine = ScoringEngine::from_staff(&staff);
+    let mut p = make_test_player(1, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
+    p.statuses.add(date, PlayerStatusType::Req);
+    p.statuses.add(date, PlayerStatusType::Unh);
+    p.happiness.morale = 5.0;
+    let neg = RelationshipChange::negative(ChangeType::TacticalDisagreement, 2.0);
+    p.relations.update_staff_relationship(staff.id, neg, date);
+
+    let competitive = engine.want_away_adjustment(&p, &staff, date, 0.5, false);
+    let friendly = engine.want_away_adjustment(&p, &staff, date, 0.5, true);
+    assert!(
+        friendly > competitive,
+        "a friendly must not pile a disaffection penalty on a listed player \
+         (friendly {friendly}, competitive {competitive})"
+    );
+}
+
+#[test]
+fn status_census_separates_market_from_unavailable() {
+    // Diagnostics: market / near-transfer status is reported separately from
+    // genuine unavailability, and never counted as a selection block.
+    let date = Utc::now().date_naive();
+    let mut injured = make_test_player(1, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
+    injured.player_attributes.is_injured = true;
+    let mut listed = make_test_player(2, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
+    listed.statuses.add(date, PlayerStatusType::Lst);
+    let mut requested = make_test_player(3, &[(PlayerPositionType::Striker, 16)], 130, date);
+    requested.statuses.add(date, PlayerStatusType::Req);
+    let mut near_transfer = make_test_player(4, &[(PlayerPositionType::Striker, 16)], 130, date);
+    near_transfer.statuses.add(date, PlayerStatusType::Trn);
+    let healthy = make_test_player(5, &[(PlayerPositionType::DefenderCenter, 16)], 130, date);
+
+    let players: Vec<&Player> = vec![&injured, &listed, &requested, &near_transfer, &healthy];
+    let census = helpers::SelectionStatusCensus::of(&players, false);
+
+    assert_eq!(census.injured, 1);
+    assert_eq!(census.listed, 1);
+    assert_eq!(census.requested, 1);
+    assert_eq!(census.agreed_transfer, 1);
+    assert_eq!(
+        census.unavailable_total(),
+        1,
+        "only the injured player genuinely blocks selection"
+    );
+    assert_eq!(
+        census.market_total(),
+        3,
+        "listed + requested + agreed-transfer are market statuses, not unavailability"
+    );
+}
+
+#[test]
+fn rotation_keeps_listed_player_benches_near_transfer() {
+    // Rotation/friendly selection keeps a listed player sharp but protects a
+    // near-transfer one from a meaningless game.
+    let date = Utc::now().date_naive();
+    let staff = generate_test_staff();
+
+    let mut players = Vec::new();
+    // A real keeper so the GK slot doesn't pull an outfielder.
+    players.push(make_test_player(99, &[(PlayerPositionType::Goalkeeper, 16)], 130, date));
+    // Twelve otherwise-identical midfielders for ten outfield rotation spots.
+    for id in 1..=12u32 {
+        players.push(make_test_player(
+            id,
+            &[(PlayerPositionType::MidfielderCenter, 16)],
+            130,
+            date,
+        ));
+    }
+    if let Some(p) = players.iter_mut().find(|p| p.id == 1) {
+        p.statuses.add(date, PlayerStatusType::Trn); // near transfer — protect
+    }
+    if let Some(p) = players.iter_mut().find(|p| p.id == 2) {
+        p.statuses.add(date, PlayerStatusType::Lst); // listed — keep sharp
+    }
+
+    let mut team = generate_test_team();
+    team.players = PlayerCollection::new(players);
+    team.tactics = Some(Tactics::new(MatchTacticType::T442));
+
+    let ctx = SelectionContext {
+        is_friendly: true,
+        ..SelectionContext::default()
+    };
+    let result = SquadSelector::select_for_rotation_with_context(&team, &staff, &[], &ctx);
+    let starters: Vec<u32> = result.main_squad.iter().map(|p| p.id).collect();
+
+    assert!(
+        !starters.contains(&1),
+        "a near-transfer player should be protected from a meaningless friendly"
+    );
+    assert!(
+        starters.contains(&2),
+        "a listed player should be kept match-sharp in rotation"
+    );
 }
 
 // ========== Test helpers ==========

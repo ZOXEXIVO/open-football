@@ -263,6 +263,9 @@ impl Player {
         // Transfer-request reasons evaporate when the move actually
         // happens — the wish was granted.
         self.transfer_request_reasons.clear();
+        // The availability-market diagnosis described the previous club's
+        // market read — it must not outlive the spell it belonged to.
+        self.clear_availability_state();
         // Force-selection is the previous manager's pin — the new
         // club's manager hasn't expressed a preference yet, so the
         // flag mustn't survive the move.

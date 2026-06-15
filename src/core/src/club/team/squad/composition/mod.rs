@@ -3,7 +3,9 @@ use crate::{Team, TeamType};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use super::{MIN_FIRST_TEAM_SQUAD, execute_moves, record_moves, record_player_decisions};
+use super::{
+    MIN_FIRST_TEAM_SQUAD, MainSquadMoveGuard, execute_moves, record_moves, record_player_decisions,
+};
 use serde_json::Value;
 
 // ─── AI prompt data types ──────────────────────────────────────────
@@ -216,9 +218,24 @@ impl SquadComposition {
                 continue;
             }
 
-            // Guard: block demotions from main team if squad is at minimum
+            // Guards for demotions off the Main team.
             if m.from_team_index == main_idx && m.to_team_index != main_idx {
+                // Never drop below the minimum first-team squad size.
                 if teams[main_idx].players.players.len() <= MIN_FIRST_TEAM_SQUAD {
+                    continue;
+                }
+                // Enforce the want-away invariant in CODE, not just prompt text:
+                // the LLM cannot demote a useful listed/requested/unhappy player
+                // (or any essential one) without genuine positional cover.
+                let allowed = {
+                    let guard = MainSquadMoveGuard::new(&teams[main_idx], date);
+                    teams[main_idx]
+                        .players
+                        .find(m.player_id)
+                        .map(|p| guard.allow_demote_from_main(p, &m.reason))
+                        .unwrap_or(true)
+                };
+                if !allowed {
                     continue;
                 }
             }

@@ -1,6 +1,5 @@
-use crate::PlayerPreferredFoot;
 use crate::club::{PlayerFieldPositionGroup, PlayerPositionType};
-use crate::{Player, TacticalStyle, Tactics};
+use crate::{Player, PlayerPreferredFoot, PlayerStatusType, TacticalStyle, Tactics};
 
 pub const DEFAULT_SQUAD_SIZE: usize = 11;
 pub const DEFAULT_BENCH_SIZE: usize = 7;
@@ -8,9 +7,101 @@ pub const DEFAULT_BENCH_SIZE: usize = 7;
 /// Minimum condition to be physically able to play (15%).
 pub const HARD_CONDITION_FLOOR: u32 = 15;
 
+/// Selection-time status census for diagnostics. Keeps genuine match
+/// *unavailability* (injury, ban, international duty, low condition) strictly
+/// separate from *market* status (listed, loan-listed, requested, unhappy) and
+/// *near-transfer* status (bid accepted, agreed move). Market and near-transfer
+/// statuses never make a player unavailable — they only colour selection — so
+/// grouping them beside the unavailable causes (as the old debug line did) is
+/// misleading when debugging a short squad.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SelectionStatusCensus {
+    // ── genuine availability blocks ──
+    pub injured: usize,
+    pub international: usize,
+    pub low_condition: usize,
+    pub banned: usize,
+    // ── market statuses (still selectable) ──
+    pub listed: usize,
+    pub loan_listed: usize,
+    pub requested: usize,
+    pub unhappy: usize,
+    // ── near-transfer statuses (still selectable) ──
+    pub bid_accepted: usize,
+    pub agreed_transfer: usize,
+}
+
+impl SelectionStatusCensus {
+    /// Census the squad. `is_friendly` mirrors the availability gate — a ban
+    /// doesn't apply in a friendly, so it isn't counted as unavailable there.
+    pub fn of(players: &[&Player], is_friendly: bool) -> Self {
+        let mut c = SelectionStatusCensus::default();
+        for p in players {
+            if p.player_attributes.is_injured {
+                c.injured += 1;
+            }
+            if p.statuses.is_on_international_duty() {
+                c.international += 1;
+            }
+            if !p.player_attributes.is_injured
+                && p.player_attributes.condition_percentage() < HARD_CONDITION_FLOOR
+            {
+                c.low_condition += 1;
+            }
+            if !is_friendly && p.player_attributes.is_banned {
+                c.banned += 1;
+            }
+            let s = p.statuses.get();
+            if s.contains(&PlayerStatusType::Lst) {
+                c.listed += 1;
+            }
+            if s.contains(&PlayerStatusType::Loa) {
+                c.loan_listed += 1;
+            }
+            if s.contains(&PlayerStatusType::Req) {
+                c.requested += 1;
+            }
+            if s.contains(&PlayerStatusType::Unh) {
+                c.unhappy += 1;
+            }
+            if s.contains(&PlayerStatusType::Bid) {
+                c.bid_accepted += 1;
+            }
+            if s.contains(&PlayerStatusType::Trn) {
+                c.agreed_transfer += 1;
+            }
+        }
+        c
+    }
+
+    /// Players blocked from selection by a genuine availability cause. Market
+    /// and near-transfer statuses are deliberately excluded.
+    pub fn unavailable_total(&self) -> usize {
+        self.injured + self.international + self.low_condition + self.banned
+    }
+
+    /// Players carrying a market or near-transfer status. These remain fully
+    /// selectable — the figure is reported separately from unavailability.
+    pub fn market_total(&self) -> usize {
+        self.listed
+            + self.loan_listed
+            + self.requested
+            + self.unhappy
+            + self.bid_accepted
+            + self.agreed_transfer
+    }
+}
+
 pub struct PlayerAvailability;
 
 impl PlayerAvailability {
+    /// Match availability is a *physical/legal* question only: injury,
+    /// international duty, a hard condition floor, and (in competitive games) a
+    /// ban. Transfer-market status is deliberately NOT consulted here — a
+    /// transfer-listed (`Lst`), transfer-requested (`Req`) or unhappy (`Unh`)
+    /// player is still a contracted club asset and remains fully selectable.
+    /// Those signals shape *how* the manager picks him (see
+    /// `ScoringEngine::want_away_adjustment`), never *whether* he can play.
     pub fn is_available(player: &Player, is_friendly: bool) -> bool {
         if player.player_attributes.is_injured {
             return false;

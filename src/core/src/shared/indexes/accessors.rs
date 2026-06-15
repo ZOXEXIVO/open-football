@@ -4,6 +4,9 @@ use crate::country::Country;
 use crate::league::League;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::negotiation::NegotiationStatus;
+use crate::transfers::pipeline::plausibility::{
+    TransferMovePlausibility, TransferMoveStage, TransferPlausibilityBuilder,
+};
 use crate::transfers::pipeline::{ClubTransferPlan, ScoutPlayerMonitoring};
 use crate::{Club, Player, SimulatorData, Staff, Team};
 use chrono::NaiveDate;
@@ -1113,19 +1116,46 @@ impl SimulatorData {
         )
     }
 
-    /// Find all clubs actively *pursuing* this player — i.e. clubs whose
-    /// recruitment pipeline shows intent to sign him, not merely passing
-    /// awareness. Returns Vec of (club_id, club_name, team_slug).
+    /// Resolve the (country, club, player) the player currently sits at —
+    /// the *selling* side for a plausibility assessment. Brute-force scan so
+    /// it works for loaned-out players whose positional index points at the
+    /// host team. Returns shared refs; safe to hold alongside the read-only
+    /// world walk in [`Self::clubs_interested_in_player`].
+    fn resolve_seller_refs(&self, player_id: u32) -> Option<(&Country, &Club, &Player)> {
+        for continent in &self.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        if let Some(player) = team.players.find(player_id) {
+                            return Some((country, club, player));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Find all clubs whose pursuit of this player has reached a **public,
+    /// credible** stage — the clubs the "Interested Clubs" panel should
+    /// show. Returns Vec of (club_id, club_name, team_slug).
     ///
-    /// Pursuit signals (any one is enough):
-    /// 1. Shortlisted with `Available` or `CurrentlyPursuing` status.
-    /// 2. Scouting report with `StrongBuy` or `Buy` recommendation.
-    /// 3. Staff recommendation with confidence ≥ 0.6.
+    /// A club counts only when:
+    /// 1. It has an active club-to-club negotiation for him (already past
+    ///    the entry gates — definitively public), OR
+    /// 2. It has him on an active shortlist (`Available`/`CurrentlyPursuing`)
+    ///    or a strong staff recommendation (confidence ≥ 0.6), **and** the
+    ///    staged plausibility model says the move can credibly reach
+    ///    [`TransferMoveStage::CanShowPublicInterest`].
     ///
-    /// Deliberately *not* counted: bare scouting observations, persistent
-    /// `known_players` memory, and raw `scout_monitoring` rows. Those
-    /// represent awareness, not transfer intent, and previously caused
-    /// nearly every notable player to appear "wanted" by dozens of clubs.
+    /// Deliberately *not* counted: bare scouting reports (Buy/StrongBuy),
+    /// observations, `known_players` memory, raw `scout_monitoring` rows, and
+    /// shortlist/staff entries for moves that can't go public (e.g. a
+    /// lower-league club that has privately scouted a first-team player at a
+    /// much stronger club, at home or abroad). Those represent private
+    /// awareness — they belong under "Scout Monitoring", not "Interested
+    /// Clubs". This is what stops a Serie C/B side from appearing as an
+    /// interested club for a Spartak first-teamer it could only ever watch.
     pub fn clubs_interested_in_player(&self, player_id: u32) -> Vec<(u32, String, String)> {
         const STAFF_RECOMMENDATION_MIN_CONFIDENCE: f32 = 0.6;
 
@@ -1143,6 +1173,10 @@ impl SimulatorData {
             })
             .unwrap_or((None, None));
 
+        // Seller-side context for the public-interest gate, resolved once.
+        let seller = self.resolve_seller_refs(player_id);
+        let date = self.date.date();
+
         for continent in &self.continents {
             for country in &continent.countries {
                 for club in &country.clubs {
@@ -1151,6 +1185,14 @@ impl SimulatorData {
                     }
 
                     let plan = &club.transfer_plan;
+
+                    // An active negotiation is itself the public signal — a
+                    // foreign negotiation lives in the buyer's market, which
+                    // is exactly `country` here, so this covers both domestic
+                    // and cross-country pursuit.
+                    let negotiating = country
+                        .transfer_market
+                        .has_active_negotiation_for(player_id, club.id);
 
                     let on_active_shortlist = plan.shortlists.iter().any(|s| {
                         s.candidates.iter().any(|c| {
@@ -1163,20 +1205,33 @@ impl SimulatorData {
                         })
                     });
 
-                    let has_buy_report = plan.scouting_reports.iter().any(|r| {
-                        r.player_id == player_id
-                            && matches!(
-                                r.recommendation,
-                                ScoutingRecommendation::StrongBuy | ScoutingRecommendation::Buy
-                            )
-                    });
-
                     let has_strong_staff_rec = plan.staff_recommendations.iter().any(|r| {
                         r.player_id == player_id
                             && r.confidence >= STAFF_RECOMMENDATION_MIN_CONFIDENCE
                     });
 
-                    if on_active_shortlist || has_buy_report || has_strong_staff_rec {
+                    let is_interested = if negotiating {
+                        true
+                    } else if on_active_shortlist || has_strong_staff_rec {
+                        // A private shortlist / staff name only becomes public
+                        // interest if the move can credibly go public. Without
+                        // resolvable seller context, do NOT assume it can.
+                        match seller {
+                            Some((sell_country, sell_club, player)) => {
+                                let inputs = TransferPlausibilityBuilder::from_global(
+                                    country, club, sell_country, sell_club, player, 0.0, false,
+                                    true, date,
+                                );
+                                TransferMovePlausibility::assess(&inputs)
+                                    .reaches(TransferMoveStage::CanShowPublicInterest)
+                            }
+                            None => false,
+                        }
+                    } else {
+                        false
+                    };
+
+                    if is_interested {
                         let team_slug = club
                             .teams
                             .teams
@@ -1211,7 +1266,7 @@ use crate::StaffPosition;
 use crate::TeamType;
 use crate::transfers::pipeline::{
     DetailedScoutingReport, RecruitmentDecisionType, ScoutMonitoringStatus, ScoutVoteChoice,
-    ScoutingAssignment, ScoutingRecommendation, ShortlistCandidateStatus, TransferRequest,
+    ScoutingAssignment, ShortlistCandidateStatus, TransferRequest,
 };
 use crate::utils::DateUtils;
 use std::collections::HashMap;
@@ -1959,5 +2014,245 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                 .then(a.id.cmp(&b.id))
         });
         rows
+    }
+}
+
+#[cfg(test)]
+mod interested_clubs_tests {
+    //! End-to-end coverage for `clubs_interested_in_player`'s public-vs-
+    //! private separation — the Sambenedettese ↔ Maximenko case. A weak
+    //! lower-league club abroad may privately scout / shortlist a strong
+    //! first-teamer, but it must not surface as an interested club unless
+    //! its pursuit reaches a public, credible stage.
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::continent::Continent;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::fullname::FullName;
+    use crate::shared::{Currency, CurrencyValue, Location};
+    use crate::transfers::negotiation::TransferNegotiation;
+    use crate::transfers::offer::TransferOffer;
+    use crate::transfers::pipeline::{
+        DetailedScoutingReport, ScoutingRecommendation, ShortlistCandidate,
+        ShortlistCandidateStatus, TransferShortlist,
+    };
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
+        PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, PlayerSquadStatus, StaffCollection, TeamCollection, TeamReputation, TeamType,
+        TrainingSchedule,
+    };
+    use chrono::{NaiveDate, NaiveTime};
+
+    const MAXIMENKO: u32 = 5001;
+    const SPARTAK: u32 = 200;
+    const SAMBENEDETTESE: u32 = 100;
+
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 8, 20).unwrap()
+        }
+
+        /// A first-team goalkeeper at a strong club: high ability, a modest
+        /// world profile but a strong domestic (current/home) standing, and
+        /// a `FirstTeamRegular` contract. No availability signal.
+        fn maximenko() -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = 165;
+            attrs.potential_ability = 170;
+            attrs.world_reputation = 3000;
+            attrs.current_reputation = 6000;
+            attrs.home_reputation = 6500;
+            let mut contract =
+                PlayerClubContract::new(700_000, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
+            contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+            PlayerBuilder::new()
+                .id(MAXIMENKO)
+                .full_name(FullName::new("Alexandr".to_string(), "Maximenko".to_string()))
+                .birth_date(NaiveDate::from_ymd_opt(1998, 1, 1).unwrap())
+                .country_id(2)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Goalkeeper,
+                        level: 19,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(contract))
+                .build()
+                .unwrap()
+        }
+
+        fn club(id: u32, name: &str, league_id: u32, team_world: u16, players: Vec<Player>) -> Club {
+            let team = Team::builder()
+                .id(id * 10)
+                .league_id(Some(league_id))
+                .club_id(id)
+                .name(name.to_string())
+                .slug(format!("club-{id}"))
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(team_world, team_world, team_world))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap();
+            Club::new(
+                id,
+                name.to_string(),
+                Location::new(1),
+                ClubFinances::new(5_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![team]),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn country(id: u32, code: &str, league_rep: u16, clubs: Vec<Club>) -> Country {
+            let league = League::new(
+                id * 100,
+                "L".to_string(),
+                format!("league-{id}"),
+                1,
+                league_rep,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            );
+            Country::builder()
+                .id(id)
+                .code(code.to_string())
+                .slug(format!("c{id}"))
+                .name(format!("c{id}"))
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(clubs)
+                .build()
+                .unwrap()
+        }
+
+        /// World with the strong seller (Spartak + Maximenko, country 2,
+        /// strong league) and the provided weak buyer club (country 1, weak
+        /// league). The buyer's league id is 100, the seller's 200.
+        fn sim(buyer: Club) -> SimulatorData {
+            let spartak = Self::club(SPARTAK, "Spartak", 200, 7000, vec![Self::maximenko()]);
+            let seller_country = Self::country(2, "ru", 6500, vec![spartak]);
+            let buyer_country = Self::country(1, "it", 2000, vec![buyer]);
+            let continent = Continent::new(
+                1,
+                "Europe".to_string(),
+                vec![buyer_country, seller_country],
+                Vec::new(),
+            );
+            SimulatorData::new(
+                Self::date().and_hms_opt(12, 0, 0).unwrap(),
+                vec![continent],
+                GlobalCompetitions::new(Vec::new()),
+            )
+        }
+
+        fn weak_buyer() -> Club {
+            Self::club(SAMBENEDETTESE, "Sambenedettese", 100, 1800, Vec::new())
+        }
+    }
+
+    // The bug: a weak lower-league club abroad has the strong first-teamer
+    // on an internal shortlist. That is private recruitment, not public
+    // interest — the move can't credibly go public, so it must not appear.
+    #[test]
+    fn foreign_weak_club_shortlist_is_not_public_interest() {
+        let mut samb = Fx::weak_buyer();
+        let mut sl = TransferShortlist::new(9001, 0.0);
+        sl.candidates.push(ShortlistCandidate {
+            player_id: MAXIMENKO,
+            score: 0.5,
+            estimated_fee: 0.0,
+            status: ShortlistCandidateStatus::Available,
+        });
+        samb.transfer_plan.shortlists.push(sl);
+
+        let data = Fx::sim(samb);
+        let interested = data.clubs_interested_in_player(MAXIMENKO);
+        assert!(
+            !interested.iter().any(|(id, _, _)| *id == SAMBENEDETTESE),
+            "a weak foreign club's private shortlist must not surface as \
+             interest: {:?}",
+            interested
+        );
+    }
+
+    // A bare Buy scouting report is private monitoring, never interest.
+    #[test]
+    fn bare_foreign_scouting_report_is_not_public_interest() {
+        let mut samb = Fx::weak_buyer();
+        samb.transfer_plan.scouting_reports.push(DetailedScoutingReport {
+            player_id: MAXIMENKO,
+            assignment_id: 1,
+            assessed_ability: 165,
+            assessed_potential: 170,
+            confidence: 0.9,
+            estimated_value: 5_000_000.0,
+            recommendation: ScoutingRecommendation::Buy,
+            role_fit: 0.8,
+            risk_flags: Vec::new(),
+        });
+        let data = Fx::sim(samb);
+        let interested = data.clubs_interested_in_player(MAXIMENKO);
+        assert!(
+            interested.is_empty(),
+            "a private Buy scouting report alone is not interest: {:?}",
+            interested
+        );
+    }
+
+    // An active club-to-club negotiation IS public, credible pursuit — it
+    // already cleared the entry gates — so it counts even for a weak club.
+    #[test]
+    fn active_negotiation_counts_as_public_interest() {
+        let mut data = Fx::sim(Fx::weak_buyer());
+        let offer = TransferOffer::new(
+            CurrencyValue::new(5_000_000.0, Currency::Usd),
+            SAMBENEDETTESE,
+            Fx::date(),
+        );
+        let neg = TransferNegotiation::new(
+            7001,
+            MAXIMENKO,
+            0,
+            SPARTAK,
+            SAMBENEDETTESE,
+            offer,
+            Fx::date(),
+            0.7,
+            0.18,
+            27,
+            10.0,
+        );
+        if let Some(buyer_country) = data.country_mut(1) {
+            buyer_country.transfer_market.negotiations.insert(7001, neg);
+        }
+        let interested = data.clubs_interested_in_player(MAXIMENKO);
+        assert!(
+            interested.iter().any(|(id, _, _)| *id == SAMBENEDETTESE),
+            "an active negotiation is public, credible pursuit: {:?}",
+            interested
+        );
     }
 }

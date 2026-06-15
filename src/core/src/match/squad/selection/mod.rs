@@ -17,7 +17,7 @@ use crate::club::staff::{
 };
 use crate::club::{ClubPhilosophy, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
-use crate::{MatchTacticType, Player, PlayerStatusType, Tactics, Team, TeamType};
+use crate::{MatchTacticType, Player, Tactics, Team, TeamType};
 use chrono::NaiveDate;
 use log::debug;
 use std::borrow::Borrow;
@@ -319,53 +319,32 @@ impl SquadSelector {
 
         if available.len() < DEFAULT_SQUAD_SIZE {
             let all_players = team.players.players();
-            let injured_count = all_players
-                .iter()
-                .filter(|p| p.player_attributes.is_injured)
-                .count();
-            let int_count = all_players
-                .iter()
-                .filter(|p| p.statuses.is_on_international_duty())
-                .count();
-            let low_condition = all_players
-                .iter()
-                .filter(|p| {
-                    !p.player_attributes.is_injured
-                        && p.player_attributes.condition_percentage() < HARD_CONDITION_FLOOR
-                })
-                .count();
-            let banned_count = if !ctx.is_friendly {
-                all_players
-                    .iter()
-                    .filter(|p| p.player_attributes.is_banned)
-                    .count()
-            } else {
-                0
-            };
-            let lst_loa_count = if !ctx.is_friendly {
-                all_players
-                    .iter()
-                    .filter(|p| {
-                        let s = p.statuses.get();
-                        s.contains(&PlayerStatusType::Lst) || s.contains(&PlayerStatusType::Loa)
-                    })
-                    .count()
-            } else {
-                0
-            };
+            // Census splits genuine unavailability from market / near-transfer
+            // status. The latter never blocks selection, so it's reported on a
+            // separate line — a short squad is an availability problem, not a
+            // transfer-list one.
+            let census = SelectionStatusCensus::of(&all_players, ctx.is_friendly);
 
             log::debug!(
-                "Squad selection for team {}: only {} available out of {} registered \
-                (injured={}, international={}, low_condition={}, banned={}, lst_loa={}, \
-                {} outfield, {} GK, {} reserves offered)",
+                "Squad selection for team {}: only {} available out of {} registered. \
+                {} unavailable (blocks selection) — injured={}, international={}, low_condition={}, banned={}. \
+                {} carry a market/near-transfer status (still selectable) — listed={}, loan_listed={}, requested={}, unhappy={}, bid_accepted={}, agreed_transfer={}. \
+                ({} outfield, {} GK, {} reserves offered)",
                 team.name,
                 available.len(),
                 all_players.len(),
-                injured_count,
-                int_count,
-                low_condition,
-                banned_count,
-                lst_loa_count,
+                census.unavailable_total(),
+                census.injured,
+                census.international,
+                census.low_condition,
+                census.banned,
+                census.market_total(),
+                census.listed,
+                census.loan_listed,
+                census.requested,
+                census.unhappy,
+                census.bid_accepted,
+                census.agreed_transfer,
                 outfield_count,
                 gk_count,
                 reserve_players.len()

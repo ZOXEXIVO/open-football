@@ -84,6 +84,21 @@ impl SelectionScoringContext<'_> {
             .unwrap_or(0.0)
     }
 
+    /// Bounded want-away selection nudge for `player`, 0.0 for a settled
+    /// player. Soft transfer-market/psychology signal layered on top of the
+    /// quality scoring — never an availability block. Applied at every
+    /// selection site (XI, bench, goalkeeper) so a listed player is scored
+    /// like any other rather than vanishing from the matchday squad.
+    fn want_away_adjustment(&self, player: &Player) -> f32 {
+        self.engine.want_away_adjustment(
+            player,
+            self.staff,
+            self.date,
+            self.match_importance,
+            self.is_friendly,
+        )
+    }
+
     /// Future-aware pathway adjustment for a starting-XI slot. `available` is
     /// the full pool, used for the same-role quality / successor checks.
     fn future_pathway_start(
@@ -207,6 +222,7 @@ impl SelectionScoringContext<'_> {
                             + self.engine.fatigue_penalty(p, self.is_friendly)
                             + self.cup_opportunity(p, true)
                             + self.future_pathway_start(p, slot, available)
+                            + self.want_away_adjustment(p)
                     };
                     score(a).partial_cmp(&score(b)).unwrap_or(Ordering::Equal)
                 })
@@ -998,6 +1014,7 @@ impl SelectionScoringContext<'_> {
             + self.policy_starting_adjustment(player)
             + self.cup_opportunity(player, true)
             + self.future_pathway_start(player, slot, available)
+            + self.want_away_adjustment(player)
             + self.coach_starting_adjustment(player, slot)
             + self.opponent_matchup_adjustment(player, slot)
             + self.role_duty_adjustment(player, slot)
@@ -1258,6 +1275,7 @@ impl SelectionScoringContext<'_> {
             + self.cup_opportunity(player, false)
             + self.cup_bench_unseen_bonus(player)
             + self.future_pathway_bench(player)
+            + self.want_away_adjustment(player)
             + self.coach_bench_adjustment(player)
             + self.bench_scenario_coverage_score(player)
             + self.eligibility_rule_penalty(player)
@@ -1490,6 +1508,7 @@ impl SelectionScoringContext<'_> {
                             .engine
                             .development_minutes_bonus(p, self.match_importance)
                         + self.cup_goalkeeper(p)
+                        + self.want_away_adjustment(p)
                 };
                 score(a).partial_cmp(&score(b)).unwrap_or(Ordering::Equal)
             })

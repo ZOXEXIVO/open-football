@@ -5,8 +5,11 @@ use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutingRegion;
 use crate::transfers::market::{TransferListing, TransferListingStatus, TransferListingType};
 use crate::transfers::offer::{TransferClause, TransferOffer};
+use crate::transfers::pipeline::plausibility::{
+    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
+};
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
-use crate::transfers::pipeline::{LoanOutReason, LoanOutStatus, TransferRequestStatus};
+use crate::transfers::pipeline::{LoanOutStatus, TransferRequestStatus};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
@@ -78,11 +81,17 @@ impl PipelineProcessor {
                             .unwrap_or(0)
                     })
                     .unwrap_or(0);
+                // Treat every game-time-driven loan (development pathway,
+                // blocked prospect, needs-minutes) as a "development" move
+                // for the borrower-side minutes gate: the player must land
+                // somewhere he will actually play, not behind a wall of
+                // better names. Pure surplus / financial loans keep the
+                // looser cover bar.
                 let is_development = parent_club
                     .map(|c| {
                         c.transfer_plan.loan_out_candidates.iter().any(|cand| {
                             cand.player_id == listing.player_id
-                                && cand.reason == LoanOutReason::DevelopmentPathway
+                                && cand.reason.expects_guaranteed_minutes()
                         })
                     })
                     .unwrap_or(false);
@@ -615,6 +624,13 @@ impl PipelineProcessor {
             // `foreign_loans.iter()` cheap.
             let borrower_position_depth = BorrowerPositionDepth::snapshot(team);
 
+            // Staged-plausibility buyer context, built once per club so the
+            // foreign-loan filter can run the same cross-border veto the
+            // scouting / permanent paths use. The candidate `PlayerSummary`
+            // carries the seller-side context, so no selling-country ref is
+            // needed here.
+            let buyer_loan_ctx = BuyerPlausibilityContext::build(country, club);
+
             for request in unfulfilled {
                 if scans >= max_scans {
                     break;
@@ -685,6 +701,21 @@ impl PipelineProcessor {
                                 p.club_world_reputation.max(0) as u16,
                                 p.skill_ability,
                                 p.club_best_in_group,
+                            )
+                            // Staged cross-border veto: an important player at
+                            // a much stronger club abroad isn't a credible
+                            // loan target even when loan-listed, unless his
+                            // availability genuinely opens the move. Mirrors
+                            // the permanent foreign gate.
+                            && !matches!(
+                                TransferPlausibilityBuilder::evaluate_summary(
+                                    &buyer_loan_ctx,
+                                    p,
+                                    true,
+                                    true,
+                                    date,
+                                ),
+                                Some(TransferPlausibilityVerdict::HardReject(_))
                             )
                     })
                     .max_by_key(|p| {
@@ -975,14 +1006,6 @@ impl BorrowerPositionDepth {
         }
     }
 
-    /// True when the incoming player would realistically see the pitch
-    /// here. GK loans must arrive as plausible first choice (nobody
-    /// clearly better); outfield loans tolerate up to two clearly
-    /// better names ahead of them in the pecking order.
-    fn would_get_minutes(&self, group: PlayerFieldPositionGroup, candidate_ability: u8) -> bool {
-        self.would_get_loan_minutes(group, candidate_ability, false)
-    }
-
     /// Minutes gate with a development-strictness switch. Development
     /// loans exist to buy PLAYING time, so a young development loanee
     /// tolerates at most ONE clearly better outfielder ahead of him;
@@ -1097,11 +1120,11 @@ mod borrower_gate_tests {
         )]);
         let depth = BorrowerPositionDepth::snapshot(&team);
         assert!(
-            !depth.would_get_minutes(PlayerFieldPositionGroup::Goalkeeper, 70),
+            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Goalkeeper, 70, false),
             "a dev keeper behind a clearly better #1 plays zero minutes"
         );
         assert!(
-            depth.would_get_minutes(PlayerFieldPositionGroup::Goalkeeper, 75),
+            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Goalkeeper, 75, false),
             "a keeper close to the incumbent can compete for the shirt"
         );
     }
@@ -1115,7 +1138,7 @@ mod borrower_gate_tests {
         ]);
         let depth = BorrowerPositionDepth::snapshot(&blocked_team);
         assert!(
-            !depth.would_get_minutes(PlayerFieldPositionGroup::Midfielder, 70),
+            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, false),
             "three clearly better midfielders leave no realistic minutes"
         );
 
@@ -1126,7 +1149,7 @@ mod borrower_gate_tests {
         ]);
         let depth = BorrowerPositionDepth::snapshot(&open_team);
         assert!(
-            depth.would_get_minutes(PlayerFieldPositionGroup::Midfielder, 70),
+            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, false),
             "with only two clearly better names the loanee can rotate in"
         );
     }

@@ -1,6 +1,6 @@
 use crate::club::{PlayerFieldPositionGroup, PlayerPositionType};
 use crate::r#match::player::MatchPlayer;
-use crate::{Player, Staff, Tactics};
+use crate::{Player, PlayerStatusType, Staff, Tactics};
 
 use super::helpers;
 use super::helpers::KeeperAvailability;
@@ -179,6 +179,10 @@ fn rotation_score_for_slot(
     let ability = player.player_attributes.current_ability as f32 / 200.0;
     score += ability * 20.0 * 0.15;
 
+    // Rotation/friendly want-away semantics: keep a listed player sharp, but
+    // protect a near-sold one from a meaningless game.
+    score += RotationWantAway::adjustment(player);
+
     score
 }
 
@@ -197,6 +201,38 @@ fn rotation_overall_quality(player: &Player) -> f32 {
     rest_score * 0.40
         + condition_norm * 0.35
         + (player.player_attributes.current_ability as f32 / 200.0 * 20.0) * 0.25
+        + RotationWantAway::adjustment(player)
+}
+
+/// Want-away nudge for rotation / friendly selection. Unlike the competitive
+/// path it has no disaffection arm — a friendly is exactly where a listed
+/// player should get minutes to stay sharp. It only (a) gives a small
+/// keep-sharp pull to a listed / transfer-requested / unhappy player with no
+/// imminent move, and (b) protects a near-transfer (`Bid`/`Trn`) player from
+/// injury in a meaningless game.
+struct RotationWantAway;
+
+impl RotationWantAway {
+    /// Small keep-sharp pull for a want-away player getting rotation minutes.
+    const KEEP_SHARP: f32 = 2.0;
+    /// Protection strong enough to bench a near-sold player from a rotation /
+    /// friendly XI whenever there is anyone else to field.
+    const PROTECT_NEAR_TRANSFER: f32 = -12.0;
+
+    fn adjustment(player: &Player) -> f32 {
+        let statuses = player.statuses.get();
+        if statuses.contains(&PlayerStatusType::Trn) || statuses.contains(&PlayerStatusType::Bid) {
+            return Self::PROTECT_NEAR_TRANSFER;
+        }
+        let want_away = statuses.contains(&PlayerStatusType::Lst)
+            || statuses.contains(&PlayerStatusType::Req)
+            || statuses.contains(&PlayerStatusType::Unh);
+        if want_away {
+            Self::KEEP_SHARP
+        } else {
+            0.0
+        }
+    }
 }
 
 /// Rotation goalkeeper selection, wrapped so the preferred-condition threshold

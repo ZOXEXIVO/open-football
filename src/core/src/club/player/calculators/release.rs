@@ -1,3 +1,4 @@
+use crate::club::team::squad::SquadAssetClass;
 use crate::{ContractType, Person, Player, PlayerSquadStatus};
 use chrono::NaiveDate;
 
@@ -19,6 +20,14 @@ pub struct ReleaseEligibilityContext {
     /// big clubs don't tear up sellable assets and tiny clubs can still
     /// move on from players nobody would buy.
     pub annual_wage_bill: u32,
+    /// Central squad-asset classification, supplied by the caller from
+    /// [`crate::club::team::squad::SquadAssetProtection`]. Free transfer is
+    /// the most conservative action a club can take, so only a genuinely
+    /// surplus player may be auto-released; a key / first-team / recognised
+    /// / merely-unevaluated player is kept or transfer-listed instead — even
+    /// when his bare CA-vs-average maths looks releasable. This is what
+    /// stops a `NotYetSet`, still-useful senior being walked for free.
+    pub asset_class: SquadAssetClass,
 }
 
 /// Why an automatic mutual release was denied. Transfer-list-or-skip is
@@ -35,6 +44,11 @@ pub enum AutomaticReleaseBlock {
     NoContract,
     /// KeyPlayer / FirstTeamRegular: the squad plan says the club needs him.
     ProtectedRole,
+    /// The central squad-asset policy classifies him as something other
+    /// than genuine surplus (core, first-team-useful, rotation depth, a
+    /// development prospect, or simply not-yet-evaluated). Free transfer is
+    /// off the table — keep or transfer-list instead.
+    ProtectedAsset,
     /// Not clearly below team level — a competitive player is kept,
     /// listed, or sold; never torn up.
     NearTeamLevel,
@@ -93,6 +107,16 @@ impl AutomaticReleaseEligibility {
             PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
         ) {
             return Some(AutomaticReleaseBlock::ProtectedRole);
+        }
+
+        // Central asset protection: anything the squad policy doesn't
+        // classify as genuine surplus is too valuable to walk for free.
+        // This catches the cases bare CA-vs-average maths misses — a
+        // `NotYetSet` player whose role hasn't been assigned yet, a
+        // recognised name whose ability has dipped, a useful rotation
+        // option — and routes them to keep / transfer-list instead.
+        if ctx.asset_class.is_free_transfer_protected() {
+            return Some(AutomaticReleaseBlock::ProtectedAsset);
         }
 
         let ability = player.player_attributes.current_ability as i16;
@@ -175,11 +199,23 @@ mod tests {
         }
 
         fn ctx(market_value: f64) -> ReleaseEligibilityContext {
+            // Default to TrueSurplus so these gate-level tests exercise the
+            // downstream quality / value / severance gates on a genuinely
+            // releasable fringe player. The asset-protection block is
+            // covered by its own test below.
+            Self::ctx_with_class(market_value, SquadAssetClass::TrueSurplus)
+        }
+
+        fn ctx_with_class(
+            market_value: f64,
+            asset_class: SquadAssetClass,
+        ) -> ReleaseEligibilityContext {
             ReleaseEligibilityContext {
                 date: Self::date(),
                 squad_avg_ability: 100,
                 market_value,
                 annual_wage_bill: 1_200_000,
+                asset_class,
             }
         }
 
@@ -299,6 +335,30 @@ mod tests {
         assert_eq!(
             AutomaticReleaseEligibility::assess(&player, &Fixture::ctx(20_000.0)),
             Some(AutomaticReleaseBlock::NoContract)
+        );
+    }
+
+    #[test]
+    fn non_surplus_asset_class_blocks_free_release() {
+        // A cheap, clearly-below-average fringe player would pass every
+        // numeric gate — but if the central squad policy classifies him as
+        // anything other than genuine surplus (here: a still-unevaluated
+        // `NotYetSet` senior), free transfer is off the table. This is the
+        // Zobnin guard at the gate level.
+        let player = Fixture::player(
+            60,
+            28,
+            Some(Fixture::contract(15_000, ContractType::FullTime, 3)),
+        );
+        let ctx = Fixture::ctx_with_class(20_000.0, SquadAssetClass::UnknownNeedsEvaluation);
+        assert_eq!(
+            AutomaticReleaseEligibility::assess(&player, &ctx),
+            Some(AutomaticReleaseBlock::ProtectedAsset)
+        );
+        // The very same player, classified as genuine surplus, is releasable.
+        assert_eq!(
+            AutomaticReleaseEligibility::assess(&player, &Fixture::ctx(20_000.0)),
+            None
         );
     }
 

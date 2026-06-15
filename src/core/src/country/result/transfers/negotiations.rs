@@ -22,7 +22,8 @@ use crate::transfers::negotiation::{
 };
 use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
 use crate::transfers::pipeline::plausibility::{
-    TransferPlausibilityBuilder, TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
+    TransferMovePlausibility, TransferPlausibilityBuilder, TransferPlausibilityEvaluator,
+    TransferPlausibilityReason, TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor};
 use crate::transfers::scouting_region::ScoutingRegion;
@@ -201,6 +202,7 @@ impl CountryResult {
                             |(fee, obligation)| (fee.amount.max(0.0).round() as u32, obligation),
                         ),
                         personal_terms: n.current_offer.personal_terms.clone(),
+                        foreign_terms_floor_blocked: n.foreign_terms_floor_blocked,
                     }
                 }
                 None => continue,
@@ -721,6 +723,44 @@ impl CountryResult {
         outcomes: &mut NegotiationOutcomes,
     ) {
         let is_foreign = neg_data.selling_country_id.is_some();
+
+        // ── Player-willingness hard floor ──
+        // Before any probability roll, a player with NO availability signal
+        // hard-refuses a move his career incentives reject: a clear sporting
+        // step down, a lower-league move in his prime, or dropping to a
+        // clearly lower-reputation club in his own market. Any genuine
+        // reason to leave — a transfer request, a real listing, unhappiness,
+        // a near-expiry contract, a triggered release clause — clears this
+        // floor (handled inside `player_terms_floor`), leaving only the
+        // probability texture below. This is the spec's "personal terms are
+        // not only a probability roll" requirement: availability opens the
+        // door, it does not make a first-team player accept a bad move.
+        //
+        // Domestic moves recompute the floor live (the seller-side data is in
+        // this country). Foreign moves can't — the player's club, rank, and
+        // status live abroad — so the verdict was captured from the full
+        // cross-border assessment at negotiation creation and rides on the
+        // negotiation. Mirrors the domestic gate so a Serie C/B side can't
+        // pass personal terms with a Spartak first-teamer on a lucky roll.
+        let terms_floor_blocked = if is_foreign {
+            neg_data.foreign_terms_floor_blocked
+        } else {
+            Self::player_terms_floor_for(country, neg_data, date).is_some()
+        };
+        if terms_floor_blocked {
+            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                negotiation
+                    .reject_with_reason(NegotiationRejectionReason::PlayerRejectedPersonalTerms);
+            }
+            Self::reopen_listing_for_player(country, neg_data.player_id);
+            PipelineProcessor::on_negotiation_resolved(
+                country,
+                neg_data.buying_club_id,
+                neg_data.player_id,
+                false,
+            );
+            return;
+        }
 
         // Foreign loans start lower: unfamiliar country, language, likely
         // wage cut. Players don't jump across borders for a bit-part role
@@ -1432,6 +1472,43 @@ impl CountryResult {
         Some(TransferPlausibilityEvaluator::evaluate(&inputs))
     }
 
+    /// The player-willingness hard floor for the current (domestic)
+    /// negotiation. `Some(reason)` means the player would refuse the move
+    /// outright at the personal-terms phase regardless of the wage offer;
+    /// `None` means the move is basically reasonable for him (or he has a
+    /// real reason to leave that clears the floor). Cross-country deals
+    /// return `None` — the selling-side context isn't carried here, and the
+    /// foreign personal-terms path keeps its own prestige/region logic.
+    fn player_terms_floor_for(
+        country: &Country,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+    ) -> Option<TransferPlausibilityReason> {
+        if neg_data.selling_country_id.is_some() {
+            return None;
+        }
+        let buyer = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.buying_club_id)?;
+        let seller = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)?;
+        let player = find_player_in_country(country, neg_data.player_id)?;
+        let inputs = TransferPlausibilityBuilder::from_clubs(
+            country,
+            buyer,
+            seller,
+            player,
+            neg_data.asking_price.max(neg_data.offer_amount),
+            neg_data.is_loan,
+            neg_data.is_unsolicited,
+            date,
+        );
+        TransferMovePlausibility::player_terms_floor(&inputs)
+    }
+
     /// Convenience: rebuild the same inputs and read off the importance
     /// score. Used by the initial-approach floor that protects key
     /// players from cheap bids.
@@ -1942,6 +2019,7 @@ mod development_pathway_protection_tests {
                 sell_on_percentage: None,
                 loan_future_fee: None,
                 personal_terms: None,
+                foreign_terms_floor_blocked: false,
             }
         }
     }

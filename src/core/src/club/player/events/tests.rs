@@ -2493,6 +2493,41 @@ fn senior_debut_fires_on_first_competitive_app() {
 }
 
 #[test]
+fn senior_debut_fires_only_once_across_seasons() {
+    let mut p = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
+    let s = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
+    let o = outcome(
+        &s,
+        6.5,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
+
+    p.on_match_played(&o);
+    assert_eq!(count_events(&p, &HappinessEventType::SeniorDebut), 1);
+    assert!(p.made_senior_debut);
+
+    // Simulate a season boundary: the live buckets are drained back to zero
+    // and the original debut event has aged out of the 365-day recent_events
+    // window. Under the old apps==1 + dead-cooldown logic this re-fired the
+    // milestone; the persistent latch must now suppress it.
+    p.statistics = Default::default();
+    p.cup_statistics = Default::default();
+    p.happiness.recent_events.clear();
+
+    p.on_match_played(&o);
+    assert_eq!(count_events(&p, &HappinessEventType::SeniorDebut), 0);
+}
+
+#[test]
 fn senior_debut_silent_in_friendly() {
     let mut p = build_player(
         PlayerPositionType::MidfielderCenter,

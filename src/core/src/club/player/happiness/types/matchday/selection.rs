@@ -141,6 +141,13 @@ pub enum SelectionOmissionReason {
     /// Competition rules (registration, cup-tie, loan clause, comp-specific
     /// suspension) blocked or strongly discouraged the pick.
     EligibilityRuleBlock,
+    /// Rested because he has agreed / is close to a transfer and the club is
+    /// protecting the asset from injury (importance-aware — he'd still feature
+    /// in a must-win).
+    RestedDueToAgreedTransfer,
+    /// Benched because a want-away player's morale and manager relationship have
+    /// both soured (a disaffected sulk), not a pure quality call.
+    OmittedDueToDisaffection,
 }
 
 impl SelectionOmissionReason {
@@ -203,6 +210,12 @@ impl SelectionOmissionReason {
             }
             SelectionOmissionReason::EligibilityRuleBlock => {
                 "selection_reason_eligibility_rule_block"
+            }
+            SelectionOmissionReason::RestedDueToAgreedTransfer => {
+                "selection_reason_rested_agreed_transfer"
+            }
+            SelectionOmissionReason::OmittedDueToDisaffection => {
+                "selection_reason_omitted_disaffection"
             }
         }
     }

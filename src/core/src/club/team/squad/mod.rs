@@ -1,13 +1,20 @@
+mod asset_protection;
 mod composition;
 mod contract_renewal;
 mod match_squad;
+mod move_guard;
 mod satisfaction;
 mod transfer_listing;
 
+pub use asset_protection::{
+    SquadAssetClass, SquadAssetContext, SquadAssetProtection, SquadEvidenceContext,
+};
 pub use composition::SquadComposition;
 pub use contract_renewal::{ContractRenewalManager, WageStructureSnapshot};
 pub use satisfaction::compute_squad_satisfaction;
 pub use transfer_listing::TransferListManager;
+
+pub(crate) use move_guard::MainSquadMoveGuard;
 
 use crate::club::staff::perception::{CoachDecisionState, RecentMoveType};
 use crate::utils::DateUtils;
@@ -19,9 +26,16 @@ pub struct SquadManager;
 pub const MIN_FIRST_TEAM_SQUAD: usize = 25;
 
 impl SquadManager {
-    /// Daily: only mandatory administrative demotions (Lst, Loa).
-    /// All other squad decisions (recalls, swaps, performance demotions)
-    /// go through the monthly AI-driven squad composition.
+    /// Daily mandatory administrative moves. This sweep is deliberately
+    /// narrow: it only acts on players the club would realistically pull out
+    /// of the senior matchday group *right now* — a player who has agreed a
+    /// move elsewhere, or a clearly surplus listed player who still has cover
+    /// in his position. Being transfer-listed / unhappy on its own is a market
+    /// or morale signal, **not** a reason to stop using a player in matches, so
+    /// such players stay on the Main roster and remain match-selectable (the
+    /// selection layer's want-away modifier shapes their minutes). All other
+    /// squad decisions (recalls, swaps, performance demotions) go through the
+    /// monthly AI-driven squad composition.
     pub fn manage_critical_moves(
         teams: &mut [Team],
         coach_state: &mut Option<CoachDecisionState>,
@@ -30,7 +44,7 @@ impl SquadManager {
         date: NaiveDate,
     ) {
         let coach_name = teams[main_idx].staffs.head_coach_name();
-        let demotions = Self::identify_administrative_demotions(&teams[main_idx]);
+        let demotions = Self::identify_administrative_demotions(&teams[main_idx], date);
         let max_age = teams[reserve_idx].team_type.max_age();
         let mut demotions = filter_by_age(demotions, &teams[main_idx], max_age, date);
 
@@ -67,20 +81,32 @@ impl SquadManager {
         }
     }
 
-    /// Administrative demotions: transfer-listed (Lst) players move to reserves.
-    /// Loa (Leave of Absence) players stay where they are — the coach decides.
-    fn identify_administrative_demotions(main_team: &Team) -> Vec<u32> {
+    /// Administrative demotions for the daily sweep. The only proactive trigger
+    /// is a *clearly-surplus, transfer-listed* player; even then the move must
+    /// clear [`MainSquadMoveGuard`] (real positional cover). Being listed,
+    /// transfer-requested, unhappy, or having agreed a move (`Trn`) is **not**
+    /// an automatic demotion any more:
+    ///   * useful want-away players stay in the senior group and remain
+    ///     match-selectable (the selection layer's want-away modifier shapes
+    ///     their minutes);
+    ///   * an agreed-transfer player stays selectable too — the importance-aware
+    ///     injury-protection penalty in selection rests him in routine games but
+    ///     keeps him available for the matches that matter.
+    fn identify_administrative_demotions(main_team: &Team, date: NaiveDate) -> Vec<u32> {
+        let guard = MainSquadMoveGuard::new(main_team, date);
         main_team
             .players
             .players
             .iter()
-            .filter_map(|player| {
-                if player.statuses.get().contains(&PlayerStatusType::Lst) {
-                    Some(player.id)
-                } else {
-                    None
-                }
+            .filter(|player| {
+                // Proactive daily trigger: only a clearly-surplus listed player.
+                player.statuses.get().contains(&PlayerStatusType::Lst)
+                    && guard.is_surplus(player)
             })
+            .filter(|player| {
+                guard.allow_demote_from_main(player, "administrative surplus clear-out")
+            })
+            .map(|player| player.id)
             .collect()
     }
 }
@@ -122,7 +148,16 @@ pub(crate) fn execute_moves(
             continue;
         }
         if let Some(mut player) = teams[from_idx].players.take_player(&player_id) {
-            teams[from_idx].transfer_list.remove(player_id);
+            // Internal squad move: migrate any team-level transfer-list entry
+            // (the asking price) to the destination team rather than dropping
+            // it. The player's market status (Lst/Req/Unh) lives on the player
+            // and travels with him automatically; market discovery scans every
+            // team and keys on that status, so an internal Main ↔ Reserve / B
+            // move never removes him from the market. Dropping the entry here
+            // used to desync the asking price from the player's location.
+            if let Some(item) = teams[from_idx].transfer_list.take(player_id) {
+                teams[to_idx].transfer_list.add(item);
+            }
             // Close the previous spell and open one on the destination so
             // the player's stats accumulate against the team they actually
             // play for. Without this, a Main → Second demotion left the
@@ -386,6 +421,448 @@ mod execute_moves_tests {
                 .iter()
                 .any(|i| i.season.start_year == 2025 && i.team_slug == "spartak-moscow"),
             "the 0-game Main spell must not show a row this season"
+        );
+    }
+
+    // ── Administrative-demotion decision + transfer-list migration ──
+
+    use crate::shared::{Currency, CurrencyValue};
+    use crate::{PlayerClubContract, PlayerSquadStatus, TransferItem};
+
+    /// A contracted, single-position player with an explicit squad status —
+    /// the inputs the demotion guard reads. Match-fit (high condition) and a
+    /// mid current ability so a teammate built the same way counts as credible,
+    /// usable cover for [`MainSquadMoveGuard`].
+    fn make_contracted(
+        id: u32,
+        position: PlayerPositionType,
+        status: PlayerSquadStatus,
+    ) -> crate::Player {
+        let mut p = make_player(id);
+        p.positions = PlayerPositions {
+            positions: vec![PlayerPosition {
+                position,
+                level: 16,
+            }],
+        };
+        p.player_attributes.current_ability = 130;
+        p.player_attributes.condition = 9000;
+        p.player_attributes.fitness = 9000;
+        let mut contract = PlayerClubContract::new(50_000, d(2030, 6, 30));
+        contract.squad_status = status;
+        p.contract = Some(contract);
+        p
+    }
+
+    fn list_for_transfer(p: &mut crate::Player, date: NaiveDate) {
+        p.statuses.add(date, PlayerStatusType::Lst);
+        if let Some(c) = p.contract.as_mut() {
+            c.is_transfer_listed = true;
+        }
+    }
+
+    #[test]
+    fn listed_first_team_regular_is_not_administratively_demoted() {
+        // A transfer-listed first-team regular stays a Main-team asset —
+        // listing is a market action, not a "stop playing him" instruction.
+        let date = d(2026, 6, 15);
+        let mut regular = make_contracted(
+            1,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        list_for_transfer(&mut regular, date);
+        let cover = make_contracted(
+            2,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        let team = make_team(10, "Main", "main", TeamType::Main, vec![regular, cover]);
+
+        let demotions = SquadManager::identify_administrative_demotions(&team, date);
+        assert!(
+            !demotions.contains(&1),
+            "a listed FirstTeamRegular must not be administratively demoted"
+        );
+    }
+
+    #[test]
+    fn listed_key_player_is_not_administratively_demoted() {
+        let date = d(2026, 6, 15);
+        let mut key = make_contracted(1, PlayerPositionType::Striker, PlayerSquadStatus::KeyPlayer);
+        list_for_transfer(&mut key, date);
+        let cover = make_contracted(
+            2,
+            PlayerPositionType::Striker,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        let team = make_team(10, "Main", "main", TeamType::Main, vec![key, cover]);
+
+        let demotions = SquadManager::identify_administrative_demotions(&team, date);
+        assert!(
+            !demotions.contains(&1),
+            "a listed KeyPlayer must stay in the Main squad"
+        );
+    }
+
+    #[test]
+    fn listed_surplus_player_is_demoted_when_cover_exists() {
+        // A listed NotNeeded player can still drop to the reserves when there
+        // is realistic cover in his position.
+        let date = d(2026, 6, 15);
+        let mut surplus = make_contracted(
+            1,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::NotNeeded,
+        );
+        list_for_transfer(&mut surplus, date);
+        let cover = make_contracted(
+            2,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        let team = make_team(10, "Main", "main", TeamType::Main, vec![surplus, cover]);
+
+        let demotions = SquadManager::identify_administrative_demotions(&team, date);
+        assert!(
+            demotions.contains(&1),
+            "a listed, surplus, well-covered player should be demoted"
+        );
+    }
+
+    #[test]
+    fn listed_surplus_player_kept_when_last_in_his_unit() {
+        // No replacement in the position group → keep him even if surplus, so a
+        // listing never strips the senior squad of its last specialist.
+        let date = d(2026, 6, 15);
+        let mut surplus =
+            make_contracted(1, PlayerPositionType::Goalkeeper, PlayerSquadStatus::NotNeeded);
+        list_for_transfer(&mut surplus, date);
+        let mid = make_contracted(
+            2,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        let team = make_team(10, "Main", "main", TeamType::Main, vec![surplus, mid]);
+
+        let demotions = SquadManager::identify_administrative_demotions(&team, date);
+        assert!(
+            !demotions.contains(&1),
+            "the only keeper must not be demoted just for being listed"
+        );
+    }
+
+    #[test]
+    fn agreed_transfer_player_is_not_auto_demoted() {
+        // An agreed move (Trn) no longer triggers an automatic administrative
+        // demotion: the player stays in the Main squad and is handled by the
+        // selection layer's importance-aware injury-protection (rested in
+        // routine games, selectable when the match matters).
+        let date = d(2026, 6, 15);
+        let mut leaving = make_contracted(
+            1,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        leaving.statuses.add(date, PlayerStatusType::Trn);
+        let cover = make_contracted(
+            2,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        let team = make_team(10, "Main", "main", TeamType::Main, vec![leaving, cover]);
+
+        let demotions = SquadManager::identify_administrative_demotions(&team, date);
+        assert!(
+            !demotions.contains(&1),
+            "an agreed-transfer player must not be auto-demoted by the daily sweep"
+        );
+    }
+
+    #[test]
+    fn guard_allows_surplus_demote_only_with_usable_cover() {
+        // Cover must be a real, usable replacement. An injured-only "cover"
+        // teammate does not count, so a surplus player with no usable peer stays.
+        let date = d(2026, 6, 15);
+        let surplus = make_contracted(
+            1,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::NotNeeded,
+        );
+        let mut injured_cover = make_contracted(
+            2,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        injured_cover.player_attributes.is_injured = true;
+        let team = make_team(10, "Main", "main", TeamType::Main, vec![surplus, injured_cover]);
+
+        let guard = MainSquadMoveGuard::new(&team, date);
+        assert!(
+            !guard.allow_demote_from_main(&team.players.players[0], "surplus"),
+            "an injured teammate is not usable cover — surplus player should stay"
+        );
+    }
+
+    #[test]
+    fn manage_critical_moves_keeps_listed_regular_demotes_surplus() {
+        // End-to-end through the daily entry point with a squad above the
+        // minimum so demotions are allowed.
+        let date = d(2026, 6, 15);
+        let mut players = Vec::new();
+        let mut regular = make_contracted(
+            1,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        list_for_transfer(&mut regular, date);
+        players.push(regular);
+        let mut surplus = make_contracted(
+            2,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::NotNeeded,
+        );
+        list_for_transfer(&mut surplus, date);
+        players.push(surplus);
+        // Fillers (same group → surplus has cover) to clear MIN_FIRST_TEAM_SQUAD.
+        for id in 3..=27u32 {
+            players.push(make_contracted(
+                id,
+                PlayerPositionType::MidfielderCenter,
+                PlayerSquadStatus::FirstTeamSquadRotation,
+            ));
+        }
+        let mut teams = vec![
+            make_team(10, "Main", "main", TeamType::Main, players),
+            make_team(11, "Reserves", "reserves", TeamType::Second, vec![]),
+        ];
+
+        let mut coach_state = None;
+        SquadManager::manage_critical_moves(&mut teams, &mut coach_state, 0, 1, date);
+
+        assert!(
+            teams[0].players.contains(1),
+            "listed regular must remain on the Main roster"
+        );
+        assert!(
+            !teams[0].players.contains(2),
+            "listed surplus player must be demoted off Main"
+        );
+        assert!(
+            teams[1].players.contains(2),
+            "listed surplus player must land in the reserves"
+        );
+    }
+
+    #[test]
+    fn internal_move_migrates_transfer_list_entry() {
+        // Internal squad moves must not destroy market visibility. The player's
+        // Lst status travels with him; the asking-price entry is migrated to the
+        // destination team rather than dropped.
+        let date = d(2026, 6, 15);
+        let mut listed = make_contracted(
+            1,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::NotNeeded,
+        );
+        list_for_transfer(&mut listed, date);
+        let mut teams = vec![
+            make_team(10, "Main", "main", TeamType::Main, vec![listed]),
+            make_team(11, "Reserves", "reserves", TeamType::Second, vec![]),
+        ];
+        teams[0]
+            .transfer_list
+            .add(TransferItem::new(1, CurrencyValue::new(1_000_000.0, Currency::Usd)));
+
+        execute_moves(&mut teams, 0, 1, &[1], date);
+
+        let moved = &teams[1].players.players[0];
+        assert!(
+            moved.statuses.get().contains(&PlayerStatusType::Lst),
+            "Lst status must travel with the player"
+        );
+        assert!(
+            !teams[0].transfer_list.contains(1),
+            "stale asking-price entry must not remain on the source team"
+        );
+        assert!(
+            teams[1].transfer_list.contains(1),
+            "asking-price entry must follow the player to the destination team"
+        );
+    }
+
+    #[test]
+    fn cover_ignores_injured_banned_intl_and_far_weaker_players() {
+        // A listed first-team regular whose only same-position peers are
+        // injured / banned / on international duty / far weaker has no usable,
+        // credible cover, so the guard keeps him on Main.
+        let date = d(2026, 6, 15);
+        let mut star =
+            make_contracted(1, PlayerPositionType::Striker, PlayerSquadStatus::FirstTeamRegular);
+        star.player_attributes.current_ability = 150;
+        list_for_transfer(&mut star, date);
+
+        let mut injured =
+            make_contracted(2, PlayerPositionType::Striker, PlayerSquadStatus::FirstTeamRegular);
+        injured.player_attributes.is_injured = true;
+        let mut banned =
+            make_contracted(3, PlayerPositionType::Striker, PlayerSquadStatus::FirstTeamRegular);
+        banned.player_attributes.is_banned = true;
+        let mut on_duty =
+            make_contracted(4, PlayerPositionType::Striker, PlayerSquadStatus::FirstTeamRegular);
+        on_duty.statuses.add(date, PlayerStatusType::Int);
+        let mut weak =
+            make_contracted(5, PlayerPositionType::Striker, PlayerSquadStatus::MainBackupPlayer);
+        weak.player_attributes.current_ability = 100; // > 25 CA below the star
+
+        let team = make_team(
+            10,
+            "Main",
+            "main",
+            TeamType::Main,
+            vec![star, injured, banned, on_duty, weak],
+        );
+        let guard = MainSquadMoveGuard::new(&team, date);
+        assert!(
+            !guard.allow_demote_from_main(&team.players.players[0], "llm wants him gone"),
+            "no usable, credible same-position cover → listed regular must stay"
+        );
+    }
+
+    #[test]
+    fn listed_keeper_protected_unless_two_backups_remain() {
+        let date = d(2026, 6, 15);
+
+        // One backup → demoting the listed keeper leaves a single keeper: blocked.
+        let mut keeper =
+            make_contracted(1, PlayerPositionType::Goalkeeper, PlayerSquadStatus::FirstTeamRegular);
+        list_for_transfer(&mut keeper, date);
+        let backup =
+            make_contracted(2, PlayerPositionType::Goalkeeper, PlayerSquadStatus::MainBackupPlayer);
+        let team_one = make_team(10, "Main", "main", TeamType::Main, vec![keeper, backup]);
+        let guard_one = MainSquadMoveGuard::new(&team_one, date);
+        assert!(
+            !guard_one.allow_demote_from_main(&team_one.players.players[0], "sell keeper"),
+            "a listed keeper must not be demoted when it leaves only one usable keeper"
+        );
+
+        // Two backups → enough cover, demotion permitted.
+        let mut keeper2 =
+            make_contracted(1, PlayerPositionType::Goalkeeper, PlayerSquadStatus::FirstTeamRegular);
+        list_for_transfer(&mut keeper2, date);
+        let b1 =
+            make_contracted(2, PlayerPositionType::Goalkeeper, PlayerSquadStatus::MainBackupPlayer);
+        let b2 =
+            make_contracted(3, PlayerPositionType::Goalkeeper, PlayerSquadStatus::MainBackupPlayer);
+        let team_two = make_team(11, "Main", "main", TeamType::Main, vec![keeper2, b1, b2]);
+        let guard_two = MainSquadMoveGuard::new(&team_two, date);
+        assert!(
+            guard_two.allow_demote_from_main(&team_two.players.players[0], "sell keeper"),
+            "a listed keeper with two usable backups can be demoted"
+        );
+    }
+
+    #[test]
+    fn monthly_composition_cannot_demote_listed_regular() {
+        // The LLM cannot bypass the want-away invariant: a demote move for a
+        // listed first-team regular with no cover is vetoed in code.
+        let date = d(2026, 6, 15);
+        let mut players = Vec::new();
+        let mut star =
+            make_contracted(1, PlayerPositionType::Striker, PlayerSquadStatus::FirstTeamRegular);
+        list_for_transfer(&mut star, date);
+        players.push(star);
+        // 25 midfielders — squad above the minimum, but none cover a striker.
+        for id in 2..=26u32 {
+            players.push(make_contracted(
+                id,
+                PlayerPositionType::MidfielderCenter,
+                PlayerSquadStatus::FirstTeamSquadRotation,
+            ));
+        }
+        let mut teams = vec![
+            make_team(10, "Main", "main", TeamType::Main, players),
+            make_team(11, "Reserves", "reserves", TeamType::Second, vec![]),
+        ];
+
+        let response = r#"{"moves":[{"player_id":1,"from_team_index":0,"to_team_index":1,"reason":"sell the listed striker"}]}"#;
+        let mut coach_state = None;
+        SquadComposition::execute_response(response, &mut teams, &mut coach_state, 0, Some(1), None, date);
+
+        assert!(
+            teams[0].players.contains(1),
+            "the guard must veto an LLM demote of a listed regular without cover"
+        );
+        assert!(!teams[1].players.contains(1));
+    }
+
+    #[test]
+    fn monthly_composition_demotes_listed_notneeded_with_cover() {
+        let date = d(2026, 6, 15);
+        let mut players = Vec::new();
+        let mut surplus = make_contracted(
+            1,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::NotNeeded,
+        );
+        list_for_transfer(&mut surplus, date);
+        players.push(surplus);
+        for id in 2..=26u32 {
+            players.push(make_contracted(
+                id,
+                PlayerPositionType::MidfielderCenter,
+                PlayerSquadStatus::FirstTeamRegular,
+            ));
+        }
+        let mut teams = vec![
+            make_team(10, "Main", "main", TeamType::Main, players),
+            make_team(11, "Reserves", "reserves", TeamType::Second, vec![]),
+        ];
+
+        let response = r#"{"moves":[{"player_id":1,"from_team_index":0,"to_team_index":1,"reason":"surplus to requirements"}]}"#;
+        let mut coach_state = None;
+        SquadComposition::execute_response(response, &mut teams, &mut coach_state, 0, Some(1), None, date);
+
+        assert!(
+            !teams[0].players.contains(1),
+            "a listed NotNeeded player with credible cover can be demoted by composition"
+        );
+        assert!(teams[1].players.contains(1));
+    }
+
+    #[test]
+    fn transfer_list_entry_delistable_after_main_to_reserve_move() {
+        // A player listed while moved to the reserves stays visible to the
+        // delisting logic — the entry migrated with him and is found club-wide.
+        let date = d(2026, 6, 15);
+        let mut listed = make_contracted(
+            1,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::NotNeeded,
+        );
+        list_for_transfer(&mut listed, date);
+        let mut teams = vec![
+            make_team(10, "Main", "main", TeamType::Main, vec![listed]),
+            make_team(11, "Reserves", "reserves", TeamType::Second, vec![]),
+        ];
+        teams[0]
+            .transfer_list
+            .add(TransferItem::new(1, CurrencyValue::new(1_000_000.0, Currency::Usd)));
+        execute_moves(&mut teams, 0, 1, &[1], date);
+        assert!(teams[1].transfer_list.contains(1), "entry migrated to reserve");
+
+        let response = r#"{"transfer_list":[],"loan_list":[],"delist":[{"player_id":1,"reason":"taken off the market"}]}"#;
+        TransferListManager::execute_response(response, &mut teams, 0, date);
+
+        assert!(!teams[0].transfer_list.contains(1));
+        assert!(
+            !teams[1].transfer_list.contains(1),
+            "delisting must clear the entry wherever in the club it lives"
+        );
+        let player = teams[1].players.find(1).unwrap();
+        assert!(
+            !player.statuses.get().contains(&PlayerStatusType::Lst),
+            "the Lst status must be cleared on delist"
         );
     }
 }

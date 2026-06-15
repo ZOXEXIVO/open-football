@@ -46,6 +46,7 @@ pub struct PlayerBuilder {
     favorite_clubs: Option<Vec<u32>>,
     traits: Option<Vec<PlayerTrait>>,
     generated: Option<bool>,
+    made_senior_debut: Option<bool>,
 }
 
 impl PlayerBuilder {
@@ -183,6 +184,11 @@ impl PlayerBuilder {
         self
     }
 
+    pub fn made_senior_debut(mut self, made_senior_debut: bool) -> Self {
+        self.made_senior_debut = Some(made_senior_debut);
+        self
+    }
+
     pub fn build(self) -> Result<Player, String> {
         let skills = self.skills.ok_or("skills is required")?;
         let positions = self.positions.ok_or("positions is required")?;
@@ -252,8 +258,10 @@ impl PlayerBuilder {
             pending_contract_ask: None,
             last_intl_caps_paid: 0,
             free_agent_state: None,
+            availability_market: None,
             squad_social_view: None,
             transfer_request_reasons: Vec::new(),
+            made_senior_debut: self.made_senior_debut.unwrap_or(false),
             awards_count: Default::default(),
         })
     }

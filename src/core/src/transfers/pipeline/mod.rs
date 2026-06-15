@@ -1,9 +1,11 @@
+mod circulation;
 mod evaluation;
+mod exposure;
 mod helpers;
 mod loan_market;
 mod negotiations;
 pub(crate) mod plausibility;
-mod recommendations;
+pub(crate) mod recommendations;
 pub(crate) mod recruitment;
 mod recruitment_meeting;
 mod scouting;
@@ -16,7 +18,7 @@ use chrono::NaiveDate;
 
 // Re-export PipelineProcessor and PlayerSummary for external use
 pub use self::processor::PipelineProcessor;
-pub use self::processor::PlayerSummary;
+pub use self::processor::{PlayerSummary, SellerPlausibilityContext};
 // Recruitment department types — meetings, votes, monitoring rows.
 pub use self::recruitment::{
     BoardRecruitmentDossier, RecruitmentDecision, RecruitmentDecisionType, RecruitmentMeeting,
@@ -27,7 +29,8 @@ use chrono::Duration;
 use std::cmp::Ordering;
 
 mod processor {
-    use crate::{PlayerFieldPositionGroup, PlayerPositionType};
+    use crate::club::team::squad::SquadAssetClass;
+    use crate::{PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus};
     use std::collections::HashMap;
 
     /// PipelineProcessor handles all daily transfer pipeline logic.
@@ -49,11 +52,59 @@ mod processor {
         pub potential_confidence: f32,
         pub age: u8,
         pub position_levels: HashMap<PlayerPositionType, u8>,
+        /// League appearances this season only. Retained for the existing
+        /// (calibration-sensitive) loan-out branches that read it.
         pub appearances: u16,
+        /// OFFICIAL appearances this season — league + every cup
+        /// (domestic + continental), friendlies excluded. The main
+        /// "is he actually playing senior football" signal for the
+        /// stalled-prospect / blocked-asset pathway detection.
+        pub official_appearances: u16,
         pub is_injured: bool,
         pub recovery_days: u16,
         #[allow(dead_code)]
         pub injury_days: u16,
+        /// Central squad-asset classification, computed once in
+        /// `evaluate_single_club` against the full `Player` + club context.
+        /// The loan-out / surplus sweeps read this instead of re-deriving
+        /// "is he surplus?" so a key / first-team / inferred-core player is
+        /// never loaned or listed automatically. See
+        /// [`crate::club::team::squad::SquadAssetProtection`].
+        pub asset_class: SquadAssetClass,
+    }
+
+    /// Seller-side context the staged plausibility model needs to assess a
+    /// move *without* re-resolving the selling club from the buyer's country.
+    /// Carried on every [`PlayerSummary`] (built once when the world player
+    /// pool is assembled) so a buyer in a different country can run the same
+    /// staged model against a foreign target as it does against a domestic
+    /// one. Without it, cross-country candidates used to fall through every
+    /// reputation/importance gate because the seller club lookup failed and
+    /// the assessment returned "unknown" — read by the pipeline as "allowed".
+    #[derive(Clone)]
+    pub struct SellerPlausibilityContext {
+        /// Selling club main-team reputation, 0.0..1.0 (`overall_score`).
+        pub club_reputation_score: f32,
+        /// Selling club's league reputation, 0..10000.
+        pub league_reputation: u16,
+        /// Selling club's league id — lets a same-country buyer detect a
+        /// same-division move. `None` when the club has no registered league.
+        pub league_id: Option<u32>,
+        /// 0-indexed rank of the player within his position group on the
+        /// seller's main team (0 = first choice). Already mapped off
+        /// `u8::MAX`: a player not on the main team reads as 1 (a deputy),
+        /// matching the legacy single-country builder.
+        pub position_group_rank: u8,
+        /// Declared squad status from the player's contract (drives the
+        /// importance model). `NotYetSet` when there is no contract.
+        pub squad_status: PlayerSquadStatus,
+        /// Player has formally requested a transfer (`Req`).
+        pub is_transfer_requested: bool,
+        /// Player is flagged unhappy (`Unh`).
+        pub is_unhappy: bool,
+        /// Selling club is running a negative balance — a soft distress
+        /// availability signal.
+        pub in_debt: bool,
     }
 
     #[allow(dead_code)]
@@ -104,6 +155,10 @@ mod processor {
         /// Months left on contract; 0 if no contract (free agent).
         pub contract_months_remaining: i16,
         pub salary: u32,
+        /// Seller-side context for the staged plausibility model. Carried on
+        /// the summary so cross-country buyers can assess a foreign target
+        /// with the same rigour as a domestic one.
+        pub seller_ctx: SellerPlausibilityContext,
     }
 }
 
@@ -656,7 +711,7 @@ impl TransferShortlist {
 // LoanOutCandidate - Players identified for loan out
 // ============================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoanOutReason {
     /// Young player needs regular first-team football to develop (elite/continental clubs)
     NeedsGameTime,
@@ -674,6 +729,44 @@ pub enum LoanOutReason {
     /// club sends them straight out for first-team minutes. The only
     /// reason allowed to bypass same-window loan-out protection.
     DevelopmentPathway,
+    /// Development-relevant player with little/no official football who
+    /// is blocked by greater depth at his position — a clearly better
+    /// player (or several) sits ahead and he simply isn't getting on.
+    /// Distinct from `BlockedByBetterPlayer` (an elite/continental-only,
+    /// group-average-driven branch); this one fires for blocked, unused
+    /// prospects at ANY tier even when their ability is near group level.
+    BlockedByDepth,
+    /// Promising player who needs regular senior minutes to keep
+    /// developing — zero/near-zero official appearances over a meaningful
+    /// period, not because he's poor but because he's stuck behind others.
+    NeedsFirstTeamMinutes,
+    /// Valuable, high-ceiling asset who would stagnate (and lose resale
+    /// value) sitting in the stands — loaned to keep his development and
+    /// market value alive rather than letting the asset rot.
+    AssetValueProtection,
+}
+
+impl LoanOutReason {
+    /// True for loan reasons whose entire point is GAME TIME. The
+    /// borrower-side minutes gate runs at its stricter "development" bar
+    /// for these so the player doesn't just swap one bench for another —
+    /// a blocked prospect must move somewhere he will actually play.
+    ///
+    /// Note: this is deliberately broader than the same-window loan-out
+    /// bypass, which stays `DevelopmentPathway`-only (see the country-level
+    /// negotiation / execution paths). Here we only tighten the
+    /// expected-minutes realism gate, never relax a protection.
+    pub fn expects_guaranteed_minutes(&self) -> bool {
+        matches!(
+            self,
+            LoanOutReason::DevelopmentPathway
+                | LoanOutReason::NeedsGameTime
+                | LoanOutReason::NeedsFirstTeamMinutes
+                | LoanOutReason::BlockedByDepth
+                | LoanOutReason::BlockedByBetterPlayer
+                | LoanOutReason::AssetValueProtection
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

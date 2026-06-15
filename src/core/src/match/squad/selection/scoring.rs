@@ -8,7 +8,7 @@ use crate::club::{
     ClubPhilosophy, PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, Staff,
 };
 use crate::utils::DateUtils;
-use crate::{Player, SelectionScoreFactor, Tactics};
+use crate::{Player, PlayerStatusType, SelectionScoreFactor, Tactics};
 use chrono::NaiveDate;
 
 use super::cup_rotation::CupRotation;
@@ -778,6 +778,122 @@ impl ScoringEngine {
         // Conservative coaches respect the label; risk-takers ignore it.
         let weight = 0.6 + self.profile.conservatism * 0.8 - self.profile.risk_tolerance * 0.3;
         raw * weight.clamp(0.2, 1.4)
+    }
+
+    /// Bounded selection nudge for a player whose transfer-market situation
+    /// colours — but never decides — whether the manager picks him. Being on
+    /// the market is a soft football/psychology signal here, not an
+    /// availability block: ability, position fit, condition, match importance
+    /// and squad need all dominate this term. Returns 0.0 for a settled
+    /// player, so the vast majority of scoring calls are unaffected (and never
+    /// pay the relationship/market reads).
+    ///
+    /// Components, all small, summed then clamped to ±2.0:
+    ///   * **shop window / value protection** — a listed but still-useful
+    ///     player gets a small positive pull: clubs keep showing a saleable
+    ///     asset and protecting his match sharpness;
+    ///   * **needs sharpness** — a player with no live market (no recent buyer
+    ///     interest, no accepted bid/agreed move) who hasn't played recently
+    ///     leans back toward normal selection so he stays fit and visible;
+    ///     stacked with a small extra pull once he has been stuck on the list
+    ///     for a long time with no takers;
+    ///   * **disaffection** — a transfer-requested / unhappy player whose
+    ///     morale *and* manager relationship are both poor takes a small
+    ///     negative; a professional who wants out but still trains well is not
+    ///     penalised;
+    ///   * **injury protection** — a player with an accepted bid / agreed move
+    ///     is rested by a penalty that fades as the match matters more, so the
+    ///     club protects a near-sold asset in routine games but still uses him
+    ///     in a must-win.
+    ///
+    /// Market state is read from the durable availability record where present,
+    /// with conservative defaults otherwise (a freshly-listed player has no
+    /// live market until interest is actually recorded).
+    pub fn want_away_adjustment(
+        &self,
+        player: &Player,
+        staff: &Staff,
+        date: NaiveDate,
+        match_importance: f32,
+        is_friendly: bool,
+    ) -> f32 {
+        let statuses = player.statuses.get();
+        let listed = statuses.contains(&PlayerStatusType::Lst);
+        let requested = statuses.contains(&PlayerStatusType::Req);
+        let unhappy = statuses.contains(&PlayerStatusType::Unh);
+        let bid_accepted = statuses.contains(&PlayerStatusType::Bid);
+        let agreed_move = statuses.contains(&PlayerStatusType::Trn);
+
+        // Settled player — nothing to adjust, and no extra reads.
+        if !(listed || requested || unhappy || bid_accepted || agreed_move) {
+            return 0.0;
+        }
+
+        // A live market = the move is genuinely progressing: an accepted bid /
+        // agreed deal, or at least one concrete approach in the rolling window.
+        let recent_interest = player
+            .availability_market_state()
+            .map(|s| s.recent_interest(date))
+            .unwrap_or(0);
+        let market_is_live = bid_accepted || agreed_move || recent_interest > 0;
+
+        let mut adj = 0.0f32;
+
+        // Shop window / value protection — only while he's still a useful squad
+        // member the club would field, not one it has already frozen out.
+        let still_useful = player
+            .contract
+            .as_ref()
+            .map(|c| {
+                !matches!(
+                    c.squad_status,
+                    PlayerSquadStatus::NotNeeded | PlayerSquadStatus::Invalid
+                )
+            })
+            .unwrap_or(true);
+        if listed && still_useful {
+            adj += 0.3;
+        }
+
+        // Needs sharpness — idle player with no live market drifts back toward
+        // normal selection; a long, fruitless spell on the list pulls a little
+        // harder so the club stops shadow-banning an unsellable player.
+        if !market_is_live {
+            let idle = player.player_attributes.days_since_last_match as f32;
+            adj += (idle / 21.0).clamp(0.0, 1.0) * 0.5;
+            if listed && player.days_available(date) > 60 {
+                adj += 0.3;
+            }
+        }
+
+        // Disaffection — only when a want-away player is genuinely sulking:
+        // both morale and the manager relationship have to be poor. Skipped in
+        // friendlies, which are exactly where a manager hands a disaffected
+        // player minutes to keep him sharp and in the shop window.
+        if !is_friendly && (requested || unhappy) {
+            let morale = player.happiness.morale;
+            let relationship = self.relationship_score(player, staff, date);
+            if morale < 40.0 && relationship < 0.0 {
+                let morale_deficit = ((40.0 - morale) / 40.0).clamp(0.0, 1.0);
+                adj -= morale_deficit * 0.8 + (-relationship) * 0.6;
+            }
+        }
+
+        // Injury protection for a near-complete departure. A meaningless game is
+        // no place to risk a near-sold asset, so protect at full strength in
+        // friendlies; in competitive games the protection fades as the match
+        // matters more (a must-win still uses him).
+        if agreed_move || bid_accepted {
+            let protect = if is_friendly {
+                1.0
+            } else {
+                (1.0 - match_importance).clamp(0.0, 1.0)
+            };
+            let base = if agreed_move { 1.4 } else { 0.7 };
+            adj -= base * protect;
+        }
+
+        adj.clamp(-2.0, 2.0)
     }
 
     /// Bonus for underplayed players in low-importance matches.

@@ -14,6 +14,7 @@ use crate::club::player::mailbox::PlayerContractAsk;
 use crate::club::player::plan::PlayerPlan;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::PlayerTrait;
+use crate::club::player::transfer::availability_market::AvailabilityMarketState;
 use crate::club::player::transfer::free_agent_market::FreeAgentMarketState;
 use crate::club::player::transfer::processing::TransferDesireContext;
 use crate::club::player::utils::PlayerUtils;
@@ -225,6 +226,16 @@ pub struct Player {
     /// — defined in `crate::club::player::transfer::free_agent_market`.
     pub(crate) free_agent_state: Option<FreeAgentMarketState>,
 
+    /// Durable market-discovery state kept while the player is a *signed*
+    /// but available player — transfer-listed, requested, unhappy, or
+    /// loan-listed. Read via `Player::availability_market_state()`.
+    /// Mutation is owner-side via `ensure_availability_state` /
+    /// `on_availability_interest` / `on_availability_blocked` /
+    /// `clear_availability_state`, defined in
+    /// `crate::club::player::transfer::availability_market`. The
+    /// signed-side mirror of `free_agent_state`.
+    pub(crate) availability_market: Option<AvailabilityMarketState>,
+
     /// Snapshot of compatriot / shared-language teammate counts written
     /// by the team's weekly pre-tick. Read by the desire pipeline; not
     /// persisted across saves and not cloned with the player on transfer.
@@ -235,6 +246,18 @@ pub struct Player {
     /// by `process_transfer_desire` to avoid clearing `Req` while at
     /// least one reason is still unresolved. Cleared on transfer.
     pub transfer_request_reasons: Vec<TransferRequestReason>,
+
+    /// One-shot career latch: set the first time the player makes a senior
+    /// competitive appearance, so the `SeniorDebut` milestone fires exactly
+    /// once across the whole career. `self.statistics` / `self.cup_statistics`
+    /// are wiped at every season / transfer boundary, so a per-spell
+    /// appearance count can't distinguish a genuine debut from the opening
+    /// match of a new season — this flag can. Players loaded or generated
+    /// already past [`Player::ASSUMED_SENIOR_DEBUT_AGE`] (or carrying recorded
+    /// senior history) start `true` so an established arrival never gets a
+    /// phantom debut on their first simulated match. Read/written only by
+    /// `record_senior_debut`; initialised at construction.
+    pub(crate) made_senior_debut: bool,
 }
 
 /// Why a player has an active transfer request. The set is bounded so
@@ -336,6 +359,21 @@ pub struct ManagerPromise {
 impl Player {
     pub fn builder() -> PlayerBuilder {
         PlayerBuilder::new()
+    }
+
+    /// Age by which a professional has almost always already made their
+    /// senior debut. Players created at or above it start the simulation
+    /// flagged as already-debuted, so the one-shot `SeniorDebut` milestone
+    /// stays reserved for genuine academy breakthroughs rather than firing
+    /// for established arrivals on their first simulated match.
+    pub const ASSUMED_SENIOR_DEBUT_AGE: u32 = 21;
+
+    /// Whether a player created at `age` (with `has_senior_history` recorded
+    /// career stats) should be treated as having made their senior debut
+    /// before the simulation began. Centralises the construction-time policy
+    /// so every generator path agrees.
+    pub fn presumed_already_debuted(age: u32, has_senior_history: bool) -> bool {
+        has_senior_history || age >= Self::ASSUMED_SENIOR_DEBUT_AGE
     }
 
     // ========================================================

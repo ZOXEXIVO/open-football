@@ -4,8 +4,13 @@ use std::collections::HashMap;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::ScoutMonitoringSource;
 use crate::transfers::pipeline::ScoutPlayerMonitoring;
+use crate::transfers::pipeline::exposure::{
+    AvailabilityExposure, AvailabilitySignals, ExposureStage, FreeAgentBuyerContext,
+    FreeAgentRecommendationSignals, OpportunisticFreeAgentScout,
+};
 use crate::transfers::pipeline::plausibility::{
-    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
+    BuyerPlausibilityContext, EffectivePlayerReputation, TransferPlausibilityBuilder,
+    TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::{
@@ -42,6 +47,19 @@ pub(in crate::transfers::pipeline) struct ListedTargetView {
     pub ambition: f32,
     pub parent_club_score: f32,
     pub parent_club_in_debt: bool,
+    /// Days since the player first became available. Drives the
+    /// market-exposure staleness curve — softening and circulation lift.
+    pub days_available: i64,
+    /// Months left on contract; <= 6 reads as a bargain pickup.
+    pub contract_months_remaining: i16,
+    /// Capable player who is barely featuring — the market should want him
+    /// even when his own club is ambivalent.
+    pub low_usage: bool,
+    /// Concrete approaches in the last 30 days (from the player's durable
+    /// availability state). High interest damps the circulation lift.
+    pub recent_interest_count: u8,
+    /// Consecutive weekly circulation scans that found no taker.
+    pub failed_scans: u16,
 }
 
 /// Buyer-side context the filter consults. One struct, one place to
@@ -131,12 +149,40 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
         return Reject(OutOfTierWindow);
     }
 
-    // Affordability — fee
+    // Market-exposure verdict — staleness, the seller/player softening
+    // curves, and the circulation lift for the soft score. Pure function
+    // of the observable signals; never relaxes the tier window above.
+    let exposure = AvailabilityExposure::compute(&AvailabilitySignals {
+        days_available: target.days_available,
+        is_listed: target.is_listed,
+        is_transfer_requested: target.is_transfer_requested,
+        is_unhappy: target.is_unhappy,
+        is_loan_listed: false,
+        current_ability: target.ability,
+        estimated_potential: target.estimated_potential,
+        age: target.age,
+        estimated_value: target.estimated_value,
+        asking_to_value_ratio: if target.parent_club_in_debt { 0.9 } else { 1.1 },
+        current_salary: 0,
+        world_reputation: target.world_reputation,
+        ambition: target.ambition,
+        contract_months_remaining: target.contract_months_remaining,
+        seller_in_debt: target.parent_club_in_debt,
+        squad_surplus: false,
+        low_usage_despite_ability: target.low_usage,
+        recent_interest_count: target.recent_interest_count,
+        failed_scans: target.failed_scans,
+    });
+
+    // Affordability — fee. The asking price softens the longer the player
+    // sits unsold, so a stale listing becomes reachable for a club that
+    // couldn't fund the headline value — bounded, never a giveaway.
+    let asking_value = target.estimated_value * (1.0 - exposure.price_softening as f64);
     let affordability_cap = (ctx.plan_total_budget * 1.4).max(0.0);
-    if affordability_cap <= 0.0 || target.estimated_value > affordability_cap {
+    if affordability_cap <= 0.0 || asking_value > affordability_cap {
         return Reject(UnaffordableFee);
     }
-    if ctx.max_recommend_value > 0.0 && target.estimated_value > ctx.max_recommend_value {
+    if ctx.max_recommend_value > 0.0 && asking_value > ctx.max_recommend_value {
         return Reject(UnaffordableFee);
     }
 
@@ -150,27 +196,57 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
         ctx.buyer_rep_score,
         ctx.buyer_league_reputation,
     );
+    // The player relaxes his wage expectation over a dry spell, again
+    // bounded by the softening curve.
+    let softened_wage = (estimated_wage as f64 * (1.0 - exposure.wage_softening as f64)) as u64;
     let wage_headroom = (ctx.buyer_wage_budget as i64 - ctx.buyer_total_wages as i64).max(0);
     let wage_cap = (wage_headroom as f64 * 1.3) as u64;
-    if wage_cap > 0 && (estimated_wage as u64) > wage_cap {
+    if wage_cap > 0 && softened_wage > wage_cap {
         return Reject(UnaffordableWage);
     }
 
-    // Reputation plausibility — tier-scaled gap
+    // Reputation plausibility — tier-scaled gap (never softened: an
+    // impossible-prestige move stays impossible regardless of staleness).
+    // Uses EFFECTIVE reputation, not bare world rep: a player who is a
+    // recognised name in his own market (high current/home standing) is
+    // gauged on that domestic renown, so a low-world-rep domestic star is
+    // not mistaken for a reachable bargain. `max(world, blend)` means a
+    // player whose current rep is at/below his world rep is judged exactly
+    // as before — the blend only ever raises the bar, never lowers it.
+    let effective_rep = EffectivePlayerReputation::compute(
+        target.world_reputation,
+        target.current_reputation,
+        target.current_reputation,
+        true,
+    )
+    .max(target.world_reputation);
     let gap_allowed = (1200.0 + 2400.0 * ctx.buyer_rep_score) as i32;
-    if (target.world_reputation as i32 - ctx.buyer_world_rep as i32) > gap_allowed {
+    if (effective_rep as i32 - ctx.buyer_world_rep as i32) > gap_allowed {
         return Reject(ReputationGapTooLarge);
     }
 
-    // Squad need
+    // Squad need — OR a strong, stale market opportunity. A high-exposure
+    // available player who is affordable and would add depth or future
+    // resale value can be recommended even to a club without an open
+    // positional need. Gated on non-Fresh staleness: a brand-new listing
+    // never bypasses the need check, so the opportunity route is reserved
+    // for players the market has had time to leave sitting — and it never
+    // relaxes the tier / fee / wage / reputation gates above.
     let weak_group = (ctx.buyer_best_in_group as i16) < baseline as i16;
-    if !(weak_group || ctx.has_open_request || ctx.has_aging_starter) {
+    let has_need = weak_group || ctx.has_open_request || ctx.has_aging_starter;
+    let resale_value = target.age <= 23 && target.estimated_potential > target.ability + 5;
+    let depth_value = (target.ability as i16) >= baseline as i16 - 10;
+    let strong_opportunity = !matches!(exposure.stage, ExposureStage::Fresh)
+        && exposure.score >= 45.0
+        && (resale_value || depth_value);
+    if !(has_need || strong_opportunity) {
         return Reject(NoSquadNeed);
     }
 
-    // Improvement: must be a meaningful upgrade or coach-requested
+    // Improvement: a meaningful upgrade, coach-requested, or a strong
+    // market opportunity (depth / resale add).
     let upgrade = (target.ability as i16) - (ctx.buyer_best_in_group as i16);
-    if !ctx.has_open_request && upgrade < 3 {
+    if !ctx.has_open_request && !strong_opportunity && upgrade < 3 {
         return Reject(NotAnUpgrade);
     }
 
@@ -219,6 +295,11 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
 
     let tier_delta = ctx.buyer_rep_score - target.parent_club_score;
     score += tier_delta * 4.0 * target.ambition.clamp(0.0, 1.0);
+
+    // Stale, untouched availability lifts the player up the ranking so a
+    // genuinely-stuck Req/Unh/listed player doesn't disappear behind a
+    // churn of fresher candidates.
+    score += exposure.circulation_boost;
 
     Accept(score)
 }
@@ -276,6 +357,16 @@ impl PipelineProcessor {
             average_rating: f32,
             appearances: u16,
             is_transfer_protected: bool,
+            /// Days the player has been advertised as available (earliest
+            /// Lst/Req/Unh/Loa status), 0 when not available. Drives the
+            /// market-exposure staleness curve.
+            days_available: i64,
+            /// Concrete approaches in the last 30 days, read from the
+            /// player's durable availability state (updated by the weekly
+            /// circulation pass). 0 before the state is seeded.
+            recent_interest_count: u8,
+            /// Consecutive weekly circulation scans that found no taker.
+            failed_scans: u16,
         }
 
         let mut all_snapshots: Vec<PlayerSnapshot> = Vec::new();
@@ -363,6 +454,15 @@ impl PipelineProcessor {
                             .average_rating_realistic(player.position().position_group()),
                         appearances: player.statistics.total_games(),
                         is_transfer_protected: player.is_transfer_protected(date, current_window),
+                        days_available: player.days_available(date),
+                        recent_interest_count: player
+                            .availability_market_state()
+                            .map(|s| s.recent_interest(date))
+                            .unwrap_or(0),
+                        failed_scans: player
+                            .availability_market_state()
+                            .map(|s| s.failed_scans)
+                            .unwrap_or(0),
                     });
                 }
             }
@@ -428,7 +528,6 @@ impl PipelineProcessor {
                 };
                 matches!(
                     TransferPlausibilityBuilder::evaluate_summary(
-                        country,
                         &buyer_plaus_ctx,
                         &summary,
                         is_loan,
@@ -778,6 +877,13 @@ impl PipelineProcessor {
                         ambition: p.ambition,
                         parent_club_score: p.parent_club_score,
                         parent_club_in_debt: p.club_in_debt,
+                        days_available: p.days_available,
+                        contract_months_remaining: p
+                            .contract_months_remaining
+                            .min(i16::MAX as u32) as i16,
+                        low_usage: p.appearances < 8,
+                        recent_interest_count: p.recent_interest_count,
+                        failed_scans: p.failed_scans,
                     };
                     let ctx = BuyerContext {
                         buyer_rep_score: club_rep_score,
@@ -841,6 +947,116 @@ impl PipelineProcessor {
                         date_recommended: date,
                     },
                 });
+            }
+
+            // ── Opportunistic free-agent / soon-free recommendations ──
+            // Quality players whose contracts are running down get
+            // circulated to clubs where they are a plausible, affordable
+            // depth or future-resale add — even without an open positional
+            // request. The pure `OpportunisticFreeAgentScout` owns the
+            // useful / affordable / level judgement, so a club is never
+            // recommended a free agent it can't use or fund, and a player
+            // well above the club's level is only floated once long
+            // unemployment (career pressure) would make him flexible. Pool
+            // free agents already without a club are discovered by the
+            // dedicated country-level matcher; this path covers the
+            // soon-free domestic players that matcher can't see until they
+            // are actually released. Deduped + capped through the same
+            // pipeline as every other recommendation.
+            {
+                let opportunistic_cap = match club_rep {
+                    ReputationLevel::Regional
+                    | ReputationLevel::Local
+                    | ReputationLevel::Amateur => 10,
+                    ReputationLevel::National => 8,
+                    _ => 6,
+                };
+                let current_recs = plan.staff_recommendations.len()
+                    + actions.iter().filter(|a| a.club_id == club.id).count();
+                if current_recs < opportunistic_cap {
+                    let max_squad = club
+                        .board
+                        .season_targets
+                        .as_ref()
+                        .map(|t| t.max_squad_size as usize)
+                        .unwrap_or(50);
+                    let squad_room = team.players.players.len() < max_squad;
+                    let wage_headroom = club_wage_budget as i64 - club_total_wages as i64;
+
+                    // Per-group body count on the main team — drives the
+                    // "thin at this position" depth signal.
+                    let mut group_counts: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
+                    for p in team.players.players.iter() {
+                        *group_counts
+                            .entry(p.position().position_group())
+                            .or_insert(0) += 1;
+                    }
+                    let group_thin = |group: PlayerFieldPositionGroup| -> bool {
+                        let count = group_counts.get(&group).copied().unwrap_or(0);
+                        let target = match group {
+                            PlayerFieldPositionGroup::Goalkeeper => 3,
+                            PlayerFieldPositionGroup::Defender => 8,
+                            PlayerFieldPositionGroup::Midfielder => 8,
+                            PlayerFieldPositionGroup::Forward => 6,
+                        };
+                        count < target
+                    };
+
+                    let mut fa_targets: Vec<&PlayerSnapshot> = all_snapshots
+                        .iter()
+                        .filter(|p| {
+                            if p.club_id == club.id
+                                || club.is_rival(p.club_id)
+                                || p.is_transfer_protected
+                                || p.contract_months_remaining > 6
+                                || already_recommended.contains(&p.id)
+                                || actions.iter().any(|a| {
+                                    a.club_id == club.id && a.recommendation.player_id == p.id
+                                })
+                            {
+                                return false;
+                            }
+                            let signals = FreeAgentRecommendationSignals {
+                                current_ability: p.ability,
+                                estimated_potential: p.estimated_potential,
+                                age: p.age,
+                                contract_months_remaining: p.contract_months_remaining,
+                                // Still under contract — no free-agent
+                                // career pressure has accrued yet.
+                                career_pressure: 0.0,
+                            };
+                            let buyer = FreeAgentBuyerContext {
+                                buyer_avg_ability: avg_ability,
+                                buyer_squad_room: squad_room,
+                                buyer_wage_headroom: wage_headroom,
+                                group_below_depth: group_thin(p.position_group),
+                            };
+                            OpportunisticFreeAgentScout::should_recommend(&signals, &buyer)
+                                && !plausibility_rejects(p.id, false)
+                        })
+                        .collect();
+                    fa_targets.sort_by(|a, b| b.ability.cmp(&a.ability));
+
+                    let remaining = opportunistic_cap - current_recs;
+                    for target in fa_targets.iter().take(remaining.min(2)) {
+                        actions.push(RecommendationAction {
+                            club_id: club.id,
+                            recommendation: StaffRecommendation {
+                                player_id: target.id,
+                                recommender_staff_id: listed_recommender_id,
+                                source: RecommendationSource::DirectorOfFootball,
+                                recommendation_type: RecommendationType::FreeAgentBargain,
+                                assessed_ability: target.ability,
+                                assessed_potential: target.estimated_potential,
+                                // Public soon-free status → high baseline
+                                // confidence; no observation noise.
+                                confidence: 0.6,
+                                estimated_fee: 0.0,
+                                date_recommended: date,
+                            },
+                        });
+                    }
+                }
             }
 
             // ── DoF bargain identification ──
@@ -1225,7 +1441,7 @@ impl PipelineProcessor {
                     Self::find_player_summary_in_country(country, rec.player_id, date)
                 {
                     let plausibility = TransferPlausibilityBuilder::evaluate_summary(
-                        country, &buyer_ctx, &summary, false, true, date,
+                        &buyer_ctx, &summary, false, true, date,
                     );
                     if let Some(TransferPlausibilityVerdict::HardReject(_)) = plausibility {
                         continue;

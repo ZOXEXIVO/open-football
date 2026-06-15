@@ -872,6 +872,7 @@ impl PlayerGenerator {
             .positions(positions)
             .languages(native_languages)
             .generated(true)
+            .made_senior_debut(Player::presumed_already_debuted(age, false))
             .build()
             .expect("Failed to build Player")
     }
@@ -1624,7 +1625,11 @@ impl PlayerGenerator {
             .preferred_foot(preferred_foot)
             .foots(foots)
             .positions(positions)
-            .languages(native_languages);
+            .languages(native_languages)
+            .made_senior_debut(Player::presumed_already_debuted(
+                age,
+                statistics_history.is_some(),
+            ));
 
         if let Some(history) = statistics_history {
             builder = builder.statistics_history(history);

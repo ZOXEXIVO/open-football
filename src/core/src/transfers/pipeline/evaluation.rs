@@ -2,8 +2,9 @@ use chrono::NaiveDate;
 use log::debug;
 use std::collections::HashMap;
 
+use crate::club::player::contract::{AffordabilityInput, ContractStalemate, StalemateLevel};
 use crate::club::staff::perception::{EstimationContext, PotentialEstimator};
-use crate::club::team::squad::MIN_FIRST_TEAM_SQUAD;
+use crate::club::team::squad::{MIN_FIRST_TEAM_SQUAD, SquadAssetContext};
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
 use crate::transfers::pipeline::{
@@ -138,6 +139,219 @@ pub(in crate::transfers::pipeline) fn compute_group_needs(
     }
 
     needs
+}
+
+/// One realistic outcome of the career-pathway ladder for an underused
+/// but development-relevant player. Pure data — [`ProspectPathway::decide`]
+/// is side-effect free so the ladder can be unit-tested in isolation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::transfers::pipeline) enum PathwayAction {
+    /// No transfer-pipeline action this tick — he's close enough to the
+    /// XI that selection bias / internal minutes handle him, or he's too
+    /// raw for a senior loan and is better served by reserve football.
+    Hold,
+    /// Loan out for first-team minutes, tagged with the reason that fits
+    /// why he isn't playing.
+    LoanOut(LoanOutReason),
+    /// The development bet has failed (repeated loans that didn't take, or
+    /// the runway has run out): list for permanent sale rather than loan
+    /// into the void again.
+    Sell,
+}
+
+/// Observable signals the pathway ladder reads for one player. Built from
+/// squad context with no `Player` borrow so [`ProspectPathway::decide`]
+/// stays pure and trivially testable.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::transfers::pipeline) struct ProspectSignals {
+    pub age: u8,
+    pub current_ability: u8,
+    pub estimated_potential: u8,
+    pub potential_confidence: f32,
+    pub group_avg_ability: u8,
+    /// Official appearances THIS season (league + cups, no friendlies).
+    pub official_appearances: u16,
+    /// Official games in the most-recent completed season — distinguishes
+    /// "stalled" from "was a regular until now".
+    pub last_season_official_games: u16,
+    /// Teammates at his position with strictly higher CA; 0 = top of the
+    /// pecking order (the de-facto starter).
+    pub depth_rank: usize,
+    /// A clearly better player (>= CLEAR_GAP CA above) sits ahead at his
+    /// position — hard evidence he's blocked, not just nominally behind.
+    pub clearly_blocked: bool,
+    /// His group carries more bodies than the formation minimum, so a loan
+    /// won't drop the club below playable depth.
+    pub has_loanable_depth: bool,
+    /// Completed loan spells already behind him.
+    pub previous_loans: u8,
+    /// Of those, how many returned with negligible official minutes.
+    pub failed_loans: u8,
+    /// Most-recent completed seasons ending with ~zero official minutes,
+    /// counted consecutively back from the latest.
+    pub consecutive_zero_seasons: u8,
+    /// Inside the January window — the mid-season "he still hasn't kicked
+    /// a competitive ball" checkpoint.
+    pub is_january: bool,
+    /// Injured / suspended / on international duty / unregistered / unfit —
+    /// any current state that means his lack of minutes isn't a free
+    /// choice the club is making, so the pathway must not act on it.
+    pub unavailable: bool,
+    /// Months left on his contract; `None` for a free agent / no contract.
+    /// Drives asset-value protection — a valuable prospect on a short deal
+    /// must not be loaned into free-transfer risk.
+    pub contract_months_remaining: Option<i32>,
+    /// Contract-renewal talks are genuinely exhausted (the existing
+    /// `ContractStalemate` says renewal is impossible). When true, a
+    /// short-contract asset is sold now rather than loaned and lost free.
+    pub renewal_exhausted: bool,
+}
+
+/// The career-pathway decision ladder. Given how a development-relevant
+/// player is ACTUALLY being used, what would a realistic club do? The key
+/// principle, and the fix for the "talented player rots with zero official
+/// games" case: being BLOCKED and UNUSED is enough to act — the player
+/// does NOT have to be far below his squad's average to be moved on.
+pub(in crate::transfers::pipeline) struct ProspectPathway;
+
+impl ProspectPathway {
+    /// Oldest age still treated as "develop via a senior loan". Past this
+    /// the stalled-asset case is sale-only (no endless loaning of a player
+    /// who never broke through).
+    pub const DEV_RELEVANT_MAX_AGE: u8 = 23;
+    /// CA gap that marks a teammate as "clearly better" at the position.
+    pub const CLEAR_GAP: u8 = 8;
+    /// A returned loan with fewer official games than this counts as a
+    /// failed pathway — the development minutes never materialised.
+    pub const FAILED_LOAN_GAMES: u16 = 5;
+    /// Season official-appearance ceiling that still reads as "no real
+    /// senior pathway" — the 0-3 band the design brief calls out.
+    pub const STALLED_SEASON_APPS: u16 = 3;
+    /// Official appearances (this season OR last) at which the player is
+    /// considered an established part of the rotation and is left alone.
+    pub const REGULAR_APPS: u16 = 8;
+    /// Believed-ceiling gap over current ability before we treat him as a
+    /// high-potential asset worth a development loan.
+    pub const CEILING_GAP: u8 = 5;
+    /// Confidence floor on the coach's potential read before acting on it.
+    pub const CONFIDENCE_FLOOR: f32 = 0.30;
+    /// How far below his position-group average a player can sit and still
+    /// be "good enough for some level of football" (worth developing
+    /// rather than simply surplus).
+    pub const WITHIN_REACH_GAP: i16 = 20;
+    /// Minimum depth rank (players strictly ahead at the position) before a
+    /// player counts as genuinely blocked. Rank 1 — narrowly behind a
+    /// single teammate, e.g. a #2 keeper — is a credible rotation path, not
+    /// a stalled asset, so it is deliberately NOT enough.
+    pub const BLOCKED_MIN_RANK: usize = 2;
+    /// Contract length (months) at or below which a valuable prospect is
+    /// treated as "short deal" — loaning him out risks running the contract
+    /// down and losing the asset for free, so renewal must come first.
+    pub const SHORT_CONTRACT_MONTHS: i32 = 18;
+
+    pub fn decide(s: &ProspectSignals) -> PathwayAction {
+        // Can't fairly assess or move an unavailable player right now.
+        if s.unavailable {
+            return PathwayAction::Hold;
+        }
+
+        // A current regular — this season or last completed season — has a
+        // pathway. Never loan/sell him via this sweep.
+        let establishing = s.official_appearances >= Self::REGULAR_APPS
+            || s.last_season_official_games >= Self::REGULAR_APPS;
+        if establishing {
+            return PathwayAction::Hold;
+        }
+
+        // ── Escalate to SALE — the development bet has failed ─────────
+        // Two loans that didn't deliver minutes is enough on its own:
+        // endlessly loaning a player who never actually plays isn't
+        // realistic. (The `establishing` guard above already spared
+        // anyone who has since become a regular.)
+        if s.failed_loans >= 2 {
+            return PathwayAction::Sell;
+        }
+
+        // Out of development runway with a track record of going nowhere:
+        // two write-off seasons, or two completed loans and still nothing.
+        let runway_gone = s.age >= Self::DEV_RELEVANT_MAX_AGE;
+        if runway_gone && (s.consecutive_zero_seasons >= 2 || s.previous_loans >= 2) {
+            return PathwayAction::Sell;
+        }
+
+        // A third loan spell isn't realistic. If he didn't qualify for a
+        // sale above, hold — no more loaning this one.
+        if s.previous_loans >= 2 {
+            return PathwayAction::Hold;
+        }
+
+        // ── LOAN path — blocked, unused, worth developing, has runway ─
+        // "Good enough for some football" = a believed high ceiling OR
+        // already within reach of his group (not a no-hoper to offload).
+        let believed_high_ceiling = s.estimated_potential
+            > s.current_ability.saturating_add(Self::CEILING_GAP)
+            && s.potential_confidence >= Self::CONFIDENCE_FLOOR;
+        let within_reach =
+            (s.current_ability as i16) >= s.group_avg_ability as i16 - Self::WITHIN_REACH_GAP;
+        let worth_developing = believed_high_ceiling || within_reach;
+
+        // Blocked = genuinely behind in the pecking order. A player only
+        // narrowly behind ONE teammate (rank 1) still has a credible
+        // rotation path — and a #2 keeper is squad depth, not surplus — so
+        // require at least two ahead of him before treating him as stuck.
+        let blocked = s.depth_rank >= Self::BLOCKED_MIN_RANK;
+
+        if !(worth_developing && blocked && s.has_loanable_depth) {
+            return PathwayAction::Hold;
+        }
+
+        if s.age > Self::DEV_RELEVANT_MAX_AGE {
+            return PathwayAction::Hold;
+        }
+
+        // Trigger windows for "needs a senior loan now":
+        //   * January and still zero official minutes ("0 by January"),
+        //   * a prior stalled season AND still nothing this season (the
+        //     end-of-season / pre-season pathway decision), or
+        //   * a clearly stalled current season (<= 3 official apps) at the
+        //     January checkpoint.
+        let zero_by_january = s.is_january && s.official_appearances == 0;
+        let multi_season_stall = s.consecutive_zero_seasons >= 1 && s.official_appearances == 0;
+        let stalled_in_january =
+            s.is_january && s.official_appearances <= Self::STALLED_SEASON_APPS;
+
+        if !(zero_by_january || multi_season_stall || stalled_in_january) {
+            return PathwayAction::Hold;
+        }
+
+        // Asset-value protection: a VALUABLE prospect on a short contract
+        // must not be silently loaned into free-transfer risk. Defer to the
+        // existing contract-renewal pipeline first (it gets the chance to
+        // extend before any move); only once renewal is genuinely exhausted
+        // do we cash in — and we SELL rather than loan, so the resale value
+        // isn't run down on an expiring deal out on loan.
+        let short_contract = s
+            .contract_months_remaining
+            .is_some_and(|m| m <= Self::SHORT_CONTRACT_MONTHS);
+        if believed_high_ceiling && short_contract {
+            return if s.renewal_exhausted {
+                PathwayAction::Sell
+            } else {
+                PathwayAction::Hold
+            };
+        }
+
+        let reason = if s.clearly_blocked {
+            LoanOutReason::BlockedByDepth
+        } else if believed_high_ceiling && within_reach {
+            // Genuinely valuable (high ceiling AND already near his group),
+            // and on a safe-length deal — loan to protect and grow value.
+            LoanOutReason::AssetValueProtection
+        } else {
+            LoanOutReason::NeedsFirstTeamMinutes
+        };
+        PathwayAction::LoanOut(reason)
+    }
 }
 
 impl PipelineProcessor {
@@ -364,6 +578,13 @@ impl PipelineProcessor {
         // only iterates the first team here so all are main-team
         // visibility.
         let head_coach = team.staffs.head_coach();
+        // Central squad-asset context, built once per club. Drives the
+        // "is this player a protected first-team asset?" gate that every
+        // loan-out / surplus sweep below consults — so a key / first-team /
+        // inferred-core player (even one whose monthly squad status is still
+        // `NotYetSet`, or who is merely short on early-season minutes) is
+        // never loaned or listed automatically.
+        let asset_ctx = SquadAssetContext::build(club, date);
         let squad: Vec<SquadPlayerInfo> = players
             .iter()
             .map(|p| {
@@ -387,9 +608,16 @@ impl PipelineProcessor {
                     age: p.age(date),
                     position_levels: levels,
                     appearances: p.statistics.played + p.statistics.played_subs,
+                    // Official = league + all cups (domestic + continental);
+                    // friendly_statistics is intentionally excluded.
+                    official_appearances: p.statistics.played
+                        + p.statistics.played_subs
+                        + p.cup_statistics.played
+                        + p.cup_statistics.played_subs,
                     is_injured: p.player_attributes.is_injured,
                     recovery_days: p.player_attributes.recovery_days_remaining,
                     injury_days: p.player_attributes.injury_days_remaining,
+                    asset_class: asset_ctx.classify(p, date),
                 }
             })
             .collect();
@@ -861,6 +1089,7 @@ impl PipelineProcessor {
             &club.philosophy,
             formation_positions,
             current_window,
+            asset_ctx.is_early_season(),
         );
 
         // Position-glut sweep: catches surplus the loan-out branches
@@ -876,6 +1105,26 @@ impl PipelineProcessor {
         // below his position-group level is no longer a development
         // asset — sell rather than hold.
         Self::identify_repeated_loan_stagnation(&squad, players, &mut force_transfer_list);
+
+        // Stalled-prospect / blocked-asset pathway sweep. The branches
+        // above all loan-list on a position-group-average DEFICIT, so a
+        // talented youngster whose ability sits near (or above) his group
+        // mean but who never plays falls through every one of them and can
+        // rot for seasons. This sweep closes that gap: a development-
+        // relevant player who is BLOCKED and UNUSED is loaned out for
+        // minutes (or, when the development bet has already failed,
+        // listed for sale) regardless of how he compares to the squad
+        // average. Runs last and is purely additive — it skips anyone the
+        // earlier, calibration-sensitive branches already planned for.
+        Self::identify_stalled_prospects(
+            &squad,
+            date,
+            players,
+            formation_positions,
+            current_window,
+            &mut loan_outs,
+            &mut force_transfer_list,
+        );
 
         SquadEvaluation {
             club_id: club.id,
@@ -972,6 +1221,14 @@ impl PipelineProcessor {
                 if player.is_force_match_selection && player.contract.is_some() {
                     continue;
                 }
+                // Never eject a protected first-team asset on a raw headcount
+                // signal. The glut sweep already picks the worst-CA players,
+                // so a core player rarely lands here — but a thin or skewed
+                // early-season group can mis-rank, and a key player must not
+                // be loaned or listed just because his position is crowded.
+                if surplus.asset_class.is_first_team_protected() {
+                    continue;
+                }
                 let statuses = player.statuses.get();
                 let already_listed = statuses.contains(&PlayerStatusType::Lst);
 
@@ -1036,6 +1293,11 @@ impl PipelineProcessor {
             if player.is_force_match_selection && player.contract.is_some() {
                 continue;
             }
+            // A core / first-team asset is never sold off via the repeated-
+            // loan-stagnation sweep, even if his raw loan history matches.
+            if info.asset_class.is_first_team_protected() {
+                continue;
+            }
             let loan_spells = player
                 .statistics_history
                 .items
@@ -1068,6 +1330,302 @@ impl PipelineProcessor {
         }
     }
 
+    /// Stalled-prospect / blocked-asset pathway sweep — the fix for the
+    /// "talented player sits unused for seasons" case. For every
+    /// development-relevant player the earlier branches left alone, build
+    /// the observable [`ProspectSignals`] and apply the realistic
+    /// [`ProspectPathway`] decision: loan him out for first-team minutes,
+    /// or (development bet failed) list him for sale.
+    ///
+    /// Crucially, being BLOCKED and UNUSED is enough here — unlike the
+    /// existing branches this does NOT require the player to be far below
+    /// his position-group average. Purely additive: every existing guard
+    /// (on-loan, manager-pinned, same-window, plan-protected, already
+    /// listed / already planned for) is respected so nothing the
+    /// calibration-sensitive branches decided is overridden.
+    fn identify_stalled_prospects(
+        squad: &[SquadPlayerInfo],
+        date: NaiveDate,
+        players: &[Player],
+        formation_positions: &[PlayerPositionType; 11],
+        current_window: Option<(NaiveDate, NaiveDate)>,
+        loan_outs: &mut Vec<LoanOutCandidate>,
+        force_list: &mut Vec<u32>,
+    ) {
+        let is_january = Self::is_january_window(date);
+
+        for info in squad {
+            let Some(player) = players.iter().find(|p| p.id == info.player_id) else {
+                continue;
+            };
+
+            // ── Guards (mirror the other loan-out paths) ─────────────
+            if player.is_on_loan() {
+                continue;
+            }
+            if player.is_force_match_selection && player.contract.is_some() {
+                continue;
+            }
+            // Core / first-team protection: a key or inferred-first-team
+            // player is never routed through the stalled-prospect pathway,
+            // however thin his current minutes look.
+            if info.asset_class.is_first_team_protected() {
+                continue;
+            }
+            // International duty isn't a club decision to bench him — his
+            // missing minutes must not read as a stalled pathway.
+            if player.statuses.is_on_international_duty() {
+                continue;
+            }
+            // Already handled by an earlier pass — don't double-tag or
+            // contradict a plan (e.g. loan-listing a player marked to sell).
+            if loan_outs.iter().any(|c| c.player_id == info.player_id)
+                || force_list.contains(&info.player_id)
+            {
+                continue;
+            }
+            let statuses = player.statuses.get();
+            if statuses.contains(&PlayerStatusType::Lst)
+                || statuses.contains(&PlayerStatusType::Loa)
+            {
+                continue;
+            }
+            // Same-window signing protection.
+            if let (Some(transfer_date), Some((window_start, window_end))) =
+                (player.last_transfer_date, current_window)
+            {
+                if transfer_date >= window_start && transfer_date <= window_end {
+                    continue;
+                }
+            }
+            // Club signing plan still under evaluation pins the player —
+            // except a development plan, where loaning IS the plan.
+            if let Some(ref plan) = player.plan {
+                if !plan.is_evaluated(date, info.official_appearances)
+                    && !plan.is_expired(date)
+                    && plan.role != PlayerPlanRole::Development
+                {
+                    continue;
+                }
+            }
+
+            // ── Position-group depth / blocking picture ──────────────
+            let group = info.primary_position.position_group();
+            let group_members: Vec<&SquadPlayerInfo> = squad
+                .iter()
+                .filter(|p| p.primary_position.position_group() == group)
+                .collect();
+            let group_count = group_members.len();
+            let min_needed = Self::group_min_needed(group, formation_positions);
+
+            let mut ahead = 0usize;
+            let mut clearly_blocked = false;
+            for other in &group_members {
+                if other.player_id == info.player_id {
+                    continue;
+                }
+                if other.current_ability > info.current_ability {
+                    ahead += 1;
+                }
+                if other.current_ability
+                    >= info
+                        .current_ability
+                        .saturating_add(ProspectPathway::CLEAR_GAP)
+                {
+                    clearly_blocked = true;
+                }
+            }
+            let group_avg_ability: u8 = if group_count > 0 {
+                (group_members
+                    .iter()
+                    .map(|p| p.current_ability as u32)
+                    .sum::<u32>()
+                    / group_count as u32) as u8
+            } else {
+                info.current_ability
+            };
+
+            let contract_months_remaining = player
+                .contract
+                .as_ref()
+                .map(|c| ((c.expiration - date).num_days() / 30) as i32);
+            // Only a SHORT-contract player's renewal state can change the
+            // decision (asset-value protection), so skip the stalemate
+            // assessment entirely for everyone else.
+            let renewal_exhausted = contract_months_remaining
+                .is_some_and(|m| m <= ProspectPathway::SHORT_CONTRACT_MONTHS)
+                && Self::renewal_exhausted(player, date);
+
+            let signals = ProspectSignals {
+                age: info.age,
+                current_ability: info.current_ability,
+                estimated_potential: info.estimated_potential,
+                potential_confidence: info.potential_confidence,
+                group_avg_ability,
+                official_appearances: info.official_appearances,
+                last_season_official_games: Self::last_completed_season_official_games(player),
+                depth_rank: ahead,
+                clearly_blocked,
+                has_loanable_depth: group_count > min_needed,
+                previous_loans: Self::loan_spell_count(player),
+                failed_loans: Self::failed_loan_count(player),
+                consecutive_zero_seasons: Self::consecutive_zero_official_seasons(player),
+                is_january,
+                unavailable: Self::pathway_unavailable(player),
+                contract_months_remaining,
+                renewal_exhausted,
+            };
+
+            match ProspectPathway::decide(&signals) {
+                PathwayAction::Hold => {}
+                PathwayAction::LoanOut(reason) => {
+                    debug!(
+                        "Stalled prospect: loan-listing player {} (age {}, CA {}, official apps {}, reason {:?})",
+                        info.player_id,
+                        info.age,
+                        info.current_ability,
+                        info.official_appearances,
+                        reason
+                    );
+                    loan_outs.push(LoanOutCandidate {
+                        player_id: info.player_id,
+                        reason,
+                        status: LoanOutStatus::Identified,
+                        loan_fee: 0.0,
+                    });
+                }
+                PathwayAction::Sell => {
+                    debug!(
+                        "Stalled prospect: transfer-listing player {} (age {}, CA {}, prev loans {}, failed {})",
+                        info.player_id,
+                        info.age,
+                        info.current_ability,
+                        signals.previous_loans,
+                        signals.failed_loans
+                    );
+                    force_list.push(info.player_id);
+                }
+            }
+        }
+    }
+
+    /// Completed loan spells in the player's frozen history.
+    fn loan_spell_count(player: &Player) -> u8 {
+        player
+            .statistics_history
+            .items
+            .iter()
+            .filter(|h| h.is_loan)
+            .count()
+            .min(u8::MAX as usize) as u8
+    }
+
+    /// Loan spells that returned with negligible official minutes — the
+    /// development the loan was supposed to provide never materialised.
+    fn failed_loan_count(player: &Player) -> u8 {
+        player
+            .statistics_history
+            .items
+            .iter()
+            .filter(|h| {
+                h.is_loan && h.statistics.total_games() < ProspectPathway::FAILED_LOAN_GAMES
+            })
+            .count()
+            .min(u8::MAX as usize) as u8
+    }
+
+    /// Total official games in the player's most-recent completed season
+    /// (loan and parent spells in that season summed). Zero when there's
+    /// no frozen history yet.
+    fn last_completed_season_official_games(player: &Player) -> u16 {
+        let latest = player
+            .statistics_history
+            .items
+            .iter()
+            .map(|h| h.season.start_year)
+            .max();
+        match latest {
+            Some(year) => player
+                .statistics_history
+                .items
+                .iter()
+                .filter(|h| h.season.start_year == year)
+                .map(|h| h.statistics.total_games())
+                .sum(),
+            None => 0,
+        }
+    }
+
+    /// Most-recent completed seasons that ended with zero official games,
+    /// counted consecutively back from the latest. Loan and parent spells
+    /// in the same season are summed, so a season counts as "zero" only if
+    /// the player featured nowhere official that year.
+    fn consecutive_zero_official_seasons(player: &Player) -> u8 {
+        let mut by_season: Vec<(u16, u16)> = Vec::new();
+        for item in &player.statistics_history.items {
+            let year = item.season.start_year;
+            let games = item.statistics.total_games();
+            if let Some(entry) = by_season.iter_mut().find(|(y, _)| *y == year) {
+                entry.1 = entry.1.saturating_add(games);
+            } else {
+                by_season.push((year, games));
+            }
+        }
+        by_season.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut count = 0u8;
+        for (_, games) in by_season {
+            if games == 0 {
+                count = count.saturating_add(1);
+            } else {
+                break;
+            }
+        }
+        count
+    }
+
+    /// Whether the player is in a current state that means his lack of
+    /// minutes is NOT a free squad decision — injured, recovering, banned,
+    /// suspended, away on international duty, unregistered, or short of
+    /// match fitness. The pathway must never loan or sell a player just
+    /// because he had no minutes while unavailable.
+    fn pathway_unavailable(player: &Player) -> bool {
+        let attrs = &player.player_attributes;
+        if attrs.is_injured || attrs.is_banned || attrs.is_in_recovery() {
+            return true;
+        }
+        player.statuses.get().iter().any(|s| {
+            matches!(
+                s,
+                PlayerStatusType::Inj
+                    | PlayerStatusType::Sus
+                    | PlayerStatusType::Int
+                    | PlayerStatusType::IntU21
+                    | PlayerStatusType::Wp
+                    | PlayerStatusType::Unr
+                    | PlayerStatusType::Lmp
+                    | PlayerStatusType::Unf
+            )
+        })
+    }
+
+    /// True when contract-renewal talks for this player are genuinely
+    /// exhausted, per the shared `ContractStalemate` assessment. Wage-budget
+    /// headroom isn't known at this layer, so it's left unspecified — the
+    /// assessment never treats "unknown" as "unaffordable", so this stays
+    /// conservative and only fires on a real rejection track record.
+    fn renewal_exhausted(player: &Player, date: NaiveDate) -> bool {
+        let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+        let stalemate = ContractStalemate::assess(
+            player,
+            date,
+            AffordabilityInput {
+                wage_budget_headroom: None,
+                current_salary,
+            },
+        );
+        matches!(stalemate.level, StalemateLevel::Exhausted)
+    }
+
     /// Get formation positions, falling back to T442 for unmapped formations.
     fn get_formation_positions(formation: MatchTacticType) -> &'static [PlayerPositionType; 11] {
         let (_, positions) = TACTICS_POSITIONS
@@ -1075,6 +1633,38 @@ impl PipelineProcessor {
             .find(|(tactic, _)| *tactic == formation)
             .unwrap_or(&TACTICS_POSITIONS[0]);
         positions
+    }
+
+    /// Minimum players a position group must retain on the main roster
+    /// before any loan-out can fire — the formation footprint plus a thin
+    /// rotation cushion. Shared by every loan-out path so they agree on
+    /// "too thin to let anyone leave". (Forward intentionally has no +1:
+    /// lone-striker shapes already carry the wide forwards counted here.)
+    fn group_min_needed(
+        group: PlayerFieldPositionGroup,
+        formation_positions: &[PlayerPositionType; 11],
+    ) -> usize {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 2,
+            PlayerFieldPositionGroup::Defender => {
+                formation_positions
+                    .iter()
+                    .filter(|p| p.is_defender())
+                    .count()
+                    + 1
+            }
+            PlayerFieldPositionGroup::Midfielder => {
+                formation_positions
+                    .iter()
+                    .filter(|p| p.is_midfielder())
+                    .count()
+                    + 1
+            }
+            PlayerFieldPositionGroup::Forward => formation_positions
+                .iter()
+                .filter(|p| p.is_forward())
+                .count(),
+        }
     }
 
     /// Identify loan-out candidates based on club reputation tier.
@@ -1088,6 +1678,7 @@ impl PipelineProcessor {
         philosophy: &ClubPhilosophy,
         formation_positions: &[PlayerPositionType; 11],
         current_window: Option<(NaiveDate, NaiveDate)>,
+        early_season: bool,
     ) {
         let is_january = Self::is_january_window(date);
 
@@ -1116,6 +1707,28 @@ impl PipelineProcessor {
             // agent (no contract) cannot be loaned anyway, but the pin
             // must not block any future move either.
             if player.is_force_match_selection && player.contract.is_some() {
+                continue;
+            }
+
+            // Central core-player protection: a key / first-team / inferred-
+            // core player is never loaned out automatically (the Litvinov
+            // case — a KeyPlayer must not be farmed out for early-season
+            // low minutes). RotationUseful / ProspectDevelopment / surplus
+            // players fall through to the normal, calibration-sensitive
+            // logic below.
+            if player_info.asset_class.is_first_team_protected() {
+                debug!(
+                    "Loan-out skipped: player {} is a protected first-team asset ({})",
+                    player_info.player_id,
+                    player_info.asset_class.label()
+                );
+                continue;
+            }
+
+            // A player away on international duty isn't being benched by a
+            // club choice — his low minutes are an artefact of the call-up,
+            // not evidence he is unwanted. Never loan-list on that basis.
+            if player.statuses.is_on_international_duty() {
                 continue;
             }
 
@@ -1174,27 +1787,7 @@ impl PipelineProcessor {
                 .count();
 
             // Minimum players needed per group from formation
-            let min_needed = match group {
-                PlayerFieldPositionGroup::Goalkeeper => 2,
-                PlayerFieldPositionGroup::Defender => {
-                    formation_positions
-                        .iter()
-                        .filter(|p| p.is_defender())
-                        .count()
-                        + 1
-                }
-                PlayerFieldPositionGroup::Midfielder => {
-                    formation_positions
-                        .iter()
-                        .filter(|p| p.is_midfielder())
-                        .count()
-                        + 1
-                }
-                PlayerFieldPositionGroup::Forward => formation_positions
-                    .iter()
-                    .filter(|p| p.is_forward())
-                    .count(),
-            };
+            let min_needed = Self::group_min_needed(group, formation_positions);
 
             // Don't loan out if we'd drop below minimum
             if group_count <= min_needed {
@@ -1262,8 +1855,12 @@ impl PipelineProcessor {
                         continue;
                     }
 
-                    // Players blocked by better players
-                    if player_info.age <= 25
+                    // Players blocked by better players. Suppressed in the
+                    // early-season low-evidence window: a handful of games
+                    // into the season, low appearances are sample noise, not
+                    // proof a player is blocked and needs to leave.
+                    if !early_season
+                        && player_info.age <= 25
                         && player_info.current_ability >= avg_ability.saturating_sub(10)
                         && player_info.appearances < min_appearances_pct
                     {
@@ -1417,5 +2014,717 @@ impl PipelineProcessor {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod stalled_prospect_tests {
+    use super::*;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::team::squad::SquadAssetClass;
+    use crate::league::Season;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills,
+        PlayerStatistics, PlayerStatisticsHistoryItem,
+    };
+    use std::collections::HashMap;
+
+    /// Fixtures for the stalled-prospect pathway sweep. Bundled on a unit
+    /// struct per the project's no-free-helpers convention.
+    struct Fx;
+
+    impl Fx {
+        fn date(y: i32, m: u32, d: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, d).unwrap()
+        }
+
+        /// The canonical "blocked, unused, high-potential January prospect"
+        /// — the Lyan profile. Tests tweak one field at a time.
+        fn blocked_prospect() -> ProspectSignals {
+            ProspectSignals {
+                age: 19,
+                current_ability: 110,
+                estimated_potential: 140,
+                potential_confidence: 0.6,
+                group_avg_ability: 118,
+                official_appearances: 0,
+                last_season_official_games: 0,
+                depth_rank: 2,
+                clearly_blocked: true,
+                has_loanable_depth: true,
+                previous_loans: 0,
+                failed_loans: 0,
+                consecutive_zero_seasons: 0,
+                is_january: true,
+                unavailable: false,
+                contract_months_remaining: Some(36),
+                renewal_exhausted: false,
+            }
+        }
+
+        /// A player with `ca` at `pos`, born so they are ~`age` on the
+        /// 2027 reference dates, with `league_apps` league appearances.
+        fn player(id: u32, pos: PlayerPositionType, ca: u8, age: i32, league_apps: u16) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ca;
+            attrs.potential_ability = ca.saturating_add(30);
+            let mut stats = PlayerStatistics::default();
+            stats.played = league_apps;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Test".to_string(), format!("P{id}")))
+                .birth_date(Self::date(2027 - age, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: pos,
+                        level: 16,
+                    }],
+                })
+                .player_attributes(attrs)
+                .statistics(stats)
+                .build()
+                .unwrap()
+        }
+
+        /// A frozen-history season row (parent or loan spell) with `games`
+        /// official appearances.
+        fn season_item(year: u16, is_loan: bool, games: u16) -> PlayerStatisticsHistoryItem {
+            let mut stats = PlayerStatistics::default();
+            stats.played = games;
+            PlayerStatisticsHistoryItem {
+                season: Season::new(year),
+                team_name: "T".to_string(),
+                team_slug: "t".to_string(),
+                team_reputation: 0,
+                league_name: "L".to_string(),
+                league_slug: "l".to_string(),
+                is_loan,
+                transfer_fee: None,
+                statistics: stats,
+                seq_id: year as u32,
+            }
+        }
+
+        fn info(
+            player: &Player,
+            date: NaiveDate,
+            est_pot: u8,
+            conf: f32,
+            official_apps: u16,
+        ) -> SquadPlayerInfo {
+            SquadPlayerInfo {
+                player_id: player.id,
+                primary_position: player.position(),
+                current_ability: player.player_attributes.current_ability,
+                estimated_potential: est_pot,
+                potential_confidence: conf,
+                age: player.age(date),
+                position_levels: HashMap::new(),
+                appearances: official_apps,
+                official_appearances: official_apps,
+                is_injured: false,
+                recovery_days: 0,
+                injury_days: 0,
+                // Neutral default — the sweeps under test only veto on
+                // first-team protection, which `UnknownNeedsEvaluation`
+                // does not trigger. Tests that exercise the veto set a
+                // protected class explicitly.
+                asset_class: SquadAssetClass::UnknownNeedsEvaluation,
+            }
+        }
+
+        fn formation() -> &'static [PlayerPositionType; 11] {
+            PipelineProcessor::get_formation_positions(MatchTacticType::T442)
+        }
+
+        fn group_min(group: PlayerFieldPositionGroup) -> usize {
+            PipelineProcessor::group_min_needed(group, Self::formation())
+        }
+    }
+
+    // ───────────────────────── decision-ladder unit tests ─────────────
+
+    #[test]
+    fn blocked_unused_january_prospect_is_loan_listed() {
+        // The headline Lyan fix: blocked + unused is enough to act, even
+        // though his ability sits NEAR (not far below) the group average.
+        let s = Fx::blocked_prospect();
+        assert_eq!(
+            ProspectPathway::decide(&s),
+            PathwayAction::LoanOut(LoanOutReason::BlockedByDepth)
+        );
+    }
+
+    #[test]
+    fn loan_never_thins_a_minimum_depth_group() {
+        // Requirement: do not loan a player out if it leaves the position
+        // below minimum depth.
+        let mut s = Fx::blocked_prospect();
+        s.has_loanable_depth = false;
+        assert_eq!(ProspectPathway::decide(&s), PathwayAction::Hold);
+    }
+
+    #[test]
+    fn de_facto_starter_is_not_loaned_out() {
+        // Top of the pecking order with nobody clearly ahead → not blocked.
+        let mut s = Fx::blocked_prospect();
+        s.depth_rank = 0;
+        s.clearly_blocked = false;
+        assert_eq!(ProspectPathway::decide(&s), PathwayAction::Hold);
+    }
+
+    #[test]
+    fn established_regular_is_left_alone() {
+        let mut s = Fx::blocked_prospect();
+        s.official_appearances = 20;
+        assert_eq!(ProspectPathway::decide(&s), PathwayAction::Hold);
+        // Even if THIS season hasn't started, a regular last season holds.
+        let mut s2 = Fx::blocked_prospect();
+        s2.official_appearances = 0;
+        s2.last_season_official_games = 25;
+        assert_eq!(ProspectPathway::decide(&s2), PathwayAction::Hold);
+    }
+
+    #[test]
+    fn injured_player_is_not_acted_on() {
+        let mut s = Fx::blocked_prospect();
+        s.unavailable = true;
+        assert_eq!(ProspectPathway::decide(&s), PathwayAction::Hold);
+    }
+
+    #[test]
+    fn high_ceiling_asset_near_group_is_value_protected() {
+        let mut s = Fx::blocked_prospect();
+        s.clearly_blocked = false; // no clear-gap superior...
+        s.depth_rank = 2; // ...but genuinely behind two teammates
+        s.current_ability = 118;
+        s.group_avg_ability = 120; // within reach
+        s.estimated_potential = 150; // high believed ceiling
+        // On a safe-length deal there's no value-loss risk in loaning him.
+        s.contract_months_remaining = Some(36);
+        assert_eq!(
+            ProspectPathway::decide(&s),
+            PathwayAction::LoanOut(LoanOutReason::AssetValueProtection)
+        );
+    }
+
+    #[test]
+    fn plain_blocked_prospect_needs_first_team_minutes() {
+        let mut s = Fx::blocked_prospect();
+        s.clearly_blocked = false;
+        s.depth_rank = 2;
+        s.estimated_potential = s.current_ability; // no believed ceiling
+        assert_eq!(
+            ProspectPathway::decide(&s),
+            PathwayAction::LoanOut(LoanOutReason::NeedsFirstTeamMinutes)
+        );
+    }
+
+    #[test]
+    fn two_failed_loans_force_a_sale_not_another_loan() {
+        // Requirement: 2 failed loans → transfer-list, not loaned again.
+        let mut s = Fx::blocked_prospect();
+        s.age = 24;
+        s.failed_loans = 2;
+        s.previous_loans = 2;
+        assert_eq!(ProspectPathway::decide(&s), PathwayAction::Sell);
+    }
+
+    #[test]
+    fn two_failed_loans_sell_even_with_runway() {
+        // "2 failed loans" is a sale trigger on its own, regardless of age.
+        let mut s = Fx::blocked_prospect();
+        s.age = 21;
+        s.failed_loans = 2;
+        s.previous_loans = 2;
+        assert_eq!(ProspectPathway::decide(&s), PathwayAction::Sell);
+    }
+
+    #[test]
+    fn two_zero_seasons_over_runway_escalate_to_sale() {
+        let mut s = Fx::blocked_prospect();
+        s.age = 24;
+        s.consecutive_zero_seasons = 2;
+        assert_eq!(ProspectPathway::decide(&s), PathwayAction::Sell);
+    }
+
+    #[test]
+    fn two_zero_seasons_under_runway_escalate_to_loan() {
+        // Requirement: 2 seasons of no official games escalate to loan OR
+        // sale — under-runway players still get the loan pathway.
+        let mut s = Fx::blocked_prospect();
+        s.age = 21;
+        s.consecutive_zero_seasons = 2;
+        s.is_january = false; // driven purely by multi-season history
+        assert!(matches!(
+            ProspectPathway::decide(&s),
+            PathwayAction::LoanOut(_)
+        ));
+    }
+
+    #[test]
+    fn no_third_loan_for_young_player_without_failure_record() {
+        let mut s = Fx::blocked_prospect();
+        s.age = 20;
+        s.previous_loans = 2;
+        s.failed_loans = 0; // both loans actually delivered minutes
+        assert_eq!(ProspectPathway::decide(&s), PathwayAction::Hold);
+    }
+
+    #[test]
+    fn game_time_reasons_demand_guaranteed_minutes() {
+        // The borrower-side minutes gate runs at its strict bar for every
+        // game-time-driven loan, so a blocked prospect can't be loaned to
+        // a club where he'd sit behind a wall of better players.
+        assert!(LoanOutReason::BlockedByDepth.expects_guaranteed_minutes());
+        assert!(LoanOutReason::NeedsFirstTeamMinutes.expects_guaranteed_minutes());
+        assert!(LoanOutReason::AssetValueProtection.expects_guaranteed_minutes());
+        assert!(LoanOutReason::DevelopmentPathway.expects_guaranteed_minutes());
+        assert!(LoanOutReason::NeedsGameTime.expects_guaranteed_minutes());
+        // Pure surplus / financial loans keep the looser cover bar.
+        assert!(!LoanOutReason::Surplus.expects_guaranteed_minutes());
+        assert!(!LoanOutReason::FinancialRelief.expects_guaranteed_minutes());
+    }
+
+    // ───────────────────────── integration (full sweep) tests ─────────
+
+    #[test]
+    fn sweep_loan_lists_blocked_unused_january_prospect() {
+        let date = Fx::date(2027, 1, 15);
+        let need = Fx::group_min(PlayerFieldPositionGroup::Forward);
+
+        // Prospect (id 1) plus `need + 1` clearly-better, established
+        // forwards → group depth comfortably above the minimum.
+        let mut players = vec![Fx::player(1, PlayerPositionType::Striker, 110, 19, 0)];
+        let mut squad = vec![Fx::info(&players[0], date, 145, 0.6, 0)];
+        for i in 0..=need as u32 {
+            let p = Fx::player(100 + i, PlayerPositionType::Striker, 130, 27, 25);
+            squad.push(Fx::info(&p, date, 130, 0.5, 25));
+            players.push(p);
+        }
+
+        let mut loan_outs = Vec::new();
+        let mut force_list = Vec::new();
+        PipelineProcessor::identify_stalled_prospects(
+            &squad,
+            date,
+            &players,
+            Fx::formation(),
+            None,
+            &mut loan_outs,
+            &mut force_list,
+        );
+
+        let listed = loan_outs.iter().find(|c| c.player_id == 1);
+        assert!(
+            listed.is_some(),
+            "blocked, unused January prospect must be loan-listed"
+        );
+        assert_eq!(listed.unwrap().reason, LoanOutReason::BlockedByDepth);
+        assert!(
+            !force_list.contains(&1),
+            "an under-23 prospect with runway is loaned, not sold"
+        );
+    }
+
+    #[test]
+    fn sweep_respects_minimum_position_depth() {
+        // A genuinely blocked prospect (several clearly-better players
+        // ahead) at a position sitting at EXACTLY its minimum depth must
+        // still be held — loaning him would leave the group too thin.
+        // Midfield's formation minimum is high enough that the prospect can
+        // be buried while the group is at the minimum count.
+        let date = Fx::date(2027, 1, 15);
+        let need = Fx::group_min(PlayerFieldPositionGroup::Midfielder);
+
+        let mut players = vec![Fx::player(1, PlayerPositionType::MidfielderCenter, 110, 19, 0)];
+        let mut squad = vec![Fx::info(&players[0], date, 145, 0.6, 0)];
+        for i in 1..need as u32 {
+            let p = Fx::player(100 + i, PlayerPositionType::MidfielderCenter, 130, 27, 25);
+            squad.push(Fx::info(&p, date, 130, 0.5, 25));
+            players.push(p);
+        }
+        assert_eq!(squad.len(), need, "group must sit at exactly the minimum");
+
+        let mut loan_outs = Vec::new();
+        let mut force_list = Vec::new();
+        PipelineProcessor::identify_stalled_prospects(
+            &squad,
+            date,
+            &players,
+            Fx::formation(),
+            None,
+            &mut loan_outs,
+            &mut force_list,
+        );
+
+        assert!(
+            !loan_outs.iter().any(|c| c.player_id == 1),
+            "must not loan out a blocked player when it leaves the group below minimum depth"
+        );
+    }
+
+    #[test]
+    fn sweep_sells_player_with_two_failed_loans() {
+        // Requirement: 2 failed loans + age 23+ → transfer-listed, not
+        // loaned again. History reads come from the frozen ledger items.
+        let date = Fx::date(2027, 1, 15);
+        let mut prospect = Fx::player(1, PlayerPositionType::Striker, 110, 24, 0);
+        prospect
+            .statistics_history
+            .items
+            .push(Fx::season_item(2024, true, 2)); // failed loan
+        prospect
+            .statistics_history
+            .items
+            .push(Fx::season_item(2025, true, 3)); // failed loan
+
+        let squad = vec![Fx::info(&prospect, date, 130, 0.6, 0)];
+        let players = vec![prospect];
+
+        let mut loan_outs = Vec::new();
+        let mut force_list = Vec::new();
+        PipelineProcessor::identify_stalled_prospects(
+            &squad,
+            date,
+            &players,
+            Fx::formation(),
+            None,
+            &mut loan_outs,
+            &mut force_list,
+        );
+
+        assert!(
+            force_list.contains(&1),
+            "two failed loans must escalate to a sale"
+        );
+        assert!(
+            !loan_outs.iter().any(|c| c.player_id == 1),
+            "a player with two failed loans must not be loaned a third time"
+        );
+    }
+
+    #[test]
+    fn sweep_loans_blocked_prospect_with_two_zero_seasons_in_summer() {
+        // Multi-season detection works without the January checkpoint: two
+        // frozen zero-official seasons + still nothing this pre-season →
+        // end-of-season pathway loan for an under-runway prospect.
+        let date = Fx::date(2027, 6, 10); // summer window, NOT January
+        let need = Fx::group_min(PlayerFieldPositionGroup::Forward);
+
+        let mut prospect = Fx::player(1, PlayerPositionType::Striker, 110, 21, 0);
+        prospect
+            .statistics_history
+            .items
+            .push(Fx::season_item(2024, false, 0));
+        prospect
+            .statistics_history
+            .items
+            .push(Fx::season_item(2025, false, 0));
+
+        let mut squad = vec![Fx::info(&prospect, date, 145, 0.6, 0)];
+        let mut players = vec![prospect];
+        for i in 0..=need as u32 {
+            let p = Fx::player(100 + i, PlayerPositionType::Striker, 130, 27, 25);
+            squad.push(Fx::info(&p, date, 130, 0.5, 25));
+            players.push(p);
+        }
+
+        let mut loan_outs = Vec::new();
+        let mut force_list = Vec::new();
+        PipelineProcessor::identify_stalled_prospects(
+            &squad,
+            date,
+            &players,
+            Fx::formation(),
+            None,
+            &mut loan_outs,
+            &mut force_list,
+        );
+
+        assert!(
+            loan_outs.iter().any(|c| c.player_id == 1),
+            "two consecutive zero-official seasons must escalate to a loan for an under-23"
+        );
+    }
+
+    #[test]
+    fn sweep_skips_loaned_pinned_and_already_listed_players() {
+        let date = Fx::date(2027, 1, 15);
+        let need = Fx::group_min(PlayerFieldPositionGroup::Forward);
+
+        // A blocked prospect who is already on the loan list elsewhere must
+        // not be double-tagged.
+        let mut players = vec![Fx::player(1, PlayerPositionType::Striker, 110, 19, 0)];
+        let mut squad = vec![Fx::info(&players[0], date, 145, 0.6, 0)];
+        for i in 0..=need as u32 {
+            let p = Fx::player(100 + i, PlayerPositionType::Striker, 130, 27, 25);
+            squad.push(Fx::info(&p, date, 130, 0.5, 25));
+            players.push(p);
+        }
+
+        let mut loan_outs = vec![LoanOutCandidate {
+            player_id: 1,
+            reason: LoanOutReason::Surplus,
+            status: LoanOutStatus::Identified,
+            loan_fee: 0.0,
+        }];
+        let mut force_list = Vec::new();
+        PipelineProcessor::identify_stalled_prospects(
+            &squad,
+            date,
+            &players,
+            Fx::formation(),
+            None,
+            &mut loan_outs,
+            &mut force_list,
+        );
+
+        assert_eq!(
+            loan_outs.iter().filter(|c| c.player_id == 1).count(),
+            1,
+            "an already-planned player must not be re-listed by the sweep"
+        );
+    }
+
+    // ───────────────────────── false-positive guards (task 3) ─────────
+
+    #[test]
+    fn second_choice_behind_one_player_is_not_blocked() {
+        // Rank 1 — only one teammate ahead (even a clearly better one) — is
+        // a credible #2 / rotation path, not a stalled asset. Covers the
+        // second-choice goalkeeper and the genuine rotation player.
+        let mut s = Fx::blocked_prospect(); // clearly_blocked = true
+        s.depth_rank = 1;
+        assert_eq!(
+            ProspectPathway::decide(&s),
+            PathwayAction::Hold,
+            "a player narrowly behind one teammate keeps a credible path"
+        );
+    }
+
+    #[test]
+    fn regular_last_season_idle_this_preseason_is_held() {
+        // Zero apps in a not-yet-started season but a full regular campaign
+        // behind him → fixture timing, not a stalled pathway.
+        let mut s = Fx::blocked_prospect();
+        s.is_january = false;
+        s.official_appearances = 0;
+        s.last_season_official_games = 28;
+        assert_eq!(ProspectPathway::decide(&s), PathwayAction::Hold);
+    }
+
+    // ───────────────────────── asset-value protection (task 5) ────────
+
+    #[test]
+    fn valuable_short_contract_defers_to_renewal_before_loan() {
+        // A high-ceiling prospect on a short deal must not be loaned while
+        // renewal is still possible — the contract renewal manager gets the
+        // first chance to protect the asset.
+        let mut s = Fx::blocked_prospect();
+        s.contract_months_remaining = Some(10);
+        s.renewal_exhausted = false;
+        assert_eq!(ProspectPathway::decide(&s), PathwayAction::Hold);
+    }
+
+    #[test]
+    fn valuable_short_contract_with_exhausted_renewal_is_sold() {
+        // Renewal is impossible and the deal is nearly up — loaning him
+        // would run the value down to a free transfer, so sell now instead.
+        let mut s = Fx::blocked_prospect();
+        s.contract_months_remaining = Some(10);
+        s.renewal_exhausted = true;
+        assert_eq!(ProspectPathway::decide(&s), PathwayAction::Sell);
+    }
+
+    #[test]
+    fn valuable_long_contract_is_loaned_safely() {
+        // Plenty of contract left → no value-loss risk → loan for minutes.
+        let mut s = Fx::blocked_prospect();
+        s.contract_months_remaining = Some(40);
+        assert!(matches!(
+            ProspectPathway::decide(&s),
+            PathwayAction::LoanOut(_)
+        ));
+    }
+
+    // ───────────────────────── history aggregation (task 8) ───────────
+
+    #[test]
+    fn failed_loan_count_ignores_loans_with_real_minutes() {
+        let mut player = Fx::player(1, PlayerPositionType::Striker, 110, 22, 0);
+        player
+            .statistics_history
+            .items
+            .push(Fx::season_item(2024, true, 2)); // failed
+        player
+            .statistics_history
+            .items
+            .push(Fx::season_item(2025, true, 18)); // real minutes
+        assert_eq!(PipelineProcessor::loan_spell_count(&player), 2);
+        assert_eq!(
+            PipelineProcessor::failed_loan_count(&player),
+            1,
+            "a loan with >= 5 official games is not a failed loan"
+        );
+    }
+
+    #[test]
+    fn season_aggregation_sums_parent_and_loan_spells() {
+        // A season split between a parent spell (0 games) and a loan spell
+        // (4 games) totals 4 — so it is NOT a zero season.
+        let mut player = Fx::player(1, PlayerPositionType::Striker, 110, 22, 0);
+        player
+            .statistics_history
+            .items
+            .push(Fx::season_item(2025, false, 0));
+        player
+            .statistics_history
+            .items
+            .push(Fx::season_item(2025, true, 4));
+        assert_eq!(
+            PipelineProcessor::consecutive_zero_official_seasons(&player),
+            0,
+            "parent 0 + loan 4 in one season is 4 games, not a write-off"
+        );
+        assert_eq!(
+            PipelineProcessor::last_completed_season_official_games(&player),
+            4
+        );
+    }
+
+    // ───────────────────────── unavailable guard (task 4) ─────────────
+
+    #[test]
+    fn sweep_skips_unavailable_non_injury_player() {
+        // A suspended (non-injury) blocked prospect with no minutes must not
+        // be pathway-listed — his lack of minutes is forced, not a club
+        // choice.
+        let date = Fx::date(2027, 1, 15);
+        let need = Fx::group_min(PlayerFieldPositionGroup::Forward);
+
+        let mut prospect = Fx::player(1, PlayerPositionType::Striker, 110, 19, 0);
+        prospect.statuses.add(date, PlayerStatusType::Sus);
+
+        let mut players = vec![prospect];
+        let mut squad = vec![Fx::info(&players[0], date, 145, 0.6, 0)];
+        for i in 0..=need as u32 {
+            let p = Fx::player(100 + i, PlayerPositionType::Striker, 130, 27, 25);
+            squad.push(Fx::info(&p, date, 130, 0.5, 25));
+            players.push(p);
+        }
+
+        let mut loan_outs = Vec::new();
+        let mut force_list = Vec::new();
+        PipelineProcessor::identify_stalled_prospects(
+            &squad,
+            date,
+            &players,
+            Fx::formation(),
+            None,
+            &mut loan_outs,
+            &mut force_list,
+        );
+
+        assert!(
+            !loan_outs.iter().any(|c| c.player_id == 1),
+            "a suspended player must not be loan-listed for having no minutes"
+        );
+        assert!(!force_list.contains(&1));
+    }
+
+    // ──────────── core-player loan protection (the Litvinov fix) ───────
+
+    /// Build a forward group where id 1 (CA 100) is a clear positional
+    /// surplus behind four CA-120 forwards — the shape that would normally
+    /// produce a `Surplus` loan candidate. Returns matching `players` +
+    /// `squad` so a test can flip id 1's asset class and re-run.
+    fn surplus_forward_scenario(date: NaiveDate) -> (Vec<Player>, Vec<SquadPlayerInfo>) {
+        let mut players = vec![Fx::player(1, PlayerPositionType::Striker, 100, 27, 5)];
+        let mut squad = vec![Fx::info(&players[0], date, 100, 0.3, 5)];
+        for i in 0..4u32 {
+            let p = Fx::player(100 + i, PlayerPositionType::Striker, 120, 27, 10);
+            squad.push(Fx::info(&p, date, 120, 0.3, 10));
+            players.push(p);
+        }
+        (players, squad)
+    }
+
+    fn run_loan_outs(
+        squad: &[SquadPlayerInfo],
+        players: &[Player],
+        date: NaiveDate,
+    ) -> Vec<LoanOutCandidate> {
+        let mut loan_outs = Vec::new();
+        PipelineProcessor::identify_loan_outs(
+            squad,
+            &ReputationLevel::Regional,
+            116,
+            date,
+            players,
+            &mut loan_outs,
+            &ClubPhilosophy::Balanced,
+            Fx::formation(),
+            None,
+            false,
+        );
+        loan_outs
+    }
+
+    #[test]
+    fn surplus_forward_loaned_only_when_not_first_team_protected() {
+        let date = Fx::date(2026, 9, 5);
+
+        // Baseline: an unprotected surplus forward IS a loan candidate.
+        let (players, squad) = surplus_forward_scenario(date);
+        assert!(
+            run_loan_outs(&squad, &players, date)
+                .iter()
+                .any(|c| c.player_id == 1),
+            "an unprotected surplus forward should be a loan candidate"
+        );
+
+        // The Litvinov case: the very same player, classified as a core
+        // player, must never be loan-listed.
+        let (players, mut squad) = surplus_forward_scenario(date);
+        squad[0].asset_class = SquadAssetClass::CorePlayer;
+        assert!(
+            !run_loan_outs(&squad, &players, date)
+                .iter()
+                .any(|c| c.player_id == 1),
+            "a core player must never be loan-listed"
+        );
+
+        // A first-team-useful player (e.g. a FirstTeamRegular) is equally
+        // protected — covering "FirstTeamRegular with low minutes".
+        let (players, mut squad) = surplus_forward_scenario(date);
+        squad[0].asset_class = SquadAssetClass::FirstTeamUseful;
+        assert!(
+            !run_loan_outs(&squad, &players, date)
+                .iter()
+                .any(|c| c.player_id == 1),
+            "a first-team-useful player must never be loan-listed"
+        );
+    }
+
+    #[test]
+    fn international_duty_player_is_not_loan_listed() {
+        // Even a genuinely surplus-classed player away on international duty
+        // must not be loan-listed: his low minutes are a call-up artefact,
+        // not a club decision.
+        let date = Fx::date(2026, 9, 5);
+        let (mut players, mut squad) = surplus_forward_scenario(date);
+        players[0].statuses.add(date, PlayerStatusType::Int);
+        squad[0].asset_class = SquadAssetClass::TrueSurplus;
+        assert!(
+            !run_loan_outs(&squad, &players, date)
+                .iter()
+                .any(|c| c.player_id == 1),
+            "a player on international duty must not be loan-listed for low minutes"
+        );
     }
 }

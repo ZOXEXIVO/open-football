@@ -109,17 +109,11 @@ impl TransferListManager {
         wage_budget_headroom: Option<u32>,
     ) -> String {
         let staff_data = teams[main_idx].staffs.head_coach().as_llm();
-        let data_json = Self::build_data_json(
-            teams,
-            main_idx,
-            team_indices,
-            &staff_data,
-            sim_date,
-            wage_budget_headroom,
-        );
+        let data_json =
+            Self::build_data_json(teams, team_indices, &staff_data, sim_date, wage_budget_headroom);
         let teams_section = Self::build_teams_section(teams, team_indices);
         let previous_decisions_section = Self::build_previous_decisions(teams, team_indices);
-        let current_tl = Self::build_current_transfer_list_section(teams, main_idx, &data_json);
+        let current_tl = Self::build_current_transfer_list_section(teams, team_indices, &data_json);
         let current_loans = Self::build_current_loans_section(teams, main_idx);
 
         format!(
@@ -135,7 +129,6 @@ impl TransferListManager {
 
     fn build_data_json(
         teams: &[Team],
-        main_idx: usize,
         team_indices: &[(usize, &str)],
         staff_data: &str,
         sim_date: NaiveDate,
@@ -143,15 +136,10 @@ impl TransferListManager {
     ) -> String {
         let staff_json: Value = serde_json::from_str(staff_data).unwrap();
 
-        let current_transfer_list: Vec<TransferListEntryLlm> = teams[main_idx]
-            .transfer_list
-            .items()
-            .iter()
-            .map(|item| TransferListEntryLlm {
-                player_id: item.player_id,
-                asking_price: item.amount.amount,
-            })
-            .collect();
+        // Aggregate across every team in the club, not just Main — a player
+        // listed while sitting in the reserves must still show in the prompt.
+        let current_transfer_list: Vec<TransferListEntryLlm> =
+            Self::all_listed_entries(teams, team_indices);
 
         // Wage budget headroom for the club — supplied by the club-level
         // caller. Used to label `contract_stalemate.pending_ask.affordable`
@@ -237,13 +225,13 @@ impl TransferListManager {
 
     fn build_current_transfer_list_section(
         teams: &[Team],
-        main_idx: usize,
+        team_indices: &[(usize, &str)],
         data_json: &str,
     ) -> String {
-        if teams[main_idx].transfer_list.items().is_empty() {
-            "None".to_string()
-        } else {
+        if Self::any_team_has_listing(teams, team_indices) {
             data_json.to_string()
+        } else {
+            "None".to_string()
         }
     }
 
@@ -269,6 +257,83 @@ impl TransferListManager {
 
     fn response_format() -> String {
         r#"Respond ONLY with JSON: {"transfer_list":[{"player_id":123,"reason":"..."}],"loan_list":[{"player_id":456,"reason":"..."}],"delist":[{"player_id":789,"reason":"..."}]}"#.to_string()
+    }
+
+    // ─── Club-wide transfer-list access ────────────────────────────
+    //
+    // A transfer-list entry lives on the team the player currently sits in — an
+    // internal Main↔Reserve/B move migrates the entry with him. Every read or
+    // write of the club's transfer list must therefore scan ALL of the club's
+    // teams, not just the Main team; otherwise a player listed while in the
+    // reserves becomes invisible to the current-list prompt data and cannot be
+    // delisted.
+
+    /// Aggregate every team's transfer-list entries across the club.
+    fn all_listed_entries(
+        teams: &[Team],
+        team_indices: &[(usize, &str)],
+    ) -> Vec<TransferListEntryLlm> {
+        let mut out = Vec::new();
+        for &(idx, _) in team_indices {
+            for item in teams[idx].transfer_list.items() {
+                out.push(TransferListEntryLlm {
+                    player_id: item.player_id,
+                    asking_price: item.amount.amount,
+                });
+            }
+        }
+        out
+    }
+
+    /// Any of the club's teams currently holds a transfer-list entry.
+    fn any_team_has_listing(teams: &[Team], team_indices: &[(usize, &str)]) -> bool {
+        team_indices
+            .iter()
+            .any(|&(idx, _)| !teams[idx].transfer_list.items().is_empty())
+    }
+
+    /// The player is transfer-listed on ANY of the club's teams.
+    fn is_listed_anywhere(teams: &[Team], team_indices: &[(usize, &str)], player_id: u32) -> bool {
+        team_indices
+            .iter()
+            .any(|&(idx, _)| teams[idx].transfer_list.contains(player_id))
+    }
+
+    /// Remove the player's transfer-list entry from whichever team holds it.
+    /// Returns true if an entry was removed.
+    fn remove_listing_anywhere(
+        teams: &mut [Team],
+        team_indices: &[(usize, &str)],
+        player_id: u32,
+    ) -> bool {
+        let mut removed = false;
+        for &(idx, _) in team_indices {
+            if teams[idx].transfer_list.contains(player_id) {
+                teams[idx].transfer_list.remove(player_id);
+                removed = true;
+            }
+        }
+        removed
+    }
+
+    /// Add the asking-price entry to the team the player currently sits in, so
+    /// the listing is co-located with the player (consistent with the
+    /// internal-move migration). Falls back to the Main team if he can't be
+    /// located on any squad.
+    fn add_listing_to_player_team(
+        teams: &mut [Team],
+        team_indices: &[(usize, &str)],
+        main_idx: usize,
+        player_id: u32,
+        item: TransferItem,
+    ) {
+        for &(idx, _) in team_indices {
+            if teams[idx].players.contains(player_id) {
+                teams[idx].transfer_list.add(item);
+                return;
+            }
+        }
+        teams[main_idx].transfer_list.add(item);
     }
 
     // ─── Advice execution ─────────────────────────────────────────
@@ -323,7 +388,6 @@ impl TransferListManager {
         );
         Self::execute_delistings(
             teams,
-            main_idx,
             team_indices,
             &advice.delist,
             &just_listed,
@@ -354,7 +418,9 @@ impl TransferListManager {
             if is_on_loan(teams, team_indices, decision.player_id) {
                 continue;
             }
-            if teams[main_idx].transfer_list.contains(decision.player_id) {
+            // Already listed on any of the club's teams (entries follow the
+            // player across internal moves).
+            if Self::is_listed_anywhere(teams, team_indices, decision.player_id) {
                 continue;
             }
 
@@ -381,10 +447,18 @@ impl TransferListManager {
                 .map(|p| p.value(date, club_rep, club_rep))
                 .unwrap_or(0.0);
 
-            teams[main_idx].transfer_list.add(TransferItem::new(
+            // Co-locate the asking-price entry with the player's current team so
+            // it stays consistent across internal squad moves.
+            Self::add_listing_to_player_team(
+                teams,
+                team_indices,
+                main_idx,
                 decision.player_id,
-                CurrencyValue::new(asking_price, Currency::Usd),
-            ));
+                TransferItem::new(
+                    decision.player_id,
+                    CurrencyValue::new(asking_price, Currency::Usd),
+                ),
+            );
 
             set_player_status(
                 teams,
@@ -477,7 +551,6 @@ impl TransferListManager {
 
     fn execute_delistings(
         teams: &mut [Team],
-        main_idx: usize,
         team_indices: &[(usize, &str)],
         decisions: &[AiListingDecision],
         just_listed: &[u32],
@@ -492,7 +565,10 @@ impl TransferListManager {
                 continue;
             }
 
-            let was_transfer_listed = teams[main_idx].transfer_list.contains(decision.player_id);
+            // A listed player may sit on any of the club's teams (an internal
+            // move migrates his entry), so look across the whole club.
+            let was_transfer_listed =
+                Self::is_listed_anywhere(teams, team_indices, decision.player_id);
             let was_loan_listed = has_status(
                 teams,
                 team_indices,
@@ -505,7 +581,7 @@ impl TransferListManager {
             }
 
             if was_transfer_listed {
-                teams[main_idx].transfer_list.remove(decision.player_id);
+                Self::remove_listing_anywhere(teams, team_indices, decision.player_id);
                 remove_player_status(
                     teams,
                     team_indices,

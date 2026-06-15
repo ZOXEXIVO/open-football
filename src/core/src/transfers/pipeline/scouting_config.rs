@@ -15,6 +15,7 @@
 //! call sites.
 
 use crate::transfers::ReportRiskFlag;
+use crate::transfers::pipeline::plausibility::EffectivePlayerReputation;
 use crate::transfers::pipeline::{PlayerSummary, ScoutingRecommendation};
 
 // ============================================================
@@ -617,8 +618,20 @@ impl ScoutingConfig {
             return true;
         }
 
-        let player_too_prominent =
-            target.world_reputation > buyer_world_rep + r.player_rep_gap_blocking;
+        // Prominence is judged on EFFECTIVE reputation, not bare world rep:
+        // a recognised name in his own market (high current / home standing)
+        // is unattainable for a much smaller buyer even when his
+        // international footprint is modest. `max(world, blend)` means a
+        // player whose current / home rep sit at or below his world rep is
+        // judged exactly as before — the blend only ever raises the bar.
+        let effective_rep = EffectivePlayerReputation::compute(
+            target.world_reputation,
+            target.current_reputation,
+            target.home_reputation,
+            true,
+        )
+        .max(target.world_reputation);
+        let player_too_prominent = effective_rep > buyer_world_rep + r.player_rep_gap_blocking;
         if player_too_prominent {
             return false;
         }
@@ -663,6 +676,8 @@ mod tests {
     use super::*;
     use crate::PlayerFieldPositionGroup;
     use crate::PlayerPositionType;
+    use crate::PlayerSquadStatus;
+    use crate::transfers::pipeline::SellerPlausibilityContext;
 
     /// Test fixture: builds a `PlayerSummary` with a baseline "anonymous
     /// big-club regular" profile. Each call overrides only the fields the
@@ -734,6 +749,16 @@ mod tests {
                 is_injured: false,
                 contract_months_remaining: self.contract_months,
                 salary: self.salary,
+                seller_ctx: SellerPlausibilityContext {
+                    club_reputation_score: (self.club_world_rep.max(0) as f32 / 10000.0),
+                    league_reputation: 5500,
+                    league_id: None,
+                    position_group_rank: 0,
+                    squad_status: PlayerSquadStatus::FirstTeamRegular,
+                    is_transfer_requested: false,
+                    is_unhappy: false,
+                    in_debt: false,
+                },
             }
         }
     }
@@ -902,6 +927,40 @@ mod tests {
         }
         .build();
         assert!(!c.is_target_realistic(LOWER_TIER_BUYER, &star_gk));
+    }
+
+    #[test]
+    fn realism_blocks_high_home_rep_domestic_star_with_low_world_rep() {
+        let c = ScoutingConfig::default();
+        // A domestic great: modest world reputation, big home / current
+        // standing, a young first-team regular at a much bigger club. On
+        // bare world rep (2869) he clears the prominence gap for a
+        // lower-tier buyer (3500 + 1500 = 5000) and the youth exemption
+        // would wave him through — but his EFFECTIVE reputation (~5200,
+        // weighting his domestic renown) does not, so he stays unrealistic.
+        let mut star = Target {
+            world_rep: 2869,
+            age: 20,
+            appearances: 25,
+            ..Target::default()
+        }
+        .build();
+        star.current_reputation = 5575;
+        star.home_reputation = 6177;
+        assert!(
+            !c.is_target_realistic(LOWER_TIER_BUYER, &star),
+            "a domestic great must not read as a low-rep bargain in his market"
+        );
+
+        // Control: collapse home / current down to the low world level — now
+        // he is genuinely low-reputation and the youth exemption applies.
+        let mut anonymous = star.clone();
+        anonymous.current_reputation = 2869;
+        anonymous.home_reputation = 2869;
+        assert!(
+            c.is_target_realistic(LOWER_TIER_BUYER, &anonymous),
+            "with world-level home/current rep the young regular is reachable"
+        );
     }
 
     #[test]

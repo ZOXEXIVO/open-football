@@ -7,6 +7,7 @@ use crate::club::player::contract::{
     AffordabilityInput, ContractStalemate, RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL,
 };
 use crate::club::staff::perception::PotentialEstimator;
+use crate::club::team::squad::SquadAssetContext;
 use crate::club::{BoardResult, ClubFinanceResult};
 use crate::league::result::LeagueProcessAccess;
 use crate::shared::{Currency, CurrencyValue};
@@ -694,7 +695,13 @@ impl ClubResult {
             let ability = player.player_attributes.current_ability as i16;
             let age = DateUtils::age(player.birth_date, date);
             let loyalty = player.attributes.loyalty;
-            let is_key = player
+
+            // Central squad-asset classification — computed once and reused
+            // for both the keep guard and the release gate below. Inferring
+            // the role here is what protects a still-`NotYetSet` but useful
+            // senior from being walked for free over a salary dispute.
+            let asset_class = SquadAssetContext::build(club, date).classify(player, date);
+            let formal_key = player
                 .contract
                 .as_ref()
                 .map(|c| {
@@ -704,6 +711,9 @@ impl ClubResult {
                     )
                 })
                 .unwrap_or(false);
+            // A formally-designated OR inferred-core/first-team player is
+            // treated as key for the "keep trying" guard.
+            let is_key = formal_key || asset_class.is_first_team_protected();
 
             // Key players and first-team regulars: club keeps trying — don't list them
             // unless they're well below squad average
@@ -733,6 +743,7 @@ impl ClubResult {
                 squad_avg_ability,
                 market_value,
                 annual_wage_bill,
+                asset_class,
             };
             let decision = match AutomaticReleaseEligibility::assess(player, &release_ctx) {
                 None => UnresolvedSalaryDecision::FreeTransfer,

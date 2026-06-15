@@ -675,14 +675,20 @@ impl Player {
     }
 
     fn record_senior_debut(&mut self, _o: &MatchOutcome<'_>) {
-        let total_competitive_apps = self.statistics.played
-            + self.statistics.played_subs
-            + self.cup_statistics.played
-            + self.cup_statistics.played_subs;
-        if total_competitive_apps == 1 {
-            self.happiness
-                .add_event_default_with_cooldown(HappinessEventType::SeniorDebut, 3650);
+        if self.made_senior_debut {
+            return;
         }
+        // Friendlies return earlier in `record_match_events`, so reaching here
+        // with the latch unset IS this player's first senior competitive
+        // appearance. Latch it permanently — `self.statistics` /
+        // `self.cup_statistics` are wiped at every season / transfer boundary,
+        // so the old `apps == 1` check re-fired this milestone on the opening
+        // match of every season (the 3650-day cooldown couldn't stop it:
+        // `recent_events` is pruned after 365 days, so the original event was
+        // long gone by the time the next season started).
+        self.made_senior_debut = true;
+        self.happiness
+            .add_event_default(HappinessEventType::SeniorDebut);
     }
 
     /// Track competitive scoring drought for forwards/midfielders. Updates
@@ -1002,6 +1008,12 @@ fn compute_drop_magnitude(player: &Player, ctx: &MatchSelectionContext) -> f32 {
         // An eligibility-rule block isn't a coaching judgement at all —
         // the player accepts the rule and the morale hit is minimal.
         SelectionOmissionReason::EligibilityRuleBlock => 0.4,
+        // A player rested because he's agreed / is close to a move understands
+        // the protection and is leaving anyway — almost no morale hit.
+        SelectionOmissionReason::RestedDueToAgreedTransfer => 0.4,
+        // Benching a disaffected want-away player is a consequence of his own
+        // stance; he's already unhappy, so it's a moderate, not severe, hit.
+        SelectionOmissionReason::OmittedDueToDisaffection => 0.9,
     };
 
     let repeat_mul = if ctx.repeated { 1.4 } else { 1.0 };

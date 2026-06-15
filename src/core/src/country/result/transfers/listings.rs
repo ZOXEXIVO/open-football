@@ -1,6 +1,7 @@
 use super::types::{SquadAnalysis, TransferActivitySummary};
 use crate::club::player::contract::{AffordabilityInput, ContractStalemate};
 use crate::club::staff::perception::PotentialEstimator;
+use crate::club::team::squad::SquadAssetProtection;
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
@@ -529,6 +530,12 @@ impl CountryResult {
                 LoanOutReason::LackOfPlayingTime => "dec_reason_lack_playing_time",
                 LoanOutReason::PostInjuryFitness => "dec_reason_post_injury_fitness",
                 LoanOutReason::DevelopmentPathway => "dec_reason_development_pathway",
+                // Stalled-prospect pathway reasons carry their own keys so
+                // UI diagnostics can tell "blocked by depth" from "needs
+                // first-team minutes" from "protecting resale value".
+                LoanOutReason::BlockedByDepth => "dec_reason_blocked_by_depth",
+                LoanOutReason::NeedsFirstTeamMinutes => "dec_reason_needs_first_team_minutes",
+                LoanOutReason::AssetValueProtection => "dec_reason_asset_value_protection",
             };
             return ListingDecision::Loan {
                 reason: reason.to_string(),
@@ -775,6 +782,18 @@ impl CountryResult {
     /// out, but routine below-average/surplus/aging sweeps don't touch
     /// this tier.
     fn is_squad_protected(player: &Player, club: &Club, date: NaiveDate) -> bool {
+        // Central squad-asset policy: a core / first-team-useful player —
+        // formally designated OR inferred from CA rank, squad-relative
+        // reputation, and prior-season minutes even while his monthly squad
+        // status is still `NotYetSet` — is kept by the routine numeric
+        // sweeps. Explicit player-driven departures (REQ / UNH) and club
+        // decisions (NotNeeded, club-listed) are evaluated BEFORE this in
+        // `evaluate_player_listing`, so they still override and the club can
+        // always sell when it (or the player) actually wants to.
+        if SquadAssetProtection::classify(player, club, date).is_first_team_protected() {
+            return true;
+        }
+
         // Club has formally labelled the player as core to the project.
         if let Some(ref c) = player.contract {
             if matches!(

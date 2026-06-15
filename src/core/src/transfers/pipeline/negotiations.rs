@@ -13,7 +13,8 @@ use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::pipeline::ScoutMonitoringStatus;
 use crate::transfers::pipeline::plausibility::{
-    TransferPlausibilityBuilder, TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
+    TransferMovePlausibility, TransferMoveStage, TransferPlausibilityBuilder,
+    TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::{
@@ -1467,9 +1468,19 @@ impl PipelineProcessor {
             player_sold_from: Option<(u32, f64)>,
             offered_annual_wage: u32,
             buying_league_reputation: u16,
+            /// Captured at creation from the full cross-border assessment:
+            /// the player would refuse this move on willingness grounds
+            /// (a clear step down with no availability signal). Applied as
+            /// the foreign personal-terms hard floor — the buyer's country
+            /// no longer holds the seller-side data to recompute it.
+            foreign_terms_floor_blocked: bool,
         }
 
         let mut resolved: Vec<ResolvedNeg> = Vec::new();
+        // Foreign candidates the final cross-border gate refuses — marked
+        // unavailable after the write pass so the shortlist advances instead
+        // of re-picking an impossible target (mirrors the domestic gate).
+        let mut foreign_rejected: Vec<PlausibilityReject> = Vec::new();
 
         for cand in candidates {
             // Find player globally
@@ -1683,6 +1694,49 @@ impl PipelineProcessor {
                     Some(TransferNeedReason::DevelopmentSigning)
                 );
 
+            // ── Final foreign plausibility gate ──────────────────────────
+            // Mirror the domestic gate in `initiate_negotiations`: before
+            // fabricating a SyntheticUnsolicited listing or opening talks,
+            // assess the FULL cross-border move with both clubs/countries in
+            // hand. A lower-league side abroad chasing an important
+            // first-teamer at a much stronger club cannot credibly reach
+            // negotiation — refuse it here so no synthetic listing is created
+            // and the shortlist advances past the dud. This is the gate that
+            // stops Sambenedettese opening talks for a Spartak first-teamer.
+            let plausibility_inputs = TransferPlausibilityBuilder::from_global(
+                buy_country,
+                buy_club,
+                sell_country,
+                sell_club,
+                player,
+                asking_price.amount,
+                is_loan,
+                true, // unsolicited — the buyer is reaching out abroad
+                date,
+            );
+            let assessment = TransferMovePlausibility::assess(&plausibility_inputs);
+            if !assessment.reaches(TransferMoveStage::CanStartNegotiation) {
+                debug!(
+                    "Foreign negotiation suppressed: club {} won't pursue {} ({}) from {} — {}",
+                    cand.buying_club_id,
+                    cand.player_id,
+                    player_name,
+                    selling_club_name,
+                    assessment.diagnostics.explain()
+                );
+                foreign_rejected.push(PlausibilityReject {
+                    club_id: cand.buying_club_id,
+                    player_id: cand.player_id,
+                    shortlist_request_id: cand.shortlist_request_id,
+                });
+                continue;
+            }
+            // Personal-terms willingness floor, captured now (full seller
+            // context in scope) for application at the PersonalTerms phase —
+            // the buyer's country won't hold the seller-side data then.
+            let foreign_terms_floor_blocked =
+                TransferMovePlausibility::player_terms_floor(&plausibility_inputs).is_some();
+
             let actual_asking = if is_loan {
                 let salary_proxy = player
                     .contract
@@ -1830,6 +1884,7 @@ impl PipelineProcessor {
                 player_sold_from: player.sold_from.clone(),
                 offered_annual_wage,
                 buying_league_reputation,
+                foreign_terms_floor_blocked,
             });
         }
 
@@ -1877,6 +1932,7 @@ impl PipelineProcessor {
                     negotiation.selling_club_name = action.selling_club_name;
                     negotiation.offered_salary = Some(action.offered_annual_wage);
                     negotiation.buying_league_reputation = action.buying_league_reputation;
+                    negotiation.foreign_terms_floor_blocked = action.foreign_terms_floor_blocked;
                 }
 
                 if let Some(club) = country
@@ -1916,6 +1972,34 @@ impl PipelineProcessor {
                     "Foreign negotiation: Club {} started negotiation for player {} from country {}",
                     action.buying_club_id, action.player_id, action.selling_country_id
                 );
+            }
+        }
+
+        // Apply the foreign plausibility rejects: mark each shortlist
+        // candidate unavailable and advance the shortlist so the next
+        // pursuit cycle skips the impossible move instead of retrying it.
+        if !foreign_rejected.is_empty() {
+            if let Some(country) = data.country_mut(country_id) {
+                for reject in foreign_rejected {
+                    if let Some(club) = country.clubs.iter_mut().find(|c| c.id == reject.club_id) {
+                        if let Some(shortlist) = club
+                            .transfer_plan
+                            .shortlists
+                            .iter_mut()
+                            .find(|s| s.transfer_request_id == reject.shortlist_request_id)
+                        {
+                            if let Some(candidate) = shortlist
+                                .candidates
+                                .iter_mut()
+                                .find(|c| c.player_id == reject.player_id)
+                            {
+                                candidate.status = ShortlistCandidateStatus::Unavailable;
+                            }
+                            shortlist.advance_to_next();
+                        }
+                    }
+                    Self::on_negotiation_resolved(country, reject.club_id, reject.player_id, false);
+                }
             }
         }
     }

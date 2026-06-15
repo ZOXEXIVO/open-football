@@ -16,8 +16,8 @@ use crate::club::{PlayerFieldPositionGroup, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
 use crate::utils::DateUtils;
 use crate::{
-    MatchSelectionContext, Player, PlayerSquadStatus, SelectionComparison, SelectionDecisionScope,
-    SelectionOmissionReason, SelectionRole, Tactics,
+    MatchSelectionContext, Player, PlayerSquadStatus, PlayerStatusType, SelectionComparison,
+    SelectionDecisionScope, SelectionOmissionReason, SelectionRole, Tactics,
 };
 use chrono::NaiveDate;
 
@@ -411,6 +411,16 @@ impl<'a> OmissionBuilder<'a> {
         if omitted.player_attributes.is_in_recovery() {
             return SelectionOmissionReason::ReturningFromInjury;
         }
+        // Transfer-situation reasons take priority over the generic rotation /
+        // fatigue / factor-gap copy: a near-sold player rested for protection,
+        // or a disaffected want-away player benched on morale, is a distinct,
+        // more informative explanation than "a teammate was sharper".
+        if Self::has_agreed_or_near_transfer(omitted) {
+            return SelectionOmissionReason::RestedDueToAgreedTransfer;
+        }
+        if self.is_disaffected_want_away(omitted) {
+            return SelectionOmissionReason::OmittedDueToDisaffection;
+        }
         if matches!(scope, SelectionDecisionScope::Rested) {
             return SelectionOmissionReason::FatigueManagement;
         }
@@ -480,6 +490,29 @@ impl<'a> OmissionBuilder<'a> {
             return SelectionOmissionReason::PoorRecentForm;
         }
         SelectionOmissionReason::TacticalMismatch
+    }
+
+    /// The player has agreed a move (`Trn`) or had a bid accepted (`Bid`) — the
+    /// club protects a near-sold asset by resting him.
+    fn has_agreed_or_near_transfer(player: &Player) -> bool {
+        let s = player.statuses.get();
+        s.contains(&PlayerStatusType::Trn) || s.contains(&PlayerStatusType::Bid)
+    }
+
+    /// A want-away player (listed / requested / unhappy) whose morale AND manager
+    /// relationship are both poor — the same disaffection signal the selection
+    /// scoring penalises, surfaced here as the omission reason.
+    fn is_disaffected_want_away(&self, player: &Player) -> bool {
+        let s = player.statuses.get();
+        let want_away = s.contains(&PlayerStatusType::Lst)
+            || s.contains(&PlayerStatusType::Req)
+            || s.contains(&PlayerStatusType::Unh);
+        if !want_away {
+            return false;
+        }
+        let morale = player.happiness.morale;
+        let relationship = self.engine.relationship_score(player, self.staff, self.date);
+        morale < 40.0 && relationship < 0.0
     }
 
     /// Map the coach engine's dominant decision reason into a
