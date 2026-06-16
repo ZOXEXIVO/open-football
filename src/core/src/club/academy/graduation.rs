@@ -1,4 +1,5 @@
 use super::ClubAcademy;
+use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::{Person, Player, PlayerClubContract, PlayerStatusType};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
@@ -146,9 +147,12 @@ impl ClubAcademy {
                 // Stamp release state so the global free-agent pool
                 // treats the player like any other contract-cleared,
                 // Frt-flagged senior. Without this the player would
-                // simply vanish from the world.
+                // simply vanish from the world. The explicit reason keeps
+                // an aged-out academy exit distinct from a senior mutual
+                // termination in any history line that reads it.
                 player.contract = None;
                 player.statuses.add(date, PlayerStatusType::Frt);
+                player.set_release_reason(FreeAgentReleaseReason::AcademyAgedOut);
                 released.push(player);
             }
         }
@@ -356,6 +360,18 @@ mod tests {
         assert!(
             p.statuses.get().contains(&PlayerStatusType::Frt),
             "released player must carry Frt status for free-agent discovery"
+        );
+        // The exit must be tagged as an academy age-out — never collapsed
+        // into a generic mutual termination — so the transfer-history line
+        // reads as a youth release.
+        assert_eq!(
+            p.release_reason(),
+            Some(FreeAgentReleaseReason::AcademyAgedOut),
+            "aged-out academy player must carry the AcademyAgedOut reason"
+        );
+        assert_eq!(
+            FreeAgentReleaseReason::AcademyAgedOut.history_reason(),
+            "dec_reason_released_academy"
         );
         // And they're no longer in the academy.
         assert!(

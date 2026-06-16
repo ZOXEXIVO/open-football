@@ -375,6 +375,8 @@
   "dec_reason_asset_value_protection": "外租以保護其轉會價值",
   "dec_reason_released_failed_renewal": "續約談判失敗後解約",
   "dec_reason_released_free": "雙方同意解約",
+  "dec_reason_released_surplus": "因陣容過剩被釋出",
+  "dec_reason_released_academy": "超過青訓營年齡上限被釋出",
   "dec_reason_squad_oversized": "陣容過大，低於平均能力",
   "dec_reason_surplus_squad": "超出陣容需求",
   "dec_reason_surplus_tactical": "不符合戰術需求",

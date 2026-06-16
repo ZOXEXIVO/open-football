@@ -263,6 +263,7 @@ impl PlayerBuilder {
             transfer_request_reasons: Vec::new(),
             made_senior_debut: self.made_senior_debut.unwrap_or(false),
             awards_count: Default::default(),
+            release_reason: None,
         })
     }
 }

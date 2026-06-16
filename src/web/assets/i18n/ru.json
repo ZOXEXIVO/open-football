@@ -377,6 +377,8 @@
   "dec_reason_asset_value_protection": "Отдан в аренду для сохранения трансферной стоимости",
   "dec_reason_released_failed_renewal": "Освобождён после провала переговоров о продлении",
   "dec_reason_released_free": "Расторжение по обоюдному согласию",
+  "dec_reason_released_surplus": "Отпущен как лишний в составе",
+  "dec_reason_released_academy": "Отпущен по достижении предельного возраста академии",
   "dec_reason_squad_oversized": "Состав перегружен, ниже среднего уровня",
   "dec_reason_surplus_squad": "Лишний в составе",
   "dec_reason_surplus_tactical": "Лишний в тактической схеме",

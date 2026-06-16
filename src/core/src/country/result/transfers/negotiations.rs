@@ -11,7 +11,9 @@ use crate::club::player::calculators::{
 use crate::club::player::events::transfer_social::{
     TransferContinentalPath, TransferInterestSignal,
 };
+use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection};
 use crate::country::result::CountryResult;
+use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferListingStatus;
 use crate::transfers::TransferRoutePolicy;
@@ -29,8 +31,8 @@ use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor};
 use crate::transfers::scouting_region::ScoutingRegion;
 use crate::utils::{FloatUtils, FormattingUtils};
 use crate::{
-    Country, PlayerSquadStatus, PlayerStatusType, TransferInterestSource, TransferInterestStage,
-    WageCalculator,
+    Club, Country, Player, PlayerSquadStatus, PlayerStatusType, PlayerValueCalculator,
+    TransferInterestSource, TransferInterestStage, WageCalculator,
 };
 use chrono::NaiveDate;
 
@@ -421,6 +423,30 @@ impl CountryResult {
             return;
         }
 
+        // Absolute seller fee floor — anchored on the player's MARKET VALUE
+        // (recomputed from the selling club's context), not the listing's
+        // asking price. The ratio guard above only protects against a low
+        // offer relative to whatever the listing advertises; a synthetic or
+        // heavily-decayed listing can advertise far below the player's worth,
+        // so a 5M core player could clear the ratio test on a 340K bid. This
+        // floor closes that gap. Loans, foreign moves, surplus players, and
+        // typed distressed sales are exempt inside the helper.
+        if let Some(floor) = SellerFeeFloor::for_permanent_domestic(country, neg_data, date) {
+            if neg_data.offer_amount < floor.min_fee {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.reject_with_reason(floor.reason);
+                }
+                Self::reopen_listing_for_player(country, neg_data.player_id);
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    false,
+                );
+                return;
+            }
+        }
+
         // Important-player floor: if the player counts as important and
         // the offer doesn't clear the plausibility-driven minimum-fee
         // multiplier, the seller refuses up front. Listed or distressed
@@ -585,6 +611,27 @@ impl CountryResult {
                 negotiation.advance_to_personal_terms(date);
             }
             return;
+        }
+
+        // Absolute seller fee floor (see resolve_initial_approach). Re-checked
+        // here so an offer that reaches club negotiation through any path —
+        // or escalates toward a deflated synthetic asking — still can't close
+        // below the player's market-value floor. A triggered release clause
+        // above already short-circuited, so a forced sale is never blocked.
+        if let Some(floor) = SellerFeeFloor::for_permanent_domestic(country, neg_data, date) {
+            if neg_data.offer_amount < floor.min_fee {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.reject_with_reason(floor.reason);
+                }
+                Self::reopen_listing_for_player(country, neg_data.player_id);
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    false,
+                );
+                return;
+            }
         }
 
         let ratio = if neg_data.asking_price > 0.0 {
@@ -1596,6 +1643,214 @@ impl CountryResult {
     }
 }
 
+/// How strong a *typed* reason the seller has to part with a player below his
+/// market value. Drives how far the [`SellerFeeFloor`] is lowered. Every
+/// level is reached only from a concrete piece of state — never a guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SellerDistress {
+    /// No typed reason to undersell — the full importance floor applies.
+    None,
+    /// A market-leverage signal (a genuine transfer listing, or unhappiness):
+    /// the buyer knows the player is gettable, so the floor drops a little —
+    /// but a valuable first-teamer still can't leave for a fraction of his
+    /// worth. This is the "listed status reduces price only modestly" rule.
+    Modest,
+    /// A strong, typed reason the player should/can move below value: a formal
+    /// transfer request, a `NotNeeded` surplus tag, a contract running down, a
+    /// club in financial crisis, or a durable unresolved grievance. Only the
+    /// low distressed residual floor remains.
+    Strong,
+}
+
+/// Seller-side **absolute** fee floor for a permanent, same-country sale.
+///
+/// The negotiation resolvers judge an incoming bid on the offer ÷ asking
+/// RATIO. That ratio is only as honest as the listing it reads: a synthetic
+/// listing fabricated to back an unsolicited approach — or one heavily
+/// decayed by the stale-listing logic — can advertise an asking price far
+/// below the player's worth, letting an important player be prised away for a
+/// fraction of his value (the Litvinov → Baltika 340K bug). This floor closes
+/// that gap. It is anchored on the player's MARKET VALUE, recomputed from the
+/// SELLING club's league/club context via [`PlayerValueCalculator`] (never
+/// the listing), so a low asking price can no longer define a cheap sale.
+///
+/// The floor only bites for players the club would not cheaply part with
+/// (core / first-team-useful / rotation), classified by the central
+/// [`SquadAssetProtection`] policy. Genuine surplus and development players
+/// carry no importance floor — their cheaper sales are governed by the ratio
+/// and plausibility layers. A typed [`SellerDistress`] reason lowers the floor
+/// (and, for an unrated player, removes it), so real fire-sales still clear —
+/// but a valuable asset always keeps a low residual floor rather than being
+/// handed over for pennies.
+pub(crate) struct SellerFeeFloor;
+
+/// The floor decision for one negotiation: the minimum acceptable base fee
+/// plus the supporting context (exposed so the rule is unit-testable and the
+/// rejection can be narrated). The context fields are read by the floor's
+/// tests and kept for decision diagnostics.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct SellerFloorVerdict {
+    /// Lowest permanent base fee the seller will accept.
+    pub(crate) min_fee: f64,
+    /// The player's recomputed market value (seller context, no listing
+    /// discount) — the anchor the floor is a fraction of.
+    pub(crate) market_value: f64,
+    /// Fraction of `market_value` the floor sits at.
+    pub(crate) fraction: f64,
+    pub(crate) asset_class: SquadAssetClass,
+    pub(crate) distress: SellerDistress,
+    /// Reason to stamp on the rejection when a bid falls short.
+    pub(crate) reason: NegotiationRejectionReason,
+}
+
+impl SellerFeeFloor {
+    /// Healthy-club floors as a fraction of market value, by how protected the
+    /// player is. A de-facto starter / `KeyPlayer` demands the most; rotation
+    /// depth the least.
+    const CORE_FLOOR: f64 = 0.80;
+    const FIRST_TEAM_FLOOR: f64 = 0.70;
+    const ROTATION_FLOOR: f64 = 0.40;
+    /// Discount applied by a modest market-leverage signal (genuine listing /
+    /// unhappiness). The buyer's knowledge that the player is available is
+    /// worth a little, not a giveaway.
+    const MODEST_DISCOUNT: f64 = 0.10;
+    /// The low residual floor a valued player keeps even under a strong,
+    /// typed distressed reason: a fire-sale is allowed, an insult is not.
+    const DISTRESSED_RESIDUAL: f64 = 0.30;
+    /// Durable-unhappiness thresholds — mirror the listing pass's
+    /// `unhappiness_is_durable` so the two systems agree on what "settled,
+    /// structural unhappiness" means (vs. a passing playing-time dip).
+    const DURABLE_UNHAPPY_STREAK: u8 = 6;
+    const DURABLE_AMBITION_FIT: f32 = -8.0;
+
+    /// The floor for the current negotiation, or `None` when none applies (a
+    /// loan, a cross-country move where the seller-side data lives abroad, an
+    /// unrated surplus/development player, or an unrated player with no
+    /// distressed reason). The caller rejects any permanent bid below
+    /// `min_fee`.
+    pub(crate) fn for_permanent_domestic(
+        country: &Country,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+    ) -> Option<SellerFloorVerdict> {
+        if neg_data.is_loan || neg_data.selling_country_id.is_some() {
+            return None;
+        }
+        let seller = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)?;
+        let player = find_player_in_country(country, neg_data.player_id)?;
+
+        let asset_class = SquadAssetProtection::classify(player, seller, date);
+        let distress = Self::distress_for(player, seller, date);
+        let fraction = Self::floor_fraction(asset_class, distress)?;
+
+        let (league_rep, club_rep) = PlayerValuationCalculator::seller_context(country, seller);
+        let market_value = PlayerValueCalculator::calculate(
+            player,
+            date,
+            country.settings.pricing.price_level,
+            league_rep,
+            club_rep,
+        );
+
+        let reason = match asset_class {
+            SquadAssetClass::CorePlayer => NegotiationRejectionReason::PlayerTooImportant,
+            _ => NegotiationRejectionReason::AskingPriceTooHigh,
+        };
+
+        Some(SellerFloorVerdict {
+            min_fee: market_value * fraction,
+            market_value,
+            fraction,
+            asset_class,
+            distress,
+            reason,
+        })
+    }
+
+    /// Floor fraction for a (class, distress) pair. `None` = no floor at all
+    /// (an unrated surplus/development/unknown player with no distressed
+    /// reason: the ratio + plausibility layers govern his cheaper sale).
+    fn floor_fraction(asset_class: SquadAssetClass, distress: SellerDistress) -> Option<f64> {
+        // Importance premium the player commands by virtue of his standing.
+        let importance = match asset_class {
+            SquadAssetClass::CorePlayer => Self::CORE_FLOOR,
+            SquadAssetClass::FirstTeamUseful => Self::FIRST_TEAM_FLOOR,
+            SquadAssetClass::RotationUseful => Self::ROTATION_FLOOR,
+            SquadAssetClass::ProspectDevelopment
+            | SquadAssetClass::TrueSurplus
+            | SquadAssetClass::UnknownNeedsEvaluation => 0.0,
+        };
+
+        let after_distress = match distress {
+            SellerDistress::None => importance,
+            SellerDistress::Modest => (importance - Self::MODEST_DISCOUNT).max(0.0),
+            // A strong, typed reason waives the importance premium entirely.
+            SellerDistress::Strong => 0.0,
+        };
+
+        // A player the club rates at all, or any player a strong distressed
+        // reason applies to, keeps a low residual floor so a valuable asset is
+        // never handed over for pennies (a club would release him for free via
+        // a different path before that). A genuinely unrated player with no
+        // distress has no floor.
+        let rated = importance > 0.0;
+        let floor = if rated || matches!(distress, SellerDistress::Strong) {
+            after_distress.max(Self::DISTRESSED_RESIDUAL)
+        } else {
+            after_distress
+        };
+
+        if floor > 0.0 { Some(floor) } else { None }
+    }
+
+    /// Strongest typed distressed reason in play, read entirely from concrete
+    /// state (status flags, contract length, club finances, durable mood) —
+    /// never decision-history strings.
+    fn distress_for(player: &Player, seller: &Club, date: NaiveDate) -> SellerDistress {
+        let statuses = player.statuses.get();
+
+        // ── Strong: the player should/can leave below value. ──
+        if statuses.contains(&PlayerStatusType::Req) {
+            return SellerDistress::Strong;
+        }
+        if let Some(contract) = player.contract.as_ref() {
+            if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
+                return SellerDistress::Strong;
+            }
+            let months_remaining = (contract.expiration - date).num_days() / 30;
+            if months_remaining <= 6 {
+                return SellerDistress::Strong;
+            }
+        }
+        if seller.finance.balance.balance < 0 {
+            return SellerDistress::Strong;
+        }
+        if Self::unhappiness_is_durable(player) {
+            return SellerDistress::Strong;
+        }
+
+        // ── Modest: market-leverage signals (available, but not forced). ──
+        if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Unh) {
+            return SellerDistress::Modest;
+        }
+
+        SellerDistress::None
+    }
+
+    /// Long-term, structural unhappiness — a months-long unresolved mood or a
+    /// settled ambition mismatch, not a passing playing-time dip. Same typed
+    /// signals the listing pass reads.
+    fn unhappiness_is_durable(player: &Player) -> bool {
+        let happiness = &player.happiness;
+        happiness.unhappy_streak >= Self::DURABLE_UNHAPPY_STREAK
+            || happiness.factors.ambition_fit <= Self::DURABLE_AMBITION_FIT
+    }
+}
+
 /// Builds the order in which the seller resolves multiple competing
 /// bids. When two clubs both bid for the same player and both reach a
 /// phase-ready point on the same tick, the seller doesn't accept
@@ -2067,6 +2322,418 @@ mod development_pathway_protection_tests {
             neg.rejection_reason,
             Some(NegotiationRejectionReason::PlayerTooImportant),
             "owner-listed development loan must bypass the protection gate"
+        );
+    }
+}
+
+/// Regression coverage for the underpriced-important-player sale (the
+/// Litvinov → Baltika 340K bug). Exercises the [`SellerFeeFloor`] directly
+/// for the typed scenarios and drives one full `resolve_initial_approach`
+/// to confirm the wiring rejects a sub-floor bid.
+#[cfg(test)]
+mod seller_fee_floor_tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings, Season};
+    use crate::shared::fullname::FullName;
+    use crate::shared::{Currency, CurrencyValue, Location};
+    use crate::transfers::negotiation::TransferNegotiation;
+    use crate::transfers::offer::TransferOffer;
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
+        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, PlayerStatistics, PlayerStatisticsHistoryItem,
+        StaffCollection, Team, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::{Datelike, NaiveTime};
+
+    /// Fixtures for the fee-floor tests. Spartak-like seller (id 1, strong
+    /// league/club reputation) and Baltika-like buyer (id 2, smaller).
+    struct Ff;
+
+    impl Ff {
+        const SELLER_ID: u32 = 1;
+        const BUYER_ID: u32 = 2;
+        const NEG_ID: u32 = 77;
+        const LEAGUE_ID: u32 = 1;
+
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+        fn date() -> NaiveDate {
+            Self::d(2026, 7, 10)
+        }
+        fn far_contract() -> NaiveDate {
+            Self::d(2030, 6, 30)
+        }
+
+        /// A central midfielder with explicit CA / age / reputation / squad
+        /// status / contract expiry. Skills are the builder default — the
+        /// valuation only needs them present, not tuned.
+        fn player(
+            id: u32,
+            ca: u8,
+            age: u8,
+            rep: i16,
+            status: PlayerSquadStatus,
+            expiration: NaiveDate,
+        ) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ca;
+            attrs.potential_ability = ca;
+            attrs.current_reputation = rep;
+            attrs.home_reputation = rep;
+            attrs.world_reputation = rep;
+            let mut contract = PlayerClubContract::new(50_000, expiration);
+            contract.squad_status = status;
+            let birth_year = Self::date().year() - age as i32;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Test".to_string(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(birth_year, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(contract))
+                .build()
+                .unwrap()
+        }
+
+        fn team(club_id: u32, players: Vec<Player>) -> Team {
+            Team::builder()
+                .id(club_id * 10)
+                .league_id(Some(Self::LEAGUE_ID))
+                .club_id(club_id)
+                .name(format!("club-{club_id}"))
+                .slug(format!("club-{club_id}"))
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(6000, 6000, 6000))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        fn club(id: u32, name: &str, balance: i64, players: Vec<Player>) -> Club {
+            Club::new(
+                id,
+                name.to_string(),
+                Location::new(1),
+                ClubFinances::new(balance, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![Self::team(id, players)]),
+                ClubFacilities::default(),
+            )
+        }
+
+        /// A country with the seller squad and an (empty) buyer club.
+        fn country(seller_players: Vec<Player>) -> Country {
+            Self::country_with_balance(seller_players, 10_000_000)
+        }
+
+        fn country_with_balance(seller_players: Vec<Player>, seller_balance: i64) -> Country {
+            let seller = Self::club(Self::SELLER_ID, "Spartak", seller_balance, seller_players);
+            let buyer = Self::club(Self::BUYER_ID, "Baltika", 1_000_000, Vec::new());
+            let league = League::new(
+                Self::LEAGUE_ID,
+                "RPL".to_string(),
+                "rpl".to_string(),
+                1,
+                6000,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            );
+            Country::builder()
+                .id(1)
+                .code("ru".to_string())
+                .slug("russia".to_string())
+                .name("Russia".to_string())
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(vec![seller, buyer])
+                .build()
+                .unwrap()
+        }
+
+        /// Throwaway negotiation phase (InitialApproach) — the floor helper
+        /// never reads it, but `NegotiationData` requires one.
+        fn initial_phase() -> NegotiationPhase {
+            let offer = TransferOffer::new(CurrencyValue::new(1.0, Currency::Usd), 2, Self::date());
+            TransferNegotiation::new(1, 1, 0, 1, 2, offer, Self::date(), 0.5, 0.5, 26, 0.5)
+                .phase
+                .clone()
+        }
+
+        /// A permanent, domestic, unsolicited `NegotiationData` for the
+        /// target with the given offer and (possibly laundered) asking price.
+        fn neg_data(player_id: u32, offer: f64, asking: f64) -> NegotiationData {
+            NegotiationData {
+                player_id,
+                selling_club_id: Self::SELLER_ID,
+                buying_club_id: Self::BUYER_ID,
+                offer_amount: offer,
+                is_loan: false,
+                has_option_to_buy: false,
+                is_unsolicited: true,
+                phase: Self::initial_phase(),
+                selling_rep: 0.75,
+                buying_rep: 0.40,
+                player_age: 26,
+                player_ambition: 0.5,
+                asking_price: asking,
+                has_market_listing: true,
+                player_is_available: false,
+                listing_origin: None,
+                selling_country_id: None,
+                selling_continent_id: None,
+                selling_country_code: String::new(),
+                player_sold_from: None,
+                player_name: "Target".to_string(),
+                selling_club_name: "Spartak".to_string(),
+                offered_annual_wage: Some(50_000),
+                buying_league_reputation: 6000,
+                sell_on_percentage: None,
+                loan_future_fee: None,
+                personal_terms: None,
+                foreign_terms_floor_blocked: false,
+            }
+        }
+
+        fn history_row(year: u16, games: u16) -> PlayerStatisticsHistoryItem {
+            let mut stats = PlayerStatistics::default();
+            stats.played = games;
+            PlayerStatisticsHistoryItem {
+                season: Season::new(year),
+                team_name: "T".to_string(),
+                team_slug: "t".to_string(),
+                team_reputation: 0,
+                league_name: "L".to_string(),
+                league_slug: "l".to_string(),
+                is_loan: false,
+                transfer_fee: None,
+                statistics: stats,
+                seq_id: year as u32,
+            }
+        }
+    }
+
+    /// Regression #1: a Spartak-like seller's core midfielder (value in the
+    /// millions) carries a strong fee floor; a Baltika-like 340K bid is far
+    /// below it. The floor is anchored on the SELLER's market value, not the
+    /// listing's asking price.
+    #[test]
+    fn core_player_floor_blocks_lowball_bid() {
+        let target =
+            Ff::player(100, 150, 26, 5000, PlayerSquadStatus::KeyPlayer, Ff::far_contract());
+        let country = Ff::country(vec![target]);
+        let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
+
+        let v = SellerFeeFloor::for_permanent_domestic(&country, &nd, Ff::date())
+            .expect("a core player must carry a fee floor");
+        assert_eq!(v.asset_class, SquadAssetClass::CorePlayer);
+        assert_eq!(v.distress, SellerDistress::None);
+        assert_eq!(v.fraction, SellerFeeFloor::CORE_FLOOR);
+        assert!(
+            v.market_value > 1_000_000.0,
+            "a CA-150 player must be valued in the millions, got {}",
+            v.market_value
+        );
+        assert_eq!(v.min_fee, v.market_value * SellerFeeFloor::CORE_FLOOR);
+        assert!(
+            340_000.0 < v.min_fee,
+            "a 340K bid ({}) must sit far below the core floor ({})",
+            340_000.0,
+            v.min_fee
+        );
+        assert_eq!(v.reason, NegotiationRejectionReason::PlayerTooImportant);
+    }
+
+    /// Regression #2: end-to-end — a low-budget unsolicited 340K bid for a
+    /// valued first-team player is rejected by `resolve_initial_approach`,
+    /// deterministically (before any acceptance roll). The target is a
+    /// recent regular tagged `NotYetSet`, so the *plausibility* importance
+    /// is below 0.78 and the pre-existing importance gate does NOT fire —
+    /// only the new market-value floor catches the bid.
+    #[test]
+    fn low_budget_bid_for_protected_player_is_rejected_end_to_end() {
+        let mut target =
+            Ff::player(100, 130, 26, 2000, PlayerSquadStatus::NotYetSet, Ff::far_contract());
+        target.statistics_history.items.push(Ff::history_row(2025, 14)); // recent regular
+        target.statistics.played = 2; // thin current sample
+        let better_a =
+            Ff::player(101, 142, 27, 2000, PlayerSquadStatus::NotYetSet, Ff::far_contract());
+        let better_b =
+            Ff::player(102, 138, 25, 2000, PlayerSquadStatus::NotYetSet, Ff::far_contract());
+
+        let mut country = Ff::country(vec![target, better_a, better_b]);
+
+        let offer = TransferOffer::new(CurrencyValue::new(340_000.0, Currency::Usd), Ff::BUYER_ID, Ff::date());
+        let neg = TransferNegotiation::new(
+            Ff::NEG_ID, 100, 0, Ff::SELLER_ID, Ff::BUYER_ID, offer, Ff::date(), 0.75, 0.40, 26, 0.5,
+        );
+        country.transfer_market.negotiations.insert(Ff::NEG_ID, neg);
+
+        // Synthetic-style asking (offer × 1.2) — the exact laundering that
+        // made the bug's ratio look healthy. The floor ignores it.
+        let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
+        CountryResult::resolve_initial_approach(&mut country, Ff::NEG_ID, &nd, Ff::date());
+
+        let neg = &country.transfer_market.negotiations[&Ff::NEG_ID];
+        assert_eq!(
+            neg.status,
+            NegotiationStatus::Rejected,
+            "a 340K bid for a valued first-team player must be rejected"
+        );
+        assert_eq!(
+            neg.rejection_reason,
+            Some(NegotiationRejectionReason::AskingPriceTooHigh),
+            "the rejection must come from the market-value fee floor"
+        );
+    }
+
+    /// Regression #3: an explicit `NotNeeded` surplus tag is a strong
+    /// distressed reason — the importance premium is waived — but a valuable
+    /// player still keeps the low distressed residual floor, so a 340K bid is
+    /// rejected (the seller would release him free before giving him away).
+    #[test]
+    fn not_needed_player_keeps_distressed_residual_floor() {
+        let target =
+            Ff::player(100, 150, 26, 5000, PlayerSquadStatus::NotNeeded, Ff::far_contract());
+        let country = Ff::country(vec![target]);
+        let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
+
+        let v = SellerFeeFloor::for_permanent_domestic(&country, &nd, Ff::date())
+            .expect("a valuable NotNeeded player keeps a distressed residual floor");
+        assert_eq!(v.distress, SellerDistress::Strong);
+        assert_eq!(v.fraction, SellerFeeFloor::DISTRESSED_RESIDUAL);
+        assert!(
+            340_000.0 < v.min_fee,
+            "a 340K bid ({}) is still below the distressed floor ({})",
+            340_000.0,
+            v.min_fee
+        );
+    }
+
+    /// Regression #4: a transfer-listed first-team player gets only a MODEST
+    /// discount — the floor stays at ~60% of market value, never a fraction
+    /// of it. "Listed status alone" must not unlock a 340K sale.
+    #[test]
+    fn listed_first_team_player_keeps_modest_floor() {
+        let mut target =
+            Ff::player(100, 150, 26, 5000, PlayerSquadStatus::FirstTeamRegular, Ff::far_contract());
+        target.statuses.add(Ff::date(), PlayerStatusType::Lst);
+        let country = Ff::country(vec![target]);
+        let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
+
+        let v = SellerFeeFloor::for_permanent_domestic(&country, &nd, Ff::date())
+            .expect("a listed first-team player still carries a floor");
+        assert_eq!(v.asset_class, SquadAssetClass::FirstTeamUseful);
+        assert_eq!(v.distress, SellerDistress::Modest);
+        assert_eq!(
+            v.fraction,
+            SellerFeeFloor::FIRST_TEAM_FLOOR - SellerFeeFloor::MODEST_DISCOUNT
+        );
+        assert!(
+            v.fraction >= 0.60,
+            "a listed first-team floor must stay at/above 60% of value, got {}",
+            v.fraction
+        );
+        assert!(340_000.0 < v.min_fee);
+    }
+
+    /// Regression #5: a genuine low-ability surplus player (well below the
+    /// squad level, no distress) carries NO importance floor, so an
+    /// around-value 340K sale can complete.
+    #[test]
+    fn genuine_low_value_surplus_has_no_floor() {
+        // Four strong midfielders so the fringe man is clearly below the
+        // squad average → inferred TrueSurplus (not via NotNeeded, so no
+        // distressed residual either).
+        let mut squad: Vec<Player> = (200..204)
+            .map(|id| Ff::player(id, 140, 26, 1000, PlayerSquadStatus::NotYetSet, Ff::far_contract()))
+            .collect();
+        squad.push(Ff::player(
+            100,
+            95,
+            33,
+            500,
+            PlayerSquadStatus::MainBackupPlayer,
+            Ff::far_contract(),
+        ));
+        let country = Ff::country(squad);
+        let nd = Ff::neg_data(100, 340_000.0, 400_000.0);
+
+        assert!(
+            SellerFeeFloor::for_permanent_domestic(&country, &nd, Ff::date()).is_none(),
+            "a genuine low-value surplus player must carry no importance floor"
+        );
+    }
+
+    /// Regression #6: a contract running down (<6 months) is a strong
+    /// distressed reason — the floor collapses to the distressed residual, so
+    /// a meaningfully lower fee can complete. Documents the allowed discount.
+    #[test]
+    fn near_expiry_contract_collapses_floor_to_residual() {
+        let target = Ff::player(
+            100,
+            150,
+            26,
+            5000,
+            PlayerSquadStatus::FirstTeamRegular,
+            Ff::d(2026, 11, 1), // ~4 months from the test date
+        );
+        let country = Ff::country(vec![target]);
+        let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
+
+        let v = SellerFeeFloor::for_permanent_domestic(&country, &nd, Ff::date())
+            .expect("a near-expiry first-team player keeps the residual floor");
+        assert_eq!(v.distress, SellerDistress::Strong);
+        assert_eq!(v.fraction, SellerFeeFloor::DISTRESSED_RESIDUAL);
+        // The allowed discount: the floor is well below the healthy 70%
+        // first-team floor — a near-expiry player genuinely goes cheaper.
+        assert!(v.fraction < SellerFeeFloor::FIRST_TEAM_FLOOR);
+    }
+
+    /// Regression #8: the stale-listing decay floors an asking price at
+    /// 0.6 × original. A core player's fee floor (0.8 × market value) sits
+    /// ABOVE that deepest decay, so even a bid at the fully-decayed asking
+    /// can't prise him away — the floor tracks his value, not the listing.
+    #[test]
+    fn decay_cannot_breach_important_player_floor() {
+        let target =
+            Ff::player(100, 150, 26, 5000, PlayerSquadStatus::KeyPlayer, Ff::far_contract());
+        let country = Ff::country(vec![target]);
+        let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
+
+        let v = SellerFeeFloor::for_permanent_domestic(&country, &nd, Ff::date()).unwrap();
+        let deepest_decay_bid = v.market_value * 0.6; // market.rs decay floor
+        assert!(
+            deepest_decay_bid < v.min_fee,
+            "a bid at the deepest listing decay ({}) must still fall below the \
+             core fee floor ({})",
+            deepest_decay_bid,
+            v.min_fee
         );
     }
 }

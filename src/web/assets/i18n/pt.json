@@ -375,6 +375,8 @@
   "dec_reason_asset_value_protection": "Emprestado para proteger o valor de revenda",
   "dec_reason_released_failed_renewal": "Liberado após negociações de renovação fracassadas",
   "dec_reason_released_free": "Liberado por acordo mútuo",
+  "dec_reason_released_surplus": "Liberado por excedente no elenco",
+  "dec_reason_released_academy": "Liberado após exceder a idade da academia",
   "dec_reason_squad_oversized": "Elenco superlotado, abaixo do nível médio",
   "dec_reason_surplus_squad": "Excedente no elenco",
   "dec_reason_surplus_tactical": "Excedente no esquema tático",

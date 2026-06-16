@@ -2169,6 +2169,18 @@ a:active {
     font-weight: 400;
 }
 
+.fm-squad .sq-name .fa-status {
+    white-space: normal;
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 1.3;
+    color: var(--fm-muted, #8a8f98);
+}
+
+.fm-squad .sq-name .fa-status .fa-stage {
+    font-weight: 600;
+}
+
 .fm-squad .sq-pos {
     color: #7a868e;
     font-size: 12px;

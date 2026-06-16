@@ -2,6 +2,56 @@ use crate::club::team::squad::SquadAssetClass;
 use crate::{ContractType, Person, Player, PlayerSquadStatus};
 use chrono::NaiveDate;
 
+/// Why a player's contract ended and they entered the free-agent pool.
+///
+/// Recorded at the moment a club-driven exit path clears the contract, so
+/// the daily free-agent sweep can stamp a faithful transfer-history
+/// reason instead of collapsing every cleared-contract exit into a single
+/// generic "released by mutual agreement". `PlayerStatusType::Frt` stays
+/// the lightweight status marker; this enum is the source of truth for the
+/// *displayed* release reason. The sweep falls back to [`Self::ContractExpired`]
+/// (no marker) or [`Self::MutualTermination`] (legacy `Frt` without an
+/// explicit reason) when no reason was recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreeAgentReleaseReason {
+    /// Natural contract expiry — nobody tore anything up, the deal simply
+    /// ran out. No exit path sets this explicitly; the sweep infers it
+    /// from the absence of an early-release marker.
+    ContractExpired,
+    /// A negotiated, cheap mutual termination of a genuinely surplus
+    /// senior — the head-coach squad-cleanup path. "Released by mutual
+    /// agreement".
+    MutualTermination,
+    /// An automatic positional / oversize trim walked a true-surplus
+    /// player for free (squad oversized, clearly below team level, cheap
+    /// to settle). Distinct from a negotiated mutual termination.
+    SurplusFreeRelease,
+    /// Released after contract-renewal talks collapsed and no buyer
+    /// emerged at an acceptable settlement.
+    FailedRenewalRelease,
+    /// A youth-academy player aged out of the pathway without earning a
+    /// senior deal.
+    AcademyAgedOut,
+    /// An under-16 free transfer release (no professional terms offered).
+    Under16Release,
+}
+
+impl FreeAgentReleaseReason {
+    /// Translatable `dec_reason_*` i18n key for this exit. Every variant
+    /// maps to an existing or newly-added key so the player page shows a
+    /// specific narrative rather than one generic "mutual agreement" line.
+    pub fn history_reason(self) -> &'static str {
+        match self {
+            FreeAgentReleaseReason::ContractExpired => "dec_reason_contract_expired",
+            FreeAgentReleaseReason::MutualTermination => "dec_reason_released_free",
+            FreeAgentReleaseReason::SurplusFreeRelease => "dec_reason_released_surplus",
+            FreeAgentReleaseReason::FailedRenewalRelease => "dec_reason_released_failed_renewal",
+            FreeAgentReleaseReason::AcademyAgedOut => "dec_reason_released_academy",
+            FreeAgentReleaseReason::Under16Release => "dec_reason_under16_release",
+        }
+    }
+}
+
 /// Club-side inputs for the automatic-release gate. Callers assemble it
 /// once per decision from whatever context they have: the unresolved-salary
 /// fallback reads real league reputation through `LeagueProcessAccess`,
@@ -440,5 +490,52 @@ mod tests {
             AutomaticReleaseEligibility::assess(&pricey, &Fixture::ctx(20_000.0)),
             Some(AutomaticReleaseBlock::ExpensiveTermination)
         );
+    }
+
+    /// The free-agent release-reason model is the source of truth for the
+    /// *displayed* exit narrative: every variant must map to a distinct,
+    /// existing `dec_reason_*` i18n key so the transfers page no longer
+    /// collapses every cleared-contract exit into "mutual agreement".
+    #[test]
+    fn free_agent_release_reason_maps_to_history_keys() {
+        assert_eq!(
+            FreeAgentReleaseReason::ContractExpired.history_reason(),
+            "dec_reason_contract_expired"
+        );
+        assert_eq!(
+            FreeAgentReleaseReason::MutualTermination.history_reason(),
+            "dec_reason_released_free"
+        );
+        assert_eq!(
+            FreeAgentReleaseReason::SurplusFreeRelease.history_reason(),
+            "dec_reason_released_surplus"
+        );
+        assert_eq!(
+            FreeAgentReleaseReason::FailedRenewalRelease.history_reason(),
+            "dec_reason_released_failed_renewal"
+        );
+        assert_eq!(
+            FreeAgentReleaseReason::AcademyAgedOut.history_reason(),
+            "dec_reason_released_academy"
+        );
+        assert_eq!(
+            FreeAgentReleaseReason::Under16Release.history_reason(),
+            "dec_reason_under16_release"
+        );
+
+        // Every variant must yield a distinct key — no two exits share a
+        // narrative, which is the whole point of the model.
+        let keys = [
+            FreeAgentReleaseReason::ContractExpired.history_reason(),
+            FreeAgentReleaseReason::MutualTermination.history_reason(),
+            FreeAgentReleaseReason::SurplusFreeRelease.history_reason(),
+            FreeAgentReleaseReason::FailedRenewalRelease.history_reason(),
+            FreeAgentReleaseReason::AcademyAgedOut.history_reason(),
+            FreeAgentReleaseReason::Under16Release.history_reason(),
+        ];
+        let mut unique = keys.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), keys.len(), "release reasons must be distinct");
     }
 }

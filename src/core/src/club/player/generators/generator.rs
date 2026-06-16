@@ -1180,6 +1180,7 @@ impl PlayerGenerator {
             // their genuine debut fires later when they break into the seniors.
             made_senior_debut: false,
             awards_count: Default::default(),
+            release_reason: None,
         }
     }
 

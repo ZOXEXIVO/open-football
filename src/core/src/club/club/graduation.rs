@@ -1,5 +1,6 @@
 use super::Club;
 use crate::Player;
+use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::language::{Language, PlayerLanguage};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::{CompletedTransfer, TransferType};
@@ -157,7 +158,11 @@ impl Club {
                         CurrencyValue::new(0.0, Currency::Usd),
                         TransferType::Free,
                     )
-                    .with_reason("Academy aged-out release".to_string()),
+                    .with_reason(
+                        FreeAgentReleaseReason::AcademyAgedOut
+                            .history_reason()
+                            .to_string(),
+                    ),
                 );
                 released_players.push(player);
             }

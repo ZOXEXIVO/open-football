@@ -1,7 +1,8 @@
 use crate::ai::PendingAiRequest;
 use crate::club::academy::result::ClubAcademyResult;
 use crate::club::player::calculators::{
-    AutomaticReleaseEligibility, ContractValuation, ReleaseEligibilityContext, ValuationContext,
+    AutomaticReleaseEligibility, ContractValuation, FreeAgentReleaseReason,
+    ReleaseEligibilityContext, ValuationContext,
 };
 use crate::club::player::contract::{
     AffordabilityInput, ContractStalemate, RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL,
@@ -46,10 +47,18 @@ impl UnresolvedSalaryTrigger {
         }
     }
 
-    fn release_reason(self) -> &'static str {
+    /// Explicit free-agent exit reason for the release branch. A failed
+    /// renewal reads as its own narrative; a `NotNeeded` player who wanted
+    /// a raise the club won't fund is a squad-surplus free release, NOT a
+    /// negotiated mutual termination — keep the two distinct in history.
+    fn release_reason(self) -> FreeAgentReleaseReason {
         match self {
-            UnresolvedSalaryTrigger::FailedRenewal => "dec_reason_released_failed_renewal",
-            UnresolvedSalaryTrigger::NotNeededWantsRaise => "dec_reason_released_free",
+            UnresolvedSalaryTrigger::FailedRenewal => {
+                FreeAgentReleaseReason::FailedRenewalRelease
+            }
+            UnresolvedSalaryTrigger::NotNeededWantsRaise => {
+                FreeAgentReleaseReason::SurplusFreeRelease
+            }
         }
     }
 }
@@ -805,12 +814,17 @@ impl ClubResult {
                     };
                     match decision {
                         UnresolvedSalaryDecision::FreeTransfer => {
+                            let release_reason = trigger.release_reason();
                             player.statuses.add(date, PlayerStatusType::Frt);
                             player.contract = None;
+                            // Stamp the explicit exit so the free-agent
+                            // sweep records this specific reason rather
+                            // than collapsing it to "mutual agreement".
+                            player.set_release_reason(release_reason);
                             player.decision_history.add(
                                 date,
                                 "dec_free_transfer_listed".to_string(),
-                                trigger.release_reason().to_string(),
+                                release_reason.history_reason().to_string(),
                                 decided_by,
                             );
                         }

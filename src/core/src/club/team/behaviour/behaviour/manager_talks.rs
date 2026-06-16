@@ -7,22 +7,26 @@
 
 use super::TeamBehaviour;
 use crate::club::player::ManagerPromiseKind;
+use crate::club::player::calculators::{
+    AutomaticReleaseEligibility, FreeAgentReleaseReason, ReleaseEligibilityContext,
+};
 use crate::club::player::happiness::{PlayingTimeFrustrationConfig, PlayingTimeOpportunityContext};
 use crate::club::player::interaction::{InteractionTone, InteractionTopic};
 use crate::club::staff::CoachPlayerBond;
-use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::behaviour::topic_for_talk;
 use crate::club::team::behaviour::{
     ContractTermination, ManagerTalkResult, ManagerTalkType, TeamBehaviourResult,
 };
+use crate::club::team::squad::SquadAssetContext;
 use crate::context::GlobalContext;
 use crate::utils::DateUtils;
 use crate::{
-    ContractType, Player, PlayerCollection, PlayerSquadStatus, PlayerStatusType, Staff,
+    Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType, Staff,
     StaffCollection,
 };
 use chrono::NaiveDate;
 use log::debug;
+use std::collections::HashMap;
 
 impl TeamBehaviour {
     /// Date-aware. The interaction-log cooldown gate needs the
@@ -511,11 +515,17 @@ impl TeamBehaviour {
         }
     }
 
-    /// Head coach reviews the squad for unwanted players whose contracts
-    /// can be torn up cheaply. Fires when the three FM-style criteria line
-    /// up: the player is structurally surplus (NotNeeded or a deadwood
-    /// youth), they're not a developing prospect, and the payout is small
-    /// enough that the club would rather eat it than keep paying wages.
+    /// Head coach reviews the squad for genuinely surplus players whose
+    /// contracts can be torn up. This is now gated by the single central
+    /// release policy [`AutomaticReleaseEligibility`] — the same gate the
+    /// season-start surplus trim and the unresolved-salary fallback use —
+    /// so a contracted senior is only mutually terminated when EVERY exit
+    /// guard agrees: not on loan / pinned / listed, classified as genuine
+    /// squad surplus, clearly below team level (or an old declining
+    /// veteran), with negligible market value and a severance the club can
+    /// shrug off. A player the market would pay for, an expensive contract,
+    /// or anyone still useful is left for the sale / loan / listing systems
+    /// instead of being walked for free.
     pub(super) fn process_coach_contract_terminations(
         players: &PlayerCollection,
         staffs: &StaffCollection,
@@ -528,16 +538,45 @@ impl TeamBehaviour {
 
         let date = ctx.simulation.date.date();
 
-        // Use one month of the squad's total wage bill as the cap for a
-        // cheap termination — clubs tolerate a payout of that size to free
-        // a squad slot. Scales naturally with club size/wealth.
-        let monthly_wage_bill: u64 = players
+        // Classify every player against the squad the head coach manages
+        // (this team's roster). For the main team that is the first-team
+        // squad; a reserve / youth coach measures his own deadwood against
+        // his own squad's level. Built once and shared across candidates.
+        let asset_ctx = SquadAssetContext::for_squad(players);
+        let squad_avg_ability = asset_ctx.squad_avg_ability();
+
+        // Severance / market-value caps scale with this squad's annual
+        // wage bill (loanees excluded — they belong to their parent club).
+        let annual_wage_bill: u32 = players
             .players
             .iter()
             .filter(|p| !p.is_on_loan())
-            .filter_map(|p| p.contract.as_ref().map(|c| c.salary as u64 / 12))
+            .filter_map(|p| p.contract.as_ref().map(|c| c.salary))
             .sum();
-        let payout_cap = (monthly_wage_bill / 2).max(5_000) as u32;
+
+        // Reputation inputs for pricing the player exactly as the country
+        // listing pass would: the real league reputation and the club's
+        // blended market-value reputation, both carried on the context.
+        let league_reputation = ctx.club_league_reputation();
+        let club_reputation = ctx.club_main_reputation();
+
+        // Per-position-group active headcount on this squad. A free release
+        // must never thin a position group below safe match-day cover — the
+        // "does not create unsafe squad depth" gate. Decremented as
+        // terminations are emitted so two cuts in the same group this week
+        // still respect the floor. Loanees / contractless players don't
+        // count (they aren't this club's usable depth).
+        let mut group_active: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
+        for p in &players.players {
+            if p.is_on_loan() || p.contract.is_none() {
+                continue;
+            }
+            *group_active
+                .entry(p.position().position_group())
+                .or_default() += 1;
+        }
+        // Releasing a player must leave at least this many in his group.
+        const MIN_GROUP_AFTER_RELEASE: usize = 2;
 
         const MAX_TERMINATIONS_PER_WEEK: usize = 2;
         let mut emitted = 0;
@@ -546,12 +585,25 @@ impl TeamBehaviour {
             if emitted >= MAX_TERMINATIONS_PER_WEEK {
                 break;
             }
-            if let Some((payout, reason)) = evaluate_termination(player, date, payout_cap) {
-                result.contract_terminations.push(ContractTermination {
-                    player_id: player.id,
-                    payout,
-                    reason,
-                });
+            // Depth guard: never strip a position group below safe cover.
+            let group = player.position().position_group();
+            let active_in_group = group_active.get(&group).copied().unwrap_or(0);
+            if active_in_group <= MIN_GROUP_AFTER_RELEASE {
+                continue;
+            }
+            let market_value = player.value(date, league_reputation, club_reputation);
+            let release_ctx = ReleaseEligibilityContext {
+                date,
+                squad_avg_ability,
+                market_value,
+                annual_wage_bill,
+                asset_class: asset_ctx.classify(player, date),
+            };
+            if let Some(termination) = CoachTerminationReview::evaluate(player, date, &release_ctx) {
+                result.contract_terminations.push(termination);
+                if let Some(count) = group_active.get_mut(&group) {
+                    *count = count.saturating_sub(1);
+                }
                 emitted += 1;
             }
         }
@@ -648,57 +700,56 @@ impl TeamBehaviour {
     }
 }
 
-/// Decide whether this player's contract should be terminated today.
-/// Returns the payout and a short reason code; None means keep.
-fn evaluate_termination(
-    player: &Player,
-    date: NaiveDate,
-    payout_cap: u32,
-) -> Option<(u32, &'static str)> {
-    if player.is_on_loan() {
-        return None;
-    }
-    let contract = player.contract.as_ref()?;
+/// Head-coach squad-cleanup wrapper around the central release policy.
+/// Builds nothing of its own: it defers entirely to
+/// [`AutomaticReleaseEligibility`] (the single gate every club-driven
+/// release path shares) and only converts a clean pass into a mutual
+/// termination. A blocked player is left untouched here — the surplus
+/// trim, the unresolved-salary fallback, and the country listing pass own
+/// the sell / loan / keep-and-seek-a-buyer outcomes for him, so the coach
+/// pass never tears up a deal those systems would rather monetise.
+struct CoachTerminationReview;
 
-    // Don't tear up an existing sale — they're leaving anyway.
-    if contract.is_transfer_listed {
-        // Listed but still sitting around after a while? Let the market
-        // finish its job; termination is a last resort, not the first.
-    }
+impl CoachTerminationReview {
+    /// Returns a [`ContractTermination`] only when the player is genuinely
+    /// releasable for free; `None` keeps him (still useful, sellable,
+    /// expensive to settle, listed, pinned, on loan, or contractless).
+    fn evaluate(
+        player: &Player,
+        date: NaiveDate,
+        release_ctx: &ReleaseEligibilityContext,
+    ) -> Option<ContractTermination> {
+        let contract = player.contract.as_ref()?;
 
-    // Promising youngsters stay even when squad-status says NotNeeded.
-    // Termination is a club decision — judge the upside from the
-    // observable ceiling, never the hidden biological PA.
-    let age = DateUtils::age(player.birth_date, date);
-    let ca = player.player_attributes.current_ability;
-    let pa = PotentialEstimator::observable_ceiling(player, date);
-    let is_prospect = age <= 23 && pa > ca + 15;
-    if is_prospect {
-        return None;
-    }
+        // Already on the market — the sale process owns this player. Never
+        // convert a standing listing into a free walk-out.
+        if contract.is_transfer_listed {
+            return None;
+        }
 
-    // Any player the squad really needs stays. `NotYetSet` is excluded
-    // because every freshly-installed contract starts there until the
-    // monthly squad-status pass computes a real role — terminating on
-    // it would tear up the deal of a player we just signed.
-    if !matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
-        return None;
-    }
+        // Central policy. Anything it blocks (protected role / asset,
+        // near team level, valuable, expensive severance, on loan, pinned)
+        // is not a free-release candidate.
+        if let Some(block) = AutomaticReleaseEligibility::assess(player, release_ctx) {
+            debug!(
+                "coach termination skipped for {} (id={}): {:?} — CA {} vs squad avg {}, \
+                 value={:.0}, severance={} → leaving for the sale/loan/listing systems",
+                player.full_name,
+                player.id,
+                block,
+                player.player_attributes.current_ability,
+                release_ctx.squad_avg_ability,
+                release_ctx.market_value,
+                contract.termination_cost(date),
+            );
+            return None;
+        }
 
-    let payout = contract.termination_cost(date);
-
-    // Free release (youth / amateur / non-contract / expiring): always
-    // fine. Paid buyouts only if below the club's comfort threshold.
-    let reason = match contract.contract_type {
-        ContractType::Youth => "term_reason_youth_surplus",
-        ContractType::Amateur | ContractType::NonContract => "term_reason_free_release",
-        _ => "term_reason_surplus_squad",
-    };
-
-    if payout == 0 || payout <= payout_cap {
-        Some((payout, reason))
-    } else {
-        None
+        Some(ContractTermination {
+            player_id: player.id,
+            payout: contract.termination_cost(date),
+            reason: FreeAgentReleaseReason::MutualTermination,
+        })
     }
 }
 
@@ -964,5 +1015,252 @@ impl ConflictTalkGate {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod coach_termination_tests {
+    //! The head-coach contract-cleanup pass now routes every decision
+    //! through the central [`AutomaticReleaseEligibility`] gate, so a
+    //! contracted senior is mutually terminated only when he is genuine,
+    //! cheap, clearly-below-level surplus — and is otherwise left for the
+    //! sale / loan / listing systems instead of being walked for free.
+    use super::*;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::team::squad::SquadAssetClass;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        ContractType, PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills,
+    };
+    use chrono::{Datelike, Duration};
+
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 6, 12).unwrap()
+        }
+
+        /// Squad context with avg ability 100 and a 1.2M wage bill — the
+        /// same calibration the release-gate fixtures use, so the
+        /// FullTime severance cap sits at ~12.5K and the market-value cap
+        /// at the 100K floor.
+        fn ctx(market_value: f64, asset_class: SquadAssetClass) -> ReleaseEligibilityContext {
+            ReleaseEligibilityContext {
+                date: Self::date(),
+                squad_avg_ability: 100,
+                market_value,
+                annual_wage_bill: 1_200_000,
+                asset_class,
+            }
+        }
+
+        fn contract(
+            salary: u32,
+            contract_type: ContractType,
+            months_remaining: u32,
+            status: PlayerSquadStatus,
+        ) -> PlayerClubContract {
+            let expiration = Self::date() + Duration::days(months_remaining as i64 * 30);
+            let mut c = PlayerClubContract::new(salary, expiration);
+            c.contract_type = contract_type;
+            c.squad_status = status;
+            c
+        }
+
+        fn player(ability: u8, age: u8, contract: Option<PlayerClubContract>) -> Player {
+            let birth_year = Self::date().year() - age as i32;
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ability;
+            attrs.potential_ability = ability;
+            PlayerBuilder::new()
+                .id(1)
+                .full_name(FullName::new("Test".to_string(), "Player".to_string()))
+                .birth_date(NaiveDate::from_ymd_opt(birth_year, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(contract)
+                .build()
+                .unwrap()
+        }
+    }
+
+    // Scenario 3: cheap old declining true-surplus senior — every gate
+    // passes, so the coach negotiates a mutual termination, the contract
+    // is cleared, Frt is stamped, and the explicit reason is recorded.
+    #[test]
+    fn cheap_declining_surplus_is_mutually_terminated() {
+        let player = Fx::player(
+            60,
+            33,
+            Some(Fx::contract(
+                15_000,
+                ContractType::FullTime,
+                3,
+                PlayerSquadStatus::NotNeeded,
+            )),
+        );
+        let ctx = Fx::ctx(20_000.0, SquadAssetClass::TrueSurplus);
+
+        let termination = CoachTerminationReview::evaluate(&player, Fx::date(), &ctx)
+            .expect("cheap declining true-surplus senior must be terminable");
+        assert_eq!(termination.player_id, player.id);
+        assert_eq!(termination.reason, FreeAgentReleaseReason::MutualTermination);
+
+        // Committing the termination clears the contract, stamps Frt, and
+        // records the explicit reason in state + decision history.
+        let mut p = player;
+        p.on_contract_terminated(Fx::date(), termination.reason);
+        assert!(p.contract.is_none(), "termination must clear the contract");
+        assert!(
+            p.statuses.get().contains(&PlayerStatusType::Frt),
+            "termination must stamp Frt for the free-agent sweep"
+        );
+        assert_eq!(
+            p.release_reason(),
+            Some(FreeAgentReleaseReason::MutualTermination),
+            "termination must record the explicit mutual-termination reason"
+        );
+        assert!(
+            p.decision_history
+                .items
+                .iter()
+                .any(|d| d.decision == "dec_reason_released_free"),
+            "termination must be explained in decision history"
+        );
+    }
+
+    // Scenario 2: a high-salary full-time player with expensive severance
+    // is NOT torn up — the club would have to pay a settlement it won't.
+    #[test]
+    fn expensive_full_time_contract_is_not_terminated() {
+        let player = Fx::player(
+            60,
+            33,
+            Some(Fx::contract(
+                2_000_000,
+                ContractType::FullTime,
+                24,
+                PlayerSquadStatus::NotNeeded,
+            )),
+        );
+        let ctx = Fx::ctx(20_000.0, SquadAssetClass::TrueSurplus);
+        assert!(
+            CoachTerminationReview::evaluate(&player, Fx::date(), &ctx).is_none(),
+            "an expensive-to-settle contract must never be auto-terminated"
+        );
+    }
+
+    // Scenario 1: a valuable surplus senior is a sale, not a free walk-out.
+    #[test]
+    fn valuable_surplus_senior_is_not_terminated() {
+        let player = Fx::player(
+            60,
+            29,
+            Some(Fx::contract(
+                15_000,
+                ContractType::FullTime,
+                24,
+                PlayerSquadStatus::NotNeeded,
+            )),
+        );
+        // Market value above the cap → the gate blocks a free release.
+        let ctx = Fx::ctx(400_000.0, SquadAssetClass::TrueSurplus);
+        assert!(
+            CoachTerminationReview::evaluate(&player, Fx::date(), &ctx).is_none(),
+            "a player the market would pay for must be sold, not released"
+        );
+    }
+
+    // Scenario 4: an already transfer-listed player is owned by the sale
+    // process — the coach pass must never convert the listing into a free
+    // termination, even when the numbers would otherwise clear the gate.
+    #[test]
+    fn transfer_listed_player_is_not_terminated() {
+        let mut contract =
+            Fx::contract(15_000, ContractType::FullTime, 3, PlayerSquadStatus::NotNeeded);
+        contract.is_transfer_listed = true;
+        let player = Fx::player(60, 33, Some(contract));
+        let ctx = Fx::ctx(20_000.0, SquadAssetClass::TrueSurplus);
+        assert!(
+            CoachTerminationReview::evaluate(&player, Fx::date(), &ctx).is_none(),
+            "a transfer-listed player's contract must not be torn up"
+        );
+    }
+
+    // Scenario 7: a loaned-in player belongs to his parent club; the
+    // borrowing club can never release him.
+    #[test]
+    fn loaned_player_is_not_terminated() {
+        let mut player = Fx::player(
+            60,
+            33,
+            Some(Fx::contract(
+                15_000,
+                ContractType::FullTime,
+                3,
+                PlayerSquadStatus::NotNeeded,
+            )),
+        );
+        let mut loan = PlayerClubContract::new(15_000, Fx::date());
+        loan.loan_from_club_id = Some(999);
+        player.contract_loan = Some(loan);
+        let ctx = Fx::ctx(20_000.0, SquadAssetClass::TrueSurplus);
+        assert!(
+            CoachTerminationReview::evaluate(&player, Fx::date(), &ctx).is_none(),
+            "a loaned-in player must never be released by the borrowing club"
+        );
+    }
+
+    // Scenario 8: a manager-pinned player is never auto-released.
+    #[test]
+    fn force_selected_player_is_not_terminated() {
+        let mut player = Fx::player(
+            60,
+            33,
+            Some(Fx::contract(
+                15_000,
+                ContractType::FullTime,
+                3,
+                PlayerSquadStatus::NotNeeded,
+            )),
+        );
+        player.is_force_match_selection = true;
+        let ctx = Fx::ctx(20_000.0, SquadAssetClass::TrueSurplus);
+        assert!(
+            CoachTerminationReview::evaluate(&player, Fx::date(), &ctx).is_none(),
+            "a force-selected player must never be auto-terminated"
+        );
+    }
+
+    // A still-useful, non-surplus senior (classified anything other than
+    // TrueSurplus) is protected even when his bare numbers look thin — the
+    // Zobnin guard, at the coach-termination layer.
+    #[test]
+    fn non_surplus_asset_class_is_not_terminated() {
+        let player = Fx::player(
+            60,
+            29,
+            Some(Fx::contract(
+                15_000,
+                ContractType::FullTime,
+                3,
+                PlayerSquadStatus::NotYetSet,
+            )),
+        );
+        let ctx = Fx::ctx(20_000.0, SquadAssetClass::UnknownNeedsEvaluation);
+        assert!(
+            CoachTerminationReview::evaluate(&player, Fx::date(), &ctx).is_none(),
+            "a not-yet-evaluated senior must not be walked for free"
+        );
     }
 }

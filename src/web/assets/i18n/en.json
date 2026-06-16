@@ -380,6 +380,8 @@
   "dec_reason_asset_value_protection": "Loaned to protect resale value while developing",
   "dec_reason_released_failed_renewal": "Released after failed renewal talks",
   "dec_reason_released_free": "Released by mutual agreement",
+  "dec_reason_released_surplus": "Released as surplus to requirements",
+  "dec_reason_released_academy": "Released after aging out of the academy",
   "dec_reason_squad_oversized": "Squad oversized, below average ability",
   "dec_reason_surplus_squad": "Surplus to squad requirements",
   "dec_reason_surplus_tactical": "Surplus to tactical requirements",

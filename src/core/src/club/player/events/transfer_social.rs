@@ -14,6 +14,7 @@ use crate::CareerDesireEventContext;
 use crate::CareerDesireEvidence;
 use crate::CareerDesireKind;
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::player::Player;
 use crate::{
     ContractEventContext, ContractEventKind, HappinessEventCause, HappinessEventContext,
@@ -1250,11 +1251,13 @@ impl Player {
         );
     }
 
-    /// React to a mutual contract termination. Clears the contract (player
-    /// becomes a free agent), drops transfer statuses that no longer apply,
-    /// and logs a mild morale event — it's a blow to pride, but freedom
-    /// plus a payout softens it considerably.
-    pub fn on_contract_terminated(&mut self, date: NaiveDate) {
+    /// React to a contract termination / club-driven early release. Clears
+    /// the contract (player becomes a free agent), drops transfer statuses
+    /// that no longer apply, records the explicit exit `reason` for the
+    /// free-agent sweep and the player's decision history, and logs a mild
+    /// morale event — it's a blow to pride, but freedom plus a payout
+    /// softens it considerably.
+    pub fn on_contract_terminated(&mut self, date: NaiveDate, reason: FreeAgentReleaseReason) {
         self.contract = None;
         self.contract_loan = None;
         for s in [
@@ -1267,8 +1270,20 @@ impl Player {
             self.statuses.remove(s);
         }
         // Mark as a club-driven release so the free-agent sweep records
-        // "released" rather than "contract expired" in transfer history.
+        // "released" rather than "contract expired" in transfer history,
+        // and stamp the *specific* reason so the sweep can tell a
+        // negotiated mutual termination apart from a surplus walk-out.
         self.statuses.add(date, PlayerStatusType::Frt);
+        self.set_release_reason(reason);
+        // Surface the exit in the player's own decision history so the
+        // transfers page shows *why* the deal ended (attributed to the
+        // board) rather than leaving it blank.
+        self.decision_history.add(
+            date,
+            "dec_free_transfer_listed".to_string(),
+            reason.history_reason().to_string(),
+            "dec_decided_board".to_string(),
+        );
         let cctx = ContractEventContext::new(ContractEventKind::Terminated);
         let happiness_ctx = HappinessEventContext::new(
             HappinessEventCause::Other,

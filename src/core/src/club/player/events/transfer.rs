@@ -270,6 +270,11 @@ impl Player {
         // club's manager hasn't expressed a preference yet, so the
         // flag mustn't survive the move.
         self.is_force_match_selection = false;
+        // The release reason described the previous spell's exit — once
+        // the player has actually moved on (signed elsewhere, or swept
+        // into the free-agent pool after the sweep has read it) it must
+        // not linger onto the next spell.
+        self.release_reason = None;
     }
 
     /// Install a fresh permanent contract on this player at the buying club.

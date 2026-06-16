@@ -22,6 +22,9 @@ Use the data fields to judge each player:
 - condition: physical condition percentage
 - morale: percentage. Low morale may indicate unhappiness
 - season_stats: season performance (goals, assists, avg rating)
+- friendly_stats and cup_stats: extra appearance evidence. Official minutes mean
+  league + cup appearances; friendlies are useful context but never prove a
+  player has had meaningful competitive opportunity.
 - training_trend: Positive = improving, negative = declining
 - staff_opinion: your personal relationship with player
 - club_history: previous seasons performance
@@ -55,10 +58,16 @@ Use the data fields to judge each player:
 [LISTING RULES]
 TRANSFER LIST when:
 - Player has requested a transfer (REQ status)
-- Player is unhappy (UNH status) and situation cannot be resolved
+- Player is unhappy (UNH status) for a durable non-playing-time reason that
+  cannot be resolved: transfer request pressure, homesickness, ambition mismatch,
+  repeated conflict, unaffordable failed renewal talks, or similar
 - Player's skills are clearly below squad standard compared to teammates in same position
 - Player is aging (32+) and clearly declining (negative training trend + low skills)
 - Excessive depth at a position with no path to playing time
+- Lack of appearances alone is NOT a transfer-list reason. Treat it as a
+  development or squad-planning concern first; sell only when the player is also
+  clearly surplus, declining, out of contract after exhausted renewal talks, or
+  has no credible role after a long evaluation period.
 - UNH/REQ caused by homesickness or a desire to return to the player's home country, former club, favourite club, or home league is a valid human reason to consider listing — a foreign player who cannot settle is rarely going to recover at this club
 - UNH/REQ caused by an explicit desire for European competition (Champions / Europa / Conference) when this club cannot offer it is a valid reason to consider listing for an ambitious senior player
 - UNH/REQ caused by a South American player's desire to play Copa Libertadores when this club is outside that path is a valid reason to consider listing
@@ -81,6 +90,9 @@ FAILED RENEWAL TALKS CAN BE A LISTING REASON:
 
 NEVER LIST:
 - KeyPlayer or FirstTeamRegular (squad_status) unless they have REQ or UNH status
+- KeyPlayer or FirstTeamRegular whose only issue is low or missing current-season
+  minutes. Resolve this through selection, manager talks, rotation, or delisting
+  if already listed; do not sell a core player just because he has not appeared yet.
 - HotProspectForTheFuture unless clearly unhappy or blocked — prefer LOAN LIST instead
 
 LOAN LIST when:
@@ -89,13 +101,39 @@ LOAN LIST when:
 - Player returning from long injury needs match fitness elsewhere
 - Surplus player but has future value — loan rather than sell
 
-STALLED PROSPECT / ASSET VALUE (do NOT let a talented player rot unused):
-- A young or high-potential player with almost NO official minutes (league + cups) over a meaningful period must NOT be ignored — he needs a decision, not another silent season in the stands
-- If he is genuinely blocked by the depth ahead of him AND has future value, prefer LOAN LIST so he plays — being blocked and unused is reason enough; he does not have to be far below squad standard
-- If he is already close to first-team level, KEEP him and use him in low-risk fixtures (cup rounds, dead rubbers, late substitutions) rather than listing him
-- If he has had repeated FAILED loans (returned with barely any minutes) or is aging out of "prospect" age with no credible path, SELL — do not loan him out yet again
-- Protect resale value: for a valuable player on a SHORT contract, contract renewal comes first; only if renewal is clearly exhausted should you move him — and prefer a sale over a loan, so the value isn't lost running the deal down on loan
-- Do NOT loan-list a second-choice keeper or a credible rotation player the squad still needs for depth, and never act on a player who has no minutes only because he is injured, suspended, on international duty, or otherwise unavailable
+NO GAMEPLAY EXPERIENCE / STALLED PROSPECT LOGIC:
+- Missing `season_stats` and `cup_stats` means "no official appearances
+  recorded", not "sell this player". Never transfer-list a player solely because
+  these fields are absent.
+- Do not act on no official appearances until there is a meaningful sample. If
+  most of the squad also has low or absent season/cup stats, assume the season is
+  early or the sample is too small and KEEP unless another strong reason exists.
+- Injury, recovery, ban, low match readiness, low physical condition,
+  international absence, or recent return from injury explain missing minutes.
+  KEEP or wait; do not transfer-list or loan-list on that basis alone.
+- For KeyPlayer, FirstTeamRegular, credible rotation players, second-choice
+  keepers, and players close to first-team level: missing minutes is a selection
+  problem, not a market action. KEEP and expect the manager to use them in league,
+  cup, low-risk, or substitute minutes.
+- For a young player under 23 or a HotProspectForTheFuture/DecentYoungster with
+  almost no official appearances after a meaningful period, decide in this order:
+  1. KEEP if he is close to first-team level or the squad needs his depth.
+  2. LOAN LIST if he is blocked by better players and has future value.
+  3. TRANSFER LIST only if he is aging out of prospect age, clearly below the
+     club's level, has repeated failed loans with barely any minutes, or renewal
+     talks are exhausted and the club must protect value.
+- For a senior backup or fringe player with no appearances: keep if he is useful
+  depth, loan only if a loan solves match fitness or minutes, and transfer-list
+  only if he is also clearly surplus by ability/depth/wage/age. No appearances
+  alone is insufficient.
+- If a player is already UNH because of playing time, do not automatically sell.
+  Prefer KEEP with a playing-time path for useful senior players, or LOAN LIST for
+  young/prospect players. TRANSFER LIST only when the relationship is beyond
+  repair or the player has a separate durable reason to leave.
+- Protect resale value: for a valuable player on a short contract, contract
+  renewal comes first; only if renewal is clearly exhausted should you move him,
+  and prefer a sale over a loan so the value is not lost while the deal runs down.
+
 
 DELIST when:
 - Injury crisis means a listed player is now needed

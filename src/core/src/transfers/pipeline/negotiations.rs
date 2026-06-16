@@ -90,6 +90,33 @@ struct NegotiationAction {
     offered_annual_wage: u32,
     buying_league_reputation: u16,
     is_rival: bool,
+    /// The SELLER's own asking price for this player (seller-context
+    /// valuation for a permanent move, loan fee for a loan). Captured so
+    /// the synthetic listing created to back an unsolicited bid advertises
+    /// what the seller would ask — never the buyer's budget-capped offer.
+    seller_asking: CurrencyValue,
+}
+
+/// Asking price for the synthetic listing the pipeline fabricates so an
+/// unsolicited approach has something to negotiate against.
+///
+/// The asking price MUST reflect the SELLER's valuation of the player —
+/// never the buyer's (budget-capped) offer. Anchoring it on the offer let a
+/// cash-poor buyer define the seller's price: a 5M core player whose only
+/// suitor could bid 340K got a ~408K synthetic ask (offer × 1.2), and the
+/// seller then "accepted" ~1:1 against that fabricated number, selling a
+/// first-team player for a fraction of his worth. Anchoring on the seller's
+/// own asking keeps the offer ÷ asking ratio honest so the reservation
+/// guards in the negotiation resolver can do their job.
+struct SyntheticListingPrice;
+
+impl SyntheticListingPrice {
+    fn for_unsolicited(seller_asking: &CurrencyValue) -> CurrencyValue {
+        CurrencyValue {
+            amount: FormattingUtils::round_fee(seller_asking.amount.max(0.0)),
+            currency: seller_asking.currency.clone(),
+        }
+    }
 }
 
 /// Candidate culled by the plausibility gate immediately before
@@ -581,6 +608,7 @@ impl PipelineProcessor {
                         offered_annual_wage,
                         buying_league_reputation,
                         is_rival,
+                        seller_asking: actual_asking.clone(),
                     });
 
                     negotiations_this_club += 1;
@@ -617,10 +645,13 @@ impl PipelineProcessor {
                     .map(|t| t.id)
                     .unwrap_or(0);
 
-                let asking = CurrencyValue {
-                    amount: FormattingUtils::round_fee(action.offer.base_fee.amount * 1.2),
-                    currency: Currency::Usd,
-                };
+                // The synthetic listing advertises the SELLER's asking price,
+                // not the buyer's budget-capped offer. Pricing it off the
+                // offer let a cash-poor club define the seller's valuation and
+                // walk away with a first-team player for a fraction of his
+                // worth; the seller's own asking keeps the acceptance ratio
+                // honest (an unaffordable bid now reads as the lowball it is).
+                let asking = SyntheticListingPrice::for_unsolicited(&action.seller_asking);
 
                 // Tag this as synthetic — the parent club did not list
                 // the player; the negotiation resolver must not grant
@@ -3029,6 +3060,45 @@ mod dev_pathway_cleanup_tests {
                 .iter()
                 .all(|c| c.player_id != player_id),
             "non-owning club's stale candidate must be dropped"
+        );
+    }
+}
+
+#[cfg(test)]
+mod synthetic_listing_price_tests {
+    use super::SyntheticListingPrice;
+    use crate::shared::{Currency, CurrencyValue};
+
+    fn usd(amount: f64) -> CurrencyValue {
+        CurrencyValue {
+            amount,
+            currency: Currency::Usd,
+        }
+    }
+
+    /// Regression #7: the synthetic listing backing an unsolicited approach
+    /// must advertise the SELLER's asking price, never the buyer's
+    /// (budget-capped) offer. Litvinov-like case: seller asks ~5.5M, the
+    /// cash-poor suitor could only bid 340K — the listing must read 5.5M, so
+    /// the offer ÷ asking ratio exposes the bid as the lowball it is rather
+    /// than the old offer × 1.2 = 408K that made 340K look like a fair deal.
+    #[test]
+    fn synthetic_listing_uses_seller_asking_not_buyer_offer() {
+        let seller_asking = usd(5_500_000.0);
+        let listing = SyntheticListingPrice::for_unsolicited(&seller_asking);
+        assert_eq!(
+            listing.amount, 5_500_000.0,
+            "synthetic asking must equal the seller's valuation, not a buyer-offer proxy"
+        );
+
+        // The old bug computed offer × 1.2 (≈408K against a 340K bid). Whatever
+        // the buyer bids, the synthetic asking is independent of it.
+        let buyer_lowball_x12 = 340_000.0 * 1.2;
+        assert!(
+            listing.amount > buyer_lowball_x12 * 5.0,
+            "synthetic asking {} must not track the buyer's budget-capped offer ({})",
+            listing.amount,
+            buyer_lowball_x12
         );
     }
 }

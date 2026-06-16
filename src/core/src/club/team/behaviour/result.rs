@@ -1,4 +1,5 @@
 use crate::club::player::ManagerPromiseKind;
+use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::interaction::{
     InteractionOutcome, InteractionTone, InteractionTopic, ManagerInteraction,
     default_cooldown_days,
@@ -28,7 +29,10 @@ pub struct TeamBehaviourResult {
 pub struct ContractTermination {
     pub player_id: u32,
     pub payout: u32,
-    pub reason: &'static str,
+    /// The specific club-driven exit this termination represents — drives
+    /// the player's recorded release reason and the free-agent sweep's
+    /// transfer-history line.
+    pub reason: FreeAgentReleaseReason,
 }
 
 impl Default for TeamBehaviourResult {
@@ -63,7 +67,7 @@ impl TeamBehaviourResult {
                 None => continue,
             };
             if let Some(player) = data.player_mut(termination.player_id) {
-                player.on_contract_terminated(date);
+                player.on_contract_terminated(date, termination.reason);
             }
             if termination.payout > 0 {
                 if let Some(club) = data.club_mut(club_id) {
@@ -83,7 +87,7 @@ impl TeamBehaviourResult {
                 termination.player_id,
                 club_id,
                 termination.payout,
-                termination.reason
+                termination.reason.history_reason()
             );
         }
     }

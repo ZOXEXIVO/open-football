@@ -375,6 +375,8 @@
   "dec_reason_asset_value_protection": "Verliehen zum Schutz des Wiederverkaufswerts",
   "dec_reason_released_failed_renewal": "Nach gescheiterten Verlängerungsgesprächen freigegeben",
   "dec_reason_released_free": "Vertrag einvernehmlich aufgelöst",
+  "dec_reason_released_surplus": "Als überzählig freigestellt",
+  "dec_reason_released_academy": "Nach Erreichen der Akademie-Altersgrenze freigestellt",
   "dec_reason_squad_oversized": "Kader überbesetzt, unterdurchschnittliche Leistung",
   "dec_reason_surplus_squad": "Im Kader überzählig",
   "dec_reason_surplus_tactical": "Taktisch überzählig",

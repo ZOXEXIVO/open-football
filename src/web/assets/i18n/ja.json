@@ -375,6 +375,8 @@
   "dec_reason_asset_value_protection": "資産価値を守るためレンタル移籍",
   "dec_reason_released_failed_renewal": "契約更新交渉決裂により解雇",
   "dec_reason_released_free": "合意による契約解除",
+  "dec_reason_released_surplus": "戦力外として放出",
+  "dec_reason_released_academy": "アカデミーの年齢上限を超えて放出",
   "dec_reason_squad_oversized": "チーム人数過多、平均以下の能力",
   "dec_reason_surplus_squad": "チーム構成上余剰",
   "dec_reason_surplus_tactical": "戦術的に不要",

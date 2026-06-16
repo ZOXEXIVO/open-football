@@ -10,8 +10,8 @@
 use super::free_agents::{EmergencySignedTerms, FreeAgentCandidate};
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::calculators::WageCalculator;
+use crate::club::player::transfer::MarketStage;
 use crate::transfers::pipeline::PipelineProcessor;
-use crate::transfers::squad_needs::EmergencyContractTermsPolicy;
 
 /// Inferred role the buyer is signing the player for. Drives wage
 /// asks, role-fit scoring, and acceptance. The matcher rarely knows
@@ -90,6 +90,7 @@ impl FreeAgentOfferPricing {
             candidate.last_salary,
             candidate.career_pressure,
             buyer_country_reputation,
+            MarketStage::from_days_free(candidate.days_free),
         );
         let offer_wage = FreeAgentMarketCalculator::offer_wage(
             market_wage,
@@ -107,11 +108,17 @@ impl FreeAgentOfferPricing {
     }
 
     /// Render the priced offer into the signed-terms shape execution
-    /// installs (wage + length + role promise).
+    /// installs (wage + length + role promise). Contract length is
+    /// stage-aware: a Fresh free agent who fits a real role lands a
+    /// multi-year deal, but a Desperate / LastChance signing is the
+    /// short, low-risk cover the design model calls for (6-month /
+    /// 1-year deals, never a 3-year commitment to a player a year out
+    /// of football).
     pub(super) fn signed_terms(&self, candidate: &FreeAgentCandidate) -> EmergencySignedTerms {
         EmergencySignedTerms {
             annual_wage: self.offer_wage,
-            contract_years: EmergencyContractTermsPolicy::contract_years(
+            contract_years: FreeAgentMarketCalculator::stage_contract_years(
+                MarketStage::from_days_free(candidate.days_free),
                 candidate.age,
                 candidate.ability,
             ),
@@ -243,18 +250,56 @@ impl FreeAgentMarketCalculator {
         by_country.max(2_000)
     }
 
+    /// Stage multiplier on the previous-salary anchor's weight. Career
+    /// pressure already decays the anchor continuously, but time on the
+    /// market matters in its own right: a player a year out of football
+    /// stops anchoring on what he used to earn regardless of how the
+    /// pressure formula happens to score him. The five bands implement
+    /// the design model's "previous-salary weight high → mostly
+    /// ignored" progression:
+    ///   - Fresh:      previous salary still anchors hard
+    ///   - Open:       medium
+    ///   - Flexible:   low
+    ///   - Desperate:  very low
+    ///   - LastChance: previous salary essentially ignored
+    pub fn previous_salary_stage_weight(stage: MarketStage) -> f32 {
+        match stage {
+            MarketStage::Fresh => 1.00,
+            MarketStage::Open => 0.78,
+            MarketStage::Flexible => 0.52,
+            MarketStage::Desperate => 0.30,
+            MarketStage::LastChance => 0.12,
+        }
+    }
+
     /// Wage the player would settle for at this buyer. Decays from
     /// previous salary toward the destination's market wage as career
-    /// pressure climbs.
+    /// pressure climbs *and* as the player moves through the market
+    /// stages — the stage weight ([`Self::previous_salary_stage_weight`])
+    /// pulls the previous-salary anchor down faster the longer he sits,
+    /// so months-free players stop holding out for their old wage even
+    /// when their raw pressure score is moderate.
     pub fn reservation_wage(
         market_wage: u32,
         last_salary: u32,
         career_pressure: f32,
         buyer_country_reputation: u16,
+        stage: MarketStage,
     ) -> u32 {
         let cp = career_pressure.clamp(0.0, 1.0);
-        let demand_multiplier = 1.20 - 0.55 * cp;
-        let previous_weight = (0.75 - 0.65 * cp).clamp(0.10, 0.75);
+        // Market-wage demand also eases through the stages so a
+        // LastChance player will sign near the local professional floor
+        // rather than holding the destination's full market rate.
+        let stage_demand_relief = match stage {
+            MarketStage::Fresh => 0.00,
+            MarketStage::Open => 0.04,
+            MarketStage::Flexible => 0.10,
+            MarketStage::Desperate => 0.18,
+            MarketStage::LastChance => 0.28,
+        };
+        let demand_multiplier = (1.20 - 0.55 * cp - stage_demand_relief).max(0.55);
+        let stage_weight = Self::previous_salary_stage_weight(stage);
+        let previous_weight = ((0.75 - 0.65 * cp) * stage_weight).clamp(0.05, 0.75);
 
         let previous_anchor = if last_salary > 0 {
             last_salary as f32
@@ -446,6 +491,96 @@ impl FreeAgentMarketCalculator {
             + 0.15 * wage_affordability.clamp(0.0, 1.0)
     }
 
+    /// Opportunistic fit score in [0,1] for a club signing a free agent
+    /// *without* an explicit transfer request — the "do we want this
+    /// cheap, available body?" judgement the soft market-clearing pass
+    /// makes. Weights mirror the design doc: squad-depth need 0.25,
+    /// wage affordability 0.20, locality 0.20, quality fit 0.15, career
+    /// pressure 0.10, professionalism 0.10. All inputs are pre-clamped
+    /// to [0,1] by the caller; we clamp again defensively.
+    pub fn opportunistic_fit_score(
+        position_depth_need: f32,
+        wage_affordability: f32,
+        locality: f32,
+        quality_fit: f32,
+        career_pressure: f32,
+        professionalism: f32,
+    ) -> f32 {
+        0.25 * position_depth_need.clamp(0.0, 1.0)
+            + 0.20 * wage_affordability.clamp(0.0, 1.0)
+            + 0.20 * locality.clamp(0.0, 1.0)
+            + 0.15 * quality_fit.clamp(0.0, 1.0)
+            + 0.10 * career_pressure.clamp(0.0, 1.0)
+            + 0.10 * professionalism.clamp(0.0, 1.0)
+    }
+
+    /// Threshold the opportunistic fit score must clear for a club to
+    /// sign a free agent off its own initiative. Loosens as the player
+    /// moves through the market stages — a Fresh player needs a strong
+    /// fit, a LastChance player is taken on a much weaker one.
+    pub fn opportunistic_fit_threshold(stage: MarketStage) -> f32 {
+        match stage {
+            MarketStage::Fresh | MarketStage::Open => 0.70,
+            MarketStage::Flexible => 0.60,
+            MarketStage::Desperate => 0.50,
+            MarketStage::LastChance => 0.42,
+        }
+    }
+
+    /// Short visibility boost for a recently-released player. Clubs in
+    /// the same country / region notice a fresh name on the market for
+    /// a while before he fades into the long tail. Additive ordering
+    /// bonus only — it never bypasses the acceptance / realism gates,
+    /// it just makes interested clubs look his way sooner.
+    pub fn recent_release_visibility_boost(days_free: i64) -> f32 {
+        if days_free <= 30 {
+            0.10
+        } else if days_free <= 90 {
+            0.05
+        } else {
+            0.00
+        }
+    }
+
+    /// Anti-RNG pity bonus (percentage points) added to the daily
+    /// signing chance for a player who has passed every structural gate
+    /// but kept losing the daily approach roll. Caps at 10 streak steps
+    /// (15 percentage points) so a structurally-signable player can't be
+    /// left waiting for months purely because the dice missed. The
+    /// streak resets the moment an offer actually lands.
+    pub fn pity_bonus(failed_approach_streak: u8) -> f32 {
+        (failed_approach_streak.min(10) as f32) * 1.5
+    }
+
+    /// Stage-aware contract length for a free-agent offer. A Fresh /
+    /// Open player signing into a real role lands a 2-3 year deal; a
+    /// Flexible player 1-2 years; a Desperate / LastChance player the
+    /// short trial-like 1-year (≈6-12 month) cover the design model
+    /// prescribes, so clubs can fill depth without long-term risk.
+    pub fn stage_contract_years(stage: MarketStage, age: u8, ability: u8) -> u8 {
+        let young_useful = age < 26 && ability >= 70;
+        let useful = ability >= 80;
+        match stage {
+            MarketStage::Fresh | MarketStage::Open => {
+                if young_useful {
+                    3
+                } else if useful {
+                    2
+                } else {
+                    1
+                }
+            }
+            MarketStage::Flexible => {
+                if young_useful {
+                    2
+                } else {
+                    1
+                }
+            }
+            MarketStage::Desperate | MarketStage::LastChance => 1,
+        }
+    }
+
     /// Daily signing chance percentage (clamped 0.5..35.0). Replaces the
     /// CA-band-only `TransferConfig::daily_signing_chance` for free
     /// agents because elite players still move quickly while weak
@@ -600,8 +735,15 @@ mod tests {
     fn reservation_wage_decays_with_pressure() {
         let market = 200_000u32;
         let last = 500_000u32;
-        let fresh = FreeAgentMarketCalculator::reservation_wage(market, last, 0.0, 5000);
-        let desperate = FreeAgentMarketCalculator::reservation_wage(market, last, 1.0, 5000);
+        let fresh =
+            FreeAgentMarketCalculator::reservation_wage(market, last, 0.0, 5000, MarketStage::Fresh);
+        let desperate = FreeAgentMarketCalculator::reservation_wage(
+            market,
+            last,
+            1.0,
+            5000,
+            MarketStage::Desperate,
+        );
         assert!(
             desperate < fresh,
             "fresh={fresh} desperate={desperate} — pressure should decay demand"
@@ -612,8 +754,154 @@ mod tests {
     fn reservation_wage_respects_country_floor() {
         let market = 1_000u32; // unrealistically low
         let last = 0u32;
-        let res = FreeAgentMarketCalculator::reservation_wage(market, last, 1.0, 6000);
+        let res = FreeAgentMarketCalculator::reservation_wage(
+            market,
+            last,
+            1.0,
+            6000,
+            MarketStage::LastChance,
+        );
         assert!(res >= FreeAgentMarketCalculator::minimum_professional_wage(6000));
+    }
+
+    #[test]
+    fn reservation_wage_drops_across_stages_at_equal_pressure() {
+        // Same high previous salary and the SAME career pressure: time
+        // on the market alone (the stage) must keep pulling the wage
+        // demand down. This is the lever that stops a months-free player
+        // from holding out for his old salary even when his pressure
+        // score plateaus.
+        let market = 150_000u32;
+        let last = 800_000u32;
+        let cp = 0.45;
+        let fresh =
+            FreeAgentMarketCalculator::reservation_wage(market, last, cp, 5000, MarketStage::Fresh);
+        let flexible = FreeAgentMarketCalculator::reservation_wage(
+            market,
+            last,
+            cp,
+            5000,
+            MarketStage::Flexible,
+        );
+        let last_chance = FreeAgentMarketCalculator::reservation_wage(
+            market,
+            last,
+            cp,
+            5000,
+            MarketStage::LastChance,
+        );
+        assert!(
+            fresh > flexible && flexible > last_chance,
+            "fresh={fresh} flexible={flexible} last_chance={last_chance} — \
+             later stages must lower demand at equal pressure"
+        );
+    }
+
+    #[test]
+    fn opportunistic_fit_threshold_loosens_with_stage() {
+        let fresh = FreeAgentMarketCalculator::opportunistic_fit_threshold(MarketStage::Fresh);
+        let desperate =
+            FreeAgentMarketCalculator::opportunistic_fit_threshold(MarketStage::Desperate);
+        let last_chance =
+            FreeAgentMarketCalculator::opportunistic_fit_threshold(MarketStage::LastChance);
+        assert!(fresh > desperate && desperate > last_chance);
+        assert!((last_chance - 0.42).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn opportunistic_fit_score_weights_sum_sensibly() {
+        // A perfect score on every axis is exactly 1.0.
+        let perfect = FreeAgentMarketCalculator::opportunistic_fit_score(1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+        assert!((perfect - 1.0).abs() < 1e-6, "perfect={perfect}");
+        // Depth need is the single biggest lever (0.25).
+        let depth_only =
+            FreeAgentMarketCalculator::opportunistic_fit_score(1.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        assert!((depth_only - 0.25).abs() < 1e-6, "depth_only={depth_only}");
+    }
+
+    #[test]
+    fn recent_release_visibility_boost_fades_with_days() {
+        assert!(
+            (FreeAgentMarketCalculator::recent_release_visibility_boost(10) - 0.10).abs() < 1e-6
+        );
+        assert!(
+            (FreeAgentMarketCalculator::recent_release_visibility_boost(60) - 0.05).abs() < 1e-6
+        );
+        assert!(
+            (FreeAgentMarketCalculator::recent_release_visibility_boost(200) - 0.0).abs() < 1e-6
+        );
+    }
+
+    #[test]
+    fn pity_bonus_accumulates_then_caps() {
+        assert!((FreeAgentMarketCalculator::pity_bonus(0) - 0.0).abs() < 1e-6);
+        assert!((FreeAgentMarketCalculator::pity_bonus(4) - 6.0).abs() < 1e-6);
+        // Caps at 10 streak steps → 15 points.
+        assert!((FreeAgentMarketCalculator::pity_bonus(50) - 15.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fresh_high_rep_rejects_big_drop_then_accepts_after_pressure_builds() {
+        // A big name (reference reputation 6000) just released. A buyer
+        // country 2000 points below his level (4000) is a real step-down.
+        // A strong CA-135 player carries a quality penalty in the gate —
+        // he resists drops harder — so this is the realistic mid-size gap
+        // that fresh rejects but a months-free version accepts, not an
+        // implausible 3000-point chasm he'd never cross.
+        let reference = 6000i32;
+        let buyer = 4000i32;
+        // Fresh (cp 0.05, prime age 27, strong CA 135): the rep gate
+        // blocks the step-down — he holds out for his level.
+        let fresh_drop = FreeAgentMarketCalculator::rep_drop_allowed(0.05, 27, 135);
+        assert!(
+            buyer + fresh_drop < reference,
+            "a fresh big name must reject a 2000-point reputation drop (drop={fresh_drop})"
+        );
+        // After months on the market (cp 0.85): the same move clears, so
+        // the player who refused early now accepts a wider range.
+        let desperate_drop = FreeAgentMarketCalculator::rep_drop_allowed(0.85, 28, 135);
+        assert!(
+            buyer + desperate_drop >= reference,
+            "after pressure builds the same step-down must clear (drop={desperate_drop})"
+        );
+    }
+
+    #[test]
+    fn daily_chance_rises_with_pity_bonus() {
+        // Same player, same pressure / CA: a long failed-approach streak
+        // must lift the daily signing chance (anti-RNG-starvation).
+        let no_streak = FreeAgentMarketCalculator::daily_signing_chance(
+            0.4,
+            80,
+            FreeAgentMarketCalculator::pity_bonus(0),
+        );
+        let long_streak = FreeAgentMarketCalculator::daily_signing_chance(
+            0.4,
+            80,
+            FreeAgentMarketCalculator::pity_bonus(8),
+        );
+        assert!(
+            long_streak > no_streak,
+            "pity streak must raise the daily chance (no_streak={no_streak}, long={long_streak})"
+        );
+    }
+
+    #[test]
+    fn stage_contract_years_shortens_for_desperate_players() {
+        // Fresh young useful player → long deal.
+        assert_eq!(
+            FreeAgentMarketCalculator::stage_contract_years(MarketStage::Fresh, 22, 110),
+            3
+        );
+        // Desperate / LastChance → short cover regardless of profile.
+        assert_eq!(
+            FreeAgentMarketCalculator::stage_contract_years(MarketStage::Desperate, 22, 110),
+            1
+        );
+        assert_eq!(
+            FreeAgentMarketCalculator::stage_contract_years(MarketStage::LastChance, 30, 95),
+            1
+        );
     }
 
     #[test]

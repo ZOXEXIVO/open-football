@@ -375,6 +375,8 @@
   "dec_reason_asset_value_protection": "Satış değerini korumak için kiralandı",
   "dec_reason_released_failed_renewal": "Sözleşme uzatma görüşmeleri başarısız olduktan sonra serbest bırakıldı",
   "dec_reason_released_free": "Karşılıklı anlaşmayla serbest bırakıldı",
+  "dec_reason_released_surplus": "Kadro fazlası olarak serbest bırakıldı",
+  "dec_reason_released_academy": "Akademi yaş sınırını aştığı için serbest bırakıldı",
   "dec_reason_squad_oversized": "Kadro çok büyük, ortalamanın altında yetenek",
   "dec_reason_surplus_squad": "Kadro ihtiyacına fazla",
   "dec_reason_surplus_tactical": "Taktik gereksinimlere fazla",

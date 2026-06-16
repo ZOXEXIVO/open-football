@@ -1,5 +1,7 @@
 use super::Club;
-use crate::club::player::calculators::{AutomaticReleaseEligibility, ReleaseEligibilityContext};
+use crate::club::player::calculators::{
+    AutomaticReleaseEligibility, FreeAgentReleaseReason, ReleaseEligibilityContext,
+};
 use crate::club::team::squad::SquadAssetContext;
 use crate::{
     ContractType, Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerStatusType,
@@ -603,10 +605,16 @@ impl Club {
                             if !player.statuses.get().contains(&PlayerStatusType::Frt) {
                                 player.statuses.add(date, PlayerStatusType::Frt);
                             }
+                            // Stamp the explicit exit so the free-agent
+                            // sweep records a "squad surplus" free release,
+                            // distinct from a negotiated mutual termination.
+                            player.set_release_reason(FreeAgentReleaseReason::SurplusFreeRelease);
                             player.decision_history.add(
                                 date,
                                 "dec_free_transfer_listed".to_string(),
-                                "dec_reason_released_free".to_string(),
+                                FreeAgentReleaseReason::SurplusFreeRelease
+                                    .history_reason()
+                                    .to_string(),
                                 "dec_decided_board".to_string(),
                             );
                         }
@@ -917,8 +925,13 @@ mod trim_surplus_tests {
                 .items
                 .iter()
                 .any(|d| d.movement == "dec_free_transfer_listed"
-                    && d.decision == "dec_reason_released_free"),
-            "release must be explained in decision history"
+                    && d.decision == "dec_reason_released_surplus"),
+            "release must be explained in decision history as a squad-surplus free release"
+        );
+        assert_eq!(
+            trimmed.release_reason(),
+            Some(FreeAgentReleaseReason::SurplusFreeRelease),
+            "trimmed surplus player must carry the explicit surplus release reason"
         );
     }
 

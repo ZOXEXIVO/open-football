@@ -13,7 +13,7 @@ use super::free_agent_market_calc::FreeAgentMarketCalculator;
 use super::types::can_club_accept_player;
 use crate::Person;
 use crate::Player;
-use crate::club::player::transfer::{FreeAgentBlockReason, MarketStage};
+use crate::club::player::transfer::{FreeAgentBlockReason, FreeAgentStatusCategory, MarketStage};
 use crate::simulator::SimulatorData;
 use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::scouting_region::ScoutingRegion;
@@ -48,6 +48,54 @@ pub struct FreeAgentMarketDiagnosis {
     /// Open transfer requests at eligible clubs matching the player's
     /// position group.
     pub matching_request_count: usize,
+}
+
+impl FreeAgentMarketDiagnosis {
+    /// Collapse the full world-scan picture into a single category — the
+    /// most authoritative structural answer first (data hole → nobody in
+    /// reputation range → nobody with room/quality fit → nobody
+    /// recruiting his position), then the funnel block reason refined by
+    /// offer history for the "clubs want him but terms/dice haven't
+    /// landed" cases. This is the richer counterpart to the cheap,
+    /// state-only `Player::market_explanation`.
+    pub fn category(&self) -> FreeAgentStatusCategory {
+        if matches!(
+            self.last_block_reason,
+            Some(FreeAgentBlockReason::UnknownNationality)
+        ) {
+            return FreeAgentStatusCategory::DataUnknown;
+        }
+        if self.eligible_country_count == 0 {
+            // No country clears his rep / region gate — he's pricing
+            // himself at a level no reachable league can match.
+            return FreeAgentStatusCategory::ReputationWait;
+        }
+        if self.eligible_club_count == 0 {
+            // Countries in range exist, but every club is at capacity or
+            // outside his quality band.
+            return FreeAgentStatusCategory::LowInterest;
+        }
+        if self.matching_request_count == 0 {
+            return FreeAgentStatusCategory::NoPositionNeed;
+        }
+        // Clubs are recruiting his position — so it's a terms / timing
+        // matter. A history of offers means he's turning them down;
+        // otherwise interest is building toward a deal.
+        let from_reason = FreeAgentStatusCategory::from_block_reason(self.last_block_reason);
+        if matches!(from_reason, FreeAgentStatusCategory::WageTooHigh) {
+            return from_reason;
+        }
+        if self.offers_rejected_total >= 1 || self.offers_received_30d >= 1 {
+            return FreeAgentStatusCategory::OffersRefused;
+        }
+        FreeAgentStatusCategory::InterestBuilding
+    }
+
+    /// Human-readable, world-scan-aware explanation of why the player is
+    /// still unsigned. See [`Self::category`].
+    pub fn explanation(&self) -> String {
+        self.category().default_message().to_string()
+    }
 }
 
 /// Read-only auditor over `SimulatorData`. Unit struct per the project
@@ -97,7 +145,7 @@ impl FreeAgentMarketAuditor {
             debug!(
                 "long-term free agent: {} (id {}) — {} days free, stage {:?}, cp {:.2}, \
                  CA {}, age {}, ref-rep {}, last salary {}, offers30d {}, rejected {}, \
-                 reason {}, eligible: {} countries / {} clubs / {} matching requests",
+                 reason {}, eligible: {} countries / {} clubs / {} matching requests — {}",
                 d.player_name,
                 d.player_id,
                 d.days_free,
@@ -113,6 +161,7 @@ impl FreeAgentMarketAuditor {
                 d.eligible_country_count,
                 d.eligible_club_count,
                 d.matching_request_count,
+                d.explanation(),
             );
         }
     }
@@ -464,5 +513,29 @@ mod tests {
             "the open midfielder request must be visible to the diagnosis"
         );
         assert_eq!(diag.last_block_reason, None);
+
+        // #8: the diagnosis must turn the raw world-scan into a readable
+        // answer. A club is recruiting his position and the gates pass —
+        // so the story is "interest is building toward a deal", never a
+        // silent unexplained sit.
+        assert_eq!(diag.category(), FreeAgentStatusCategory::InterestBuilding);
+        assert!(
+            !diag.explanation().is_empty(),
+            "diagnosis must produce a non-empty human explanation"
+        );
+    }
+
+    #[test]
+    fn unknown_nationality_diagnosis_explains_the_data_hole() {
+        // #8 + #9: the unknown-nationality data hole must be named in the
+        // human explanation, not surface as a mysterious endless sit.
+        let today = AuditFixtures::d(2026, 6, 13);
+        let player = AuditFixtures::pool_player(703, 99_999, today);
+        let mut data = AuditFixtures::simulator(today, Vec::new(), vec![player]);
+        snapshot_global_free_agents(&mut data, today);
+
+        let diag = FreeAgentMarketAuditor::diagnose(&data, 703, today).unwrap();
+        assert_eq!(diag.category(), FreeAgentStatusCategory::DataUnknown);
+        assert!(!diag.explanation().is_empty());
     }
 }

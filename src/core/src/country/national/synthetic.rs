@@ -286,6 +286,7 @@ impl NationalTeam {
             // Synthetic seniors (age 22-34) are established pros, not debutants.
             made_senior_debut: true,
             awards_count: Default::default(),
+            release_reason: None,
         }
     }
 }

@@ -2,6 +2,7 @@ use crate::PlayerSquadStatus;
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::builder::PlayerBuilder;
+use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::development::CoachingEffect;
 use crate::club::player::happiness::{
     ClubMoraleContext, PlayingTimeFrustrationConfig, TeamSeasonState,
@@ -258,6 +259,15 @@ pub struct Player {
     /// phantom debut on their first simulated match. Read/written only by
     /// `record_senior_debut`; initialised at construction.
     pub(crate) made_senior_debut: bool,
+
+    /// Why this player's contract was cleared by a club-driven exit, set
+    /// the moment the contract is torn up / walked / released. The daily
+    /// free-agent sweep reads it to stamp a faithful transfer-history
+    /// reason instead of inferring every cleared-contract exit as a mutual
+    /// agreement. Consumed (cleared) by `reset_on_club_change` once the
+    /// player has actually left for the pool. `None` for a natural expiry.
+    /// Read via [`Player::release_reason`]; set via [`Player::set_release_reason`].
+    pub(crate) release_reason: Option<FreeAgentReleaseReason>,
 }
 
 /// Why a player has an active transfer request. The set is bounded so
@@ -526,6 +536,23 @@ impl Player {
     }
     pub fn is_generated(&self) -> bool {
         self.generated
+    }
+
+    /// Why this player's contract was cleared by a club-driven exit, if an
+    /// exit path recorded one. `None` for a player still under contract or
+    /// one whose deal lapsed naturally. The free-agent sweep reads this to
+    /// choose the transfer-history reason.
+    pub fn release_reason(&self) -> Option<FreeAgentReleaseReason> {
+        self.release_reason
+    }
+
+    /// Record why this player's contract was cleared. Called by every
+    /// club-driven exit path (head-coach termination, surplus trim,
+    /// failed-renewal release, academy age-out) at the moment the contract
+    /// is removed, so the sweep can stamp the matching reason. Cleared by
+    /// `reset_on_club_change` once the player has left for the pool.
+    pub fn set_release_reason(&mut self, reason: FreeAgentReleaseReason) {
+        self.release_reason = Some(reason);
     }
 
     /// Canonical URL segment for this player: `{id}-{ascii-folded-name}`.

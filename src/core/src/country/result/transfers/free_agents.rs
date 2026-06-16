@@ -10,7 +10,7 @@ use super::free_agent_market_calc::{
 use super::types::{TransferActivitySummary, can_club_accept_player, find_player_in_country};
 use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
 use crate::club::player::mailbox::handlers::contract_proposal::ProcessContractHandler;
-use crate::club::player::transfer::FreeAgentBlockReason;
+use crate::club::player::transfer::{FreeAgentBlockReason, MarketStage};
 use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::country::result::CountryResult;
@@ -81,6 +81,14 @@ pub struct GlobalFreeAgentSummary {
     pub last_league_reputation: u16,
     pub world_reputation: i16,
     pub current_reputation: i16,
+    /// Professionalism normalised to [0,1] (raw attribute / 20). Feeds
+    /// the soft-clearing opportunistic fit score — professional players
+    /// settle for sensible squad-role deals.
+    pub professionalism_norm: f32,
+    /// Anti-RNG pity streak carried from the player's market state, so
+    /// the matcher can lift a structurally-signable player's daily
+    /// chance without re-reading the pool inside the country borrow.
+    pub failed_approach_streak: u8,
 }
 
 /// A free-agent signing decided by `handle_free_agents` for a player who
@@ -196,6 +204,13 @@ pub(super) struct FreeAgentCandidate {
     pub last_league_reputation: u16,
     pub world_reputation: i16,
     pub current_reputation: i16,
+    /// Professionalism normalised to [0,1] (raw attribute / 20). Feeds
+    /// the soft-clearing opportunistic fit score.
+    pub professionalism_norm: f32,
+    /// Anti-RNG pity streak carried from the player's market state
+    /// (0 for in-country expiring contracts — they aren't on the
+    /// market yet).
+    pub failed_approach_streak: u8,
     /// True when the candidate sits in `data.free_agents` — the
     /// global pool. The country borrow can't mutate them, so
     /// any state updates land in `global_*_ids` and are applied
@@ -337,6 +352,11 @@ impl CountryResult {
                             last_league_reputation: country.reputation,
                             world_reputation: player.player_attributes.world_reputation,
                             current_reputation: player.player_attributes.current_reputation,
+                            professionalism_norm: (player.attributes.professionalism / 20.0)
+                                .clamp(0.0, 1.0),
+                            // Expiring-contract candidates aren't on the
+                            // open market yet — no accumulated pity.
+                            failed_approach_streak: 0,
                             is_global_pool: false,
                         });
                     }
@@ -386,6 +406,8 @@ impl CountryResult {
                 last_league_reputation: fa.last_league_reputation,
                 world_reputation: fa.world_reputation,
                 current_reputation: fa.current_reputation,
+                professionalism_norm: fa.professionalism_norm,
+                failed_approach_streak: fa.failed_approach_streak,
                 is_global_pool: true,
             });
         }
@@ -648,10 +670,15 @@ impl CountryResult {
                     attempts += 1;
 
                     let daily_chance = if best.is_global_pool {
+                        // Pity bonus lifts the daily chance for a
+                        // structurally-signable player who keeps losing
+                        // the approach roll, so a real squad need isn't
+                        // left unfilled for months purely on dice.
                         FreeAgentMarketCalculator::daily_signing_chance(
                             best.career_pressure,
                             best.ability,
-                            urgency_bonus,
+                            urgency_bonus
+                                + FreeAgentMarketCalculator::pity_bonus(best.failed_approach_streak),
                         )
                     } else {
                         // In-country expiring-contract candidates keep the
@@ -1504,21 +1531,26 @@ impl CountryResult {
         depth_intents
     }
 
-    /// Long-term market-clearing pass. Free agents past the pressure /
-    /// days-free thresholds stop waiting for an explicit transfer
-    /// request: each one (most desperate first) is matched against the
-    /// lowest-tier club with open roster room whose quality band fits,
-    /// and offered a short Backup/Emergency squad-role deal through the
-    /// same wage chain and acceptance model as every other entry point.
+    /// Market-clearing pass. Free agents past the pressure / days-free
+    /// thresholds stop waiting for an explicit transfer request: each one
+    /// (most desperate first) is matched against the lowest-tier club
+    /// with open roster room whose quality band fits, and offered a short
+    /// Backup/Emergency squad-role deal through the same wage chain and
+    /// acceptance model as every other entry point.
     ///
-    /// Hard realism gates stay on; `MarketStage::LastChance` players
-    /// (a year or more on the market) get a wider allowance: rep drop
-    /// +600, region drop +0.10, cross-continent pressure floor 0.75
-    /// instead of 0.85.
+    /// Two tiers run back to back over a single shared buyer set:
+    ///   - **Soft** (≈3 months / 0.45 pressure): restricted to DOMESTIC /
+    ///     same-continent candidates and gated by the opportunistic
+    ///     squad-fit score, so most normal free agents resolve early
+    ///     through a realistic local fit rather than waiting a full year.
+    ///   - **Hard** (≈1 year / 0.75 pressure): the broad long-tail
+    ///     backstop with the wider region / reputation tolerance.
     ///
-    /// The per-day cap keeps clearing gradual and the daily approach
-    /// roll keeps it organic — a player crossing the threshold isn't
-    /// deterministically swept the same day.
+    /// Hard realism gates stay on in both tiers; `MarketStage::LastChance`
+    /// players (a year or more on the market) get a wider allowance: rep
+    /// drop +600, region drop +0.10, cross-continent pressure floor 0.75
+    /// instead of 0.85. Per-day caps (soft 1, hard 2) keep clearing
+    /// gradual and the daily approach roll keeps it organic.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn handle_free_agents_market_clearing_pass(
         country: &Country,
@@ -1530,62 +1562,96 @@ impl CountryResult {
         global_rejected_ids: &mut Vec<u32>,
         recorder: &mut BlockReasonRecorder,
     ) {
-        let cap = config.market_clearing_max_signings_per_country_per_day;
-        if cap == 0 {
-            return;
-        }
-
-        // Buyer rows: every club with roster room, lowest tier first —
-        // the realistic landing spot for a long-unemployed journeyman
-        // is the small club that can use a cheap body, not the
-        // strongest club that happens to have space.
-        let mut buyers: Vec<MarketClearingBuyer> = country
-            .clubs
-            .iter()
-            .filter(|club| !club.teams.teams.is_empty() && can_club_accept_player(club))
-            .map(|club| {
-                let main_team = club.teams.main().or_else(|| club.teams.teams.first());
-                let club_score = main_team
-                    .map(|t| (t.reputation.world as f32 / 10_000.0).clamp(0.0, 1.0))
-                    .unwrap_or(0.0);
-                let league_reputation = main_team
-                    .and_then(|t| t.league_id)
-                    .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                    .map(|l| l.reputation)
-                    .unwrap_or(0);
-                let negotiator_skill = main_team
-                    .and_then(|t| t.staffs.find_negotiator())
-                    .map(|s| (s.staff_attributes.mental.man_management as u32 * 5).min(100) as u8)
-                    .unwrap_or(50);
-                MarketClearingBuyer {
-                    club_id: club.id,
-                    club_score,
-                    league_reputation,
-                    negotiator_skill,
-                }
-            })
-            .collect();
+        // Build the open-capacity buyer set once (lowest tier first) and
+        // share it across both clearing tiers.
+        let buyers = MarketClearingBuyer::rows_for_country(country);
         if buyers.is_empty() {
             return;
         }
-        buyers.sort_by(|a, b| {
-            a.club_score
-                .partial_cmp(&b.club_score)
-                .unwrap_or(Ordering::Equal)
-        });
 
+        // Soft tier first: early, domestic / same-continent only, gated
+        // by the opportunistic fit score — the "a local club takes a punt
+        // on a useful free body" outcome that resolves most normal free
+        // agents well before the hard backstop.
+        Self::run_market_clearing_tier(
+            country,
+            candidates,
+            &buyers,
+            MarketClearingTier {
+                min_pressure: config.soft_market_clearing_min_pressure,
+                min_days_free: config.soft_market_clearing_min_days_free,
+                cap: config.soft_market_clearing_max_signings_per_country_per_day,
+                locality_restricted: true,
+                opportunistic_gate: true,
+            },
+            staged_ids,
+            signings,
+            global_offered_ids,
+            global_rejected_ids,
+            recorder,
+        );
+
+        // Hard tier: the long-tail backstop with broad tolerance, for
+        // players the soft tier's locality restriction never reached.
+        Self::run_market_clearing_tier(
+            country,
+            candidates,
+            &buyers,
+            MarketClearingTier {
+                min_pressure: config.hard_market_clearing_min_pressure,
+                min_days_free: config.hard_market_clearing_min_days_free,
+                cap: config.market_clearing_max_signings_per_country_per_day,
+                locality_restricted: false,
+                opportunistic_gate: false,
+            },
+            staged_ids,
+            signings,
+            global_offered_ids,
+            global_rejected_ids,
+            recorder,
+        );
+    }
+
+    /// Run one market-clearing tier over the long-tail pool. Soft and
+    /// hard tiers share this body; [`MarketClearingTier`] sets the
+    /// eligibility thresholds, the per-day cap, whether candidates are
+    /// restricted to the buyer country's domestic / continental market,
+    /// and whether the opportunistic squad-fit gate fires before an
+    /// offer is made.
+    #[allow(clippy::too_many_arguments)]
+    fn run_market_clearing_tier(
+        country: &Country,
+        candidates: &[FreeAgentCandidate],
+        buyers: &[MarketClearingBuyer],
+        tier: MarketClearingTier,
+        staged_ids: &HashSet<u32>,
+        signings: &mut Vec<FreeAgentSigning>,
+        global_offered_ids: &mut Vec<u32>,
+        global_rejected_ids: &mut Vec<u32>,
+        recorder: &mut BlockReasonRecorder,
+    ) {
+        if tier.cap == 0 {
+            return;
+        }
         let buyer_country_reputation = country.reputation;
         let buyer_continent_id = country.continent_id;
+        let buyer_country_code = country.code.as_str();
         let buyer_region_prestige =
             ScoutingRegion::from_country(country.continent_id, &country.code).league_prestige();
 
-        // Long-tail candidates, most desperate first.
+        // Long-tail candidates eligible for this tier, most desperate
+        // first. The soft tier additionally restricts to domestic /
+        // same-continent nationalities — its whole purpose is the local
+        // market outlet; a cross-continent punt is the hard tier's job.
         let mut eligible: Vec<&FreeAgentCandidate> = candidates
             .iter()
             .filter(|c| c.is_global_pool)
+            .filter(|c| c.career_pressure >= tier.min_pressure || c.days_free >= tier.min_days_free)
             .filter(|c| {
-                c.career_pressure >= config.market_clearing_min_pressure
-                    || c.days_free >= config.market_clearing_min_days_free
+                !tier.locality_restricted
+                    || c.nationality_country_code
+                        .eq_ignore_ascii_case(buyer_country_code)
+                    || c.nationality_continent_id == buyer_continent_id
             })
             .filter(|c| !signings.iter().any(|s| s.player_id == c.player_id))
             .filter(|c| !staged_ids.contains(&c.player_id))
@@ -1599,23 +1665,26 @@ impl CountryResult {
 
         let mut cleared = 0usize;
         for candidate in eligible {
-            if cleared >= cap {
+            if cleared >= tier.cap {
                 break;
             }
 
-            // Organic pacing — the long-tail player fields an approach
-            // every few days rather than being swept immediately.
+            // Organic pacing, lifted by the anti-RNG pity bonus so a
+            // structurally-signable long-tail player isn't left waiting
+            // on dice alone.
             let daily = FreeAgentMarketCalculator::daily_signing_chance(
                 candidate.career_pressure,
                 candidate.ability,
-                4.0,
+                4.0 + FreeAgentMarketCalculator::pity_bonus(candidate.failed_approach_streak),
             );
             let roll = IntegerUtils::random(1, 1000) as f32 / 10.0;
             if roll > daily {
                 continue;
             }
 
-            let last_chance = candidate.days_free >= config.market_clearing_min_days_free;
+            // A year-plus on the market unlocks the widest allowance,
+            // independent of which tier is running.
+            let last_chance = candidate.days_free >= 365;
 
             // Country-level realism gates, widened for LastChance.
             let rep_drop = FreeAgentMarketCalculator::rep_drop_allowed(
@@ -1623,12 +1692,8 @@ impl CountryResult {
                 candidate.age,
                 candidate.ability,
             ) + if last_chance { 600 } else { 0 };
-            if (buyer_country_reputation as i32 + rep_drop) < candidate.reference_reputation as i32
-            {
-                recorder.record(
-                    candidate.player_id,
-                    FreeAgentBlockReason::CountryReputationGap,
-                );
+            if (buyer_country_reputation as i32 + rep_drop) < candidate.reference_reputation as i32 {
+                recorder.record(candidate.player_id, FreeAgentBlockReason::CountryReputationGap);
                 continue;
             }
             let cross_floor = if last_chance { 0.75 } else { 0.85 };
@@ -1648,8 +1713,7 @@ impl CountryResult {
             let region_drop =
                 FreeAgentMarketCalculator::region_drop_allowed(candidate.career_pressure)
                     + if last_chance { 0.10 } else { 0.0 };
-            if candidate.nationality_region.league_prestige() > buyer_region_prestige + region_drop
-            {
+            if candidate.nationality_region.league_prestige() > buyer_region_prestige + region_drop {
                 recorder.record(candidate.player_id, FreeAgentBlockReason::RegionPrestigeGap);
                 continue;
             }
@@ -1657,7 +1721,7 @@ impl CountryResult {
             // First (lowest-tier) buyer whose quality band fits.
             let mut too_good_everywhere = true;
             let mut chosen: Option<(&MarketClearingBuyer, u8, u8)> = None;
-            for buyer in &buyers {
+            for buyer in buyers {
                 let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
                     buyer.club_score,
                     candidate.position_group,
@@ -1713,6 +1777,41 @@ impl CountryResult {
 
             let wage_fit =
                 FreeAgentMarketCalculator::wage_score(pricing.offer_wage, pricing.reservation_wage);
+            let quality_fit =
+                FreeAgentMarketCalculator::quality_fit_score(candidate.ability, min_ca, max_ca);
+
+            // Soft tier only: opportunistic squad-fit gate. A club takes
+            // a punt on a free body only when the overall fit — depth
+            // need, affordability, locality, quality, pressure,
+            // professionalism — clears the stage-scaled threshold. This
+            // is what makes the early domestic layer a *selective*
+            // outlet rather than an indiscriminate sweep.
+            if tier.opportunistic_gate {
+                let stage = MarketStage::from_days_free(candidate.days_free);
+                let locality = if candidate
+                    .nationality_country_code
+                    .eq_ignore_ascii_case(buyer_country_code)
+                {
+                    1.0
+                } else if candidate.nationality_continent_id == buyer_continent_id {
+                    0.6
+                } else {
+                    0.25
+                };
+                let fit = FreeAgentMarketCalculator::opportunistic_fit_score(
+                    buyer.position_depth_need(candidate.position_group),
+                    wage_fit,
+                    locality,
+                    quality_fit,
+                    candidate.career_pressure,
+                    candidate.professionalism_norm,
+                );
+                if fit < FreeAgentMarketCalculator::opportunistic_fit_threshold(stage) {
+                    recorder.record(candidate.player_id, FreeAgentBlockReason::NoMatchingRequest);
+                    continue;
+                }
+            }
+
             let score = FreeAgentMarketCalculator::acceptance_score(
                 wage_fit,
                 FreeAgentMarketCalculator::role_score(pricing.role),
@@ -1721,7 +1820,7 @@ impl CountryResult {
                     candidate.reference_reputation,
                     rep_drop,
                 ),
-                FreeAgentMarketCalculator::quality_fit_score(candidate.ability, min_ca, max_ca),
+                quality_fit,
                 candidate.career_pressure,
             );
             let threshold =
@@ -1756,11 +1855,33 @@ impl CountryResult {
             });
             cleared += 1;
             debug!(
-                "Market clearing: club {} signs long-term free agent {} (cp={:.2}, days_free={})",
-                buyer.club_id, candidate.player_id, candidate.career_pressure, candidate.days_free
+                "Market clearing ({} tier): club {} signs long-term free agent {} (cp={:.2}, days_free={})",
+                if tier.opportunistic_gate { "soft" } else { "hard" },
+                buyer.club_id,
+                candidate.player_id,
+                candidate.career_pressure,
+                candidate.days_free
             );
         }
     }
+}
+
+/// Parameters for one market-clearing tier ([`CountryResult::run_market_clearing_tier`]).
+/// The soft tier (early, local, opportunistic) and the hard tier
+/// (long-tail, broad) differ only in these knobs.
+struct MarketClearingTier {
+    /// Career-pressure floor for tier eligibility.
+    min_pressure: f32,
+    /// Days-free floor for tier eligibility (either criterion qualifies).
+    min_days_free: i64,
+    /// Per-country per-day signing cap for this tier.
+    cap: usize,
+    /// Soft tier: restrict candidates to the buyer country's domestic /
+    /// same-continent market.
+    locality_restricted: bool,
+    /// Soft tier: require the opportunistic squad-fit score to clear the
+    /// stage threshold before an offer is made.
+    opportunistic_gate: bool,
 }
 
 /// Picks the next emergency slot from the running projected squad.
@@ -2440,14 +2561,25 @@ impl RequestCandidateOrdering {
         );
         let wage_affordability =
             FreeAgentMarketCalculator::wage_score(pricing.offer_wage, pricing.reservation_wage);
-        FreeAgentMarketCalculator::candidate_priority_score(
+        let base = FreeAgentMarketCalculator::candidate_priority_score(
             quality_fit,
             domestic,
             same_continent,
             rep_mismatch,
             candidate.career_pressure,
             wage_affordability,
-        )
+        );
+        // Recently-released players get a short ordering bump so clubs
+        // notice a fresh name before he fades into the long tail. Pool
+        // players only — an in-country expiring contract (days_free 0)
+        // isn't a "newly released into the market" signal. Ordering
+        // only; it never relaxes the acceptance / realism gates.
+        let visibility = if candidate.is_global_pool {
+            FreeAgentMarketCalculator::recent_release_visibility_boost(candidate.days_free)
+        } else {
+            0.0
+        };
+        base + visibility
     }
 
     /// Descending on priority; raw quality as the tiebreak so equal-
@@ -2496,12 +2628,97 @@ impl BlockReasonRecorder {
 
 /// One open-capacity buyer row for the market-clearing pass. Cached
 /// per club so the per-candidate buyer scan is field reads, not
-/// repeated league / staff lookups.
+/// repeated league / staff lookups. Group head-counts let the soft
+/// (opportunistic) tier weigh how badly the club needs the candidate's
+/// position before taking a punt on a free body.
 struct MarketClearingBuyer {
     club_id: u32,
     club_score: f32,
     league_reputation: u16,
     negotiator_skill: u8,
+    gk: u8,
+    def: u8,
+    mid: u8,
+    fwd: u8,
+}
+
+impl MarketClearingBuyer {
+    /// Build the buyer rows for every club in `country` with open
+    /// roster room, sorted lowest-tier first — the realistic landing
+    /// spot for a long-unemployed journeyman is the small club that can
+    /// use a cheap body, not the strongest club that happens to have
+    /// space.
+    fn rows_for_country(country: &Country) -> Vec<MarketClearingBuyer> {
+        let mut buyers: Vec<MarketClearingBuyer> = country
+            .clubs
+            .iter()
+            .filter(|club| !club.teams.teams.is_empty() && can_club_accept_player(club))
+            .map(|club| {
+                let main_team = club.teams.main().or_else(|| club.teams.teams.first());
+                let club_score = main_team
+                    .map(|t| (t.reputation.world as f32 / 10_000.0).clamp(0.0, 1.0))
+                    .unwrap_or(0.0);
+                let league_reputation = main_team
+                    .and_then(|t| t.league_id)
+                    .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                    .map(|l| l.reputation)
+                    .unwrap_or(0);
+                let negotiator_skill = main_team
+                    .and_then(|t| t.staffs.find_negotiator())
+                    .map(|s| (s.staff_attributes.mental.man_management as u32 * 5).min(100) as u8)
+                    .unwrap_or(50);
+                let (mut gk, mut def, mut mid, mut fwd) = (0u8, 0u8, 0u8, 0u8);
+                if let Some(team) = main_team {
+                    for player in &team.players.players {
+                        match player.position().position_group() {
+                            PlayerFieldPositionGroup::Goalkeeper => gk = gk.saturating_add(1),
+                            PlayerFieldPositionGroup::Defender => def = def.saturating_add(1),
+                            PlayerFieldPositionGroup::Midfielder => mid = mid.saturating_add(1),
+                            PlayerFieldPositionGroup::Forward => fwd = fwd.saturating_add(1),
+                        }
+                    }
+                }
+                MarketClearingBuyer {
+                    club_id: club.id,
+                    club_score,
+                    league_reputation,
+                    negotiator_skill,
+                    gk,
+                    def,
+                    mid,
+                    fwd,
+                }
+            })
+            .collect();
+        buyers.sort_by(|a, b| {
+            a.club_score
+                .partial_cmp(&b.club_score)
+                .unwrap_or(Ordering::Equal)
+        });
+        buyers
+    }
+
+    /// Current head-count in `group` for this buyer.
+    fn group_count(&self, group: PlayerFieldPositionGroup) -> u8 {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => self.gk,
+            PlayerFieldPositionGroup::Defender => self.def,
+            PlayerFieldPositionGroup::Midfielder => self.mid,
+            PlayerFieldPositionGroup::Forward => self.fwd,
+        }
+    }
+
+    /// How badly the buyer needs another body in `group`, in [0,1].
+    /// Thin groups (a club with one keeper) score high; well-stocked
+    /// ones score low. Feeds the opportunistic fit score's depth term.
+    fn position_depth_need(&self, group: PlayerFieldPositionGroup) -> f32 {
+        match self.group_count(group) {
+            0 | 1 => 1.0,
+            2 => 0.6,
+            3 => 0.35,
+            _ => 0.15,
+        }
+    }
 }
 
 /// Build a snapshot of `sim.free_agents` so per-country handlers can match
@@ -2595,6 +2812,10 @@ pub(crate) fn snapshot_global_free_agents(
                     ((nationality_rep as f32) * 0.75) as u16,
                     0,
                 ));
+            let failed_approach_streak = player
+                .free_agent_state()
+                .map(|s| s.failed_approach_streak)
+                .unwrap_or(0);
 
             GlobalFreeAgentSummary {
                 player_id: player.id,
@@ -2616,6 +2837,8 @@ pub(crate) fn snapshot_global_free_agents(
                 last_league_reputation,
                 world_reputation: player.player_attributes.world_reputation,
                 current_reputation: player.player_attributes.current_reputation,
+                professionalism_norm: (player.attributes.professionalism / 20.0).clamp(0.0, 1.0),
+                failed_approach_streak,
             }
         })
         .collect()
@@ -2951,6 +3174,8 @@ mod emergency_fill_tests {
                 last_league_reputation: 4500,
                 world_reputation: 1500,
                 current_reputation: 1500,
+                professionalism_norm: 0.5,
+                failed_approach_streak: 0,
                 is_global_pool: true,
             }
         }
@@ -3995,6 +4220,8 @@ mod emergency_fill_tests {
                 last_league_reputation: ((nationality_country_reputation as f32) * 0.85) as u16,
                 world_reputation: 1200,
                 current_reputation: 1200,
+                professionalism_norm: 0.5,
+                failed_approach_streak: 0,
                 is_global_pool: true,
             }
         }
@@ -4444,6 +4671,8 @@ mod emergency_fill_tests {
                 last_league_reputation: ((reference_reputation as f32) * 0.85) as u16,
                 world_reputation: 1500,
                 current_reputation: 1500,
+                professionalism_norm: 0.5,
+                failed_approach_streak: 0,
             }
         }
 
@@ -5120,6 +5349,41 @@ mod emergency_fill_tests {
             );
             signings
         }
+
+        /// Buyer country with one club deliberately thin in defenders (a
+        /// single CB) and NO transfer plan / open requests. The high
+        /// position-depth need makes the soft tier's opportunistic fit
+        /// gate reliably pass for a domestic defender, so the soft-tier
+        /// tests exercise the early domestic clearing layer rather than
+        /// the hard backstop.
+        fn country_thin_in_defenders() -> Country {
+            let mut players: Vec<Player> = Vec::new();
+            for i in 0..2 {
+                players.push(EmergencyFillFixtures::player(
+                    i,
+                    PlayerPositionType::Goalkeeper,
+                ));
+            }
+            players.push(EmergencyFillFixtures::player(
+                10,
+                PlayerPositionType::DefenderCenter,
+            ));
+            for i in 0..7 {
+                players.push(EmergencyFillFixtures::player(
+                    20 + i,
+                    PlayerPositionType::MidfielderCenter,
+                ));
+            }
+            for i in 0..4 {
+                players.push(EmergencyFillFixtures::player(
+                    30 + i,
+                    PlayerPositionType::Striker,
+                ));
+            }
+            let main = EmergencyFillFixtures::team(10, "FC", "fc", players);
+            let club = EmergencyFillFixtures::club(100, "FC", main);
+            EmergencyFillFixtures::country(vec![club])
+        }
     }
 
     #[test]
@@ -5246,8 +5510,10 @@ mod emergency_fill_tests {
 
     #[test]
     fn market_clearing_skips_players_below_both_thresholds() {
-        // cp 0.5 and 100 days free: under both eligibility floors —
-        // the pass must never touch them, no matter how many ticks.
+        // cp 0.3 and 60 days free: under BOTH soft (0.45 / 90d) and hard
+        // (0.75 / 365d) eligibility floors — the pass must never touch
+        // them, no matter how many ticks. (A 100-day / 0.5-cp player is
+        // now deliberately soft-eligible — see the soft-clearing tests.)
         let main =
             EmergencyFillFixtures::team(10, "FC", "fc", DepthPipelineFixtures::balanced_squad());
         let club = EmergencyFillFixtures::club(100, "FC", main);
@@ -5262,12 +5528,12 @@ mod emergency_fill_tests {
                 PlayerFieldPositionGroup::Defender,
                 true,
             );
-            c.career_pressure = 0.5;
-            c.days_free = 100;
+            c.career_pressure = 0.3;
+            c.days_free = 60;
             let signings = MarketClearingFixtures::run_clearing(&country, &[c], &config);
             assert!(
                 signings.is_empty(),
-                "short-sit low-pressure players are not market-clearing eligible"
+                "players below both soft and hard floors are not market-clearing eligible"
             );
         }
     }
@@ -5275,13 +5541,19 @@ mod emergency_fill_tests {
     #[test]
     fn market_clearing_per_day_cap_prevents_mass_pool_draining() {
         // Thirty fully-desperate candidates against one open club:
-        // every tick must stay at or under the per-country clearing
-        // cap, even though far more would pass the gates.
+        // every tick must stay at or under the COMBINED per-country
+        // clearing cap (soft + hard), even though far more would pass
+        // the gates. This is the realism backstop against draining the
+        // pool in a single week.
         let main =
             EmergencyFillFixtures::team(10, "FC", "fc", DepthPipelineFixtures::balanced_squad());
         let club = EmergencyFillFixtures::club(100, "FC", main);
         let country = EmergencyFillFixtures::country(vec![club]);
         let config = TransferConfig::default();
+        // Both tiers can fire in one tick for a fully-desperate domestic
+        // cohort (soft 1 + hard 2 = 3).
+        let combined_cap = config.soft_market_clearing_max_signings_per_country_per_day
+            + config.market_clearing_max_signings_per_country_per_day;
 
         let mut any_signed = false;
         for _ in 0..100 {
@@ -5294,8 +5566,9 @@ mod emergency_fill_tests {
                 .collect();
             let signings = MarketClearingFixtures::run_clearing(&country, &candidates, &config);
             assert!(
-                signings.len() <= config.market_clearing_max_signings_per_country_per_day,
-                "clearing must respect the per-day cap, got {} signings",
+                signings.len() <= combined_cap,
+                "clearing must respect the combined soft+hard per-day cap ({combined_cap}), \
+                 got {} signings",
                 signings.len()
             );
             any_signed |= !signings.is_empty();
@@ -5304,6 +5577,123 @@ mod emergency_fill_tests {
             any_signed,
             "with 30 desperate candidates over 100 ticks, clearing must sign someone"
         );
+    }
+
+    #[test]
+    fn soft_market_clearing_signs_100_day_domestic_backup() {
+        // A ~100-day-free domestic backup-level defender (cp 0.55) is
+        // BELOW both hard thresholds (0.75 pressure / 365 days), so any
+        // clearing signing here can only come from the new SOFT tier —
+        // the early, domestic, opportunistic layer. Acceptance criterion
+        // #1: a fringe domestic free agent resolves in months, not years.
+        let country = MarketClearingFixtures::country_thin_in_defenders();
+        let config = TransferConfig::default();
+
+        let mut signed = None;
+        for _ in 0..400 {
+            let mut c = EmergencyFillFixtures::candidate(
+                8500,
+                78,
+                29,
+                PlayerFieldPositionGroup::Defender,
+                true,
+            );
+            c.career_pressure = 0.55;
+            c.days_free = 100;
+            let signings = MarketClearingFixtures::run_clearing(&country, &[c], &config);
+            if let Some(s) = signings.into_iter().next() {
+                signed = Some(s);
+                break;
+            }
+        }
+
+        let signing =
+            signed.expect("soft clearing must sign a 100-day domestic backup within 400 ticks");
+        assert_eq!(signing.player_id, 8500);
+        assert_eq!(signing.reason, "free_agent_market_clearing");
+        let terms = signing.terms.expect("soft clearing stages short-deal terms");
+        // Stage-aware contract: a Flexible-stage player gets a short
+        // 1-2 year deal, never a long commitment.
+        assert!(
+            terms.contract_years <= 2,
+            "soft-stage clearing deals stay short, got {}y",
+            terms.contract_years
+        );
+        assert!(matches!(
+            terms.role,
+            BuyerRoleFit::Backup | BuyerRoleFit::Emergency
+        ));
+    }
+
+    #[test]
+    fn opportunistic_clearing_signs_free_agent_with_no_matching_request() {
+        // The club has NO open transfer request for a defender (empty
+        // transfer plan), yet a domestic soft-eligible journeyman is
+        // signed anyway through the opportunistic depth logic. Acceptance
+        // criterion #6 / spec test #6: NoMatchingRequest free agents are
+        // still reachable.
+        let country = MarketClearingFixtures::country_thin_in_defenders();
+        assert!(
+            country.clubs[0]
+                .transfer_plan
+                .transfer_requests
+                .is_empty(),
+            "fixture must have no open requests for this test to be meaningful"
+        );
+        let config = TransferConfig::default();
+
+        let mut signed = false;
+        for _ in 0..400 {
+            let mut c = EmergencyFillFixtures::candidate(
+                8550,
+                78,
+                30,
+                PlayerFieldPositionGroup::Defender,
+                true,
+            );
+            // Soft-eligible by pressure, still below the hard floor.
+            c.career_pressure = 0.6;
+            c.days_free = 120;
+            let signings = MarketClearingFixtures::run_clearing(&country, &[c], &config);
+            if signings.iter().any(|s| s.player_id == 8550) {
+                signed = true;
+                break;
+            }
+        }
+        assert!(
+            signed,
+            "opportunistic soft clearing must sign a useful domestic FA with no open request"
+        );
+    }
+
+    #[test]
+    fn soft_clearing_ignores_cross_continent_candidates() {
+        // The soft tier is the LOCAL market outlet: a cross-continent
+        // foreigner at the same soft-eligible stage must NOT be swept by
+        // it (he is the hard tier's job, and only once far more
+        // pressured). Below the hard floor he stays unsigned.
+        let country = MarketClearingFixtures::country_thin_in_defenders();
+        let config = TransferConfig::default();
+
+        for _ in 0..200 {
+            let mut c = EmergencyFillFixtures::candidate(
+                8560,
+                78,
+                29,
+                PlayerFieldPositionGroup::Defender,
+                false,
+            );
+            // Foreign AND cross-continent (different continent id).
+            c.nationality_continent_id = 7;
+            c.nationality_region = ScoutingRegion::from_country(7, "br");
+            c.career_pressure = 0.6;
+            c.days_free = 120;
+            let signings = MarketClearingFixtures::run_clearing(&country, &[c], &config);
+            assert!(
+                signings.is_empty(),
+                "soft clearing must not reach a cross-continent foreigner below the hard floor"
+            );
+        }
     }
 }
 

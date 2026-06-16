@@ -51,6 +51,14 @@ pub struct FreeAgentPlayerDto {
     /// Primary position used to bucket players in the squad-style sort
     /// (GK → DF → MF → FW). Not rendered — purely a sort key.
     pub position_sort: PlayerPositionType,
+    /// Days the player has been without a club.
+    pub days_free: i64,
+    /// Market-decay stage label (Fresh / Open / … / Last chance).
+    pub market_stage: String,
+    /// Plain-language reason he is still unsigned, from the player's own
+    /// durable market state (no world scan). Empty only if state is
+    /// somehow missing.
+    pub status_message: String,
 }
 
 pub async fn country_free_agents_action(
@@ -105,6 +113,18 @@ pub async fn country_free_agents_action(
         .filter(|player| player.country_id == country.id)
         .map(|player| {
             let position = player.positions.display_positions_compact();
+            // Cheap, state-only "why is he still free?" explanation —
+            // no world scan, so it's safe to compute per row in a list.
+            let explanation = player.market_explanation(now);
+            let (days_free, market_stage, status_message) = explanation
+                .map(|e| {
+                    (
+                        e.days_free,
+                        e.market_stage.label().to_string(),
+                        e.message,
+                    )
+                })
+                .unwrap_or_else(|| (0, String::new(), String::new()));
             FreeAgentPlayerDto {
                 slug: player.slug(),
                 first_name: player.full_name.display_first_name().to_string(),
@@ -114,6 +134,9 @@ pub async fn country_free_agents_action(
                 current_ability: PotentialStarsView::current(player),
                 potential_ability: PotentialStarsView::potential_absolute(player),
                 position_sort: player.position(),
+                days_free,
+                market_stage,
+                status_message,
             }
         })
         .collect();

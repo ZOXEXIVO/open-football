@@ -8,7 +8,7 @@ use crate::NationalSelectionPolicy;
 use crate::NationalTeam;
 use crate::PlayerSquadStatus;
 use crate::club::board::manager_market::ManagerApproach;
-use crate::club::player::calculators::WageCalculator;
+use crate::club::player::calculators::{FreeAgentReleaseReason, WageCalculator};
 use crate::club::staff::perception::PotentialEstimator;
 use crate::competitions::GlobalCompetitions;
 use crate::continent::Continent;
@@ -465,11 +465,26 @@ impl SimulatorData {
                             .collect();
                         for (id, player_name, released_early) in candidates {
                             if let Some(mut p) = team.players.take_player(&id) {
-                                let reason = if released_early {
-                                    "dec_reason_released_free".to_string()
-                                } else {
-                                    "dec_reason_contract_expired".to_string()
-                                };
+                                // Prefer the explicit reason the release path
+                                // recorded; fall back to the legacy Frt-vs-no-Frt
+                                // inference so an older save (or a path that
+                                // didn't stamp a reason) still reads sensibly:
+                                // an Frt marker without a reason is a generic
+                                // mutual release, no marker is a plain expiry.
+                                let reason = p
+                                    .release_reason()
+                                    .map(|r| r.history_reason().to_string())
+                                    .unwrap_or_else(|| {
+                                        if released_early {
+                                            FreeAgentReleaseReason::MutualTermination
+                                                .history_reason()
+                                                .to_string()
+                                        } else {
+                                            FreeAgentReleaseReason::ContractExpired
+                                                .history_reason()
+                                                .to_string()
+                                        }
+                                    });
                                 new_history.push(
                                     CompletedTransfer::new(
                                         id,
@@ -945,5 +960,172 @@ mod free_agent_retirement_tests {
             "young free agent must not be swept at 13 months"
         );
         assert!(!data.free_agents[0].retired);
+    }
+}
+
+#[cfg(test)]
+mod free_agent_release_reason_tests {
+    //! The free-agent sweep must record a *specific* transfer-history
+    //! reason per exit: a squad-surplus walk-out, a natural contract
+    //! expiry, and a legacy `Frt`-without-reason must read differently —
+    //! never all collapsed into "released by mutual agreement".
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
+        PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, PlayerStatusType, StaffCollection, TeamBuilder, TeamCollection,
+        TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    struct SweepFx;
+
+    impl SweepFx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 6, 15).unwrap()
+        }
+
+        /// A contractless senior already sitting on the roster awaiting the
+        /// sweep — the upstream release path has cleared the contract.
+        fn player(id: u32) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = 80;
+            attrs.potential_ability = 80;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Free".to_string(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(1994, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(None)
+                .build()
+                .unwrap()
+        }
+
+        fn sim(players: Vec<Player>) -> SimulatorData {
+            let team = TeamBuilder::new()
+                .id(10)
+                .league_id(Some(1))
+                .club_id(100)
+                .name("Main".to_string())
+                .slug("main".to_string())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(500, 500, 500))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap();
+            let club = Club::new(
+                100,
+                "Club".to_string(),
+                Location::new(1),
+                ClubFinances::new(10_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![team]),
+                ClubFacilities::default(),
+            );
+            let league = League::new(
+                1,
+                "L".to_string(),
+                "l".to_string(),
+                1,
+                500,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            );
+            let country = Country::builder()
+                .id(1)
+                .code("EN".to_string())
+                .slug("en".to_string())
+                .name("England".to_string())
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(vec![club])
+                .build()
+                .unwrap();
+            let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+            SimulatorData::new(
+                Self::date().and_hms_opt(12, 0, 0).unwrap(),
+                vec![continent],
+                GlobalCompetitions::new(Vec::new()),
+            )
+        }
+
+        fn reason_for(data: &SimulatorData, player_id: u32) -> String {
+            data.country(1)
+                .unwrap()
+                .transfer_market
+                .transfer_history
+                .iter()
+                .find(|t| t.player_id == player_id)
+                .map(|t| t.reason.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    #[test]
+    fn sweep_records_distinct_reasons_per_exit() {
+        let date = SweepFx::date();
+
+        // Squad-surplus free release: contract cleared, Frt + explicit reason.
+        let mut surplus = SweepFx::player(1);
+        surplus.statuses.add(date, PlayerStatusType::Frt);
+        surplus.set_release_reason(FreeAgentReleaseReason::SurplusFreeRelease);
+
+        // Natural expiry: the contract simply lapsed — no Frt, no reason.
+        let expired = SweepFx::player(2);
+
+        // Legacy / fallback: Frt with no recorded reason (older save or a
+        // path that didn't stamp one).
+        let mut legacy = SweepFx::player(3);
+        legacy.statuses.add(date, PlayerStatusType::Frt);
+
+        let mut data = SweepFx::sim(vec![surplus, expired, legacy]);
+        data.sweep_released_to_free_agents();
+
+        assert_eq!(
+            SweepFx::reason_for(&data, 1),
+            "dec_reason_released_surplus",
+            "an explicit surplus release must record its own reason"
+        );
+        assert_eq!(
+            SweepFx::reason_for(&data, 2),
+            "dec_reason_contract_expired",
+            "a natural expiry must NOT read as a release"
+        );
+        assert_eq!(
+            SweepFx::reason_for(&data, 3),
+            "dec_reason_released_free",
+            "a legacy Frt with no reason falls back to a generic mutual release"
+        );
+
+        // Every cleared-contract player reaches the global pool.
+        assert_eq!(data.free_agents.len(), 3, "all three must enter the pool");
     }
 }

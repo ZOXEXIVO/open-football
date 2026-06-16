@@ -37,7 +37,7 @@ use std::collections::HashMap;
 use chrono::NaiveDate;
 
 use crate::club::staff::perception::PotentialEstimator;
-use crate::{Club, Person, Player, PlayerFieldPositionGroup, PlayerSquadStatus};
+use crate::{Club, Person, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus};
 
 /// What a player is to his club, derived from observable signals. Ordered
 /// loosely from most to least protected. The disposal paths read the
@@ -131,18 +131,25 @@ impl SquadEvidenceContext {
     /// signal.
     pub fn current_season_sample(date: NaiveDate, club: &Club) -> Self {
         let _ = date;
-        let club_matches_proxy = club
-            .teams
+        club.teams
             .main()
             .or_else(|| club.teams.teams.first())
-            .map(|team| {
-                team.players
-                    .iter()
-                    .filter(|p| !p.is_on_loan())
-                    .map(Self::official_appearances)
-                    .max()
-                    .unwrap_or(0)
+            .map(|team| Self::from_squad(&team.players))
+            .unwrap_or(SquadEvidenceContext {
+                club_matches_proxy: 0,
             })
+    }
+
+    /// Build the season-sample context directly from one squad's roster —
+    /// the team the classifying coach actually manages. The match-count
+    /// proxy is the busiest non-loanee's official appearances, the same
+    /// signal `current_season_sample` reads off the main team.
+    pub fn from_squad(players: &PlayerCollection) -> Self {
+        let club_matches_proxy = players
+            .iter()
+            .filter(|p| !p.is_on_loan())
+            .map(Self::official_appearances)
+            .max()
             .unwrap_or(0);
         SquadEvidenceContext { club_matches_proxy }
     }
@@ -219,25 +226,37 @@ impl SquadAssetContext {
 
     /// Build the classifier context from a club's senior (main) squad.
     pub fn build(club: &Club, date: NaiveDate) -> Self {
+        let _ = date;
+        match club.teams.main().or_else(|| club.teams.teams.first()) {
+            Some(team) => Self::for_squad(&team.players),
+            None => Self::for_squad(&PlayerCollection::new(Vec::new())),
+        }
+    }
+
+    /// Build the classifier context from a single squad's roster — the
+    /// team the classifying coach manages. `build` calls this on the club's
+    /// main team; the head-coach contract-cleanup pass calls it directly
+    /// with the team it is iterating, since it has no `Club` handle. The
+    /// "team level" is then that squad's average, which is exactly the bar
+    /// a reserve / youth coach measures his own deadwood against.
+    pub fn for_squad(players: &PlayerCollection) -> Self {
         let mut group_ca: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
         let mut reputations: Vec<i16> = Vec::new();
         let mut ca_sum: u32 = 0;
         let mut ca_count: u32 = 0;
 
-        if let Some(team) = club.teams.main().or_else(|| club.teams.teams.first()) {
-            for player in team.players.iter() {
-                // Loanees belong to their parent club — they are not this
-                // club's assets and must not skew the level / rank picture.
-                if player.is_on_loan() {
-                    continue;
-                }
-                let group = player.position().position_group();
-                let ca = player.player_attributes.current_ability;
-                group_ca.entry(group).or_default().push(ca);
-                ca_sum += ca as u32;
-                ca_count += 1;
-                reputations.push(Self::display_reputation(player));
+        for player in players.iter() {
+            // Loanees belong to their parent club — they are not this
+            // club's assets and must not skew the level / rank picture.
+            if player.is_on_loan() {
+                continue;
             }
+            let group = player.position().position_group();
+            let ca = player.player_attributes.current_ability;
+            group_ca.entry(group).or_default().push(ca);
+            ca_sum += ca as u32;
+            ca_count += 1;
+            reputations.push(Self::display_reputation(player));
         }
 
         let squad_avg_ability = ca_sum
@@ -245,7 +264,7 @@ impl SquadAssetContext {
             .map(|avg| avg as u8)
             .unwrap_or(0);
         let top_quartile_reputation = Self::top_quartile(&mut reputations);
-        let evidence = SquadEvidenceContext::current_season_sample(date, club);
+        let evidence = SquadEvidenceContext::from_squad(players);
 
         SquadAssetContext {
             group_ca,

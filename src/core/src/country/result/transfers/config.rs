@@ -68,12 +68,29 @@ pub struct TransferConfig {
     //    long that waiting for an explicit transfer request is no
     //    longer realistic: they take a modest squad-role deal at a
     //    lower-tier club instead.
-    /// Career-pressure floor for market-clearing eligibility.
-    pub market_clearing_min_pressure: f32,
-    /// Days-free floor for market-clearing eligibility (either
-    /// criterion qualifies).
-    pub market_clearing_min_days_free: i64,
-    /// Per-country per-day cap on market-clearing signings, so the
+    //
+    //    Two layers run back to back:
+    //      • Soft clearing kicks in early (90 days OR pressure 0.45)
+    //        but only matches DOMESTIC / same-region clubs and only
+    //        when an opportunistic squad-fit gate passes — the
+    //        realistic "a local club takes a punt on a useful free
+    //        body" outcome. Tight per-day cap.
+    //      • Hard clearing is the long-tail backstop (365 days OR
+    //        pressure 0.75) with the broader region / reputation
+    //        tolerance, for players the soft layer's locality
+    //        restriction never reached.
+    /// Career-pressure floor for SOFT (early, domestic-only) clearing.
+    pub soft_market_clearing_min_pressure: f32,
+    /// Days-free floor for SOFT clearing (either criterion qualifies).
+    pub soft_market_clearing_min_days_free: i64,
+    /// Per-country per-day cap on soft-clearing signings. Deliberately
+    /// tiny (1) so the early domestic layer trickles rather than floods.
+    pub soft_market_clearing_max_signings_per_country_per_day: usize,
+    /// Career-pressure floor for HARD (long-tail, broad) clearing.
+    pub hard_market_clearing_min_pressure: f32,
+    /// Days-free floor for HARD clearing (either criterion qualifies).
+    pub hard_market_clearing_min_days_free: i64,
+    /// Per-country per-day cap on hard-clearing signings, so the
     /// fallback drains the long-tail pool gradually instead of mass-
     /// clearing it the first day someone crosses the threshold.
     pub market_clearing_max_signings_per_country_per_day: usize,
@@ -161,8 +178,17 @@ impl Default for TransferConfig {
             max_free_agent_signings_per_day: 2,
             free_agent_ability_slack: 5,
             free_agent_attempts_per_request: 3,
-            market_clearing_min_pressure: 0.75,
-            market_clearing_min_days_free: 365,
+            // Soft clearing: early, domestic-only, opportunistic. Either
+            // ~3 months free or a 0.45 pressure score opens it; capped to
+            // a single signing per country per day so the long tail
+            // resolves gradually through realistic local fits.
+            soft_market_clearing_min_pressure: 0.45,
+            soft_market_clearing_min_days_free: 90,
+            soft_market_clearing_max_signings_per_country_per_day: 1,
+            // Hard clearing: the long-tail backstop, broad region /
+            // reputation tolerance, capped at 2 per country per day.
+            hard_market_clearing_min_pressure: 0.75,
+            hard_market_clearing_min_days_free: 365,
             market_clearing_max_signings_per_country_per_day: 2,
             emergency_max_signings_per_country_per_day: 20,
             emergency_max_signings_per_club_per_day: 5,
