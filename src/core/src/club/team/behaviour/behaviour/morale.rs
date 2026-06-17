@@ -6,6 +6,9 @@ use super::TeamBehaviour;
 use crate::PlayerHappiness;
 use crate::club::person::Person;
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::calculators::{
+    ContractValuation, ValuationContext, expected_annual_value, package_inputs_from_contract,
+};
 use crate::club::player::contract::stalemate::{AffordabilityInput, ContractStalemate};
 use crate::club::player::happiness::PlayingTimeFrustrationConfig;
 use crate::club::player::lifecycle::CareerStageDetector;
@@ -15,10 +18,11 @@ use crate::{
     CareerDesireEventContext, CareerDesireEvidence, CareerDesireKind, ConflictLocation,
     HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
     HappinessEventScope, HappinessEventSeverity, HappinessEventType, LoanConcernReason,
-    LoanDevelopmentConcernReason, LoanEventContext, LoanEventKind, PlayerCollection,
-    PlayerFieldPositionGroup, PlayerSquadStatus, TeammateConflictContext, TeammateConflictReason,
+    LoanDevelopmentConcernReason, LoanEventContext, LoanEventKind, Player, PlayerClubContract,
+    PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus, TeammateConflictContext,
+    TeammateConflictReason,
 };
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -102,6 +106,22 @@ impl TeamBehaviour {
                     .map(|r| r.friendship)
                     .unwrap_or(30.0);
                 if friendship >= 40.0 {
+                    continue;
+                }
+
+                // Late-career fair-wage guard: a fading veteran already
+                // paid fairly for his own age/ability (by his own
+                // `ContractValuation`) isn't unsettled when a prime
+                // teammate signs big — the gap is the market valuing
+                // youth, not a personal slight. Mirrors the periodic
+                // wage-envy gate so the two signals can't disagree about
+                // whether a wage is genuinely low.
+                let late_career_fair = player
+                    .contract
+                    .as_ref()
+                    .map(|c| WageFairness::assess(player, c, today, ctx).late_career_wage_is_fair(player))
+                    .unwrap_or(false);
+                if late_career_fair {
                     continue;
                 }
 
@@ -775,25 +795,28 @@ impl TeamBehaviour {
             if player.id == 0 || contract.salary >= top {
                 continue;
             }
-            let ratio = contract.salary as f32 / top as f32;
-            if ratio >= 0.6 {
+            // The raw peer ratio is only the entry signal. The full gate
+            // weighs it against the player's own fair valuation, age,
+            // current role, ambition and temperament — so a fairly-paid
+            // veteran merely trailing a prime star is never flagged, while
+            // a genuinely underpaid important player still is. The
+            // returned magnitude is already late-career-capped.
+            let Some(profile) = WageEnvyProfile::evaluate(player, contract, top, today, ctx) else {
                 continue;
-            }
-            // Magnitude: 60% ratio → -1.5, 30% ratio → -4.5, cap at -5.
+            };
             // 28-day cooldown so the monthly audit doesn't re-fire the
             // same player while last month's wage-envy event is still
             // visible in the history.
-            let magnitude = -(((0.6 - ratio) * 10.0) + 1.5).min(5.0);
             let context = HappinessEventContext::new(
                 HappinessEventCause::WageJealousy,
-                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventSeverity::from_magnitude(profile.magnitude),
                 HappinessEventScope::DressingRoom,
             )
             .with_evidence(HappinessEventEvidence::WageGap)
             .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
             player.happiness.add_event_with_context_and_cooldown(
                 HappinessEventType::SalaryGapNoticed,
-                magnitude,
+                profile.magnitude,
                 None,
                 context,
                 28,
@@ -1123,6 +1146,238 @@ impl TeamBehaviour {
     }
 }
 
+/// A player's own fair-wage picture, shared by the periodic wage-envy
+/// sweep ([`WageEnvyProfile`]) and the fresh-renewal jealousy path
+/// ([`TeamBehaviour::process_contract_jealousy`]) so the two can never
+/// disagree about whether a wage is actually low.
+///
+/// `fair_ratio` compares the player's *effective* annual package (base
+/// plus realistically-weighted bonuses, via the shared
+/// [`expected_annual_value`] helper) against what [`ContractValuation`]
+/// says he should earn given his age, ability, status, club and league —
+/// the same curve the salary-happiness factor uses. Because the
+/// valuation bakes in the age decline, a fading veteran is measured
+/// against a *lower* bar, so a wage that merely trails a prime star is
+/// not treated as underpayment.
+struct WageFairness {
+    age: u8,
+    is_goalkeeper: bool,
+    /// 34+ for an outfielder, 37+ for a goalkeeper.
+    is_late_career: bool,
+    /// effective package / fair expected wage. ≥1.0 means paid at or
+    /// above his own valuation; well below 1.0 is genuine underpayment.
+    fair_ratio: f32,
+}
+
+impl WageFairness {
+    fn assess(
+        player: &Player,
+        contract: &PlayerClubContract,
+        today: NaiveDate,
+        ctx: &GlobalContext<'_>,
+    ) -> WageFairness {
+        let age = player.age(today);
+        let is_goalkeeper = player.position().is_goalkeeper();
+        let is_late_career = if is_goalkeeper { age >= 37 } else { age >= 34 };
+
+        // Club / league reputation feed the valuation curve. Fall back to
+        // a neutral mid-tier baseline when the club context is absent or
+        // unpopulated (older saves), mirroring `calculate_salary_factor`.
+        let (club_reputation_score, league_reputation) =
+            ctx.club.as_ref().map_or((0.5_f32, 5_000_u16), |club| {
+                let rep = if club.main_team_reputation > 0 {
+                    (club.main_team_reputation as f32 / 10_000.0).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                let league = if club.league_reputation > 0 {
+                    club.league_reputation
+                } else {
+                    5_000
+                };
+                (rep, league)
+            });
+
+        // Approximate months left; only widens the valuation's leverage
+        // band, never the expected wage itself.
+        let months_remaining = ((contract.expiration - today).num_days() / 30) as i32;
+        let valuation_ctx = ValuationContext::happiness_default(
+            player,
+            age,
+            contract.squad_status.clone(),
+            club_reputation_score,
+            league_reputation,
+            months_remaining,
+        );
+        let expected_wage = ContractValuation::evaluate(player, &valuation_ctx).expected_wage as f32;
+        let effective_salary =
+            expected_annual_value(&package_inputs_from_contract(contract, player)) as f32;
+
+        // No meaningful expectation (youth / amateur edge) → treat as
+        // fairly paid so the gate can never fire on a divide-by-zero.
+        let fair_ratio = if expected_wage >= 1.0 {
+            effective_salary / expected_wage
+        } else {
+            1.0
+        };
+
+        WageFairness {
+            age,
+            is_goalkeeper,
+            is_late_career,
+            fair_ratio,
+        }
+    }
+
+    /// True when a late-career veteran is paid fairly enough relative to
+    /// his *own* declining valuation that a teammate's fresh raise — or
+    /// the squad wage hierarchy — should not unsettle him. Prime-age
+    /// players are never suppressed here; the caller's full gate handles
+    /// them.
+    fn late_career_wage_is_fair(&self, player: &Player) -> bool {
+        if !self.is_late_career {
+            return false;
+        }
+        // Within ~30% of his own fair value is not "underpaid" for a
+        // fading player.
+        if self.fair_ratio >= 0.70 {
+            return true;
+        }
+        // A loyal, professional veteran in the fair band lets it go.
+        player.attributes.loyalty >= 16.0
+            && player.attributes.professionalism >= 14.0
+            && self.fair_ratio >= 0.65
+    }
+}
+
+/// Outcome of the periodic wage-envy gate for one player. Built (via
+/// [`WageEnvyProfile::evaluate`]) only when the player is genuinely and
+/// materially underpaid for someone of his importance, age and current
+/// role — never merely because a prime-age star out-earns him. The
+/// embedded `magnitude` is the final, late-career-capped morale hit.
+struct WageEnvyProfile {
+    magnitude: f32,
+}
+
+impl WageEnvyProfile {
+    /// Decide whether `player` should resent the squad wage hierarchy
+    /// this month, and size the hit. Returns `None` (no event) unless
+    /// every gate passes. `top_group_salary` is the highest permanent
+    /// wage at the player's position group; the caller has already
+    /// applied the cheap squad-status / reputation / grace / appearance
+    /// pre-gates.
+    fn evaluate(
+        player: &Player,
+        contract: &PlayerClubContract,
+        top_group_salary: u32,
+        today: NaiveDate,
+        ctx: &GlobalContext<'_>,
+    ) -> Option<WageEnvyProfile> {
+        if top_group_salary == 0 || contract.salary == 0 {
+            return None;
+        }
+
+        let peer_ratio = contract.salary as f32 / top_group_salary as f32;
+
+        let fairness = WageFairness::assess(player, contract, today, ctx);
+        let fair_ratio = fairness.fair_ratio;
+        let is_late_career = fairness.is_late_career;
+
+        let squad_status = &contract.squad_status;
+        let is_key = matches!(squad_status, PlayerSquadStatus::KeyPlayer);
+        let starter_ratio = player.happiness.starter_ratio;
+        let ambition = player.attributes.ambition;
+        let loyalty = player.attributes.loyalty;
+        let professionalism = player.attributes.professionalism;
+
+        // ── Score ──────────────────────────────────────────────
+        let peer_gap = ((0.60 - peer_ratio) / 0.60).clamp(0.0, 1.0);
+        let fair_gap = ((0.82 - fair_ratio) / 0.82).clamp(0.0, 1.0);
+        let role_weight = match squad_status {
+            PlayerSquadStatus::KeyPlayer => 1.20,
+            PlayerSquadStatus::FirstTeamRegular => 1.00,
+            PlayerSquadStatus::FirstTeamSquadRotation => 0.70,
+            _ => 0.0,
+        };
+        let current_use_weight = 0.65 + 0.70 * starter_ratio.clamp(0.0, 1.0);
+        let ambition_weight = 0.70 + 0.60 * (ambition / 20.0);
+        let loyalty_damp = 1.0 - 0.25 * (loyalty / 20.0);
+        let professionalism_damp = 1.0 - 0.15 * (professionalism / 20.0);
+        let late_career_damp = Self::late_career_damp(&fairness, is_key, starter_ratio);
+
+        let salary_gap_score = (0.45 * peer_gap + 0.55 * fair_gap)
+            * role_weight
+            * current_use_weight
+            * ambition_weight
+            * loyalty_damp
+            * professionalism_damp
+            * late_career_damp;
+
+        // ── Gate ───────────────────────────────────────────────
+        if peer_ratio >= 0.60 || fair_ratio >= 0.82 || salary_gap_score < 1.0 {
+            return None;
+        }
+
+        // A player weighing retirement isn't chasing a new wage band —
+        // unless he's still a genuine, regularly-playing key man.
+        let recent_retirement = player
+            .happiness
+            .has_recent_event(&HappinessEventType::RetirementConsidering, 180);
+        if recent_retirement && !(is_key && starter_ratio >= 0.60) {
+            return None;
+        }
+
+        if is_late_career {
+            // Tighter bar: only a clearly-underpaid, still-ambitious,
+            // still-playing veteran is unsettled by the hierarchy.
+            if fair_ratio >= 0.70 || ambition < 14.0 {
+                return None;
+            }
+            if starter_ratio < 0.50 && !is_key {
+                return None;
+            }
+            // A loyal, professional veteran in the fair band lets it go.
+            if loyalty >= 16.0 && professionalism >= 14.0 && fair_ratio >= 0.65 {
+                return None;
+            }
+        }
+
+        // ── Magnitude ──────────────────────────────────────────
+        let mut magnitude = -(1.25 + salary_gap_score * 4.0).clamp(1.25, 5.0);
+        // A fading non-key veteran feels it, but it never becomes a
+        // dressing-room crisis.
+        if is_late_career && !is_key {
+            magnitude = magnitude.max(-2.5);
+        }
+        // Someone already mulling retirement shrugs most of it off.
+        if recent_retirement {
+            magnitude = magnitude.max(-1.5);
+        }
+
+        Some(WageEnvyProfile { magnitude })
+    }
+
+    /// Age-banded damp on the wage-envy score for late-career players.
+    /// Non-veterans are unaffected (1.0). A still-central key player who
+    /// is playing regularly keeps most of his voice (0.85); everyone else
+    /// is steeply discounted as they wind down (0.45 deep into the
+    /// decline, 0.65 at its start).
+    fn late_career_damp(fairness: &WageFairness, is_key: bool, starter_ratio: f32) -> f32 {
+        if !fairness.is_late_career {
+            return 1.0;
+        }
+        if is_key && starter_ratio >= 0.65 {
+            return 0.85;
+        }
+        let steep = if fairness.is_goalkeeper {
+            fairness.age >= 39
+        } else {
+            fairness.age >= 36
+        };
+        if steep { 0.45 } else { 0.65 }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1432,7 +1687,14 @@ mod tests {
     /// to exercise.
     fn build_wage_envy_pair(starter_contract_started: Option<NaiveDate>) -> Vec<Player> {
         let birth = NaiveDate::from_ymd_opt(2002, 1, 1).unwrap();
-        let mut starter = build_player(1, birth, 130, 5_000, 12.0);
+        // A prime-age (24), ambitious, ever-present regular earning a tiny
+        // fraction of his own fair value (20k vs a multi-million expected
+        // wage) — the canonical "genuinely underpaid important player" who
+        // *should* fire. The high ambition + starter_ratio carry the score
+        // past the new fair-value gate, so these grace / appearance tests
+        // actually exercise those gates rather than passing trivially
+        // because the scoring fell short.
+        let mut starter = build_player(1, birth, 130, 5_000, 16.0);
         let mut starter_contract = PlayerClubContract::new(
             20_000,
             NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
@@ -1442,6 +1704,7 @@ mod tests {
         starter.contract = Some(starter_contract);
         starter.happiness.eligible_official_matches_since_join = 12;
         starter.happiness.starts_since_join = 6;
+        starter.happiness.starter_ratio = 0.9;
 
         let star = with_contract(
             build_player(2, birth, 160, 8_000, 14.0),
@@ -1497,6 +1760,356 @@ mod tests {
             count(&players.players[0], HappinessEventType::SalaryGapNoticed),
             0,
             "a fresh arrival with only 3 eligible matches must not yet resent the wage hierarchy"
+        );
+    }
+
+    // ── SalaryGapNoticed late-career / fair-wage gate ───────────
+
+    /// Builds a wage-envy scenario: the underpaid candidate (id 1) plus a
+    /// top-earning peer (id 2) in the same position group, so the
+    /// periodic sweep has a real wage ceiling to compare against. The
+    /// candidate always clears the cheap pre-gates (reputation, 90-day
+    /// grace, ≥8 eligible matches, ≥3 matchday inclusions); each test then
+    /// varies only the age / status / wage / temperament that the new gate
+    /// reasons about.
+    struct WageEnvyScenario {
+        age_years: i64,
+        is_goalkeeper: bool,
+        squad_status: PlayerSquadStatus,
+        ca: u8,
+        world_rep: i16,
+        salary: u32,
+        top_salary: u32,
+        starter_ratio: f32,
+        ambition: f32,
+        loyalty: f32,
+        professionalism: f32,
+        recent_retirement: bool,
+    }
+
+    impl WageEnvyScenario {
+        /// A drastically-underpaid, ever-present, prime-age (24) regular —
+        /// the canonical "genuinely underpaid important player".
+        fn prime_regular() -> Self {
+            WageEnvyScenario {
+                age_years: 24,
+                is_goalkeeper: false,
+                squad_status: PlayerSquadStatus::FirstTeamRegular,
+                ca: 140,
+                world_rep: 5_000,
+                salary: 20_000,
+                top_salary: 200_000,
+                starter_ratio: 0.90,
+                ambition: 16.0,
+                loyalty: 10.0,
+                professionalism: 12.0,
+                recent_retirement: false,
+            }
+        }
+
+        /// A 35-year-old outfield veteran; defaults otherwise as
+        /// [`Self::prime_regular`].
+        fn late_career_outfield() -> Self {
+            WageEnvyScenario {
+                age_years: 35,
+                ..Self::prime_regular()
+            }
+        }
+
+        fn position(&self) -> PlayerPositionType {
+            if self.is_goalkeeper {
+                PlayerPositionType::Goalkeeper
+            } else {
+                PlayerPositionType::Striker
+            }
+        }
+
+        fn squad(&self, today: NaiveDate) -> PlayerCollection {
+            let birth = today - chrono::Duration::days(self.age_years * 365);
+            let position = self.position();
+
+            let mut candidate = build_player(1, birth, self.ca, self.world_rep, self.ambition);
+            candidate.attributes.loyalty = self.loyalty;
+            candidate.attributes.professionalism = self.professionalism;
+            candidate.positions = PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position,
+                    level: 20,
+                }],
+            };
+            let mut contract =
+                PlayerClubContract::new(self.salary, NaiveDate::from_ymd_opt(2032, 6, 30).unwrap());
+            contract.squad_status = self.squad_status.clone();
+            // Well outside the 90-day grace window.
+            contract.started = Some(today - chrono::Duration::days(200));
+            candidate.contract = Some(contract);
+            // Saturate the appearance gate; starter_ratio is set
+            // independently so a benched veteran can carry a long history
+            // of starts yet a low recent ratio.
+            candidate.happiness.eligible_official_matches_since_join = 12;
+            candidate.happiness.starts_since_join = 9;
+            candidate.happiness.starter_ratio = self.starter_ratio;
+            if self.recent_retirement {
+                candidate
+                    .happiness
+                    .add_event(HappinessEventType::RetirementConsidering, -2.0);
+            }
+
+            // Prime-age key man on the ceiling wage in the same group.
+            // Never fires (its salary == the group top).
+            let mut peer = build_player(
+                2,
+                today - chrono::Duration::days(26 * 365),
+                165,
+                9_000,
+                14.0,
+            );
+            peer.positions = PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position,
+                    level: 20,
+                }],
+            };
+            let mut peer_contract = PlayerClubContract::new(
+                self.top_salary,
+                NaiveDate::from_ymd_opt(2032, 6, 30).unwrap(),
+            );
+            peer_contract.squad_status = PlayerSquadStatus::KeyPlayer;
+            peer.contract = Some(peer_contract);
+
+            PlayerCollection::new(vec![candidate, peer])
+        }
+    }
+
+    /// A veteran paid *fairly for his age* — he earns half the prime
+    /// star's wage but well above his own age-suppressed valuation
+    /// (fair_ratio ≥ 0.82). The squad wage hierarchy is not a grievance.
+    #[test]
+    fn fairly_paid_veteran_does_not_notice_wage_gap() {
+        let today = first_of_month(2026, 6);
+        let mut players = WageEnvyScenario {
+            salary: 1_400_000,
+            top_salary: 3_000_000,
+            ..WageEnvyScenario::late_career_outfield()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a veteran paid above his own fair value must not resent a prime star earning more"
+        );
+    }
+
+    /// A loyal, professional, benched 35-year-old who *is* somewhat
+    /// underpaid (fair_ratio ~0.68) still lets it go: a fading reserve is
+    /// not unsettled by the squad wage hierarchy.
+    #[test]
+    fn loyal_benched_veteran_does_not_notice_wage_gap() {
+        let today = first_of_month(2026, 6);
+        let mut players = WageEnvyScenario {
+            salary: 650_000,
+            top_salary: 1_400_000,
+            starter_ratio: 0.30,
+            ambition: 15.0,
+            loyalty: 17.0,
+            professionalism: 15.0,
+            ..WageEnvyScenario::late_career_outfield()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a loyal, benched late-career veteran must not be flagged"
+        );
+    }
+
+    /// An elite, still-central, still-ambitious 35-year-old key player who
+    /// is genuinely and badly underpaid (fair_ratio well below 0.70) is a
+    /// legitimate grievance — the event still fires.
+    #[test]
+    fn underpaid_elite_veteran_keyplayer_notices_wage_gap() {
+        let today = first_of_month(2026, 6);
+        let mut players = WageEnvyScenario {
+            squad_status: PlayerSquadStatus::KeyPlayer,
+            ca: 165,
+            world_rep: 9_000,
+            starter_ratio: 0.75,
+            ambition: 18.0,
+            ..WageEnvyScenario::late_career_outfield()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            1,
+            "a genuinely-underpaid, still-key, ambitious veteran is a real grievance"
+        );
+    }
+
+    /// A drastically-underpaid prime-age regular fires — the gate must not
+    /// over-suppress the very players it is meant to protect.
+    #[test]
+    fn underpaid_prime_regular_notices_wage_gap() {
+        let today = first_of_month(2026, 6);
+        let mut players = WageEnvyScenario::prime_regular().squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            1,
+            "a drastically-underpaid prime regular should still notice the gap"
+        );
+    }
+
+    /// Someone already weighing retirement is suppressed — unless he's a
+    /// genuine, regularly-playing key man, in which case the hit still
+    /// lands but is capped soft (≥ -1.5).
+    #[test]
+    fn retirement_considering_suppresses_wage_envy_unless_genuine_keyplayer() {
+        let today = first_of_month(2026, 6);
+
+        // Rotation-ish key player (starter_ratio 0.55 < 0.60) mulling
+        // retirement → suppressed despite a firing-strength gap.
+        let mut winding_down = WageEnvyScenario {
+            squad_status: PlayerSquadStatus::KeyPlayer,
+            starter_ratio: 0.55,
+            recent_retirement: true,
+            ..WageEnvyScenario::prime_regular()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut winding_down, &month_ctx(today));
+        assert_eq!(
+            count(&winding_down.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a player considering retirement and no longer a regular starter is suppressed"
+        );
+
+        // Genuine, ever-present key man considering retirement → still
+        // fires, but the magnitude is capped soft.
+        let mut still_key = WageEnvyScenario {
+            squad_status: PlayerSquadStatus::KeyPlayer,
+            starter_ratio: 0.70,
+            recent_retirement: true,
+            ..WageEnvyScenario::prime_regular()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut still_key, &month_ctx(today));
+        assert_eq!(
+            count(&still_key.players[0], HappinessEventType::SalaryGapNoticed),
+            1,
+            "a still-key regular starter weighing retirement may still feel underpaid"
+        );
+        let capped = still_key.players[0]
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::SalaryGapNoticed)
+            .map(|e| e.magnitude);
+        assert_eq!(
+            capped,
+            Some(-1.5),
+            "the retirement-window hit must be capped soft at -1.5"
+        );
+    }
+
+    /// The late-career boundary is position-specific: at 36 an outfield
+    /// player is "late career" (≥34) and suppressed, while a goalkeeper is
+    /// not yet (GK threshold is 37) and a genuinely underpaid one still
+    /// fires. Same age, same wage, same temperament — only the position
+    /// differs.
+    #[test]
+    fn late_career_boundary_is_position_specific() {
+        let today = first_of_month(2026, 6);
+
+        let mut gk = WageEnvyScenario {
+            age_years: 36,
+            is_goalkeeper: true,
+            ..WageEnvyScenario::prime_regular()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut gk, &month_ctx(today));
+        assert_eq!(
+            count(&gk.players[0], HappinessEventType::SalaryGapNoticed),
+            1,
+            "a 36-year-old keeper is not yet late-career, so a genuine gap still fires"
+        );
+
+        let mut outfield = WageEnvyScenario {
+            age_years: 36,
+            is_goalkeeper: false,
+            ..WageEnvyScenario::prime_regular()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut outfield, &month_ctx(today));
+        assert_eq!(
+            count(&outfield.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a 36-year-old outfield player is late-career and steeply damped — suppressed"
+        );
+    }
+
+    /// Fresh-renewal jealousy ([`process_contract_jealousy`]) must not
+    /// unsettle a late-career veteran whose own valuation already says his
+    /// wage is fair — while a prime, underpaid teammate is still rattled by
+    /// the same signing.
+    #[test]
+    fn fresh_renewal_spares_fairly_paid_veteran_but_not_prime_teammate() {
+        let today = first_of_month(2026, 6);
+
+        // Veteran (id 1): 35, paid fairly for his age (900k vs his
+        // age-suppressed valuation → fair_ratio ≥ 0.70).
+        let mut veteran = build_player(
+            1,
+            today - chrono::Duration::days(35 * 365),
+            140,
+            4_000,
+            12.0,
+        );
+        let mut vet_contract =
+            PlayerClubContract::new(900_000, NaiveDate::from_ymd_opt(2032, 6, 30).unwrap());
+        vet_contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+        veteran.contract = Some(vet_contract);
+
+        // Signer (id 2): a prime star who just agreed a huge fresh deal.
+        let mut signer = build_player(
+            2,
+            today - chrono::Duration::days(25 * 365),
+            165,
+            9_000,
+            14.0,
+        );
+        let mut signer_contract =
+            PlayerClubContract::new(2_000_000, NaiveDate::from_ymd_opt(2032, 6, 30).unwrap());
+        signer_contract.squad_status = PlayerSquadStatus::KeyPlayer;
+        signer.contract = Some(signer_contract);
+        signer.happiness.last_salary_negotiation = Some(today);
+
+        // Prime teammate (id 3): drastically underpaid, not late-career.
+        let mut prime = build_player(
+            3,
+            today - chrono::Duration::days(24 * 365),
+            140,
+            5_000,
+            14.0,
+        );
+        let mut prime_contract =
+            PlayerClubContract::new(200_000, NaiveDate::from_ymd_opt(2032, 6, 30).unwrap());
+        prime_contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+        prime.contract = Some(prime_contract);
+
+        let mut players = PlayerCollection::new(vec![veteran, signer, prime]);
+        TeamBehaviour::process_contract_jealousy(&mut players, &month_ctx(today));
+
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a fairly-paid late-career veteran should shrug off a teammate's fresh raise"
+        );
+        assert_eq!(
+            count(&players.players[2], HappinessEventType::SalaryGapNoticed),
+            1,
+            "a drastically-underpaid prime teammate is still unsettled by the same signing"
         );
     }
 }
