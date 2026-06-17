@@ -20,10 +20,12 @@
 
 use crate::Relations;
 use crate::club::Club;
+use crate::club::StaffStub;
 use crate::club::Team;
 use crate::club::board::ClubBoard;
 use crate::club::staff::free_pool;
 use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
+use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
 use crate::{SimulatorData, Staff, TeamType};
 use chrono::Duration;
@@ -181,6 +183,206 @@ impl ManagerSeat {
     pub fn build_manager_contract(salary: u32, today: NaiveDate) -> StaffClubContract {
         let expires = today.with_year(today.year() + 3).unwrap_or(today);
         StaffClubContract::new(salary, expires, StaffPosition::Manager, StaffStatus::Active)
+    }
+
+    /// Id base for synthetic emergency caretakers. Sits far above any
+    /// generator-allocated staff id, and adding `club_id` keeps each club's
+    /// emergency seat unique and stable across ticks (so it can never
+    /// duplicate). Mirrors the project's high-id-range convention used
+    /// elsewhere (e.g. domestic-cup ids at 800M+).
+    const EMERGENCY_CARETAKER_ID_BASE: u32 = 900_000_000;
+
+    /// Token interim salary — a stopgap caretaker isn't on a headline deal.
+    const EMERGENCY_CARETAKER_SALARY: u32 = 24_000;
+
+    /// Number of permanent `Manager` contracts on the team. The head-coach
+    /// seat is unique by construction, so this is normally 0 or 1; anything
+    /// higher is a bug the repair pass collapses back to one.
+    pub fn manager_count(team: &Team) -> usize {
+        team.staffs
+            .iter()
+            .filter(|s| {
+                s.contract
+                    .as_ref()
+                    .map(|c| matches!(c.position, StaffPosition::Manager))
+                    .unwrap_or(false)
+            })
+            .count()
+    }
+
+    /// Is an interim caretaker currently sitting in the head-coach seat?
+    pub fn has_caretaker(team: &Team) -> bool {
+        team.staffs
+            .find_by_position(StaffPosition::CaretakerManager)
+            .is_some()
+    }
+
+    /// Collapse duplicate permanent managers down to a single seat: keep the
+    /// best-fitting manager (by `relevance_score_for`) and demote the rest to
+    /// generic coaches, preserving their salaries. No-op with 0 or 1 manager.
+    pub fn dedupe_managers(team: &mut Team) {
+        let keep_id = team
+            .staffs
+            .iter()
+            .filter(|s| {
+                s.contract
+                    .as_ref()
+                    .map(|c| matches!(c.position, StaffPosition::Manager))
+                    .unwrap_or(false)
+            })
+            .max_by_key(|s| s.relevance_score_for(&StaffPosition::Manager))
+            .map(|s| s.id);
+        let Some(keep_id) = keep_id else {
+            return;
+        };
+        for staff in team.staffs.iter_mut() {
+            let is_extra_manager = staff
+                .contract
+                .as_ref()
+                .map(|c| matches!(c.position, StaffPosition::Manager))
+                .unwrap_or(false)
+                && staff.id != keep_id;
+            if is_extra_manager {
+                if let Some(c) = staff.contract.as_mut() {
+                    c.position = StaffPosition::Coach;
+                }
+            }
+        }
+    }
+
+    /// Install a minimal emergency caretaker when a club has lost its entire
+    /// coaching staff and there is nobody internal to promote. Modelled on
+    /// the staff-stub conventions but with a real, club-unique id and modest
+    /// (not floor-1) attributes so the dugout isn't run by a phantom. The
+    /// 60-day interim contract gives the manager market time to find a
+    /// permanent appointment.
+    pub fn install_emergency_caretaker(team: &mut Team, club_id: u32, today: NaiveDate) {
+        let caretaker_id = Self::EMERGENCY_CARETAKER_ID_BASE.saturating_add(club_id);
+
+        let mut staff = StaffStub::default();
+        staff.id = caretaker_id;
+        staff.full_name = FullName::new("Interim".to_string(), "Coach".to_string());
+        staff.job_satisfaction = 50.0;
+
+        // Lift the key man-management / tactical attributes off the stub
+        // floor so selection, training and morale read a journeyman caretaker
+        // rather than a 1-rated ghost.
+        staff.staff_attributes.coaching.tactical = 7;
+        staff.staff_attributes.coaching.mental = 7;
+        staff.staff_attributes.mental.man_management = 7;
+        staff.staff_attributes.mental.motivating = 7;
+        staff.staff_attributes.knowledge.tactical_knowledge = 7;
+
+        let expires = today
+            .checked_add_signed(Duration::days(60))
+            .unwrap_or_else(|| {
+                NaiveDate::from_ymd_opt(today.year() + 1, today.month(), 1).unwrap()
+            });
+        staff.contract = Some(StaffClubContract::new(
+            Self::EMERGENCY_CARETAKER_SALARY,
+            expires,
+            StaffPosition::CaretakerManager,
+            StaffStatus::Active,
+        ));
+        team.staffs.push(staff);
+        info!(
+            "Installed emergency caretaker (staff {}) at club {}",
+            caretaker_id, club_id
+        );
+    }
+}
+
+// ─── ManagerSeatRepair — daily head-coach-seat invariant ───────────────
+
+/// Daily maintenance pass that guarantees the FM-style invariant: every
+/// active main team is run by either a permanent `Manager` or an interim
+/// `CaretakerManager`, and the board is actively searching whenever the
+/// permanent seat is vacant.
+///
+/// Runs inside `ManagerMarketTick::run` after expired staff have been
+/// harvested into the free-agent pool (so a club that just lost its last
+/// coach this tick is repaired immediately) and before shortlists refresh
+/// (so a freshly-opened search is given candidates the same tick). It is the
+/// safety net behind sackings and poaches: those paths normally install a
+/// caretaker themselves, but a club that has shed its whole coaching staff —
+/// or a legacy save with a half-finished search — is recovered here.
+pub struct ManagerSeatRepair;
+
+impl ManagerSeatRepair {
+    /// Walk every club with a main team and enforce the seat invariant.
+    /// Serial mutable walk — mirrors `free_pool::harvest_expired_staff`; the
+    /// work is a couple of position scans per club plus, in the rare vacant
+    /// case, an interim promotion.
+    pub fn run(data: &mut SimulatorData, today: NaiveDate) {
+        for continent in &mut data.continents {
+            for country in &mut continent.countries {
+                for club in &mut country.clubs {
+                    Self::repair_club(club, today);
+                }
+            }
+        }
+    }
+
+    /// Enforce the head-coach-seat invariant for a single club.
+    fn repair_club(club: &mut Club, today: NaiveDate) {
+        let club_id = club.id;
+
+        // Read the seat state (and main-team reputation for any search we
+        // may open) up front, then drop the team borrow so we can touch the
+        // board afterwards. Clubs with no main team are skipped entirely.
+        let (manager_count, has_caretaker, main_rep) = {
+            let Some(main) = club.teams.main() else {
+                return;
+            };
+            (
+                ManagerSeat::manager_count(main),
+                ManagerSeat::has_caretaker(main),
+                main.reputation.world,
+            )
+        };
+
+        // ── A permanent manager is in post ──
+        if manager_count >= 1 {
+            if manager_count > 1 || has_caretaker {
+                if let Some(main) = club.teams.main_mut() {
+                    if manager_count > 1 {
+                        ManagerSeat::dedupe_managers(main);
+                    }
+                    // A permanent manager and a caretaker can't co-hold the seat.
+                    if has_caretaker {
+                        ManagerSeat::clear_caretaker(main);
+                    }
+                }
+            }
+            // A filled permanent seat means any lingering search is stale.
+            if club.board.manager_search_since.is_some() {
+                ManagerSearch::clear(&mut club.board);
+            }
+            return;
+        }
+
+        // ── Interim in place, permanent seat open ──
+        if has_caretaker {
+            // The board must actually be hunting for a permanent successor.
+            if club.board.manager_search_since.is_none() {
+                ManagerSearch::open(&mut club.board, today, main_rep);
+            }
+            return;
+        }
+
+        // ── Nobody in the dugout — install interim cover, then search ──
+        if let Some(main) = club.teams.main_mut() {
+            // Prefer promoting the strongest internal coach; only mint a
+            // synthetic caretaker when the cupboard is completely bare.
+            if !ManagerSeat::promote_best_caretaker(main, 0, today) {
+                ManagerSeat::install_emergency_caretaker(main, club_id, today);
+            }
+        }
+        // Don't reset an existing search clock — only open one if the board
+        // wasn't already searching (e.g. a sacking that found no caretaker).
+        if club.board.manager_search_since.is_none() {
+            ManagerSearch::open(&mut club.board, today, main_rep);
+        }
     }
 }
 
@@ -586,8 +788,8 @@ pub struct ManagerMarketTick;
 impl ManagerMarketTick {
     /// Run one daily tick of the world-level manager market in the
     /// canonical order: harvest expired contracts → age the pool →
-    /// refresh shortlists → initiate fresh approaches → advance
-    /// in-flight approaches.
+    /// repair vacant seats → refresh shortlists → initiate fresh
+    /// approaches → advance in-flight approaches.
     ///
     /// The order is load-bearing:
     ///   1. Sacked / contract-lapsed staff must hit the free-agent
@@ -596,18 +798,24 @@ impl ManagerMarketTick {
     ///   2. Pool aging (satisfaction decay, retirement) runs before
     ///      shortlists so retiring coaches don't appear as candidates
     ///      this tick.
-    ///   3. Shortlists must exist before fresh approaches initiate
+    ///   3. Seat repair runs after harvesting (so a club that just lost
+    ///      its last coach is recovered) and before shortlist refresh
+    ///      (so a freshly-opened vacancy search gets candidates the same
+    ///      tick): every main team ends the step with a Manager or a
+    ///      CaretakerManager, and every vacant club has an open search.
+    ///   4. Shortlists must exist before fresh approaches initiate
     ///      (an approach picks from the shortlist).
-    ///   4. Approach ticks must run *after* fresh initiation so a
+    ///   5. Approach ticks must run *after* fresh initiation so a
     ///      brand-new approach starts at state 0 and doesn't get
     ///      advanced on the same tick.
     ///
     /// Wrapping these in one function localises the contract — adding
-    /// a sixth step now means editing one place rather than three call
-    /// sites scattered around the orchestrator.
+    /// a further step now means editing one place rather than several
+    /// call sites scattered around the orchestrator.
     pub fn run(data: &mut SimulatorData, today: NaiveDate) {
         free_pool::harvest_expired_staff(data, today);
         free_pool::tick_free_agent_staff_pool(&mut data.free_agent_staff, today);
+        ManagerSeatRepair::run(data, today);
         Self::refresh_shortlists(data);
         Self::initiate_approaches(data);
         Self::tick_approaches(data);
@@ -1269,6 +1477,7 @@ impl ManagerApproach {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::club::BoardResult;
     use crate::club::StaffStub;
 
     fn coach(id: u32, age: u8, today: NaiveDate, skill: u8) -> Staff {
@@ -1816,5 +2025,222 @@ mod tests {
             starting_balance
         );
         assert!(data.pending_manager_approaches.is_empty());
+    }
+
+    // ─── Manager-seat repair (vacancy invariant) tests ───────────────────
+
+    fn coach_with_skill_and_role(
+        id: u32,
+        today: NaiveDate,
+        skill: u8,
+        position: StaffPosition,
+        salary: u32,
+    ) -> Staff {
+        let mut s = coach(id, 45, today, skill);
+        s.contract = Some(manager_contract(salary, today, position));
+        s
+    }
+
+    fn coach_with_expired_contract(
+        id: u32,
+        today: NaiveDate,
+        position: StaffPosition,
+        salary: u32,
+    ) -> Staff {
+        let mut s = coach(id, 45, today, 14);
+        let expired = today - chrono::Duration::days(10);
+        s.contract = Some(StaffClubContract::new(
+            salary,
+            expired,
+            position,
+            StaffStatus::Active,
+        ));
+        s
+    }
+
+    fn caretaker_id(data: &SimulatorData, club_id: u32) -> Option<u32> {
+        data.club(club_id)
+            .and_then(|c| c.teams.main())
+            .and_then(|t| {
+                t.staffs
+                    .iter()
+                    .find(|s| {
+                        s.contract
+                            .as_ref()
+                            .map(|c| matches!(c.position, StaffPosition::CaretakerManager))
+                            .unwrap_or(false)
+                    })
+                    .map(|s| s.id)
+            })
+    }
+
+    fn main_staff_len(data: &SimulatorData, club_id: u32) -> usize {
+        data.club(club_id)
+            .and_then(|c| c.teams.main())
+            .map(|t| t.staffs.len())
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn run_repairs_empty_main_team_into_caretaker_with_open_search() {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        let club = make_club_with_main(1, Vec::new());
+        let mut data = make_data(today, vec![club]);
+
+        ManagerMarketTick::run(&mut data, today);
+
+        assert!(
+            main_staff_len(&data, 1) >= 1,
+            "an emptied main team must not stay empty"
+        );
+        assert_eq!(count_caretakers(&data, 1), 1, "interim cover installed");
+        assert_eq!(count_head_coaches(&data, 1), 1, "head-coach seat is unique");
+        // Synthetic caretaker lives in the dedicated high-id range.
+        let id = caretaker_id(&data, 1).unwrap();
+        assert!(id >= 900_000_000, "expected emergency caretaker id, got {id}");
+        let club = data.club(1).unwrap();
+        assert!(
+            club.board.manager_search_since.is_some(),
+            "board must open a search for the vacant seat"
+        );
+    }
+
+    #[test]
+    fn repair_promotes_best_internal_coach_when_no_manager() {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        let weak = coach_with_skill_and_role(201, today, 8, StaffPosition::Coach, 50_000);
+        let strong = coach_with_skill_and_role(202, today, 16, StaffPosition::Coach, 50_000);
+        let club = make_club_with_main(1, vec![weak, strong]);
+        let mut data = make_data(today, vec![club]);
+
+        ManagerSeatRepair::run(&mut data, today);
+
+        assert_eq!(count_caretakers(&data, 1), 1);
+        assert_eq!(count_head_coaches(&data, 1), 1);
+        assert_eq!(
+            caretaker_id(&data, 1),
+            Some(202),
+            "the stronger coach should step up, not a synthetic caretaker"
+        );
+        assert!(data.club(1).unwrap().board.manager_search_since.is_some());
+    }
+
+    #[test]
+    fn repair_opens_search_for_caretaker_without_manager() {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        let caretaker =
+            coach_with_contract(50, today, StaffPosition::CaretakerManager, 80_000);
+        let club = make_club_with_main(1, vec![caretaker]);
+        let mut data = make_data(today, vec![club]);
+        assert!(data.club(1).unwrap().board.manager_search_since.is_none());
+
+        ManagerSeatRepair::run(&mut data, today);
+
+        assert_eq!(count_caretakers(&data, 1), 1, "caretaker is not disturbed");
+        assert_eq!(count_head_coaches(&data, 1), 1);
+        assert!(
+            data.club(1).unwrap().board.manager_search_since.is_some(),
+            "a caretaker-run club must have an open manager search"
+        );
+    }
+
+    #[test]
+    fn repair_clears_stale_search_and_keeps_single_manager() {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        let manager = coach_with_contract(100, today, StaffPosition::Manager, 200_000);
+        let club = make_club_with_main(1, vec![manager]);
+        let mut data = make_data(today, vec![club]);
+        if let Some(club) = data.club_mut(1) {
+            club.board.manager_search_since = Some(today - chrono::Duration::days(5));
+            club.board.search_window_days = 30;
+        }
+
+        ManagerSeatRepair::run(&mut data, today);
+
+        assert_eq!(count_managers(&data, 1), 1, "no second manager appears");
+        assert_eq!(count_head_coaches(&data, 1), 1);
+        assert!(
+            data.club(1).unwrap().board.manager_search_since.is_none(),
+            "stale search cleared while a permanent manager is in post"
+        );
+    }
+
+    #[test]
+    fn repair_collapses_duplicate_permanent_managers() {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        let weak = coach_with_skill_and_role(101, today, 8, StaffPosition::Manager, 200_000);
+        let strong = coach_with_skill_and_role(102, today, 16, StaffPosition::Manager, 200_000);
+        let club = make_club_with_main(1, vec![weak, strong]);
+        let mut data = make_data(today, vec![club]);
+
+        ManagerSeatRepair::run(&mut data, today);
+
+        assert_eq!(
+            count_managers(&data, 1),
+            1,
+            "duplicate managers collapse to a single seat"
+        );
+        assert_eq!(count_head_coaches(&data, 1), 1);
+        // The stronger candidate keeps the seat.
+        let main = data.club(1).unwrap().teams.main().unwrap();
+        let kept = main
+            .staffs
+            .iter()
+            .find(|s| {
+                s.contract
+                    .as_ref()
+                    .map(|c| matches!(c.position, StaffPosition::Manager))
+                    .unwrap_or(false)
+            })
+            .unwrap();
+        assert_eq!(kept.id, 102);
+    }
+
+    #[test]
+    fn harvest_then_repair_recovers_an_emptied_main_team() {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        // No manager; only expiring non-manager staff that the harvest will
+        // sweep into the free-agent pool, emptying the main team.
+        let coach = coach_with_expired_contract(201, today, StaffPosition::Coach, 60_000);
+        let physio = coach_with_expired_contract(202, today, StaffPosition::Physio, 30_000);
+        let club = make_club_with_main(1, vec![coach, physio]);
+        let mut data = make_data(today, vec![club]);
+
+        ManagerMarketTick::run(&mut data, today);
+
+        // The expired staff were harvested...
+        assert!(data.free_agent_staff.iter().any(|s| s.id == 201));
+        assert!(data.free_agent_staff.iter().any(|s| s.id == 202));
+        // ...but the club did not end the tick unmanaged.
+        assert!(main_staff_len(&data, 1) >= 1);
+        assert_eq!(count_caretakers(&data, 1), 1);
+        assert_eq!(count_head_coaches(&data, 1), 1);
+        assert!(data.club(1).unwrap().board.manager_search_since.is_some());
+    }
+
+    #[test]
+    fn sacking_removes_manager_pools_him_and_promotes_caretaker() {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        let manager = coach_with_contract(100, today, StaffPosition::Manager, 200_000);
+        let coach = coach_with_contract(201, today, StaffPosition::Coach, 60_000);
+        let club = make_club_with_main(1, vec![manager, coach]);
+        let mut data = make_data(today, vec![club]);
+
+        let mut result = BoardResult::new();
+        result.club_id = 1;
+        result.manager_sacked = true;
+        result.process(&mut data);
+
+        // Manager off the roster and into the global free-agent pool.
+        assert_eq!(count_managers(&data, 1), 0);
+        assert!(
+            data.free_agent_staff.iter().any(|s| s.id == 100),
+            "sacked manager joins the free-agent staff pool"
+        );
+        // Best internal coach steps up; the seat stays filled and unique.
+        assert_eq!(count_caretakers(&data, 1), 1);
+        assert_eq!(count_head_coaches(&data, 1), 1);
+        // Board opens its search.
+        assert!(data.club(1).unwrap().board.manager_search_since.is_some());
     }
 }

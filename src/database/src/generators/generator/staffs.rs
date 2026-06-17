@@ -16,6 +16,17 @@ impl DatabaseGenerator {
         let mut staffs = Vec::with_capacity(30);
 
         if *team_type == TeamType::Main {
+            // A main team is ALWAYS born with exactly one permanent manager.
+            // From here the board / manager-market lifecycle owns the seat
+            // (renewals, sackings, caretakers, appointments), but it must
+            // START filled — otherwise a club can spend its whole existence
+            // invisible to the manager market with nobody in the dugout.
+            staffs.push(staff_generator.generate(
+                country_id,
+                StaffPosition::Manager,
+                team_reputation,
+            ));
+
             // Only main team gets directors and scouts
             staffs.push(staff_generator.generate(
                 country_id,
@@ -58,22 +69,91 @@ impl DatabaseGenerator {
                 Self::assign_scout_regions(&mut scout, continent_id, country_code, team_reputation);
                 staffs.push(scout);
             }
+
+            // Reputation-scaled coaching / medical / analytics backroom.
+            Self::push_main_backroom(staff_generator, country_id, team_reputation, &mut staffs);
+        } else {
+            // Reserve / youth teams keep a lean support backroom and never
+            // their own manager seat — the club's head coach runs the
+            // football side across the whole club.
+            Self::push_support_backroom(staff_generator, country_id, team_reputation, &mut staffs);
         }
 
-        staffs.push(staff_generator.generate(
-            country_id,
-            StaffPosition::AssistantManager,
-            team_reputation,
-        ));
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Coach, team_reputation));
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Coach, team_reputation));
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Coach, team_reputation));
-
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Physio, team_reputation));
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Physio, team_reputation));
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Physio, team_reputation));
-
         staffs
+    }
+
+    /// Coaching, medical and analytics depth for a main team, scaled by
+    /// reputation. Elite clubs field a full modern backroom (assistant,
+    /// generalist coaches, GK + fitness specialists, a head physio leading
+    /// the medical room, a data analyst and head of recruitment); smaller
+    /// clubs get a credible-but-thin core — an assistant, a coach and a
+    /// physio — but never zero operational staff.
+    fn push_main_backroom(
+        staff_generator: &StaffGenerator,
+        country_id: u32,
+        team_reputation: u16,
+        staffs: &mut Vec<Staff>,
+    ) {
+        let hire = |position| staff_generator.generate(country_id, position, team_reputation);
+
+        // Every main team has an assistant manager.
+        staffs.push(hire(StaffPosition::AssistantManager));
+
+        let (coaches, physios) = if team_reputation >= 7000 {
+            (3, 3)
+        } else if team_reputation >= 5000 {
+            (3, 2)
+        } else if team_reputation >= 3000 {
+            (2, 2)
+        } else {
+            (1, 1)
+        };
+
+        for _ in 0..coaches {
+            staffs.push(hire(StaffPosition::Coach));
+        }
+
+        // Specialist coaches appear as the club can afford them.
+        if team_reputation >= 3000 {
+            staffs.push(hire(StaffPosition::GoalkeeperCoach));
+        }
+        if team_reputation >= 5000 {
+            staffs.push(hire(StaffPosition::FitnessCoach));
+        }
+
+        // A head physio leads the medical room at well-funded clubs.
+        if team_reputation >= 5000 {
+            staffs.push(hire(StaffPosition::HeadOfPhysio));
+        }
+        for _ in 0..physios {
+            staffs.push(hire(StaffPosition::Physio));
+        }
+
+        // Modern analytics / recruitment leadership at the very top end.
+        if team_reputation >= 7000 {
+            staffs.push(hire(StaffPosition::DataAnalyst));
+            staffs.push(hire(StaffPosition::HeadOfRecruitment));
+        }
+    }
+
+    /// Lean support backroom for reserve / youth teams: an assistant, a few
+    /// coaches and physios. Mirrors the historical flat allocation so youth
+    /// development and medical cover are unchanged, but without minting a
+    /// second manager seat inside the club.
+    fn push_support_backroom(
+        staff_generator: &StaffGenerator,
+        country_id: u32,
+        team_reputation: u16,
+        staffs: &mut Vec<Staff>,
+    ) {
+        let hire = |position| staff_generator.generate(country_id, position, team_reputation);
+        staffs.push(hire(StaffPosition::AssistantManager));
+        staffs.push(hire(StaffPosition::Coach));
+        staffs.push(hire(StaffPosition::Coach));
+        staffs.push(hire(StaffPosition::Coach));
+        staffs.push(hire(StaffPosition::Physio));
+        staffs.push(hire(StaffPosition::Physio));
+        staffs.push(hire(StaffPosition::Physio));
     }
 
     /// Give a scout knowledge of their home region + foreign regions weighted
@@ -178,5 +258,81 @@ impl DatabaseGenerator {
             }
         }
         corridors[0].0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::generators::StaffGenerator;
+    use core::PeopleNameGeneratorData;
+
+    fn make_generator() -> StaffGenerator {
+        StaffGenerator::with_people_names(&PeopleNameGeneratorData {
+            first_names: vec!["Alex".into(), "Sam".into()],
+            last_names: vec!["Smith".into(), "Jones".into()],
+            nicknames: vec![],
+        })
+    }
+
+    fn count_position(staffs: &[Staff], position: StaffPosition) -> usize {
+        staffs
+            .iter()
+            .filter(|s| {
+                s.contract
+                    .as_ref()
+                    .map(|c| c.position == position)
+                    .unwrap_or(false)
+            })
+            .count()
+    }
+
+    #[test]
+    fn main_team_has_exactly_one_manager_across_reputations() {
+        let generator = make_generator();
+        for rep in [800u16, 3500, 6000, 8000] {
+            let staffs =
+                DatabaseGenerator::generate_staffs(&generator, 1, 1, "EN", rep, &TeamType::Main);
+            assert_eq!(
+                count_position(&staffs, StaffPosition::Manager),
+                1,
+                "exactly one permanent manager expected at rep {rep}"
+            );
+            // Even a tiny club is never left with zero operational staff.
+            assert!(
+                staffs.len() >= 3,
+                "main team at rep {rep} too thin: {} staff",
+                staffs.len()
+            );
+        }
+    }
+
+    #[test]
+    fn youth_team_gets_no_manager_seat() {
+        let generator = make_generator();
+        let staffs =
+            DatabaseGenerator::generate_staffs(&generator, 1, 1, "EN", 5000, &TeamType::U18);
+        assert_eq!(count_position(&staffs, StaffPosition::Manager), 0);
+        assert_eq!(count_position(&staffs, StaffPosition::CaretakerManager), 0);
+        assert!(!staffs.is_empty(), "youth team still has support staff");
+    }
+
+    #[test]
+    fn elite_main_team_has_richer_backroom_than_small_club() {
+        let generator = make_generator();
+        let elite =
+            DatabaseGenerator::generate_staffs(&generator, 1, 1, "EN", 8000, &TeamType::Main);
+        let small = DatabaseGenerator::generate_staffs(&generator, 1, 1, "EN", 800, &TeamType::Main);
+        assert!(
+            elite.len() > small.len(),
+            "elite backroom ({}) should exceed small club ({})",
+            elite.len(),
+            small.len()
+        );
+        // Modern leadership roles only at the very top.
+        assert_eq!(count_position(&elite, StaffPosition::HeadOfRecruitment), 1);
+        assert_eq!(count_position(&small, StaffPosition::HeadOfRecruitment), 0);
+        assert_eq!(count_position(&elite, StaffPosition::HeadOfPhysio), 1);
+        assert_eq!(count_position(&small, StaffPosition::HeadOfPhysio), 0);
     }
 }

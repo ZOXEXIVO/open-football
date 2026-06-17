@@ -139,13 +139,53 @@ impl StaffClubContract {
         }
     }
 
+    /// A staff contract is expired once its end date is on or before the
+    /// current simulation date. The previous implementation had the
+    /// comparison reversed (`expired >= today`), so it reported live
+    /// contracts as expired and lapsed ones as active. Matches the
+    /// `expired <= today` convention used by the free-agent harvest and by
+    /// `days_to_expiration <= 0`.
     pub fn is_expired(&self, context: &SimulationContext) -> bool {
-        self.expired >= context.date.date()
+        self.expired <= context.date.date()
     }
 
     pub fn simulate(&mut self, context: &SimulationContext) {
         if context.check_contract_expiration() && self.is_expired(context) {
             self.status = StaffStatus::ExpiredContract;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx_on(date: NaiveDate) -> SimulationContext {
+        SimulationContext::new(date.and_hms_opt(0, 0, 0).unwrap())
+    }
+
+    fn contract_expiring(end: NaiveDate) -> StaffClubContract {
+        StaffClubContract::new(50_000, end, StaffPosition::Coach, StaffStatus::Active)
+    }
+
+    #[test]
+    fn not_expired_before_end_date() {
+        let contract = contract_expiring(NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
+        let ctx = ctx_on(NaiveDate::from_ymd_opt(2030, 6, 29).unwrap());
+        assert!(!contract.is_expired(&ctx));
+    }
+
+    #[test]
+    fn expired_on_end_date() {
+        let end = NaiveDate::from_ymd_opt(2030, 6, 30).unwrap();
+        let contract = contract_expiring(end);
+        assert!(contract.is_expired(&ctx_on(end)));
+    }
+
+    #[test]
+    fn expired_after_end_date() {
+        let contract = contract_expiring(NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
+        let ctx = ctx_on(NaiveDate::from_ymd_opt(2030, 7, 1).unwrap());
+        assert!(contract.is_expired(&ctx));
     }
 }
