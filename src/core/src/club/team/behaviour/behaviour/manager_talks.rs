@@ -545,6 +545,22 @@ impl TeamBehaviour {
         let asset_ctx = SquadAssetContext::for_squad(players);
         let squad_avg_ability = asset_ctx.squad_avg_ability();
 
+        // Evidence gate. At the very start of a season — before the club has
+        // played a meaningful number of official matches — the head coach has
+        // not yet seen this squad perform, and the full team-behaviour update
+        // fires on the first simulated day (`last_full_update` is `None`) with
+        // no warm-up. A mutual termination is a one-way door: the player is
+        // walked for free. So it must wait for the season to produce evidence
+        // rather than tear up a recognised senior's deal before a ball is
+        // kicked. The asset classifier is deliberately early-season-robust for
+        // *classification* (it reads prior-season minutes, never the tiny
+        // current sample); this guards the *decision* to act on it. Once the
+        // squad has accumulated enough matches the pass resumes normally and
+        // the surplus is cleared then.
+        if asset_ctx.is_early_season() {
+            return;
+        }
+
         // Severance / market-value caps scale with this squad's annual
         // wage bill (loanees excluded — they belong to their parent club).
         let annual_wage_bill: u32 = players
@@ -1026,8 +1042,11 @@ mod coach_termination_tests {
     //! cheap, clearly-below-level surplus — and is otherwise left for the
     //! sale / loan / listing systems instead of being walked for free.
     use super::*;
+    use crate::club::StaffStub;
     use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
     use crate::club::team::squad::SquadAssetClass;
+    use crate::context::SimulationContext;
     use crate::shared::fullname::FullName;
     use crate::{
         ContractType, PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
@@ -1070,12 +1089,21 @@ mod coach_termination_tests {
         }
 
         fn player(ability: u8, age: u8, contract: Option<PlayerClubContract>) -> Player {
+            Self::player_with_id(1, ability, age, contract)
+        }
+
+        fn player_with_id(
+            id: u32,
+            ability: u8,
+            age: u8,
+            contract: Option<PlayerClubContract>,
+        ) -> Player {
             let birth_year = Self::date().year() - age as i32;
             let mut attrs = PlayerAttributes::default();
             attrs.current_ability = ability;
             attrs.potential_ability = ability;
             PlayerBuilder::new()
-                .id(1)
+                .id(id)
                 .full_name(FullName::new("Test".to_string(), "Player".to_string()))
                 .birth_date(NaiveDate::from_ymd_opt(birth_year, 1, 1).unwrap())
                 .country_id(1)
@@ -1091,6 +1119,73 @@ mod coach_termination_tests {
                 .contract(contract)
                 .build()
                 .unwrap()
+        }
+
+        /// A staff collection holding only a head coach (Manager seat) — the
+        /// minimum `process_coach_contract_terminations` needs to run.
+        fn head_coach_only() -> StaffCollection {
+            let mut staff = StaffStub::default();
+            staff.id = 1;
+            staff.contract = Some(StaffClubContract::new(
+                50_000,
+                NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+                StaffPosition::Manager,
+                StaffStatus::Active,
+            ));
+            StaffCollection::new(vec![staff])
+        }
+
+        /// A bare global context at the fixture date — no club attached, so
+        /// the reputation lookups return 0, which is all the termination pass
+        /// needs for pricing a near-worthless veteran.
+        fn ctx_global<'a>() -> GlobalContext<'a> {
+            let dt = Self::date().and_hms_opt(0, 0, 0).unwrap();
+            GlobalContext::new(SimulationContext::new(dt))
+        }
+
+        /// A squad with one genuine cheap-old-surplus senior (id 10, NotNeeded,
+        /// CA 60, age 36) behind two first-team regulars in the same position
+        /// group. The regulars raise the squad level (so the veteran is clearly
+        /// below it) and the wage bill (so the value / severance caps have
+        /// headroom), and keep the group ≥3 so a release still leaves safe
+        /// cover. `busiest_played` sets one regular's official appearances —
+        /// the season-evidence proxy that drives the early-season gate.
+        fn surplus_squad(busiest_played: u16) -> PlayerCollection {
+            let surplus = Self::player_with_id(
+                10,
+                60,
+                36,
+                Some(Self::contract(
+                    15_000,
+                    ContractType::FullTime,
+                    3,
+                    PlayerSquadStatus::NotNeeded,
+                )),
+            );
+            let mut reg_a = Self::player_with_id(
+                11,
+                130,
+                25,
+                Some(Self::contract(
+                    5_000_000,
+                    ContractType::FullTime,
+                    24,
+                    PlayerSquadStatus::FirstTeamRegular,
+                )),
+            );
+            reg_a.statistics.played = busiest_played;
+            let reg_b = Self::player_with_id(
+                12,
+                130,
+                25,
+                Some(Self::contract(
+                    5_000_000,
+                    ContractType::FullTime,
+                    24,
+                    PlayerSquadStatus::FirstTeamRegular,
+                )),
+            );
+            PlayerCollection::new(vec![surplus, reg_a, reg_b])
         }
     }
 
@@ -1261,6 +1356,43 @@ mod coach_termination_tests {
         assert!(
             CoachTerminationReview::evaluate(&player, Fx::date(), &ctx).is_none(),
             "a not-yet-evaluated senior must not be walked for free"
+        );
+    }
+
+    // The early-season evidence gate: a genuine cheap-old-surplus senior who
+    // WOULD pass every release gate is nonetheless left alone while the season
+    // is too young to judge the squad (no official matches played), and is
+    // only mutually terminated once enough matches have accumulated. This is
+    // the "veteran walked for free on simulated day 1" guard, exercised
+    // through the full `process_coach_contract_terminations` pass.
+    #[test]
+    fn early_season_window_defers_coach_terminations_until_evidence() {
+        let staffs = Fx::head_coach_only();
+        let ctx = Fx::ctx_global();
+
+        // Day 1 / low-evidence window — busiest player has zero appearances.
+        let early = Fx::surplus_squad(0);
+        let mut result = TeamBehaviourResult::new();
+        TeamBehaviour::process_coach_contract_terminations(&early, &staffs, &mut result, &ctx);
+        assert!(
+            result.contract_terminations.is_empty(),
+            "no contract may be torn up before the season has produced evidence"
+        );
+
+        // Established season — a squad-mate now has a full appearance sample,
+        // so the evidence window has closed and the same veteran is released.
+        let established = Fx::surplus_squad(20);
+        let mut result = TeamBehaviourResult::new();
+        TeamBehaviour::process_coach_contract_terminations(&established, &staffs, &mut result, &ctx);
+        assert_eq!(
+            result.contract_terminations.len(),
+            1,
+            "once the season has evidence the surplus veteran is mutually terminated"
+        );
+        assert_eq!(result.contract_terminations[0].player_id, 10);
+        assert_eq!(
+            result.contract_terminations[0].reason,
+            FreeAgentReleaseReason::MutualTermination
         );
     }
 }
