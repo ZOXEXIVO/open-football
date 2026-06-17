@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::ScoutMonitoringSource;
 use crate::transfers::pipeline::ScoutPlayerMonitoring;
+use crate::transfers::pipeline::breakout::{BreakoutPerformanceSignal, LeaguePerformanceLookup};
 use crate::transfers::pipeline::exposure::{
     AvailabilityExposure, AvailabilitySignals, ExposureStage, FreeAgentBuyerContext,
     FreeAgentRecommendationSignals, OpportunisticFreeAgentScout,
@@ -42,6 +43,18 @@ pub(in crate::transfers::pipeline) struct ListedTargetView {
     pub is_listed: bool,
     pub is_transfer_requested: bool,
     pub is_unhappy: bool,
+    /// Parent club has loan-listed the player. On its own this routes to
+    /// the loan market, but a loan-listed player with a strong breakout
+    /// score is treated as "available enough" for a permanent approach too
+    /// — clubs buy the players smaller clubs only meant to loan out.
+    pub is_loan_listed: bool,
+    /// Performance-breakout discovery score (0..100) from
+    /// [`crate::transfers::pipeline::breakout::BreakoutPerformanceSignal`].
+    /// A high score lets the player be discovered on *form* — admitting a
+    /// loan-listed (or, in form-discovery mode, an unlisted) breakout
+    /// player into this path and lifting his ranking — but it never relaxes
+    /// the affordability / tier / reputation gates below.
+    pub breakout_score: f32,
     pub world_reputation: i16,
     pub current_reputation: i16,
     pub ambition: f32,
@@ -86,6 +99,13 @@ pub(in crate::transfers::pipeline) struct BuyerContext {
     /// Buyer has a 30+ at-tier starter at the target's group — a
     /// succession opportunity that opens up a slot.
     pub has_aging_starter: bool,
+    /// Year-round "breakout watch" mode. When set, a strong-breakout player
+    /// who is NOT publicly available is still admitted so the club can open
+    /// scouting monitoring on him purely on form. Off (the default) for the
+    /// in-window listed-star sweep, which only surfaces players who have
+    /// advertised availability. Either way the affordability / tier /
+    /// reputation / squad-need gates are unchanged.
+    pub form_discovery_mode: bool,
 }
 
 /// Outcome of evaluating a listed target. Either rejected with a
@@ -108,17 +128,22 @@ pub(in crate::transfers::pipeline) enum ListedRejectReason {
     NotAnUpgrade,
 }
 
-/// Pure evaluator for the listed-star sweep.
+/// Pure evaluator for the listed-star / breakout sweep.
 ///
 /// Hard gates (reject if any fail):
-///   • status flag present (Lst|Req|Unh)
+///   • availability: a public market flag (Lst|Req|Unh), OR loan-listed
+///     with a strong breakout score, OR — in `form_discovery_mode` — a
+///     strong breakout alone (the year-round watch discovers on form)
 ///   • CA inside the buyer's tier window
 ///   • estimated fee within `plan_total_budget × 1.4`
 ///   • estimated wage within `wage_headroom × 1.3`
 ///   • world-reputation gap ≤ tier-scaled allowance
-///   • at least one squad-need signal: weak group, open request,
-///     or aging starter at the target's group
-///   • improvement: ≥ 3 CA above current best, or open request
+///   • a reason to act: a squad-need signal (weak group, open request,
+///     aging starter) OR a market opportunity — a stale available player
+///     or a genuine breakout who is at least depth-relevant or a resale
+///     prospect. A breakout never relaxes the fee / wage / tier / rep gates.
+///   • improvement: ≥ 3 CA above current best, an open request, or a
+///     qualifying opportunity
 ///
 /// Soft scoring (sum, higher is better — used for top-N selection):
 ///   • improvement margin (capped to +30)
@@ -129,6 +154,8 @@ pub(in crate::transfers::pipeline) enum ListedRejectReason {
 ///   • affordability headroom
 ///   • squad-need fit
 ///   • ambition-driven step-up
+///   • stale-availability circulation lift
+///   • performance-breakout lift
 pub(in crate::transfers::pipeline) fn evaluate_listed_target(
     target: &ListedTargetView,
     ctx: &BuyerContext,
@@ -136,7 +163,19 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
     use ListedRejectReason::*;
     use ListedTargetVerdict::*;
 
-    if !(target.is_listed || target.is_transfer_requested || target.is_unhappy) {
+    // Availability gate. A player is "available enough" to pursue when he
+    // is publicly on the market (Lst/Req/Unh); OR he is loan-listed AND his
+    // form is a genuine breakout (clubs buy the players smaller clubs only
+    // meant to loan out); OR, in year-round form-discovery mode, his form
+    // alone is a strong breakout (scouting monitoring opens on talent, not
+    // just on a for-sale sign). None of these relax the realism gates below
+    // — they only decide whether the player enters this path at all.
+    let strong_breakout = target.breakout_score >= BreakoutPerformanceSignal::BREAKOUT_THRESHOLD;
+    let publicly_available = target.is_listed || target.is_transfer_requested || target.is_unhappy;
+    let available_enough = publicly_available
+        || (target.is_loan_listed && strong_breakout)
+        || (ctx.form_discovery_mode && strong_breakout);
+    if !available_enough {
         return Reject(NotListed);
     }
 
@@ -157,7 +196,7 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
         is_listed: target.is_listed,
         is_transfer_requested: target.is_transfer_requested,
         is_unhappy: target.is_unhappy,
-        is_loan_listed: false,
+        is_loan_listed: target.is_loan_listed,
         current_ability: target.ability,
         estimated_potential: target.estimated_potential,
         age: target.age,
@@ -236,9 +275,15 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
     let has_need = weak_group || ctx.has_open_request || ctx.has_aging_starter;
     let resale_value = target.age <= 23 && target.estimated_potential > target.ability + 5;
     let depth_value = (target.ability as i16) >= baseline as i16 - 10;
-    let strong_opportunity = !matches!(exposure.stage, ExposureStage::Fresh)
+    // A stale, untouched available player OR a genuine performance breakout
+    // is a market opportunity even without a conventional positional need —
+    // but only when he is at least squad-relevant (depth) or a resale
+    // prospect, so a club never chases a hot scorer plainly below its level.
+    let stale_opportunity = !matches!(exposure.stage, ExposureStage::Fresh)
         && exposure.score >= 45.0
         && (resale_value || depth_value);
+    let breakout_opportunity = strong_breakout && (resale_value || depth_value);
+    let strong_opportunity = stale_opportunity || breakout_opportunity;
     if !(has_need || strong_opportunity) {
         return Reject(NoSquadNeed);
     }
@@ -300,6 +345,11 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
     // genuinely-stuck Req/Unh/listed player doesn't disappear behind a
     // churn of fresher candidates.
     score += exposure.circulation_boost;
+
+    // Breakout form lifts the player up the ranking so a genuinely hot
+    // talent is pursued ahead of a merely-available one. Ranking only —
+    // the hard gates above already passed.
+    score += (target.breakout_score / 100.0) * 12.0;
 
     Accept(score)
 }
@@ -367,8 +417,15 @@ impl PipelineProcessor {
             recent_interest_count: u8,
             /// Consecutive weekly circulation scans that found no taker.
             failed_scans: u16,
+            /// Performance-breakout discovery score (0..100), computed once
+            /// here from the league performance lookup so the listed-star
+            /// sweep and the scout-network scorer share one number.
+            breakout_score: f32,
         }
 
+        // Per-country scoring-chart + recent-award lookup, built once for
+        // the whole pass so the breakout score on each snapshot is cheap.
+        let performance_lookup = LeaguePerformanceLookup::build(country);
         let mut all_snapshots: Vec<PlayerSnapshot> = Vec::new();
 
         for club in &country.clubs {
@@ -427,6 +484,22 @@ impl PipelineProcessor {
                             skill_ability,
                         );
 
+                    let appearances = player.statistics.total_games();
+                    let average_rating = player
+                        .statistics
+                        .average_rating_realistic(player.position().position_group());
+                    // Form-discovery signal — built once per player from the
+                    // observable output / rating / scoring-chart / award data.
+                    let breakout_score = performance_lookup
+                        .breakout_for_player(
+                            player,
+                            appearances,
+                            average_rating,
+                            player_age,
+                            parent_league_reputation,
+                        )
+                        .score;
+
                     all_snapshots.push(PlayerSnapshot {
                         id: player.id,
                         club_id: club.id,
@@ -449,10 +522,8 @@ impl PipelineProcessor {
                         world_reputation: player.player_attributes.world_reputation,
                         current_reputation: player.player_attributes.current_reputation,
                         // Recommendation feature row: regressed value.
-                        average_rating: player
-                            .statistics
-                            .average_rating_realistic(player.position().position_group()),
-                        appearances: player.statistics.total_games(),
+                        average_rating,
+                        appearances,
                         is_transfer_protected: player.is_transfer_protected(date, current_window),
                         days_available: player.days_available(date),
                         recent_interest_count: player
@@ -463,6 +534,7 @@ impl PipelineProcessor {
                             .availability_market_state()
                             .map(|s| s.failed_scans)
                             .unwrap_or(0),
+                        breakout_score,
                     });
                 }
             }
@@ -704,6 +776,11 @@ impl PipelineProcessor {
                         score += if is_january { 2.0 } else { 1.0 };
                     }
 
+                    // Performance breakout — a player whose *results* are
+                    // outrunning his current level (league-rep discounted)
+                    // is exactly who a scout network should flag.
+                    score += (cand.breakout_score / 100.0) * 4.0;
+
                     // Ability fit
                     if cand.ability >= avg_ability.saturating_sub(5) {
                         score += 1.0;
@@ -872,6 +949,8 @@ impl PipelineProcessor {
                         is_listed: p.is_listed,
                         is_transfer_requested: p.is_transfer_requested,
                         is_unhappy: p.is_unhappy,
+                        is_loan_listed: p.is_loan_listed,
+                        breakout_score: p.breakout_score,
                         world_reputation: p.world_reputation,
                         current_reputation: p.current_reputation,
                         ambition: p.ambition,
@@ -899,6 +978,9 @@ impl PipelineProcessor {
                             .unwrap_or(0),
                         has_open_request: buyer_open_request_for(p.position_group),
                         has_aging_starter: buyer_has_aging_starter(p.position_group),
+                        // In-window listed-star sweep: only publicly
+                        // available players (Lst/Req/Unh, or Loa+breakout).
+                        form_discovery_mode: false,
                     };
                     match evaluate_listed_target(&view, &ctx) {
                         ListedTargetVerdict::Accept(score) => Some((p, score)),

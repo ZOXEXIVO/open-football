@@ -534,6 +534,130 @@ impl SeasonFixture {
         f
     }
 
+    /// Live "Pichienko 2029/30" shape: a keeper behind a thoroughly
+    /// dominant lower-division defence — 29 starts, 24 clean sheets,
+    /// only 5 conceded (21W 7D 1L). The clean sheets arrive almost
+    /// entirely as protected shutouts (0-2 shots faced) because the
+    /// back line snuffed everything out, so the keeper rarely had a
+    /// save to make. This is the exact engine distribution that posted
+    /// a 6.42 season average on the live site — a historically great
+    /// defensive season that the per-match model buried in the
+    /// passenger band purely because the keeper wasn't peppered.
+    fn dominant_defense_gk_season() -> Self {
+        let mut f = SeasonFixture {
+            matches: Vec::new(),
+            team_shot_share: 0.66,
+            team_possession: 0.62,
+        };
+        // 24 clean sheets behind a dominant but low-scoring side: the
+        // keeper barely touches the ball (mostly 0 saves), and the
+        // shutouts skew toward goalless / 1-0 grinds rather than wins.
+        // 9 wins, 15 draws. (saves, faced, command, team_goals).
+        let clean_sheets: [(u16, u16, u16, u8); 24] = [
+            (0, 0, 0, 0),
+            (0, 0, 0, 0),
+            (0, 0, 0, 0),
+            (0, 0, 0, 0),
+            (0, 0, 0, 0),
+            (0, 0, 0, 0),
+            (0, 0, 0, 0),
+            (0, 0, 0, 0),
+            (0, 0, 0, 0),
+            (1, 1, 0, 0),
+            (1, 1, 0, 0),
+            (1, 1, 0, 0),
+            (0, 0, 0, 0),
+            (0, 0, 0, 0),
+            (1, 1, 0, 0),
+            (0, 0, 0, 1),
+            (0, 0, 0, 1),
+            (0, 0, 0, 1),
+            (0, 0, 0, 1),
+            (0, 0, 0, 1),
+            (0, 0, 0, 1),
+            (1, 1, 0, 1),
+            (1, 1, 0, 1),
+            (2, 2, 1, 1),
+        ];
+        for (saves, faced, cmd, tg) in clean_sheets {
+            f.push(LineFactory::gk(saves, faced, cmd), tg, 0);
+        }
+        // 5 one-goal matches: the only goals all season. 1W 1D 3L.
+        let one_goal: [(u16, u16, u8); 5] = [
+            (1, 2, 0),
+            (2, 3, 0),
+            (1, 2, 0),
+            (2, 3, 1),
+            (3, 4, 2),
+        ];
+        for (saves, faced, tg) in one_goal {
+            f.push(LineFactory::gk(saves, faced, 0), tg, 1);
+        }
+        f
+    }
+
+    /// Live "Pichienko 2026/27" shape: the same keeper a few seasons
+    /// earlier behind a leaky top-flight side — 31 starts, only 9 clean
+    /// sheets, 30 conceded (14W 9D 8L). This is the season that posted a
+    /// 6.39 average on the live site, statistically a dead heat with the
+    /// 24-CS / 5-conceded campaign above (6.42) even though it kept a
+    /// third as many clean sheets and shipped six times as many goals —
+    /// the inversion that motivated the protected-shutout fix.
+    fn leaky_topflight_gk_season() -> Self {
+        let mut f = SeasonFixture {
+            matches: Vec::new(),
+            team_shot_share: 0.58,
+            team_possession: 0.57,
+        };
+        // 9 clean sheets, 6W 3D. (saves, faced, command, team_goals).
+        let clean_sheets: [(u16, u16, u16, u8); 9] = [
+            (0, 0, 0, 1),
+            (1, 1, 0, 2),
+            (0, 0, 0, 1),
+            (2, 2, 1, 3),
+            (1, 1, 0, 2),
+            (1, 1, 0, 1),
+            (0, 0, 0, 0),
+            (2, 2, 0, 0),
+            (1, 1, 0, 0),
+        ];
+        for (saves, faced, cmd, tg) in clean_sheets {
+            f.push(LineFactory::gk(saves, faced, cmd), tg, 0);
+        }
+        // 16 one-goal matches (7W 4D 5L). A leaky top side concedes from
+        // a low shot count — most goals beat the keeper cleanly, so the
+        // save volume per conceded match is low. (saves, faced, team_goals).
+        let one_goal: [(u16, u16, u8); 16] = [
+            (0, 1, 2),
+            (1, 2, 2),
+            (0, 1, 2),
+            (1, 2, 2),
+            (0, 1, 2),
+            (1, 2, 2),
+            (0, 1, 2),
+            (1, 2, 1),
+            (0, 1, 1),
+            (1, 2, 1),
+            (0, 1, 1),
+            (1, 2, 0),
+            (0, 1, 0),
+            (1, 2, 0),
+            (0, 1, 0),
+            (1, 2, 0),
+        ];
+        for (saves, faced, tg) in one_goal {
+            f.push(LineFactory::gk(saves, faced, 0), tg, 1);
+        }
+        // 5 two-goal matches (1W 2D 2L) + one 4-goal hammering (loss).
+        let two_goal: [(u16, u16, u8); 5] =
+            [(1, 3, 3), (1, 3, 2), (2, 4, 2), (1, 3, 1), (2, 4, 0)];
+        for (saves, faced, tg) in two_goal {
+            f.push(LineFactory::gk(saves, faced, 0), tg, 2);
+        }
+        f.push(LineFactory::gk(1, 5, 0), 1, 4);
+        f
+    }
+
     /// Ivan-Lopez-like league season: 32 starts + 2 sub cameos, 15 goals
     /// (11 singles + 2 braces), 2 assists, dominant club (21W 7D 6L).
     fn striker_fifteen_goal_season() -> Self {
@@ -1324,6 +1448,52 @@ fn second_tier_shutout_gk_season_reads_good_not_elite() {
          the 7.11-7.37 robot band that motivated the 2026-04 GK tightening\n{}",
         avg,
         f.breakdown()
+    );
+}
+
+#[test]
+fn dominant_defense_gk_season_reads_elite_not_buried() {
+    let f = SeasonFixture::dominant_defense_gk_season();
+    let avg = f.average();
+    // A 24-CS / 5-conceded season is a historically great defensive
+    // campaign and must read clearly in the good-to-elite band, NOT the
+    // ~6.4 passenger hole the protected-shutout penalties used to bury it
+    // in. Upper-bounded so an untested-but-immaculate keeper still can't
+    // reach the 7.2+ robot band the GK tightening guards against.
+    assert!(
+        (6.75..=7.20).contains(&avg),
+        "dominant-defence 24-CS/29-start GK season averaged {:.3} — a \
+         historically great defensive season must land in 6.75..=7.20, not \
+         the ~6.4 passenger hole protected shutouts used to fall into\n{}",
+        avg,
+        f.breakdown()
+    );
+}
+
+#[test]
+fn dominant_defense_gk_clearly_beats_leaky_gk() {
+    // The headline regression, reproduced from the exact pair the live
+    // site reported: a 24-CS/5-conceded season (live 6.42) and a
+    // 9-CS/30-conceded season (live 6.39) were a statistical dead heat
+    // because save volume — not goals kept out — drove the rating. After
+    // the protected-shutout fix the elite defensive season must clearly
+    // out-rate the leaky one.
+    let dominant = SeasonFixture::dominant_defense_gk_season().average();
+    let leaky = SeasonFixture::leaky_topflight_gk_season().average();
+    assert!(
+        leaky < 6.55,
+        "leaky 9-CS/30-conceded GK season averaged {:.3} — a season that \
+         shipped 30 goals must stay in the mediocre band, below 6.55\n{}",
+        leaky,
+        SeasonFixture::leaky_topflight_gk_season().breakdown()
+    );
+    assert!(
+        dominant > leaky + 0.30,
+        "elite defensive GK season ({:.3}) must clearly beat the leaky one \
+         ({:.3}) by more than 0.30 — goals kept out, not save volume, is the \
+         keeper's headline currency",
+        dominant,
+        leaky
     );
 }
 

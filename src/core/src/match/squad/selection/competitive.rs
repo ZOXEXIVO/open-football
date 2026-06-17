@@ -67,6 +67,18 @@ pub(crate) struct SelectionScoringContext<'a> {
 }
 
 impl SelectionScoringContext<'_> {
+    /// Whether `player` is a manager-pinned starter this side actually honours.
+    /// Force selection is a Main-team pin for *competitive* football, so three
+    /// conditions must all hold:
+    ///   * the fixture is not a friendly — a pin never drags a player into a
+    ///     meaningless friendly, where the squad is rotated on merit/rest;
+    ///   * the engine honours the pin (`honor_force_selection` is false for B /
+    ///     reserve / youth squads — the pin is a senior-XI override);
+    ///   * the player actually carries the pin.
+    fn honors_force(&self, player: &Player) -> bool {
+        !self.is_friendly && self.engine.honor_force_selection && player.is_force_match_selection
+    }
+
     /// Domestic-cup opportunity bonus for `player`, or 0.0 outside a cup tie.
     fn cup_opportunity(&self, player: &Player, for_starting: bool) -> f32 {
         self.cup
@@ -146,6 +158,12 @@ impl SelectionScoringContext<'_> {
         let required = self.tactics.positions();
 
         // STEP 1: Goalkeeper. Fallback order:
+        //   0. Manager-pinned keeper. A force-selected, available keeper is a
+        //      hard pin — the manager wants him between the sticks, so he takes
+        //      the gloves over the merit pick. The force bonus only ever
+        //      reached the outfield slot score, never `goalkeeper_score`, so a
+        //      pinned backup keeper used to lose the gloves to the #1 and ride
+        //      the bench; this restores the pin for keepers too.
         //   1. Best available keeper (fit, not injured, not on int duty).
         //   2. Any keeper in the available pool, even if low-condition — we
         //      normally reject those, but a tired keeper still has real
@@ -163,7 +181,8 @@ impl SelectionScoringContext<'_> {
         // 0%, and the league generated repeatable 10+ goal blowouts. This
         // order keeps a real keeper in goal whenever possible.
         let picked_gk = self
-            .pick_best_goalkeeper(available, &used_ids)
+            .pick_forced_goalkeeper(available, &used_ids)
+            .or_else(|| self.pick_best_goalkeeper(available, &used_ids))
             .or_else(|| Self::pick_any_goalkeeper_fallback(available, &used_ids));
         if let Some(gk) = picked_gk {
             squad.push(MatchPlayer::from_player(
@@ -646,6 +665,14 @@ impl SelectionScoringContext<'_> {
             used_ids.push(gk.id);
         }
 
+        // 1b. Manager-pinned overflow. A force-selected player the XI had no
+        // room for (more pins than slots) still belongs in the eighteen, ahead
+        // of ordinary squad members — so bench him before the role-coverage and
+        // fill passes get to choose. Runs after the backup keeper so the
+        // structural keeper slot is never lost to the pins. No-op outside the
+        // overflow case, in friendlies, and for non-Main squads.
+        self.place_forced_substitutes(team_id, &mut subs, &mut used_ids, remaining);
+
         // 2. Role coverage. Real benches are selected for match options, not just
         // broad DEF/MID/FWD buckets.
         for role in self.bench_plan() {
@@ -718,6 +745,45 @@ impl SelectionScoringContext<'_> {
         self.ensure_backup_goalkeeper(team_id, &mut subs, &mut used_ids, remaining);
 
         subs
+    }
+
+    /// Bench the manager-pinned players who couldn't be fitted into the XI,
+    /// ahead of ordinary squad members. Only fires in the overflow case (more
+    /// pins than starting slots) — the surplus pins still travel in the
+    /// matchday eighteen. Best pins first, with a stable id tie-break for a
+    /// deterministic bench; capped at the bench size and never duplicating an id
+    /// already used. Skipped in friendlies and for non-Main squads via
+    /// [`Self::honors_force`].
+    fn place_forced_substitutes(
+        &self,
+        team_id: u32,
+        subs: &mut Vec<MatchPlayer>,
+        used_ids: &mut Vec<u32>,
+        remaining: &[&Player],
+    ) {
+        let mut forced: Vec<&Player> = remaining
+            .iter()
+            .copied()
+            .filter(|p| self.honors_force(p))
+            .filter(|p| !used_ids.contains(&p.id))
+            .collect();
+        if forced.is_empty() {
+            return;
+        }
+        forced.sort_by(|a, b| {
+            self.bench_role_score(b, BenchRole::Impact)
+                .partial_cmp(&self.bench_role_score(a, BenchRole::Impact))
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        for player in forced {
+            if subs.len() >= helpers::DEFAULT_BENCH_SIZE {
+                break;
+            }
+            let pos = helpers::best_tactical_position(player, self.tactics);
+            subs.push(MatchPlayer::from_player(team_id, player, pos, false));
+            used_ids.push(player.id);
+        }
     }
 
     /// Final backup-goalkeeper guarantee for the bench. No-op when the bench
@@ -905,22 +971,82 @@ impl SelectionScoringContext<'_> {
             return Vec::new();
         }
 
-        let players: Vec<&Player> = available
+        let candidates: Vec<&'p Player> = available
             .iter()
             .filter(|p| !used_ids.contains(&p.id))
             .filter(|p| !p.positions.is_goalkeeper())
             .copied()
             .collect();
 
-        if players.len() < slots.len() {
+        // Manager-pinned outfielders must be in the XI whenever it is
+        // structurally possible — a hard pre-placement rule, not merely the
+        // +1000 slot-score nudge. Two regimes:
+        //   * pins <= open slots: pin every forced player into the assignment
+        //     (the DP may not skip them) and fill the rest of the shape around
+        //     them, choosing the slots that maximise the *total* slot score.
+        //   * pins > open slots (overflow): only the pinned players contest the
+        //     slots, so the DP fields the best feasible XI of them and the
+        //     surplus pins fall through to the bench pass.
+        // With no forced players this collapses to the original assignment.
+        let forced_count = candidates
+            .iter()
+            .copied()
+            .filter(|p| self.honors_force(p))
+            .count();
+        let overflow = forced_count > slots.len();
+
+        let pool: Vec<&'p Player> = if overflow {
+            candidates
+                .iter()
+                .copied()
+                .filter(|p| self.honors_force(p))
+                .collect()
+        } else {
+            candidates
+        };
+
+        if pool.len() < slots.len() {
+            return Vec::new();
+        }
+
+        // A forced player is pinned (the DP can't leave him out) only in the
+        // non-overflow regime; in overflow every pooled player is forced, so
+        // the assignment is a free contest among them for the slots.
+        let must_place: Vec<bool> = if overflow {
+            vec![false; pool.len()]
+        } else {
+            pool.iter().map(|p| self.honors_force(p)).collect()
+        };
+
+        self.solve_slot_assignment(&pool, available, slots, &must_place)
+    }
+
+    /// Maximum-total slot assignment by bitmask DP. Each pooled player is
+    /// assigned to at most one slot and every slot must be filled; the returned
+    /// assignment maximises the summed slot score. `must_place[i] == true`
+    /// drops player `i`'s "skip" transition, so a manager-pinned starter is
+    /// guaranteed a slot whenever the assignment is feasible. With every
+    /// `must_place` false this is exactly the original free assignment.
+    ///
+    /// `available` is the full availability pool the slot score reads for its
+    /// same-role / successor checks; `pool` is the subset actually contesting
+    /// the slots.
+    fn solve_slot_assignment<'p>(
+        &self,
+        pool: &[&'p Player],
+        available: &[&'p Player],
+        slots: &[PlayerPositionType],
+        must_place: &[bool],
+    ) -> Vec<(PlayerPositionType, &'p Player)> {
+        if pool.len() < slots.len() {
             return Vec::new();
         }
 
         // Precompute every (player, slot) score once. The DP revisits each
         // (player, slot) pair across many bitmask states, and `starting_slot_score`
-        // — now including the future-aware pathway pass — isn't free, so caching
-        // it keeps the assignment cost flat instead of multiplying by 2^slots.
-        let score_matrix: Vec<Vec<f32>> = players
+        // — including the future-aware pathway pass — isn't free, so caching it
+        // keeps the assignment cost flat instead of multiplying by 2^slots.
+        let score_matrix: Vec<Vec<f32>> = pool
             .iter()
             .map(|p| {
                 slots
@@ -933,18 +1059,20 @@ impl SelectionScoringContext<'_> {
         let slot_count = slots.len();
         let full_mask = (1usize << slot_count) - 1;
         let neg_inf = f32::NEG_INFINITY;
-        let mut dp = vec![vec![neg_inf; full_mask + 1]; players.len() + 1];
-        let mut prev = vec![vec![None; full_mask + 1]; players.len() + 1];
+        let mut dp = vec![vec![neg_inf; full_mask + 1]; pool.len() + 1];
+        let mut prev = vec![vec![None; full_mask + 1]; pool.len() + 1];
         dp[0][0] = 0.0;
 
-        for (i, _player) in players.iter().enumerate() {
+        for (i, _player) in pool.iter().enumerate() {
             for mask in 0..=full_mask {
                 let current = dp[i][mask];
                 if !current.is_finite() {
                     continue;
                 }
 
-                if current > dp[i + 1][mask] {
+                // Skip transition — suppressed for a pinned player so the DP
+                // can never leave a force-selected starter out of the XI.
+                if !must_place[i] && current > dp[i + 1][mask] {
                     dp[i + 1][mask] = current;
                     prev[i + 1][mask] = Some((mask, None));
                 }
@@ -965,18 +1093,18 @@ impl SelectionScoringContext<'_> {
             }
         }
 
-        if !dp[players.len()][full_mask].is_finite() {
+        if !dp[pool.len()][full_mask].is_finite() {
             return Vec::new();
         }
 
-        let mut assigned: Vec<Option<&Player>> = vec![None; slot_count];
+        let mut assigned: Vec<Option<&'p Player>> = vec![None; slot_count];
         let mut mask = full_mask;
-        for i in (1..=players.len()).rev() {
+        for i in (1..=pool.len()).rev() {
             let Some((previous_mask, selected_slot)) = prev[i][mask] else {
                 break;
             };
             if let Some(slot_idx) = selected_slot {
-                assigned[slot_idx] = Some(players[i - 1]);
+                assigned[slot_idx] = Some(pool[i - 1]);
             }
             mask = previous_mask;
         }
@@ -1469,6 +1597,32 @@ impl SelectionScoringContext<'_> {
                 }
             }
         }
+    }
+
+    /// Best manager-pinned goalkeeper, or `None` when no force-selected keeper
+    /// is available to this side. A hard pin: among the force-selected keepers
+    /// already passed by the availability gate (so injury / international duty /
+    /// condition floor / ban still exclude them upstream), pick the strongest by
+    /// the same `goalkeeper_score` the merit picker uses. Returns `None` in a
+    /// friendly and for non-Main squads — the same gate as [`Self::honors_force`].
+    fn pick_forced_goalkeeper<'p>(
+        &self,
+        available: &[&'p Player],
+        used_ids: &[u32],
+    ) -> Option<&'p Player> {
+        available
+            .iter()
+            .copied()
+            .filter(|p| !used_ids.contains(&p.id))
+            .filter(|p| p.positions.is_goalkeeper())
+            .filter(|p| self.honors_force(p))
+            .max_by(|a, b| {
+                let score = |p: &Player| {
+                    self.engine
+                        .goalkeeper_score(p, self.staff, self.is_friendly, self.date)
+                };
+                score(a).partial_cmp(&score(b)).unwrap_or(Ordering::Equal)
+            })
     }
 
     fn pick_best_goalkeeper<'p>(

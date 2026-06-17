@@ -32,6 +32,7 @@ use log::debug;
 use crate::club::player::transfer::AvailabilityBlockReason;
 use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::pipeline::TransferRequestStatus;
+use crate::transfers::pipeline::breakout::LeaguePerformanceLookup;
 use crate::transfers::pipeline::exposure::MarketDiscoveryDiagnosis;
 use crate::transfers::pipeline::plausibility::{
     TransferPlausibilityBuilder, TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
@@ -66,8 +67,10 @@ enum CirculationAction {
 
 /// Precomputed buyer snapshot reused across every available player so the
 /// scan doesn't re-walk a club's reputation / wage / squad data per
-/// candidate. Built once per club at the start of the pass.
-struct BuyerScan {
+/// candidate. Built once per club at the start of the pass. Shared with the
+/// year-round breakout watch ([`super::breakout_watch`]) so both passes
+/// derive the buyer's [`BuyerContext`] from one place.
+pub(in crate::transfers::pipeline) struct BuyerScan {
     rep_score: f32,
     world_rep: i16,
     league_rep: u16,
@@ -81,7 +84,11 @@ struct BuyerScan {
 }
 
 impl BuyerScan {
-    fn build(country: &Country, club: &Club, date: NaiveDate) -> Option<BuyerScan> {
+    pub(in crate::transfers::pipeline) fn build(
+        country: &Country,
+        club: &Club,
+        date: NaiveDate,
+    ) -> Option<BuyerScan> {
         let team = club.teams.teams.first()?;
         let rep_score = team.reputation.overall_score();
         let world_rep = team.reputation.world as i16;
@@ -156,8 +163,15 @@ impl BuyerScan {
     }
 
     /// Build the per-player [`BuyerContext`] the listed-target evaluator
-    /// expects, reading the precomputed per-group signals.
-    fn buyer_context(&self, group: PlayerFieldPositionGroup) -> BuyerContext {
+    /// expects, reading the precomputed per-group signals. `form_discovery`
+    /// is `false` for the availability-driven diagnosis / listed sweep and
+    /// `true` for the year-round breakout watch (which may surface a player
+    /// who has not advertised availability).
+    pub(in crate::transfers::pipeline) fn buyer_context(
+        &self,
+        group: PlayerFieldPositionGroup,
+        form_discovery: bool,
+    ) -> BuyerContext {
         BuyerContext {
             buyer_rep_score: self.rep_score,
             buyer_world_rep: self.world_rep,
@@ -169,6 +183,7 @@ impl BuyerScan {
             buyer_best_in_group: self.best_in_group.get(&group).copied().unwrap_or(0),
             has_open_request: self.open_request_groups.contains(&group),
             has_aging_starter: self.aging_groups.contains(&group),
+            form_discovery_mode: form_discovery,
         }
     }
 }
@@ -218,6 +233,9 @@ impl PipelineProcessor {
             .iter()
             .filter_map(|c| BuyerScan::build(country, c, date).map(|s| (c.id, s)))
             .collect();
+
+        // Scoring-chart + recent-award lookup, built once for the country.
+        let performance_lookup = LeaguePerformanceLookup::build(country);
 
         let price_level = country.settings.pricing.price_level;
 
@@ -304,6 +322,16 @@ impl PipelineProcessor {
                         .map(|s| s.failed_scans)
                         .unwrap_or(0);
 
+                    let breakout_score = performance_lookup
+                        .breakout_for_player(
+                            player,
+                            player.statistics.total_games(),
+                            player.statistics.average_rating_realistic(group),
+                            player_age,
+                            seller_league_rep,
+                        )
+                        .score;
+
                     let view = ListedTargetView {
                         ability,
                         estimated_potential,
@@ -313,6 +341,8 @@ impl PipelineProcessor {
                         is_listed: statuses.contains(&PlayerStatusType::Lst),
                         is_transfer_requested: statuses.contains(&PlayerStatusType::Req),
                         is_unhappy: statuses.contains(&PlayerStatusType::Unh),
+                        is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
+                        breakout_score,
                         world_reputation: player.player_attributes.world_reputation,
                         current_reputation: player.player_attributes.current_reputation,
                         ambition: player.attributes.ambition,
@@ -339,7 +369,7 @@ impl PipelineProcessor {
                         let Some(scan) = buyer_scans.get(&buyer.id) else {
                             continue;
                         };
-                        let bctx = scan.buyer_context(group);
+                        let bctx = scan.buyer_context(group, false);
                         match evaluate_listed_target(&view, &bctx) {
                             ListedTargetVerdict::Reject(reason) => {
                                 reasons.push(MarketDiscoveryDiagnosis::from_listed_reject(reason));

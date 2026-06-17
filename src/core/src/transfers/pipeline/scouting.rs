@@ -2,6 +2,7 @@ use chrono::{Datelike, NaiveDate};
 use log::debug;
 
 use crate::transfers::ScoutingRegion;
+use crate::transfers::pipeline::breakout::LeaguePerformanceLookup;
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferMoveStage, TransferPlausibilityBuilder,
     TransferPlausibilityVerdict,
@@ -852,6 +853,9 @@ impl PipelineProcessor {
         let country_reputation = country.reputation;
         // Single source of truth for observation/error/recommendation/risk-flag tuning.
         let config = ScoutingConfig::default();
+        // Scoring-chart + recent-award lookup, built once so the data
+        // pre-filter can fold each candidate's breakout score into its rank.
+        let performance_lookup = LeaguePerformanceLookup::build(country);
 
         // Reuse collect_player_pool for the domestic pool — the body of this
         // loop used to be a copy-paste of that function, doubling the work
@@ -1021,7 +1025,7 @@ impl PipelineProcessor {
                     let mut scored: Vec<(&PlayerSummary, f32)> = matching
                         .iter()
                         .map(|p| {
-                            let score = Self::player_data_score(p);
+                            let score = Self::player_data_score(p, &performance_lookup);
                             let jitter = IntegerUtils::random(-noise, noise) as f32;
                             (*p, score + jitter)
                         })

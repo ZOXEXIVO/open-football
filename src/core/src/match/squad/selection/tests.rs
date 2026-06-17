@@ -1164,6 +1164,489 @@ fn force_selected_established_not_swapped_in_cup_rotation() {
     );
 }
 
+// ========== Force-selection hard placement ==========
+//
+// Force selection is a hard pre-placement rule for *competitive* Main-team
+// matches: a legally/physically available pinned player must start whenever it
+// is structurally possible. The pin is ignored in friendlies and on non-Main
+// squads, and it never overrides a genuine availability block.
+
+/// Fixtures for the force-selection hard-placement tests: a non-Main squad
+/// (the pin is a senior-side override, so a B team must ignore it) and a T442
+/// of strong specialists with the `ForwardLeft` slot left open to contest.
+struct ForceFixture;
+
+impl ForceFixture {
+    /// A non-Main (B-team) squad for the "pin is ignored off the senior side"
+    /// check. Same T442 build as [`cup_team`], only the team type differs.
+    fn reserve_team(players: Vec<Player>) -> Team {
+        let mut team = TeamBuilder::new()
+            .id(2)
+            .league_id(Some(1))
+            .club_id(1)
+            .name("Reserve Team".to_string())
+            .slug("reserve-team".to_string())
+            .team_type(TeamType::B)
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+            ))
+            .reputation(TeamReputation::new(100, 100, 100))
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .tactics(Some(Tactics::new(MatchTacticType::T442)))
+            .build()
+            .expect("Failed to build reserve team");
+        team.tactics = Some(Tactics::new(MatchTacticType::T442));
+        team
+    }
+
+    /// A full T442 outfield of established specialists (one per non-`FL` slot)
+    /// plus a goalkeeper — ids 1..=10. The `ForwardLeft` slot is left open for a
+    /// test to contest. Specialists sit at `level` with a flat, deterministic
+    /// skill of 16.0 so a cross-position fill never out-scores a slot's own
+    /// specialist (and the contest doesn't hinge on the generator's random
+    /// skill scatter).
+    fn specialists_minus_forward_left(level: u8) -> Vec<Player> {
+        let slots = [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::DefenderRight,
+            PlayerPositionType::MidfielderLeft,
+            PlayerPositionType::MidfielderCenterLeft,
+            PlayerPositionType::MidfielderCenterRight,
+            PlayerPositionType::MidfielderRight,
+            PlayerPositionType::ForwardRight,
+        ];
+        let mut players = Vec::new();
+        let mut id = 1u32;
+        for &pos in slots.iter() {
+            players.push(DevPlayer::with_skill(
+                make_cup_player(
+                    id,
+                    pos,
+                    level,
+                    PlayerSquadStatus::FirstTeamRegular,
+                    26,
+                    5,
+                    12,
+                    100.0,
+                ),
+                16.0,
+            ));
+            id += 1;
+        }
+        players
+    }
+}
+
+#[test]
+fn force_selected_weak_outfielder_starts_over_stronger_rival() {
+    // A weak pinned forward must take the contested ForwardLeft slot off a
+    // clearly stronger, non-pinned rival in a competitive match.
+    let staff = generate_test_staff();
+    // Specialists sit a level above the rival so the rival can never escape the
+    // contested ForwardLeft slot by displacing one of them at another position —
+    // his only natural home is FL, the slot the pin claims.
+    let mut players = ForceFixture::specialists_minus_forward_left(18);
+
+    // The rival (skill 12 — would beat the pin for FL on merit) and the weak
+    // pin (skill 8). The rival is below the 16.0 specialists, so FL is his only
+    // home; the pin claims it and he drops out.
+    players.push(DevPlayer::with_skill(
+        make_cup_player(
+            100,
+            PlayerPositionType::ForwardLeft,
+            17,
+            PlayerSquadStatus::FirstTeamRegular,
+            27,
+            4,
+            20,
+            100.0,
+        ),
+        12.0,
+    ));
+    let mut weak = DevPlayer::with_skill(
+        make_cup_player(
+            101,
+            PlayerPositionType::ForwardLeft,
+            9,
+            PlayerSquadStatus::DecentYoungster,
+            24,
+            6,
+            2,
+            80.0,
+        ),
+        8.0,
+    );
+    weak.is_force_match_selection = true;
+    players.push(weak);
+
+    let team = cup_team(players);
+    // BestEleven, high importance: on merit the strong forward starts.
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.9));
+
+    assert!(
+        result.main_squad.iter().any(|p| p.id == 101),
+        "a force-selected outfielder must start even when much weaker than a rival"
+    );
+    assert!(
+        !result.main_squad.iter().any(|p| p.id == 100),
+        "the stronger non-pinned rival yields the contested slot to the pin"
+    );
+}
+
+#[test]
+fn force_selected_reserve_player_starts_for_main_team() {
+    // A pinned reserve/youth player offered to the Main team through
+    // `reserve_players` must displace a starter and make the XI.
+    let staff = generate_test_staff();
+    let slots = [
+        PlayerPositionType::Goalkeeper,
+        PlayerPositionType::DefenderLeft,
+        PlayerPositionType::DefenderCenterLeft,
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::MidfielderRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardRight,
+    ];
+    let mut players = Vec::new();
+    let mut id = 1u32;
+    for &pos in slots.iter() {
+        players.push(make_cup_player(
+            id,
+            pos,
+            16,
+            PlayerSquadStatus::FirstTeamRegular,
+            26,
+            5,
+            12,
+            100.0,
+        ));
+        id += 1;
+    }
+    let team = cup_team(players);
+
+    let mut reserve = make_cup_player(
+        500,
+        PlayerPositionType::MidfielderCenter,
+        12,
+        PlayerSquadStatus::DecentYoungster,
+        19,
+        10,
+        0,
+        0.0,
+    );
+    reserve.is_force_match_selection = true;
+    let reserves: Vec<&Player> = vec![&reserve];
+
+    let result = SquadSelector::select_with_context(&team, &staff, &reserves, &league_ctx(0.9));
+    assert!(
+        result.main_squad.iter().any(|p| p.id == 500),
+        "a force-selected reserve passed through reserve_players must start for the Main team"
+    );
+}
+
+#[test]
+fn force_selected_backup_goalkeeper_starts() {
+    // The pin reaches the goalkeeper slot too: a force-selected backup keeper
+    // takes the gloves off the stronger #1 (who used to keep them because the
+    // force bonus never touched `goalkeeper_score`).
+    let staff = generate_test_staff();
+    let mut players = two_keeper_roster();
+    for p in players.iter_mut() {
+        if p.id == 2 {
+            p.is_force_match_selection = true;
+        }
+    }
+    let team = cup_team(players);
+    // Must-win league game — no cup rotation, so on merit the #1 (id 1) keeps.
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.95));
+
+    assert_eq!(
+        starting_goalkeeper_id(&result),
+        Some(2),
+        "a force-selected backup keeper must take the gloves over the #1"
+    );
+    assert!(
+        result.substitutes.iter().any(|p| p.id == 1),
+        "the displaced #1 keeper should be benched, not dropped"
+    );
+}
+
+#[test]
+fn unavailable_force_selected_players_stay_excluded() {
+    // Hard availability beats the pin: injured / banned / international-duty
+    // pinned players never make the squad.
+    let staff = generate_test_staff();
+    let date = Utc::now().date_naive();
+    let mut players = paired_cup_roster();
+    for p in players.iter_mut() {
+        match p.id {
+            3 => {
+                p.is_force_match_selection = true;
+                p.player_attributes.is_injured = true;
+            }
+            5 => {
+                p.is_force_match_selection = true;
+                p.player_attributes.is_banned = true;
+            }
+            7 => {
+                p.is_force_match_selection = true;
+                p.statuses.add(date, PlayerStatusType::Int);
+            }
+            _ => {}
+        }
+    }
+    let team = cup_team(players);
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
+
+    for id in [3u32, 5, 7] {
+        assert!(
+            !result.main_squad.iter().any(|p| p.id == id)
+                && !result.substitutes.iter().any(|p| p.id == id),
+            "unavailable force-selected player {id} must stay excluded — availability overrides the pin"
+        );
+    }
+}
+
+#[test]
+fn force_selection_overflow_no_duplicates_and_deterministic() {
+    // More pins than XI slots: the best feasible eleven are fielded, the
+    // surplus pins are benched ahead of ordinary players, and the result is
+    // deterministic with no duplicate ids.
+    let staff = generate_test_staff();
+    let mut players = Vec::new();
+    // One ordinary keeper.
+    players.push(make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::FirstTeamRegular,
+        27,
+        4,
+        20,
+        0.0,
+    ));
+    // Thirteen pinned outfielders — more than the ten outfield places.
+    let forced_slots = [
+        PlayerPositionType::DefenderLeft,
+        PlayerPositionType::DefenderCenterLeft,
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::MidfielderRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardRight,
+        PlayerPositionType::DefenderCenter,
+        PlayerPositionType::MidfielderCenter,
+        PlayerPositionType::Striker,
+    ];
+    let mut id = 100u32;
+    for &pos in forced_slots.iter() {
+        let mut p = make_cup_player(
+            id,
+            pos,
+            15,
+            PlayerSquadStatus::FirstTeamRegular,
+            25,
+            5,
+            10,
+            100.0,
+        );
+        p.is_force_match_selection = true;
+        players.push(p);
+        id += 1;
+    }
+    // Four ordinary outfielders who must yield to the pins.
+    for ord_id in 200..204u32 {
+        players.push(make_cup_player(
+            ord_id,
+            PlayerPositionType::MidfielderCenter,
+            16,
+            PlayerSquadStatus::FirstTeamRegular,
+            26,
+            5,
+            12,
+            100.0,
+        ));
+    }
+
+    let team = cup_team(players);
+    let ctx = league_ctx(0.7);
+
+    let r1 = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+    let r2 = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+
+    assert_eq!(r1.main_squad.len(), 11, "XI is always eleven");
+
+    let mut all: Vec<u32> = r1.main_squad.iter().map(|p| p.id).collect();
+    all.extend(r1.substitutes.iter().map(|p| p.id));
+    let unique = {
+        let mut s = all.clone();
+        s.sort_unstable();
+        s.dedup();
+        s.len()
+    };
+    assert_eq!(all.len(), unique, "no id may appear twice across XI and bench");
+
+    let xi1: Vec<u32> = r1.main_squad.iter().map(|p| p.id).collect();
+    let xi2: Vec<u32> = r2.main_squad.iter().map(|p| p.id).collect();
+    assert_eq!(xi1, xi2, "overflow XI must be deterministic");
+    let b1: Vec<u32> = r1.substitutes.iter().map(|p| p.id).collect();
+    let b2: Vec<u32> = r2.substitutes.iter().map(|p| p.id).collect();
+    assert_eq!(b1, b2, "overflow bench must be deterministic");
+
+    let pinned_in_xi = r1
+        .main_squad
+        .iter()
+        .filter(|p| (100..113).contains(&p.id))
+        .count();
+    assert_eq!(pinned_in_xi, 10, "all ten outfield places go to pinned players");
+    let pinned_on_bench = r1
+        .substitutes
+        .iter()
+        .filter(|p| (100..113).contains(&p.id))
+        .count();
+    assert_eq!(pinned_on_bench, 3, "the three surplus pins are benched");
+    assert!(
+        !r1.main_squad.iter().any(|p| (200..204).contains(&p.id)),
+        "ordinary players never start ahead of pins in the overflow case"
+    );
+}
+
+#[test]
+fn friendly_rotation_ignores_force_selection() {
+    // The pin is a competitive-only override: a weak pinned player who would
+    // start a competitive match must NOT be forced into a friendly, where the
+    // squad is rotated on merit/rest.
+    let staff = generate_test_staff();
+    let slots = [
+        PlayerPositionType::Goalkeeper,
+        PlayerPositionType::DefenderLeft,
+        PlayerPositionType::DefenderCenterLeft,
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::MidfielderRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardRight,
+    ];
+    let mut players = Vec::new();
+    let mut id = 1u32;
+    for &pos in slots.iter() {
+        players.push(make_cup_player(
+            id,
+            pos,
+            16,
+            PlayerSquadStatus::FirstTeamRegular,
+            26,
+            6,
+            12,
+            80.0,
+        ));
+        id += 1;
+    }
+    // A weak pinned midfielder: forced in a competitive match, ignored here.
+    let mut weak = make_cup_player(
+        500,
+        PlayerPositionType::MidfielderCenterLeft,
+        8,
+        PlayerSquadStatus::DecentYoungster,
+        24,
+        6,
+        2,
+        80.0,
+    );
+    weak.is_force_match_selection = true;
+    players.push(weak);
+
+    let team = cup_team(players);
+    let ctx = SelectionContext {
+        is_friendly: true,
+        ..SelectionContext::default()
+    };
+
+    // Sanity: the same weak pin DOES start the equivalent competitive fixture.
+    let competitive = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.9));
+    assert!(
+        competitive.main_squad.iter().any(|p| p.id == 500),
+        "the pin must start a competitive match (control for the friendly check)"
+    );
+
+    let friendly = SquadSelector::select_for_rotation_with_context(&team, &staff, &[], &ctx);
+    assert!(
+        !friendly.main_squad.iter().any(|p| p.id == 500),
+        "a friendly must not honour the force-selection pin"
+    );
+}
+
+#[test]
+fn non_main_team_ignores_force_selection() {
+    // A player pinned for the senior side is a Main-team override only — a
+    // B/reserve squad must not field him in its own match.
+    let staff = generate_test_staff();
+    let slots = [
+        PlayerPositionType::Goalkeeper,
+        PlayerPositionType::DefenderLeft,
+        PlayerPositionType::DefenderCenterLeft,
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::MidfielderRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardRight,
+    ];
+    let mut players = Vec::new();
+    let mut id = 1u32;
+    for &pos in slots.iter() {
+        players.push(make_cup_player(
+            id,
+            pos,
+            15,
+            PlayerSquadStatus::FirstTeamRegular,
+            22,
+            5,
+            8,
+            80.0,
+        ));
+        id += 1;
+    }
+    // A strong striker pinned for the senior side.
+    let mut pinned = make_cup_player(
+        500,
+        PlayerPositionType::ForwardLeft,
+        18,
+        PlayerSquadStatus::KeyPlayer,
+        20,
+        4,
+        10,
+        80.0,
+    );
+    pinned.is_force_match_selection = true;
+    players.push(pinned);
+
+    let team = ForceFixture::reserve_team(players);
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
+    assert!(
+        !result.main_squad.iter().any(|p| p.id == 500)
+            && !result.substitutes.iter().any(|p| p.id == 500),
+        "a non-Main squad must not field a player pinned to the senior team"
+    );
+}
+
 #[test]
 fn cup_rotation_preserves_team_shape() {
     // The rotation pass must not corrupt the XI: no duplicate ids across

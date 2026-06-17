@@ -188,6 +188,11 @@ impl CountryResult {
         }
 
         PipelineProcessor::refresh_shadow_reports(country, current_date);
+        // Year-round breakout watch: discover high-form players on plausible
+        // buyers' books even with the window shut. Runs outside the window
+        // block (weekly cadence enforced inside) and only records scout
+        // monitoring — never a negotiation.
+        PipelineProcessor::scan_breakout_form(country, current_date);
         PipelineProcessor::sync_wanted_status(country);
 
         ops.completed_after = summary.completed_transfers;
@@ -463,6 +468,10 @@ impl CountryResult {
             // cadence enforced inside the function). Keeps tracked players
             // fresh between windows so the next window opens with current data.
             PipelineProcessor::refresh_shadow_reports(country, current_date);
+
+            // Year-round breakout watch — records scout monitoring on high-form
+            // players (weekly cadence enforced inside; never a negotiation).
+            PipelineProcessor::scan_breakout_form(country, current_date);
 
             // Prune stale `Wnt` statuses whose originating interest has
             // since been cleared (window reset, transfer completion, or

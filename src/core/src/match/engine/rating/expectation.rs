@@ -281,7 +281,18 @@ impl<'a> RatingContext<'a> {
                         + (z.gk_failed_claims_to_shot + z.gk_failed_claims_to_goal) as f32,
                     2.0,
                 );
-                0.45 * saves + 0.30 * xgp + 0.15 * command - 0.30 * errors
+                // A clean sheet is the keeper's defining contribution to the
+                // result — save volume or not. A protected shutout means the
+                // keeper organised a back line that conceded nothing, which
+                // the raw save / command counters never register. Without
+                // this floor a quiet shutout reads as "zero contribution" and
+                // takes an expectation drag for being untested, inverting the
+                // one outcome that matters most for a keeper. Sits just below
+                // the dominant-side expectation baseline (≈0.35) so it lands a
+                // protected shutout at ≈neutral rather than turning the
+                // expectation layer into a second clean-sheet bonus.
+                let clean_sheet = if self.opponent_goals == 0 { 0.40 } else { 0.0 };
+                0.45 * saves + 0.30 * xgp + 0.15 * command + clean_sheet - 0.30 * errors
             }
             PlayerFieldPositionGroup::Defender => {
                 let routine = sat(

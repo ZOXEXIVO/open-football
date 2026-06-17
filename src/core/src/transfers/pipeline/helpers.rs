@@ -1,6 +1,7 @@
 use chrono::{Datelike, NaiveDate};
 
 use crate::shared::CurrencyValue;
+use crate::transfers::pipeline::breakout::{BreakoutPerformanceSignal, LeaguePerformanceLookup};
 use crate::transfers::pipeline::processor::{
     PipelineProcessor, PlayerSummary, SellerPlausibilityContext,
 };
@@ -384,12 +385,28 @@ impl PipelineProcessor {
     }
 
     /// Performance-adjusted data score used as a pre-scouting filter.
-    /// Weights ability, form (rating × appearances), and raw output (G+A).
-    pub(super) fn player_data_score(p: &PlayerSummary) -> f32 {
+    /// Weights ability, form (rating × appearances), raw output (G+A), and
+    /// the performance-breakout signal — so a high-output player whose
+    /// *results* outrun his level rises up the data department's shortlist
+    /// and actually gets watched, instead of being buried behind
+    /// higher-ability names. The breakout term is league-reputation
+    /// discounted inside the signal, so a flat-track scorer in a weak
+    /// division doesn't leapfrog proven quality.
+    pub(super) fn player_data_score(p: &PlayerSummary, perf: &LeaguePerformanceLookup) -> f32 {
         let ability = p.skill_ability as f32 * 0.4;
         let form = p.average_rating * (p.appearances.min(40) as f32 / 4.0);
         let output = ((p.goals + p.assists).min(30)) as f32 * 0.3;
-        ability + form + output
+        let breakout = BreakoutPerformanceSignal::compute(&perf.breakout_inputs(
+            p.player_id,
+            p.position_group,
+            p.goals,
+            p.assists,
+            p.appearances,
+            p.average_rating,
+            p.age,
+            p.seller_ctx.league_reputation,
+        ));
+        ability + form + output + breakout.score * 0.2
     }
 
     pub(super) fn get_scout_skills(club: &Club, scout_id: u32) -> (u8, u8) {
@@ -1281,6 +1298,7 @@ mod group_need_tests {
             buyer_best_in_group: if weak_group { 105 } else { 130 },
             has_open_request: open_request,
             has_aging_starter: false,
+            form_discovery_mode: false,
         };
 
         // Mikhailov-class candidate: 14M, CA 130, listed, age 25.
@@ -1303,6 +1321,8 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            is_loan_listed: false,
+            breakout_score: 0.0,
         };
 
         // Acceptance: weak group + an actual upgrade
@@ -1348,6 +1368,7 @@ mod group_need_tests {
             buyer_best_in_group: 75,
             has_open_request: true,
             has_aging_starter: false,
+            form_discovery_mode: false,
         };
 
         // Asking 5M when budget allows ~700k → UnaffordableFee
@@ -1370,6 +1391,8 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            is_loan_listed: false,
+            breakout_score: 0.0,
         };
         assert_eq!(
             evaluate_listed_target(&pricey, &small_buyer),
@@ -1398,6 +1421,7 @@ mod group_need_tests {
             buyer_best_in_group: 75,
             has_open_request: true,
             has_aging_starter: false,
+            form_discovery_mode: false,
         };
 
         let in_tier_listed = ListedTargetView {
@@ -1419,6 +1443,8 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            is_loan_listed: false,
+            breakout_score: 0.0,
         };
 
         assert_eq!(
@@ -1446,6 +1472,7 @@ mod group_need_tests {
             buyer_best_in_group: 60,
             has_open_request: true, // even with explicit demand, world-class is out of reach
             has_aging_starter: false,
+            form_discovery_mode: false,
         };
 
         let world_class = ListedTargetView {
@@ -1467,6 +1494,8 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            is_loan_listed: false,
+            breakout_score: 0.0,
         };
 
         let v = evaluate_listed_target(&world_class, &local_buyer);
@@ -1500,6 +1529,7 @@ mod group_need_tests {
             buyer_best_in_group: 135, // above tier baseline
             has_open_request: false,
             has_aging_starter: false,
+            form_discovery_mode: false,
         };
 
         let modest_listed = ListedTargetView {
@@ -1521,6 +1551,8 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            is_loan_listed: false,
+            breakout_score: 0.0,
         };
 
         let v = evaluate_listed_target(&modest_listed, &buyer);
@@ -1551,6 +1583,7 @@ mod group_need_tests {
             buyer_best_in_group: 105,
             has_open_request: true,
             has_aging_starter: false,
+            form_discovery_mode: false,
         };
 
         let happy_player = ListedTargetView {
@@ -1572,6 +1605,8 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            is_loan_listed: false,
+            breakout_score: 0.0,
         };
 
         // The sweep is the listed-star path — players without any
@@ -1632,6 +1667,7 @@ mod group_need_tests {
             buyer_best_in_group: 135,
             has_open_request: false,
             has_aging_starter: false,
+            form_discovery_mode: false,
         };
 
         let mut player = ListedTargetView {
@@ -1653,6 +1689,8 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            is_loan_listed: false,
+            breakout_score: 0.0,
         };
 
         // Fresh: no need + only a sideways move → rejected. The
@@ -1699,6 +1737,7 @@ mod group_need_tests {
             buyer_best_in_group: 110,
             has_open_request: true,
             has_aging_starter: false,
+            form_discovery_mode: false,
         };
 
         let mut player = ListedTargetView {
@@ -1720,6 +1759,8 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            is_loan_listed: false,
+            breakout_score: 0.0,
         };
 
         // Fresh: a 17M asking sits above the ~14M reach → unaffordable.
@@ -1739,6 +1780,232 @@ mod group_need_tests {
                 ListedTargetVerdict::Accept(_)
             ),
             "asking-price softening after a long market failure must bring a borderline fee into reach"
+        );
+    }
+}
+
+#[cfg(test)]
+mod breakout_sweep_tests {
+    //! The performance-breakout discovery path through
+    //! [`evaluate_listed_target`]: a loan-listed (or, in form-discovery
+    //! mode, an unlisted) high-form player becomes a target for stronger
+    //! clubs — without the breakout ever relaxing the affordability, tier,
+    //! reputation, or squad-need gates. Mirrors the reported Arseny Filev
+    //! case: a 22-y-o striker top-scoring a second division, loan-listed
+    //! over a contract dispute, who should still draw realistic interest.
+
+    use crate::PlayerFieldPositionGroup;
+    use crate::transfers::pipeline::breakout::BreakoutPerformanceSignal;
+    use crate::transfers::pipeline::recommendations::{
+        BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
+        evaluate_listed_target,
+    };
+
+    /// Fixtures wrapped in a unit struct per the no-free-helpers
+    /// convention. Each accessor returns a baseline the test tweaks.
+    struct BreakoutFixtures;
+
+    impl BreakoutFixtures {
+        /// A strong top-flight domestic club (Continental-ish). `weak_group`
+        /// forces a positional need; otherwise the group is well-stocked.
+        fn top_domestic_buyer(weak_group: bool) -> BuyerContext {
+            BuyerContext {
+                buyer_rep_score: 0.72,
+                buyer_world_rep: 5800,
+                buyer_league_reputation: 5500,
+                buyer_total_wages: 20_000_000,
+                buyer_wage_budget: 60_000_000,
+                plan_total_budget: 30_000_000.0,
+                max_recommend_value: 60_000_000.0,
+                buyer_best_in_group: if weak_group { 118 } else { 135 },
+                has_open_request: false,
+                has_aging_starter: false,
+                form_discovery_mode: false,
+            }
+        }
+
+        /// The reported player: 22-y-o striker, loan-listed (not transfer
+        /// listed / requested / unhappy), a genuine breakout, with resale
+        /// upside, comfortably affordable, in a smaller club.
+        fn loan_listed_breakout_striker() -> ListedTargetView {
+            ListedTargetView {
+                ability: 130,
+                estimated_potential: 142,
+                age: 22,
+                estimated_value: 5_000_000.0,
+                position_group: PlayerFieldPositionGroup::Forward,
+                is_listed: false,
+                is_transfer_requested: false,
+                is_unhappy: false,
+                is_loan_listed: true,
+                breakout_score: 55.0,
+                world_reputation: 5000,
+                current_reputation: 4800,
+                ambition: 0.7,
+                parent_club_score: 0.40,
+                parent_club_in_debt: false,
+                days_available: 5,
+                contract_months_remaining: 24,
+                low_usage: false,
+                recent_interest_count: 0,
+                failed_scans: 0,
+            }
+        }
+    }
+
+    #[test]
+    fn loan_listed_breakout_striker_is_visible_to_a_top_domestic_club() {
+        // Req: a loan-listed breakout striker at a lower-rep club is visible
+        // to top domestic clubs. No open positional need — admission and the
+        // opportunity route ride entirely on the loan-listing + breakout +
+        // resale upside. This is also the "window open" case: the in-window
+        // listed sweep (form_discovery_mode = false) admits him.
+        let target = BreakoutFixtures::loan_listed_breakout_striker();
+        let buyer = BreakoutFixtures::top_domestic_buyer(false);
+        match evaluate_listed_target(&target, &buyer) {
+            ListedTargetVerdict::Accept(score) => {
+                assert!(score > 10.0, "expected a meaningful score, got {}", score)
+            }
+            other => panic!("expected Accept for a loan-listed breakout, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn mediocre_loan_listed_player_without_breakout_is_ignored() {
+        // Req: a mediocre loan-listed player with no goals / awards stays
+        // ignored — loan-listing alone routes to the loan market, not the
+        // permanent-interest path.
+        let mut target = BreakoutFixtures::loan_listed_breakout_striker();
+        target.breakout_score = 0.0; // no output, no recognition
+        target.estimated_potential = 128; // no resale upside either
+        let buyer = BreakoutFixtures::top_domestic_buyer(true);
+        assert_eq!(
+            evaluate_listed_target(&target, &buyer),
+            ListedTargetVerdict::Reject(ListedRejectReason::NotListed),
+            "a loan-listed player without breakout must not enter the permanent path"
+        );
+    }
+
+    #[test]
+    fn elite_club_skips_breakout_player_who_is_no_upgrade_no_resale_no_need() {
+        // Req: an elite club does NOT pursue even a high-breakout player when
+        // he is not an upgrade, has no resale value, and fills no squad need.
+        // The breakout score does not manufacture a reason to buy.
+        let elite = BuyerContext {
+            buyer_rep_score: 0.90,
+            buyer_world_rep: 8500,
+            buyer_league_reputation: 9000,
+            buyer_total_wages: 120_000_000,
+            buyer_wage_budget: 250_000_000,
+            plan_total_budget: 150_000_000.0,
+            max_recommend_value: 300_000_000.0,
+            buyer_best_in_group: 165, // well-stocked
+            has_open_request: false,
+            has_aging_starter: false,
+            form_discovery_mode: false,
+        };
+        // In the elite tier window, publicly listed, but a 28-y-o who is no
+        // upgrade (135 < 165) and no resale prospect (age > 23).
+        let mut target = BreakoutFixtures::loan_listed_breakout_striker();
+        target.ability = 135;
+        target.age = 28;
+        target.estimated_potential = 137;
+        target.is_listed = true;
+        target.is_loan_listed = false;
+        target.world_reputation = 6000;
+        target.current_reputation = 6000;
+        target.breakout_score = 55.0;
+        assert_eq!(
+            evaluate_listed_target(&target, &elite),
+            ListedTargetVerdict::Reject(ListedRejectReason::NoSquadNeed),
+            "breakout must not bypass the upgrade / resale / need requirement"
+        );
+    }
+
+    #[test]
+    fn breakout_does_not_bypass_affordability() {
+        // Req: the breakout signal affects discovery but never the hard
+        // affordability gate. A strong breakout with an out-of-budget fee is
+        // still rejected as unaffordable.
+        let modest_buyer = BuyerContext {
+            buyer_rep_score: 0.55,
+            buyer_world_rep: 3800,
+            buyer_league_reputation: 4000,
+            buyer_total_wages: 3_000_000,
+            buyer_wage_budget: 6_000_000,
+            plan_total_budget: 500_000.0, // reach ≈ 700k
+            max_recommend_value: 1_000_000.0,
+            buyer_best_in_group: 95,
+            has_open_request: true,
+            has_aging_starter: false,
+            form_discovery_mode: false,
+        };
+        let mut target = BreakoutFixtures::loan_listed_breakout_striker();
+        target.ability = 110; // inside this tier's window
+        target.estimated_value = 5_000_000.0; // far beyond the buyer's reach
+        target.breakout_score = 60.0;
+        assert_eq!(
+            evaluate_listed_target(&target, &modest_buyer),
+            ListedTargetVerdict::Reject(ListedRejectReason::UnaffordableFee),
+            "a high breakout score must not rescue an unaffordable fee"
+        );
+    }
+
+    #[test]
+    fn form_discovery_admits_unlisted_breakout_but_availability_mode_does_not() {
+        // The mechanism behind the year-round watch vs the in-window sweep:
+        // a not-yet-listed breakout is admitted ONLY in form-discovery mode
+        // (the watch opens scout monitoring on talent). The in-window sweep,
+        // which only surfaces advertised availability, rejects him — so he is
+        // not immediately pursued for a transfer just because his form spiked.
+        let mut target = BreakoutFixtures::loan_listed_breakout_striker();
+        target.is_loan_listed = false; // not on any list at all
+        target.breakout_score = 60.0;
+        let weak_group_buyer = BreakoutFixtures::top_domestic_buyer(true);
+
+        // Availability mode (in-window listed sweep): not on the market → out.
+        assert_eq!(
+            evaluate_listed_target(&target, &weak_group_buyer),
+            ListedTargetVerdict::Reject(ListedRejectReason::NotListed),
+            "an unlisted player is not pursued by the availability-driven sweep"
+        );
+
+        // Form-discovery mode (year-round watch): admitted on form, then the
+        // ordinary realism gates decide — here the weak group is a real need.
+        let mut watch_buyer = weak_group_buyer;
+        watch_buyer.form_discovery_mode = true;
+        assert!(
+            matches!(
+                evaluate_listed_target(&target, &watch_buyer),
+                ListedTargetVerdict::Accept(_)
+            ),
+            "form-discovery mode must admit an unlisted breakout for monitoring"
+        );
+    }
+
+    #[test]
+    fn breakout_threshold_governs_loan_listed_admission() {
+        // The admission bar is exactly the breakout threshold: a loan-listed
+        // player just below it stays loan-only; at/above it he enters the
+        // permanent-interest path.
+        let buyer = BreakoutFixtures::top_domestic_buyer(true);
+
+        let mut below = BreakoutFixtures::loan_listed_breakout_striker();
+        below.breakout_score = BreakoutPerformanceSignal::BREAKOUT_THRESHOLD - 0.1;
+        assert_eq!(
+            evaluate_listed_target(&below, &buyer),
+            ListedTargetVerdict::Reject(ListedRejectReason::NotListed),
+            "just below the breakout bar a loan-listed player stays loan-only"
+        );
+
+        let mut at_bar = BreakoutFixtures::loan_listed_breakout_striker();
+        at_bar.breakout_score = BreakoutPerformanceSignal::BREAKOUT_THRESHOLD;
+        assert!(
+            matches!(
+                evaluate_listed_target(&at_bar, &buyer),
+                ListedTargetVerdict::Accept(_)
+            ),
+            "at the breakout bar a loan-listed player enters the permanent path"
         );
     }
 }

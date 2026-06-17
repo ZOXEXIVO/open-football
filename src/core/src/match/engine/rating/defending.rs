@@ -138,16 +138,31 @@ impl<'a> RatingContext<'a> {
         // Command-zone actions (cross claims, sweeper interventions).
         let command = sat(z.gk_command_actions as f32, 4.0) * 0.30;
 
-        // Quiet-shutout credit — keeper who organised the line and
-        // never had to make a save still earned the clean sheet.
-        // Lifted 0.12 → 0.30 (FM-parity season calibration): the
-        // engine's typical top-club shutout arrives with 0-2 on-target
-        // shots, and at 0.12 a 12-CS season read like a string of
-        // non-events. FM-style season credit rewards repeated quiet
-        // shutouts; the heavy continental cluster is untouched because
-        // this only fires on clean sheets with low shot volume.
-        let dominant_defense = if self.opponent_goals == 0 && shots_faced < 3 {
-            0.30
+        // Protected-shutout credit — keeper who organised the line and
+        // kept a clean sheet behind a back four that limited the
+        // opposition to little or nothing. Keeping the goal intact IS
+        // the keeper's headline job; when the defence allowed only a
+        // handful of shots there is barely any save volume to carry that
+        // credit, so a quiet shutout was landing marooned near the 6.0
+        // baseline (a 0-save clean sheet read 6.47, barely above a
+        // do-nothing match, and a leaky 29-conceded season out-rated a
+        // 24-clean-sheet one because save volume — not goals kept out —
+        // drove the score).
+        //
+        // The credit is solid at zero shots faced and tapers linearly to
+        // zero by three shots, because from there the save-based credit
+        // above takes over: a keeper peppered with shots earns through
+        // `saves_v` / `save_pct` / `workload`, a keeper protected by his
+        // defence earns through the shutout itself. Replacing the old
+        // flat `shots_faced < 3` gate with a continuous taper collapses
+        // the save-volume cliff (one routine save used to be worth +0.4
+        // over the same clean sheet kept untested) without leaking a
+        // second bonus to the moderate-workload keeper, who is already
+        // paid by saves. Lifted 0.30 → 0.62 and reshaped in the
+        // protected-shutout calibration pass.
+        let dominant_defense = if self.opponent_goals == 0 {
+            let shot_taper = (1.0 - shots_faced as f32 / 3.0).max(0.0);
+            0.62 * shot_taper
         } else {
             0.0
         };
