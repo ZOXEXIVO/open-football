@@ -77,7 +77,7 @@ impl PlayerStatisticsProjection {
         current_date: NaiveDate,
     ) -> Vec<PlayerStatLedgerEntry> {
         let mut ledger: Vec<PlayerStatLedgerEntry> = Vec::new();
-        let today_year = Season::from_date(current_date).start_year;
+        let current_year = Self::current_season_year(history, current_date);
 
         // ── 1. Past-season frozen records ─────────────────────────
         //
@@ -98,7 +98,7 @@ impl PlayerStatisticsProjection {
                 // tag the row with the current season year; the active
                 // spell's own non-League stats are still in the live
                 // caches, so no double-count risk.
-                let is_past = entry.season_start_year < today_year;
+                let is_past = entry.season_start_year < current_year;
                 let is_inter_spell_non_league =
                     entry.competition_kind != PlayerStatCompetitionKind::League;
                 if is_past || is_inter_spell_non_league {
@@ -111,7 +111,7 @@ impl PlayerStatisticsProjection {
             // any (season, team) ContinentalCup entry the ledger
             // doesn't already have to avoid double-counting.
             for cont in &history.continental {
-                if cont.season_year >= today_year {
+                if cont.season_year >= current_year {
                     continue;
                 }
                 let already_in_ledger = history.season_ledger.iter().any(|e| {
@@ -211,10 +211,10 @@ impl PlayerStatisticsProjection {
             let is_active = entry.departed_date.is_none();
             let use_live = is_active && !live_applied;
             let row_season_year = if is_active {
-                today_year
+                current_year
             } else {
                 let joined_year = Season::from_date(entry.joined_date).start_year;
-                joined_year.min(today_year)
+                joined_year.min(current_year)
             };
 
             let stats = if use_live {
@@ -255,7 +255,7 @@ impl PlayerStatisticsProjection {
                     e.team_slug.clone(),
                     e.league_slug.clone(),
                     e.league_name.clone(),
-                    today_year,
+                    current_year,
                     e.seq_id,
                 )
             });
@@ -343,6 +343,46 @@ impl PlayerStatisticsProjection {
         ledger
     }
 
+    /// The season year the player's still-active spell belongs to — the
+    /// boundary `build_ledger` uses to split frozen past seasons from the
+    /// in-progress one.
+    ///
+    /// `Season::from_date` hardcodes an August boundary, but the season-end
+    /// snapshot freezes a just-ended season under its CALENDAR year
+    /// (`date.year() - 1`) on each league's own season-start day. For a
+    /// league whose season starts before August the two disagree for the
+    /// whole Jan–Jul window after the snapshot: `from_date` still reports
+    /// the season that was just frozen as the "current" one. Using it
+    /// directly made `build_ledger` treat the freshly-frozen League rows as
+    /// in-progress and hide them (expecting the live counter to carry them);
+    /// they only reappeared once the calendar crossed the next August
+    /// boundary — the user-reported "history stats hidden until the new
+    /// season, especially after a loan return" bug (a returned loanee has no
+    /// active spell to fall back on, so the loan row vanishes entirely).
+    ///
+    /// A League row in the canonical ledger (or legacy `items`) is only ever
+    /// written by the season-end drain, so the latest such year is a
+    /// definitively COMPLETED season and the current season is at least one
+    /// past it. Taking the max of that and the calendar boundary recovers the
+    /// true current season without threading per-league season-start
+    /// configuration into the projection. Non-League ledger rows are ignored
+    /// here: inter-spell drains stamp them with the in-progress season year,
+    /// so they are not proof a season has ended.
+    fn current_season_year(history: &PlayerStatisticsHistory, current_date: NaiveDate) -> u16 {
+        let today_year = Season::from_date(current_date).start_year;
+        let last_frozen_league_year = history
+            .season_ledger
+            .iter()
+            .filter(|e| e.competition_kind == PlayerStatCompetitionKind::League)
+            .map(|e| e.season_start_year)
+            .chain(history.items.iter().map(|i| i.season.start_year))
+            .max();
+        match last_frozen_league_year {
+            Some(frozen) => today_year.max(frozen.saturating_add(1)),
+            None => today_year,
+        }
+    }
+
     /// Project the current season's stats into per-competition Overview
     /// rows. Filters the ledger to `Season::from_date(current_date)` and
     /// groups remaining entries by `(competition_kind, competition_slug)`
@@ -356,7 +396,7 @@ impl PlayerStatisticsProjection {
         current_date: NaiveDate,
     ) -> Vec<PlayerCompetitionStatsRow> {
         let ledger = Self::build_ledger(history, live, domestic_cup, current_date);
-        let today_year = Season::from_date(current_date).start_year;
+        let current_year = Self::current_season_year(history, current_date);
 
         // Accumulators keyed by (kind, slug) so a stale duplicate (e.g. a
         // legacy live cup slice plus an override that matches it) cannot
@@ -372,7 +412,7 @@ impl PlayerStatisticsProjection {
 
         for entry in ledger
             .into_iter()
-            .filter(|e| e.season_start_year == today_year)
+            .filter(|e| e.season_start_year == current_year)
         {
             match entry.competition_kind {
                 PlayerStatCompetitionKind::League => {
@@ -1451,6 +1491,102 @@ mod tests {
         );
         assert_eq!(spartak[0].statistics.played, 18);
         assert_eq!(spartak[0].statistics.goals, 4);
+    }
+
+    #[test]
+    fn history_shows_just_frozen_season_in_sub_august_window() {
+        // Sub-August league: the season-end snapshot froze 2025/26 (a loan
+        // spell) on a July regen and re-seeded the new season. But
+        // `Season::from_date(July 2026)` still reports 2025/26 as "current",
+        // so the just-frozen row must NOT be hidden until the calendar
+        // crosses the next August boundary.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.season_ledger.push(PlayerStatLedgerEntry {
+            seq_id: 1,
+            season_start_year: 2025,
+            team_slug: "borrowing".to_string(),
+            team_name: "Borrowing".to_string(),
+            team_reputation: 100,
+            league_slug: "league-b".to_string(),
+            league_name: "League B".to_string(),
+            competition_kind: PlayerStatCompetitionKind::League,
+            competition_slug: "league-b".to_string(),
+            is_loan: true,
+            transfer_fee: Some(0.0),
+            statistics: stats(20, 5),
+        });
+        // Re-seeded active spell for the new season (joined Aug 2026 by the
+        // season-end re-seed convention).
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "Parent".to_string(),
+            team_slug: "parent".to_string(),
+            team_reputation: 200,
+            league_name: "League A".to_string(),
+            league_slug: "league-a".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2026, 8, 1),
+            departed_date: None,
+            seq_id: 2,
+        });
+
+        let empty = PlayerStatistics::default();
+        let live = empty_live(&empty);
+        // Render in the Jan–Jul window: from_date(July 2026) == 2025.
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2026, 7, 1));
+        let loan = rows
+            .iter()
+            .find(|r| r.team_slug == "borrowing" && r.season.start_year == 2025)
+            .expect("just-frozen loan row must not be hidden in the sub-August window");
+        assert_eq!(loan.statistics.played, 20);
+        assert!(loan.is_loan);
+    }
+
+    #[test]
+    fn history_shows_just_frozen_loan_when_player_already_returned() {
+        // Same league shape, but the loan already returned and the only
+        // active spell's `joined_date` is itself a Jan–Jul date — so a naive
+        // `max(today, joined)` would still lag. The frozen-season inference
+        // (last completed League season + 1) must still surface the 2025/26
+        // loan row.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.season_ledger.push(PlayerStatLedgerEntry {
+            seq_id: 1,
+            season_start_year: 2025,
+            team_slug: "borrowing".to_string(),
+            team_name: "Borrowing".to_string(),
+            team_reputation: 100,
+            league_slug: "league-b".to_string(),
+            league_name: "League B".to_string(),
+            competition_kind: PlayerStatCompetitionKind::League,
+            competition_slug: "league-b".to_string(),
+            is_loan: true,
+            transfer_fee: Some(0.0),
+            statistics: stats(18, 2),
+        });
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "Parent".to_string(),
+            team_slug: "parent".to_string(),
+            team_reputation: 200,
+            league_name: "League A".to_string(),
+            league_slug: "league-a".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2026, 6, 15),
+            departed_date: None,
+            seq_id: 2,
+        });
+
+        let empty = PlayerStatistics::default();
+        let live = empty_live(&empty);
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2026, 7, 1));
+        let loan = rows
+            .iter()
+            .find(|r| r.team_slug == "borrowing" && r.season.start_year == 2025)
+            .expect("returned-loan row must still show in the sub-August window");
+        assert_eq!(loan.statistics.played, 18);
     }
 
     #[test]

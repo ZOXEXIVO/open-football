@@ -167,7 +167,39 @@ impl<'a> RatingContext<'a> {
             0.0
         };
 
-        saves_v + save_pct_v + xg_prev_v + workload + command + dominant_defense
+        // Limited-exposure relief — the conceded-side mirror of the
+        // protected-shutout term. A keeper beaten by essentially the only
+        // shot he faced (one conceded, no save to show for it) had no
+        // chance to be the difference: a single goal off a single shot is
+        // an ordinary keeper outing, not a failure, yet with zero save
+        // volume to carry any positive signal he was marooned in the low
+        // 5s (a 0-save / 1-conceded keeper read 5.76, and any small blemish
+        // dropped him toward the disaster line). Pays ONLY the untested
+        // 0-save case — the taper is gone by two shots faced, so a keeper
+        // who made even one save, or faced more, earns through saves /
+        // workload / save% instead, and the underperformance season
+        // fixtures (whose conceding matches all carry a save) are
+        // untouched. Gated to exactly one conceded AND a blameless one: a
+        // keeper beaten repeatedly by the little he faced, or whose own
+        // error or own-goal put it there (a howler, not bad luck), gets
+        // nothing here.
+        let limited_exposure = if self.opponent_goals == 1
+            && self.stats.errors_leading_to_goal == 0
+            && self.stats.own_goals == 0
+        {
+            let shot_taper = (1.0 - shots_faced as f32 / 2.0).max(0.0);
+            0.55 * shot_taper
+        } else {
+            0.0
+        };
+
+        saves_v
+            + save_pct_v
+            + xg_prev_v
+            + workload
+            + command
+            + dominant_defense
+            + limited_exposure
     }
 
     /// GK-specific exceptional negatives kept at full strength: failed

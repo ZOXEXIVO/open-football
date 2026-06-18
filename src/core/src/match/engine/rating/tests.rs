@@ -2051,6 +2051,64 @@ fn single_keeper_blunder_is_not_triple_counted() {
     );
 }
 
+#[test]
+fn untested_conceding_keeper_is_not_buried() {
+    // A keeper beaten by essentially the only shot he faced — one goal, no
+    // save — had no chance to influence the result; a single goal off a
+    // single shot is an ordinary keeper outing, not a failure. Without the
+    // limited-exposure relief he was marooned at ~5.76 (and below the
+    // disaster line with any small blemish). It must now read as an
+    // ordinary game, while still sitting below a keeper who made a save.
+    let mut untested = make_gk(0, 1);
+    untested.minutes_played = 90;
+    let untested_r = RatingContext::new(&untested, 1, 1).calculate();
+    assert!(
+        (5.95..=6.35).contains(&untested_r),
+        "0-save 1-conceded keeper in a draw rated {untested_r:.3} — an \
+         untested keeper beaten by the one shot he faced should read as an \
+         ordinary game, not a sub-six failure",
+    );
+
+    // Making a save is still worth more than facing nothing.
+    let mut one_save = make_gk(1, 2);
+    one_save.minutes_played = 90;
+    let one_save_r = RatingContext::new(&one_save, 1, 1).calculate();
+    assert!(
+        one_save_r > untested_r,
+        "a keeper who made a save ({one_save_r:.3}) must outrate one who \
+         only faced the goal ({untested_r:.3})",
+    );
+
+    // The relief is for a BLAMELESS concession — a keeper who gifted the
+    // goal himself gets none of it and stays in the howler band.
+    let mut blunder = make_gk(0, 1);
+    blunder.minutes_played = 90;
+    blunder.errors_leading_to_goal = 1;
+    let blunder_r = RatingContext::new(&blunder, 1, 1).calculate();
+    assert!(
+        blunder_r < untested_r - 1.0,
+        "a keeper who caused the goal ({blunder_r:.3}) must rate far below a \
+         blameless untested keeper ({untested_r:.3}) — no relief for a howler",
+    );
+}
+
+#[test]
+#[ignore]
+fn dump_conceded_one_keeper_band() {
+    let neutral = RatingExpectationContext::neutral();
+    println!("--- GK conceded 1 in a 1-1 draw ---");
+    for &(saves, faced) in &[(0u16, 1u16), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6)] {
+        let mut gk = make_gk(saves, faced);
+        gk.minutes_played = 90;
+        let s1 = RatingContext::new(&gk, 1, 1).calculate();
+        let ctx = RatingContext::new(&gk, 1, 1).calculate_contextual(&neutral);
+        println!(
+            "{}sv/{}faced  stage1 {:.3}  contextual {:.3}",
+            saves, faced, s1, ctx
+        );
+    }
+}
+
 // ─── Defenders ──────────────────────────────────────────────
 
 #[test]
