@@ -1629,6 +1629,8 @@ fn dump_season_calibration_values() {
         ("top GK league", SeasonFixture::top_gk_league_season()),
         ("GK continental", SeasonFixture::gk_continental_cluster()),
         ("GK 2nd-tier 16CS", SeasonFixture::second_tier_shutout_gk_season()),
+        ("GK dominant 24CS", SeasonFixture::dominant_defense_gk_season()),
+        ("GK leaky 9CS", SeasonFixture::leaky_topflight_gk_season()),
         ("ST 15 goals", SeasonFixture::striker_fifteen_goal_season()),
         ("ST 21 goals", SeasonFixture::striker_twentyone_goal_season()),
         ("ST 6 goals", SeasonFixture::striker_low_output_season()),

@@ -672,6 +672,47 @@ mod tests {
     }
 
     #[test]
+    fn gk_season_display_anchors_on_six_six_five_not_match_baseline() {
+        // A keeper's season-display regression target is the GK positional
+        // neutral (6.65), NOT the 6.0 per-match baseline. Clean sheets and
+        // protected shutouts make even an ordinary keeper's season currency
+        // sit in the high sixes, so a small-sample or middling GK must
+        // regress toward ~6.65 — quietly dropping the anchor toward 6.0
+        // would re-bury exactly the protected-shutout seasons the rating
+        // model was fixed to reward. This pins the display path so a future
+        // change can't silently undo that.
+        //
+        // A one-app sample regresses almost entirely onto the anchor:
+        // reliability 1/(1+12) ≈ 0.077, so a flat 6.0 line displays
+        // 6.65 + (6.0 - 6.65)*0.077 ≈ 6.60 — pulled UP toward 6.65, the
+        // opposite of what a 6.0 anchor would do.
+        let mut gk = PlayerStatistics::default();
+        gk.played += 1;
+        gk.record_match_rating(6.0, 90, true);
+        let gk_anchored = gk.realistic_average_rating(PlayerFieldPositionGroup::Goalkeeper);
+        assert!(
+            gk_anchored > 6.55 && gk_anchored < 6.66,
+            "1-app 6.0 GK regresses to {:.3} — the display anchor must be \
+             the 6.65 GK neutral, not the 6.0 match baseline",
+            gk_anchored
+        );
+
+        // The anchor is positional, not a flat 6.0: the identical one-app
+        // 6.0 line for a lower-neutral position regresses to a lower value.
+        let mut def = PlayerStatistics::default();
+        def.played += 1;
+        def.record_match_rating(6.0, 90, true);
+        let def_anchored = def.realistic_average_rating(PlayerFieldPositionGroup::Defender);
+        assert!(
+            gk_anchored > def_anchored,
+            "GK display anchor ({:.3}) must sit above the defender anchor \
+             ({:.3}) — the regression neutral is position-aware",
+            gk_anchored,
+            def_anchored
+        );
+    }
+
+    #[test]
     fn merge_from_promotes_legacy_into_ledger() {
         // a is legacy (no rating_weight), b is new-style. Merge should
         // synthesise a weight for a and produce a sensible blended avg.

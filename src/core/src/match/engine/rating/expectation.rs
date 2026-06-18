@@ -35,7 +35,7 @@
 //! league pipeline (`compute_effective_ratings`); this module is the
 //! deterministic, match-data-only half of the model.
 
-use super::{EvidenceTier, RATING_MAX, RATING_MIN, RatingContext, sat};
+use super::{EvidenceTier, RATING_MAX, RATING_MIN, RatingContext, RatingMath};
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::events::PositionLoad;
 use crate::r#match::PlayerMatchEndStats;
@@ -273,11 +273,16 @@ impl<'a> RatingContext<'a> {
         let z = s.zone_stats;
         let idx = match self.pos {
             PlayerFieldPositionGroup::Goalkeeper => {
-                let saves = sat(s.saves as f32, 3.5);
-                let xgp = sat(s.xg_prevented.max(0.0), 1.5);
-                let command = sat(z.gk_command_actions as f32, 3.0);
-                let errors = sat(
-                    (s.errors_leading_to_shot + s.errors_leading_to_goal) as f32
+                let saves = RatingMath::sat(s.saves as f32, 3.5);
+                let xgp = RatingMath::sat(s.xg_prevented.max(0.0), 1.5);
+                let command = RatingMath::sat(z.gk_command_actions as f32, 3.0);
+                // Count distinct error incidents once: every
+                // `errors_leading_to_goal` is already inside
+                // `errors_leading_to_shot` (the engine promotes the same
+                // play), so summing both double-weighted a keeper's blunder
+                // against their own contribution index.
+                let errors = RatingMath::sat(
+                    s.errors_leading_to_shot as f32
                         + (z.gk_failed_claims_to_shot + z.gk_failed_claims_to_goal) as f32,
                     2.0,
                 );
@@ -295,12 +300,12 @@ impl<'a> RatingContext<'a> {
                 0.45 * saves + 0.30 * xgp + 0.15 * command + clean_sheet - 0.30 * errors
             }
             PlayerFieldPositionGroup::Defender => {
-                let routine = sat(
+                let routine = RatingMath::sat(
                     (s.tackles + s.interceptions + s.blocks + s.clearances) as f32,
                     7.0,
                 );
-                let box_work = sat(self.danger_zone_actions(), 4.0);
-                let build = sat(
+                let box_work = RatingMath::sat(self.danger_zone_actions(), 4.0);
+                let build = RatingMath::sat(
                     (s.progressive_passes + s.progressive_carries + s.passes_into_box) as f32,
                     6.0,
                 );
@@ -312,21 +317,21 @@ impl<'a> RatingContext<'a> {
                 // recycler role's actual contribution, and the prior
                 // weighting read a 60-pass shift as barely half of the
                 // expected midfield influence.
-                let pass_vol = sat(s.passes_completed as f32, 50.0);
-                let progression = sat(
+                let pass_vol = RatingMath::sat(s.passes_completed as f32, 50.0);
+                let progression = RatingMath::sat(
                     (s.progressive_passes + s.progressive_carries) as f32,
                     6.0,
                 );
-                let creation = sat((s.key_passes + s.passes_into_box) as f32, 4.0);
-                let press = sat(s.successful_pressures as f32, 5.0);
+                let creation = RatingMath::sat((s.key_passes + s.passes_into_box) as f32, 4.0);
+                let press = RatingMath::sat(s.successful_pressures as f32, 5.0);
                 0.30 * pass_vol + 0.30 * progression + 0.25 * creation + 0.20 * press
             }
             PlayerFieldPositionGroup::Forward => {
-                let decisive = sat(s.goals as f32 + s.assists as f32 * 0.6, 1.5);
-                let threat = sat(s.xg.max(0.0), 1.5);
-                let sot = sat(s.shots_on_target as f32, 3.0);
-                let creation = sat((s.key_passes + s.passes_into_box) as f32, 3.0);
-                let dribbles = sat(s.successful_dribbles as f32, 3.0);
+                let decisive = RatingMath::sat(s.goals as f32 + s.assists as f32 * 0.6, 1.5);
+                let threat = RatingMath::sat(s.xg.max(0.0), 1.5);
+                let sot = RatingMath::sat(s.shots_on_target as f32, 3.0);
+                let creation = RatingMath::sat((s.key_passes + s.passes_into_box) as f32, 3.0);
+                let dribbles = RatingMath::sat(s.successful_dribbles as f32, 3.0);
                 0.40 * decisive + 0.20 * threat + 0.15 * sot + 0.15 * creation + 0.10 * dribbles
             }
         };
@@ -426,7 +431,7 @@ impl<'a> RatingContext<'a> {
                     + self.stats.heavy_touches) as f32;
                 let normal = self.position_sloppy_floor();
                 let excess = (sloppy - normal).max(0.0);
-                modifier -= sat(excess, 3.0) * 0.18;
+                modifier -= RatingMath::sat(excess, 3.0) * 0.18;
             }
         }
 

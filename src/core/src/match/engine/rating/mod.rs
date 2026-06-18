@@ -37,83 +37,89 @@ const RATING_MIN: f32 = 1.0;
 const RATING_MAX: f32 = 10.0;
 
 // =====================================================================
-// Saturation helpers
+// RatingMath — stateless scoring-curve primitives
 // =====================================================================
+//
+// Saturation curves, the minute-confidence / event-minute policy, and
+// the upside-compression helpers shared by every rating component.
+// Grouped onto one zero-sized struct so the model exposes no free
+// functions: each call site reads `RatingMath::sat(..)` /
+// `RatingMath::soft_cap(..)` etc. Pure math, no state.
 
-/// Smooth positive saturation: `1 - exp(-x/scale)`. Returns 0 for
-/// non-positive `x`. At `x = scale` ≈ 0.63, at `x = 2·scale` ≈ 0.86,
-/// at `x = 3·scale` ≈ 0.95.
-#[inline]
-fn sat(x: f32, scale: f32) -> f32 {
-    if x <= 0.0 || scale <= 0.0 {
-        0.0
-    } else {
-        1.0 - (-x / scale).exp()
+struct RatingMath;
+
+impl RatingMath {
+    /// Smooth positive saturation: `1 - exp(-x/scale)`. Returns 0 for
+    /// non-positive `x`. At `x = scale` ≈ 0.63, at `x = 2·scale` ≈ 0.86,
+    /// at `x = 3·scale` ≈ 0.95.
+    #[inline]
+    fn sat(x: f32, scale: f32) -> f32 {
+        if x <= 0.0 || scale <= 0.0 {
+            0.0
+        } else {
+            1.0 - (-x / scale).exp()
+        }
     }
-}
 
-/// Signed smooth saturation via `tanh`. Useful for percentage-like
-/// signals that swing both above and below a baseline.
-#[inline]
-fn signed_sat(x: f32, scale: f32) -> f32 {
-    if scale <= 0.0 {
-        0.0
-    } else {
-        (x / scale).tanh()
+    /// Signed smooth saturation via `tanh`. Useful for percentage-like
+    /// signals that swing both above and below a baseline.
+    #[inline]
+    fn signed_sat(x: f32, scale: f32) -> f32 {
+        if scale <= 0.0 {
+            0.0
+        } else {
+            (x / scale).tanh()
+        }
     }
-}
 
-// =====================================================================
-// Confidence + event-minute policy
-// =====================================================================
-
-/// Smooth minute-confidence curve. Reaches ~0.40 by 15 minutes, ~0.70
-/// by 35, ~0.93 by 70, ~1.0 by 90+. Players that didn't play (0
-/// minutes) get 0.0 so their event totals contribute nothing.
-fn minute_confidence(minutes: u16) -> f32 {
-    if minutes == 0 {
-        return 0.0;
+    /// Smooth minute-confidence curve. Reaches ~0.40 by 15 minutes, ~0.70
+    /// by 35, ~0.93 by 70, ~1.0 by 90+. Players that didn't play (0
+    /// minutes) get 0.0 so their event totals contribute nothing.
+    fn minute_confidence(minutes: u16) -> f32 {
+        if minutes == 0 {
+            return 0.0;
+        }
+        let m = minutes as f32 / 35.0;
+        m.tanh()
     }
-    let m = minutes as f32 / 35.0;
-    m.tanh()
-}
 
-/// Damp factor for direct event deltas (goals, errors-to-goal, reds,
-/// own goals). Always ≥ 0.70 so a 5-minute winner keeps the bulk of
-/// the goal credit, but a cameo doesn't get the full routine credit
-/// either — that part still goes through `minute_confidence`.
-#[inline]
-fn event_minutes_factor(conf: f32) -> f32 {
-    0.70 + 0.30 * conf
-}
-
-/// Compress excessive cumulative positive upside. Below the knee passes
-/// through unchanged; above, each extra unit is damped to `SLOPE`
-/// contribution. Knee is set so that ordinary stat lines (typical
-/// per-match routine sum 0.6-1.0) pass through, but accumulated routine
-/// stacking past ~1.0 starts to hit diminishing returns — keeps a
-/// volume passer / busy worker from drifting into the elite band on
-/// routine alone, without flattening genuinely top-tier performances.
-#[inline]
-fn compress_positive_delta(delta: f32) -> f32 {
-    const KNEE: f32 = 1.0;
-    const SLOPE: f32 = 0.40;
-    if delta <= KNEE {
-        delta
-    } else {
-        KNEE + (delta - KNEE) * SLOPE
+    /// Damp factor for direct event deltas (goals, errors-to-goal, reds,
+    /// own goals). Always ≥ 0.70 so a 5-minute winner keeps the bulk of
+    /// the goal credit, but a cameo doesn't get the full routine credit
+    /// either — that part still goes through `minute_confidence`.
+    #[inline]
+    fn event_minutes_factor(conf: f32) -> f32 {
+        0.70 + 0.30 * conf
     }
-}
 
-/// Soft cap: below `cap`, passes through; above, the excess is
-/// compressed by `slope_after`. Cheaper than a hard clamp because
-/// the relative ordering of "great vs very great" survives.
-#[inline]
-fn soft_cap(value: f32, cap: f32, slope_after: f32) -> f32 {
-    if value <= cap {
-        value
-    } else {
-        cap + (value - cap) * slope_after
+    /// Compress excessive cumulative positive upside. Below the knee passes
+    /// through unchanged; above, each extra unit is damped to `SLOPE`
+    /// contribution. Knee is set so that ordinary stat lines (typical
+    /// per-match routine sum 0.6-1.0) pass through, but accumulated routine
+    /// stacking past ~1.0 starts to hit diminishing returns — keeps a
+    /// volume passer / busy worker from drifting into the elite band on
+    /// routine alone, without flattening genuinely top-tier performances.
+    #[inline]
+    fn compress_positive_delta(delta: f32) -> f32 {
+        const KNEE: f32 = 1.0;
+        const SLOPE: f32 = 0.40;
+        if delta <= KNEE {
+            delta
+        } else {
+            KNEE + (delta - KNEE) * SLOPE
+        }
+    }
+
+    /// Soft cap: below `cap`, passes through; above, the excess is
+    /// compressed by `slope_after`. Cheaper than a hard clamp because
+    /// the relative ordering of "great vs very great" survives.
+    #[inline]
+    fn soft_cap(value: f32, cap: f32, slope_after: f32) -> f32 {
+        if value <= cap {
+            value
+        } else {
+            cap + (value - cap) * slope_after
+        }
     }
 }
 
@@ -240,7 +246,7 @@ impl<'a> RatingContext<'a> {
     pub fn new(stats: &'a PlayerMatchEndStats, team_goals: u8, opponent_goals: u8) -> Self {
         let pos = stats.position_group;
         let profile = Profile::for_position(pos);
-        let confidence = minute_confidence(stats.minutes_played);
+        let confidence = RatingMath::minute_confidence(stats.minutes_played);
         Self {
             stats,
             team_goals,
@@ -268,7 +274,7 @@ impl<'a> RatingContext<'a> {
     pub fn calculate(&self) -> f32 {
         let p = self.profile;
         let conf = self.confidence;
-        let ev_factor = event_minutes_factor(conf);
+        let ev_factor = RatingMath::event_minutes_factor(conf);
 
         // Routine on-the-ball signal — minute-confidence damped.
         let routine = p.shooting * self.shooting()
@@ -299,7 +305,7 @@ impl<'a> RatingContext<'a> {
         let positive_routine = if self.is_goalkeeper() {
             raw_pos_routine
         } else {
-            compress_positive_delta(raw_pos_routine)
+            RatingMath::compress_positive_delta(raw_pos_routine)
         };
         let negative_routine = routine_damped.min(0.0);
         let positive_event = event_damped.max(0.0);

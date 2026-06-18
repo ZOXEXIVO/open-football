@@ -2010,6 +2010,47 @@ fn gk_error_to_goal_drops_rating_hard() {
     );
 }
 
+#[test]
+fn single_keeper_blunder_is_not_triple_counted() {
+    // Reproduces the reported live bug: a keeper conceded ONE goal in a
+    // 1-1 draw and rated 3.9 — below the disaster band the model reserves
+    // for shipping SEVEN. Root cause: one own-box giveaway that became a
+    // goal billed the keeper through three overlapping counters at once —
+    // `errors_leading_to_shot` (the shot), `errors_leading_to_goal` (that
+    // same shot converting), and `errors_to_goal_own_box` (the same play,
+    // in the box). One mistake must cost like one mistake.
+
+    // Reference: the same keeper charged with only the goal-error flag.
+    let mut single = make_gk(0, 1);
+    single.minutes_played = 90;
+    single.errors_leading_to_goal = 1;
+    let single_r = RatingContext::new(&single, 1, 1).calculate();
+
+    // The full engine attribution for ONE own-box giveaway-to-goal.
+    let mut triple = make_gk(0, 1);
+    triple.minutes_played = 90;
+    triple.errors_leading_to_shot = 1;
+    triple.errors_leading_to_goal = 1;
+    triple.zone_stats.errors_to_goal_own_box = 1;
+    let triple_r = RatingContext::new(&triple, 1, 1).calculate();
+
+    // The two extra flags describe the SAME play, so they must add (almost)
+    // nothing on top of the goal-error already billed in full.
+    assert!(
+        (single_r - triple_r).abs() < 0.05,
+        "one keeper mistake must not be billed multiple times: \
+         goal-error only {single_r:.3} vs full attribution {triple_r:.3}",
+    );
+
+    // And the absolute rating reads as a clear keeper howler, not a
+    // worse-than-seven-conceded disaster.
+    assert!(
+        (4.30..=5.30).contains(&triple_r),
+        "a single self-inflicted goal in a draw should read as a keeper \
+         howler (4.30..=5.30), not a multi-goal disaster — got {triple_r:.3}",
+    );
+}
+
 // ─── Defenders ──────────────────────────────────────────────
 
 #[test]
@@ -2506,6 +2547,86 @@ fn four_save_shutout_win_stays_below_elite_band() {
         "4-save shutout-win GK rated {} — the GkBusy tier step must \
              stay below 8.3",
         r
+    );
+}
+
+#[test]
+fn protected_shutout_curve_is_smooth_and_monotonic() {
+    // Clean-sheet WIN ratings as real save workload climbs from a fully
+    // protected shutout (0 faced) to a busy one (5 faced). The
+    // protected-shutout taper pays a keeper the defence shielded across
+    // 0..3 faced; genuine save volume takes over from 3 on. This guards
+    // the sensitive 0..=3 region so a future coefficient change cannot
+    // reintroduce the original "untested keeper marooned at baseline" bug,
+    // invert the curve, or turn the GkBusy tier boundary into a cliff.
+    let curve: Vec<f32> = [(0u16, 0u16), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5)]
+        .iter()
+        .map(|&(saves, faced)| {
+            let mut gk = make_gk(saves, faced);
+            gk.minutes_played = 90;
+            RatingContext::new(&gk, 1, 0).calculate()
+        })
+        .collect();
+
+    // Monotonic non-decreasing — more genuine save workload behind a clean
+    // sheet is never worth less. The core regression guard: it is what
+    // keeps 2/2 and 3/3 from being punished for losing the taper credit.
+    for w in curve.windows(2) {
+        assert!(
+            w[1] >= w[0] - 0.001,
+            "protected-shutout curve must be non-decreasing, got {:?}",
+            curve
+        );
+    }
+
+    // 0/0 — a fully protected shutout win clears the "did the job" line but
+    // is not an automatic 7 (the back four did the heavy lifting).
+    assert!(
+        curve[0] > 6.50 && curve[0] < 7.05,
+        "0-save protected shutout win = {:.3}, want 6.50..7.05\ncurve {:?}",
+        curve[0],
+        curve
+    );
+
+    // The 0->1 step lives in the taper region and must stay gentle, not a
+    // save-volume cliff that re-creates the old one-save discontinuity.
+    assert!(
+        curve[1] - curve[0] <= 0.35,
+        "0/0 -> 1/1 jump = {:.3}, taper must stay smooth (<= 0.35)\ncurve {:?}",
+        curve[1] - curve[0],
+        curve
+    );
+    assert!(
+        curve[1] < curve[2],
+        "1/1 must stay below 2/2\ncurve {:?}",
+        curve
+    );
+
+    // 4/4 crosses into the GkBusy tier — saves >= 4 flips the soft cap
+    // (0.92 -> 1.52) and the clean-sheet tier (0.29 -> 0.34) together — so
+    // there is an earned, visible step here. It is structurally ~0.57 and
+    // bracketed by two hard invariants it must not break: it cannot shrink
+    // (`heroic_loss_gk_outrates_routine_shutout_gk` needs the GkBusy
+    // headroom) and cannot grow past ~0.64 (`four_save_shutout...` pins
+    // 4/4 < 8.3). No GK season fixture ever reaches 4 saves, so this is a
+    // pure per-match boundary — tightening it toward the aspirational 0.45
+    // would invert the heroic-loss ordering, so we guard it as a bounded
+    // step (visible, never a runaway cliff) instead.
+    let busy_step = curve[4] - curve[3];
+    assert!(
+        (0.15..=0.62).contains(&busy_step),
+        "3/3 -> 4/4 busy-tier step = {:.3}, want a visible-but-bounded \
+         0.15..=0.62 (the GkBusy tier boundary)\ncurve {:?}",
+        busy_step,
+        curve
+    );
+
+    // 5/5 — a busy clean sheet, clearly good.
+    assert!(
+        curve[5] >= 7.25,
+        "5-save clean sheet = {:.3}, want >= 7.25\ncurve {:?}",
+        curve[5],
+        curve
     );
 }
 

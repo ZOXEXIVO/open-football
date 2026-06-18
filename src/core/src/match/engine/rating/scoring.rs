@@ -5,7 +5,7 @@
 //! are deliberately modest — they get multiplied by the position weight
 //! (<= ~1.1) before contributing to the rating.
 
-use super::{RatingContext, sat, signed_sat};
+use super::{RatingContext, RatingMath};
 use crate::PlayerFieldPositionGroup;
 
 impl<'a> RatingContext<'a> {
@@ -35,17 +35,17 @@ impl<'a> RatingContext<'a> {
         // lifting passengers. The OneGoalLowVolume soft cap absorbs
         // most of the single-match effect, so per-match bands move by
         // hundredths while the season aggregate gains the difference.
-        let goal_raw = sat(g, 1.6) * 2.95;
+        let goal_raw = RatingMath::sat(g, 1.6) * 2.95;
         // Assists ≈ 55% of a goal — decisive but not as decisive as
         // putting it in. Lifted 1.55 → 1.65 in tandem for the same
         // reason (assist-match rating proportional to goal-match).
-        let assist_raw = sat(a, 1.6) * 1.65;
+        let assist_raw = RatingMath::sat(a, 1.6) * 1.65;
         let raw = goal_raw + assist_raw;
 
         // Clinical-finisher bonus: goals beyond xG → premium for
         // converting tougher chances or being lethal in front of goal.
         let over = (g - s.xg).max(0.0);
-        let clinical = sat(over, 1.0) * 0.15;
+        let clinical = RatingMath::sat(over, 1.0) * 0.15;
 
         // Decisive-event nudge — the goal or assist mattered to the
         // scoreline.
@@ -80,13 +80,13 @@ impl<'a> RatingContext<'a> {
         // signal when goals don't come. A 16-goal striker's blank
         // matches still carry 0.4-0.8 xG; those shifts have to read
         // ordinary (6.3-6.6), not poor, for the season band to hold.
-        let xg_value = sat(s.xg, 1.8) * 0.46;
+        let xg_value = RatingMath::sat(s.xg, 1.8) * 0.46;
         // SoT credit lifted 0.34 → 0.42 in the same pass — putting a
         // shot on target IS the headline forward action even without
         // scoring. Together with the xG lift this moves an active
         // goalless shift (~2 SOT, 0.5 xG) by ≈ +0.07 while a no-SOT
         // passenger gains nothing.
-        let sot_value = sat(s.shots_on_target as f32, 2.5) * 0.42;
+        let sot_value = RatingMath::sat(s.shots_on_target as f32, 2.5) * 0.42;
         let mut shooting = xg_value + sot_value;
 
         // Wasted high xG: created premium chances, scored nothing.
@@ -111,7 +111,7 @@ impl<'a> RatingContext<'a> {
                 (0.60, 0.55)
             };
             if s.xg > threshold {
-                shooting -= sat(s.xg - threshold, 1.2) * coef;
+                shooting -= RatingMath::sat(s.xg - threshold, 1.2) * coef;
             }
         }
 
@@ -122,7 +122,7 @@ impl<'a> RatingContext<'a> {
         // of the SoT credit it already earned).
         if s.shots_total >= 2 {
             let accuracy = s.shots_on_target as f32 / s.shots_total as f32;
-            shooting += signed_sat(accuracy - 0.40, 0.30) * 0.08;
+            shooting += RatingMath::signed_sat(accuracy - 0.40, 0.30) * 0.08;
         }
 
         // Shot spam: a wasteful low-skill finisher who keeps launching
@@ -135,7 +135,7 @@ impl<'a> RatingContext<'a> {
             let xg_per_shot = s.xg / s.shots_total as f32;
             if xg_per_shot < 0.10 {
                 let spam_coef = if is_forward { 0.40 } else { 0.30 };
-                shooting -= sat(s.shots_total as f32 - 2.0, 4.0) * spam_coef;
+                shooting -= RatingMath::sat(s.shots_total as f32 - 2.0, 4.0) * spam_coef;
             }
         }
 
@@ -147,7 +147,7 @@ impl<'a> RatingContext<'a> {
         // "poor/quiet ≈ 6.0" anchor.
         if s.goals == 0 && s.shots_on_target == 0 && s.shots_total >= 2 {
             let nosot_coef = if is_forward { 0.24 } else { 0.25 };
-            shooting -= sat(s.shots_total as f32 - 1.0, 3.0) * nosot_coef;
+            shooting -= RatingMath::sat(s.shots_total as f32 - 1.0, 3.0) * nosot_coef;
         }
 
         shooting
@@ -173,11 +173,11 @@ impl<'a> RatingContext<'a> {
         let s = self.stats;
         let z = s.zone_stats;
 
-        let key = sat(s.key_passes as f32, 3.5) * 0.42;
+        let key = RatingMath::sat(s.key_passes as f32, 3.5) * 0.42;
 
         // Box entries — combine passes-into-box and carries-into-box so
         // the same delivery doesn't pay double if both fired.
-        let box_entries = sat(s.passes_into_box as f32 + z.carries_into_box as f32, 5.0) * 0.30;
+        let box_entries = RatingMath::sat(s.passes_into_box as f32 + z.carries_into_box as f32, 5.0) * 0.30;
 
         // Cross output: completed crosses help, failed crosses drag.
         // Failed-cross penalty softened (was sat(failed, 5.0) * 0.22):
@@ -188,17 +188,17 @@ impl<'a> RatingContext<'a> {
         // average. The gentler curve still drags a player who can't
         // hit a cross to save their life, but absorbs ordinary fullback
         // crossing volume.
-        let cross_credit = sat(s.crosses_completed as f32, 3.5) * 0.13;
+        let cross_credit = RatingMath::sat(s.crosses_completed as f32, 3.5) * 0.13;
         let cross_failed = s.crosses_attempted.saturating_sub(s.crosses_completed) as f32;
-        let cross_penalty = sat(cross_failed, 10.0) * 0.10;
+        let cross_penalty = RatingMath::sat(cross_failed, 10.0) * 0.10;
 
         // xG buildup — chains the player participated in that ended
         // in a shot. Clean "made the chance happen" signal.
-        let xg_chain = sat(s.xg_buildup.max(0.0), 1.2) * 0.30;
+        let xg_chain = RatingMath::sat(s.xg_buildup.max(0.0), 1.2) * 0.30;
 
         // Zone-aware lane creation — smaller weights because the same
         // events typically tick `passes_into_box` / `key_passes` too.
-        let lanes = sat(
+        let lanes = RatingMath::sat(
             z.half_space_passes_into_box as f32
                 + z.central_passes_into_box as f32
                 + z.switches_of_play as f32,
@@ -207,7 +207,7 @@ impl<'a> RatingContext<'a> {
 
         // Progressive into final third — chance build-up that didn't
         // reach the box.
-        let into_final_third = sat(
+        let into_final_third = RatingMath::sat(
             z.progressive_passes_into_final_third as f32
                 + z.progressive_carries_into_final_third as f32,
             7.0,
@@ -231,15 +231,15 @@ impl<'a> RatingContext<'a> {
     pub(super) fn progression(&self) -> f32 {
         let s = self.stats;
 
-        let pp = sat(s.progressive_passes as f32, 6.0) * 0.26;
-        let pc = sat(s.progressive_carries as f32, 5.0) * 0.24;
-        let cd = sat(s.carry_distance as f32 / 1000.0, 1.8) * 0.10;
+        let pp = RatingMath::sat(s.progressive_passes as f32, 6.0) * 0.26;
+        let pc = RatingMath::sat(s.progressive_carries as f32, 5.0) * 0.24;
+        let cd = RatingMath::sat(s.carry_distance as f32 / 1000.0, 1.8) * 0.10;
 
         let drib_w = match self.pos {
             PlayerFieldPositionGroup::Forward | PlayerFieldPositionGroup::Midfielder => 0.26,
             _ => 0.14,
         };
-        let dribbles = sat(s.successful_dribbles as f32, 3.5) * drib_w;
+        let dribbles = RatingMath::sat(s.successful_dribbles as f32, 3.5) * drib_w;
 
         let failed = s.attempted_dribbles.saturating_sub(s.successful_dribbles) as f32;
         // Failed-dribble drag is tighter saturation (3.0 vs 4.0) and
@@ -251,7 +251,7 @@ impl<'a> RatingContext<'a> {
         } else {
             0.34
         };
-        let failed_drib = sat(failed, 3.0) * failed_w;
+        let failed_drib = RatingMath::sat(failed, 3.0) * failed_w;
 
         pp + pc + cd + dribbles - failed_drib
     }
@@ -273,7 +273,7 @@ impl<'a> RatingContext<'a> {
             return touch_drag;
         }
         let pct = s.passes_completed as f32 / s.passes_attempted as f32;
-        let volume = sat(s.passes_attempted as f32, 45.0); // saturates by ~90 attempts
+        let volume = RatingMath::sat(s.passes_attempted as f32, 45.0); // saturates by ~90 attempts
         // 0.74 is the league-average baseline. Coefficient lifted
         // 0.30 → 0.50 in the FM-parity DEF/MID season pass: the
         // recycler archetype (60+ passes at ~90%) was accumulating to
@@ -282,7 +282,7 @@ impl<'a> RatingContext<'a> {
         // credits it as solid. The elite band still needs progression
         // / creation: the recycler guards (`safe_recycler...`,
         // `high_pass_completion...`) hold tidy volume below 7.0.
-        let pass_signal = signed_sat(pct - 0.74, 0.18) * volume * 0.50;
+        let pass_signal = RatingMath::signed_sat(pct - 0.74, 0.18) * volume * 0.50;
         pass_signal + touch_drag
     }
 
@@ -308,7 +308,7 @@ impl<'a> RatingContext<'a> {
         // sat(5, 5) ≈ 0.63 → ~ -0.54 at five. Strong enough that
         // low-first-touch players visibly drop, gentle enough that one
         // mishit doesn't define the match.
-        -sat(m + h, 5.0) * 0.85
+        -RatingMath::sat(m + h, 5.0) * 0.85
     }
 
     /// Forward role expectation drag — applied at the rating layer
@@ -386,7 +386,7 @@ impl<'a> RatingContext<'a> {
         // damping) already hold an anonymous forward below baseline —
         // a zero-footprint 90 still loses ≈ −0.06 here plus the rest.
         let shortfall = (1.0 - footprint).max(0.0);
-        let lack_penalty = -sat(shortfall, 2.0) * 0.15;
+        let lack_penalty = -RatingMath::sat(shortfall, 2.0) * 0.15;
 
         // Wasted big-chance drag (ARE lane, separate from shooting()).
         // Threshold 0.8, coef cut 0.30 → 0.20 — the 200-match benchmark
@@ -394,7 +394,7 @@ impl<'a> RatingContext<'a> {
         // wasted-xG drag on the same xg signal. Reserve this for
         // 1.0+ xG unconverted (clear sitter case).
         let wasted = if xg > 0.8 {
-            -sat(xg - 0.8, 1.2) * 0.20
+            -RatingMath::sat(xg - 0.8, 1.2) * 0.20
         } else {
             0.0
         };

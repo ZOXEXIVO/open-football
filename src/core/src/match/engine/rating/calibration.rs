@@ -2,7 +2,7 @@
 //! team-result context damping, and the low-engagement penalty. All from a
 //! single stat-line read so the three signals can't drift out of sync.
 
-use super::{EvidenceTier, RatingContext, sat, soft_cap};
+use super::{EvidenceTier, RatingContext, RatingMath};
 use crate::PlayerFieldPositionGroup;
 
 impl<'a> RatingContext<'a> {
@@ -179,10 +179,10 @@ impl<'a> RatingContext<'a> {
     pub(super) fn apply_soft_caps_for(&self, positive_delta: f32, tier: EvidenceTier) -> f32 {
         match tier {
             EvidenceTier::HatTrick => positive_delta,
-            EvidenceTier::TwoGoals => soft_cap(positive_delta, 2.3, 0.45),
-            EvidenceTier::OneGoalLowVolume => soft_cap(positive_delta, 1.6, 0.45),
-            EvidenceTier::QuietCameo => soft_cap(positive_delta, 0.7, 0.25),
-            EvidenceTier::Strong => soft_cap(positive_delta, 1.3, 0.40),
+            EvidenceTier::TwoGoals => RatingMath::soft_cap(positive_delta, 2.3, 0.45),
+            EvidenceTier::OneGoalLowVolume => RatingMath::soft_cap(positive_delta, 1.6, 0.45),
+            EvidenceTier::QuietCameo => RatingMath::soft_cap(positive_delta, 0.7, 0.25),
+            EvidenceTier::Strong => RatingMath::soft_cap(positive_delta, 1.3, 0.40),
             EvidenceTier::Modest => {
                 // Unified Modest cap at 0.95 for all outfield positions
                 // (was forward-specific 0.80 → 0.65 → 0.80). The
@@ -195,13 +195,13 @@ impl<'a> RatingContext<'a> {
                 // doing that work. Restoring 0.95 lets an active
                 // goalless forward's busy routine line register, while
                 // ARE still drags the rating below the good band.
-                soft_cap(positive_delta, 0.95, 0.30)
+                RatingMath::soft_cap(positive_delta, 0.95, 0.30)
             }
             // Tightened: passenger routine volume alone is severely
             // bounded. The engagement penalty + context damping handle
             // the rest of the "showed up, did nothing" signal.
-            EvidenceTier::Passenger => soft_cap(positive_delta, 0.20, 0.15),
-            EvidenceTier::AnonymousStarter => soft_cap(positive_delta, 1.1, 0.25),
+            EvidenceTier::Passenger => RatingMath::soft_cap(positive_delta, 0.20, 0.15),
+            EvidenceTier::AnonymousStarter => RatingMath::soft_cap(positive_delta, 1.1, 0.25),
             // GK caps: previous tightening (0.75 / 1.30 / 0.50) was
             // calibrated against synthetic 7.x averages but went too
             // far — the engine emits modest shot volume so most TOP-GK
@@ -218,15 +218,15 @@ impl<'a> RatingContext<'a> {
             // Keeping the barrage keeper's headroom above the
             // well-protected shutout preserves the "earned vs
             // organised" ordering FM shows.
-            EvidenceTier::GkBusy => soft_cap(positive_delta, 1.52, 0.35),
-            EvidenceTier::GkModest => soft_cap(positive_delta, 0.92, 0.30),
+            EvidenceTier::GkBusy => RatingMath::soft_cap(positive_delta, 1.52, 0.35),
+            EvidenceTier::GkModest => RatingMath::soft_cap(positive_delta, 0.92, 0.30),
             // GkPassenger cap lifted 0.62 → 0.70 (FM-parity season
             // calibration): with the quiet-shutout credit at 0.25 the
             // old cap clipped a 1-save clean sheet's honest routine sum,
             // re-flattening exactly the matches the GK season band
             // needed back. Still well under GkModest, so an untested
             // keeper can't ride saves they never made.
-            EvidenceTier::GkPassenger => soft_cap(positive_delta, 0.70, 0.20),
+            EvidenceTier::GkPassenger => RatingMath::soft_cap(positive_delta, 0.70, 0.20),
             EvidenceTier::Uncapped => positive_delta,
         }
     }
@@ -347,6 +347,6 @@ impl<'a> RatingContext<'a> {
         // passes / 90 ≈ 0.28 touches/min) lands around −0.7 to −0.9,
         // pulling 6.3 into the 5.0–5.5 "clear underperformance" band.
         let shortfall = (floor - touches_per_min) / floor;
-        -sat(shortfall, 0.5) * 1.5
+        -RatingMath::sat(shortfall, 0.5) * 1.5
     }
 }

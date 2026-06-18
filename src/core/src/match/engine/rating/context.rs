@@ -2,7 +2,7 @@
 //! discipline, and errors/cards. Applied at full strength (no minute
 //! damping) because they are scoreline/team signals, not on-the-ball work.
 
-use super::{RatingContext, sat};
+use super::{RatingContext, RatingMath};
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::zones::ZoneCoeffs;
 
@@ -148,7 +148,7 @@ impl<'a> RatingContext<'a> {
                 // of the loss penalty, landing in the real-football
                 // 5.7-6.0 band for a bad day, never the disaster band.
                 let extra = self.opponent_goals as f32 - 1.5;
-                -sat(extra, 4.0) * 0.85
+                -RatingMath::sat(extra, 4.0) * 0.85
             }
             _ => 0.0,
         }
@@ -163,7 +163,7 @@ impl<'a> RatingContext<'a> {
 
         // Fouls — saturating drag so a 10-foul shift doesn't compound
         // linearly.
-        let fouls = sat(s.fouls as f32, 5.0) * -0.30;
+        let fouls = RatingMath::sat(s.fouls as f32, 5.0) * -0.30;
 
         let own_third_extra = if matches!(
             self.pos,
@@ -179,7 +179,7 @@ impl<'a> RatingContext<'a> {
             PlayerFieldPositionGroup::Forward => (0.08, 4.0),
             _ => (0.06, 3.0),
         };
-        let offsides = -sat(s.offsides as f32, scale) * per * scale; // ≈ per-event ≤ scale*per
+        let offsides = -RatingMath::sat(s.offsides as f32, scale) * per * scale; // ≈ per-event ≤ scale*per
 
         let own_goals =
             s.own_goals as f32 * (ZoneCoeffs::OWN_GOAL_BASE + ZoneCoeffs::OWN_GOAL_OWN_BOX_EXTRA);
@@ -192,8 +192,19 @@ impl<'a> RatingContext<'a> {
     /// moment. Always at full strength so a cameo error still lands.
     pub(super) fn errors_and_cards(&self) -> f32 {
         let s = self.stats;
-        let err_shot = sat(s.errors_leading_to_shot as f32, 1.0) * -0.55;
-        let err_goal = sat(s.errors_leading_to_goal as f32, 1.2) * -2.40;
+        // A shot-error that converts is promoted to `errors_leading_to_goal`
+        // at goal time, but the engine never clears the shot counter — so
+        // the same mistake sits in BOTH counters. Bill only the shot-errors
+        // that stayed shot-errors; the ones that became goals are punished,
+        // far more harshly, through `err_goal` below. Without this a single
+        // own-box giveaway-to-goal was charged as a shot-error AND a
+        // goal-error (AND an own-box extra), triple-counting one mistake and
+        // dropping a 1-conceded keeper into the disaster band.
+        let non_goal_shot_errors = s
+            .errors_leading_to_shot
+            .saturating_sub(s.errors_leading_to_goal);
+        let err_shot = RatingMath::sat(non_goal_shot_errors as f32, 1.0) * -0.55;
+        let err_goal = RatingMath::sat(s.errors_leading_to_goal as f32, 1.2) * -2.40;
         let yellow = s.yellow_cards as f32 * -0.15;
         let red = s.red_cards as f32 * -1.50;
         err_shot + err_goal + yellow + red

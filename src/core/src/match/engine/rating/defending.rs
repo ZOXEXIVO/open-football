@@ -1,6 +1,6 @@
 //! Defensive and goalkeeping rating components.
 
-use super::{RatingContext, sat};
+use super::{RatingContext, RatingMath};
 use crate::r#match::engine::zones::ZoneCoeffs;
 
 impl<'a> RatingContext<'a> {
@@ -39,18 +39,18 @@ impl<'a> RatingContext<'a> {
         // away, and the busy-CB cluster guards in tests.rs bound the
         // top end.
         let effective_tackles = (s.tackles as f32 - s.fouls as f32 * 0.5).max(0.0);
-        let tackles = sat(effective_tackles, 4.5) * 0.34;
-        let interceptions = sat(s.interceptions as f32, 4.5) * 0.34;
-        let blocks = sat(s.blocks as f32, 3.5) * 0.30;
+        let tackles = RatingMath::sat(effective_tackles, 4.5) * 0.34;
+        let interceptions = RatingMath::sat(s.interceptions as f32, 4.5) * 0.34;
+        let blocks = RatingMath::sat(s.blocks as f32, 3.5) * 0.30;
         // Clearances saturation scale tightened 7.5 → 6.0: 3 clearances
         // — a typical CB / fullback match — now registers at 39% rather
         // than 33% saturation. Same calibration motive as the tackles
         // / interceptions tighten above.
-        let clearances = sat(s.clearances as f32, 6.0) * 0.18;
+        let clearances = RatingMath::sat(s.clearances as f32, 6.0) * 0.18;
 
-        let succ_pressure = sat(s.successful_pressures as f32, 5.5) * 0.16;
+        let succ_pressure = RatingMath::sat(s.successful_pressures as f32, 5.5) * 0.16;
         let raw_pressure = s.pressures.saturating_sub(s.successful_pressures);
-        let press_volume = sat(raw_pressure as f32, 12.0) * 0.04;
+        let press_volume = RatingMath::sat(raw_pressure as f32, 12.0) * 0.04;
 
         // Zone-aware premium on top of the flat work — actions in
         // high-danger zones deserve more credit. Tighter saturation
@@ -64,11 +64,11 @@ impl<'a> RatingContext<'a> {
                     + z.interceptions_own_six_yard
                     + z.blocks_own_six_yard
                     + z.clearances_own_six_yard) as f32;
-        let danger_zone = sat(danger_actions, 4.0) * 0.42;
+        let danger_zone = RatingMath::sat(danger_actions, 4.0) * 0.42;
 
-        let final_third_pressure = sat(z.pressures_won_final_third as f32, 3.0) * 0.10;
-        let middle_third_int = sat(z.interceptions_middle_third as f32, 4.0) * 0.05;
-        let final_third_tackle = sat(z.tackles_final_third as f32, 3.0) * 0.07;
+        let final_third_pressure = RatingMath::sat(z.pressures_won_final_third as f32, 3.0) * 0.10;
+        let middle_third_int = RatingMath::sat(z.interceptions_middle_third as f32, 4.0) * 0.05;
+        let final_third_tackle = RatingMath::sat(z.tackles_final_third as f32, 3.0) * 0.07;
 
         tackles
             + interceptions
@@ -97,7 +97,7 @@ impl<'a> RatingContext<'a> {
 
         // Per-save credit — saturates so a 10-save shift isn't 10× a
         // single save.
-        let saves_v = sat(s.saves as f32, 2.8) * 1.35;
+        let saves_v = RatingMath::sat(s.saves as f32, 2.8) * 1.35;
 
         // Save percentage band — relative to a 70% baseline. We use a
         // hard zero in the 50%-70% dead-zone to keep a "made the saves
@@ -130,13 +130,13 @@ impl<'a> RatingContext<'a> {
         } else {
             0.0
         };
-        let xg_prev_v = sat(xg_prev, 1.5) * 0.90;
+        let xg_prev_v = RatingMath::sat(xg_prev, 1.5) * 0.90;
 
         // Workload absorbed: showing up under a barrage. Capped via sat.
-        let workload = sat((shots_faced as f32 - 2.0).max(0.0), 6.0) * 0.35;
+        let workload = RatingMath::sat((shots_faced as f32 - 2.0).max(0.0), 6.0) * 0.35;
 
         // Command-zone actions (cross claims, sweeper interventions).
-        let command = sat(z.gk_command_actions as f32, 4.0) * 0.30;
+        let command = RatingMath::sat(z.gk_command_actions as f32, 4.0) * 0.30;
 
         // Protected-shutout credit — keeper who organised the line and
         // kept a clean sheet behind a back four that limited the
@@ -181,12 +181,18 @@ impl<'a> RatingContext<'a> {
         let z = self.stats.zone_stats;
         let failed_shot = z.gk_failed_claims_to_shot as f32 * ZoneCoeffs::GK_FAILED_CLAIM_TO_SHOT;
         let failed_goal = z.gk_failed_claims_to_goal as f32 * ZoneCoeffs::GK_FAILED_CLAIM_TO_GOAL;
-        let turnovers = sat(
+        let turnovers = RatingMath::sat(
             z.dangerous_turnovers_own_third as f32 * 0.5 + z.dangerous_turnovers_own_box as f32,
             4.0,
         ) * 0.55;
-        let error_extra = z.errors_to_goal_own_box as f32 * ZoneCoeffs::ERROR_TO_GOAL_OWN_BOX_EXTRA;
+        // `errors_to_goal_own_box` is intentionally NOT re-penalised here.
+        // The engine sets it on the very same play that already bumped
+        // `errors_leading_to_goal` (an own-box giveaway that became a goal),
+        // and that goal-error is billed at near-own-goal strength in
+        // `errors_and_cards`. Stacking a separate own-box extra on top
+        // triple-counted one keeper mistake and dumped a single-goal keeper
+        // into the disaster band (a 1-conceded GK reading ~3.9 in a draw).
         // Apply GK profile weight (1.0) implicitly — these are GK-only.
-        failed_shot + failed_goal - turnovers + error_extra
+        failed_shot + failed_goal - turnovers
     }
 }
