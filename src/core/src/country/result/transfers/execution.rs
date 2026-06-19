@@ -866,6 +866,7 @@ fn execute_loan_within_country(
         let loan_contract = build_loan_contract(
             loan_fee,
             loan_end,
+            date,
             selling_club_id,
             from_team_id,
             buying_club_id,
@@ -1388,6 +1389,7 @@ fn execute_loan_across_countries(
     let loan_contract = build_loan_contract(
         loan_fee,
         loan_end,
+        date,
         selling_club_id,
         parent_team_id,
         buying_club_id,
@@ -1505,6 +1507,7 @@ fn resolve_buying_club_info(country: &Country, buying_club_id: u32) -> Option<Te
 fn build_loan_contract(
     _loan_fee: f64,
     loan_end: NaiveDate,
+    signing_date: NaiveDate,
     parent_club_id: u32,
     parent_team_id: u32,
     buying_club_id: u32,
@@ -1534,15 +1537,22 @@ fn build_loan_contract(
         .round()
         .clamp(0.0, 100.0) as u8;
 
-    // Minimum-appearances scales with borrower size: bigger borrowers
-    // promised the parent more minutes; small borrowers can't commit.
-    let min_apps = if borrower_score >= 0.7 {
+    // Minimum-appearances scales with borrower size AND with how much of the
+    // season the loan actually covers. Bigger borrowers promise the parent
+    // more minutes; small borrowers can't commit. A January (half-season)
+    // loan can't demand a full campaign's appearances, so the base figure is
+    // pro-rated by the fraction of a ~10-month season still to play from the
+    // signing date: a summer loan keeps the full bar, a winter loan ~half.
+    let base_min_apps: u16 = if borrower_score >= 0.7 {
         15
     } else if borrower_score >= 0.4 {
         10
     } else {
         6
     };
+    let months_remaining = (loan_end - signing_date).num_days().max(0) as f32 / 30.0;
+    let season_fraction = (months_remaining / 10.0).clamp(0.4, 1.0);
+    let min_apps = ((base_min_apps as f32 * season_fraction).round() as u16).max(1);
 
     let mut contract = PlayerClubContract::new_loan(
         borrower_wage,
