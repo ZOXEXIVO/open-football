@@ -222,9 +222,10 @@ impl PlayerValueCalculator {
             y if y < 1.0 => 0.5,  // Less than 1 year
             y if y < 1.5 => 0.7,  // 1-1.5 years
             y if y < 2.0 => 0.85, // 1.5-2 years
-            y if y < 3.0 => 1.0,  // 2-3 years
-            y if y < 4.0 => 1.05, // 3-4 years
-            _ => 1.1,             // 4+ years
+            y if y < 3.0 => 1.0,  // 2-3 years (anchor — the common case)
+            y if y < 4.0 => 1.15, // 3-4 years
+            y if y < 5.0 => 1.30, // 4-5 years
+            _ => 1.45,            // 5+ years — long contract, hard to prise loose
         }
     }
 
@@ -414,7 +415,8 @@ impl PlayerValueCalculator {
         }
     }
 
-    /// Player reputation premium — smooth curve in 0.95..1.20.
+    /// Player reputation premium — smooth curve in 0.95..1.45 (the body is
+    /// near-neutral for small/mid clubs; only the elite tier stretches up).
     ///
     /// Replaces the previous step function (1.0 / 1.05 / 1.15 / 1.30) which
     /// flattened anyone above rep 2000 to the same 1.30× ceiling. That cliff
@@ -425,18 +427,22 @@ impl PlayerValueCalculator {
     /// Examples:
     ///   rep    200 → 0.951
     ///   rep   1000 → 0.958
-    ///   rep   2000 → 0.978
-    ///   rep   5000 → 1.040
-    ///   rep   7500 → 1.116
-    ///   rep  10000 → 1.200
+    ///   rep   2000 → 0.973
+    ///   rep   5000 → 1.054
+    ///   rep   7500 → 1.191
+    ///   rep   9000 → 1.327
+    ///   rep  10000 → 1.450
     fn determine_reputation_factor(player: &Player) -> f64 {
         let rep = (player.player_attributes.current_reputation as f64).max(0.0);
         let normalized = (rep / 10_000.0).clamp(0.0, 1.0);
-        // 1.5-power curve keeps small clubs near-neutral while stretching
-        // the upper tier — a 9000-rep player still gets a clear premium over
-        // a 5000-rep one without the discontinuity at 2000.
-        let factor = 0.95 + 0.25 * normalized.powf(1.5);
-        factor.clamp(0.95, 1.20)
+        // Keep the smooth low/mid body (0.25·n^1.5) exactly as calibrated, and
+        // ADD a top-only stretch (0.25·n^4) so genuine icons separate from
+        // merely-very-good players: a rep-9000 name now reads well above a
+        // rep-7500 one instead of both compressing toward the old 1.20
+        // ceiling. The n^4 term is negligible below ~0.7 normalized, so small
+        // and mid clubs are unaffected; only the elite tier stretches.
+        let factor = 0.95 + 0.25 * normalized.powf(1.5) + 0.25 * normalized.powf(4.0);
+        factor.clamp(0.95, 1.45)
     }
 
     /// League and club reputation factor.
