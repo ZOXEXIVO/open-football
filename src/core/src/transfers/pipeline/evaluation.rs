@@ -94,14 +94,21 @@ pub(in crate::transfers::pipeline) fn compute_group_needs(
             .find(|p| p.position_group() == group)
             .unwrap_or(*pos);
 
-        // (1) Formation gap — any slot in the group has no covering player
-        let group_has_gap = position_coverage
+        // (1) Formation gap — any slot in the group has no covering player.
+        // Use the SPECIFIC uncovered slot as the representative position, not
+        // the group's first formation slot: a side with four centre-backs but
+        // no left-back has an empty LB slot, and the request should name the
+        // left-back, not a centre-back. Downstream matching is group-based, so
+        // this only sharpens the request (and any position-specific logic) —
+        // it never narrows who can fill it.
+        let gap_pos = position_coverage
             .iter()
-            .any(|(p, pid, _)| p.position_group() == group && pid.is_none());
-        if group_has_gap {
+            .find(|(p, pid, _)| p.position_group() == group && pid.is_none())
+            .map(|(p, _, _)| *p);
+        if let Some(gap_pos) = gap_pos {
             needs.push(GroupNeed {
                 group,
-                representative_pos,
+                representative_pos: gap_pos,
                 kind: NeedKind::FormationGap,
             });
             continue;

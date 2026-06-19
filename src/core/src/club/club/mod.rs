@@ -330,6 +330,10 @@ impl Club {
 
             // Weekly: rebalance players across all teams
             self.rebalance_squads(date);
+
+            // Weekly: hand pro contracts to youth players who've earned
+            // them on form (also makes them visible to the loan market).
+            self.review_youth_contracts(date);
         } else {
             self.teams.manage_critical_squad_moves(date);
         }

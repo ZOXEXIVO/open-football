@@ -453,6 +453,28 @@ impl Player {
         &self.cup_statistics
     }
 
+    /// Current-season statistics across **all** competitions — league
+    /// (full-season, blended across intra-club Main↔B/Second spells via
+    /// the history ledger), domestic + continental cups, and friendlies —
+    /// rolled into one [`PlayerStatistics`]. The squad table reads apps,
+    /// goals and average rating from this single sample so every column
+    /// reflects the same set of matches: appearance count and average
+    /// rating can no longer disagree about which games count (e.g. a
+    /// player with only cup/friendly minutes used to show apps but a
+    /// blank "-" league-only rating).
+    ///
+    /// Rating is minutes-weighted via [`PlayerStatistics::merge_from`], so
+    /// a handful of friendly cameos drag the blended average far less than
+    /// a season of league starts.
+    pub fn current_season_all_statistics(&self) -> PlayerStatistics {
+        let mut combined = self
+            .statistics_history
+            .current_season_stats(&self.statistics);
+        combined.merge_from(&self.cup_statistics);
+        combined.merge_from(&self.friendly_statistics);
+        combined
+    }
+
     /// Mutable handle on this competition's cup-stats bucket, creating an
     /// empty one the first time the player appears in it. Match recording
     /// books cup appearances here (keyed by the match's `league_slug`)

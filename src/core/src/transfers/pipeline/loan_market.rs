@@ -959,15 +959,16 @@ struct BorrowerPositionDepth {
 
 impl BorrowerPositionDepth {
     fn snapshot(team: &Team) -> Self {
-        let caps = [
-            (PlayerFieldPositionGroup::Goalkeeper, 3usize),
-            (PlayerFieldPositionGroup::Defender, 8),
-            (PlayerFieldPositionGroup::Midfielder, 8),
-            (PlayerFieldPositionGroup::Forward, 6),
+        let groups = [
+            PlayerFieldPositionGroup::Goalkeeper,
+            PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Forward,
         ];
-        let rows = caps
+        let rows = groups
             .iter()
-            .map(|&(group, max)| {
+            .map(|&group| {
+                let max = group.ideal_squad_depth();
                 let abilities: Vec<u8> = team
                     .players
                     .iter()

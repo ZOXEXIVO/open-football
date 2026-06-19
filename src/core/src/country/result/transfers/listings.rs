@@ -7,6 +7,7 @@ use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::LoanOutReason;
+use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::{TransferListing, TransferListingType};
 use crate::{
     Club, Country, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
@@ -1042,8 +1043,6 @@ impl CountryResult {
         league_reputation: u16,
         club_reputation: u16,
     ) -> CurrencyValue {
-        use crate::transfers::window::PlayerValuationCalculator;
-
         let base_value = PlayerValuationCalculator::calculate_value_with_price_level(
             player,
             date,
@@ -1052,11 +1051,8 @@ impl CountryResult {
             club_reputation,
         );
 
-        let multiplier = if club.finance.balance.balance < 0 {
-            0.9
-        } else {
-            1.1
-        };
+        let multiplier =
+            PlayerValuationCalculator::seller_distress_multiplier(club.finance.balance.balance);
 
         CurrencyValue {
             amount: base_value.amount * multiplier,

@@ -464,6 +464,17 @@ mod transfer_window_tests {
 pub struct PlayerValuationCalculator;
 
 impl PlayerValuationCalculator {
+    /// Premium (solvent club) or discount (club in the red) applied over a
+    /// player's computed market value when setting an asking price: a
+    /// motivated/distressed seller lists a little under value, a solvent
+    /// club asks a little over. Centralizes the constant that previously
+    /// lived inline in both the pipeline asking-price helper and the country
+    /// listing path. A later pass makes this continuous in debt magnitude
+    /// and contract length remaining.
+    pub fn seller_distress_multiplier(balance: i64) -> f64 {
+        if balance < 0 { 0.9 } else { 1.1 }
+    }
+
     pub fn calculate_value(
         player: &Player,
         date: NaiveDate,

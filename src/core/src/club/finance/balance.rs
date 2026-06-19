@@ -265,6 +265,37 @@ impl ClubFinances {
         }
     }
 
+    /// Pure cash movement that is NOT a player sale — sell-on payouts,
+    /// agent fees, and deferred installment / performance add-on
+    /// settlements. Unlike [`add_transfer_income`] it must NOT recycle a
+    /// fraction into the transfer budget: these are obligation
+    /// settlements, not "we sold a player" income, so inflating spendable
+    /// budget by half the amount (and, on an outflow, *reducing* budget by
+    /// half on top of the cash) silently corrupts the transfer budget.
+    /// Positive = cash in, negative = cash out.
+    pub fn adjust_cash(&mut self, amount: f64) {
+        let cents = amount.round() as i64;
+        if cents > 0 {
+            self.balance.push_income(cents);
+        } else if cents < 0 {
+            self.balance.push_cash_outflow(-cents);
+        }
+    }
+
+    /// True when the club's transfer budget (if configured) can cover
+    /// `amount`. Mirrors the budget check inside
+    /// [`register_transfer_purchase`] so a caller can pre-check
+    /// affordability before committing any roster / finance mutation.
+    /// A club with no configured transfer budget is treated as able to
+    /// afford the move (the budget gate is opt-in).
+    pub fn can_afford_transfer(&self, amount: f64) -> bool {
+        let amount = amount.max(0.0);
+        match self.transfer_budget {
+            Some(ref budget) => budget.amount >= amount,
+            None => true,
+        }
+    }
+
     /// Trailing twelve months of total income across the history snapshots.
     /// Used by the board to size next season's transfer/wage budgets from
     /// projected revenue rather than current cash.
@@ -787,5 +818,62 @@ mod finance_tests {
         // > 365 days old, must be ignored.
         f.history.add(d(2024, 1), snap_old);
         assert_eq!(f.trailing_annual_income(d(2026, 1)), 5_000_000);
+    }
+}
+
+#[cfg(test)]
+mod transfer_cash_tests {
+    use super::ClubFinances;
+    use crate::shared::{Currency, CurrencyValue};
+
+    fn finances_with_budget(cash: i64, transfer_budget: f64) -> ClubFinances {
+        let mut f = ClubFinances::new(cash, Vec::new());
+        f.transfer_budget = Some(CurrencyValue {
+            amount: transfer_budget,
+            currency: Currency::Usd,
+        });
+        f
+    }
+
+    #[test]
+    fn adjust_cash_moves_balance_without_touching_transfer_budget() {
+        // Sell-on payouts and agent fees are pure cash movements: the
+        // balance moves but the transfer budget must stay put. The old path
+        // routed them through `add_transfer_income`, which shifted the
+        // budget by half the amount (a windfall on receipt, a double-hit on
+        // payment) — silently corrupting it.
+        let mut f = finances_with_budget(10_000_000, 5_000_000.0);
+        let bal0 = f.balance.balance;
+
+        f.adjust_cash(-1_000_000.0); // pay an agent fee
+        assert_eq!(f.balance.balance, bal0 - 1_000_000);
+        assert_eq!(f.transfer_budget.as_ref().unwrap().amount, 5_000_000.0);
+
+        f.adjust_cash(2_000_000.0); // receive a sell-on payout
+        assert_eq!(f.balance.balance, bal0 - 1_000_000 + 2_000_000);
+        assert_eq!(f.transfer_budget.as_ref().unwrap().amount, 5_000_000.0);
+    }
+
+    #[test]
+    fn add_transfer_income_still_recycles_half_into_budget() {
+        // Contrast with `adjust_cash`: a genuine player sale DOES reinvest
+        // half the fee into the transfer budget (intended behaviour, kept).
+        let mut f = finances_with_budget(0, 1_000_000.0);
+        f.add_transfer_income(4_000_000.0);
+        assert_eq!(
+            f.transfer_budget.as_ref().unwrap().amount,
+            1_000_000.0 + 2_000_000.0
+        );
+    }
+
+    #[test]
+    fn can_afford_transfer_respects_budget_and_opens_when_unset() {
+        let f = finances_with_budget(0, 3_000_000.0);
+        assert!(f.can_afford_transfer(3_000_000.0));
+        assert!(!f.can_afford_transfer(3_000_001.0));
+
+        // No configured transfer budget => the affordability gate is open.
+        let no_budget = ClubFinances::new(0, Vec::new());
+        assert!(no_budget.can_afford_transfer(999_999_999.0));
     }
 }

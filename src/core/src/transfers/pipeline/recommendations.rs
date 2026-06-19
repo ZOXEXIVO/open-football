@@ -1075,12 +1075,7 @@ impl PipelineProcessor {
                     }
                     let group_thin = |group: PlayerFieldPositionGroup| -> bool {
                         let count = group_counts.get(&group).copied().unwrap_or(0);
-                        let target = match group {
-                            PlayerFieldPositionGroup::Goalkeeper => 3,
-                            PlayerFieldPositionGroup::Defender => 8,
-                            PlayerFieldPositionGroup::Midfielder => 8,
-                            PlayerFieldPositionGroup::Forward => 6,
-                        };
+                        let target = group.ideal_squad_depth();
                         count < target
                     };
 

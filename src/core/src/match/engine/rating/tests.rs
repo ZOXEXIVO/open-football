@@ -3593,6 +3593,61 @@ fn tired_player_sloppy_actions_amplify_negative_rating() {
 }
 
 #[test]
+fn fatigue_drag_is_meaningful_not_a_rounding_error() {
+    // Condition is one of the real player-state factors a rating must
+    // reflect. A player who walked on already tired (~55%) and emptied the
+    // tank to the engine's 15% floor, then got sloppy, must take a clearly
+    // visible hit versus the same line played fresh — not the token nick
+    // the pre-strengthening clamp (−0.22) allowed. Pins the strengthened
+    // condition slopes so a future edit can't quietly throttle fatigue
+    // back to a rounding error.
+    let mut s = make_stats(
+        0,
+        0,
+        40,
+        33,
+        0,
+        0,
+        2,
+        2,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    s.minutes_played = 90;
+    s.fouls = 3;
+    s.miscontrols = 3;
+    s.heavy_touches = 2;
+
+    let summary = team_summary(10, 4, 1.0, 400, 30);
+    let fresh = RatingExpectationContext::from_match(
+        &summary,
+        &summary,
+        1,
+        1,
+        Some(&phys(9500, 6500, 0.30)),
+    );
+    let knackered = RatingExpectationContext::from_match(
+        &summary,
+        &summary,
+        1,
+        1,
+        Some(&phys(5500, 1500, 0.30)),
+    );
+
+    let r_fresh = RatingContext::new(&s, 1, 1).calculate_contextual(&fresh);
+    let r_knackered = RatingContext::new(&s, 1, 1).calculate_contextual(&knackered);
+    assert!(
+        r_fresh - r_knackered >= 0.30,
+        "started-tired + emptied-the-tank + sloppy must drag the rating \
+         meaningfully (≥0.30) below the same shift played fresh: fresh {:.3}, \
+         knackered {:.3}",
+        r_fresh,
+        r_knackered
+    );
+}
+
+#[test]
 fn high_load_good_shift_gets_small_condition_respect_not_big_bonus() {
     // A genuinely good shift (raw > 6.0) with a heavy high-intensity load
     // earns a SMALL respect bump — never more than +0.10, and never

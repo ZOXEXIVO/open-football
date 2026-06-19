@@ -12,8 +12,8 @@ use crate::transfers::pipeline::{
     LoanOutCandidate, LoanOutReason, LoanOutStatus, PipelineProcessor,
 };
 use crate::{
-    ClubPhilosophy, Country, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerPlanRole,
-    PlayerSquadStatus, ReputationLevel, TeamInfo, TeamType,
+    Club, ClubPhilosophy, Country, Player, PlayerClubContract, PlayerFieldPositionGroup,
+    PlayerPlanRole, PlayerSquadStatus, ReputationLevel, TeamInfo, TeamType,
 };
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
@@ -23,6 +23,56 @@ use log::debug;
 /// club's P&L when a more specific length isn't available at execution
 /// time. Matches the IFRS football-finance norm.
 const DEFAULT_AMORTIZATION_YEARS: u8 = 4;
+
+/// Stateless helpers for the transfer execution path — roster placement
+/// and fee-structure math. Grouped on a unit struct (rather than free
+/// functions) so the execution surface reads as one discoverable namespace.
+struct TransferExecution;
+
+impl TransferExecution {
+    /// Add a player to a club's **Main** team. Resolves the main team by
+    /// type (the main team is NOT guaranteed to be `teams[0]`); falls back
+    /// to the first team only when no Main team exists so a signing is
+    /// never silently dropped. Replaces the historical `teams.teams[0]`
+    /// inserts, which landed arrivals on whatever squad happened to be
+    /// first in the collection.
+    fn add_to_main_team(club: &mut Club, player: Player) {
+        let idx = club.teams.main_index().unwrap_or(0);
+        if let Some(team) = club.teams.teams.get_mut(idx) {
+            team.players.add(player);
+        }
+    }
+
+    /// Upfront cash portion of a permanent transfer fee after carving out
+    /// any installment tranches. Installments are a *payment structure*,
+    /// not an additional surcharge: the headline `fee` is split into an
+    /// upfront payment now plus deferred tranches that the daily settlement
+    /// walk pays buyer → seller over time. Without this split the buyer
+    /// paid the full fee at completion AND the tranches on top (~155% of
+    /// the headline) — money creation on every structured deal. Loans (no
+    /// installments) return the full fee unchanged.
+    fn upfront_fee(transfer: &DeferredTransfer) -> f64 {
+        let fee = transfer.fee.max(0.0);
+        // Loans carry no installments; cross-country deals pay the fee
+        // upfront because the daily settlement walk runs on the buyer's
+        // country market and can't route a deferred tranche to a foreign
+        // seller (mirrors how cross-country sell-ons settle upfront).
+        if transfer.is_loan || transfer.selling_country_id != transfer.buying_country_id {
+            return fee;
+        }
+        let deferred: f64 = transfer
+            .offer_clauses
+            .iter()
+            .filter_map(|clause| match clause {
+                TransferClause::Installments(amount, years) if *years > 0 => {
+                    Some(amount.amount.max(0.0))
+                }
+                _ => None,
+            })
+            .sum();
+        (fee - deferred.min(fee)).max(0.0)
+    }
+}
 
 /// Snapshot of a departing player's traits captured BEFORE they leave the
 /// selling club. Drives the per-teammate social events (close-friend lost,
@@ -393,6 +443,9 @@ pub(crate) fn execute_transfer_within_country(
     let selling_club_id = transfer.selling_club_id;
     let buying_club_id = transfer.buying_club_id;
     let fee = transfer.fee;
+    // Only the upfront portion moves at completion; any installment tranches
+    // are paid over time by the settlement walk (see `upfront_fee`).
+    let upfront = TransferExecution::upfront_fee(transfer);
     let mut player = None;
     let mut from_info: Option<TeamInfo> = None;
     let mut selling_league_id = None;
@@ -438,9 +491,11 @@ pub(crate) fn execute_transfer_within_country(
             }
         }
 
-        // Only credit income when player was actually found and taken
+        // Only credit income when player was actually found and taken.
+        // Credit the upfront portion now; deferred installment tranches
+        // arrive over time via the settlement walk.
         if player.is_some() {
-            selling_club.finance.add_transfer_income(fee);
+            selling_club.finance.add_transfer_income(upfront);
         }
 
         // Emit per-teammate dressing-room events on the leftover squad.
@@ -491,26 +546,27 @@ pub(crate) fn execute_transfer_within_country(
             from.league_slug = league_slug;
         }
 
-        // Check squad capacity BEFORE recording history — otherwise a rejected
-        // transfer creates a phantom career entry with no matching transfer record
+        // Check squad capacity AND affordability BEFORE recording history —
+        // otherwise a rejected transfer creates a phantom career entry with no
+        // matching transfer record, or (worse) a player moves with the fee
+        // never debited because the budget couldn't cover it.
         let to_info = resolve_buying_club_info(country, buying_club_id);
         let can_accept = country
             .clubs
             .iter()
             .find(|c| c.id == buying_club_id)
-            .map(|c| can_club_accept_player(c))
+            .map(|c| can_club_accept_player(c) && c.finance.can_afford_transfer(upfront))
             .unwrap_or(false);
 
         if !can_accept {
             debug!(
-                "Transfer rejected: club {} squad full, returning player {}",
+                "Transfer rejected: club {} squad full or unaffordable, returning player {}",
                 buying_club_id, player_id
             );
             if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                if !selling_club.teams.teams.is_empty() {
-                    selling_club.teams.teams[0].players.add(player);
-                }
-                selling_club.finance.add_transfer_income(-fee);
+                TransferExecution::add_to_main_team(selling_club, player);
+                // Reverse the upfront credit booked above.
+                selling_club.finance.add_transfer_income(-upfront);
             }
             return false;
         }
@@ -547,10 +603,10 @@ pub(crate) fn execute_transfer_within_country(
                 .iter_mut()
                 .find(|c| c.id == obligation.beneficiary_club_id)
             {
-                beneficiary.finance.add_transfer_income(payout);
+                beneficiary.finance.adjust_cash(payout);
             }
             if let Some(seller) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                seller.finance.add_transfer_income(-payout);
+                seller.finance.adjust_cash(-payout);
             }
         }
 
@@ -566,23 +622,24 @@ pub(crate) fn execute_transfer_within_country(
         let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
-            // Cash leaves immediately, P&L spread across DEFAULT_AMORTIZATION_YEARS.
+            // Only the upfront portion leaves now; deferred installment
+            // tranches are paid over time by the settlement walk. P&L spread
+            // across DEFAULT_AMORTIZATION_YEARS. Affordability was pre-checked
+            // above, so this debit always succeeds.
             buying_club
                 .finance
-                .register_transfer_purchase(fee, DEFAULT_AMORTIZATION_YEARS);
-            // Agent fee — separate one-off cost on top of the headline
-            // fee, paid in cash at signing. Honoured only when the
-            // structured personal-terms package agreed one.
+                .register_transfer_purchase(upfront, DEFAULT_AMORTIZATION_YEARS);
+            // Agent fee — separate one-off cash cost on top of the headline
+            // fee. A pure cash movement (not sale income), so it must not
+            // perturb the transfer budget.
             if let Some(terms) = transfer.personal_terms.as_ref() {
                 if let Some(amount) = terms.agent_fee {
                     if amount > 0 {
-                        buying_club.finance.add_transfer_income(-(amount as f64));
+                        buying_club.finance.adjust_cash(-(amount as f64));
                     }
                 }
             }
-            if !buying_club.teams.teams.is_empty() {
-                buying_club.teams.teams[0].players.add(player);
-            }
+            TransferExecution::add_to_main_team(buying_club, player);
 
             // Compatriot pass on the buying club's existing roster: any
             // same-nationality teammate gets the integration boost. Skip
@@ -776,9 +833,7 @@ fn execute_loan_within_country(
                 buying_club_id, player_id
             );
             if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                if !selling_club.teams.teams.is_empty() {
-                    selling_club.teams.teams[0].players.add(player);
-                }
+                TransferExecution::add_to_main_team(selling_club, player);
                 selling_club.finance.refund_loan_fee(loan_fee);
             }
             return false;
@@ -811,6 +866,7 @@ fn execute_loan_within_country(
         let loan_contract = build_loan_contract(
             loan_fee,
             loan_end,
+            date,
             selling_club_id,
             from_team_id,
             buying_club_id,
@@ -835,9 +891,7 @@ fn execute_loan_within_country(
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             buying_club.finance.pay_loan_fee(loan_fee);
-            if !buying_club.teams.teams.is_empty() {
-                buying_club.teams.teams[0].players.add(player);
-            }
+            TransferExecution::add_to_main_team(buying_club, player);
         }
 
         // Remove listing and loan-out candidate so the player can't be loaned again
@@ -948,11 +1002,15 @@ fn execute_transfer_across_countries(
     let buying_country_id = transfer.buying_country_id;
     let buying_club_id = transfer.buying_club_id;
     let fee = transfer.fee;
+    // Installments defer part of the fee; only the upfront portion is paid
+    // (and gated for affordability) at completion. See `upfront_fee` —
+    // cross-country deals collapse to the full fee upfront.
+    let upfront = TransferExecution::upfront_fee(transfer);
 
     let can_accept = data
         .country(buying_country_id)
         .and_then(|c| c.clubs.iter().find(|club| club.id == buying_club_id))
-        .map(can_club_accept_player)
+        .map(|club| can_club_accept_player(club) && club.finance.can_afford_transfer(upfront))
         .unwrap_or(false);
     if !can_accept {
         debug!(
@@ -988,7 +1046,7 @@ fn execute_transfer_across_countries(
         player_id,
         selling_country_id,
         selling_club_id,
-        fee,
+        upfront,
         false,
     );
 
@@ -1050,7 +1108,7 @@ fn execute_transfer_across_countries(
                 selling_country_id,
                 selling_club_id,
                 player,
-                fee,
+                upfront,
                 false,
             );
             return false;
@@ -1090,21 +1148,22 @@ fn execute_transfer_across_countries(
         .iter_mut()
         .find(|c| c.id == buying_club_id)
     {
+        // Only the upfront portion leaves now; deferred installment tranches
+        // are paid over time by the settlement walk. Affordability was
+        // pre-checked above, so this debit always succeeds.
         buying_club
             .finance
-            .register_transfer_purchase(fee, DEFAULT_AMORTIZATION_YEARS);
-        // Mirror the within-country agent fee deduction: cash-out at
-        // signing when the personal-terms package committed one.
+            .register_transfer_purchase(upfront, DEFAULT_AMORTIZATION_YEARS);
+        // Agent fee — a pure cash movement (not sale income), so it must not
+        // perturb the transfer budget.
         if let Some(terms) = transfer.personal_terms.as_ref() {
             if let Some(amount) = terms.agent_fee {
                 if amount > 0 {
-                    buying_club.finance.add_transfer_income(-(amount as f64));
+                    buying_club.finance.adjust_cash(-(amount as f64));
                 }
             }
         }
-        if !buying_club.teams.teams.is_empty() {
-            buying_club.teams.teams[0].players.add(player);
-        }
+        TransferExecution::add_to_main_team(buying_club, player);
 
         // Compatriot integration pass — same shape as the within-country
         // path, but the player has just stepped off a flight rather than
@@ -1207,7 +1266,7 @@ fn credit_club_globally(data: &mut SimulatorData, club_id: u32, amount: f64) {
     for continent in data.continents.iter_mut() {
         for country in continent.countries.iter_mut() {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
-                club.finance.add_transfer_income(amount);
+                club.finance.adjust_cash(amount);
                 return;
             }
         }
@@ -1330,6 +1389,7 @@ fn execute_loan_across_countries(
     let loan_contract = build_loan_contract(
         loan_fee,
         loan_end,
+        date,
         selling_club_id,
         parent_team_id,
         buying_club_id,
@@ -1356,9 +1416,7 @@ fn execute_loan_across_countries(
         .find(|c| c.id == buying_club_id)
     {
         buying_club.finance.pay_loan_fee(loan_fee);
-        if !buying_club.teams.teams.is_empty() {
-            buying_club.teams.teams[0].players.add(player);
-        }
+        TransferExecution::add_to_main_team(buying_club, player);
     }
 
     debug!(
@@ -1449,6 +1507,7 @@ fn resolve_buying_club_info(country: &Country, buying_club_id: u32) -> Option<Te
 fn build_loan_contract(
     _loan_fee: f64,
     loan_end: NaiveDate,
+    signing_date: NaiveDate,
     parent_club_id: u32,
     parent_team_id: u32,
     buying_club_id: u32,
@@ -1478,15 +1537,22 @@ fn build_loan_contract(
         .round()
         .clamp(0.0, 100.0) as u8;
 
-    // Minimum-appearances scales with borrower size: bigger borrowers
-    // promised the parent more minutes; small borrowers can't commit.
-    let min_apps = if borrower_score >= 0.7 {
+    // Minimum-appearances scales with borrower size AND with how much of the
+    // season the loan actually covers. Bigger borrowers promise the parent
+    // more minutes; small borrowers can't commit. A January (half-season)
+    // loan can't demand a full campaign's appearances, so the base figure is
+    // pro-rated by the fraction of a ~10-month season still to play from the
+    // signing date: a summer loan keeps the full bar, a winter loan ~half.
+    let base_min_apps: u16 = if borrower_score >= 0.7 {
         15
     } else if borrower_score >= 0.4 {
         10
     } else {
         6
     };
+    let months_remaining = (loan_end - signing_date).num_days().max(0) as f32 / 30.0;
+    let season_fraction = (months_remaining / 10.0).clamp(0.4, 1.0);
+    let min_apps = ((base_min_apps as f32 * season_fraction).round() as u16).max(1);
 
     let mut contract = PlayerClubContract::new_loan(
         borrower_wage,
@@ -1525,9 +1591,7 @@ fn return_player_to_selling_country(
             .iter_mut()
             .find(|c| c.id == selling_club_id)
         {
-            if !selling_club.teams.teams.is_empty() {
-                selling_club.teams.teams[0].players.add(player);
-            }
+            TransferExecution::add_to_main_team(selling_club, player);
             if is_loan {
                 selling_club.finance.refund_loan_fee(credited_fee);
             } else {
@@ -1588,6 +1652,14 @@ impl TransferClauseScheduler {
         for clause in &transfer.offer_clauses {
             match clause {
                 TransferClause::Installments(amount, years) => {
+                    // Cross-country installments are collapsed into the
+                    // upfront fee at completion (the settler runs on the
+                    // buyer's country market and can't route a tranche to a
+                    // foreign seller), so only schedule deferred tranches for
+                    // domestic deals.
+                    if transfer.selling_country_id != transfer.buying_country_id {
+                        continue;
+                    }
                     let deferred = amount.amount.max(0.0);
                     if deferred <= 0.0 || *years == 0 {
                         continue;

@@ -34,12 +34,7 @@ struct PositionDepth {
 
 fn position_depth_for(club: &Club, group: PlayerFieldPositionGroup) -> Option<PositionDepth> {
     let main = club.teams.iter().find(|t| t.team_type == TeamType::Main)?;
-    let max = match group {
-        PlayerFieldPositionGroup::Goalkeeper => 3,
-        PlayerFieldPositionGroup::Defender => 8,
-        PlayerFieldPositionGroup::Midfielder => 8,
-        PlayerFieldPositionGroup::Forward => 6,
-    };
+    let max = group.ideal_squad_depth();
     let (count, best_ability) = main
         .players
         .iter()
