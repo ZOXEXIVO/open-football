@@ -524,4 +524,18 @@ impl PlayerFieldPositionGroup {
             PlayerFieldPositionGroup::Forward => "pos_group_forward",
         }
     }
+
+    /// Baseline "ideal" senior squad depth for this position group, used by
+    /// the recruitment, shortlist and loan-market depth checks. Centralizes
+    /// the GK 3 / DEF 8 / MID 8 / FWD 6 table that was duplicated across
+    /// three pipeline modules so it can no longer drift between them. Tier
+    /// and fixture-load scaling layer on top of this baseline elsewhere.
+    pub fn ideal_squad_depth(&self) -> usize {
+        match self {
+            PlayerFieldPositionGroup::Goalkeeper => 3,
+            PlayerFieldPositionGroup::Defender => 8,
+            PlayerFieldPositionGroup::Midfielder => 8,
+            PlayerFieldPositionGroup::Forward => 6,
+        }
+    }
 }

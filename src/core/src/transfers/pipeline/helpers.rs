@@ -492,11 +492,8 @@ impl PipelineProcessor {
             club_rep,
         );
 
-        let multiplier = if club.finance.balance.balance < 0 {
-            0.9
-        } else {
-            1.1
-        };
+        let multiplier =
+            PlayerValuationCalculator::seller_distress_multiplier(club.finance.balance.balance);
 
         CurrencyValue {
             amount: FormattingUtils::round_fee(base_value.amount * multiplier),
