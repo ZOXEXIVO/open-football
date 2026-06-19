@@ -848,6 +848,23 @@ impl CountryResult {
                     let reason =
                         PipelineProcessor::transfer_need_reason_text(&request.reason).to_string();
 
+                    // Stage stage-aware contract terms so the installed deal
+                    // matches the free agent's market stage (a long-unemployed
+                    // or older player signs a short trial, not a multi-year
+                    // deal off the generic age-band default) and carries the
+                    // role / pressure-decayed wage. Mirrors the depth and
+                    // global-pool pricing so the contract-length policy can't
+                    // drift between the free-agent entry points.
+                    let terms = FreeAgentOfferPricing::compute(
+                        best,
+                        group,
+                        buyer_club_score,
+                        buyer_league_reputation,
+                        buyer_negotiator_skill,
+                        buyer_country_reputation,
+                    )
+                    .signed_terms(best);
+
                     signings.push(FreeAgentSigning {
                         player_id: best.player_id,
                         player_name: best.player_name.clone(),
@@ -855,11 +872,7 @@ impl CountryResult {
                         from_club_name: best.club_name.clone(),
                         to_club_id: club.id,
                         reason,
-                        // Request-driven matcher doesn't stage explicit
-                        // contract terms — the installer falls back to the
-                        // calculator default, matching the legacy behaviour
-                        // for non-emergency signings.
-                        terms: None,
+                        terms: Some(terms),
                         fills_group: Some(group),
                     });
                     break;

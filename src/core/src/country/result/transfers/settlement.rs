@@ -64,9 +64,10 @@ impl TransferClauseSettler {
         }
     }
 
-    /// Move cash from the buying club to the selling club. Routes
-    /// through the existing `add_transfer_income` interface — debiting
-    /// is a negative credit, mirroring how sell-on obligations settle.
+    /// Move cash from the buying club to the selling club. Routes through
+    /// the pure-cash `adjust_cash` interface (debit = negative): a deferred
+    /// installment / add-on tranche is an obligation settlement, NOT a
+    /// player sale, so it must not perturb either club's transfer budget.
     fn route_payout(country: &mut Country, clause: &PendingTransferClause) {
         let amount = clause.amount.max(0.0);
         if amount <= 0.0 {
@@ -88,10 +89,10 @@ impl TransferClauseSettler {
             (b, s)
         };
         if let Some(i) = buyer_idx {
-            country.clubs[i].finance.add_transfer_income(-amount);
+            country.clubs[i].finance.adjust_cash(-amount);
         }
         if let Some(i) = seller_idx {
-            country.clubs[i].finance.add_transfer_income(amount);
+            country.clubs[i].finance.adjust_cash(amount);
         }
         let label = match clause.trigger {
             ClauseTrigger::Installment { .. } => "installment",
@@ -219,6 +220,45 @@ mod tests {
         assert_eq!(seller_after - seller_before, 1_000_000);
         // Clause is retired after firing.
         assert!(c.transfer_market.pending_clauses.is_empty());
+    }
+
+    #[test]
+    fn installment_settlement_does_not_perturb_transfer_budgets() {
+        let mut c = country(101, 202);
+        // Give both clubs an explicit transfer budget.
+        for club in c.clubs.iter_mut() {
+            club.finance.transfer_budget = Some(CurrencyValue::new(10_000_000.0, Currency::Usd));
+        }
+        let today = d(2026, 7, 1);
+        c.transfer_market
+            .pending_clauses
+            .push(PendingTransferClause {
+                id: 1,
+                buying_club_id: 101,
+                selling_club_id: 202,
+                player_id: 9999,
+                trigger: ClauseTrigger::Installment {
+                    scheduled_date: today,
+                },
+                amount: 1_000_000.0,
+                max_fires: 1,
+                fires_so_far: 0,
+                expires_on: None,
+            });
+
+        TransferClauseSettler::settle_due(&mut c, today);
+
+        // A deferred tranche is a pure cash settlement: the budgets must be
+        // exactly unchanged. The old `add_transfer_income` routing would
+        // have shifted them by ±500k (half the tranche).
+        assert_eq!(
+            c.clubs[0].finance.transfer_budget.as_ref().unwrap().amount,
+            10_000_000.0
+        );
+        assert_eq!(
+            c.clubs[1].finance.transfer_budget.as_ref().unwrap().amount,
+            10_000_000.0
+        );
     }
 
     #[test]

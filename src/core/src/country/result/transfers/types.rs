@@ -150,11 +150,13 @@ pub(crate) fn can_club_accept_player(club: &Club) -> bool {
         .as_ref()
         .map(|t| t.max_squad_size as usize)
         .unwrap_or(50);
-    // Only count main team players for squad cap — youth/reserve teams are separate
+    // Only count main team players for squad cap — youth/reserve teams are
+    // separate. Resolve the Main team by type, NOT teams[0]: the main team
+    // is not guaranteed to be first in the collection, and counting the
+    // wrong squad would gate the cap against a reserve/B roster.
     let main_squad = club
         .teams
-        .teams
-        .first()
+        .main()
         .map(|t| t.players.len())
         .unwrap_or(0);
     main_squad < max_squad

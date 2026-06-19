@@ -712,8 +712,17 @@ impl CountryResult {
                 // window, up to ~30% on the last few days (panic buy).
                 // The previous offer is archived to `counter_offers` so the
                 // negotiation history is auditable (who bid what, when).
+                // Escalate toward the actual asking price, not
+                // asking × reservation. Targeting the reservation made the
+                // buyer aim exactly at the 62%-acceptance threshold, and
+                // because each round only closes a fraction of the gap (with
+                // a 3-round cap) the offer could never actually reach it —
+                // legitimate deals timed out short of the seller's minimum.
+                // Aiming at the ask gives the escalation headroom to clear
+                // the reservation; SellerFeeFloor + the reservation bands
+                // still gate how high the buyer realistically goes.
                 let target = if neg_data.asking_price > 0.0 {
-                    neg_data.asking_price * seller_reservation
+                    neg_data.asking_price
                 } else {
                     negotiation.current_offer.base_fee.amount * 1.15
                 };
