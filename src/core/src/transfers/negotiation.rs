@@ -98,6 +98,13 @@ pub struct TransferNegotiation {
     /// buyer's country no longer holds the seller-side data to recompute it.
     /// `false` for domestic negotiations (their floor recomputes live).
     pub foreign_terms_floor_blocked: bool,
+    /// Foreign moves only: the seller-side player importance captured at
+    /// creation (the buyer's country can't recompute it once the deal is in
+    /// flight). The club-fee resolver reads this instead of a flat constant
+    /// so forcing a deal through abroad is no easier/cheaper than the
+    /// equivalent domestic move. `None` for domestic moves, whose importance
+    /// recomputes live.
+    pub foreign_seller_importance: Option<f32>,
 }
 
 impl TransferNegotiation {
@@ -159,6 +166,7 @@ impl TransferNegotiation {
             player_name: String::new(),
             selling_club_name: String::new(),
             foreign_terms_floor_blocked: false,
+            foreign_seller_importance: None,
         }
     }
 

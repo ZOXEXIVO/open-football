@@ -205,6 +205,7 @@ impl CountryResult {
                         ),
                         personal_terms: n.current_offer.personal_terms.clone(),
                         foreign_terms_floor_blocked: n.foreign_terms_floor_blocked,
+                        foreign_seller_importance: n.foreign_seller_importance,
                     }
                 }
                 None => continue,
@@ -651,7 +652,12 @@ impl CountryResult {
         let importance = if neg_data.selling_country_id.is_none() {
             Self::calculate_player_importance(country, neg_data.player_id, neg_data.selling_club_id)
         } else {
-            0.55
+            // Foreign: use the seller-side importance captured at creation
+            // (the seller's roster lives abroad and can't be read here), so a
+            // key foreign player commands the same premium a domestic one
+            // would — not a flat mid-range constant that made foreign deals
+            // systematically easier and cheaper to force through.
+            neg_data.foreign_seller_importance.unwrap_or(0.55)
         };
         seller_reservation += (importance as f64) * 0.28;
 
@@ -2284,6 +2290,7 @@ mod development_pathway_protection_tests {
                 loan_future_fee: None,
                 personal_terms: None,
                 foreign_terms_floor_blocked: false,
+                foreign_seller_importance: None,
             }
         }
     }
@@ -2526,6 +2533,7 @@ mod seller_fee_floor_tests {
                 loan_future_fee: None,
                 personal_terms: None,
                 foreign_terms_floor_blocked: false,
+                foreign_seller_importance: None,
             }
         }
 

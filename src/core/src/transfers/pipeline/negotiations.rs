@@ -1505,6 +1505,12 @@ impl PipelineProcessor {
             /// the foreign personal-terms hard floor — the buyer's country
             /// no longer holds the seller-side data to recompute it.
             foreign_terms_floor_blocked: bool,
+            /// Seller-side player importance captured at creation (same 0..1
+            /// scale as the domestic resolver computes). Rides into the
+            /// foreign club-fee resolver so a foreign deal faces the same
+            /// importance-driven seller reservation as a domestic one,
+            /// instead of a flat mid-range constant.
+            foreign_seller_importance: f32,
         }
 
         let mut resolved: Vec<ResolvedNeg> = Vec::new();
@@ -1767,6 +1773,13 @@ impl PipelineProcessor {
             // the buyer's country won't hold the seller-side data then.
             let foreign_terms_floor_blocked =
                 TransferMovePlausibility::player_terms_floor(&plausibility_inputs).is_some();
+            // Capture seller-side importance now (full cross-border context
+            // in scope) so the foreign club-fee resolver applies the same
+            // importance-driven reservation a domestic seller would, instead
+            // of a flat constant that made foreign buys too easy. The
+            // assessment already derived it from the seller's squad-status
+            // and position rank.
+            let foreign_seller_importance = assessment.diagnostics.importance;
 
             let actual_asking = if is_loan {
                 let salary_proxy = player
@@ -1916,6 +1929,7 @@ impl PipelineProcessor {
                 offered_annual_wage,
                 buying_league_reputation,
                 foreign_terms_floor_blocked,
+                foreign_seller_importance,
             });
         }
 
@@ -1964,6 +1978,7 @@ impl PipelineProcessor {
                     negotiation.offered_salary = Some(action.offered_annual_wage);
                     negotiation.buying_league_reputation = action.buying_league_reputation;
                     negotiation.foreign_terms_floor_blocked = action.foreign_terms_floor_blocked;
+                    negotiation.foreign_seller_importance = Some(action.foreign_seller_importance);
                 }
 
                 if let Some(club) = country

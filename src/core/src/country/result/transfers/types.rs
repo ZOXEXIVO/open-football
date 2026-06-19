@@ -103,6 +103,11 @@ pub(crate) struct NegotiationData {
     /// recompute it (the seller-side data lives abroad). `false` for
     /// domestic moves, whose floor is recomputed live.
     pub(crate) foreign_terms_floor_blocked: bool,
+    /// Foreign moves only: seller-side player importance captured at
+    /// creation (same 0..1 scale as the domestic importance computation).
+    /// `None` for domestic moves, whose importance is recomputed live in
+    /// the resolver.
+    pub(crate) foreign_seller_importance: Option<f32>,
 }
 
 /// A completed negotiation that needs execution at SimulatorData level.
