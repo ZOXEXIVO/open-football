@@ -218,8 +218,15 @@ impl CountryResult {
                 NegotiationPhase::ClubNegotiation { round, .. } => {
                     Self::resolve_club_negotiation(country, neg_id, &neg_data, round, date);
                 }
-                NegotiationPhase::PersonalTerms { .. } => {
-                    Self::resolve_personal_terms(country, neg_id, &neg_data, date, &mut outcomes);
+                NegotiationPhase::PersonalTerms { round, .. } => {
+                    Self::resolve_personal_terms(
+                        country,
+                        neg_id,
+                        &neg_data,
+                        round,
+                        date,
+                        &mut outcomes,
+                    );
                 }
                 NegotiationPhase::MedicalAndFinalization { .. } => {
                     Self::resolve_medical(
@@ -781,10 +788,15 @@ impl CountryResult {
         country: &mut Country,
         neg_id: u32,
         neg_data: &NegotiationData,
+        round: u8,
         date: NaiveDate,
         outcomes: &mut NegotiationOutcomes,
     ) {
         let is_foreign = neg_data.selling_country_id.is_some();
+        // Set inside the domestic branch once the player's reservation wage
+        // and the buyer's offered wage are both known — `(reservation, offered)`.
+        // Drives the iterative wage negotiation at the tail of this function.
+        let mut wage_negotiable: Option<(f64, f64)> = None;
 
         // ── Player-willingness hard floor ──
         // Before any probability roll, a player with NO availability signal
@@ -989,6 +1001,9 @@ impl CountryResult {
                     .unwrap_or_else(|| current_salary.max(500.0) * 1.05);
                 let wage_gap = offered_salary / reservation_wage.max(500.0);
                 let salary_ratio = offered_salary / current_salary.max(500.0);
+                // If the deal later fails on money, the buyer can improve its
+                // offer toward the player's reservation rather than walking.
+                wage_negotiable = Some((reservation_wage.max(500.0), offered_salary));
 
                 // Gap vs reservation wage drives the primary pass/fail signal;
                 // ratio-to-current adds flavour for veterans chasing paydays.
@@ -1127,26 +1142,54 @@ impl CountryResult {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation.advance_to_medical(date);
             }
-        } else {
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation
-                    .reject_with_reason(NegotiationRejectionReason::PlayerRejectedPersonalTerms);
-            }
-            Self::reopen_listing_for_player(country, neg_data.player_id);
-            // A pool free agent (selling_club_id == 0) who declined the
-            // terms gets it counted against his market state — this is
-            // the "player actually rejected a negotiated offer" moment,
-            // not the candidate scan.
-            if neg_data.selling_country_id.is_none() && neg_data.selling_club_id == 0 {
-                outcomes.free_agent_rejected_ids.push(neg_data.player_id);
-            }
-            PipelineProcessor::on_negotiation_resolved(
-                country,
-                neg_data.buying_club_id,
-                neg_data.player_id,
-                false,
-            );
+            return;
         }
+
+        // ── Iterative wage negotiation ──
+        // A failed roll is not automatically a dead deal. If the obstacle is
+        // money — the offered wage sits below the player's reservation — and
+        // the wage rounds aren't spent, the buyer improves its offer toward
+        // the player's ask and the player re-evaluates next tick. Clubs meet
+        // partway on wages rather than a single coin-flip killing an otherwise
+        // sensible move. Capped so a deal can't be won purely by attrition,
+        // and the buyer never bids above the player's own reservation.
+        const MAX_WAGE_ROUNDS: u8 = 2;
+        if round < MAX_WAGE_ROUNDS {
+            if let Some((reservation, offered)) = wage_negotiable {
+                if offered < reservation * 0.98 {
+                    let improved = (offered + (reservation - offered) * 0.6).min(reservation);
+                    let improved = improved.round() as u32;
+                    if improved as f64 > offered {
+                        if let Some(negotiation) =
+                            country.transfer_market.negotiations.get_mut(&neg_id)
+                        {
+                            negotiation.raise_offered_salary(improved);
+                            negotiation.advance_personal_terms_round(date);
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Terminal rejection — the wage rounds are spent, the gap is not about
+        // money, or the buyer can't sensibly improve the offer.
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.reject_with_reason(NegotiationRejectionReason::PlayerRejectedPersonalTerms);
+        }
+        Self::reopen_listing_for_player(country, neg_data.player_id);
+        // A pool free agent (selling_club_id == 0) who declined the terms gets
+        // it counted against his market state — the "player actually rejected
+        // a negotiated offer" moment, not the candidate scan.
+        if neg_data.selling_country_id.is_none() && neg_data.selling_club_id == 0 {
+            outcomes.free_agent_rejected_ids.push(neg_data.player_id);
+        }
+        PipelineProcessor::on_negotiation_resolved(
+            country,
+            neg_data.buying_club_id,
+            neg_data.player_id,
+            false,
+        );
     }
 
     fn resolve_medical(

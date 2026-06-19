@@ -9,8 +9,10 @@ pub enum NegotiationPhase {
     InitialApproach { started: NaiveDate },
     /// Fee negotiation with counter-offers, up to 3 rounds (3-7 days per round)
     ClubNegotiation { started: NaiveDate, round: u8 },
-    /// Player evaluates the move (2-5 days)
-    PersonalTerms { started: NaiveDate },
+    /// Player evaluates the move (2-5 days). `round` counts wage-negotiation
+    /// passes: a deal that stalls purely on money lets the buyer improve its
+    /// offer and the player re-evaluate, up to a small cap.
+    PersonalTerms { started: NaiveDate, round: u8 },
     /// Medical exam and paperwork (1-3 days)
     MedicalAndFinalization { started: NaiveDate },
 }
@@ -224,10 +226,42 @@ impl TransferNegotiation {
         let duration = IntegerUtils::random(1, 3) as i64;
         self.phase = NegotiationPhase::PersonalTerms {
             started: current_date,
+            round: 0,
         };
         self.phase_expiry = current_date
             .checked_add_signed(Duration::days(duration))
             .unwrap_or(current_date);
+    }
+
+    /// Re-enter the personal-terms phase for another wage round after the
+    /// buyer has improved its offer. Bumps the round counter (the caller caps
+    /// the number of rounds) and resets the short phase timer so the player
+    /// evaluates the new offer on the next tick.
+    pub fn advance_personal_terms_round(&mut self, current_date: NaiveDate) {
+        let round = match self.phase {
+            NegotiationPhase::PersonalTerms { round, .. } => round.saturating_add(1),
+            _ => 1,
+        };
+        let duration = IntegerUtils::random(1, 2) as i64;
+        self.phase = NegotiationPhase::PersonalTerms {
+            started: current_date,
+            round,
+        };
+        self.phase_expiry = current_date
+            .checked_add_signed(Duration::days(duration))
+            .unwrap_or(current_date);
+    }
+
+    /// Raise the wage the buyer is putting on the table during personal-terms
+    /// negotiation. Updates both the loose `offered_salary` (which the
+    /// acceptance roll reads) and the structured personal-terms package's
+    /// annual wage (the authoritative figure installed on completion), so the
+    /// wage the player accepts is exactly the wage he is then paid.
+    pub fn raise_offered_salary(&mut self, new_wage: u32) {
+        self.offered_salary = Some(new_wage);
+        if let Some(terms) = self.current_offer.personal_terms.as_mut() {
+            terms.annual_wage = Some(new_wage);
+        }
     }
 
     pub fn advance_to_medical(&mut self, current_date: NaiveDate) {
@@ -255,5 +289,50 @@ impl TransferNegotiation {
             return true;
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod personal_terms_round_tests {
+    use super::{NegotiationPhase, TransferNegotiation};
+    use crate::shared::{Currency, CurrencyValue};
+    use crate::transfers::offer::TransferOffer;
+    use chrono::NaiveDate;
+
+    fn negotiation(date: NaiveDate) -> TransferNegotiation {
+        let offer = TransferOffer::new(CurrencyValue::new(1_000_000.0, Currency::Usd), 2, date);
+        TransferNegotiation::new(1, 100, 0, 10, 2, offer, date, 0.5, 0.5, 25, 0.5)
+    }
+
+    #[test]
+    fn personal_terms_starts_at_round_zero_then_advances() {
+        let date = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        let mut n = negotiation(date);
+
+        n.advance_to_personal_terms(date);
+        match n.phase {
+            NegotiationPhase::PersonalTerms { round, .. } => assert_eq!(round, 0),
+            _ => panic!("expected PersonalTerms phase"),
+        }
+
+        n.advance_personal_terms_round(date);
+        n.advance_personal_terms_round(date);
+        match n.phase {
+            NegotiationPhase::PersonalTerms { round, .. } => assert_eq!(round, 2),
+            _ => panic!("expected PersonalTerms phase after two wage rounds"),
+        }
+    }
+
+    #[test]
+    fn raise_offered_salary_updates_the_loose_wage() {
+        let date = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        let mut n = negotiation(date);
+        assert!(n.offered_salary.is_none());
+
+        n.raise_offered_salary(80_000);
+        assert_eq!(n.offered_salary, Some(80_000));
+        // A bare offer carries no structured personal-terms package, so only
+        // the loose wage updates — and the call must not panic.
+        assert!(n.current_offer.personal_terms.is_none());
     }
 }
