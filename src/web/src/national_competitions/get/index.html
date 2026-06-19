@@ -16,7 +16,7 @@
 
     {% for comp in competitions %}
     <div class="fm-panel-head">
-        <h3>{{ comp.name }} <span class="fm-badge">{{ i18n.t(comp.level_key) }}</span> — {{ comp.phase }}</h3>
+        <h3>{{ comp.name }} <span class="fm-badge">{{ comp.confederation }}</span> <span class="fm-badge">{{ i18n.t(comp.level_key) }}</span> — {{ comp.phase }}</h3>
     </div>
 
     {% if !comp.groups.is_empty() %}

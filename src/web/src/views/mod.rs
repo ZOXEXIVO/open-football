@@ -410,47 +410,48 @@ pub fn match_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSectio
     sections
 }
 
-fn continental_competitions_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+/// The continental-club-competition menu section (Champions / Europa /
+/// Conference League + Copa Libertadores), shared by every continental
+/// page's left menu.
+fn club_competitions_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
     let cl_url = format!("/{}/champions-league", lang);
     let el_url = format!("/{}/europa-league", lang);
     let conf_url = format!("/{}/conference-league", lang);
     let copa_url = format!("/{}/copa-libertadores", lang);
-    let nat_url = format!("/{}/national-competitions", lang);
+    MenuSection::plain(vec![
+        MenuItem {
+            active: current_path == cl_url,
+            title: i18n.t("champions_league").to_string(),
+            url: cl_url,
+            icon: "fa-trophy".to_string(),
+        },
+        MenuItem {
+            active: current_path == el_url,
+            title: i18n.t("europa_league").to_string(),
+            url: el_url,
+            icon: "fa-trophy".to_string(),
+        },
+        MenuItem {
+            active: current_path == conf_url,
+            title: i18n.t("conference_league").to_string(),
+            url: conf_url,
+            icon: "fa-trophy".to_string(),
+        },
+        MenuItem {
+            active: current_path == copa_url,
+            title: i18n.t("copa_libertadores").to_string(),
+            url: copa_url,
+            icon: "fa-trophy".to_string(),
+        },
+    ])
+}
+
+fn continental_competitions_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
     vec![
         home_section(i18n, lang),
         search_section(i18n, lang, current_path),
-        MenuSection::plain(vec![
-            MenuItem {
-                active: current_path == cl_url,
-                title: i18n.t("champions_league").to_string(),
-                url: cl_url,
-                icon: "fa-trophy".to_string(),
-            },
-            MenuItem {
-                active: current_path == el_url,
-                title: i18n.t("europa_league").to_string(),
-                url: el_url,
-                icon: "fa-trophy".to_string(),
-            },
-            MenuItem {
-                active: current_path == conf_url,
-                title: i18n.t("conference_league").to_string(),
-                url: conf_url,
-                icon: "fa-trophy".to_string(),
-            },
-            MenuItem {
-                active: current_path == copa_url,
-                title: i18n.t("copa_libertadores").to_string(),
-                url: copa_url,
-                icon: "fa-trophy".to_string(),
-            },
-        ]),
-        MenuSection::plain(vec![MenuItem {
-            active: current_path == nat_url,
-            title: i18n.t("national_competitions").to_string(),
-            url: nat_url,
-            icon: "fa-flag".to_string(),
-        }]),
+        club_competitions_section(i18n, lang, current_path),
+        national_section(i18n, lang, current_path),
         watchlist_section(i18n, lang, current_path),
     ]
 }
@@ -471,6 +472,47 @@ pub fn copa_libertadores_menu(i18n: &I18n, lang: &str, current_path: &str) -> Ve
     continental_competitions_menu(i18n, lang, current_path)
 }
 
-pub fn national_competitions_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
-    continental_competitions_menu(i18n, lang, current_path)
+/// A national-team competition entry for the left menu.
+pub struct NationalCompetitionLink {
+    pub slug: String,
+    pub title: String,
+}
+
+/// Left menu for the national-competitions section: home, search, the
+/// continental club competitions, then one entry per national-team
+/// competition (World Cup, Euro, Copa America, AFCON, ...), each linking
+/// to its own page. Falls back to a single overview link when the list
+/// is empty.
+pub fn national_competitions_menu(
+    i18n: &I18n,
+    lang: &str,
+    current_path: &str,
+    competitions: &[NationalCompetitionLink],
+) -> Vec<MenuSection> {
+    let mut sections = vec![
+        home_section(i18n, lang),
+        search_section(i18n, lang, current_path),
+        club_competitions_section(i18n, lang, current_path),
+    ];
+
+    if competitions.is_empty() {
+        sections.push(national_section(i18n, lang, current_path));
+    } else {
+        let items: Vec<MenuItem> = competitions
+            .iter()
+            .map(|c| {
+                let url = format!("/{}/national-competitions/{}", lang, c.slug);
+                MenuItem {
+                    active: current_path == url,
+                    title: c.title.clone(),
+                    url,
+                    icon: "fa-flag".to_string(),
+                }
+            })
+            .collect();
+        sections.push(MenuSection::plain(items));
+    }
+
+    sections.push(watchlist_section(i18n, lang, current_path));
+    sections
 }
