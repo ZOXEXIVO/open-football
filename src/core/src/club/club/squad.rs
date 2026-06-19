@@ -1,4 +1,5 @@
 use super::Club;
+use super::graduation_salary;
 use crate::club::player::calculators::{
     AutomaticReleaseEligibility, FreeAgentReleaseReason, ReleaseEligibilityContext,
 };
@@ -291,7 +292,7 @@ impl Club {
             if let Some(mut player) = self.teams.teams[m.from].players.take_player(&m.player_id) {
                 // Upgrade youth contract to full when promoting to main
                 if m.to == main_idx {
-                    upgrade_contract_if_youth(
+                    ProfessionalContractPromotion::upgrade(
                         &mut player,
                         date,
                         self.teams.teams[main_idx].reputation.world,
@@ -362,7 +363,7 @@ impl Club {
                 let to_senior = self.teams.teams[main_idx].team_type.is_own_team();
                 if let Some(mut player) = self.teams.teams[team_idx].players.take_player(&player_id)
                 {
-                    upgrade_contract_if_youth(
+                    ProfessionalContractPromotion::upgrade(
                         &mut player,
                         date,
                         self.teams.teams[main_idx].reputation.world,
@@ -388,8 +389,9 @@ impl Club {
     ///
     /// Previously a youth contract only became a full one when the player
     /// was good enough to be pulled into the senior squad (see
-    /// [`upgrade_contract_if_youth`] at the promotion sites). That meant a
-    /// standout 17/18-year-old stayed on youth terms — and, because the
+    /// [`ProfessionalContractPromotion::upgrade`] at the promotion sites).
+    /// That meant a standout 17/18-year-old stayed on youth terms — and,
+    /// because the
     /// utilization audit skips youth contracts, stayed invisible to the
     /// loan market — until he could already displace a senior. Real clubs
     /// hand a promising academy player pro terms on the back of good
@@ -411,7 +413,7 @@ impl Club {
                 continue;
             }
             for player in team.players.iter() {
-                if Self::has_earned_professional_contract(player, date) {
+                if ProfessionalContractPromotion::is_earned(player, date) {
                     earned.push((ti, player.id));
                 }
             }
@@ -420,7 +422,7 @@ impl Club {
         for (ti, player_id) in earned {
             let team_name = self.teams.teams[ti].name.clone();
             if let Some(player) = self.teams.teams[ti].players.find_mut(player_id) {
-                upgrade_contract_if_youth(player, date, club_rep);
+                ProfessionalContractPromotion::upgrade(player, date, club_rep);
                 // First pro deal — a genuine career milestone for the
                 // player, distinct from the senior-debut breakthrough.
                 player.on_professional_contract_awarded();
@@ -433,48 +435,6 @@ impl Club {
                 );
             }
         }
-    }
-
-    /// Has this youth-contract player earned a first professional
-    /// contract? A pure *results* signal, never raw ability or potential:
-    /// a real sample of matches at a reliability-adjusted rating clearly
-    /// above the positional neutral (~6.6). The realistic average already
-    /// regresses small samples toward neutral, so a hot three-game streak
-    /// can't trigger it — the player must sustain the form.
-    fn has_earned_professional_contract(player: &Player, date: NaiveDate) -> bool {
-        // Meaningful sample — mirrors the "established regular" bar used
-        // by the stalled-prospect pathway.
-        const MIN_GAMES: u16 = 8;
-        // Clearly above the ~6.6 positional neutral: a standout youth
-        // season, not merely "featured".
-        const MIN_RATING: f32 = 7.0;
-        // Real-world floor for signing professional terms.
-        const MIN_AGE: u8 = 16;
-
-        let is_youth = player
-            .contract
-            .as_ref()
-            .map(|c| c.contract_type == ContractType::Youth)
-            .unwrap_or(false);
-        if !is_youth {
-            return false;
-        }
-
-        // Don't upgrade a player already earmarked to leave.
-        let statuses = player.statuses.get();
-        if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Loa) {
-            return false;
-        }
-
-        if player.age(date) < MIN_AGE {
-            return false;
-        }
-        if player.statistics.total_games() < MIN_GAMES {
-            return false;
-        }
-
-        let pos = player.position().position_group();
-        player.statistics.average_rating_realistic(pos) >= MIN_RATING
     }
 
     /// Find the next youth team in progression (U18→U19→U20→U21→U23)
@@ -761,22 +721,73 @@ impl Club {
     }
 }
 
-/// Upgrade a youth contract to a full professional contract. Used both
-/// when a player is promoted to the main team and when a youth-team
-/// player earns pro terms on form (see [`Club::review_youth_contracts`]).
-/// `club_rep` is the main team's world reputation — it scales the
-/// graduation salary so the same ability earns far more at a big club.
-fn upgrade_contract_if_youth(player: &mut Player, date: NaiveDate, club_rep: u16) {
-    let is_youth = player
-        .contract
-        .as_ref()
-        .map(|c| c.contract_type == ContractType::Youth)
-        .unwrap_or(false);
+/// Youth → professional contract promotion on merit: deciding whether a
+/// youth-contract player has earned pro terms, and performing the upgrade.
+/// Both the promotion sites in [`Club::rebalance_squads`] and the weekly
+/// [`Club::review_youth_contracts`] pass route through here.
+struct ProfessionalContractPromotion;
 
-    if is_youth {
+impl ProfessionalContractPromotion {
+    /// Meaningful sample — mirrors the "established regular" bar used by
+    /// the stalled-prospect pathway.
+    const MIN_GAMES: u16 = 8;
+    /// Clearly above the ~6.6 positional neutral: a standout youth
+    /// season, not merely "featured".
+    const MIN_RATING: f32 = 7.0;
+    /// Real-world floor for signing professional terms.
+    const MIN_AGE: u8 = 16;
+
+    /// Has this youth-contract player earned a first professional
+    /// contract? A pure *results* signal, never raw ability or potential:
+    /// a real sample of matches at a reliability-adjusted rating clearly
+    /// above the positional neutral (~6.6). The realistic average already
+    /// regresses small samples toward neutral, so a hot three-game streak
+    /// can't trigger it — the player must sustain the form.
+    fn is_earned(player: &Player, date: NaiveDate) -> bool {
+        let is_youth = player
+            .contract
+            .as_ref()
+            .map(|c| c.contract_type == ContractType::Youth)
+            .unwrap_or(false);
+        if !is_youth {
+            return false;
+        }
+
+        // Don't upgrade a player already earmarked to leave.
+        let statuses = player.statuses.get();
+        if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Loa) {
+            return false;
+        }
+
+        if player.age(date) < Self::MIN_AGE {
+            return false;
+        }
+        if player.statistics.total_games() < Self::MIN_GAMES {
+            return false;
+        }
+
+        let pos = player.position().position_group();
+        player.statistics.average_rating_realistic(pos) >= Self::MIN_RATING
+    }
+
+    /// Upgrade a youth contract to a full professional contract. Used both
+    /// when a player is promoted to the main team and when a youth-team
+    /// player earns pro terms on form. `club_rep` is the main team's world
+    /// reputation — it scales the graduation salary so the same ability
+    /// earns far more at a big club.
+    fn upgrade(player: &mut Player, date: NaiveDate, club_rep: u16) {
+        let is_youth = player
+            .contract
+            .as_ref()
+            .map(|c| c.contract_type == ContractType::Youth)
+            .unwrap_or(false);
+        if !is_youth {
+            return;
+        }
+
         let expiration = NaiveDate::from_ymd_opt(date.year() + 3, date.month(), date.day().min(28))
             .unwrap_or(date);
-        let salary = super::graduation_salary(player.player_attributes.current_ability, club_rep);
+        let salary = graduation_salary(player.player_attributes.current_ability, club_rep);
         let mut upgraded = PlayerClubContract::new(salary, expiration);
         // Anchor the new senior contract to today so the wage-envy
         // grace window correctly treats a freshly graduated youngster
