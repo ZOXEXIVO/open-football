@@ -1525,6 +1525,39 @@ impl MatchSideContext {
     }
 }
 
+/// Mood-colouring of a match rating from the player's morale.
+///
+/// Morale is the happiness model's 0..100 mood score (50 = neutral). The
+/// shift is deliberately a *pure player-state* signal — it reads nothing
+/// about the club's reputation or quality, so two keepers with the same
+/// morale receive the same colouring whether one plays for the champions
+/// and the other for the bottom side. Two design rules keep it honest:
+///
+///   * **Asymmetric** — low morale drags harder than high morale lifts.
+///     Disgruntlement visibly disrupts a performance (a player hiding,
+///     playing within himself), whereas contentment is the baseline a
+///     professional is expected to bring; confidence helps, but less than
+///     unhappiness hurts.
+///   * **Bounded** — capped at −0.45 / +0.20 so morale only *colours* the
+///     stat-line verdict, never overturns it. A brilliant shift on poor
+///     morale is still brilliant; a poor shift on great morale is still
+///     poor. Keeping the magnitude small also keeps the morale→rating→
+///     form→morale loop's gain well under 1, so a dip nudges the
+///     equilibrium rather than spiralling.
+struct MoraleRatingShaper;
+
+impl MoraleRatingShaper {
+    #[inline]
+    fn shift(morale: f32) -> f32 {
+        let centered = ((morale - 50.0) / 50.0).clamp(-1.0, 1.0);
+        if centered < 0.0 {
+            centered * 0.45
+        } else {
+            centered * 0.20
+        }
+    }
+}
+
 fn compute_effective_ratings<D: LeagueProcessAccess>(
     details: &MatchResultRaw,
     data: &D,
@@ -1668,19 +1701,21 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
             .and_then(|(_, _, _, team_id)| data.team(team_id))
             .map(|t| t.team_chemistry())
             .unwrap_or(50.0);
-        let (consistency, big_match, temperament, pressure, professionalism, chemistry) = data
-            .player(*player_id)
-            .map(|p| {
-                (
-                    p.attributes.consistency,
-                    p.attributes.important_matches,
-                    p.attributes.temperament,
-                    p.attributes.pressure,
-                    p.attributes.professionalism,
-                    team_chem,
-                )
-            })
-            .unwrap_or((10.0, 10.0, 10.0, 10.0, 10.0, 50.0));
+        let (consistency, big_match, temperament, pressure, professionalism, chemistry, morale) =
+            data
+                .player(*player_id)
+                .map(|p| {
+                    (
+                        p.attributes.consistency,
+                        p.attributes.important_matches,
+                        p.attributes.temperament,
+                        p.attributes.pressure,
+                        p.attributes.professionalism,
+                        team_chem,
+                        p.happiness().morale,
+                    )
+                })
+                .unwrap_or((10.0, 10.0, 10.0, 10.0, 10.0, 50.0, 50.0));
 
         const BASELINE: f32 = 6.0;
         let mut adjusted = adjusted_from_settlement;
@@ -1695,6 +1730,19 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
         } else {
             raw_chem_shift
         };
+
+        // Morale — the player's current mood colours how he performs, the
+        // way a real match rating tracks a player's confidence and
+        // contentment. Read straight from the happiness model (0..100,
+        // 50 = neutral): a disgruntled, low-morale player plays within
+        // himself and the rating reflects it; a buoyant one rides the
+        // lift. This is a pure *player-state* factor — deliberately
+        // independent of club reputation, so a relegation keeper and a
+        // title-winner on identical morale take the identical shift; the
+        // rating tracks the man, not his club. Bounded and asymmetric (see
+        // `MoraleRatingShaper`) so morale only colours the stat-line
+        // verdict and never overturns it.
+        adjusted += MoraleRatingShaper::shift(morale);
 
         // Per-match deterministic date seed, shared by the two
         // deterministic jitter sources below (consistency swing + routine
@@ -1751,15 +1799,21 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
         // against them; a composed one rides the dip. Symmetric on the
         // upside: high temperament holds form a touch better when the team
         // is on top, but the lift is small (composure isn't a goal).
+        // Slopes strengthened so a player's composure (a mental *skill*)
+        // visibly shapes how he handles a game: a short-fuse player loses
+        // the head more sharply when it turns against him, a composed one
+        // rides the dip better. Still bounded by the deficit/surplus caps
+        // so it colours the verdict without inventing it — and, like
+        // morale, it reads only the player, never the club.
         let temp_centered = (temperament - 10.0) / 10.0;
         if stats.match_rating < BASELINE {
             let deficit = (BASELINE - stats.match_rating).min(2.0);
-            adjusted -= deficit * 0.18 * (-temp_centered).max(0.0);
-            adjusted += deficit * 0.08 * temp_centered.max(0.0);
+            adjusted -= deficit * 0.24 * (-temp_centered).max(0.0);
+            adjusted += deficit * 0.11 * temp_centered.max(0.0);
         } else {
             let surplus = (stats.match_rating - BASELINE).min(2.5);
-            adjusted += surplus * 0.05 * temp_centered.max(0.0);
-            adjusted -= surplus * 0.07 * (-temp_centered).max(0.0);
+            adjusted += surplus * 0.07 * temp_centered.max(0.0);
+            adjusted -= surplus * 0.10 * (-temp_centered).max(0.0);
         }
 
         // Important-matches personality — always-on smooth gradient (was
@@ -2548,6 +2602,85 @@ mod canonical_rating_tests {
         assert!(
             (rating_sum - (6.8 + 7.5)).abs() < 1e-6,
             "aggregator must sum public ratings (6.8 + 7.5), not raw (8.6 + 7.5)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod morale_shaper_tests {
+    //! The morale colouring is a pure player-state factor — these pin its
+    //! shape so a future edit can't quietly turn it into a club-quality
+    //! proxy or let it grow large enough to overturn the stat-line verdict.
+    use super::*;
+
+    #[test]
+    fn neutral_morale_does_not_move_the_rating() {
+        assert!(
+            MoraleRatingShaper::shift(50.0).abs() < 1e-6,
+            "morale 50 is the neutral baseline — no shift"
+        );
+    }
+
+    #[test]
+    fn low_morale_drags_and_high_morale_lifts() {
+        assert!(
+            MoraleRatingShaper::shift(30.0) < 0.0,
+            "a disgruntled player (morale 30) must take a drag"
+        );
+        assert!(
+            MoraleRatingShaper::shift(75.0) > 0.0,
+            "a buoyant player (morale 75) must take a lift"
+        );
+    }
+
+    #[test]
+    fn drag_is_stronger_than_an_equal_distance_lift() {
+        // Unhappiness disrupts more than contentment enhances: the drag at
+        // 20-below-neutral must exceed the lift at 20-above-neutral.
+        let drag = -MoraleRatingShaper::shift(30.0);
+        let lift = MoraleRatingShaper::shift(70.0);
+        assert!(
+            drag > lift,
+            "low-morale drag ({drag:.3}) must exceed the symmetric high-morale lift ({lift:.3})"
+        );
+    }
+
+    #[test]
+    fn shift_is_monotonic_in_morale() {
+        let samples = [0.0, 20.0, 35.0, 50.0, 60.0, 80.0, 100.0];
+        for pair in samples.windows(2) {
+            assert!(
+                MoraleRatingShaper::shift(pair[0]) <= MoraleRatingShaper::shift(pair[1]),
+                "shift must rise monotonically with morale: {} then {}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
+    #[test]
+    fn shift_stays_bounded_so_it_colours_not_overturns() {
+        // Even rock-bottom / maxed morale (and out-of-range inputs) stay
+        // inside the design envelope — a brilliant shift on poor morale is
+        // still brilliant, a poor shift on great morale is still poor.
+        for morale in [-50.0, 0.0, 10.0, 90.0, 100.0, 150.0] {
+            let s = MoraleRatingShaper::shift(morale);
+            assert!(
+                (-0.45..=0.20).contains(&s),
+                "morale {morale} produced shift {s:.3} outside the [-0.45, 0.20] envelope"
+            );
+        }
+    }
+
+    #[test]
+    fn concern_morale_is_meaningful_but_not_dominant() {
+        // The "concern" band (~30-35) should read as a clear but modest
+        // drag — enough to colour a season average, not enough to bury an
+        // otherwise solid performance.
+        let s = MoraleRatingShaper::shift(30.0);
+        assert!(
+            (-0.25..=-0.10).contains(&s),
+            "concern-band morale 30 should drag ~-0.18, got {s:.3}"
         );
     }
 }

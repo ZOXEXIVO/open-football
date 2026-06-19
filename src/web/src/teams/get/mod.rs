@@ -144,6 +144,10 @@ pub async fn team_get_action(
                 .map(|c| c.contract_type == ContractType::Youth)
                 .unwrap_or(false);
 
+            // Apps, goals and rating all read from one all-competition
+            // (league + cup + friendly) season sample so the columns agree.
+            let season_stats = p.current_season_all_statistics();
+
             TeamPlayer {
                 id: p.id,
                 slug: p.slug(),
@@ -169,17 +173,10 @@ pub async fn team_get_action(
                 current_ability: PotentialStarsView::current(p),
                 potential_ability: PotentialStarsView::potential_by_staff(p, head_coach),
                 age: DateUtils::age(p.birth_date, now),
-                played: p.statistics.played
-                    + p.friendly_statistics.played
-                    + p.cup_statistics.played,
-                played_subs: p.statistics.played_subs
-                    + p.friendly_statistics.played_subs
-                    + p.cup_statistics.played_subs,
-                goals: p.statistics.goals + p.friendly_statistics.goals + p.cup_statistics.goals,
-                average_rating: p
-                    .statistics_history
-                    .current_season_stats(&p.statistics)
-                    .average_rating_str(),
+                played: season_stats.played,
+                played_subs: season_stats.played_subs,
+                goals: season_stats.goals,
+                average_rating: season_stats.average_rating_str(),
                 is_captain: captain_id == Some(p.id),
                 status: PlayerStatusDto::new(p.statuses.get()),
             }
@@ -216,6 +213,10 @@ pub async fn team_get_action(
                             .unwrap_or_default();
                         let position = player.positions.display_positions_compact();
 
+                        // Same all-competition season sample as the squad
+                        // block above, so loaned-out rows are consistent too.
+                        let season_stats = player.current_season_all_statistics();
+
                         players.push(TeamPlayer {
                             id: player.id,
                             slug: player.slug(),
@@ -245,19 +246,10 @@ pub async fn team_get_action(
                                 player, head_coach,
                             ),
                             age: DateUtils::age(player.birth_date, now),
-                            played: player.statistics.played
-                                + player.friendly_statistics.played
-                                + player.cup_statistics.played,
-                            played_subs: player.statistics.played_subs
-                                + player.friendly_statistics.played_subs
-                                + player.cup_statistics.played_subs,
-                            goals: player.statistics.goals
-                                + player.friendly_statistics.goals
-                                + player.cup_statistics.goals,
-                            average_rating: player
-                                .statistics_history
-                                .current_season_stats(&player.statistics)
-                                .average_rating_str(),
+                            played: season_stats.played,
+                            played_subs: season_stats.played_subs,
+                            goals: season_stats.goals,
+                            average_rating: season_stats.average_rating_str(),
                             is_captain: false,
                             status: PlayerStatusDto::new(player.statuses.get()),
                         });

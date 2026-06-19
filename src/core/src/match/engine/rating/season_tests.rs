@@ -658,6 +658,164 @@ impl SeasonFixture {
         f
     }
 
+    /// Reconstruction of the reported Zenit 2026/27 keeper line: 21 starts,
+    /// 9 clean sheets, 16 conceded, dominant top-club context. Used to read
+    /// what the CURRENT model produces for that exact profile — the live
+    /// site shows 6.08 on a stale, pre-GK-fix build.
+    fn zenit_keeper_2026_season() -> Self {
+        let mut f = SeasonFixture {
+            matches: Vec::new(),
+            team_shot_share: 0.62,
+            team_possession: 0.60,
+        };
+        // 9 clean sheets, varied low-medium workload (saves, faced, cmd, tg).
+        let clean_sheets: [(u16, u16, u16, u8); 9] = [
+            (1, 1, 0, 2),
+            (0, 0, 1, 1),
+            (2, 2, 0, 3),
+            (1, 1, 0, 1),
+            (0, 0, 0, 2),
+            (2, 2, 1, 1),
+            (1, 1, 0, 2),
+            (0, 0, 0, 1),
+            (2, 2, 0, 2),
+        ];
+        for (saves, faced, cmd, tg) in clean_sheets {
+            f.push(LineFactory::gk(saves, faced, cmd), tg, 0);
+        }
+        // 8 one-goal matches (saves, faced, tg).
+        let one_goal: [(u16, u16, u8); 8] = [
+            (1, 2, 2),
+            (2, 3, 2),
+            (1, 2, 3),
+            (2, 3, 1),
+            (1, 2, 2),
+            (2, 3, 2),
+            (1, 2, 1),
+            (2, 3, 2),
+        ];
+        for (saves, faced, tg) in one_goal {
+            f.push(LineFactory::gk(saves, faced, 0), tg, 1);
+        }
+        // 4 two-goal matches; conceded 8 + 8 = 16 total across 21 apps.
+        let two_goal: [(u16, u16, u8); 4] = [(2, 4, 2), (1, 3, 1), (2, 4, 3), (1, 3, 0)];
+        for (saves, faced, tg) in two_goal {
+            f.push(LineFactory::gk(saves, faced, 0), tg, 2);
+        }
+        f
+    }
+
+    /// Reconstruction of the reported Sommer / AS Roma 2026/27 line: 27
+    /// starts, 14 clean sheets, 21 conceded, strong-club context. The live
+    /// site shows 6.87 for this one — this checks that figure IS what the
+    /// current model produces (i.e. Sommer's row is current-build, the
+    /// Zenit 6.08 row is the stale one).
+    fn sommer_roma_2026_season() -> Self {
+        let mut f = SeasonFixture {
+            matches: Vec::new(),
+            team_shot_share: 0.58,
+            team_possession: 0.57,
+        };
+        // 14 clean sheets (saves, faced, cmd, tg).
+        let clean_sheets: [(u16, u16, u16, u8); 14] = [
+            (1, 1, 0, 2),
+            (2, 2, 0, 1),
+            (0, 0, 1, 1),
+            (2, 2, 0, 2),
+            (1, 1, 0, 3),
+            (3, 3, 0, 1),
+            (1, 1, 0, 1),
+            (0, 0, 0, 2),
+            (2, 2, 1, 1),
+            (1, 1, 0, 2),
+            (2, 2, 0, 1),
+            (0, 0, 0, 1),
+            (1, 1, 0, 2),
+            (2, 2, 0, 3),
+        ];
+        for (saves, faced, cmd, tg) in clean_sheets {
+            f.push(LineFactory::gk(saves, faced, cmd), tg, 0);
+        }
+        // 6 one-goal matches (saves, faced, tg).
+        let one_goal: [(u16, u16, u8); 6] =
+            [(1, 2, 2), (2, 3, 2), (1, 2, 1), (2, 3, 2), (1, 2, 3), (2, 3, 1)];
+        for (saves, faced, tg) in one_goal {
+            f.push(LineFactory::gk(saves, faced, 0), tg, 1);
+        }
+        // 6 two-goal matches.
+        let two_goal: [(u16, u16, u8); 6] =
+            [(2, 4, 2), (1, 3, 1), (2, 4, 2), (1, 3, 0), (2, 4, 3), (1, 3, 1)];
+        for (saves, faced, tg) in two_goal {
+            f.push(LineFactory::gk(saves, faced, 0), tg, 2);
+        }
+        // 1 three-goal day; conceded 6 + 12 + 3 = 21 across 27 apps.
+        f.push(LineFactory::gk(2, 5, 1), 1, 3);
+        f
+    }
+
+    /// Reconstruction of the reported PSG 2026/27 keeper line: 32 starts,
+    /// 14 clean sheets, 26 conceded, 0 player-of-the-match, behind a
+    /// thoroughly dominant Ligue 1 side. The clean sheets are mostly
+    /// untested (the keeper is a spectator for them), there is no standout
+    /// match-winning game all season, and 18 conceding matches drag the
+    /// other way — the case where "lots of clean sheets" does NOT mean a
+    /// high rating, because the keeper himself was rarely the difference.
+    fn psg_keeper_2026_season() -> Self {
+        let mut f = SeasonFixture {
+            matches: Vec::new(),
+            team_shot_share: 0.65,
+            team_possession: 0.62,
+        };
+        // 14 clean sheets, mostly untested (0-2 saves) behind the dominant
+        // defence (saves, faced, cmd, tg).
+        let clean_sheets: [(u16, u16, u16, u8); 14] = [
+            (0, 0, 0, 2),
+            (0, 0, 0, 1),
+            (1, 1, 0, 3),
+            (0, 0, 1, 1),
+            (1, 1, 0, 2),
+            (0, 0, 0, 2),
+            (2, 2, 0, 1),
+            (0, 0, 0, 3),
+            (1, 1, 0, 1),
+            (0, 0, 0, 2),
+            (1, 1, 0, 2),
+            (0, 0, 0, 1),
+            (1, 1, 0, 2),
+            (2, 2, 0, 1),
+        ];
+        for (saves, faced, cmd, tg) in clean_sheets {
+            f.push(LineFactory::gk(saves, faced, cmd), tg, 0);
+        }
+        // 12 one-goal matches — low save volume, beaten by the rare shot.
+        let one_goal: [(u16, u16, u8); 12] = [
+            (1, 2, 2),
+            (0, 1, 3),
+            (1, 2, 1),
+            (0, 1, 2),
+            (1, 2, 2),
+            (2, 3, 1),
+            (0, 1, 2),
+            (1, 2, 3),
+            (0, 1, 1),
+            (1, 2, 2),
+            (0, 1, 2),
+            (1, 2, 1),
+        ];
+        for (saves, faced, tg) in one_goal {
+            f.push(LineFactory::gk(saves, faced, 0), tg, 1);
+        }
+        // 5 two-goal matches.
+        let two_goal: [(u16, u16, u8); 5] =
+            [(1, 3, 2), (2, 4, 1), (1, 3, 0), (2, 4, 2), (1, 3, 1)];
+        for (saves, faced, tg) in two_goal {
+            f.push(LineFactory::gk(saves, faced, 0), tg, 2);
+        }
+        // 1 four-goal night; conceded 12 + 10 + 4 = 26 across 32 apps.
+        f.push(LineFactory::gk(2, 6, 1), 1, 4);
+        f
+    }
+
     /// Ivan-Lopez-like league season: 32 starts + 2 sub cameos, 15 goals
     /// (11 singles + 2 braces), 2 assists, dominant club (21W 7D 6L).
     fn striker_fifteen_goal_season() -> Self {
@@ -1631,6 +1789,18 @@ fn dump_season_calibration_values() {
         ("GK 2nd-tier 16CS", SeasonFixture::second_tier_shutout_gk_season()),
         ("GK dominant 24CS", SeasonFixture::dominant_defense_gk_season()),
         ("GK leaky 9CS", SeasonFixture::leaky_topflight_gk_season()),
+        (
+            "GK Zenit 9CS/16con",
+            SeasonFixture::zenit_keeper_2026_season(),
+        ),
+        (
+            "GK Sommer 14CS/21con",
+            SeasonFixture::sommer_roma_2026_season(),
+        ),
+        (
+            "GK PSG 14CS/26con/0PoM",
+            SeasonFixture::psg_keeper_2026_season(),
+        ),
         ("ST 15 goals", SeasonFixture::striker_fifteen_goal_season()),
         ("ST 21 goals", SeasonFixture::striker_twentyone_goal_season()),
         ("ST 6 goals", SeasonFixture::striker_low_output_season()),

@@ -392,7 +392,7 @@ impl<'a> RatingContext<'a> {
         base.clamp(0.0, 1.2)
     }
 
-    /// Stage-3 condition modifier (−0.22..0.12). Reads the physical
+    /// Stage-3 condition modifier (−0.40..0.12). Reads the physical
     /// snapshot only — never ability. A tired starter, or one who ran
     /// the tank dry and then got sloppy, is dragged; a player who put in
     /// a heavy high-intensity shift and still performed earns a small,
@@ -405,24 +405,34 @@ impl<'a> RatingContext<'a> {
         let minutes = self.stats.minutes_played;
         let mut modifier = 0.0_f32;
 
-        // Started the match already short of a full tank — every action
-        // is run on fumes. Linear below 70% condition.
+        // Started the match already short of a full tank — every action is
+        // run on tired legs. `starting_condition` is the player's real
+        // condition attribute, so a player carrying fixture-congestion
+        // fatigue onto the pitch genuinely performs worse. Strengthened so
+        // this actually shows: the drag bites from 75% condition (not only
+        // when nearly empty) with a meaningful slope (0.55). Pure
+        // player-state — it reads the player's own legs, nothing about the
+        // club he plays for.
         if let Some(start) = ctx.starting_condition_pct {
-            if start < 0.70 {
-                modifier -= (0.70 - start) * 0.35;
+            if start < 0.75 {
+                modifier -= (0.75 - start) * 0.55;
             }
         }
 
         if let Some(end) = ctx.final_energy_pct {
             // Emptied the tank over a full shift — late-game drop-off.
-            if end < 0.35 && minutes >= 60 {
-                modifier -= (0.35 - end) * 0.25;
+            // Strengthened (threshold 0.40, slope 0.45) so a player who ran
+            // himself into the ground visibly fades down the stretch rather
+            // than taking a token nick.
+            if end < 0.40 && minutes >= 60 {
+                modifier -= (0.40 - end) * 0.45;
             }
             // Running on fumes AND it showed: errors / fouls / loose
             // touches beyond the position-normal floor get amplified.
             // This is the "tiredness caused sloppiness" punishment — it
             // only fires when the player both gassed out (<30%) and made
-            // the mistakes.
+            // the mistakes. Slope lifted to 0.28 so a knackered, sloppy
+            // shift reads as the clear underperformance it was.
             if end < 0.30 {
                 let sloppy = (self.stats.errors_leading_to_shot
                     + self.stats.errors_leading_to_goal
@@ -431,7 +441,7 @@ impl<'a> RatingContext<'a> {
                     + self.stats.heavy_touches) as f32;
                 let normal = self.position_sloppy_floor();
                 let excess = (sloppy - normal).max(0.0);
-                modifier -= RatingMath::sat(excess, 3.0) * 0.18;
+                modifier -= RatingMath::sat(excess, 3.0) * 0.28;
             }
         }
 
@@ -439,6 +449,9 @@ impl<'a> RatingContext<'a> {
         // respect bump, capped hard at +0.10 so it can never substitute
         // for actual contribution. Gated on the raw rating being above
         // baseline: you have to have performed to earn the load credit.
+        // Deliberately left small: `high_intensity_load_hint` is still a
+        // position-group default, not real per-player tracking, so the
+        // upside stays a token nod until the engine grows the signal.
         if let Some(hi) = ctx.high_intensity_load {
             let position_default = PositionLoad::high_intensity_share(self.pos);
             if hi > position_default + 0.12 && raw_rating > 6.0 {
@@ -447,7 +460,12 @@ impl<'a> RatingContext<'a> {
             }
         }
 
-        modifier.clamp(-0.22, 0.12)
+        // Downside widened to −0.40 (was −0.22): genuine fatigue is one of
+        // the real player-state factors a match rating should reflect, and
+        // the old clamp throttled it to a rounding error. Upside stays at
+        // +0.12 because the only positive term is the position-default load
+        // bump above.
+        modifier.clamp(-0.40, 0.12)
     }
 
     /// Position-typical count of "sloppy" events (errors + fouls + loose

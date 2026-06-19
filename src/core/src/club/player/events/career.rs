@@ -11,9 +11,10 @@ use chrono::NaiveDate;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
 use crate::{
-    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
-    HappinessEventType, Person, RecognitionEventContext, RecognitionEventKind,
-    RegulationEventContext, SeasonOutcomeContext, TrophyEventContext,
+    ContractEventContext, ContractEventEvidence, ContractEventKind, HappinessEventCause,
+    HappinessEventContext, HappinessEventScope, HappinessEventSeverity, HappinessEventType, Person,
+    RecognitionEventContext, RecognitionEventKind, RegulationEventContext, SeasonOutcomeContext,
+    TrophyEventContext,
 };
 
 /// Centralised, FM-style classification of award recognitions for the
@@ -291,6 +292,34 @@ impl Player {
         // 5-year cooldown ≈ one-shot per career spell.
         self.happiness
             .add_event_with_cooldown(HappinessEventType::YouthBreakthrough, mag, 365 * 5);
+    }
+
+    /// React to being handed a first professional contract on the back of
+    /// strong youth/reserve form. Distinct from [`Self::on_youth_breakthrough`]:
+    /// this is the club committing to a prospect on improved terms — a
+    /// real squad-status step up from a youth deal — and can happen while
+    /// the player is still developing away from the senior side. Modelled
+    /// as a positive contract event with a long cooldown so it reads as a
+    /// one-off milestone, not a recurring renewal.
+    pub fn on_professional_contract_awarded(&mut self) {
+        let cctx = ContractEventContext::new(ContractEventKind::Renewed)
+            .with_evidence(ContractEventEvidence::SquadStatusUpgrade);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::Boardroom,
+        )
+        .with_contract_context(cctx);
+        let mag = HappinessConfig::default()
+            .catalog
+            .magnitude(HappinessEventType::ContractRenewal);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::ContractRenewal,
+            mag,
+            None,
+            happiness_ctx,
+            365,
+        );
     }
 
     /// React to a team-level season / competition outcome. Magnitude is
