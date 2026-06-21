@@ -628,16 +628,25 @@ impl PlayerStatisticsProjection {
             if row.statistics.total_games() > 0 {
                 return true;
             }
-            // A *paid* transfer fee marks a real signing event — keep
-            // even at 0 apps. `Some(0.0)` is the "free" sentinel used
-            // for both free transfers and free loans; on its own it
-            // does not prove the player actually spent the season at
-            // the club. The proxy for "stayed long enough to matter"
-            // is "another row for this season has played games" —
-            // when one does, this 0-app row is a phantom event seed
-            // (typically a transfer/loan stamped in the prior
-            // calendar season's window).
-            if matches!(row.transfer_fee, Some(f) if f > 0.0) {
+            // A real signing fee marks a real event — keep even at 0 apps.
+            // Two cases qualify:
+            //   * a *paid* fee on any row (loan or permanent), and
+            //   * the `Some(0.0)` "free" sentinel on a PERMANENT row — a
+            //     free transfer / free signing is a genuine event, and
+            //     only the re-seed paths (season-end roll-over) ever write
+            //     a permanent row with `transfer_fee = None`, so a present
+            //     fee here can't be a phantom seed.
+            // A free LOAN's `Some(0.0)` is deliberately NOT short-circuited
+            // here: it must fall through to the `is_loan` branch below,
+            // which owns phantom-loan detection (a continued-loan re-seed
+            // can also carry `Some(0.0)`). Keeping the permanent free
+            // signing here, before the `phantom_alongside_other_senior`
+            // drop, is what lets its "Free" label survive once the row
+            // freezes alongside a played sibling spell from the same season
+            // (the reported "free move shows on transfers but not in
+            // history" bug).
+            let paid_fee = matches!(row.transfer_fee, Some(f) if f > 0.0);
+            if paid_fee || (row.transfer_fee.is_some() && !row.is_loan) {
                 return true;
             }
             // Every loan spell is a real part of the player's career and

@@ -4023,4 +4023,302 @@ mod drain_invariants_tests {
         // into the next spell after the drain).
         assert!(p.friendly_source_slug.is_none());
     }
+
+    // ===============================================================
+    // Repro harness for the Luciano Sokolic / FK Liepaja "Free" bug.
+    // The /history page shows "Free" only when the destination row's
+    // transfer_fee == Some(0.0). Drive each signing path end-to-end and
+    // assert the projected Liepaja row carries Some(0.0).
+    // ===============================================================
+    mod free_agent_free_label_repro {
+        use super::{d, player as make_player, stats as make_stats, team as make_team};
+        use crate::club::player::statistics::ledger::{
+            PlayerHistoryRow, PlayerLiveStatsInput,
+        };
+        use crate::club::player::statistics::projection::PlayerStatisticsProjection;
+        use crate::club::player::statistics::types::{PlayerStatistics, TeamInfo};
+        use crate::league::Season;
+        use chrono::NaiveDate;
+
+        fn make_date(y: i32, m: u32, day: u32) -> NaiveDate {
+            d(y, m, day)
+        }
+
+        fn liepaja() -> TeamInfo {
+            make_team("FK Liepaja", "fk-liepaja", "latvian-higher-league")
+        }
+        fn old_club() -> TeamInfo {
+            make_team("Old Club", "old-club", "latvian-higher-league")
+        }
+
+        fn project_rows(player: &crate::Player, current_date: NaiveDate) -> Vec<PlayerHistoryRow> {
+            let empty = PlayerStatistics::default();
+            let live = PlayerLiveStatsInput {
+                league: &empty,
+                friendly: &empty,
+                cups: &[],
+                friendly_source_slug: "",
+            };
+            PlayerStatisticsProjection::player_history_rows(
+                &player.statistics_history,
+                &live,
+                current_date,
+            )
+        }
+
+        fn liepaja_row_2025(player: &crate::Player, current_date: NaiveDate) -> Option<Option<f64>> {
+            project_rows(player, current_date)
+                .iter()
+                .filter(|r| r.team_slug == "fk-liepaja")
+                .find(|r| r.season.start_year == 2025)
+                .map(|r| r.transfer_fee)
+        }
+
+        #[test]
+        fn a_global_released_then_free_signs() {
+            let mut p = make_player();
+            p.statistics_history
+                .seed_initial_team(&old_club(), make_date(2025, 8, 1), false);
+            p.statistics = make_stats(12, 3);
+            p.on_release(&old_club(), make_date(2026, 2, 1));
+            p.on_free_agent_signing(&liepaja(), make_date(2026, 2, 15));
+            assert_eq!(
+                liepaja_row_2025(&p, make_date(2026, 3, 1)),
+                Some(Some(0.0)),
+                "(a) global free signing must render Free"
+            );
+        }
+
+        #[test]
+        fn b_in_country_free_transfer_fee_zero() {
+            let mut p = make_player();
+            p.statistics_history
+                .seed_initial_team(&old_club(), make_date(2025, 8, 1), false);
+            p.statistics = make_stats(12, 3);
+            p.on_transfer(&old_club(), &liepaja(), 0.0, make_date(2026, 2, 15));
+            assert_eq!(
+                liepaja_row_2025(&p, make_date(2026, 3, 1)),
+                Some(Some(0.0)),
+                "(b) in-country free transfer must render Free"
+            );
+        }
+
+        #[test]
+        fn c_global_then_season_end() {
+            let mut p = make_player();
+            p.statistics_history
+                .seed_initial_team(&old_club(), make_date(2025, 8, 1), false);
+            p.statistics = make_stats(12, 3);
+            p.on_release(&old_club(), make_date(2026, 2, 1));
+            p.on_free_agent_signing(&liepaja(), make_date(2026, 2, 15));
+            p.statistics = make_stats(8, 1);
+            p.on_season_end(Season::new(2025), &liepaja(), make_date(2026, 8, 1));
+            assert_eq!(
+                liepaja_row_2025(&p, make_date(2026, 9, 1)),
+                Some(Some(0.0)),
+                "(c-global) frozen Liepaja row must keep Free"
+            );
+        }
+
+        #[test]
+        fn c_in_country_then_season_end() {
+            let mut p = make_player();
+            p.statistics_history
+                .seed_initial_team(&old_club(), make_date(2025, 8, 1), false);
+            p.statistics = make_stats(12, 3);
+            p.on_transfer(&old_club(), &liepaja(), 0.0, make_date(2026, 2, 15));
+            p.statistics = make_stats(8, 1);
+            p.on_season_end(Season::new(2025), &liepaja(), make_date(2026, 8, 1));
+            assert_eq!(
+                liepaja_row_2025(&p, make_date(2026, 9, 1)),
+                Some(Some(0.0)),
+                "(c-incountry) frozen Liepaja row must keep Free"
+            );
+        }
+
+        #[test]
+        fn e_spring_window_render() {
+            let mut p = make_player();
+            p.statistics_history
+                .seed_initial_team(&old_club(), make_date(2025, 8, 1), false);
+            p.statistics = make_stats(12, 3);
+            p.on_release(&old_club(), make_date(2026, 2, 1));
+            p.on_free_agent_signing(&liepaja(), make_date(2026, 2, 15));
+            p.statistics = make_stats(8, 1);
+            p.on_season_end(Season::new(2025), &liepaja(), make_date(2026, 6, 1));
+            assert_eq!(
+                liepaja_row_2025(&p, make_date(2026, 6, 15)),
+                Some(Some(0.0)),
+                "(e) same-window render must keep Free"
+            );
+        }
+
+        #[test]
+        fn f_pre_contract_after_season_boundary() {
+            let mut p = make_player();
+            p.statistics_history
+                .seed_initial_team(&old_club(), make_date(2024, 8, 1), false);
+            p.statistics = make_stats(30, 4);
+            p.on_season_end(Season::new(2024), &old_club(), make_date(2025, 8, 1));
+            p.statistics = make_stats(5, 0);
+            p.on_transfer(&old_club(), &liepaja(), 0.0, make_date(2025, 9, 15));
+            assert_eq!(
+                project_rows(&p, make_date(2025, 10, 1))
+                    .iter()
+                    .filter(|r| r.team_slug == "fk-liepaja")
+                    .find(|r| r.season.start_year == 2025)
+                    .map(|r| r.transfer_fee),
+                Some(Some(0.0)),
+                "(f) pre-contract free move across season boundary must render Free"
+            );
+        }
+
+        #[test]
+        fn h_spring_frozen_same_season_then_free_sign() {
+            let mut p = make_player();
+            p.statistics_history
+                .seed_initial_team(&old_club(), make_date(2025, 3, 1), false);
+            p.statistics = make_stats(20, 2);
+            p.on_season_end(Season::new(2025), &old_club(), make_date(2026, 3, 1));
+            p.statistics = make_stats(0, 0);
+            p.on_release(&old_club(), make_date(2026, 3, 20));
+            p.on_free_agent_signing(&liepaja(), make_date(2026, 4, 1));
+            let rows = project_rows(&p, make_date(2026, 4, 15));
+            let liepaja_row = rows.iter().find(|r| r.team_slug == "fk-liepaja");
+            assert!(liepaja_row.is_some(), "(h) Liepaja row must be present");
+            assert_eq!(
+                liepaja_row.map(|r| r.transfer_fee),
+                Some(Some(0.0)),
+                "(h) spring-league free signing must render Free"
+            );
+        }
+
+        #[test]
+        fn i_free_sign_then_later_seasons() {
+            let mut p = make_player();
+            p.statistics_history
+                .seed_initial_team(&old_club(), make_date(2025, 8, 1), false);
+            p.statistics = make_stats(10, 1);
+            p.on_release(&old_club(), make_date(2026, 1, 5));
+            p.on_free_agent_signing(&liepaja(), make_date(2026, 1, 15));
+            p.statistics = make_stats(12, 3);
+            p.on_season_end(Season::new(2025), &liepaja(), make_date(2026, 8, 1));
+            p.statistics = make_stats(15, 4);
+            p.on_season_end(Season::new(2026), &liepaja(), make_date(2027, 8, 1));
+            assert_eq!(
+                project_rows(&p, make_date(2027, 9, 1))
+                    .iter()
+                    .filter(|r| r.team_slug == "fk-liepaja")
+                    .find(|r| r.season.start_year == 2025)
+                    .map(|r| r.transfer_fee),
+                Some(Some(0.0)),
+                "(i) free-signing season row must keep Free across later seasons"
+            );
+        }
+
+        // ── (j) Same-season: PAID transfer into old club (games played),
+        //        then FREE move to Liepaja which has 0 games so far. The
+        //        projection drop filter (phantom_alongside_other_senior)
+        //        could delete the 0-app Some(0.0) Liepaja row because a
+        //        sibling senior team that season has a paid fee / games. ──
+        #[test]
+        fn j_free_to_liepaja_zero_games_sibling_paid() {
+            let mut p = make_player();
+            // Joined old club mid-season for a fee, played some games.
+            p.statistics_history.record_transfer(
+                PlayerStatistics::default(),
+                &make_team("Origin", "origin", "latvian-higher-league"),
+                &old_club(),
+                250_000.0,
+                make_date(2025, 8, 10),
+            );
+            p.statistics = make_stats(10, 2);
+            // Then a free move to Liepaja later the SAME season; Liepaja
+            // has 0 games yet (just signed).
+            p.on_transfer(&old_club(), &liepaja(), 0.0, make_date(2026, 1, 20));
+            let rows = project_rows(&p, make_date(2026, 2, 1));
+            let liepaja_row = rows
+                .iter()
+                .filter(|r| r.team_slug == "fk-liepaja")
+                .find(|r| r.season.start_year == 2025);
+            assert!(
+                liepaja_row.is_some(),
+                "(j) the 0-game free Liepaja row must NOT be dropped by the phantom filter"
+            );
+            assert_eq!(
+                liepaja_row.map(|r| r.transfer_fee),
+                Some(Some(0.0)),
+                "(j) 0-game free Liepaja row alongside a paid sibling must still render Free"
+            );
+        }
+
+        // ── (k) Same as (j) but the active spell is NOT Liepaja — the
+        //        player free-signs Liepaja then is immediately re-listed
+        //        and the active current entry is a DIFFERENT later club,
+        //        leaving Liepaja as a departed 0-game Some(0.0) row. ──
+        #[test]
+        fn k_liepaja_departed_zero_game_free_then_moved_on() {
+            let mut p = make_player();
+            p.statistics_history
+                .seed_initial_team(&old_club(), make_date(2025, 8, 1), false);
+            p.statistics = make_stats(8, 1);
+            p.on_release(&old_club(), make_date(2026, 1, 5));
+            // Free-sign Liepaja...
+            p.on_free_agent_signing(&liepaja(), make_date(2026, 1, 15));
+            // ...then immediately move on (paid) to another club before
+            // playing a single Liepaja game.
+            p.on_transfer(
+                &liepaja(),
+                &make_team("Next Club", "next-club", "latvian-higher-league"),
+                100_000.0,
+                make_date(2026, 1, 25),
+            );
+            let rows = project_rows(&p, make_date(2026, 2, 1));
+            let liepaja_row = rows
+                .iter()
+                .filter(|r| r.team_slug == "fk-liepaja")
+                .find(|r| r.season.start_year == 2025);
+            assert!(
+                liepaja_row.is_some(),
+                "(k) departed 0-game free Liepaja row must survive the drop filter"
+            );
+            assert_eq!(
+                liepaja_row.map(|r| r.transfer_fee),
+                Some(Some(0.0)),
+                "(k) departed 0-game free Liepaja row must render Free"
+            );
+        }
+
+        // ── (l) Free-sign Liepaja (0 games), then the season ends so the
+        //        Liepaja Some(0.0) row freezes alongside the played old-club
+        //        row. At render the Liepaja row is FROZEN (not active) and a
+        //        sibling that season has games — same drop as (k). ──
+        #[test]
+        fn l_free_sign_zero_games_frozen_with_played_sibling() {
+            let mut p = make_player();
+            p.statistics_history
+                .seed_initial_team(&old_club(), make_date(2025, 8, 1), false);
+            p.statistics = make_stats(18, 4);
+            // Free move to Liepaja near the very end of the season; never
+            // plays a Liepaja game before season end.
+            p.on_release(&old_club(), make_date(2026, 5, 20));
+            p.on_free_agent_signing(&liepaja(), make_date(2026, 5, 25));
+            p.statistics = make_stats(0, 0);
+            p.on_season_end(Season::new(2025), &liepaja(), make_date(2026, 6, 1));
+            let rows = project_rows(&p, make_date(2026, 7, 1));
+            let liepaja_row = rows
+                .iter()
+                .filter(|r| r.team_slug == "fk-liepaja")
+                .find(|r| r.season.start_year == 2025);
+            assert!(
+                liepaja_row.is_some(),
+                "(l) frozen 0-game free Liepaja row must survive alongside a played sibling"
+            );
+            assert_eq!(
+                liepaja_row.map(|r| r.transfer_fee),
+                Some(Some(0.0)),
+                "(l) frozen 0-game free Liepaja row must render Free"
+            );
+        }
+    }
 }
