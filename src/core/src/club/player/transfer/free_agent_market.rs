@@ -313,11 +313,11 @@ impl FreeAgentStatusCategory {
     /// core has a usable default and tests have something to read.
     pub fn default_message(self) -> &'static str {
         match self {
-            Self::DataUnknown => "His registration data is incomplete, so clubs can't approach him.",
-            Self::NoPositionNeed => "No clubs currently need his position.",
-            Self::WageTooHigh => {
-                "His wage demands remain above what interested clubs can offer."
+            Self::DataUnknown => {
+                "His registration data is incomplete, so clubs can't approach him."
             }
+            Self::NoPositionNeed => "No clubs currently need his position.",
+            Self::WageTooHigh => "His wage demands remain above what interested clubs can offer.",
             Self::ReputationWait => {
                 "He is waiting for a club closer to his previous reputation level."
             }

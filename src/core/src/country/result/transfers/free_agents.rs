@@ -693,9 +693,10 @@ impl CountryResult {
                             best.career_pressure,
                             best.ability,
                             urgency_bonus
-                                + FreeAgentMarketCalculator::pity_bonus(best.failed_approach_streak)
-                                + config
-                                    .fresh_high_ability_bonus(best.days_free, best.ability),
+                                + FreeAgentMarketCalculator::pity_bonus(
+                                    best.failed_approach_streak,
+                                )
+                                + config.fresh_high_ability_bonus(best.days_free, best.ability),
                         )
                     } else {
                         // In-country expiring-contract candidates keep the
@@ -1013,6 +1014,10 @@ impl CountryResult {
                 .find(|c| c.id == signing.to_club_id)
                 .map(|c| c.name.clone())
                 .unwrap_or_default();
+            // Captured before `signing.reason` is moved into the history
+            // row below, so the monthly diagnostics can split pre-contract
+            // moves from ordinary domestic-expiry signings.
+            let is_pre_contract = signing.reason == "pre_contract";
 
             // Execute first — a failed move (squad full, player not found
             // at claimed origin) must NOT leave a phantom transfer-history
@@ -1108,6 +1113,12 @@ impl CountryResult {
             // the country mutable borrow ends.
             domestic_signed_ids.push(signing.player_id);
             summary.completed_transfers += 1;
+            // Pre-contract moves are a subset of the in-country signings;
+            // count them separately so Phase C can split the monthly
+            // "pre-contract" vs "domestic-expiry" diagnostics.
+            if is_pre_contract {
+                summary.signed_pre_contract += 1;
+            }
 
             debug!(
                 "Free agent signing: player {} from club {} to club {}",
@@ -1144,9 +1155,7 @@ impl CountryResult {
                         continue;
                     };
                     // Domestic only, and never a no-op self-move.
-                    if agreement.to_country_id != country.id
-                        || agreement.to_club_id == club.id
-                    {
+                    if agreement.to_country_id != country.id || agreement.to_club_id == club.id {
                         continue;
                     }
                     // Claimed already this tick (defensive — the pre pass
@@ -1808,8 +1817,12 @@ impl CountryResult {
                 candidate.age,
                 candidate.ability,
             ) + if last_chance { 600 } else { 0 };
-            if (buyer_country_reputation as i32 + rep_drop) < candidate.reference_reputation as i32 {
-                recorder.record(candidate.player_id, FreeAgentBlockReason::CountryReputationGap);
+            if (buyer_country_reputation as i32 + rep_drop) < candidate.reference_reputation as i32
+            {
+                recorder.record(
+                    candidate.player_id,
+                    FreeAgentBlockReason::CountryReputationGap,
+                );
                 continue;
             }
             let cross_floor = if last_chance { 0.75 } else { 0.85 };
@@ -1829,7 +1842,8 @@ impl CountryResult {
             let region_drop =
                 FreeAgentMarketCalculator::region_drop_allowed(candidate.career_pressure)
                     + if last_chance { 0.10 } else { 0.0 };
-            if candidate.nationality_region.league_prestige() > buyer_region_prestige + region_drop {
+            if candidate.nationality_region.league_prestige() > buyer_region_prestige + region_drop
+            {
                 recorder.record(candidate.player_id, FreeAgentBlockReason::RegionPrestigeGap);
                 continue;
             }
@@ -1972,7 +1986,11 @@ impl CountryResult {
             cleared += 1;
             debug!(
                 "Market clearing ({} tier): club {} signs long-term free agent {} (cp={:.2}, days_free={})",
-                if tier.opportunistic_gate { "soft" } else { "hard" },
+                if tier.opportunistic_gate {
+                    "soft"
+                } else {
+                    "hard"
+                },
                 buyer.club_id,
                 candidate.player_id,
                 candidate.career_pressure,
@@ -2334,10 +2352,7 @@ impl EmergencyTopClusterSelector {
     /// is a contiguous run from index 0: every member is within
     /// [`Self::SCORE_EPSILON`] of the leader's score and shares the
     /// leader's three locality keys (domestic / in-country / continent).
-    fn cluster_len(
-        scored: &[(&FreeAgentCandidate, f32)],
-        buyer: &EmergencyBuyerContext,
-    ) -> usize {
+    fn cluster_len(scored: &[(&FreeAgentCandidate, f32)], buyer: &EmergencyBuyerContext) -> usize {
         let Some((leader, leader_score)) = scored.first() else {
             return 0;
         };
@@ -3134,7 +3149,10 @@ pub(crate) fn execute_global_free_agent_signing(
 
     // Monthly diagnostics flow counter — a player just left the global
     // pool for a club, which a later point-in-time scan can't recover.
-    data.free_agents_signed_this_period = data.free_agents_signed_this_period.saturating_add(1);
+    data.free_agent_flow.signed_from_global_pool = data
+        .free_agent_flow
+        .signed_from_global_pool
+        .saturating_add(1);
 
     debug!(
         "Free agent signing (global pool): player {} → club {} in country {}",
@@ -5738,7 +5756,9 @@ mod emergency_fill_tests {
             signed.expect("soft clearing must sign a 100-day domestic backup within 400 ticks");
         assert_eq!(signing.player_id, 8500);
         assert_eq!(signing.reason, "free_agent_market_clearing");
-        let terms = signing.terms.expect("soft clearing stages short-deal terms");
+        let terms = signing
+            .terms
+            .expect("soft clearing stages short-deal terms");
         // Stage-aware contract: a Flexible-stage player gets a short
         // 1-2 year deal, never a long commitment.
         assert!(
@@ -5761,10 +5781,7 @@ mod emergency_fill_tests {
         // still reachable.
         let country = MarketClearingFixtures::country_thin_in_defenders();
         assert!(
-            country.clubs[0]
-                .transfer_plan
-                .transfer_requests
-                .is_empty(),
+            country.clubs[0].transfer_plan.transfer_requests.is_empty(),
             "fixture must have no open requests for this test to be meaningful"
         );
         let config = TransferConfig::default();
@@ -6296,9 +6313,11 @@ mod expiry_renewal_tests {
             rejection_reason: Some(RejectionReason::LowSalary),
         });
 
-        let offers_before =
-            ExpiryRenewalFixtures::history_count(&player, RENEWAL_OFFERED_LABEL);
-        assert_eq!(offers_before, 3, "fixture must start with three prior offers");
+        let offers_before = ExpiryRenewalFixtures::history_count(&player, RENEWAL_OFFERED_LABEL);
+        assert_eq!(
+            offers_before, 3,
+            "fixture must start with three prior offers"
+        );
 
         let main = ExpiryRenewalFixtures::team(10, 100, vec![player]);
         let club = ExpiryRenewalFixtures::club(100, main);

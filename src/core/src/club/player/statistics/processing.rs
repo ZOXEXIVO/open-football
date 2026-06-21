@@ -14,7 +14,10 @@ use chrono::{Datelike, NaiveDate};
 fn is_continental_slug(slug: &str) -> bool {
     matches!(
         slug,
-        CHAMPIONS_LEAGUE_SLUG | EUROPA_LEAGUE_SLUG | CONFERENCE_LEAGUE_SLUG | COPA_LIBERTADORES_SLUG
+        CHAMPIONS_LEAGUE_SLUG
+            | EUROPA_LEAGUE_SLUG
+            | CONFERENCE_LEAGUE_SLUG
+            | COPA_LIBERTADORES_SLUG
     )
 }
 
@@ -322,12 +325,7 @@ impl Player {
     /// the player's career thread still shows a row for the gap year
     /// (when the row survives the trivial-stint / stale-loan-seed
     /// filters in `record_season_end`).
-    pub fn on_missed_season_end(
-        &mut self,
-        season: Season,
-        team: &TeamInfo,
-        _date: NaiveDate,
-    ) {
+    pub fn on_missed_season_end(&mut self, season: Season, team: &TeamInfo, _date: NaiveDate) {
         let is_loan = self.is_on_loan();
         self.statistics_history.record_season_end(
             season,
@@ -659,12 +657,12 @@ mod tests {
         let mut player = make_player();
         player.statistics = make_stats(15, 4);
         player.friendly_statistics = make_stats(3, 1);
-        player.cup_statistics_by_competition.push(
-            crate::CompetitionStatistics {
+        player
+            .cup_statistics_by_competition
+            .push(crate::CompetitionStatistics {
                 competition_slug: CHAMPIONS_LEAGUE_SLUG.to_string(),
                 statistics: make_stats(5, 2),
-            },
-        );
+            });
 
         let borrowing = make_team("Torino", "torino");
         let parent = make_team("Juventus", "juventus");
@@ -676,43 +674,29 @@ mod tests {
 
         // Borrowing club's friendly + continental survive in the
         // canonical ledger under Torino — NOT under Juventus.
-        let friendly_under_torino = player
-            .statistics_history
-            .season_ledger
-            .iter()
-            .any(|e| {
-                e.team_slug == "torino"
-                    && e.competition_kind
-                        == crate::PlayerStatCompetitionKind::Friendly
-                    && e.statistics.played == 3
-            });
+        let friendly_under_torino = player.statistics_history.season_ledger.iter().any(|e| {
+            e.team_slug == "torino"
+                && e.competition_kind == crate::PlayerStatCompetitionKind::Friendly
+                && e.statistics.played == 3
+        });
         assert!(
             friendly_under_torino,
             "loan-period Friendly must be frozen under the borrowing club"
         );
-        let continental_under_torino = player
-            .statistics_history
-            .season_ledger
-            .iter()
-            .any(|e| {
-                e.team_slug == "torino"
-                    && e.competition_kind
-                        == crate::PlayerStatCompetitionKind::ContinentalCup
-                    && e.statistics.played == 5
-            });
+        let continental_under_torino = player.statistics_history.season_ledger.iter().any(|e| {
+            e.team_slug == "torino"
+                && e.competition_kind == crate::PlayerStatCompetitionKind::ContinentalCup
+                && e.statistics.played == 5
+        });
         assert!(
             continental_under_torino,
             "loan-period Continental must be frozen under the borrowing club"
         );
         // Nothing got mis-attributed to the parent club.
-        let any_under_parent_non_league = player
-            .statistics_history
-            .season_ledger
-            .iter()
-            .any(|e| {
-                e.team_slug == "juventus"
-                    && e.competition_kind != crate::PlayerStatCompetitionKind::League
-            });
+        let any_under_parent_non_league = player.statistics_history.season_ledger.iter().any(|e| {
+            e.team_slug == "juventus"
+                && e.competition_kind != crate::PlayerStatCompetitionKind::League
+        });
         assert!(
             !any_under_parent_non_league,
             "no loan-period non-League entry may land under the parent club"
@@ -2772,10 +2756,18 @@ mod tests {
             .find(|r| r.season.start_year == 2026)
             .expect("2026/27 row");
         assert_eq!(middle.team_slug, "zenit", "got rows {:?}", desc);
-        assert!(middle.is_loan, "2026/27 must be the Zenit loan, got {:?}", desc);
+        assert!(
+            middle.is_loan,
+            "2026/27 must be the Zenit loan, got {:?}",
+            desc
+        );
         assert_eq!(middle.statistics.played, 0);
         // And every season in the career span is now present.
-        assert!(years.contains(&2025) && years.contains(&2027), "got {:?}", desc);
+        assert!(
+            years.contains(&2025) && years.contains(&2027),
+            "got {:?}",
+            desc
+        );
     }
 
     #[test]
@@ -2787,8 +2779,20 @@ mod tests {
         // `Season::from_date(31 Jul 2028)` is 2027, so the row sits under
         // 2027/28 in both cases.
         use crate::club::player::statistics::projection::PlayerStatisticsProjection;
-        let spartak = TeamInfo { name: "Spartak Moscow".to_string(), slug: "spartak".to_string(), reputation: 5000, league_name: "Premier League".to_string(), league_slug: "russian-premier-league".to_string() };
-        let rostov = TeamInfo { name: "Rostov".to_string(), slug: "rostov".to_string(), reputation: 5000, league_name: "Premier League".to_string(), league_slug: "russian-premier-league".to_string() };
+        let spartak = TeamInfo {
+            name: "Spartak Moscow".to_string(),
+            slug: "spartak".to_string(),
+            reputation: 5000,
+            league_name: "Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+        };
+        let rostov = TeamInfo {
+            name: "Rostov".to_string(),
+            slug: "rostov".to_string(),
+            reputation: 5000,
+            league_name: "Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+        };
 
         for returned in [false, true] {
             let mut player = make_player();
@@ -2826,7 +2830,9 @@ mod tests {
             let rostov_row = rows
                 .iter()
                 .find(|r| r.team_slug == "rostov")
-                .unwrap_or_else(|| panic!("Rostov loan must be visible on 31 Jul (returned={returned})"));
+                .unwrap_or_else(|| {
+                    panic!("Rostov loan must be visible on 31 Jul (returned={returned})")
+                });
             assert_eq!(rostov_row.season.start_year, 2027);
             assert!(rostov_row.is_loan);
             assert_eq!(rostov_row.statistics.played, 19);
@@ -2840,14 +2846,34 @@ mod tests {
         // because apps are 0. Loan to Zenit in 2026/27 with 0 games, then
         // 2027/28 at Spartak: the 2026/27 Zenit loan row must remain.
         use crate::club::player::statistics::projection::PlayerStatisticsProjection;
-        let spartak = TeamInfo { name: "Spartak Moscow".to_string(), slug: "spartak".to_string(), reputation: 5000, league_name: "Premier League".to_string(), league_slug: "rpl".to_string() };
-        let zenit = TeamInfo { name: "Zenit".to_string(), slug: "zenit".to_string(), reputation: 5000, league_name: "Premier League".to_string(), league_slug: "rpl".to_string() };
+        let spartak = TeamInfo {
+            name: "Spartak Moscow".to_string(),
+            slug: "spartak".to_string(),
+            reputation: 5000,
+            league_name: "Premier League".to_string(),
+            league_slug: "rpl".to_string(),
+        };
+        let zenit = TeamInfo {
+            name: "Zenit".to_string(),
+            slug: "zenit".to_string(),
+            reputation: 5000,
+            league_name: "Premier League".to_string(),
+            league_slug: "rpl".to_string(),
+        };
 
         let mut player = make_player();
-        player.statistics_history.seed_initial_team(&spartak, make_date(2026, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&spartak, make_date(2026, 8, 1), false);
         player.statistics = make_stats(0, 0);
         player.on_manual_loan(&spartak, &spartak, &zenit, make_date(2026, 9, 1));
-        player.contract_loan = Some(crate::PlayerClubContract::new_loan(500, make_date(2027, 5, 31), 99, 0, 100));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500,
+            make_date(2027, 5, 31),
+            99,
+            0,
+            100,
+        ));
         // 0 games at Zenit; season ends while on loan.
         player.statistics = make_stats(0, 0);
         player.on_season_end(Season::new(2026), &zenit, make_date(2027, 8, 1));
@@ -2856,12 +2882,33 @@ mod tests {
         player.contract_loan = None;
 
         let empty = PlayerStatistics::default();
-        let live_input = crate::PlayerLiveStatsInput { league: &empty, friendly: &empty, cups: &[], friendly_source_slug: "" };
-        let rows = PlayerStatisticsProjection::player_history_rows(&player.statistics_history, &live_input, make_date(2027, 10, 1));
-        let desc: Vec<String> = rows.iter().map(|r| format!("{}:{}{}", r.season.start_year, r.team_slug, if r.is_loan {"(loan)"} else {""})).collect();
+        let live_input = crate::PlayerLiveStatsInput {
+            league: &empty,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let rows = PlayerStatisticsProjection::player_history_rows(
+            &player.statistics_history,
+            &live_input,
+            make_date(2027, 10, 1),
+        );
+        let desc: Vec<String> = rows
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}:{}{}",
+                    r.season.start_year,
+                    r.team_slug,
+                    if r.is_loan { "(loan)" } else { "" }
+                )
+            })
+            .collect();
         assert!(
-            rows.iter().any(|r| r.season.start_year == 2026 && r.team_slug == "zenit" && r.is_loan),
-            "0-game Zenit loan must remain visible after the season ends; got {:?}", desc
+            rows.iter()
+                .any(|r| r.season.start_year == 2026 && r.team_slug == "zenit" && r.is_loan),
+            "0-game Zenit loan must remain visible after the season ends; got {:?}",
+            desc
         );
     }
 }
@@ -2889,7 +2936,9 @@ mod drain_invariants_tests {
     use crate::club::player::statistics::projection::PlayerStatisticsProjection;
     use crate::continent::competitions::CHAMPIONS_LEAGUE_SLUG;
     use crate::shared::fullname::FullName;
-    use crate::{PersonAttributes, PlayerAttributes, PlayerPositions, PlayerSkills, PlayerStatistics};
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPositions, PlayerSkills, PlayerStatistics,
+    };
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
@@ -2933,16 +2982,12 @@ mod drain_invariants_tests {
         competition_slug: &str,
         played: u16,
     ) -> bool {
-        player
-            .statistics_history
-            .season_ledger
-            .iter()
-            .any(|e| {
-                e.team_slug == team_slug
-                    && e.competition_kind == kind
-                    && e.competition_slug == competition_slug
-                    && e.statistics.played == played
-            })
+        player.statistics_history.season_ledger.iter().any(|e| {
+            e.team_slug == team_slug
+                && e.competition_kind == kind
+                && e.competition_slug == competition_slug
+                && e.statistics.played == played
+        })
     }
 
     // ── Per-handler drain contract ────────────────────────────────────
@@ -2971,7 +3016,13 @@ mod drain_invariants_tests {
         assert_eq!(p.friendly_statistics.played, 0);
         assert!(p.cup_statistics_by_competition.is_empty());
         // Source spell's friendly + per-cup entries frozen under SOURCE team.
-        assert!(has_ledger_entry(&p, "juventus", PlayerStatCompetitionKind::Friendly, "serie-a", 2));
+        assert!(has_ledger_entry(
+            &p,
+            "juventus",
+            PlayerStatCompetitionKind::Friendly,
+            "serie-a",
+            2
+        ));
         assert!(has_ledger_entry(
             &p,
             "juventus",
@@ -2979,14 +3030,21 @@ mod drain_invariants_tests {
             CHAMPIONS_LEAGUE_SLUG,
             3,
         ));
-        assert!(has_ledger_entry(&p, "juventus", PlayerStatCompetitionKind::DomesticCup, "coppa-italia", 1));
+        assert!(has_ledger_entry(
+            &p,
+            "juventus",
+            PlayerStatCompetitionKind::DomesticCup,
+            "coppa-italia",
+            1
+        ));
         // Nothing under destination.
-        assert!(!p
-            .statistics_history
-            .season_ledger
-            .iter()
-            .any(|e| e.team_slug == "lazio"
-                && e.competition_kind != PlayerStatCompetitionKind::League));
+        assert!(
+            !p.statistics_history
+                .season_ledger
+                .iter()
+                .any(|e| e.team_slug == "lazio"
+                    && e.competition_kind != PlayerStatCompetitionKind::League)
+        );
     }
 
     #[test]
@@ -3005,14 +3063,27 @@ mod drain_invariants_tests {
         p.on_manual_loan(&from, &from, &to, d(2026, 11, 5));
 
         assert!(p.cup_statistics_by_competition.is_empty());
-        assert!(has_ledger_entry(&p, "juventus", PlayerStatCompetitionKind::Friendly, "serie-a", 2));
-        assert!(has_ledger_entry(&p, "juventus", PlayerStatCompetitionKind::DomesticCup, "coppa-italia", 2));
-        assert!(!p
-            .statistics_history
-            .season_ledger
-            .iter()
-            .any(|e| e.team_slug == "empoli"
-                && e.competition_kind != PlayerStatCompetitionKind::League));
+        assert!(has_ledger_entry(
+            &p,
+            "juventus",
+            PlayerStatCompetitionKind::Friendly,
+            "serie-a",
+            2
+        ));
+        assert!(has_ledger_entry(
+            &p,
+            "juventus",
+            PlayerStatCompetitionKind::DomesticCup,
+            "coppa-italia",
+            2
+        ));
+        assert!(
+            !p.statistics_history
+                .season_ledger
+                .iter()
+                .any(|e| e.team_slug == "empoli"
+                    && e.competition_kind != PlayerStatCompetitionKind::League)
+        );
     }
 
     // ── Loan out of a B/Second squad surfaces the loan club ───────────
@@ -3047,7 +3118,8 @@ mod drain_invariants_tests {
         let mut p = player();
         let main = team("Rodina", "rodina", "first-division");
         let second = team("Rodina 2", "rodina-2", "second-division");
-        p.statistics_history.seed_initial_team(&main, d(2027, 8, 1), false);
+        p.statistics_history
+            .seed_initial_team(&main, d(2027, 8, 1), false);
         p.statistics = stats(2, 0);
         p.on_intra_club_move(&main, &second, true, true, d(2027, 9, 1));
         p.statistics = stats(3, 0);
@@ -3118,9 +3190,8 @@ mod drain_invariants_tests {
         });
 
         // Existing borrowing-club current entry so the League snapshot lands somewhere.
-        p.statistics_history
-            .current
-            .push(crate::club::player::statistics::history::CurrentSeasonEntry {
+        p.statistics_history.current.push(
+            crate::club::player::statistics::history::CurrentSeasonEntry {
                 team_name: borrowing.name.clone(),
                 team_slug: borrowing.slug.clone(),
                 team_reputation: borrowing.reputation,
@@ -3132,21 +3203,35 @@ mod drain_invariants_tests {
                 joined_date: d(2026, 8, 1),
                 departed_date: None,
                 seq_id: 1,
-            });
+            },
+        );
 
         p.on_cancel_loan(&borrowing, &parent, d(2026, 12, 1));
 
         assert_eq!(p.friendly_statistics.played, 0);
         assert!(p.cup_statistics_by_competition.is_empty());
-        assert!(has_ledger_entry(&p, "pari", PlayerStatCompetitionKind::Friendly, "rpl", 2));
-        assert!(has_ledger_entry(&p, "pari", PlayerStatCompetitionKind::DomesticCup, "russia-cup", 1));
+        assert!(has_ledger_entry(
+            &p,
+            "pari",
+            PlayerStatCompetitionKind::Friendly,
+            "rpl",
+            2
+        ));
+        assert!(has_ledger_entry(
+            &p,
+            "pari",
+            PlayerStatCompetitionKind::DomesticCup,
+            "russia-cup",
+            1
+        ));
         // No parent-club non-League leakage.
-        assert!(!p
-            .statistics_history
-            .season_ledger
-            .iter()
-            .any(|e| e.team_slug == "spartak"
-                && e.competition_kind != PlayerStatCompetitionKind::League));
+        assert!(
+            !p.statistics_history
+                .season_ledger
+                .iter()
+                .any(|e| e.team_slug == "spartak"
+                    && e.competition_kind != PlayerStatCompetitionKind::League)
+        );
     }
 
     #[test]
@@ -3161,7 +3246,8 @@ mod drain_invariants_tests {
         // History instead of being hidden as a same-season phantom.
         let mut p = player();
         let fakel = team("Fakel", "fakel", "first-division");
-        p.statistics_history.seed_initial_team(&fakel, d(2026, 8, 1), false);
+        p.statistics_history
+            .seed_initial_team(&fakel, d(2026, 8, 1), false);
         p.on_release(&fakel, d(2027, 7, 3));
         let stumbras = team("Stumbras", "stumbras", "a-lyga");
         p.on_free_agent_signing(&stumbras, d(2027, 7, 5));
@@ -3202,7 +3288,13 @@ mod drain_invariants_tests {
         p.on_release(&from, d(2026, 12, 30));
 
         assert!(p.cup_statistics_by_competition.is_empty());
-        assert!(has_ledger_entry(&p, "marseille", PlayerStatCompetitionKind::Friendly, "ligue-1", 2));
+        assert!(has_ledger_entry(
+            &p,
+            "marseille",
+            PlayerStatCompetitionKind::Friendly,
+            "ligue-1",
+            2
+        ));
         assert!(has_ledger_entry(
             &p,
             "marseille",
@@ -3223,7 +3315,13 @@ mod drain_invariants_tests {
         p.friendly_statistics = stats(4, 1);
         p.on_season_end(Season::new(2026), &main, d(2027, 8, 1));
 
-        assert!(has_ledger_entry(&p, "inter", PlayerStatCompetitionKind::Friendly, "serie-a", 4));
+        assert!(has_ledger_entry(
+            &p,
+            "inter",
+            PlayerStatCompetitionKind::Friendly,
+            "serie-a",
+            4
+        ));
         assert_eq!(p.friendly_statistics.played, 0);
     }
 
@@ -3414,8 +3512,11 @@ mod drain_invariants_tests {
             .find(|b| b.season_start_year == 2026 && b.team_slug == "pari")
             .expect("Pari breakdown must exist after cancel-loan");
         assert!(pari.is_loan, "Pari row should be labelled loan");
-        let kinds: Vec<PlayerStatCompetitionKind> =
-            pari.competitions.iter().map(|c| c.competition_kind).collect();
+        let kinds: Vec<PlayerStatCompetitionKind> = pari
+            .competitions
+            .iter()
+            .map(|c| c.competition_kind)
+            .collect();
         assert!(kinds.contains(&PlayerStatCompetitionKind::League));
         assert!(kinds.contains(&PlayerStatCompetitionKind::Friendly));
         assert!(kinds.contains(&PlayerStatCompetitionKind::DomesticCup));
@@ -3467,8 +3568,11 @@ mod drain_invariants_tests {
             .iter()
             .find(|b| b.season_start_year == 2026 && b.team_slug == "club-a")
             .expect("source-club A breakdown missing after transfer");
-        let kinds: Vec<PlayerStatCompetitionKind> =
-            a_bd.competitions.iter().map(|c| c.competition_kind).collect();
+        let kinds: Vec<PlayerStatCompetitionKind> = a_bd
+            .competitions
+            .iter()
+            .map(|c| c.competition_kind)
+            .collect();
         assert!(kinds.contains(&PlayerStatCompetitionKind::League));
         assert!(kinds.contains(&PlayerStatCompetitionKind::Friendly));
         assert!(kinds.contains(&PlayerStatCompetitionKind::ContinentalCup));
@@ -3538,12 +3642,13 @@ mod drain_invariants_tests {
         assert!(kinds.contains(&PlayerStatCompetitionKind::Friendly));
         assert!(kinds.contains(&PlayerStatCompetitionKind::DomesticCup));
         // And no Torino non-League stats leaked to parent.
-        assert!(!p
-            .statistics_history
-            .season_ledger
-            .iter()
-            .any(|e| e.team_slug == "juventus"
-                && e.competition_kind != PlayerStatCompetitionKind::League));
+        assert!(
+            !p.statistics_history
+                .season_ledger
+                .iter()
+                .any(|e| e.team_slug == "juventus"
+                    && e.competition_kind != PlayerStatCompetitionKind::League)
+        );
     }
 
     /// Spec edge case: same player, same season, same team, same league
@@ -3576,8 +3681,20 @@ mod drain_invariants_tests {
         p.on_cancel_loan(&pari, &parent, d(2026, 12, 1));
 
         // Pari row carries the cup + friendly under team_slug=pari.
-        assert!(has_ledger_entry(&p, "pari", PlayerStatCompetitionKind::Friendly, "rpl", 2));
-        assert!(has_ledger_entry(&p, "pari", PlayerStatCompetitionKind::DomesticCup, "russia-cup", 1));
+        assert!(has_ledger_entry(
+            &p,
+            "pari",
+            PlayerStatCompetitionKind::Friendly,
+            "rpl",
+            2
+        ));
+        assert!(has_ledger_entry(
+            &p,
+            "pari",
+            PlayerStatCompetitionKind::DomesticCup,
+            "russia-cup",
+            1
+        ));
 
         // Render the breakdowns: pari row's is_loan flag is true (League
         // entry says so) and the cup/friendly entries — written with
@@ -3681,11 +3798,12 @@ mod drain_invariants_tests {
         // Stays clean; no synthetic non-League ledger rows appeared.
         assert_eq!(p.friendly_statistics.total_games(), 0);
         assert!(p.cup_statistics_by_competition.is_empty());
-        assert!(!p
-            .statistics_history
-            .season_ledger
-            .iter()
-            .any(|e| e.competition_kind != PlayerStatCompetitionKind::League));
+        assert!(
+            !p.statistics_history
+                .season_ledger
+                .iter()
+                .any(|e| e.competition_kind != PlayerStatCompetitionKind::League)
+        );
     }
 
     // ── No-double-count regressions ───────────────────────────────────
@@ -4032,9 +4150,8 @@ mod drain_invariants_tests {
     // ===============================================================
     mod free_agent_free_label_repro {
         use super::{d, player as make_player, stats as make_stats, team as make_team};
-        use crate::club::player::statistics::ledger::{
-            PlayerHistoryRow, PlayerLiveStatsInput,
-        };
+        use crate::Player;
+        use crate::club::player::statistics::ledger::{PlayerHistoryRow, PlayerLiveStatsInput};
         use crate::club::player::statistics::projection::PlayerStatisticsProjection;
         use crate::club::player::statistics::types::{PlayerStatistics, TeamInfo};
         use crate::league::Season;
@@ -4051,7 +4168,7 @@ mod drain_invariants_tests {
             make_team("Old Club", "old-club", "latvian-higher-league")
         }
 
-        fn project_rows(player: &crate::Player, current_date: NaiveDate) -> Vec<PlayerHistoryRow> {
+        fn project_rows(player: &Player, current_date: NaiveDate) -> Vec<PlayerHistoryRow> {
             let empty = PlayerStatistics::default();
             let live = PlayerLiveStatsInput {
                 league: &empty,
@@ -4066,7 +4183,7 @@ mod drain_invariants_tests {
             )
         }
 
-        fn liepaja_row_2025(player: &crate::Player, current_date: NaiveDate) -> Option<Option<f64>> {
+        fn liepaja_row_2025(player: &Player, current_date: NaiveDate) -> Option<Option<f64>> {
             project_rows(player, current_date)
                 .iter()
                 .filter(|r| r.team_slug == "fk-liepaja")

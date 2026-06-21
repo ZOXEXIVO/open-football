@@ -76,6 +76,15 @@ impl AcceptContractHandler {
             last_loyalty_paid_year: None,
             signing_bonus_paid: false,
         });
+
+        // Accepting a proposal installs a fresh deal, so any pre-contract
+        // the player agreed with a rival is now void — he either renewed
+        // (staying put) or signed a new deal here. This is the single
+        // chokepoint every accepted proposal installs through (mailbox
+        // renewals via `accept_and_clear`, the synchronous expiry-day pass
+        // via `ProcessContractHandler`), so clearing here voids the stale
+        // agreement before the country expiry pass could ever fire it.
+        player.clear_pre_contract();
     }
 }
 

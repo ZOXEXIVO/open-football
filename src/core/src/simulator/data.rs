@@ -82,15 +82,42 @@ pub struct SimulatorData {
     /// snapshot type is internal to the country/result module.
     pub(crate) daily_global_free_agents: Option<Vec<GlobalFreeAgentSummary>>,
 
-    /// Global-pool signings completed since the last monthly diagnostics
-    /// log. A point-in-time scan of `free_agents` can't recover this flow
-    /// (signed players have already left the pool), so the executor bumps
-    /// it as moves land and `FreeAgentMarketAuditor::log_pool_stats`
-    /// reads then resets it on the first of each month.
-    pub free_agents_signed_this_period: u32,
-    /// Players retired straight out of the pool by the current month's
-    /// retirement pass. Same lifecycle as `free_agents_signed_this_period`.
-    pub free_agents_retired_this_period: u32,
+    /// Monthly free-agent market flow counters (signed from the global
+    /// pool, signed off a domestic expiry, signed on a pre-contract,
+    /// released into the pool, retired out of it). A point-in-time scan of
+    /// `free_agents` can't recover these flows — the signed / released /
+    /// retired players have already moved — so the execution, sweep, and
+    /// retirement passes bump them as events land, and
+    /// `FreeAgentMarketAuditor::log_pool_stats` reads them on the first of
+    /// each month before the caller `reset`s them.
+    pub free_agent_flow: FreeAgentFlowCounters,
+}
+
+/// Monthly free-agent market flow counters. Distinguishes the routes a
+/// player leaves or enters the pool by, so a long run's diagnostics log
+/// can tell apart "saved by a pre-contract" from "signed off the open
+/// pool" from "still leaking into long-term free agency".
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FreeAgentFlowCounters {
+    /// Signed out of the cross-country global pool (`data.free_agents`).
+    pub signed_from_global_pool: u32,
+    /// Signed in-country off a just-expired domestic contract by the
+    /// emergency / request / market-clearing matcher.
+    pub signed_same_country_expired: u32,
+    /// Moved on a staged pre-contract (Bosman) free transfer at expiry.
+    pub signed_pre_contract: u32,
+    /// Swept into the pool after a release / contract expiry this period.
+    pub released_to_pool: u32,
+    /// Retired straight out of the pool this period.
+    pub retired_from_pool: u32,
+}
+
+impl FreeAgentFlowCounters {
+    /// Zero every counter — called after the monthly diagnostics log reads
+    /// them so the next month measures only its own flow.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 impl SimulatorData {
@@ -165,8 +192,7 @@ impl SimulatorData {
             match_store: MatchStorage::new(),
             daily_world_player_pool: None,
             daily_global_free_agents: None,
-            free_agents_signed_this_period: 0,
-            free_agents_retired_this_period: 0,
+            free_agent_flow: FreeAgentFlowCounters::default(),
         };
 
         let mut indexes = SimulatorDataIndexes::new();
@@ -580,6 +606,12 @@ impl SimulatorData {
             // longer plays for.
             let released_ids: Vec<u32> = released.iter().map(|p| p.id).collect();
             PipelineProcessor::cleanup_player_release_interest_batch(self, &released_ids);
+            // Monthly diagnostics flow counter — every swept player is one
+            // that leaked out of a roster into the pool this period.
+            self.free_agent_flow.released_to_pool = self
+                .free_agent_flow
+                .released_to_pool
+                .saturating_add(released.len() as u32);
             self.free_agents.extend(released);
         }
     }
@@ -673,8 +705,9 @@ impl SimulatorData {
         // Monthly diagnostics flow counter — recorded before the drain so
         // `log_pool_stats` can report how many players left the pool to
         // retirement this month.
-        self.free_agents_retired_this_period = self
-            .free_agents_retired_this_period
+        self.free_agent_flow.retired_from_pool = self
+            .free_agent_flow
+            .retired_from_pool
             .saturating_add(to_retire.len() as u32);
         for idx in to_retire {
             let mut player = self.free_agents.swap_remove(idx);
@@ -1147,12 +1180,17 @@ mod free_agent_release_reason_tests {
         assert_eq!(data.free_agents.len(), 3, "all three must enter the pool");
     }
 
-    /// Spec test #1: a player whose contract was cleared this tick must be
-    /// visible to the GLOBAL free-agent market within the same deterministic
-    /// post-sweep snapshot pass — i.e. the moment the sweep moves him into
-    /// `data.free_agents`, the very next `snapshot_global_free_agents`
-    /// (which the next tick builds before its parallel matching phase)
-    /// already carries him. No extra tick of latency beyond the sweep.
+    /// A player whose contract was cleared this tick is swept into
+    /// `data.free_agents` in Phase C — AFTER the tick's cross-country
+    /// matching has already run against the snapshot built before Phase A.
+    /// His GLOBAL visibility therefore carries one tick of latency: the
+    /// first snapshot that includes him is the one the NEXT tick builds
+    /// before its matching phase. This test pins that contract (the
+    /// post-sweep snapshot carries him with a seeded market state) and
+    /// documents the latency — it does NOT claim same-tick global matching.
+    /// (His own country's market released him in Phase A and could sign him
+    /// THIS tick; only cross-country clubs wait for the next tick's
+    /// snapshot.)
     #[test]
     fn newly_expired_player_is_visible_in_post_sweep_global_snapshot() {
         use crate::country::result::transfers::snapshot_global_free_agents;
@@ -1175,8 +1213,10 @@ mod free_agent_release_reason_tests {
         data.sweep_released_to_free_agents();
         assert!(data.free_agents.iter().any(|p| p.id == 7));
 
-        // …and the next snapshot — built before any matching runs — now
-        // carries him, so global clubs can act on him immediately.
+        // …and the snapshot rebuilt AFTER the sweep carries him. Production
+        // rebuilds this snapshot at the START of the next tick (before its
+        // matching phase), so cross-country clubs first act on him one tick
+        // after the sweep — never the same tick he was swept.
         let post = snapshot_global_free_agents(&mut data, date);
         let row = post
             .iter()

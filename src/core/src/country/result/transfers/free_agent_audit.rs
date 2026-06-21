@@ -14,7 +14,7 @@ use super::types::can_club_accept_player;
 use crate::Person;
 use crate::Player;
 use crate::club::player::transfer::{FreeAgentBlockReason, FreeAgentStatusCategory, MarketStage};
-use crate::simulator::SimulatorData;
+use crate::simulator::{FreeAgentFlowCounters, SimulatorData};
 use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::scouting_region::ScoutingRegion;
 use chrono::NaiveDate;
@@ -327,10 +327,12 @@ pub struct FreeAgentPoolStats {
     /// `last_block`, highest count first. The matcher's funnel reason —
     /// "why was he passed over last".
     pub block_reason_counts: Vec<(FreeAgentBlockReason, usize)>,
-    /// Global-pool signings completed since the previous monthly log.
-    pub signed_from_pool: u32,
-    /// Players retired straight out of the pool in this month's pass.
-    pub retired_from_pool: u32,
+    /// This period's pool in/out flow split by route: signed from the
+    /// global pool / off a domestic expiry / on a pre-contract, plus
+    /// released into and retired out of the pool. Lets a long run tell
+    /// apart players saved by pre-contracts, signed off the open pool, and
+    /// still leaking into long-term free agency.
+    pub flow: FreeAgentFlowCounters,
 }
 
 impl FreeAgentMarketAuditor {
@@ -346,15 +348,11 @@ impl FreeAgentMarketAuditor {
     }
 
     /// Roll the whole `data.free_agents` pool into a single monthly
-    /// aggregate. `signed_from_pool` / `retired_from_pool` are flow
-    /// counters the caller carries across the month (they can't be
-    /// recovered from a point-in-time scan of the surviving pool).
-    pub fn aggregate(
-        data: &SimulatorData,
-        date: NaiveDate,
-        signed_from_pool: u32,
-        retired_from_pool: u32,
-    ) -> FreeAgentPoolStats {
+    /// aggregate. The in/out flow split (`data.free_agent_flow`) is carried
+    /// across the month by the execution / sweep / retirement passes — it
+    /// can't be recovered from a point-in-time scan of the surviving pool,
+    /// since signed / released / retired players have already moved.
+    pub fn aggregate(data: &SimulatorData, date: NaiveDate) -> FreeAgentPoolStats {
         const LABELS: [&str; 5] = ["0-30", "31-90", "91-180", "181-365", "365+"];
         let mut counts = [0usize; 5];
         let mut pressure_sums = [0.0f32; 5];
@@ -393,24 +391,18 @@ impl FreeAgentMarketAuditor {
             total: data.free_agents.len(),
             buckets,
             block_reason_counts,
-            signed_from_pool,
-            retired_from_pool,
+            flow: data.free_agent_flow,
         }
     }
 
     /// Monthly aggregate log line. Like `log_long_term`, bails before the
-    /// scan unless debug logging is on. `signed_from_pool` /
-    /// `retired_from_pool` are the month's flow counters from the caller.
-    pub fn log_pool_stats(
-        data: &SimulatorData,
-        date: NaiveDate,
-        signed_from_pool: u32,
-        retired_from_pool: u32,
-    ) {
+    /// scan unless debug logging is on. The month's flow split is read
+    /// from `data.free_agent_flow`.
+    pub fn log_pool_stats(data: &SimulatorData, date: NaiveDate) {
         if !log::log_enabled!(log::Level::Debug) {
             return;
         }
-        let stats = Self::aggregate(data, date, signed_from_pool, retired_from_pool);
+        let stats = Self::aggregate(data, date);
         let buckets: Vec<String> = stats
             .buckets
             .iter()
@@ -422,13 +414,17 @@ impl FreeAgentMarketAuditor {
             .take(5)
             .map(|(r, n)| format!("{}={}", r.label(), n))
             .collect();
+        let flow = stats.flow;
         debug!(
-            "free-agent pool: {} total | days-free [{}] | signed {} / retired {} this month | \
-             top block reasons: {}",
+            "free-agent pool: {} total | days-free [{}] | signed: {} global + {} domestic-expiry \
+             + {} pre-contract | released {} / retired {} this month | top block reasons: {}",
             stats.total,
             buckets.join(", "),
-            stats.signed_from_pool,
-            stats.retired_from_pool,
+            flow.signed_from_global_pool,
+            flow.signed_same_country_expired,
+            flow.signed_pre_contract,
+            flow.released_to_pool,
+            flow.retired_from_pool,
             if reasons.is_empty() {
                 "none".to_string()
             } else {
@@ -726,12 +722,14 @@ mod tests {
             // Fresh cohort, no recorded reason yet.
             seed(903, today - chrono::Duration::days(10), None),
         ];
-        let data = AuditFixtures::simulator(today, Vec::new(), pool);
+        let mut data = AuditFixtures::simulator(today, Vec::new(), pool);
+        data.free_agent_flow.signed_from_global_pool = 7;
+        data.free_agent_flow.retired_from_pool = 2;
 
-        let stats = FreeAgentMarketAuditor::aggregate(&data, today, 7, 2);
+        let stats = FreeAgentMarketAuditor::aggregate(&data, today);
         assert_eq!(stats.total, 4);
-        assert_eq!(stats.signed_from_pool, 7);
-        assert_eq!(stats.retired_from_pool, 2);
+        assert_eq!(stats.flow.signed_from_global_pool, 7);
+        assert_eq!(stats.flow.retired_from_pool, 2);
 
         // Days-free cohorts: [0-30, 31-90, 91-180, 181-365, 365+].
         assert_eq!(stats.buckets[0].count, 1, "fresh player in 0-30 bucket");

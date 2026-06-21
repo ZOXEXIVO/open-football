@@ -735,8 +735,13 @@ mod tests {
     fn reservation_wage_decays_with_pressure() {
         let market = 200_000u32;
         let last = 500_000u32;
-        let fresh =
-            FreeAgentMarketCalculator::reservation_wage(market, last, 0.0, 5000, MarketStage::Fresh);
+        let fresh = FreeAgentMarketCalculator::reservation_wage(
+            market,
+            last,
+            0.0,
+            5000,
+            MarketStage::Fresh,
+        );
         let desperate = FreeAgentMarketCalculator::reservation_wage(
             market,
             last,
@@ -811,7 +816,8 @@ mod tests {
     #[test]
     fn opportunistic_fit_score_weights_sum_sensibly() {
         // A perfect score on every axis is exactly 1.0.
-        let perfect = FreeAgentMarketCalculator::opportunistic_fit_score(1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+        let perfect =
+            FreeAgentMarketCalculator::opportunistic_fit_score(1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
         assert!((perfect - 1.0).abs() < 1e-6, "perfect={perfect}");
         // Depth need is the single biggest lever (0.25).
         let depth_only =

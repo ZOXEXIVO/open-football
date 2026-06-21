@@ -217,8 +217,10 @@ impl CountryResult {
             // Captured before `listing_data.listing_type` is moved into the
             // listing below — an end-of-contract listing is the under-16
             // free release and is the only producer of this listing type.
-            let is_under16_release =
-                matches!(listing_data.listing_type, TransferListingType::EndOfContract);
+            let is_under16_release = matches!(
+                listing_data.listing_type,
+                TransferListingType::EndOfContract
+            );
 
             let listing = TransferListing::new(
                 listing_data.player_id,

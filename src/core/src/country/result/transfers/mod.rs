@@ -20,8 +20,8 @@ use chrono::NaiveDate;
 use config::TransferConfig;
 use free_agents::{GlobalFreeAgentSigning, execute_global_free_agent_signing};
 pub(crate) use free_agents::{GlobalFreeAgentSummary, snapshot_global_free_agents};
-use pre_contract::PreContractManager;
 use log::debug;
+use pre_contract::PreContractManager;
 use settlement::TransferClauseSettler;
 use std::collections::{HashMap, HashSet};
 use types::DeferredTransfer;
@@ -66,6 +66,11 @@ pub struct DeferredTransferOps {
     /// landed in Phase A. Phase C checks this against `completed_before`
     /// so it can dirty the player index without re-counting.
     pub completed_after: u32,
+    /// Pre-contract (Bosman) free moves executed in this country's Phase-A
+    /// pass — a subset of `domestic_signed_ids`. Phase C splits the monthly
+    /// "signed pre-contract" vs "signed off a domestic expiry" counters
+    /// from this plus `domestic_signed_ids.len()`.
+    pub pre_contract_signed: u32,
 }
 
 impl DeferredTransferOps {
@@ -81,6 +86,7 @@ impl DeferredTransferOps {
             deferred_transfers: Vec::new(),
             completed_before: 0,
             completed_after: 0,
+            pre_contract_signed: 0,
         }
     }
 }
@@ -205,6 +211,7 @@ impl CountryResult {
         PipelineProcessor::sync_wanted_status(country);
 
         ops.completed_after = summary.completed_transfers;
+        ops.pre_contract_signed = summary.signed_pre_contract;
         debug!(
             "Transfer Activity (Phase A) - Listings: {}, Negotiations: {}, Completed: {}",
             summary.total_listings, summary.active_negotiations, summary.completed_transfers
@@ -288,6 +295,22 @@ impl CountryResult {
         if completed > ops.completed_before {
             data.dirty_player_index = true;
         }
+
+        // Monthly diagnostics flow: every domestic signed id is an
+        // in-country free-agent signing (the global-pool ones defer to
+        // `global_signings` above and are counted by the executor). Split
+        // them into the pre-contract subset carried up on `ops` and the
+        // remaining ordinary domestic-expiry signings.
+        let pre_contract = ops.pre_contract_signed;
+        let domestic_expiry = (ops.domestic_signed_ids.len() as u32).saturating_sub(pre_contract);
+        data.free_agent_flow.signed_pre_contract = data
+            .free_agent_flow
+            .signed_pre_contract
+            .saturating_add(pre_contract);
+        data.free_agent_flow.signed_same_country_expired = data
+            .free_agent_flow
+            .signed_same_country_expired
+            .saturating_add(domestic_expiry);
 
         // Phase 2: Execute all completed transfers (domestic + foreign).
         for transfer in &ops.deferred_transfers {

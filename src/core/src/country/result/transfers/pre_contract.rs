@@ -27,7 +27,10 @@ use crate::club::player::contract::RENEWAL_REJECTED_LABEL;
 use crate::club::player::transfer::{MarketStage, PreContractAgreement};
 use crate::transfers::pipeline::TransferRequestStatus;
 use crate::utils::IntegerUtils;
-use crate::{Country, Person, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType};
+use crate::{
+    Country, Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerSquadStatus,
+    PlayerStatusType,
+};
 use chrono::NaiveDate;
 use log::debug;
 
@@ -176,11 +179,7 @@ impl PreContractManager {
     /// his club has signalled it won't keep him: he is listed / released,
     /// surplus to the squad plan, has just had renewal talks collapse, or
     /// is being actively chased by rival clubs while running his deal down.
-    fn is_leaving(
-        player: &crate::Player,
-        contract: &crate::PlayerClubContract,
-        date: NaiveDate,
-    ) -> bool {
+    fn is_leaving(player: &Player, contract: &PlayerClubContract, date: NaiveDate) -> bool {
         let statuses = player.statuses.get();
         if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Frt) {
             return true;
@@ -192,9 +191,11 @@ impl PreContractManager {
         }
         // Renewal talks collapsed in the last ~5 months — the club tried
         // and failed, so a rival can step in.
-        let renewal_failed = player.decision_history.items.iter().any(|d| {
-            d.decision == RENEWAL_REJECTED_LABEL && (date - d.date).num_days() <= 150
-        });
+        let renewal_failed = player
+            .decision_history
+            .items
+            .iter()
+            .any(|d| d.decision == RENEWAL_REJECTED_LABEL && (date - d.date).num_days() <= 150);
         if renewal_failed {
             return true;
         }
@@ -324,7 +325,8 @@ impl PreContractManager {
             club_score,
             league_reputation,
         );
-        let role = FreeAgentMarketCalculator::infer_buyer_role(player.ability, club_score, player.group);
+        let role =
+            FreeAgentMarketCalculator::infer_buyer_role(player.ability, club_score, player.group);
         let annual_wage = FreeAgentMarketCalculator::offer_wage(
             market_wage,
             role,
@@ -335,8 +337,11 @@ impl PreContractManager {
             market_wage,
             0.0,
         );
-        let contract_years =
-            FreeAgentMarketCalculator::stage_contract_years(MarketStage::Fresh, player.age, player.ability);
+        let contract_years = FreeAgentMarketCalculator::stage_contract_years(
+            MarketStage::Fresh,
+            player.age,
+            player.ability,
+        );
         let promised_status = match role {
             BuyerRoleFit::KeyPlayer => Some(PlayerSquadStatus::KeyPlayer),
             BuyerRoleFit::Starter => Some(PlayerSquadStatus::FirstTeamRegular),
@@ -354,9 +359,13 @@ mod tests {
     //! then route the move to the agreed club once it does lapse.
 
     use super::*;
+    use crate::PlayerContractProposal;
     use crate::club::academy::ClubAcademy;
+    use crate::club::board::SeasonTargets;
     use crate::club::player::builder::PlayerBuilder;
     use crate::country::result::CountryResult;
+    use crate::country::result::transfers::types::TransferActivitySummary;
+    use crate::handlers::AcceptContractHandler;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
@@ -505,7 +514,8 @@ mod tests {
         // Current club (B = 100) holds the leaving midfielder, 120 days
         // from expiry. A domestic rival (A = 200) wants a midfielder.
         let leaver = PreContractFixtures::leaving_player(1, today, 120);
-        let club_b = PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![leaver]));
+        let club_b =
+            PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![leaver]));
         let club_a = PreContractFixtures::buyer_club(200);
         let mut country = PreContractFixtures::country(vec![club_b, club_a]);
 
@@ -521,7 +531,10 @@ mod tests {
                 break;
             }
         }
-        assert!(staged, "a leaving useful player must eventually be pre-signed");
+        assert!(
+            staged,
+            "a leaving useful player must eventually be pre-signed"
+        );
 
         let (club_id, player) =
             PreContractFixtures::find_player(&country, 1).expect("player still present");
@@ -558,11 +571,12 @@ mod tests {
             promised_status: Some(PlayerSquadStatus::FirstTeamRegular),
             agreed_on: PreContractFixtures::d(2026, 3, 1),
         });
-        let club_b = PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![leaver]));
+        let club_b =
+            PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![leaver]));
         let club_a = PreContractFixtures::buyer_club(200);
         let mut country = PreContractFixtures::country(vec![club_b, club_a]);
 
-        let mut summary = crate::country::result::transfers::types::TransferActivitySummary::new();
+        let mut summary = TransferActivitySummary::new();
         let config = TransferConfig::default();
         let mut domestic = Vec::new();
         let mut offered = Vec::new();
@@ -587,7 +601,10 @@ mod tests {
             "the expiring pre-contract must move the player to the agreed club"
         );
         assert!(
-            player.contract.as_ref().is_some_and(|c| c.expiration > today),
+            player
+                .contract
+                .as_ref()
+                .is_some_and(|c| c.expiration > today),
             "the buyer must install a fresh contract on arrival"
         );
         assert!(
@@ -603,5 +620,243 @@ mod tests {
                 .any(|t| t.player_id == 1 && t.to_club_id == 200),
             "the pre-contract free transfer must be in the history"
         );
+    }
+
+    // ── Edge-case helpers (spec #2 + #4) ───────────────────────────────
+    impl PreContractFixtures {
+        /// A standard staged agreement pointing at `to_club_id`.
+        fn agreement_to(to_club_id: u32, today: NaiveDate) -> PreContractAgreement {
+            PreContractAgreement {
+                to_club_id,
+                to_country_id: 1,
+                annual_wage: 70_000,
+                contract_years: 2,
+                promised_status: Some(PlayerSquadStatus::FirstTeamRegular),
+                agreed_on: today,
+            }
+        }
+
+        /// A domestic club with roster room but NO open transfer request —
+        /// a valid pre-contract destination the request matcher won't pick,
+        /// so a move there can only come from the binding agreement.
+        fn plain_buyer(id: u32) -> Club {
+            Self::club(id, Self::team(id * 10, id, Vec::new()))
+        }
+
+        /// A domestic club whose squad cap is already reached, so
+        /// `can_club_accept_player` rejects it — a buyer that "filled up"
+        /// before the pre-contract could execute.
+        fn full_buyer(id: u32) -> Club {
+            let mut club = Self::plain_buyer(id);
+            club.board.season_targets = Some(SeasonTargets {
+                transfer_budget: 0,
+                wage_budget: 0,
+                max_squad_size: 0,
+                min_squad_size: 0,
+                expected_position: 5,
+                min_acceptable_position: 10,
+            });
+            club
+        }
+
+        /// Run the country free-agent pass (expiry release + pre-contract
+        /// execution + matcher) the way Phase A does.
+        fn run_free_agents(country: &mut Country, today: NaiveDate) {
+            let mut summary = TransferActivitySummary::new();
+            let config = TransferConfig::default();
+            let mut domestic = Vec::new();
+            let mut offered = Vec::new();
+            let mut rejected = Vec::new();
+            let mut blocked = Vec::new();
+            let _ = CountryResult::handle_free_agents(
+                country,
+                today,
+                &mut summary,
+                &[],
+                &config,
+                &mut domestic,
+                &mut offered,
+                &mut rejected,
+                &mut blocked,
+            );
+        }
+
+        /// True when a pre-contract (Bosman) free move to `to_club_id` was
+        /// actually executed — identified by the `pre_contract` reason on
+        /// the country transfer log, so an unrelated emergency / request
+        /// signing to the same club can't be mistaken for one.
+        fn pre_contract_move_to(country: &Country, to_club_id: u32) -> bool {
+            country
+                .transfer_market
+                .transfer_history
+                .iter()
+                .any(|t| t.to_club_id == to_club_id && t.reason == "pre_contract")
+        }
+    }
+
+    /// Spec #2: accepting a renewal voids any pre-contract the player had
+    /// agreed with a rival, so the expiry pass can never fire it later.
+    #[test]
+    fn accepting_a_renewal_clears_a_staged_pre_contract() {
+        let today = PreContractFixtures::d(2026, 3, 1);
+        let mut player = PreContractFixtures::leaving_player(1, today, 120);
+        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today));
+        assert!(player.pending_pre_contract().is_some());
+
+        // The current club's renewal offer is accepted through the shared
+        // contract-install chokepoint.
+        let proposal = PlayerContractProposal::basic(70_000, 3, 10, 0, 0, None);
+        AcceptContractHandler::process(&mut player, proposal, today);
+
+        assert!(
+            player.pending_pre_contract().is_none(),
+            "accepting a renewal must void the rival pre-contract"
+        );
+    }
+
+    /// Spec #4: any club change (sold, swept to the pool, signed elsewhere)
+    /// consumes a staged pre-contract.
+    #[test]
+    fn a_club_change_clears_a_staged_pre_contract() {
+        let today = PreContractFixtures::d(2026, 3, 1);
+        let mut player = PreContractFixtures::leaving_player(1, today, 120);
+        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today));
+        assert!(player.pending_pre_contract().is_some());
+
+        player.reset_on_club_change();
+        assert!(
+            player.pending_pre_contract().is_none(),
+            "a club change must consume the staged agreement"
+        );
+    }
+
+    /// Spec #2: a player who renewed before expiry must NOT be routed to
+    /// his old agreed club when his (renewed) deal later lapses — the
+    /// agreement is gone, so no pre-contract move fires.
+    #[test]
+    fn a_renewed_player_is_not_moved_by_his_stale_pre_contract_on_expiry() {
+        let today = PreContractFixtures::d(2026, 6, 30);
+        let mut player = PreContractFixtures::leaving_player(1, today, 120);
+        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today));
+
+        // Renew, then prove the agreement is gone.
+        let proposal = PlayerContractProposal::basic(70_000, 3, 10, 0, 0, None);
+        AcceptContractHandler::process(&mut player, proposal, today);
+        assert!(player.pending_pre_contract().is_none());
+
+        // Simulate the renewed deal lapsing much later and run the pass.
+        player.contract = None;
+        let club_b =
+            PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![player]));
+        let club_a = PreContractFixtures::plain_buyer(200);
+        let mut country = PreContractFixtures::country(vec![club_b, club_a]);
+        PreContractFixtures::run_free_agents(&mut country, today);
+
+        assert!(
+            !PreContractFixtures::pre_contract_move_to(&country, 200),
+            "a renewed player's stale pre-contract must never execute"
+        );
+    }
+
+    /// Spec #4: the agreement is BINDING at expiry — it executes even when
+    /// the buyer no longer carries an open request for the position. The
+    /// deal was struck while the player ran his deal down; we honour it
+    /// rather than re-validating squad need on expiry day.
+    #[test]
+    fn pre_contract_is_binding_when_buyer_has_room_but_no_open_request() {
+        let today = PreContractFixtures::d(2026, 6, 30);
+        let mut player = PreContractFixtures::leaving_player(1, today, 0);
+        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today));
+        let club_b =
+            PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![player]));
+        let club_a = PreContractFixtures::plain_buyer(200);
+        let mut country = PreContractFixtures::country(vec![club_b, club_a]);
+
+        PreContractFixtures::run_free_agents(&mut country, today);
+
+        let (club_id, _) =
+            PreContractFixtures::find_player(&country, 1).expect("player must still exist");
+        assert_eq!(
+            club_id, 200,
+            "the binding pre-contract must execute regardless of the buyer's request state"
+        );
+        assert!(PreContractFixtures::pre_contract_move_to(&country, 200));
+    }
+
+    /// Spec #4: if the buyer has filled its squad by expiry day, the
+    /// pre-contract can't execute — the player stays put (and is left for
+    /// the open free-agent pool), the agreement is not forced through.
+    #[test]
+    fn pre_contract_does_not_fire_when_the_buyer_is_full_at_expiry() {
+        let today = PreContractFixtures::d(2026, 6, 30);
+        let mut player = PreContractFixtures::leaving_player(1, today, 0);
+        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today));
+        let club_b =
+            PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![player]));
+        let club_a = PreContractFixtures::full_buyer(200);
+        let mut country = PreContractFixtures::country(vec![club_b, club_a]);
+
+        PreContractFixtures::run_free_agents(&mut country, today);
+
+        let (club_id, _) =
+            PreContractFixtures::find_player(&country, 1).expect("player must still exist");
+        assert_eq!(
+            club_id, 100,
+            "a full buyer means the pre-contract can't execute; the player falls through to the pool"
+        );
+        assert!(!PreContractFixtures::pre_contract_move_to(&country, 200));
+    }
+
+    /// Spec #4: a pre-contract pointing at the player's OWN club is a no-op
+    /// — it must never be executed as a self-move.
+    #[test]
+    fn a_self_club_pre_contract_is_ignored_at_expiry() {
+        let today = PreContractFixtures::d(2026, 6, 30);
+        let mut player = PreContractFixtures::leaving_player(1, today, 0);
+        // Agreement points back at his current club (100).
+        player.stage_pre_contract(PreContractFixtures::agreement_to(100, today));
+        let club_b =
+            PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![player]));
+        let mut country = PreContractFixtures::country(vec![club_b]);
+
+        PreContractFixtures::run_free_agents(&mut country, today);
+
+        let (club_id, _) =
+            PreContractFixtures::find_player(&country, 1).expect("player must still exist");
+        assert_eq!(
+            club_id, 100,
+            "a self-club agreement must not move the player"
+        );
+        assert!(
+            !PreContractFixtures::pre_contract_move_to(&country, 100),
+            "a self-club pre-contract must be ignored, not executed"
+        );
+    }
+
+    /// Spec #4: a loaned player is skipped by the expiry / pre-contract
+    /// pass even if an agreement is somehow staged on him — his presence at
+    /// the club is the borrower's, not a free move to make.
+    #[test]
+    fn a_loaned_player_is_not_pre_contract_signed_on_parent_expiry() {
+        let today = PreContractFixtures::d(2026, 6, 30);
+        let mut player = PreContractFixtures::leaving_player(1, today, 0);
+        // Parent contract lapsed, but he is physically out on loan.
+        player.contract = None;
+        player.contract_loan = Some(PlayerClubContract::new(40_000, today));
+        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today));
+        let club_b =
+            PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![player]));
+        let club_a = PreContractFixtures::plain_buyer(200);
+        let mut country = PreContractFixtures::country(vec![club_b, club_a]);
+
+        PreContractFixtures::run_free_agents(&mut country, today);
+
+        let (club_id, _) =
+            PreContractFixtures::find_player(&country, 1).expect("player must still exist");
+        assert_eq!(
+            club_id, 100,
+            "a loaned player must be skipped by the pre-contract pass"
+        );
+        assert!(!PreContractFixtures::pre_contract_move_to(&country, 200));
     }
 }

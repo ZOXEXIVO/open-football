@@ -7,7 +7,7 @@ mod result;
 mod seeding;
 
 pub use country_info::CountryInfo;
-pub use data::SimulatorData;
+pub use data::{FreeAgentFlowCounters, SimulatorData};
 pub use matchday::WorldMatchdayResult;
 pub use result::{SimulationResult, WorldWorkloadCounts};
 
@@ -338,17 +338,13 @@ impl FootballSimulator {
             // (no-op unless debug logging is enabled).
             FreeAgentMarketAuditor::log_long_term(data, today);
             // Monthly aggregate: pool size, days-free distribution with
-            // mean career pressure per cohort, signed / retired flow, and
-            // the dominant block reasons. Reset the flow counters after
-            // the log so next month measures only its own activity.
-            FreeAgentMarketAuditor::log_pool_stats(
-                data,
-                today,
-                data.free_agents_signed_this_period,
-                data.free_agents_retired_this_period,
-            );
-            data.free_agents_signed_this_period = 0;
-            data.free_agents_retired_this_period = 0;
+            // mean career pressure per cohort, the in/out flow split by
+            // route (global / domestic-expiry / pre-contract / released /
+            // retired), and the dominant block reasons. Reset the flow
+            // counters after the log so next month measures only its own
+            // activity.
+            FreeAgentMarketAuditor::log_pool_stats(data, today);
+            data.free_agent_flow.reset();
         }
 
         // Global competitions (Champions League, World Cup, etc.)
@@ -369,6 +365,14 @@ impl FootballSimulator {
             // surplus, free-transfer release, contract expiry) off their old
             // team's roster and into the global free-agent pool, so the player
             // page header and contract panel agree.
+            //
+            // This runs in Phase C, after this tick's cross-country matching
+            // already read the `global_fa_snapshot` built before Phase A. So a
+            // player swept here first becomes visible to OTHER countries'
+            // clubs NEXT tick, when the snapshot is rebuilt at the top of the
+            // loop — a deliberate one-tick latency, not same-tick global
+            // matching. His own country released and could re-sign him within
+            // this tick's Phase-A pass (which clears expired contracts inline).
             data.sweep_released_to_free_agents();
 
             // Refresh player indexes only if a transfer actually moved a player

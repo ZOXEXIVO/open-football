@@ -13,7 +13,6 @@ use crate::club::player::events::transfer_social::{
 };
 use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection};
 use crate::country::result::CountryResult;
-use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferListingStatus;
 use crate::transfers::TransferRoutePolicy;
@@ -29,6 +28,7 @@ use crate::transfers::pipeline::plausibility::{
 };
 use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor};
 use crate::transfers::scouting_region::ScoutingRegion;
+use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::{FloatUtils, FormattingUtils};
 use crate::{
     Club, Country, Player, PlayerSquadStatus, PlayerStatusType, PlayerValueCalculator,
@@ -2604,8 +2604,14 @@ mod seller_fee_floor_tests {
     /// listing's asking price.
     #[test]
     fn core_player_floor_blocks_lowball_bid() {
-        let target =
-            Ff::player(100, 150, 26, 5000, PlayerSquadStatus::KeyPlayer, Ff::far_contract());
+        let target = Ff::player(
+            100,
+            150,
+            26,
+            5000,
+            PlayerSquadStatus::KeyPlayer,
+            Ff::far_contract(),
+        );
         let country = Ff::country(vec![target]);
         let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
 
@@ -2637,20 +2643,55 @@ mod seller_fee_floor_tests {
     /// only the new market-value floor catches the bid.
     #[test]
     fn low_budget_bid_for_protected_player_is_rejected_end_to_end() {
-        let mut target =
-            Ff::player(100, 130, 26, 2000, PlayerSquadStatus::NotYetSet, Ff::far_contract());
-        target.statistics_history.items.push(Ff::history_row(2025, 14)); // recent regular
+        let mut target = Ff::player(
+            100,
+            130,
+            26,
+            2000,
+            PlayerSquadStatus::NotYetSet,
+            Ff::far_contract(),
+        );
+        target
+            .statistics_history
+            .items
+            .push(Ff::history_row(2025, 14)); // recent regular
         target.statistics.played = 2; // thin current sample
-        let better_a =
-            Ff::player(101, 142, 27, 2000, PlayerSquadStatus::NotYetSet, Ff::far_contract());
-        let better_b =
-            Ff::player(102, 138, 25, 2000, PlayerSquadStatus::NotYetSet, Ff::far_contract());
+        let better_a = Ff::player(
+            101,
+            142,
+            27,
+            2000,
+            PlayerSquadStatus::NotYetSet,
+            Ff::far_contract(),
+        );
+        let better_b = Ff::player(
+            102,
+            138,
+            25,
+            2000,
+            PlayerSquadStatus::NotYetSet,
+            Ff::far_contract(),
+        );
 
         let mut country = Ff::country(vec![target, better_a, better_b]);
 
-        let offer = TransferOffer::new(CurrencyValue::new(340_000.0, Currency::Usd), Ff::BUYER_ID, Ff::date());
+        let offer = TransferOffer::new(
+            CurrencyValue::new(340_000.0, Currency::Usd),
+            Ff::BUYER_ID,
+            Ff::date(),
+        );
         let neg = TransferNegotiation::new(
-            Ff::NEG_ID, 100, 0, Ff::SELLER_ID, Ff::BUYER_ID, offer, Ff::date(), 0.75, 0.40, 26, 0.5,
+            Ff::NEG_ID,
+            100,
+            0,
+            Ff::SELLER_ID,
+            Ff::BUYER_ID,
+            offer,
+            Ff::date(),
+            0.75,
+            0.40,
+            26,
+            0.5,
         );
         country.transfer_market.negotiations.insert(Ff::NEG_ID, neg);
 
@@ -2678,8 +2719,14 @@ mod seller_fee_floor_tests {
     /// rejected (the seller would release him free before giving him away).
     #[test]
     fn not_needed_player_keeps_distressed_residual_floor() {
-        let target =
-            Ff::player(100, 150, 26, 5000, PlayerSquadStatus::NotNeeded, Ff::far_contract());
+        let target = Ff::player(
+            100,
+            150,
+            26,
+            5000,
+            PlayerSquadStatus::NotNeeded,
+            Ff::far_contract(),
+        );
         let country = Ff::country(vec![target]);
         let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
 
@@ -2700,8 +2747,14 @@ mod seller_fee_floor_tests {
     /// of it. "Listed status alone" must not unlock a 340K sale.
     #[test]
     fn listed_first_team_player_keeps_modest_floor() {
-        let mut target =
-            Ff::player(100, 150, 26, 5000, PlayerSquadStatus::FirstTeamRegular, Ff::far_contract());
+        let mut target = Ff::player(
+            100,
+            150,
+            26,
+            5000,
+            PlayerSquadStatus::FirstTeamRegular,
+            Ff::far_contract(),
+        );
         target.statuses.add(Ff::date(), PlayerStatusType::Lst);
         let country = Ff::country(vec![target]);
         let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
@@ -2731,7 +2784,16 @@ mod seller_fee_floor_tests {
         // squad average → inferred TrueSurplus (not via NotNeeded, so no
         // distressed residual either).
         let mut squad: Vec<Player> = (200..204)
-            .map(|id| Ff::player(id, 140, 26, 1000, PlayerSquadStatus::NotYetSet, Ff::far_contract()))
+            .map(|id| {
+                Ff::player(
+                    id,
+                    140,
+                    26,
+                    1000,
+                    PlayerSquadStatus::NotYetSet,
+                    Ff::far_contract(),
+                )
+            })
             .collect();
         squad.push(Ff::player(
             100,
@@ -2781,8 +2843,14 @@ mod seller_fee_floor_tests {
     /// can't prise him away — the floor tracks his value, not the listing.
     #[test]
     fn decay_cannot_breach_important_player_floor() {
-        let target =
-            Ff::player(100, 150, 26, 5000, PlayerSquadStatus::KeyPlayer, Ff::far_contract());
+        let target = Ff::player(
+            100,
+            150,
+            26,
+            5000,
+            PlayerSquadStatus::KeyPlayer,
+            Ff::far_contract(),
+        );
         let country = Ff::country(vec![target]);
         let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
 

@@ -10,6 +10,11 @@ pub(crate) struct TransferActivitySummary {
     pub(crate) active_negotiations: u32,
     pub(crate) completed_transfers: u32,
     pub(crate) total_fees_exchanged: f64,
+    /// Pre-contract (Bosman) free moves executed in this country's local
+    /// pass — a subset of the in-country free-agent signings. Carried up
+    /// through `DeferredTransferOps` so Phase C can split the monthly
+    /// "signed pre-contract" vs "signed off a domestic expiry" diagnostics.
+    pub(crate) signed_pre_contract: u32,
 }
 
 impl TransferActivitySummary {
@@ -19,6 +24,7 @@ impl TransferActivitySummary {
             active_negotiations: 0,
             completed_transfers: 0,
             total_fees_exchanged: 0.0,
+            signed_pre_contract: 0,
         }
     }
 
@@ -159,11 +165,7 @@ pub(crate) fn can_club_accept_player(club: &Club) -> bool {
     // separate. Resolve the Main team by type, NOT teams[0]: the main team
     // is not guaranteed to be first in the collection, and counting the
     // wrong squad would gate the cap against a reserve/B roster.
-    let main_squad = club
-        .teams
-        .main()
-        .map(|t| t.players.len())
-        .unwrap_or(0);
+    let main_squad = club.teams.main().map(|t| t.players.len()).unwrap_or(0);
     main_squad < max_squad
 }
 
