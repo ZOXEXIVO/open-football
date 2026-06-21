@@ -14,6 +14,7 @@ use crate::{
     Team,
 };
 use chrono::NaiveDate;
+use log::debug;
 
 /// Minimum gap between proactive offers when the previous one hasn't
 /// actually been turned down yet. Set above 30 so the proactive (month
@@ -794,7 +795,146 @@ impl ContractRenewalManager {
             // match-highest-earner is allowed in isolation here.
             false,
         )?;
+
+        // Don't spam a pointless final offer. Once the player has already
+        // turned down a season's worth of attempts, the expiry-day offer
+        // is only worth making if it MATERIALLY improves on what he kept
+        // rejecting — it matches his stated wage ask or grants a demand he
+        // was holding out for. If even the last offer can't clear that
+        // bar, the club has effectively decided to let him walk; record
+        // *why* (for diagnostics) and make no offer rather than firing the
+        // same losing proposal again.
+        if attempts >= MAX_RENEWAL_ATTEMPTS_PER_YEAR
+            && !Self::expiry_offer_materially_improves(player, &proposal)
+        {
+            let reason = Self::diagnose_walk(player, &proposal);
+            debug!(
+                "Expiry renewal: {} (id {}) walks — {} (attempts={}, final offer ${}/y, {}y)",
+                player.full_name,
+                player.id,
+                reason.label(),
+                attempts,
+                proposal.salary,
+                proposal.years,
+            );
+            return None;
+        }
+
         Some((proposal, coach_name))
+    }
+
+    /// Whether the final expiry-day offer is worth making to a player who
+    /// has already rejected the season's worth of attempts: it must match
+    /// his stated wage ask, or grant a key demand (release clause, squad
+    /// role, or contract length) he was holding out for. With no recorded
+    /// ask there is nothing new to put on the table, so a repeat offer is
+    /// pointless.
+    fn expiry_offer_materially_improves(
+        player: &Player,
+        proposal: &PlayerContractProposal,
+    ) -> bool {
+        // Full-package check FIRST, independent of any stated ask. The
+        // acceptance handler signs off when the total package (base wage
+        // plus amortized bonuses / fees / clauses) is at least a 10% uplift
+        // on the current salary — even when the base wage sits below the
+        // player's ask. Mirror that so we never suppress a package-sweetened
+        // final offer the player would actually accept.
+        //
+        // The acceptance handler gates that package path on
+        // `proposal.salary >= current_salary` — a base pay cut is refused
+        // regardless of sweeteners (e.g. a player who is his own top earner
+        // gets the offer clamped below his wage by the wage-structure cap).
+        // Mirror that gate too, or we'd green-light a doomed pay-cut offer.
+        if let Some(current) = player.contract.as_ref().map(|c| c.salary.max(1)) {
+            if proposal.salary >= current {
+                let pkg = ProcessContractHandler::expected_package_value(proposal, player);
+                if pkg as f32 / current as f32 >= 1.10 {
+                    return true;
+                }
+            }
+        }
+
+        let Some(ask) = player.pending_contract_ask.as_ref() else {
+            return false;
+        };
+        // Meets (or beats) the wage he asked for.
+        if proposal.salary >= ask.desired_salary {
+            return true;
+        }
+        // Grants the release clause he demanded.
+        if ask.demanded_release_clause.is_some() && proposal.release_clause.is_some() {
+            return true;
+        }
+        // Grants the squad role he wanted written in.
+        if let Some(status) = ask.demanded_status.as_ref() {
+            if proposal.squad_status_promise.as_ref() == Some(status) {
+                return true;
+            }
+        }
+        // Honours a longer contract when length was the sticking point.
+        if matches!(ask.rejection_reason, Some(RejectionReason::ShortContract))
+            && proposal.years >= ask.desired_years
+        {
+            return true;
+        }
+        false
+    }
+
+    /// Classify why a player the club is no longer chasing on expiry day
+    /// ends up walking, from his last stated ask versus the best final
+    /// offer. Diagnostics only — drives the debug log so long runs can be
+    /// audited for *which* sticking point loses players for free.
+    fn diagnose_walk(player: &Player, proposal: &PlayerContractProposal) -> RenewalWalkReason {
+        let Some(ask) = player.pending_contract_ask.as_ref() else {
+            return RenewalWalkReason::ClubLetWalk;
+        };
+        if let Some(status) = ask.demanded_status.as_ref() {
+            if proposal.squad_status_promise.as_ref() != Some(status) {
+                return RenewalWalkReason::WantedBiggerRole;
+            }
+        }
+        if ask.demanded_release_clause.is_some() && proposal.release_clause.is_none() {
+            return RenewalWalkReason::WantedReleaseClause;
+        }
+        if matches!(ask.rejection_reason, Some(RejectionReason::ShortContract))
+            && proposal.years < ask.desired_years
+        {
+            return RenewalWalkReason::WantedLongerDeal;
+        }
+        if proposal.salary < ask.desired_salary {
+            return RenewalWalkReason::CouldNotAffordAsk;
+        }
+        RenewalWalkReason::ClubLetWalk
+    }
+}
+
+/// Why a player walks for free on expiry day once the club stops chasing
+/// the renewal. Surfaced in the debug log so multi-season runs can be
+/// audited for which sticking point most often loses players on a free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenewalWalkReason {
+    /// The wage the player asked for sat above what the club would fund.
+    CouldNotAffordAsk,
+    /// The player demanded a higher squad role than the club promised.
+    WantedBiggerRole,
+    /// The player insisted on a release clause the offer didn't carry.
+    WantedReleaseClause,
+    /// The player wanted a longer contract than the club would commit to.
+    WantedLongerDeal,
+    /// No outstanding demand to satisfy — the club simply chose not to
+    /// re-offer and let the player leave.
+    ClubLetWalk,
+}
+
+impl RenewalWalkReason {
+    fn label(self) -> &'static str {
+        match self {
+            RenewalWalkReason::CouldNotAffordAsk => "could not afford wage ask",
+            RenewalWalkReason::WantedBiggerRole => "player wanted a bigger role",
+            RenewalWalkReason::WantedReleaseClause => "player wanted a release clause",
+            RenewalWalkReason::WantedLongerDeal => "player wanted a longer deal",
+            RenewalWalkReason::ClubLetWalk => "club let the player walk",
+        }
     }
 }
 
@@ -1409,5 +1549,62 @@ mod expiry_evaluate_tests {
             ContractRenewalManager::evaluate_for_expiry(&p, today).is_none(),
             "the club already decided to move a listed player on"
         );
+    }
+
+    /// The expiry-day anti-spam gate must align with the player's actual
+    /// acceptance logic, which signs off on the FULL package (base wage
+    /// plus amortized sweeteners), gated on the base wage not being a pay
+    /// cut. A base wage below the player's ask is therefore NOT pointless
+    /// when sweeteners lift the package over the 10% acceptance floor — the
+    /// offer must still be made, not suppressed.
+    #[test]
+    fn materially_improves_counts_full_package_not_just_base_wage() {
+        use crate::club::player::mailbox::PlayerContractAsk;
+
+        let today = ExpiryFixtures::d(2026, 6, 10);
+        let mut player = ExpiryFixtures::player_with_expiration(today);
+        // Current salary is 100k (set by the fixture). He's holding out for
+        // a far higher base wage, with no clause / role / length demand.
+        player.pending_contract_ask = Some(PlayerContractAsk {
+            desired_salary: 800_000,
+            desired_years: 3,
+            recorded_on: today,
+            demanded_status: None,
+            demanded_release_clause: None,
+            demanded_signing_bonus: None,
+            rejection_reason: Some(RejectionReason::LowSalary),
+        });
+
+        // (a) A package-sweetened offer: base 110k (above current, below
+        // the 800k ask) plus a 60k loyalty bonus pushes the package to
+        // ~170k — a 1.7x uplift the acceptance gate would sign. It must
+        // NOT be suppressed even though base < ask. This is the fix.
+        let sweetened = PlayerContractProposal::basic(110_000, 3, 10, 0, 60_000, None);
+        assert!(
+            ContractRenewalManager::expiry_offer_materially_improves(&player, &sweetened),
+            "a package-sweetened offer the player would accept must not be suppressed"
+        );
+
+        // (b) A meagre offer below the ask with no sweeteners (package only
+        // ~1.05x current) IS pointless — suppress it rather than spam.
+        let meagre = PlayerContractProposal::basic(105_000, 3, 10, 0, 0, None);
+        assert!(
+            !ContractRenewalManager::expiry_offer_materially_improves(&player, &meagre),
+            "a meagre below-ask offer with no package value is correctly suppressed"
+        );
+
+        // (c) A pay cut (base below current) can never clear the package
+        // path — the acceptance gate refuses base pay cuts outright.
+        let pay_cut = PlayerContractProposal::basic(90_000, 3, 10, 0, 500_000, None);
+        assert!(
+            !ContractRenewalManager::expiry_offer_materially_improves(&player, &pay_cut),
+            "a base pay cut is suppressed regardless of sweeteners"
+        );
+
+        // (d) Meeting the wage ask outright is always worth offering.
+        let meets_ask = PlayerContractProposal::basic(800_000, 3, 10, 0, 0, None);
+        assert!(ContractRenewalManager::expiry_offer_materially_improves(
+            &player, &meets_ask
+        ));
     }
 }

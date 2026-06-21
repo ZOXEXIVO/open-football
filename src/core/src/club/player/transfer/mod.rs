@@ -5,7 +5,7 @@ pub mod processing;
 pub use availability_market::{AvailabilityBlockReason, AvailabilityMarketState};
 pub use free_agent_market::{
     FreeAgentBlockReason, FreeAgentMarketState, FreeAgentStatusCategory,
-    FreeAgentStatusExplanation, MarketStage, ReleaseContext,
+    FreeAgentStatusExplanation, MarketStage, PreContractAgreement, ReleaseContext,
 };
 pub use processing::{
     ContinentalAccessContext, ContinentalCompetitionTier, ContinentalPathHeuristic,

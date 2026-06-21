@@ -19,6 +19,7 @@ use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::scouting_region::ScoutingRegion;
 use chrono::NaiveDate;
 use log::debug;
+use std::collections::HashMap;
 
 /// One player's full market-stall picture. Mirrors the fields the
 /// matcher decides on, plus the world-scan eligibility counters that
@@ -301,6 +302,142 @@ impl FreeAgentMarketAuditor {
     }
 }
 
+/// One days-free cohort in the monthly pool aggregate. The five buckets
+/// mirror the `MarketStage` boundaries (0-30 Fresh, 31-90 Open, 91-180
+/// Flexible, 181-365 Desperate, 365+ LastChance) so the log reads against
+/// the same timeline the decay model uses.
+#[derive(Debug, Clone, Copy)]
+pub struct FreeAgentPoolBucketStat {
+    pub label: &'static str,
+    pub count: usize,
+    /// Mean `career_pressure` of the players in this bucket (0 when empty).
+    pub avg_career_pressure: f32,
+}
+
+/// Aggregate snapshot of the global free-agent pool, emitted monthly so an
+/// operator can watch the pool's size, its days-free distribution, and the
+/// dominant reasons long-term players stay unsigned — the question the
+/// per-player `log_long_term` dump answers one line at a time, rolled up.
+#[derive(Debug, Clone)]
+pub struct FreeAgentPoolStats {
+    pub total: usize,
+    /// Indexed cohorts: [0-30, 31-90, 91-180, 181-365, 365+].
+    pub buckets: [FreeAgentPoolBucketStat; 5],
+    /// Block-reason histogram over every pool player carrying a recorded
+    /// `last_block`, highest count first. The matcher's funnel reason —
+    /// "why was he passed over last".
+    pub block_reason_counts: Vec<(FreeAgentBlockReason, usize)>,
+    /// Global-pool signings completed since the previous monthly log.
+    pub signed_from_pool: u32,
+    /// Players retired straight out of the pool in this month's pass.
+    pub retired_from_pool: u32,
+}
+
+impl FreeAgentMarketAuditor {
+    /// Days-free → bucket index. Boundaries match `MarketStage`.
+    fn pool_bucket_index(days_free: i64) -> usize {
+        match days_free {
+            d if d <= 30 => 0,
+            d if d <= 90 => 1,
+            d if d <= 180 => 2,
+            d if d <= 365 => 3,
+            _ => 4,
+        }
+    }
+
+    /// Roll the whole `data.free_agents` pool into a single monthly
+    /// aggregate. `signed_from_pool` / `retired_from_pool` are flow
+    /// counters the caller carries across the month (they can't be
+    /// recovered from a point-in-time scan of the surviving pool).
+    pub fn aggregate(
+        data: &SimulatorData,
+        date: NaiveDate,
+        signed_from_pool: u32,
+        retired_from_pool: u32,
+    ) -> FreeAgentPoolStats {
+        const LABELS: [&str; 5] = ["0-30", "31-90", "91-180", "181-365", "365+"];
+        let mut counts = [0usize; 5];
+        let mut pressure_sums = [0.0f32; 5];
+        let mut reason_counts: HashMap<FreeAgentBlockReason, usize> = HashMap::new();
+
+        for player in &data.free_agents {
+            let Some(state) = player.free_agent_state() else {
+                continue;
+            };
+            let days_free = (date - state.free_since).num_days().max(0);
+            let idx = Self::pool_bucket_index(days_free);
+            counts[idx] += 1;
+            pressure_sums[idx] += player.career_pressure(date);
+            if let Some((_, reason)) = state.last_block {
+                *reason_counts.entry(reason).or_insert(0) += 1;
+            }
+        }
+
+        let buckets = std::array::from_fn(|i| FreeAgentPoolBucketStat {
+            label: LABELS[i],
+            count: counts[i],
+            avg_career_pressure: if counts[i] > 0 {
+                pressure_sums[i] / counts[i] as f32
+            } else {
+                0.0
+            },
+        });
+
+        let mut block_reason_counts: Vec<(FreeAgentBlockReason, usize)> =
+            reason_counts.into_iter().collect();
+        // Highest count first; rank as a stable tiebreak so the order is
+        // deterministic across runs (HashMap iteration isn't).
+        block_reason_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.rank().cmp(&a.0.rank())));
+
+        FreeAgentPoolStats {
+            total: data.free_agents.len(),
+            buckets,
+            block_reason_counts,
+            signed_from_pool,
+            retired_from_pool,
+        }
+    }
+
+    /// Monthly aggregate log line. Like `log_long_term`, bails before the
+    /// scan unless debug logging is on. `signed_from_pool` /
+    /// `retired_from_pool` are the month's flow counters from the caller.
+    pub fn log_pool_stats(
+        data: &SimulatorData,
+        date: NaiveDate,
+        signed_from_pool: u32,
+        retired_from_pool: u32,
+    ) {
+        if !log::log_enabled!(log::Level::Debug) {
+            return;
+        }
+        let stats = Self::aggregate(data, date, signed_from_pool, retired_from_pool);
+        let buckets: Vec<String> = stats
+            .buckets
+            .iter()
+            .map(|b| format!("{}: {} (cp {:.2})", b.label, b.count, b.avg_career_pressure))
+            .collect();
+        let reasons: Vec<String> = stats
+            .block_reason_counts
+            .iter()
+            .take(5)
+            .map(|(r, n)| format!("{}={}", r.label(), n))
+            .collect();
+        debug!(
+            "free-agent pool: {} total | days-free [{}] | signed {} / retired {} this month | \
+             top block reasons: {}",
+            stats.total,
+            buckets.join(", "),
+            stats.signed_from_pool,
+            stats.retired_from_pool,
+            if reasons.is_empty() {
+                "none".to_string()
+            } else {
+                reasons.join(", ")
+            },
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,5 +674,88 @@ mod tests {
         let diag = FreeAgentMarketAuditor::diagnose(&data, 703, today).unwrap();
         assert_eq!(diag.category(), FreeAgentStatusCategory::DataUnknown);
         assert!(!diag.explanation().is_empty());
+    }
+
+    /// #5: the monthly aggregate must classify the long-term pool by
+    /// days-free cohort AND surface the dominant block reasons, so an
+    /// operator can see *why* the tail is stuck without reading one line
+    /// per player.
+    #[test]
+    fn aggregate_buckets_pool_and_ranks_block_reasons() {
+        use crate::club::player::transfer::ReleaseContext;
+
+        let today = AuditFixtures::d(2026, 6, 13);
+
+        // Helper: a pool player free since `free_since` carrying `reason`.
+        let seed = |id: u32, free_since: NaiveDate, reason: Option<FreeAgentBlockReason>| {
+            let mut p = AuditFixtures::pool_player(id, 1, today);
+            p.enter_free_agent_market(ReleaseContext {
+                date: free_since,
+                last_club_id: Some(10),
+                last_country_id: Some(1),
+                last_country_reputation: 4000,
+                last_league_reputation: 4000,
+                last_club_reputation_score: 0.4,
+                last_salary: 50_000,
+                last_squad_status: crate::PlayerSquadStatus::FirstTeamSquadRotation,
+            });
+            if let Some(r) = reason {
+                p.on_market_blocked(today, r);
+            }
+            p
+        };
+
+        let pool = vec![
+            // 365+ cohort, no offers ever reach his position.
+            seed(
+                900,
+                today - chrono::Duration::days(400),
+                Some(FreeAgentBlockReason::NoMatchingRequest),
+            ),
+            // 181-365 cohort, two players whose offers were declined.
+            seed(
+                901,
+                today - chrono::Duration::days(200),
+                Some(FreeAgentBlockReason::AcceptanceRollFailed),
+            ),
+            seed(
+                902,
+                today - chrono::Duration::days(220),
+                Some(FreeAgentBlockReason::AcceptanceRollFailed),
+            ),
+            // Fresh cohort, no recorded reason yet.
+            seed(903, today - chrono::Duration::days(10), None),
+        ];
+        let data = AuditFixtures::simulator(today, Vec::new(), pool);
+
+        let stats = FreeAgentMarketAuditor::aggregate(&data, today, 7, 2);
+        assert_eq!(stats.total, 4);
+        assert_eq!(stats.signed_from_pool, 7);
+        assert_eq!(stats.retired_from_pool, 2);
+
+        // Days-free cohorts: [0-30, 31-90, 91-180, 181-365, 365+].
+        assert_eq!(stats.buckets[0].count, 1, "fresh player in 0-30 bucket");
+        assert_eq!(stats.buckets[3].count, 2, "two players in 181-365 bucket");
+        assert_eq!(stats.buckets[4].count, 1, "long-term player in 365+ bucket");
+        // The 365+ cohort's mean pressure must be materially higher than
+        // the fresh cohort's — the bucket carries the decay signal.
+        assert!(
+            stats.buckets[4].avg_career_pressure > stats.buckets[0].avg_career_pressure,
+            "long-term cohort must show higher mean career pressure"
+        );
+
+        // Block-reason histogram, highest count first.
+        assert_eq!(
+            stats.block_reason_counts.first().map(|(r, n)| (*r, *n)),
+            Some((FreeAgentBlockReason::AcceptanceRollFailed, 2)),
+            "the two declined offers must be the top block reason"
+        );
+        assert!(
+            stats
+                .block_reason_counts
+                .iter()
+                .any(|(r, n)| *r == FreeAgentBlockReason::NoMatchingRequest && *n == 1),
+            "the no-matching-request player must also be classified"
+        );
     }
 }

@@ -81,6 +81,16 @@ pub struct SimulatorData {
     /// date) and walks every free agent. Crate-private because the
     /// snapshot type is internal to the country/result module.
     pub(crate) daily_global_free_agents: Option<Vec<GlobalFreeAgentSummary>>,
+
+    /// Global-pool signings completed since the last monthly diagnostics
+    /// log. A point-in-time scan of `free_agents` can't recover this flow
+    /// (signed players have already left the pool), so the executor bumps
+    /// it as moves land and `FreeAgentMarketAuditor::log_pool_stats`
+    /// reads then resets it on the first of each month.
+    pub free_agents_signed_this_period: u32,
+    /// Players retired straight out of the pool by the current month's
+    /// retirement pass. Same lifecycle as `free_agents_signed_this_period`.
+    pub free_agents_retired_this_period: u32,
 }
 
 impl SimulatorData {
@@ -155,6 +165,8 @@ impl SimulatorData {
             match_store: MatchStorage::new(),
             daily_world_player_pool: None,
             daily_global_free_agents: None,
+            free_agents_signed_this_period: 0,
+            free_agents_retired_this_period: 0,
         };
 
         let mut indexes = SimulatorDataIndexes::new();
@@ -658,6 +670,12 @@ impl SimulatorData {
             .map(|(idx, _, _)| *idx)
             .collect();
         to_retire.sort_unstable_by(|a, b| b.cmp(a));
+        // Monthly diagnostics flow counter — recorded before the drain so
+        // `log_pool_stats` can report how many players left the pool to
+        // retirement this month.
+        self.free_agents_retired_this_period = self
+            .free_agents_retired_this_period
+            .saturating_add(to_retire.len() as u32);
         for idx in to_retire {
             let mut player = self.free_agents.swap_remove(idx);
             // A still-renowned name bows out with a planned farewell;
@@ -1127,5 +1145,45 @@ mod free_agent_release_reason_tests {
 
         // Every cleared-contract player reaches the global pool.
         assert_eq!(data.free_agents.len(), 3, "all three must enter the pool");
+    }
+
+    /// Spec test #1: a player whose contract was cleared this tick must be
+    /// visible to the GLOBAL free-agent market within the same deterministic
+    /// post-sweep snapshot pass — i.e. the moment the sweep moves him into
+    /// `data.free_agents`, the very next `snapshot_global_free_agents`
+    /// (which the next tick builds before its parallel matching phase)
+    /// already carries him. No extra tick of latency beyond the sweep.
+    #[test]
+    fn newly_expired_player_is_visible_in_post_sweep_global_snapshot() {
+        use crate::country::result::transfers::snapshot_global_free_agents;
+
+        let date = SweepFx::date();
+        // A contractless senior awaiting the sweep (contract already
+        // cleared upstream this tick).
+        let expired = SweepFx::player(7);
+        let mut data = SweepFx::sim(vec![expired]);
+
+        // Before the sweep he is still on his club roster, NOT in the pool,
+        // so the global snapshot can't see him yet.
+        let pre = snapshot_global_free_agents(&mut data, date);
+        assert!(
+            !pre.iter().any(|s| s.player_id == 7),
+            "an un-swept player must not yet appear in the global snapshot"
+        );
+
+        // The deterministic post-sweep pass moves him into the pool…
+        data.sweep_released_to_free_agents();
+        assert!(data.free_agents.iter().any(|p| p.id == 7));
+
+        // …and the next snapshot — built before any matching runs — now
+        // carries him, so global clubs can act on him immediately.
+        let post = snapshot_global_free_agents(&mut data, date);
+        let row = post
+            .iter()
+            .find(|s| s.player_id == 7)
+            .expect("newly expired player must be visible in the post-sweep global snapshot");
+        // And he carries a seeded market state (days_free read from the
+        // sweep's `free_since`), so the matcher's gates have real inputs.
+        assert!(row.days_free >= 0);
     }
 }

@@ -337,6 +337,18 @@ impl FootballSimulator {
             // 12-month-plus free agent explaining why they're unsigned
             // (no-op unless debug logging is enabled).
             FreeAgentMarketAuditor::log_long_term(data, today);
+            // Monthly aggregate: pool size, days-free distribution with
+            // mean career pressure per cohort, signed / retired flow, and
+            // the dominant block reasons. Reset the flow counters after
+            // the log so next month measures only its own activity.
+            FreeAgentMarketAuditor::log_pool_stats(
+                data,
+                today,
+                data.free_agents_signed_this_period,
+                data.free_agents_retired_this_period,
+            );
+            data.free_agents_signed_this_period = 0;
+            data.free_agents_retired_this_period = 0;
         }
 
         // Global competitions (Champions League, World Cup, etc.)

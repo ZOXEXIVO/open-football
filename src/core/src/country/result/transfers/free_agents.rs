@@ -31,7 +31,7 @@ use crate::utils::FormattingUtils;
 use crate::utils::IntegerUtils;
 use crate::{
     Country, Person, PlayerContractProposal, PlayerFieldPositionGroup, PlayerResult,
-    PlayerStatusType, TeamInfo,
+    PlayerSquadStatus, PlayerStatusType, TeamInfo,
 };
 use chrono::NaiveDate;
 use log::{debug, warn};
@@ -447,6 +447,15 @@ impl CountryResult {
         // Pass 2: Match candidates to clubs with needs, using probability-based signing
         let mut signings: Vec<FreeAgentSigning> = Vec::new();
 
+        // ── Pass 2-pre: honour staged pre-contracts ─────────────────
+        // A player who agreed a pre-contract while running his deal down
+        // now has an expired contract (cleared by the release sweep
+        // above). Route the agreed free transfer to his future club
+        // FIRST — pushed ahead of the emergency / request / clearing
+        // passes so their `signings.iter().any(...)` dedup leaves him be.
+        // Pass 3 executes it through the ordinary in-country path.
+        Self::collect_pre_contract_signings(country, &mut signings);
+
         // ── Pass 2a (NEW): Emergency squad fill ─────────────────────
         // Runs BEFORE the request-driven matcher so clubs sitting
         // under MIN_FIRST_TEAM_SQUAD don't have to wait for the
@@ -470,7 +479,10 @@ impl CountryResult {
         );
         EmergencyDepthRequestPlanner::stage_requests(country, &depth_intents);
 
-        let max_signings_per_day = config.max_free_agent_signings_per_day;
+        // Peak post-season window (Jun–Aug) lifts the request-driven cap
+        // so summer free-agent business isn't throttled to the off-season
+        // trickle.
+        let max_signings_per_day = config.max_free_agent_signings_for(date);
         let ability_slack = config.free_agent_ability_slack;
         let buyer_country_reputation = country.reputation;
         let buyer_country_code = country.code.clone();
@@ -673,12 +685,17 @@ impl CountryResult {
                         // Pity bonus lifts the daily chance for a
                         // structurally-signable player who keeps losing
                         // the approach roll, so a real squad need isn't
-                        // left unfilled for months purely on dice.
+                        // left unfilled for months purely on dice. The
+                        // fresh-high-ability bonus makes a good player who
+                        // just came free move quickly when a club already
+                        // has a matching open request for him.
                         FreeAgentMarketCalculator::daily_signing_chance(
                             best.career_pressure,
                             best.ability,
                             urgency_bonus
-                                + FreeAgentMarketCalculator::pity_bonus(best.failed_approach_streak),
+                                + FreeAgentMarketCalculator::pity_bonus(best.failed_approach_streak)
+                                + config
+                                    .fresh_high_ability_bonus(best.days_free, best.ability),
                         )
                     } else {
                         // In-country expiring-contract candidates keep the
@@ -897,6 +914,7 @@ impl CountryResult {
             country,
             &candidates,
             config,
+            date,
             &staged_depth_ids,
             &mut signings,
             global_offered_ids,
@@ -1100,6 +1118,76 @@ impl CountryResult {
         global_signings
     }
 
+    /// Turn staged pre-contracts into priority free-agent signings. A
+    /// player whose contract has just lapsed (cleared by the release sweep
+    /// — so `contract.is_none()` and he's still on his old roster) and who
+    /// agreed a pre-contract with a domestic club moves there directly,
+    /// instead of entering the open free-agent market.
+    ///
+    /// Read-only on `country`; pushes a [`FreeAgentSigning`] per honoured
+    /// agreement so the existing Pass 3 executor performs the in-country
+    /// move and `reset_on_club_change` clears the consumed agreement. A
+    /// pre-contract whose buyer no longer exists / has no room is silently
+    /// dropped — the player falls through to the pool and the sweep clears
+    /// the stale agreement.
+    fn collect_pre_contract_signings(country: &Country, signings: &mut Vec<FreeAgentSigning>) {
+        for club in &country.clubs {
+            for team in &club.teams.teams {
+                for player in &team.players.players {
+                    // Only just-expired players (contract cleared this
+                    // tick, still on the roster) are eligible. A live
+                    // contract or a loanee's parent contract is not.
+                    if player.contract.is_some() || player.is_on_loan() {
+                        continue;
+                    }
+                    let Some(agreement) = player.pending_pre_contract() else {
+                        continue;
+                    };
+                    // Domestic only, and never a no-op self-move.
+                    if agreement.to_country_id != country.id
+                        || agreement.to_club_id == club.id
+                    {
+                        continue;
+                    }
+                    // Claimed already this tick (defensive — the pre pass
+                    // runs first, so this is normally empty).
+                    if signings.iter().any(|s| s.player_id == player.id) {
+                        continue;
+                    }
+                    // Buyer must still exist with roster room.
+                    let Some(buyer) = country.clubs.iter().find(|c| c.id == agreement.to_club_id)
+                    else {
+                        continue;
+                    };
+                    if buyer.teams.teams.is_empty() || !can_club_accept_player(buyer) {
+                        continue;
+                    }
+
+                    let role = match agreement.promised_status {
+                        Some(PlayerSquadStatus::KeyPlayer) => BuyerRoleFit::KeyPlayer,
+                        Some(PlayerSquadStatus::FirstTeamRegular) => BuyerRoleFit::Starter,
+                        Some(PlayerSquadStatus::FirstTeamSquadRotation) => BuyerRoleFit::Rotation,
+                        _ => BuyerRoleFit::Backup,
+                    };
+                    signings.push(FreeAgentSigning {
+                        player_id: player.id,
+                        player_name: player.full_name.to_string(),
+                        from_club_id: club.id,
+                        from_club_name: club.name.clone(),
+                        to_club_id: agreement.to_club_id,
+                        reason: "pre_contract".to_string(),
+                        terms: Some(EmergencySignedTerms {
+                            annual_wage: agreement.annual_wage,
+                            contract_years: agreement.contract_years,
+                            role,
+                        }),
+                        fills_group: Some(player.position().position_group()),
+                    });
+                }
+            }
+        }
+    }
+
     /// One synchronous last-chance renewal attempt for every player whose
     /// contract has expired today, run BEFORE the release sweep clears the
     /// contract. Returns the ids of players who accepted — the caller
@@ -1219,6 +1307,9 @@ impl CountryResult {
                             .unwrap_or(false);
                         if renewed_now {
                             renewed.insert(player.id);
+                            // He's staying — void any pre-contract he had
+                            // agreed with a rival so it can't fire later.
+                            player.clear_pre_contract();
                             debug!(
                                 "Expiry-day renewal accepted: player {} ({}) stays at {}",
                                 player.full_name, player.id, club.name
@@ -1569,6 +1660,7 @@ impl CountryResult {
         country: &Country,
         candidates: &[FreeAgentCandidate],
         config: &TransferConfig,
+        date: NaiveDate,
         staged_ids: &HashSet<u32>,
         signings: &mut Vec<FreeAgentSigning>,
         global_offered_ids: &mut Vec<u32>,
@@ -1582,6 +1674,13 @@ impl CountryResult {
             return;
         }
 
+        // Per-day caps scale with the country's club count so a large
+        // league clears proportionally more of its pool, and lift by one
+        // in the peak window. The daily-chance bonus accelerates clearing
+        // during the summer too. Small countries keep the base caps.
+        let club_count = country.clubs.len();
+        let peak_chance_bonus = config.peak_clearing_chance_bonus(date);
+
         // Soft tier first: early, domestic / same-continent only, gated
         // by the opportunistic fit score — the "a local club takes a punt
         // on a useful free body" outcome that resolves most normal free
@@ -1593,9 +1692,10 @@ impl CountryResult {
             MarketClearingTier {
                 min_pressure: config.soft_market_clearing_min_pressure,
                 min_days_free: config.soft_market_clearing_min_days_free,
-                cap: config.soft_market_clearing_max_signings_per_country_per_day,
+                cap: config.soft_clearing_cap(club_count, date),
                 locality_restricted: true,
                 opportunistic_gate: true,
+                peak_chance_bonus,
             },
             staged_ids,
             signings,
@@ -1613,9 +1713,10 @@ impl CountryResult {
             MarketClearingTier {
                 min_pressure: config.hard_market_clearing_min_pressure,
                 min_days_free: config.hard_market_clearing_min_days_free,
-                cap: config.market_clearing_max_signings_per_country_per_day,
+                cap: config.hard_clearing_cap(club_count, date),
                 locality_restricted: false,
                 opportunistic_gate: false,
+                peak_chance_bonus,
             },
             staged_ids,
             signings,
@@ -1684,11 +1785,13 @@ impl CountryResult {
 
             // Organic pacing, lifted by the anti-RNG pity bonus so a
             // structurally-signable long-tail player isn't left waiting
-            // on dice alone.
+            // on dice alone, and by the peak-window bonus so summer
+            // clearing runs faster.
             let daily = FreeAgentMarketCalculator::daily_signing_chance(
                 candidate.career_pressure,
                 candidate.ability,
-                4.0 + FreeAgentMarketCalculator::pity_bonus(candidate.failed_approach_streak),
+                4.0 + FreeAgentMarketCalculator::pity_bonus(candidate.failed_approach_streak)
+                    + tier.peak_chance_bonus,
             );
             let roll = IntegerUtils::random(1, 1000) as f32 / 10.0;
             if roll > daily {
@@ -1895,6 +1998,9 @@ struct MarketClearingTier {
     /// Soft tier: require the opportunistic squad-fit score to clear the
     /// stage threshold before an offer is made.
     opportunistic_gate: bool,
+    /// Extra percentage points on the daily signing chance during the
+    /// peak post-season window; zero off-season.
+    peak_chance_bonus: f32,
 }
 
 /// Picks the next emergency slot from the running projected squad.
@@ -3025,6 +3131,10 @@ pub(crate) fn execute_global_free_agent_signing(
     // have monitoring or shortlist rows that survived the local clear.
     let player_id = signing.player_id;
     PipelineProcessor::cleanup_player_transfer_interest(data, player_id);
+
+    // Monthly diagnostics flow counter — a player just left the global
+    // pool for a club, which a later point-in-time scan can't recover.
+    data.free_agents_signed_this_period = data.free_agents_signed_this_period.saturating_add(1);
 
     debug!(
         "Free agent signing (global pool): player {} → club {} in country {}",
@@ -5350,10 +5460,14 @@ mod emergency_fill_tests {
             let mut offered = Vec::new();
             let mut rejected = Vec::new();
             let mut recorder = BlockReasonRecorder::new();
+            // Non-peak date (March) so the club-scaled / peak-window cap
+            // adjustments stay at the base values these tests assert on.
+            let date = EmergencyFillFixtures::d(2026, 3, 10);
             CountryResult::handle_free_agents_market_clearing_pass(
                 country,
                 candidates,
                 config,
+                date,
                 &HashSet::new(),
                 &mut signings,
                 &mut offered,
@@ -5523,7 +5637,7 @@ mod emergency_fill_tests {
 
     #[test]
     fn market_clearing_skips_players_below_both_thresholds() {
-        // cp 0.3 and 60 days free: under BOTH soft (0.45 / 90d) and hard
+        // cp 0.3 and 60 days free: under BOTH soft (0.40 / 75d) and hard
         // (0.75 / 365d) eligibility floors — the pass must never touch
         // them, no matter how many ticks. (A 100-day / 0.5-cp player is
         // now deliberately soft-eligible — see the soft-clearing tests.)
@@ -5677,6 +5791,62 @@ mod emergency_fill_tests {
             signed,
             "opportunistic soft clearing must sign a useful domestic FA with no open request"
         );
+    }
+
+    /// Spec test #2: a USEFUL domestic player whose contract recently
+    /// expired (≈11-12 weeks free) is signed through opportunistic
+    /// clearing WITHOUT any club holding an explicit transfer request for
+    /// him. At 80 days free he sits below the legacy 90-day soft floor —
+    /// the lowered floor (75d / 0.40cp) is exactly what lets a local club
+    /// take a punt on him a few weeks sooner.
+    #[test]
+    fn useful_domestic_expired_player_cleared_opportunistically_under_lowered_floor() {
+        let country = MarketClearingFixtures::country_thin_in_defenders();
+        assert!(
+            country.clubs[0].transfer_plan.transfer_requests.is_empty(),
+            "fixture must have no open requests — this is the opportunistic, no-request path"
+        );
+        // 80 days free is below the legacy 90-day soft-clearing floor; it
+        // is only reachable because the floor was lowered to 75 days.
+        assert!(
+            80 >= TransferConfig::default().soft_market_clearing_min_days_free,
+            "80 days must clear the (lowered) soft days-free floor"
+        );
+        let config = TransferConfig::default();
+
+        let mut signing = None;
+        for _ in 0..800 {
+            let mut c = EmergencyFillFixtures::candidate(
+                8560,
+                80,
+                29,
+                PlayerFieldPositionGroup::Defender,
+                true,
+            );
+            // Domestic, useful, recently expired: eligible via the days
+            // floor; the modest pressure keeps the opportunistic fit over
+            // its Open-stage threshold for a thin-in-defenders club.
+            c.career_pressure = 0.5;
+            c.days_free = 80;
+            let signings = MarketClearingFixtures::run_clearing(&country, &[c], &config);
+            if let Some(s) = signings.into_iter().find(|s| s.player_id == 8560) {
+                signing = Some(s);
+                break;
+            }
+        }
+
+        let signing = signing.expect(
+            "a useful domestic expired player must clear opportunistically within 800 ticks",
+        );
+        assert_eq!(signing.reason, "free_agent_market_clearing");
+        // No request was serviced — the opportunistic path leaves request
+        // bookkeeping untouched.
+        assert!(signing.fills_group.is_none());
+        let terms = signing.terms.expect("clearing stages short-deal terms");
+        assert!(matches!(
+            terms.role,
+            BuyerRoleFit::Backup | BuyerRoleFit::Emergency
+        ));
     }
 
     #[test]
@@ -6077,6 +6247,74 @@ mod expiry_renewal_tests {
         assert!(
             country.transfer_market.transfer_history.is_empty(),
             "no free transfer may be recorded for a renewed player"
+        );
+    }
+
+    /// Spec test #3: a player who has already rejected a season's worth of
+    /// renewal offers and is still asking for a wage the club won't fund
+    /// must NOT receive yet another identical expiry-day proposal. The
+    /// final offer is suppressed (the club lets him walk) instead of
+    /// spamming the same losing deal — no new RENEWAL_OFFERED row appears.
+    #[test]
+    fn repeated_rejected_renewal_does_not_spam_expiry_day_offer() {
+        use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
+        use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
+
+        let date = ExpiryRenewalFixtures::d(2026, 6, 10);
+        let mut player = ExpiryRenewalFixtures::player(
+            1,
+            PlayerPositionType::MidfielderCenter,
+            ExpiryRenewalFixtures::attrs(8.0, 8.0),
+            100_000,
+            PlayerSquadStatus::FirstTeamRegular,
+            date,
+        );
+        // Three renewal offers already made (and turned down) this rolling
+        // year — the season's worth of attempts is spent.
+        for offer_date in [
+            ExpiryRenewalFixtures::d(2026, 1, 10),
+            ExpiryRenewalFixtures::d(2026, 3, 10),
+            ExpiryRenewalFixtures::d(2026, 5, 10),
+        ] {
+            player.decision_history.add(
+                offer_date,
+                "3y · $110,000/y".to_string(),
+                RENEWAL_OFFERED_LABEL.to_string(),
+                "Coach".to_string(),
+            );
+        }
+        // His standing ask is a wage well above anything the club's
+        // valuation produces for a CA-100 player — the only sticking point
+        // is money, with no clause / role / length demand to grant.
+        player.pending_contract_ask = Some(PlayerContractAsk {
+            desired_salary: 800_000,
+            desired_years: 3,
+            recorded_on: ExpiryRenewalFixtures::d(2026, 5, 10),
+            demanded_status: None,
+            demanded_release_clause: None,
+            demanded_signing_bonus: None,
+            rejection_reason: Some(RejectionReason::LowSalary),
+        });
+
+        let offers_before =
+            ExpiryRenewalFixtures::history_count(&player, RENEWAL_OFFERED_LABEL);
+        assert_eq!(offers_before, 3, "fixture must start with three prior offers");
+
+        let main = ExpiryRenewalFixtures::team(10, 100, vec![player]);
+        let club = ExpiryRenewalFixtures::club(100, main);
+        let mut country = ExpiryRenewalFixtures::country(vec![club]);
+
+        ExpiryRenewalFixtures::run(&mut country, date);
+
+        let p = ExpiryRenewalFixtures::find_player(&country, 100, 1);
+        assert_eq!(
+            ExpiryRenewalFixtures::history_count(p, RENEWAL_OFFERED_LABEL),
+            3,
+            "no fourth identical offer may be made — the expiry offer is suppressed"
+        );
+        assert!(
+            p.contract.is_none(),
+            "with no improved offer the player walks for free on expiry"
         );
     }
 }

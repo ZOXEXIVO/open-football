@@ -23,7 +23,7 @@ use chrono::{Datelike, NaiveDate};
 /// higher the rank, and the per-tick merge keeps only the
 /// highest-ranked reason so a near-miss isn't overwritten by a
 /// coarse early-gate rejection from another buyer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FreeAgentBlockReason {
     /// Nationality country could not be resolved — the snapshot
     /// fail-closed fallback (`u16::MAX` reference reputation) blocks
@@ -345,6 +345,29 @@ pub struct FreeAgentStatusExplanation {
     pub message: String,
 }
 
+/// A pre-contract a free-transfer-bound player has agreed with a future
+/// club, effective when his current deal expires. Staged in the final
+/// months of his contract by the country-level `PreContractManager`; the
+/// player is NOT moved — he plays out his contract, then the expiry pass
+/// routes the free transfer to `to_club_id` instead of letting him hit
+/// the open pool. Domestic-only for now: `to_country_id` always equals
+/// the player's current country.
+///
+/// Terms are primitives (plus the player-side [`PlayerSquadStatus`]) so
+/// the agreement carries no dependency on the country transfer module
+/// that prices and later executes it.
+#[derive(Debug, Clone)]
+pub struct PreContractAgreement {
+    pub to_club_id: u32,
+    pub to_country_id: u32,
+    pub annual_wage: u32,
+    pub contract_years: u8,
+    /// Promised first-team role; `None` means a squad/backup role with no
+    /// formal commitment.
+    pub promised_status: Option<PlayerSquadStatus>,
+    pub agreed_on: NaiveDate,
+}
+
 /// Inputs for `Player::on_release`. Bundled because every release path
 /// needs the same context — the buying-side `TransferCompletion` /
 /// `LoanCompletion` precedent gives us the convention.
@@ -366,6 +389,24 @@ impl Player {
     /// moved them yet).
     pub fn free_agent_state(&self) -> Option<&FreeAgentMarketState> {
         self.free_agent_state.as_ref()
+    }
+
+    /// Read-only access to a staged pre-contract, if the player has agreed
+    /// a free transfer effective at his current contract's expiry.
+    pub fn pending_pre_contract(&self) -> Option<&PreContractAgreement> {
+        self.pending_pre_contract.as_ref()
+    }
+
+    /// Stage (or replace) a pre-contract. The player keeps playing under
+    /// his current deal; the expiry pass executes the move when it lapses.
+    pub fn stage_pre_contract(&mut self, agreement: PreContractAgreement) {
+        self.pending_pre_contract = Some(agreement);
+    }
+
+    /// Drop a staged pre-contract — the player renewed, was sold, or the
+    /// agreement could no longer be honoured.
+    pub fn clear_pre_contract(&mut self) {
+        self.pending_pre_contract = None;
     }
 
     /// Stamp the player as just-released and seed their market-state

@@ -16,7 +16,7 @@ use crate::club::player::plan::PlayerPlan;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::PlayerTrait;
 use crate::club::player::transfer::availability_market::AvailabilityMarketState;
-use crate::club::player::transfer::free_agent_market::FreeAgentMarketState;
+use crate::club::player::transfer::free_agent_market::{FreeAgentMarketState, PreContractAgreement};
 use crate::club::player::transfer::processing::TransferDesireContext;
 use crate::club::player::utils::PlayerUtils;
 use crate::club::{
@@ -197,6 +197,14 @@ pub struct Player {
     /// Lets the next club offer converge on a deal the player would sign,
     /// rather than guessing from scratch. Cleared when a deal is accepted.
     pub pending_contract_ask: Option<PlayerContractAsk>,
+
+    /// A pre-contract agreed with a future club, effective when the
+    /// current deal expires. The player keeps playing under his current
+    /// contract; the country-level expiry pass executes the free transfer
+    /// to the agreed club rather than letting him hit the open pool. Read
+    /// via [`Player::pending_pre_contract`]; cleared on any club change
+    /// (see `reset_on_club_change`) and on renewal.
+    pub(crate) pending_pre_contract: Option<PreContractAgreement>,
 
     /// Baseline of `player_attributes.international_apps` on the most
     /// recent monthly bonus pass. The InternationalCapFee bonus pays the

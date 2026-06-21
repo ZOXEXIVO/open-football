@@ -122,6 +122,17 @@ fn package_value(proposal: &PlayerContractProposal, player: &Player) -> u32 {
 }
 
 impl ProcessContractHandler {
+    /// Expected annual value of a proposal's full package — base wage plus
+    /// the amortized value of signing / loyalty bonuses, performance fees,
+    /// and clauses. This is the same figure [`Self::process`] weighs as
+    /// `pkg_value` when deciding acceptance, exposed so the renewal manager
+    /// can judge a final offer against the SAME yardstick the player uses
+    /// (a base wage below the player's ask can still clear acceptance once
+    /// the package sweeteners are counted).
+    pub fn expected_package_value(proposal: &PlayerContractProposal, player: &Player) -> u32 {
+        package_value(proposal, player)
+    }
+
     pub fn process(
         player: &mut Player,
         proposal: PlayerContractProposal,

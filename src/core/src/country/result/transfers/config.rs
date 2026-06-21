@@ -9,6 +9,8 @@
 //! All values are deliberately `pub` so tests can override individual
 //! tiers; the simulation reads via `TransferConfig::default()` for now.
 
+use chrono::{Datelike, NaiveDate};
+
 /// Daily probability that a free agent of a given calibre is signed by
 /// any one club whose unfulfilled transfer request matches their position
 /// and ability floor. Independent rolls per club-need pair.
@@ -126,6 +128,46 @@ pub struct TransferConfig {
     /// reach 11 in a single tick when candidates exist. Country cap
     /// still applies on top.
     pub emergency_urgent_per_club_cap_floor: usize,
+
+    // ── Peak-window & demand boosts ───────────────────────────────
+    // Real markets conclude most free-agent business in the summer
+    // (June–August) post-season window, and big leagues clear
+    // proportionally more of the pool each day than a tiny one. These
+    // knobs lift demand during the peak window and scale the clearing
+    // caps with the number of clubs so the experienced-free-agent pool
+    // doesn't grow without bound in large countries.
+    /// Extra request-driven signings/day allowed in the peak window, on
+    /// top of `max_free_agent_signings_per_day`.
+    pub peak_window_extra_signings_per_day: usize,
+    /// Divisor turning a country's club count into a market-clearing cap
+    /// floor: `max(base_cap, club_count / divisor)`. Big leagues clear
+    /// proportionally more each day; small test countries (a handful of
+    /// clubs) keep the base cap untouched. 0 disables the scaling.
+    pub clearing_cap_clubs_per_signing: usize,
+    /// Extra percentage points added to the market-clearing daily
+    /// signing chance during the peak window.
+    pub peak_window_clearing_chance_bonus: f32,
+    /// Daily-chance bonus (percentage points) for a freshly-released,
+    /// high-ability global free agent a club has a matching request for
+    /// — "good players who just came free move quickly". Applied only
+    /// when `days_free < fresh_high_ability_max_days` and
+    /// `ability >= fresh_high_ability_min_ca`.
+    pub fresh_high_ability_chance_bonus: f32,
+    pub fresh_high_ability_max_days: i64,
+    pub fresh_high_ability_min_ca: u8,
+
+    // ── Pre-contracts (Bosman) ────────────────────────────────────
+    /// Per-country per-day cap on pre-contracts staged with players in
+    /// the final months of an expiring deal. Deliberately small so the
+    /// flow trickles — most expiring players still run their contract
+    /// down and hit the open market.
+    pub max_pre_contracts_per_country_per_day: usize,
+    /// Earliest a pre-contract can be agreed: days-to-expiry must sit at
+    /// or below this (the Bosman six-month window).
+    pub pre_contract_window_days: i64,
+    /// Minimum ability for a player to be worth pre-signing — fringe
+    /// bodies still go through the open free-agent market.
+    pub pre_contract_min_ability: u8,
 }
 
 impl Default for TransferConfig {
@@ -179,11 +221,13 @@ impl Default for TransferConfig {
             free_agent_ability_slack: 5,
             free_agent_attempts_per_request: 3,
             // Soft clearing: early, domestic-only, opportunistic. Either
-            // ~3 months free or a 0.45 pressure score opens it; capped to
-            // a single signing per country per day so the long tail
-            // resolves gradually through realistic local fits.
-            soft_market_clearing_min_pressure: 0.45,
-            soft_market_clearing_min_days_free: 90,
+            // ~2.5 months free or a 0.40 pressure score opens it; capped
+            // to a single signing per country per day so the long tail
+            // resolves gradually through realistic local fits. Both
+            // floors were nudged down from 0.45 / 90d so useful domestic
+            // expired players reach a local club a few weeks sooner.
+            soft_market_clearing_min_pressure: 0.40,
+            soft_market_clearing_min_days_free: 75,
             soft_market_clearing_max_signings_per_country_per_day: 1,
             // Hard clearing: the long-tail backstop, broad region /
             // reputation tolerance, capped at 2 per country per day.
@@ -207,11 +251,102 @@ impl Default for TransferConfig {
             // 11 players — enough to bridge a 0-player roster to a
             // playable side in one tick. Country cap still applies.
             emergency_urgent_per_club_cap_floor: 11,
+            // Peak window (Jun–Aug): request-driven cap 2 → 5; a country
+            // clears one extra soft + hard signing/day; +6pp clearing
+            // chance. A 20-club country keeps the base clearing caps,
+            // an 80-club one lifts them to ~4 each.
+            peak_window_extra_signings_per_day: 3,
+            clearing_cap_clubs_per_signing: 20,
+            peak_window_clearing_chance_bonus: 6.0,
+            // Fresh, high-ability free agents with a matching need move
+            // fast: +8pp daily chance while < 30 days free and CA ≥ 120.
+            fresh_high_ability_chance_bonus: 8.0,
+            fresh_high_ability_max_days: 30,
+            fresh_high_ability_min_ca: 120,
+            // Pre-contracts: trickle a couple per country per day, only
+            // in the last six months, only for genuinely useful players.
+            max_pre_contracts_per_country_per_day: 2,
+            pre_contract_window_days: 180,
+            pre_contract_min_ability: 55,
         }
     }
 }
 
 impl TransferConfig {
+    /// True in the peak post-season free-agent window (June–August), when
+    /// most free-agent business is concluded. Static — depends only on the
+    /// calendar month, not on any tuning value.
+    pub fn is_peak_free_agent_window(date: NaiveDate) -> bool {
+        matches!(date.month(), 6 | 7 | 8)
+    }
+
+    /// Per-day request-driven free-agent signing cap, lifted during the
+    /// peak window so post-season demand isn't throttled to the
+    /// off-season trickle.
+    pub fn max_free_agent_signings_for(&self, date: NaiveDate) -> usize {
+        if Self::is_peak_free_agent_window(date) {
+            self.max_free_agent_signings_per_day + self.peak_window_extra_signings_per_day
+        } else {
+            self.max_free_agent_signings_per_day
+        }
+    }
+
+    /// Soft-clearing per-country per-day cap, scaled by the club count and
+    /// the peak window. A small country keeps the base cap; a large one
+    /// clears proportionally more so its pool can't grow without bound.
+    pub fn soft_clearing_cap(&self, club_count: usize, date: NaiveDate) -> usize {
+        self.scaled_clearing_cap(
+            self.soft_market_clearing_max_signings_per_country_per_day,
+            club_count,
+            date,
+        )
+    }
+
+    /// Hard-clearing per-country per-day cap. Same scaling as
+    /// [`Self::soft_clearing_cap`] over the long-tail backstop's base.
+    pub fn hard_clearing_cap(&self, club_count: usize, date: NaiveDate) -> usize {
+        self.scaled_clearing_cap(
+            self.market_clearing_max_signings_per_country_per_day,
+            club_count,
+            date,
+        )
+    }
+
+    fn scaled_clearing_cap(&self, base: usize, club_count: usize, date: NaiveDate) -> usize {
+        let scaled = if self.clearing_cap_clubs_per_signing > 0 {
+            club_count / self.clearing_cap_clubs_per_signing
+        } else {
+            0
+        };
+        let mut cap = base.max(scaled);
+        if Self::is_peak_free_agent_window(date) {
+            cap += 1;
+        }
+        cap
+    }
+
+    /// Extra percentage points added to the market-clearing daily signing
+    /// chance during the peak window; zero otherwise.
+    pub fn peak_clearing_chance_bonus(&self, date: NaiveDate) -> f32 {
+        if Self::is_peak_free_agent_window(date) {
+            self.peak_window_clearing_chance_bonus
+        } else {
+            0.0
+        }
+    }
+
+    /// Daily-chance bonus for a freshly-released, high-ability global free
+    /// agent (the request-driven path passes the candidate's market
+    /// stats). Zero unless both the recency and ability gates pass.
+    pub fn fresh_high_ability_bonus(&self, days_free: i64, ability: u8) -> f32 {
+        if days_free < self.fresh_high_ability_max_days && ability >= self.fresh_high_ability_min_ca
+        {
+            self.fresh_high_ability_chance_bonus
+        } else {
+            0.0
+        }
+    }
+
     /// Resolve the daily signing chance for a free agent of `ability`. Returns
     /// a percentage in `[0, 100]` before age / potential modifiers.
     pub fn free_agent_base_chance(&self, ability: u8) -> f32 {

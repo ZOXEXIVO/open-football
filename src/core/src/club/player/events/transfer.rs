@@ -275,6 +275,11 @@ impl Player {
         // into the free-agent pool after the sweep has read it) it must
         // not linger onto the next spell.
         self.release_reason = None;
+        // A staged pre-contract is consumed the moment the player changes
+        // clubs — whether the move IS that pre-contract (he just joined
+        // the agreed club) or any other exit (sold, swept to the pool).
+        // Either way the agreement must not survive onto the new spell.
+        self.pending_pre_contract = None;
     }
 
     /// Install a fresh permanent contract on this player at the buying club.

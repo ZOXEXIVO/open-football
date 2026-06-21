@@ -6,6 +6,7 @@ pub(crate) mod free_agent_market_calc;
 mod free_agents;
 mod listings;
 mod negotiations;
+mod pre_contract;
 mod settlement;
 pub(crate) mod types;
 
@@ -19,6 +20,7 @@ use chrono::NaiveDate;
 use config::TransferConfig;
 use free_agents::{GlobalFreeAgentSigning, execute_global_free_agent_signing};
 pub(crate) use free_agents::{GlobalFreeAgentSummary, snapshot_global_free_agents};
+use pre_contract::PreContractManager;
 use log::debug;
 use settlement::TransferClauseSettler;
 use std::collections::{HashMap, HashSet};
@@ -163,6 +165,13 @@ impl CountryResult {
             &mut ops.global_block_reasons,
         );
         ops.global_signings.extend(pool_signings);
+
+        // Pre-contracts (Bosman): stage future free transfers for useful
+        // players in the final months of an expiring deal their club won't
+        // renew, so they move directly to a domestic rival on expiry
+        // instead of lingering in the open pool. Window-independent — a
+        // pre-contract is legal year-round inside the six-month window.
+        PreContractManager::stage(country, current_date, &config);
 
         if window_open {
             debug!("Transfer window is OPEN - simulating pipeline-driven market activity");
