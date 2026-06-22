@@ -12,7 +12,7 @@ use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
 use crate::r#match::player::waypoints::WaypointManager;
-use crate::r#match::{GameTickContext, MatchContext, StateProcessingContext};
+use crate::r#match::{ActivityIntensity, GameTickContext, MatchContext, StateProcessingContext};
 use crate::utils::DateUtils;
 use crate::{
     PersonAttributes, Player, PlayerAttributes, PlayerFieldPositionGroup, PlayerPositionType,
@@ -48,6 +48,13 @@ pub struct MatchPlayer {
 
     /// Accumulates fractional condition changes across ticks
     pub fatigue_accumulator: f32,
+
+    /// Exertion level the AI assigned to this player on the last full
+    /// tick — the same `ActivityIntensity` the fatigue model reads.
+    /// Drives movement speed via `MovementEffort` so off-ball play
+    /// jogs/cruises instead of pinning to a sprint. Written in
+    /// `ConditionProcessor::process`; defaults to `Moderate` pre-kickoff.
+    pub last_activity_intensity: ActivityIntensity,
 
     /// Cached waypoint vectors (only changes on substitution/half-time swap)
     cached_waypoints: Vec<Vector3<f32>>,
@@ -239,6 +246,7 @@ impl MatchPlayer {
             use_extended_state_logging,
             memory: PlayerMemory::new(),
             fatigue_accumulator: 0.0,
+            last_activity_intensity: ActivityIntensity::Moderate,
             cached_waypoints: Vec::new(),
             traits: player.traits.clone(),
             yellow_cards: 0,
@@ -299,6 +307,7 @@ impl MatchPlayer {
             use_extended_state_logging,
             memory: PlayerMemory::new(),
             fatigue_accumulator: 0.0,
+            last_activity_intensity: ActivityIntensity::Moderate,
             cached_waypoints: Vec::new(),
             traits,
             yellow_cards: 0,

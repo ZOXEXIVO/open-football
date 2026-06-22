@@ -627,8 +627,16 @@ pub fn evaluate_forward_shot_decision(
     // score-reactive behavior to the final ~28 minutes un-suppressed
     // the first hour of play and lifted totals to 3.48 — this rebases
     // to ~2.9-3.0 at the new flat game-state profile.
+    // Fourth trim (×0.80, condition/movement realism round): the
+    // effort-based movement + fatigue rework (sprint occupancy 77%→10%,
+    // FT condition ~45%→~70%) stopped outfielders losing their skill to
+    // exhaustion, so they hold effective finishing/creation all match —
+    // which re-inflated helper volume to 3.48 again. Volume is the
+    // line-balance-neutral half of the rebalance (base cut only; xg_boost
+    // floor untouched so the 58/32/10 share holds); the freshness gain
+    // itself is realistic and kept.
     let base_willingness =
-        0.0038 + selection * 0.0134 + composure_skill * 0.0061 + execution_skill * 0.0077;
+        0.0030 + selection * 0.0107 + composure_skill * 0.0049 + execution_skill * 0.0062;
     // xg_boost — floor 0.30 (vs prior 0.50). Mid-range chance with
     // xG=0.06 gets 0.30 boost (was 0.50 — ~40% reduction). Clear-shot
     // xG=0.10 gets 0.50 (was 0.50 — no change). High-xG xG≥0.28 gets

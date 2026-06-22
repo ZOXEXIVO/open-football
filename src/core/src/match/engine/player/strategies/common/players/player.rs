@@ -250,8 +250,18 @@ impl<'p> PlayerOperationsImpl<'p> {
         MatchPlayerLogic::distance_to_start_position(self.ctx.player)
     }
 
+    /// True when the player's condition has fallen into the tired band
+    /// (< 50%). Callers use it to back off explosive work (a forward
+    /// abandoning a run in behind) or drop into a less-demanding state
+    /// (a defender holding the line / walking to recover).
+    ///
+    /// Was `> 50`, which inverted every caller: a fresh player (e.g.
+    /// 90%) read as "tired" and an exhausted one (e.g. 30%) read as
+    /// "fresh". That made forwards attempt runs in behind ONLY once
+    /// gassed, and made fresh defenders stop tracking back / walk off —
+    /// the opposite of each call site's stated intent.
     pub fn is_tired(&self) -> bool {
-        self.ctx.player.player_attributes.condition_percentage() > 50
+        self.ctx.player.player_attributes.condition_percentage() < 50
     }
 
     pub fn pass_teammate_power(&self, teammate_id: u32) -> f32 {

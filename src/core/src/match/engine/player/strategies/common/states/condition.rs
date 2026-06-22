@@ -31,6 +31,11 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
     /// Process condition changes based on activity intensity and player attributes
     /// Calculation: 75% velocity-based, 25% intensity-based
     pub fn process(self, ctx: ConditionContext) {
+        // Record the exertion this state declared so the movement
+        // integrator can scale speed to match. One signal feeds both
+        // fatigue and movement, so the two can never drift apart.
+        ctx.player.last_activity_intensity = self.intensity;
+
         let stamina_skill = ctx.player.skills.physical.stamina;
         let natural_fitness = ctx.player.skills.physical.natural_fitness;
         let chronic_fitness = ctx.player.player_attributes.fitness;
@@ -98,24 +103,33 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
             }
         }
 
-        // Compare against squared thresholds: 0.05² = 0.0025, 0.3² = 0.09, 0.6² = 0.36, 0.85² = 0.7225
-        let velocity_fatigue = if intensity_ratio_sq < 0.0025 {
-            -4.0 * 1.5 // Nearly stationary - recovery
-        } else if intensity_ratio_sq < 0.09 {
-            -2.0 // Walking slowly - light recovery
-        } else if intensity_ratio_sq < 0.36 {
-            3.0 // Jogging
-        } else if intensity_ratio_sq < 0.7225 {
-            6.0 // Running
+        // Continuous metabolic curve (replaces the old 5-band step
+        // function: -6 / -2 / +3 / +6 / +9). Below the break-even pace the
+        // legs recover; above it the drain climbs smoothly toward a
+        // role-dependent sprint peak, accelerating as the player nears
+        // flat-out — matching how real energy cost rises steeply with
+        // pace. Continuous matters now that effort + self-pacing
+        // (`MovementEffort`) put players at intermediate speeds: a step
+        // function would reintroduce a drain cliff at the band edges (a
+        // 2%-of-max-speed change swinging fatigue by 50%). The anchor
+        // points still track the old bands — jog≈+2.3, run≈+5.8,
+        // sprint≈peak — so the calibrated trajectory is preserved.
+        let intensity_ratio = intensity_ratio_sq.sqrt();
+        const BREAK_EVEN: f32 = 0.30;
+        let sprint_peak = if T::sprint_multiplier() > 1.55 {
+            10.0 // Forwards (highest)
+        } else if T::sprint_multiplier() > 1.4 {
+            9.0 // Defenders / Midfielders
         } else {
-            // Sprinting - varies by role
-            if T::sprint_multiplier() > 1.55 {
-                10.0 // Forwards (highest)
-            } else if T::sprint_multiplier() > 1.4 {
-                9.0 // Defenders/Midfielders
-            } else {
-                7.0 // Goalkeepers (lowest)
-            }
+            7.0 // Goalkeepers (lowest)
+        };
+        let velocity_fatigue = if intensity_ratio < BREAK_EVEN {
+            // Recovery: deepest when fully stationary (−6.0 at rest),
+            // easing to zero at the break-even pace.
+            -6.0 * (1.0 - intensity_ratio / BREAK_EVEN)
+        } else {
+            let over = (intensity_ratio - BREAK_EVEN) / (1.0 - BREAK_EVEN);
+            sprint_peak * over.powf(1.15)
         };
 
         // Calculate intensity-based fatigue modifier (25% of total effect)

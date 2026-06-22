@@ -99,7 +99,8 @@ impl StateProcessingHandler for DefenderTrackingBackState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        // Tracking back is running back to defensive position - moderate intensity
-        DefenderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+        // Tracking back is a hard recovery run to get goal-side — high
+        // intensity (the player is literally running back, not jogging).
+        DefenderCondition::with_velocity(ActivityIntensity::High).process(ctx);
     }
 }

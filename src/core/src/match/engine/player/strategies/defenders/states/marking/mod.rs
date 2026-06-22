@@ -187,8 +187,10 @@ impl StateProcessingHandler for DefenderMarkingState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        // Marking involves constant movement following opponent - moderate intensity
-        DefenderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+        // Marking a runner means matching their movement with the ball
+        // live — high intensity. Was Moderate, which capped the defender
+        // to a jog and let the marked attacker pull away.
+        DefenderCondition::with_velocity(ActivityIntensity::High).process(ctx);
     }
 }
 

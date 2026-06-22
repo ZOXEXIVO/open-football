@@ -249,8 +249,9 @@ impl StateProcessingHandler for DefenderCoveringState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        // Covering space involves moving to cover gaps - moderate intensity
-        DefenderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+        // Covering a gap during a live attack is a hard recovery run —
+        // high intensity, not a jog.
+        DefenderCondition::with_velocity(ActivityIntensity::High).process(ctx);
     }
 }
 

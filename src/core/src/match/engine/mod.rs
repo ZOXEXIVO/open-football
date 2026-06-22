@@ -88,6 +88,7 @@ pub use player::strategies::processor::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     StateProcessingResult, StateProcessor,
 };
+pub use player::strategies::common_states::{ActivityIntensity, MovementEffort};
 // Export modules for those who want to access them
 pub use player::context as player_context;
 pub use player::positions as player_positions;

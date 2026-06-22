@@ -6,7 +6,7 @@ use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
+use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MovementEffort};
 
 use nalgebra::Vector3;
 use std::fmt::Display;
@@ -135,6 +135,25 @@ impl PlayerMatchState {
                 let composite = sc::movement_speed_with_ball(player, minute);
                 let raw = 0.78 + composite * 0.42;
                 max_speed *= raw.clamp(0.75, 1.00);
+            }
+
+            // Off-ball effort: a player jogs to reposition and only
+            // sprints to press / chase / break in behind. Scale the speed
+            // cap by the effort the state itself declared this tick (the
+            // same `ActivityIntensity` the fatigue model reads), so
+            // off-ball movement stops pinning to a full sprint — the
+            // condition diagnostic had ~77% of outfield ticks in the top
+            // band. This caps the top speed only: a velocity already below
+            // the ceiling (a decelerating `Arrive`, a slow walk vector) is
+            // untouched. On-ball carriers keep the carry model applied
+            // above; goalkeepers keep their context-managed speed.
+            if player_position_group != PlayerFieldPositionGroup::Goalkeeper
+                && tick_context.ball.current_owner != Some(player.id)
+            {
+                max_speed *= MovementEffort::speed_fraction(
+                    player.last_activity_intensity,
+                    player.player_attributes.condition_percentage(),
+                );
             }
 
             // NaN/Inf guard: state velocity functions compose many
