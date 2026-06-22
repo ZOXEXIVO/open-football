@@ -29,33 +29,12 @@
         </div>
     </section>
 
-    {% if no_remote_workers %}
-    <details class="fm-panel fm-workers-setup mt-3">
-        <summary class="fm-panel-head fm-workers-setup-head">
-            <h3>{{ i18n.t("workers_remote_setup_title") }}</h3>
-            <span class="fm-panel-count">
-                <span class="fm-workers-setup-hint">{{ i18n.t("workers_remote_setup_none") }}</span>
-                <span class="fm-workers-setup-chevron" aria-hidden="true">›</span>
-            </span>
-        </summary>
-        <div class="fm-workers-setup-body">
-            <p class="fm-workers-setup-lead">
-                {{ i18n.t("workers_remote_setup_lead_1") }} <code>open-football.conf</code> {{ i18n.t("workers_remote_setup_lead_1_suffix") }}
-            </p>
-            <pre>[[worker]]
-address = "127.0.0.1:18001"</pre>
-            <p class="fm-workers-setup-lead">
-                {{ i18n.t("workers_remote_setup_lead_2") }}
-                <code>open_football --worker --worker-port=18001</code>
-            </p>
-        </div>
-    </details>
-    {% endif %}
-
     <section class="fm-panel mt-3">
         <div class="fm-panel-head">
             <h3>{{ i18n.t("workers_table_title") }}</h3>
-            <span class="fm-panel-count">{{ workers.len() }} {% if workers.len() == 1 %}{{ i18n.t("workers_host_singular") }}{% else %}{{ i18n.t("workers_host_plural") }}{% endif %}</span>
+            <button type="button" class="fm-workers-add-btn" id="fm-workers-add-open" title="{{ i18n.t("workers_add_tooltip") }}" aria-label="{{ i18n.t("workers_add_tooltip") }}">
+                <i class="fa fa-plus"></i>
+            </button>
         </div>
         <div class="fm-workers-table-wrap">
             <table class="fm-workers-table">
@@ -115,5 +94,127 @@ address = "127.0.0.1:18001"</pre>
             </table>
         </div>
     </section>
+
+    <dialog class="fm-worker-dialog" id="fm-workers-add-dialog">
+        <form method="dialog" class="fm-worker-dialog-form" id="fm-workers-add-form">
+            <div class="fm-worker-dialog-head">
+                <h3>{{ i18n.t("workers_add_title") }}</h3>
+                <button type="button" class="fm-worker-dialog-close" id="fm-workers-add-close" aria-label="{{ i18n.t("workers_add_cancel") }}">
+                    <i class="fa fa-times"></i>
+                </button>
+            </div>
+            <div class="fm-worker-dialog-body">
+                <label class="fm-worker-dialog-field fm-worker-dialog-host">
+                    <span>{{ i18n.t("workers_add_host_label") }}</span>
+                    <input type="text" id="fm-workers-add-host" autocomplete="off" spellcheck="false" placeholder="{{ i18n.t("workers_add_host_placeholder") }}" required>
+                </label>
+                <label class="fm-worker-dialog-field fm-worker-dialog-port">
+                    <span>{{ i18n.t("workers_add_port_label") }}</span>
+                    <input type="number" id="fm-workers-add-port" min="1" max="65535" value="18001" required>
+                </label>
+            </div>
+            <div class="fm-worker-dialog-result" id="fm-workers-add-result" hidden></div>
+            <div class="fm-worker-dialog-actions">
+                <button type="button" class="fm-worker-dialog-btn fm-worker-dialog-btn-cancel" id="fm-workers-add-cancel">{{ i18n.t("workers_add_cancel") }}</button>
+                <button type="submit" class="fm-worker-dialog-btn fm-worker-dialog-btn-add" id="fm-workers-add-submit">{{ i18n.t("workers_add_submit") }}</button>
+            </div>
+        </form>
+    </dialog>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    var dialog = document.getElementById('fm-workers-add-dialog');
+    var openBtn = document.getElementById('fm-workers-add-open');
+    var closeBtn = document.getElementById('fm-workers-add-close');
+    var cancelBtn = document.getElementById('fm-workers-add-cancel');
+    var form = document.getElementById('fm-workers-add-form');
+    var hostInput = document.getElementById('fm-workers-add-host');
+    var portInput = document.getElementById('fm-workers-add-port');
+    var submitBtn = document.getElementById('fm-workers-add-submit');
+    var result = document.getElementById('fm-workers-add-result');
+
+    if (!dialog || !openBtn) { return; }
+
+    var labels = {
+        connecting: "{{ i18n.t("workers_add_connecting") }}",
+        ready: "{{ i18n.t("workers_add_ready") }}",
+        version_mismatch: "{{ i18n.t("workers_add_version_mismatch") }}",
+        unreachable: "{{ i18n.t("workers_add_unreachable") }}",
+        threads: "{{ i18n.t("workers_add_threads") }}",
+        error: "{{ i18n.t("workers_add_error") }}"
+    };
+
+    function showResult(kind, text) {
+        result.hidden = false;
+        result.className = 'fm-worker-dialog-result fm-worker-dialog-result-' + kind;
+        result.textContent = text;
+    }
+
+    function resetResult() {
+        result.hidden = true;
+        result.textContent = '';
+        result.className = 'fm-worker-dialog-result';
+    }
+
+    openBtn.addEventListener('click', function() {
+        resetResult();
+        if (typeof dialog.showModal === 'function') {
+            dialog.showModal();
+        } else {
+            dialog.setAttribute('open', '');
+        }
+        hostInput.focus();
+    });
+
+    function closeDialog() {
+        if (typeof dialog.close === 'function') {
+            dialog.close();
+        } else {
+            dialog.removeAttribute('open');
+        }
+    }
+
+    closeBtn.addEventListener('click', closeDialog);
+    cancelBtn.addEventListener('click', closeDialog);
+
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        var host = hostInput.value.trim();
+        var port = parseInt(portInput.value, 10);
+        if (!host || !port) { return; }
+
+        submitBtn.disabled = true;
+        showResult('pending', labels.connecting);
+
+        fetch('/api/workers/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ host: host, port: port })
+        })
+        .then(function(resp) {
+            if (!resp.ok) { throw new Error('http ' + resp.status); }
+            return resp.json();
+        })
+        .then(function(data) {
+            if (data.status === 'ready') {
+                showResult('ok', labels.ready + ' — v' + data.version + ', ' + data.threads + ' ' + labels.threads);
+                setTimeout(function() { location.reload(); }, 700);
+            } else if (data.status === 'version_mismatch') {
+                showResult('bad', labels.version_mismatch + (data.detail ? ': ' + data.detail : ''));
+                submitBtn.disabled = false;
+            } else {
+                showResult('bad', labels.unreachable + (data.detail ? ': ' + data.detail : ''));
+                submitBtn.disabled = false;
+            }
+        })
+        .catch(function() {
+            showResult('bad', labels.error);
+            submitBtn.disabled = false;
+        });
+    });
+})();
+</script>
 {% endblock %}

@@ -10743,139 +10743,191 @@ html:has(.fm-workers-page) {
     color: #51626d;
 }
 
-.fm-workers-empty {
-    padding: 24px;
-    color: #8a9caa;
-    font-size: 13px;
-    line-height: 1.5;
-}
-
-.fm-workers-empty code {
-    padding: 1px 5px;
-    background: #1a2530;
-    border: 1px solid #2c3c4a;
-    border-radius: 3px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12px;
-    color: #c3d2dd;
-}
-
-.fm-workers-empty pre {
-    margin: 10px 0;
-    padding: 10px 14px;
-    background: #1a2530;
-    border: 1px solid #2c3c4a;
-    border-radius: 5px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12px;
-    color: #c3d2dd;
-    overflow-x: auto;
-}
-
-.fm-workers-setup {
-    /* details element needs explicit overrides — UA defaults override
-       the fm-panel border-radius/overflow rules otherwise. */
-    padding: 0;
-}
-
-.fm-workers-setup-head {
-    cursor: pointer;
-    list-style: none;
-    user-select: none;
-    transition: background 120ms ease;
-}
-
-.fm-workers-setup-head::-webkit-details-marker {
-    display: none;
-}
-
-.fm-workers-setup-head:hover {
-    background: linear-gradient(180deg, #253341 0%, #1f2c34 100%);
-}
-
-.fm-workers-setup-head .fm-panel-count {
+/* "+" button in the workers-table panel head — opens the add-worker
+   dialog. Replaces the old static host-count label. */
+.fm-workers-add-btn {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
-}
-
-.fm-workers-setup-hint {
-    color: #4e5a63;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.2px;
-}
-
-.fm-workers-setup-chevron {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    line-height: 13px;
-    text-align: center;
-    color: #6a8190;
-    font-size: 14px;
-    font-weight: 700;
-    transition:
-        transform 160ms ease,
-        color 160ms ease;
-}
-
-.fm-workers-setup[open] .fm-workers-setup-chevron {
-    transform: rotate(90deg);
-    color: #4a9d5b;
-}
-
-.fm-workers-setup[open] .fm-workers-setup-hint {
-    color: #4a9d5b;
-}
-
-.fm-workers-setup-body {
-    padding: 16px 18px 18px;
-    color: #8a9caa;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 5px;
+    border: 1px solid rgba(74, 157, 91, 0.4);
+    background: rgba(74, 157, 91, 0.14);
+    color: #5cb86c;
     font-size: 13px;
-    line-height: 1.55;
-    border-top: 1px solid #263340;
-    background: #1a242c;
-    animation: fm-workers-setup-reveal 180ms ease both;
+    cursor: pointer;
+    transition:
+        background 120ms ease,
+        border-color 120ms ease,
+        color 120ms ease;
 }
 
-@keyframes fm-workers-setup-reveal {
-    from {
-        opacity: 0;
-        transform: translateY(-2px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+.fm-workers-add-btn:hover {
+    background: rgba(74, 157, 91, 0.24);
+    border-color: rgba(74, 157, 91, 0.7);
+    color: #6fce80;
 }
 
-.fm-workers-setup-lead {
+/* Add-worker modal dialog. */
+.fm-worker-dialog {
+    width: min(420px, calc(100vw - 32px));
+    padding: 0;
+    border: 1px solid #2c3c4a;
+    border-radius: 8px;
+    background: #1c2730;
+    color: #c3d2dd;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+}
+
+.fm-worker-dialog::backdrop {
+    background: rgba(8, 12, 16, 0.6);
+}
+
+.fm-worker-dialog-form {
+    display: block;
     margin: 0;
 }
 
-.fm-workers-setup-lead + .fm-workers-setup-lead {
-    margin-top: 10px;
+.fm-worker-dialog-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid #263340;
+    background: linear-gradient(180deg, #222e38 0%, #1e2a32 100%);
 }
 
-.fm-workers-setup-body code {
-    padding: 1px 5px;
-    background: #131c22;
-    border: 1px solid #2c3c4a;
-    border-radius: 3px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12px;
+.fm-worker-dialog-head h3 {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: #8a9caa;
+}
+
+.fm-worker-dialog-close {
+    border: none;
+    background: none;
+    color: #6c8290;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 2px 4px;
+    line-height: 1;
+}
+
+.fm-worker-dialog-close:hover {
     color: #c3d2dd;
 }
 
-.fm-workers-setup-body pre {
-    margin: 10px 0;
-    padding: 10px 14px;
-    background: #131c22;
+.fm-worker-dialog-body {
+    display: flex;
+    gap: 12px;
+    padding: 16px;
+}
+
+.fm-worker-dialog-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.fm-worker-dialog-host {
+    flex: 1 1 auto;
+}
+
+.fm-worker-dialog-port {
+    flex: 0 0 84px;
+}
+
+.fm-worker-dialog-field span {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: #6c8290;
+}
+
+.fm-worker-dialog-field input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
     border: 1px solid #2c3c4a;
     border-radius: 5px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #131c22;
+    color: #ffffff;
+    font-size: 13px;
+    font-family: inherit;
+}
+
+.fm-worker-dialog-field input:focus {
+    outline: none;
+    border-color: #4a9d5b;
+}
+
+.fm-worker-dialog-result {
+    margin: 0 16px;
+    padding: 9px 11px;
+    border-radius: 5px;
+    font-size: 12.5px;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.fm-worker-dialog-result-pending {
+    background: rgba(120, 140, 155, 0.16);
+    color: #99adba;
+}
+
+.fm-worker-dialog-result-ok {
+    background: rgba(91, 210, 138, 0.15);
+    color: #5bd28a;
+}
+
+.fm-worker-dialog-result-bad {
+    background: rgba(232, 122, 122, 0.15);
+    color: #e87a7a;
+}
+
+.fm-worker-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 16px;
+}
+
+.fm-worker-dialog-btn {
+    padding: 8px 16px;
+    border-radius: 5px;
     font-size: 12px;
-    color: #c3d2dd;
-    overflow-x: auto;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    border: 1px solid transparent;
+}
+
+.fm-worker-dialog-btn-cancel {
+    background: #243240;
+    border-color: #2c3c4a;
+    color: #b3c2cd;
+}
+
+.fm-worker-dialog-btn-cancel:hover {
+    background: #2a3a48;
+}
+
+.fm-worker-dialog-btn-add {
+    background: #3f8a4f;
+    color: #ffffff;
+}
+
+.fm-worker-dialog-btn-add:hover {
+    background: #4a9d5b;
+}
+
+.fm-worker-dialog-btn-add:disabled {
+    opacity: 0.55;
+    cursor: default;
 }

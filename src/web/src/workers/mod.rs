@@ -5,6 +5,7 @@ use crate::views::{self, MenuSection};
 use crate::worker::{WorkerSnapshot, WorkerStatus};
 use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::MatchRuntime;
@@ -40,10 +41,6 @@ pub struct WorkersPageTemplate {
     pub total_batches: u64,
     pub total_matches: u64,
     pub total_failures: u64,
-    /// True when no remote workers are configured. The table still
-    /// renders the local row, but a side note explains how to add
-    /// remote workers.
-    pub no_remote_workers: bool,
 
     pub workers: Vec<WorkerRowDto>,
 }
@@ -181,7 +178,27 @@ pub async fn workers_page_action(
         total_batches,
         total_matches,
         total_failures,
-        no_remote_workers: total == 0,
         workers,
     })
+}
+
+/// Body of the "add worker" dialog POST. `port` defaults to the worker's
+/// standard listen port (18001) when the dialog leaves it untouched, but
+/// it's always sent explicitly by the form.
+#[derive(Deserialize)]
+pub struct AddWorkerRequest {
+    pub host: String,
+    pub port: u16,
+}
+
+/// Dial the worker the operator typed into the dialog, run the
+/// version-checked handshake, register it, and hand the outcome back as
+/// JSON so the dialog can show "connected — vX, N threads" or the
+/// failure reason without a page reload.
+pub async fn workers_add_action(
+    State(state): State<GameAppData>,
+    Json(body): Json<AddWorkerRequest>,
+) -> impl IntoResponse {
+    let address = format!("{}:{}", body.host.trim(), body.port);
+    Json(state.workers.add_worker(address).await)
 }

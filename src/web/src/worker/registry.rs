@@ -7,10 +7,10 @@
 //! and the current connection status. The dispatcher holds an
 //! `Arc<WorkerRegistry>` and reads the snapshot when it routes work.
 
-use crate::worker::config::WorkersConfig;
 use crate::worker::protocol::{Request, Response, PROTOCOL_VERSION};
 use crate::worker::transport::Frame;
 use log::{info, warn};
+use serde::Serialize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
@@ -88,50 +88,45 @@ pub struct WorkerRegistry {
 }
 
 impl WorkerRegistry {
-    /// Build an empty registry — used when no `open-football.conf` is
-    /// present. The dispatcher returns `Err` for every batch in that
-    /// state and the pool falls back to local rayon.
+    /// Build an empty registry. Remote workers are added at runtime from
+    /// the /workers page via [`add_worker`](Self::add_worker); until one
+    /// is, the dispatcher returns `Err` for every batch and the pool
+    /// falls back to local rayon. The heartbeat task is spawned here so
+    /// runtime-added workers that drop are redialed automatically.
+    ///
+    /// Must be called from within a Tokio runtime (it spawns the
+    /// heartbeat task) — that always holds for the coordinator, which
+    /// constructs the registry inside `#[tokio::main]`.
     pub fn empty() -> Self {
-        WorkerRegistry {
+        let registry = WorkerRegistry {
             inner: Arc::new(RwLock::new(Vec::new())),
             local_throughput_mpms: Arc::new(RwLock::new(None)),
             coordinator_version: env!("CARGO_PKG_VERSION"),
-        }
-    }
-
-    /// Dial every worker in `cfg` in parallel and run the handshake.
-    /// Returns a populated registry — entries that failed are still
-    /// present (with `Unreachable` or `VersionMismatch` status) so the
-    /// workers page can surface the failure.
-    pub async fn from_config(cfg: WorkersConfig) -> Self {
-        let registry = Self::empty();
-        let coordinator_version = registry.coordinator_version.to_string();
-
-        info!("worker registry: {} address(es)", cfg.workers.len());
-
-        let handles: Vec<_> = cfg
-            .workers
-            .into_iter()
-            .map(|entry| {
-                let v = coordinator_version.clone();
-                tokio::spawn(async move { Self::connect_and_handshake(entry.address, v).await })
-            })
-            .collect();
-
-        let mut workers = Vec::with_capacity(handles.len());
-        for h in handles {
-            if let Ok(worker) = h.await {
-                workers.push(worker);
-            }
-        }
-
-        {
-            let mut guard = registry.inner.write().await;
-            *guard = workers;
-        }
-
+        };
         registry.spawn_heartbeat();
         registry
+    }
+
+    /// Dial a single worker at runtime, run the version-checked
+    /// handshake, and splice the result into the registry. An existing
+    /// entry with the same address is replaced, so re-adding redials.
+    /// Returns the outcome (status + reported metadata) for the web
+    /// "add worker" dialog. The entry is stored regardless of outcome
+    /// so a `VersionMismatch` / `Unreachable` worker shows up in the
+    /// table and the heartbeat keeps retrying it.
+    pub async fn add_worker(&self, address: String) -> AddWorkerOutcome {
+        let coordinator_version = self.coordinator_version.to_string();
+        info!("worker registry: adding {}", address);
+        let worker = Self::connect_and_handshake(address, coordinator_version).await;
+        let outcome = AddWorkerOutcome::from_worker(&worker);
+        {
+            let mut guard = self.inner.write().await;
+            match guard.iter_mut().find(|w| w.address == worker.address) {
+                Some(existing) => *existing = worker,
+                None => guard.push(worker),
+            }
+        }
+        outcome
     }
 
     /// Read-only snapshot of every worker, in config order. Cheap to
@@ -421,6 +416,43 @@ pub struct WorkerSnapshot {
     pub computer_name: String,
     pub cpu_brand: String,
     pub stats: WorkerStats,
+}
+
+/// Outcome of a runtime [`WorkerRegistry::add_worker`] call, serialized
+/// straight back to the web "add worker" dialog as JSON. `status` is one
+/// of `ready` / `version_mismatch` / `unreachable`; `detail` carries the
+/// mismatch version or the connection-failure reason when relevant.
+#[derive(Debug, Clone, Serialize)]
+pub struct AddWorkerOutcome {
+    pub status: &'static str,
+    pub address: String,
+    pub version: String,
+    pub threads: usize,
+    pub computer_name: String,
+    pub cpu_brand: String,
+    pub detail: String,
+}
+
+impl AddWorkerOutcome {
+    fn from_worker(w: &Worker) -> Self {
+        let (status, detail) = match &w.status {
+            WorkerStatus::Ready => ("ready", String::new()),
+            WorkerStatus::VersionMismatch { worker_version } => {
+                ("version_mismatch", worker_version.clone())
+            }
+            WorkerStatus::Unreachable { reason } => ("unreachable", reason.clone()),
+            WorkerStatus::Connecting => ("connecting", String::new()),
+        };
+        AddWorkerOutcome {
+            status,
+            address: w.address.clone(),
+            version: w.version.clone(),
+            threads: w.threads,
+            computer_name: w.computer_name.clone(),
+            cpu_brand: w.cpu_brand.clone(),
+            detail,
+        }
+    }
 }
 
 impl WorkerSnapshot {

@@ -12,7 +12,7 @@ use tokio::sync::{Mutex, RwLock};
 use web::ai::registry::{AiProviderRegistry, RegistryAiService};
 use web::{
     DistributedDispatcher, FootballSimulatorServer, GameAppData, I18nManager, Settings,
-    WorkerRegistry, WorkerServer, WorkersConfig,
+    WorkerRegistry, WorkerServer,
 };
 
 #[tokio::main]
@@ -46,34 +46,11 @@ async fn main() {
         registry: Arc::clone(&ai_registry),
     }));
 
-    // Load distributed-worker config (silent if missing) and bring up the
-    // registry BEFORE the database load — the handshakes run concurrently
-    // with the DB I/O so they don't add startup latency.
-    let workers = match WorkersConfig::load(&settings.workers_config_path) {
-        Ok(Some(cfg)) => {
-            info!(
-                "loaded {} worker(s) from {}",
-                cfg.workers.len(),
-                settings.workers_config_path
-            );
-            WorkerRegistry::from_config(cfg).await
-        }
-        Ok(None) => {
-            info!(
-                "no workers config at {} — running local-only",
-                settings.workers_config_path
-            );
-            WorkerRegistry::empty()
-        }
-        Err(e) => {
-            log::warn!(
-                "failed to load workers config {}: {} — running local-only",
-                settings.workers_config_path,
-                e
-            );
-            WorkerRegistry::empty()
-        }
-    };
+    // Start with an empty worker registry — remote workers are added at
+    // runtime from the /workers page. While the registry is empty the
+    // dispatcher returns `Err` for every batch and the pool falls back
+    // to the local rayon path.
+    let workers = WorkerRegistry::empty();
 
     // Install the dispatcher into core. The pool will use it for every
     // batch from here on; empty registry → Err → local rayon fallback.

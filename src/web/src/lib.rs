@@ -32,7 +32,6 @@ pub use error::{ApiError, ApiResult};
 pub use i18n::{I18n, I18nManager};
 pub use worker::{
     DistributedDispatcher, WorkerRegistry, WorkerServer, WorkerSnapshot, WorkerStatus,
-    WorkersConfig,
 };
 
 use crate::ai::registry::AiProviderRegistry;
@@ -98,7 +97,7 @@ pub struct GameAppData {
     pub i18n: Arc<I18nManager>,
     pub ai_registry: Arc<AiProviderRegistry>,
     /// Live registry of distributed match workers. Always present;
-    /// empty when no `open-football.conf` was loaded.
+    /// starts empty and is populated at runtime from the /workers page.
     pub workers: WorkerRegistry,
 }
 
