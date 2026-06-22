@@ -2230,6 +2230,7 @@
   "workers_add_error": "Request failed",
   "workers_add_host_label": "Host / IP address",
   "workers_add_host_placeholder": "192.168.1.50",
+  "workers_add_info_lead": "Run a worker process on the remote machine, then add its address here:",
   "workers_add_port_label": "Port",
   "workers_add_ready": "Connected",
   "workers_add_submit": "Add",

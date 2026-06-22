@@ -2226,6 +2226,7 @@
   "workers_add_error": "Ошибка запроса",
   "workers_add_host_label": "Хост / IP-адрес",
   "workers_add_host_placeholder": "192.168.1.50",
+  "workers_add_info_lead": "Запустите процесс воркера на удалённой машине, затем добавьте его адрес здесь:",
   "workers_add_port_label": "Порт",
   "workers_add_ready": "Подключено",
   "workers_add_submit": "Добавить",

@@ -66,9 +66,10 @@ pub struct WorkerStats {
     pub last_latency_ms: Option<u64>,
     pub last_error: Option<String>,
     /// EWMA of `matches / latency_ms` observed on successful batches.
-    /// `None` until the worker has completed at least one batch — the
-    /// dispatcher's `build_plan` falls back to thread-count weighting
-    /// for unmeasured workers. α = 0.3 (see `update_throughput`).
+    /// `None` until the worker has completed at least one batch. Surfaced
+    /// on the workers page as a matches-per-second readout; the dispatcher
+    /// itself self-balances by greedy pull and doesn't read this. α = 0.3
+    /// (see `record_batch`).
     pub throughput_mpms: Option<f64>,
 }
 
@@ -159,7 +160,6 @@ impl WorkerRegistry {
                 (WorkerStatus::Ready, Some(c)) => Some(ReadyWorker {
                     address: w.address.clone(),
                     threads: w.threads,
-                    throughput_mpms: w.stats.throughput_mpms,
                     connection: Arc::clone(c),
                 }),
                 _ => None,
@@ -467,10 +467,6 @@ impl WorkerSnapshot {
 pub struct ReadyWorker {
     pub address: String,
     pub threads: usize,
-    /// EWMA throughput from the registry — `None` until the worker has
-    /// completed at least one batch. The dispatcher's `build_plan`
-    /// falls back to a thread-count seed weight when this is `None`.
-    pub throughput_mpms: Option<f64>,
     pub connection: Arc<Mutex<TcpStream>>,
 }
 

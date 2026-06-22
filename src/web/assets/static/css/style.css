@@ -10822,6 +10822,47 @@ html:has(.fm-workers-page) {
     color: #c3d2dd;
 }
 
+/* "How to run a worker" hint at the top of the add dialog. */
+.fm-worker-dialog-info {
+    display: flex;
+    gap: 10px;
+    margin: 16px 16px 0;
+    padding: 11px 12px;
+    border: 1px solid #2c3c4a;
+    border-radius: 6px;
+    background: #1a242c;
+}
+
+.fm-worker-dialog-info > .fa {
+    flex: 0 0 auto;
+    margin-top: 1px;
+    color: #6ea8d6;
+    font-size: 13px;
+}
+
+.fm-worker-dialog-info-text {
+    min-width: 0;
+}
+
+.fm-worker-dialog-info-text p {
+    margin: 0 0 7px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: #8a9caa;
+}
+
+.fm-worker-dialog-info-text code {
+    display: block;
+    padding: 7px 9px;
+    border: 1px solid #2c3c4a;
+    border-radius: 4px;
+    background: #131c22;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    color: #c3d2dd;
+    word-break: break-all;
+}
+
 .fm-worker-dialog-body {
     display: flex;
     gap: 12px;

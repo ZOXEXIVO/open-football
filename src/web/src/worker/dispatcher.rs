@@ -1,36 +1,43 @@
-//! Coordinator-side `MatchDispatcher` impl. Each dispatch_* call
-//! SPLITS its batch into chunks of `2 × target.threads` and ships
-//! chunks across every ready worker (plus the local rayon pool) in
-//! parallel — so a single matchday doesn't sit on one worker while
-//! the rest of the fleet idles.
+//! Coordinator-side `MatchDispatcher` impl. A dispatch spreads its batch
+//! across every Ready worker (plus the local rayon pool) using a shared
+//! work queue, so a single matchday never sits on one worker while the
+//! rest of the fleet idles — and a worker dying mid-batch never stalls or
+//! drops the run.
 //!
-//! Routing model:
+//! Routing model (work-stealing):
 //!
-//!   1. Snapshot the `Ready` worker slots, each carrying an EWMA
-//!      throughput estimate the registry has been maintaining from
-//!      observed batch latencies (`matches / latency_ms`). Workers
-//!      that have never completed a batch read `None` and fall back
-//!      to a thread-count seed.
-//!   2. Prepend a virtual `Local` target (skipped when
-//!      `local_threads = 0`) with its own throughput estimate.
-//!   3. Smooth-weighted round-robin (SWRR) over the slots: each step
-//!      every slot's `current_weight` is incremented by its weight,
-//!      the slot with the highest `current_weight` wins the next
-//!      chunk and its counter is reduced by `total_weight`. Chunks
-//!      stay at `2 × threads` so the worker's rayon pool stays the
-//!      right "size unit", but the FREQUENCY of chunk assignment is
-//!      proportional to throughput — a 5× slower worker gets ~1/5 the
-//!      chunks of a fast one with the same thread count, instead of
-//!      becoming the matchday's tail latency. The per-call cursor
-//!      rotates the slot order so concurrent dispatch calls (parallel
-//!      `countries.par_iter_mut()`) don't all start at slot 0.
-//!   4. Spawn one tokio task per target slot. Chunks within a slot
-//!      serialize over its `Mutex<TcpStream>`; slots run concurrently.
-//!   5. Any failed remote chunk replays on the local rayon pool
-//!      before returning, so callers never see a partial result.
+//!   1. Snapshot the `Ready` worker slots and prepend a virtual `Local`
+//!      target (skipped when `local_threads = 0`). Each slot carries the
+//!      chunk size it pulls per round: `2 × threads`, large enough to
+//!      keep that worker's rayon pool busy without a long straggler tail
+//!      on the chunk's own internal parallelism.
+//!   2. Seed one shared queue with every match index and spawn one task
+//!      per slot. Each task greedily pulls a chunk off the queue, runs
+//!      it, records the result, and loops until the queue drains. Greedy
+//!      pull self-balances: a faster slot comes back for more sooner, so
+//!      throughput — not a static weight — decides how much each slot
+//!      does.
+//!   3. **Failure handling.** When a remote chunk fails (I/O error,
+//!      error response, or shape mismatch) the worker is marked
+//!      `Unreachable` and its connection dropped (so it leaves the ready
+//!      set for the next dispatch), the in-flight chunk is handed back to
+//!      the FRONT of the queue for a healthy slot to retry, and that slot
+//!      stops pulling — a dead worker is fenced off and never touched
+//!      again for the rest of the batch. The other slots keep draining
+//!      the queue, including the requeued chunk.
+//!   4. **Safety net.** After all slot tasks finish, any match still
+//!      unprocessed (every slot that could have run it failed, or a task
+//!      panicked) is played on the local rayon pool. A total worker
+//!      wipeout degrades to local-only; the caller always gets a full,
+//!      correctly-sized result set.
 //!
-//! Local fallback: with no ready targets the dispatcher returns `Err`
-//! so the engine pool runs the rayon path on the unmodified input.
+//! Fast path: a batch that fits in a single local chunk skips every
+//! remote slot — the network round-trip would cost more than the local
+//! pool takes to play it.
+//!
+//! Local fallback: with no Ready targets and no local share the
+//! dispatcher returns `Err` so the engine pool runs the rayon path on the
+//! unmodified input.
 
 use crate::worker::protocol::{MatchEnvelope, MatchOutcome, Request, Response};
 use crate::worker::registry::{BatchOutcome, LatencyTimer, ReadyWorker, WorkerRegistry};
@@ -39,23 +46,21 @@ use crate::worker::wire::{LeagueMatchWire, SquadFixtureWire, SquadWire};
 use core::MatchRuntime;
 use core::r#match::{Match, MatchDispatcher, MatchResult, MatchResultRaw, MatchSquad, Score};
 use log::{info, warn};
+use std::collections::VecDeque;
 use std::future::Future;
+use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::runtime::Handle;
+use tokio::sync::Mutex;
 
 pub struct DistributedDispatcher {
     registry: WorkerRegistry,
     runtime: Handle,
-    /// `0` disables the coordinator's local share — every batch is
-    /// routed to a remote worker (or the rayon-fallback path when no
-    /// workers are Ready).
+    /// `0` disables the coordinator's local share — every chunk is routed
+    /// to a remote worker (or the rayon-fallback path when no workers are
+    /// Ready). Otherwise the local rayon pool participates as a virtual
+    /// slot so the coordinator's CPU isn't idle while workers crunch.
     local_threads: usize,
-    /// Rotates the round-robin's starting target per call. Small
-    /// batches (a few matches against many targets) would otherwise
-    /// always land on slot 0 first; the rotation spreads those across
-    /// concurrent dispatch calls.
-    cursor: AtomicUsize,
 }
 
 enum Target {
@@ -72,51 +77,21 @@ impl Target {
     }
 }
 
-/// One target's slice of a dispatched batch: the per-chunk lists of
-/// input-vector indices to send. Chunks are sized at `2 × threads` so
-/// each remote `PlayBatch` round-trip carries an amount of work the
-/// worker's rayon pool can fully occupy without stragglers stalling a
-/// huge batch.
+/// One dispatch target plus the chunk size it pulls per round. Chunks are
+/// sized at `2 × threads` so each round-trip carries enough work to keep
+/// the target's rayon pool fully occupied.
 struct Slot {
     target: Target,
-    threads: usize,
-    chunks: Vec<Vec<usize>>,
+    chunk_size: usize,
 }
-
-impl Slot {
-    fn chunk_size(&self) -> usize {
-        self.threads.max(1) * 2
-    }
-
-    fn total(&self) -> usize {
-        self.chunks.iter().map(|c| c.len()).sum()
-    }
-}
-
-/// Per-thread seed throughput (matches per second) used when a slot
-/// has never recorded a batch. Picked so that an unmeasured slot's
-/// initial weight is in the same order of magnitude as a measured
-/// one — a real match takes a few tens of ms per thread, so 20 mps
-/// per thread is a sensible neutral starting point that scales
-/// linearly with thread count (matching the old behaviour exactly
-/// when no measurements exist yet).
-const SEED_MPS_PER_THREAD: f64 = 20.0;
 
 impl MatchDispatcher for DistributedDispatcher {
     fn dispatch_league(&self, matches: Vec<Match>) -> Result<Vec<MatchResult>, Vec<Match>> {
         let registry = self.registry.clone();
         let local_threads = self.local_threads;
-        let cursor_start = self.cursor.fetch_add(1, Ordering::Relaxed);
         self.run_blocking(async move {
             let ready = registry.ready_handles().await;
-            let local_throughput = registry.local_throughput().await;
-            let slots = Self::build_plan(
-                matches.len(),
-                local_threads,
-                local_throughput,
-                ready,
-                cursor_start,
-            );
+            let slots = Self::build_slots(matches.len(), local_threads, ready);
             if slots.is_empty() {
                 return Err(matches);
             }
@@ -130,17 +105,9 @@ impl MatchDispatcher for DistributedDispatcher {
     ) -> Result<Vec<(usize, MatchResultRaw)>, Vec<(usize, MatchSquad, MatchSquad, bool)>> {
         let registry = self.registry.clone();
         let local_threads = self.local_threads;
-        let cursor_start = self.cursor.fetch_add(1, Ordering::Relaxed);
         self.run_blocking(async move {
             let ready = registry.ready_handles().await;
-            let local_throughput = registry.local_throughput().await;
-            let slots = Self::build_plan(
-                matches.len(),
-                local_threads,
-                local_throughput,
-                ready,
-                cursor_start,
-            );
+            let slots = Self::build_slots(matches.len(), local_threads, ready);
             if slots.is_empty() {
                 return Err(matches);
             }
@@ -155,7 +122,6 @@ impl DistributedDispatcher {
             registry,
             runtime,
             local_threads,
-            cursor: AtomicUsize::new(0),
         }
     }
 
@@ -182,135 +148,59 @@ impl DistributedDispatcher {
         }
     }
 
-    /// Smooth-weighted round-robin chunking. Each step every slot's
-    /// `current_weight` accumulates by its `weight` (matches/sec, from
-    /// the registry's EWMA throughput or a thread-count seed when no
-    /// batch has ever been observed); the slot with the highest
-    /// `current_weight` claims the next chunk and gets `total_weight`
-    /// subtracted from its counter. This produces a smooth
-    /// interleaving where chunk frequency tracks throughput — a 5×
-    /// slower worker gets ~1/5 the chunks of a fast one regardless of
-    /// thread count.
+    /// Build the dispatch targets for a batch: an optional local rayon
+    /// slot plus one slot per Ready worker, each carrying the chunk size
+    /// it pulls per round (`2 × threads`).
     ///
-    /// `chunk_size` stays at `2 × threads` per slot so each `PlayBatch`
-    /// round-trip is still sized to fully occupy that worker's rayon
-    /// pool without straggler tails on the chunk's own internal
-    /// parallelism — slow workers just get FEWER chunks, not smaller
-    /// ones.
+    /// Fast path: a batch that fits in a single local chunk skips every
+    /// remote slot — the network/serialization round-trip would cost more
+    /// than the local pool takes to play these matches. Cuts tail latency
+    /// on idle days and the last stragglers of a matchday.
     ///
-    /// `cursor_start` is folded in by rotating the slot order before
-    /// SWRR begins; without it, every dispatch call would tie-break
-    /// toward the same slot on its first pick and concurrent dispatch
-    /// calls would pile on the same worker.
-    fn build_plan(
-        total: usize,
-        local_threads: usize,
-        local_throughput_mpms: Option<f64>,
-        ready: Vec<ReadyWorker>,
-        cursor_start: usize,
-    ) -> Vec<Slot> {
-        // Fast path: the whole batch fits in one local chunk
-        // (`2 × local_threads` is the local slot's `chunk_size`). Skip
-        // every remote slot — the network/serialization round-trip
-        // costs more than the local pool would take to play these
-        // matches. Cuts tail latency on idle days, late-stage knockout
-        // rounds, and the last few stragglers of any matchday.
-        if local_threads > 0 && total > 0 && total <= local_threads * 2 {
+    /// Returns an empty vec when there is nothing to run on (no local
+    /// share and no Ready workers); the caller then returns `Err` so the
+    /// engine pool falls back to its own rayon path.
+    fn build_slots(total: usize, local_threads: usize, ready: Vec<ReadyWorker>) -> Vec<Slot> {
+        if total == 0 {
+            return Vec::new();
+        }
+        if local_threads > 0 && total <= local_threads * 2 {
             return vec![Slot {
                 target: Target::Local,
-                threads: local_threads,
-                chunks: vec![(0..total).collect()],
+                chunk_size: local_threads * 2,
             }];
         }
-        let mut slots: Vec<Slot> = Vec::with_capacity(ready.len() + 1);
-        let mut weights: Vec<f64> = Vec::with_capacity(ready.len() + 1);
+        let mut slots = Vec::with_capacity(ready.len() + 1);
         if local_threads > 0 {
             slots.push(Slot {
                 target: Target::Local,
-                threads: local_threads,
-                chunks: Vec::new(),
+                chunk_size: (local_threads * 2).max(1),
             });
-            weights.push(Self::slot_weight(local_throughput_mpms, local_threads));
         }
         for w in ready {
-            let threads = w.threads;
-            weights.push(Self::slot_weight(w.throughput_mpms, threads));
+            let chunk_size = w.threads.max(1) * 2;
             slots.push(Slot {
                 target: Target::Remote(w),
-                threads,
-                chunks: Vec::new(),
+                chunk_size,
             });
         }
-        if slots.is_empty() || total == 0 {
-            return Vec::new();
-        }
-
-        let n = slots.len();
-        let rotate = cursor_start % n;
-        slots.rotate_left(rotate);
-        weights.rotate_left(rotate);
-
-        let chunk_sizes: Vec<usize> = slots.iter().map(|s| s.chunk_size()).collect();
-        let assignments = Self::swrr_assign(total, &chunk_sizes, &weights);
-        for (i, chunks) in assignments.into_iter().enumerate() {
-            slots[i].chunks = chunks;
-        }
-
-        slots.into_iter().filter(|s| !s.chunks.is_empty()).collect()
+        slots
     }
 
-    /// Pure SWRR chunk-assignment loop. Returns per-slot lists of
-    /// index ranges. Extracted from `build_plan` so the weighting
-    /// behaviour can be unit-tested without TcpStream-bearing
-    /// `ReadyWorker` instances.
-    fn swrr_assign(
-        total: usize,
-        chunk_sizes: &[usize],
-        weights: &[f64],
-    ) -> Vec<Vec<Vec<usize>>> {
-        let n = chunk_sizes.len();
-        let mut out: Vec<Vec<Vec<usize>>> = (0..n).map(|_| Vec::new()).collect();
-        if total == 0 || n == 0 {
-            return out;
-        }
-        let total_weight: f64 = weights.iter().sum();
-        let mut current: Vec<f64> = vec![0.0; n];
-        let mut start = 0usize;
-        while start < total {
-            for i in 0..n {
-                current[i] += weights[i];
-            }
-            let pick = current
-                .iter()
-                .enumerate()
-                .max_by(|(_, a), (_, b)| {
-                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            let end = (start + chunk_sizes[pick]).min(total);
-            out[pick].push((start..end).collect());
-            current[pick] -= total_weight;
-            start = end;
-        }
-        out
+    /// Drain up to `chunk_size` indices off the front of the shared
+    /// pending queue. Returns an empty vec once the queue is drained —
+    /// the slot loop reads that as "no more work, stop". Pure helper so
+    /// the pull/clamp behaviour can be unit-tested without spawning
+    /// TcpStream-bearing slots.
+    fn pull_chunk(pending: &mut VecDeque<usize>, chunk_size: usize) -> Vec<usize> {
+        let n = chunk_size.min(pending.len());
+        pending.drain(0..n).collect()
     }
 
-    /// Weight (matches/sec) the slot will be assigned in SWRR. Real
-    /// EWMA throughput when available, else a thread-count seed —
-    /// `SEED_MPS_PER_THREAD × threads` matches the dispatcher's old
-    /// behaviour exactly when nothing has been measured yet.
-    fn slot_weight(throughput_mpms: Option<f64>, threads: usize) -> f64 {
-        match throughput_mpms {
-            Some(mpms) if mpms > 0.0 => (mpms * 1000.0).max(1.0),
-            _ => (threads.max(1) as f64) * SEED_MPS_PER_THREAD,
-        }
-    }
-
-    fn describe_plan(slots: &[Slot]) -> String {
+    fn describe_slots(slots: &[Slot]) -> String {
         slots
             .iter()
-            .map(|s| format!("{}×{} matches/{} chunks", s.target.label(), s.total(), s.chunks.len()))
+            .map(|s| format!("{}@{}", s.target.label(), s.chunk_size))
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -326,19 +216,22 @@ impl DistributedDispatcher {
             .map(|m| m.league_id().to_string())
             .unwrap_or_else(|| "?".to_string());
         info!(
-            "dispatch league={} matches={} plan=[{}]",
+            "dispatch league={} matches={} slots=[{}]",
             lg_label,
             total,
-            Self::describe_plan(&slots)
+            Self::describe_slots(&slots)
         );
 
         let matches = Arc::new(matches);
+        let pending = Arc::new(Mutex::new((0..total).collect::<VecDeque<usize>>()));
+
         let mut tasks = Vec::with_capacity(slots.len());
         for slot in slots {
             let matches = Arc::clone(&matches);
+            let pending = Arc::clone(&pending);
             let registry = registry.clone();
             tasks.push(tokio::spawn(async move {
-                Self::run_league_slot(slot, matches, registry).await
+                Self::run_league_slot(slot, matches, pending, registry).await
             }));
         }
 
@@ -353,27 +246,30 @@ impl DistributedDispatcher {
             }
         }
 
-        // Defensive backfill — `play_remote_league` already replays
-        // failed chunks locally before returning, so the only way to
-        // reach here with a None is a tokio task that panicked outright.
-        let mut originals: Vec<Option<Match>> = match Arc::try_unwrap(matches) {
-            Ok(v) => v.into_iter().map(Some).collect(),
-            Err(arc) => (*arc).iter().map(|m| Some(m.clone())).collect(),
-        };
-        let mut backfilled = 0usize;
-        for (i, slot) in results.iter_mut().enumerate() {
-            if slot.is_none() {
-                if let Some(m) = originals[i].take() {
-                    *slot = Some(m.play());
-                    backfilled += 1;
-                }
-            }
-        }
-        if backfilled > 0 {
+        // Safety net: a match is still `None` only when every slot that
+        // could have run it failed (or a slot task panicked outright).
+        // Play the remainder on the local rayon pool so the caller always
+        // gets a full result set — a total worker wipeout degrades to
+        // local-only, it never drops matches.
+        let missing: Vec<usize> = results
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.is_none())
+            .map(|(i, _)| i)
+            .collect();
+        if !missing.is_empty() {
             warn!(
-                "dispatch league={}: backfilled {} matches locally after slot task failure",
-                lg_label, backfilled
+                "dispatch league={}: {} matches unprocessed after worker failures — running locally",
+                lg_label,
+                missing.len()
             );
+            let chunk: Vec<Match> = missing.iter().map(|&i| matches[i].clone()).collect();
+            let local = tokio::task::spawn_blocking(move || MatchRuntime::engine_pool().play_local(chunk))
+                .await
+                .unwrap_or_default();
+            for (i, r) in missing.into_iter().zip(local) {
+                results[i] = Some(r);
+            }
         }
 
         results
@@ -382,7 +278,7 @@ impl DistributedDispatcher {
             .map(|(i, r)| {
                 r.unwrap_or_else(|| {
                     warn!(
-                        "dispatcher: missing result for input index {} after backfill",
+                        "dispatcher: missing result for input index {} after safety net",
                         i
                     );
                     Self::placeholder_match_result()
@@ -394,16 +290,24 @@ impl DistributedDispatcher {
     async fn run_league_slot(
         slot: Slot,
         matches: Arc<Vec<Match>>,
+        pending: Arc<Mutex<VecDeque<usize>>>,
         registry: WorkerRegistry,
     ) -> Vec<(usize, MatchResult)> {
-        let mut out: Vec<(usize, MatchResult)> = Vec::with_capacity(slot.total());
-        for indices in slot.chunks {
+        let mut out: Vec<(usize, MatchResult)> = Vec::new();
+        loop {
+            let indices = {
+                let mut q = pending.lock().await;
+                Self::pull_chunk(&mut q, slot.chunk_size)
+            };
+            if indices.is_empty() {
+                break;
+            }
+            let count = indices.len();
             let chunk: Vec<Match> = indices.iter().map(|&i| matches[i].clone()).collect();
-            let count = chunk.len();
-            let results = match &slot.target {
+            match &slot.target {
                 Target::Local => {
                     let timer = LatencyTimer::start();
-                    let r = tokio::task::spawn_blocking(move || {
+                    let results = tokio::task::spawn_blocking(move || {
                         MatchRuntime::engine_pool().play_local(chunk)
                     })
                     .await
@@ -415,14 +319,35 @@ impl DistributedDispatcher {
                         elapsed.as_millis()
                     );
                     registry.record_local_batch(count, elapsed).await;
-                    r
+                    for (i, r) in indices.into_iter().zip(results) {
+                        out.push((i, r));
+                    }
                 }
                 Target::Remote(worker) => {
-                    Self::play_remote_league(worker, &registry, chunk).await
+                    match Self::play_remote_league(worker, &registry, chunk).await {
+                        Ok(results) => {
+                            for (i, r) in indices.into_iter().zip(results) {
+                                out.push((i, r));
+                            }
+                        }
+                        Err(()) => {
+                            // The worker died on this chunk. `record_batch`
+                            // (inside play_remote_league) has already marked
+                            // it Unreachable and dropped its connection, so
+                            // it's gone from the next dispatch's ready set.
+                            // Hand the chunk back to the front of the queue
+                            // for a healthy slot to retry, then stop pulling
+                            // — this slot must not touch the dead worker
+                            // again.
+                            Self::requeue_front(&pending, indices).await;
+                            warn!(
+                                "worker {} fenced off after failure; {} matches requeued",
+                                worker.address, count
+                            );
+                            break;
+                        }
+                    }
                 }
-            };
-            for (i, r) in indices.into_iter().zip(results) {
-                out.push((i, r));
             }
         }
         out
@@ -432,7 +357,7 @@ impl DistributedDispatcher {
         worker: &ReadyWorker,
         registry: &WorkerRegistry,
         matches: Vec<Match>,
-    ) -> Vec<MatchResult> {
+    ) -> Result<Vec<MatchResult>, ()> {
         let count = matches.len();
         let envelopes: Vec<MatchEnvelope> = matches
             .iter()
@@ -442,7 +367,7 @@ impl DistributedDispatcher {
 
         let mut stream = worker.connection.lock().await;
         let timer = LatencyTimer::start();
-        let recv: std::io::Result<Response> = match Frame::write(&mut *stream, &req).await {
+        let recv: io::Result<Response> = match Frame::write(&mut *stream, &req).await {
             Ok(()) => Frame::read(&mut *stream).await,
             Err(e) => Err(e),
         };
@@ -458,13 +383,13 @@ impl DistributedDispatcher {
                 registry
                     .record_batch(&worker.address, count, latency, BatchOutcome::Ok)
                     .await;
-                items
+                Ok(items
                     .into_iter()
                     .filter_map(|o| match o {
                         MatchOutcome::League(r) => Some(r),
                         _ => None,
                     })
-                    .collect()
+                    .collect())
             }
             other => {
                 let reason = match other {
@@ -473,20 +398,13 @@ impl DistributedDispatcher {
                     Err(e) => format!("io: {}", e),
                 };
                 warn!(
-                    "remote {}: league chunk failed — {}; running locally",
+                    "remote {}: league chunk failed — {}; requeueing",
                     worker.address, reason
                 );
                 registry
-                    .record_batch(
-                        &worker.address,
-                        count,
-                        latency,
-                        BatchOutcome::Failed(reason),
-                    )
+                    .record_batch(&worker.address, count, latency, BatchOutcome::Failed(reason))
                     .await;
-                tokio::task::spawn_blocking(move || MatchRuntime::engine_pool().play_local(matches))
-                    .await
-                    .unwrap_or_default()
+                Err(())
             }
         }
     }
@@ -498,44 +416,80 @@ impl DistributedDispatcher {
     ) -> Vec<(usize, MatchResultRaw)> {
         let total = matches.len();
         info!(
-            "dispatch squads matches={} plan=[{}]",
+            "dispatch squads matches={} slots=[{}]",
             total,
-            Self::describe_plan(&slots)
+            Self::describe_slots(&slots)
         );
 
         let matches = Arc::new(matches);
+        let pending = Arc::new(Mutex::new((0..total).collect::<VecDeque<usize>>()));
+
         let mut tasks = Vec::with_capacity(slots.len());
         for slot in slots {
             let matches = Arc::clone(&matches);
+            let pending = Arc::clone(&pending);
             let registry = registry.clone();
             tasks.push(tokio::spawn(async move {
-                Self::run_squad_slot(slot, matches, registry).await
+                Self::run_squad_slot(slot, matches, pending, registry).await
             }));
         }
 
+        // Squad results carry the caller's fixture idx, not the input
+        // position, so completeness is tracked by position separately.
+        let mut done = vec![false; total];
         let mut out: Vec<(usize, MatchResultRaw)> = Vec::with_capacity(total);
         for t in tasks {
             if let Ok(items) = t.await {
-                out.extend(items);
+                for (pos, pair) in items {
+                    if pos < done.len() && !done[pos] {
+                        done[pos] = true;
+                        out.push(pair);
+                    }
+                }
             }
         }
+
+        let missing: Vec<usize> = (0..total).filter(|&p| !done[p]).collect();
+        if !missing.is_empty() {
+            warn!(
+                "dispatch squads: {} matches unprocessed after worker failures — running locally",
+                missing.len()
+            );
+            let chunk: Vec<(usize, MatchSquad, MatchSquad, bool)> =
+                missing.iter().map(|&p| matches[p].clone()).collect();
+            let local = tokio::task::spawn_blocking(move || {
+                MatchRuntime::engine_pool().play_squads_local(chunk)
+            })
+            .await
+            .unwrap_or_default();
+            out.extend(local);
+        }
+
         out
     }
 
     async fn run_squad_slot(
         slot: Slot,
         matches: Arc<Vec<(usize, MatchSquad, MatchSquad, bool)>>,
+        pending: Arc<Mutex<VecDeque<usize>>>,
         registry: WorkerRegistry,
-    ) -> Vec<(usize, MatchResultRaw)> {
-        let mut out: Vec<(usize, MatchResultRaw)> = Vec::with_capacity(slot.total());
-        for indices in slot.chunks {
+    ) -> Vec<(usize, (usize, MatchResultRaw))> {
+        let mut out: Vec<(usize, (usize, MatchResultRaw))> = Vec::new();
+        loop {
+            let indices = {
+                let mut q = pending.lock().await;
+                Self::pull_chunk(&mut q, slot.chunk_size)
+            };
+            if indices.is_empty() {
+                break;
+            }
+            let count = indices.len();
             let chunk: Vec<(usize, MatchSquad, MatchSquad, bool)> =
                 indices.iter().map(|&i| matches[i].clone()).collect();
-            let count = chunk.len();
-            let part = match &slot.target {
+            match &slot.target {
                 Target::Local => {
                     let timer = LatencyTimer::start();
-                    let r = tokio::task::spawn_blocking(move || {
+                    let results = tokio::task::spawn_blocking(move || {
                         MatchRuntime::engine_pool().play_squads_local(chunk)
                     })
                     .await
@@ -547,13 +501,28 @@ impl DistributedDispatcher {
                         elapsed.as_millis()
                     );
                     registry.record_local_batch(count, elapsed).await;
-                    r
+                    for (pos, pair) in indices.into_iter().zip(results) {
+                        out.push((pos, pair));
+                    }
                 }
                 Target::Remote(worker) => {
-                    Self::play_remote_squads(worker, &registry, chunk).await
+                    match Self::play_remote_squads(worker, &registry, chunk).await {
+                        Ok(results) => {
+                            for (pos, pair) in indices.into_iter().zip(results) {
+                                out.push((pos, pair));
+                            }
+                        }
+                        Err(()) => {
+                            Self::requeue_front(&pending, indices).await;
+                            warn!(
+                                "worker {} fenced off after failure; {} matches requeued",
+                                worker.address, count
+                            );
+                            break;
+                        }
+                    }
                 }
-            };
-            out.extend(part);
+            }
         }
         out
     }
@@ -562,7 +531,7 @@ impl DistributedDispatcher {
         worker: &ReadyWorker,
         registry: &WorkerRegistry,
         matches: Vec<(usize, MatchSquad, MatchSquad, bool)>,
-    ) -> Vec<(usize, MatchResultRaw)> {
+    ) -> Result<Vec<(usize, MatchResultRaw)>, ()> {
         let count = matches.len();
         let envelopes: Vec<MatchEnvelope> = matches
             .iter()
@@ -579,7 +548,7 @@ impl DistributedDispatcher {
 
         let mut stream = worker.connection.lock().await;
         let timer = LatencyTimer::start();
-        let recv: std::io::Result<Response> = match Frame::write(&mut *stream, &req).await {
+        let recv: io::Result<Response> = match Frame::write(&mut *stream, &req).await {
             Ok(()) => Frame::read(&mut *stream).await,
             Err(e) => Err(e),
         };
@@ -595,13 +564,13 @@ impl DistributedDispatcher {
                 registry
                     .record_batch(&worker.address, count, latency, BatchOutcome::Ok)
                     .await;
-                items
+                Ok(items
                     .into_iter()
                     .filter_map(|o| match o {
                         MatchOutcome::Squad { idx, result } => Some((idx, result)),
                         _ => None,
                     })
-                    .collect()
+                    .collect())
             }
             other => {
                 let reason = match other {
@@ -610,23 +579,24 @@ impl DistributedDispatcher {
                     Err(e) => format!("io: {}", e),
                 };
                 warn!(
-                    "remote {}: squad chunk failed — {}; running locally",
+                    "remote {}: squad chunk failed — {}; requeueing",
                     worker.address, reason
                 );
                 registry
-                    .record_batch(
-                        &worker.address,
-                        count,
-                        latency,
-                        BatchOutcome::Failed(reason),
-                    )
+                    .record_batch(&worker.address, count, latency, BatchOutcome::Failed(reason))
                     .await;
-                tokio::task::spawn_blocking(move || {
-                    MatchRuntime::engine_pool().play_squads_local(matches)
-                })
-                .await
-                .unwrap_or_default()
+                Err(())
             }
+        }
+    }
+
+    /// Push a fenced-off worker's in-flight indices back onto the FRONT
+    /// of the shared queue (order preserved) so a healthy slot retries
+    /// them next, rather than after every still-queued chunk.
+    async fn requeue_front(pending: &Arc<Mutex<VecDeque<usize>>>, indices: Vec<usize>) {
+        let mut q = pending.lock().await;
+        for i in indices.into_iter().rev() {
+            q.push_front(i);
         }
     }
 
@@ -646,88 +616,57 @@ impl DistributedDispatcher {
 
 #[cfg(test)]
 mod tests {
-    use super::DistributedDispatcher;
+    use super::{DistributedDispatcher, Target};
+    use std::collections::VecDeque;
 
-    /// Two slots, same `chunk_size`, but slot B is 4× faster: B should
-    /// receive roughly 4× as many chunks as A.
     #[test]
-    fn swrr_assigns_chunks_proportional_to_weight() {
-        let chunk_sizes = vec![8, 8];
-        let weights = vec![100.0, 400.0]; // matches/sec — B is 4× A
-        let assignments = DistributedDispatcher::swrr_assign(200, &chunk_sizes, &weights);
-        let a = assignments[0].len();
-        let b = assignments[1].len();
-        assert!(a + b > 0);
-        let ratio = b as f64 / a.max(1) as f64;
-        assert!(
-            ratio >= 3.5 && ratio <= 4.5,
-            "expected B/A ≈ 4, got {:.2} ({} vs {})",
-            ratio,
-            b,
-            a
-        );
-        let total_matches: usize = assignments
-            .iter()
-            .flat_map(|cs| cs.iter().map(|c| c.len()))
-            .sum();
-        assert_eq!(total_matches, 200);
+    fn pull_chunk_drains_up_to_chunk_size() {
+        let mut q: VecDeque<usize> = (0..10).collect();
+        let chunk = DistributedDispatcher::pull_chunk(&mut q, 4);
+        assert_eq!(chunk, vec![0, 1, 2, 3]);
+        assert_eq!(q.len(), 6);
     }
 
-    /// Equal weights → pure round-robin, no slot starves.
     #[test]
-    fn swrr_with_equal_weights_distributes_evenly() {
-        let chunk_sizes = vec![8, 8, 8];
-        let weights = vec![1.0, 1.0, 1.0];
-        let assignments = DistributedDispatcher::swrr_assign(96, &chunk_sizes, &weights);
-        for slot in &assignments {
-            assert!(!slot.is_empty(), "every slot should get at least one chunk");
-            let count: usize = slot.iter().map(|c| c.len()).sum();
-            assert!(
-                count >= 24 && count <= 40,
-                "even split: each slot near 32, got {}",
-                count
-            );
-        }
-        let total: usize = assignments
-            .iter()
-            .flat_map(|cs| cs.iter().map(|c| c.len()))
-            .sum();
-        assert_eq!(total, 96);
+    fn pull_chunk_clamps_to_remaining() {
+        let mut q: VecDeque<usize> = (0..3).collect();
+        let chunk = DistributedDispatcher::pull_chunk(&mut q, 8);
+        assert_eq!(chunk, vec![0, 1, 2]);
+        assert!(q.is_empty());
     }
 
-    /// A slot whose weight is dwarfed by the others should still get
-    /// SOME work eventually — SWRR doesn't starve low-weight slots.
     #[test]
-    fn swrr_does_not_starve_low_weight_slot() {
-        let chunk_sizes = vec![16, 16];
-        let weights = vec![1000.0, 10.0]; // 100× ratio
-        let assignments = DistributedDispatcher::swrr_assign(500, &chunk_sizes, &weights);
-        let fast: usize = assignments[0].iter().map(|c| c.len()).sum();
-        let slow: usize = assignments[1].iter().map(|c| c.len()).sum();
-        assert_eq!(fast + slow, 500);
-        // Slow slot SHOULD get some chunks once enough total work
-        // accumulates — every ~100 chunks for the fast slot, the slow
-        // slot's current_weight overflows enough to pick.
-        // With chunk_size=16 and total=500, fast claims ~30+ chunks
-        // before slow gets one. Just assert slow > 0.
-        // Allow strict starvation when ratio is extreme AND total fits
-        // in fewer rounds than the ratio — here total/chunk_size ≈ 31
-        // rounds, much less than 100, so slow may legitimately get 0.
-        // Tighten with bigger total instead.
-        let assignments = DistributedDispatcher::swrr_assign(5000, &chunk_sizes, &weights);
-        let slow: usize = assignments[1].iter().map(|c| c.len()).sum();
-        assert!(slow > 0, "slow slot should get at least one chunk over 5000 matches");
+    fn pull_chunk_empty_queue_returns_empty() {
+        let mut q: VecDeque<usize> = VecDeque::new();
+        let chunk = DistributedDispatcher::pull_chunk(&mut q, 8);
+        assert!(chunk.is_empty());
     }
 
-    /// `slot_weight` falls back to thread-count × SEED when throughput
-    /// is None, preserving today's behaviour for unmeasured slots.
+    /// Small batch with a local share collapses to a single local slot —
+    /// no remote round-trip for work the local pool can swallow in one
+    /// chunk.
     #[test]
-    fn slot_weight_seed_for_unmeasured_slot() {
-        let measured = DistributedDispatcher::slot_weight(Some(0.2), 16);
-        // 0.2 mpms × 1000 = 200 mps
-        assert!((measured - 200.0).abs() < 0.01);
-        let seed = DistributedDispatcher::slot_weight(None, 16);
-        // 16 × 20 = 320
-        assert!((seed - 320.0).abs() < 0.01);
+    fn build_slots_fast_path_local_only() {
+        let slots = DistributedDispatcher::build_slots(4, 8, Vec::new());
+        assert_eq!(slots.len(), 1);
+        assert!(matches!(slots[0].target, Target::Local));
+        assert_eq!(slots[0].chunk_size, 16);
+    }
+
+    /// No local share and no Ready workers → no slots → caller returns
+    /// `Err` and the engine pool runs its own rayon path.
+    #[test]
+    fn build_slots_no_targets_is_empty() {
+        let slots = DistributedDispatcher::build_slots(100, 0, Vec::new());
+        assert!(slots.is_empty());
+    }
+
+    /// Large batch, local enabled, no workers → one local slot that pulls
+    /// the whole queue over multiple rounds.
+    #[test]
+    fn build_slots_local_only_large_batch() {
+        let slots = DistributedDispatcher::build_slots(100, 8, Vec::new());
+        assert_eq!(slots.len(), 1);
+        assert!(matches!(slots[0].target, Target::Local));
     }
 }
