@@ -738,11 +738,29 @@ impl PipelineProcessor {
                     continue;
                 }
 
-                // Score candidates
+                // Assessment error from the scout's judging skill: ≈±1 for a
+                // top scout (judging 20), wide for a poor one. Drives BOTH the
+                // ranking below and the report further down, so a sharp scout
+                // converges on the genuine best target while a weaker one
+                // legitimately misjudges and disagrees — different clubs chase
+                // different players instead of the whole division funnelling
+                // onto one deterministic "best" name.
+                let ability_error = (20i16 - judging as i16).max(1) as i32;
+                let potential_error = (20i16 - judging_pot as i16).max(1) as i32;
+
+                // Score candidates by the scout's PERCEIVED quality, not their
+                // true numbers.
                 let mut best_score = 0.0f32;
                 let mut best_candidate: Option<&PlayerSnapshot> = None;
 
                 for cand in &candidates {
+                    let perceived_ability = (cand.ability as i32
+                        + IntegerUtils::random(-ability_error, ability_error))
+                    .clamp(1, 200) as u8;
+                    let perceived_potential = (cand.estimated_potential as i32
+                        + IntegerUtils::random(-potential_error, potential_error))
+                    .clamp(1, 200) as u8;
+
                     let mut score: f32 = 0.0;
 
                     // Expiring contract
@@ -757,10 +775,10 @@ impl PipelineProcessor {
                         score += 2.0;
                     }
 
-                    // High potential gap
-                    if cand.estimated_potential > cand.ability + 15 {
+                    // High potential gap (as the scout reads it)
+                    if perceived_potential > perceived_ability + 15 {
                         score += 2.5;
-                    } else if cand.estimated_potential > cand.ability + 8 {
+                    } else if perceived_potential > perceived_ability + 8 {
                         score += 1.5;
                     }
 
@@ -781,10 +799,16 @@ impl PipelineProcessor {
                     // is exactly who a scout network should flag.
                     score += (cand.breakout_score / 100.0) * 4.0;
 
-                    // Ability fit
-                    if cand.ability >= avg_ability.saturating_sub(5) {
+                    // Ability fit (as the scout reads it)
+                    if perceived_ability >= avg_ability.saturating_sub(5) {
                         score += 1.0;
                     }
+
+                    // Split genuine near-ties so they don't always resolve to
+                    // the same iteration-order winner. Bounded well under the
+                    // scoring steps above (never leapfrogs a clearly-preferred
+                    // target) and shrinks toward zero as judging improves.
+                    score += IntegerUtils::random(0, ability_error.min(10)) as f32 * 0.05;
 
                     if score > best_score {
                         best_score = score;
@@ -793,10 +817,9 @@ impl PipelineProcessor {
                 }
 
                 if let Some(cand) = best_candidate {
-                    // Assess with error based on judging skill
-                    let ability_error = (20i16 - judging as i16).max(1) as i32;
-                    let potential_error = (20i16 - judging_pot as i16).max(1) as i32;
-
+                    // Report figure: an independent roll on the same judging
+                    // error hoisted above, so what the board sees isn't pinned
+                    // to the draw that won selection.
                     let assessed_ability = (cand.ability as i32
                         + IntegerUtils::random(-ability_error, ability_error))
                     .clamp(1, 200) as u8;
@@ -1160,10 +1183,17 @@ impl PipelineProcessor {
                         })
                         .collect();
 
-                    if let Some(best) = dof_candidates.iter().max_by_key(|p| p.ability) {
-                        let ability_error = (20i16 - judging as i16).max(1) as i32;
-                        let potential_error = (20i16 - judging_pot as i16).max(1) as i32;
-
+                    // Rank by the DoF's PERCEIVED ability (judging-driven
+                    // error), not true ability — two equally-equipped
+                    // directors no longer both converge on the same single
+                    // name, so the bargain hunt spreads across comparable
+                    // expiring-contract targets.
+                    let ability_error = (20i16 - judging as i16).max(1) as i32;
+                    let potential_error = (20i16 - judging_pot as i16).max(1) as i32;
+                    if let Some(best) = dof_candidates.iter().max_by_key(|p| {
+                        (p.ability as i32 + IntegerUtils::random(-ability_error, ability_error))
+                            .clamp(1, 200)
+                    }) {
                         let assessed_ability = (best.ability as i32
                             + IntegerUtils::random(-ability_error, ability_error))
                         .clamp(1, 200) as u8;

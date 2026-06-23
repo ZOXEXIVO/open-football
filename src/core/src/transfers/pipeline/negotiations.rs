@@ -4,6 +4,7 @@ use rayon::prelude::*;
 use std::collections::HashSet;
 
 use crate::SimulatorData;
+use crate::country::result::transfers::types::can_club_accept_player;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
 use crate::transfers::market::{
@@ -144,20 +145,14 @@ impl PipelineProcessor {
                 continue;
             }
 
-            // Skip clubs that have reached their squad cap (main team only)
-            let max_squad = club
-                .board
-                .season_targets
-                .as_ref()
-                .map(|t| t.max_squad_size as usize)
-                .unwrap_or(50);
-            let main_squad = club
-                .teams
-                .teams
-                .first()
-                .map(|t| t.players.players.len())
-                .unwrap_or(0);
-            if main_squad >= max_squad {
+            // Skip clubs that have reached their squad cap. Use the same
+            // `can_club_accept_player` predicate the executor enforces: it
+            // resolves the Main team by TeamType, not `teams[0]`. The old
+            // `teams.first()` count gated against whatever team happened to
+            // sit first (often a reserve/B roster), so a club whose Main was
+            // already full kept agreeing deals the executor then refused —
+            // re-pursuing the same target every evaluation cycle.
+            if !can_club_accept_player(club) {
                 continue;
             }
 
