@@ -11,6 +11,7 @@ use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
+use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::player::waypoints::WaypointManager;
 use crate::r#match::{ActivityIntensity, GameTickContext, MatchContext, StateProcessingContext};
 use crate::utils::DateUtils;
@@ -38,6 +39,16 @@ pub struct MatchPlayer {
     pub velocity: Vector3<f32>,
     pub side: Option<PlayerSide>,
     pub state: PlayerState,
+    /// Ticks spent in the current `state`, counted in **AI ticks** (full
+    /// `game_tick_inner` passes), not raw simulation ticks. The engine
+    /// alternates full AI ticks with movement-only "light" ticks; only
+    /// full ticks run the state machine, so this counter advances once
+    /// per AI decision. Every per-state timeout (`in_state_time > N`) and
+    /// the fatigue curve are calibrated in these units. Reset to 0 by
+    /// [`MatchPlayer::transition_to`] (a true state-machine transition);
+    /// [`MatchPlayer::redirect_to`] (the out-of-band loose-ball / reset
+    /// overrides) deliberately PRESERVES it. See `game_tick_light` for why
+    /// light ticks leave it alone.
     pub in_state_time: u64,
     pub statistics: MatchPlayerStatistics,
     pub use_extended_state_logging: bool,
@@ -515,14 +526,6 @@ impl MatchPlayer {
         self.move_to();
     }
 
-    /// Movement-only update: apply existing velocity without re-evaluating AI state.
-    #[inline]
-    pub fn update_movement_only(&mut self, context: &MatchContext) {
-        self.in_state_time += 1;
-        self.check_boundary_collision(context);
-        self.move_to();
-    }
-
     #[inline]
     pub fn check_boundary_collision(&mut self, context: &MatchContext) {
         let field_width = context.field_size.width as f32 + 1.0;
@@ -551,8 +554,65 @@ impl MatchPlayer {
         }
     }
 
-    pub fn set_default_state(&mut self) {
-        self.state = Self::default_state(self.tactical_position.current_position);
+    /// A TRUE state-machine transition: set the new state AND reset
+    /// `in_state_time` to 0 so the destination's timers count from entry.
+    ///
+    /// Use this for the normal handler hand-off (`change_state`) and the
+    /// set-piece teleport — the sites that reset the timer in the
+    /// pre-refactor engine. For the out-of-band overrides that left the
+    /// timer running, use [`redirect_to`](Self::redirect_to) instead.
+    ///
+    /// `source` records WHY the transition happened for the
+    /// transition-graph audit (see [`TransitionSource`]); in production
+    /// (`match-logs` off) the recording compiles out.
+    ///
+    /// Pending cross-state handoffs are deliberately NOT cleared here:
+    /// `pending_shot_reason` is written by the transition INTO `Shooting`
+    /// and consumed there, so a blanket wipe would drop the shot-reason tag.
+    #[inline]
+    pub fn transition_to(&mut self, state: PlayerState, source: TransitionSource) {
+        self.in_state_time = 0;
+        self.set_state_internal(state, source);
+    }
+
+    /// Out-of-band state override that PRESERVES the running `in_state_time`.
+    ///
+    /// The loose-ball override, `run_for_ball`, and `set_default_state`
+    /// redirect a player mid-action — the AI yanks them onto the ball or
+    /// back into shape — rather than the state machine choosing to move on.
+    /// The pre-refactor engine left the in-state timer running across these
+    /// redirects, and that is load-bearing: resetting it measurably shifts
+    /// timing-driven state behaviour (notably the goalkeeper save states,
+    /// which key off `in_state_time`) and collapses scoring in the dev
+    /// harness (`stats` goals/match dropped ~10×). So this preserves the
+    /// timer to stay calibration-neutral; a clean per-entry timer here is
+    /// deferred to a change that re-tunes the affected states.
+    #[inline]
+    pub fn redirect_to(&mut self, state: PlayerState, source: TransitionSource) {
+        self.set_state_internal(state, source);
+    }
+
+    /// The one place `self.state` is written. Both `transition_to` and
+    /// `redirect_to` route through here, so the transition-graph audit sees
+    /// every state change and the "no raw `.state =`" invariant has a
+    /// single sanctioned site.
+    #[inline]
+    fn set_state_internal(&mut self, state: PlayerState, source: TransitionSource) {
+        let _from = self.state;
+        self.state = state;
+
+        #[cfg(feature = "match-logs")]
+        crate::r#match::TransitionGraph::record(_from, state, source);
+        #[cfg(not(feature = "match-logs"))]
+        let _ = source;
+    }
+
+    pub fn set_default_state(&mut self, source: TransitionSource) {
+        let default = Self::default_state(self.tactical_position.current_position);
+        // Redirect (timer-preserving): the pre-refactor `set_default_state`
+        // set the state without resetting in_state_time. Callers that need
+        // a reset (kickoff) do it explicitly, matching the old behaviour.
+        self.redirect_to(default, source);
         self.rebuild_waypoint_cache();
     }
 
@@ -570,7 +630,7 @@ impl MatchPlayer {
     }
 
     pub fn run_for_ball(&mut self) {
-        self.state = match self.tactical_position.current_position.position_group() {
+        let target = match self.tactical_position.current_position.position_group() {
             PlayerFieldPositionGroup::Goalkeeper => {
                 PlayerState::Goalkeeper(GoalkeeperState::TakeBall)
             }
@@ -579,7 +639,11 @@ impl MatchPlayer {
                 PlayerState::Midfielder(MidfielderState::TakeBall)
             }
             PlayerFieldPositionGroup::Forward => PlayerState::Forward(ForwardState::TakeBall),
-        }
+        };
+        // Loose-ball signal from an event handler — redirect onto the ball
+        // mid-action. Timer-preserving (`redirect_to`) to match the
+        // pre-refactor behaviour and stay calibration-neutral.
+        self.redirect_to(target, TransitionSource::EventHandler);
     }
 
     #[inline]
@@ -736,6 +800,11 @@ impl From<&MatchPlayer> for MatchPlayerLite {
 mod tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::r#match::MatchPlayer;
+    use crate::r#match::defenders::states::DefenderState;
+    use crate::r#match::forwarders::states::ForwardState;
+    use crate::r#match::midfielders::states::MidfielderState;
+    use crate::r#match::player::state::PlayerState;
+    use crate::r#match::player::transition::TransitionSource;
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
@@ -803,5 +872,62 @@ mod tests {
         // Pathological — 200 minute match should clamp to 120.
         let minutes = p.minutes_played_at(200 * 60_000);
         assert_eq!(minutes, 120);
+    }
+
+    #[test]
+    fn transition_to_sets_state_and_resets_timer() {
+        let mut p = build_player(PlayerPositionType::ForwardCenter);
+        p.in_state_time = 137;
+        p.transition_to(
+            PlayerState::Forward(ForwardState::Dribbling),
+            TransitionSource::Handler,
+        );
+        assert_eq!(p.state, PlayerState::Forward(ForwardState::Dribbling));
+        assert_eq!(p.in_state_time, 0, "transition must reset the state timer");
+    }
+
+    #[test]
+    fn redirect_to_sets_state_but_preserves_timer() {
+        // The out-of-band override path keeps the running timer — this is
+        // load-bearing for timing-driven states (notably the GK save
+        // states) and is what keeps the refactor calibration-neutral.
+        let mut p = build_player(PlayerPositionType::DefenderCenter);
+        p.in_state_time = 137;
+        p.redirect_to(
+            PlayerState::Defender(DefenderState::TakeBall),
+            TransitionSource::LooseBallOverride,
+        );
+        assert_eq!(p.state, PlayerState::Defender(DefenderState::TakeBall));
+        assert_eq!(p.in_state_time, 137, "redirect_to must preserve the timer");
+    }
+
+    #[test]
+    fn run_for_ball_enters_takeball_preserving_timer() {
+        // run_for_ball redirects onto a loose ball mid-action without
+        // resetting in_state_time (matches the pre-refactor behaviour).
+        let mut p = build_player(PlayerPositionType::MidfielderCenter);
+        p.in_state_time = 90;
+        p.run_for_ball();
+        assert_eq!(p.state, PlayerState::Midfielder(MidfielderState::TakeBall));
+        assert_eq!(p.in_state_time, 90, "run_for_ball preserves in_state_time");
+    }
+
+    #[test]
+    fn set_default_state_sets_default_preserving_timer() {
+        // reset_players_positions / substitutions route through
+        // set_default_state, which is timer-preserving; callers that need a
+        // reset (kickoff) do it explicitly.
+        let mut p = build_player(PlayerPositionType::DefenderCenter);
+        p.redirect_to(
+            PlayerState::Defender(DefenderState::Marking),
+            TransitionSource::Handler,
+        );
+        p.in_state_time = 250;
+        p.set_default_state(TransitionSource::Reset);
+        assert_eq!(p.state, PlayerState::Defender(DefenderState::Standing));
+        assert_eq!(
+            p.in_state_time, 250,
+            "set_default_state preserves the timer"
+        );
     }
 }

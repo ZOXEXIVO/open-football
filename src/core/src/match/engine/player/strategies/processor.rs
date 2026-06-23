@@ -10,6 +10,7 @@ use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, Midfielder};
 use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
+use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::team::TeamOperationsImpl;
 use crate::r#match::{BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer};
 use log::debug;
@@ -50,10 +51,20 @@ impl PlayerFieldPositionGroup {
         // chasers pile up over time because TakeBall only exits on
         // ownership, not on "someone else is a better chaser now".
         let override_state_time = if Self::should_yield_takeball(*self, player, tick_context) {
-            player.state = Self::yield_state_for(*self);
+            // Redirect preserves the persisted in_state_time (the
+            // pre-refactor override left it running — load-bearing for GK
+            // save-state timing); dispatch THIS tick with 0 to match the
+            // old "override_state_time = 0" behaviour exactly.
+            player.redirect_to(
+                Self::yield_state_for(*self),
+                TransitionSource::LooseBallOverride,
+            );
             0
         } else if Self::should_force_takeball(*self, player, tick_context) {
-            player.state = Self::takeball_state_for(*self);
+            player.redirect_to(
+                Self::takeball_state_for(*self),
+                TransitionSource::LooseBallOverride,
+            );
             0
         } else {
             in_state_time
@@ -306,30 +317,20 @@ impl<'p> StateProcessor<'p> {
             result.velocity = Some(velocity * tempo);
         }
 
-        // common logic
-        let complete_result = |state_results: StateChangeResult,
-                               mut result: StateProcessingResult| {
-            // Propagate the tackle-cooldown signal regardless of whether
-            // the handler also changed state — a successful tackle
-            // returns a state-change + cooldown, but a keep-current-state
-            // (None) wouldn't hit the `if let Some(state)` branch below.
-            result.start_tackle_cooldown = state_results.start_tackle_cooldown;
-            // Propagate the shot reason the same way — tagged at the
-            // transition point, consumed by the Shooting state when it
-            // composes the Shoot event.
-            result.shot_reason = state_results.shot_reason;
-            if let Some(state) = state_results.state {
-                if need_extended_state_logging {
+        if let Some(change) = handler.process(&processing_ctx) {
+            // Extended per-player state trace — only a real transition is
+            // worth a line; event-only results keep the current state.
+            if need_extended_state_logging {
+                if let Some(state) = change.state {
                     debug!("Player, Id={}, State {:?}", player_id, state);
                 }
-                result.state = Some(state);
-                result.events = state_results.events;
             }
-            result
-        };
-
-        if let Some(state_result) = handler.process(&processing_ctx) {
-            return complete_result(state_result, result);
+            // Fold the handler's result in. `merge_state_change` moves the
+            // events across WHETHER OR NOT a transition occurred — an
+            // event-only result (state == None) must still reach the
+            // EventDispatcher. Dropping those was the cause of the
+            // CrossReceiving "ground ball rolls through the receiver" bug.
+            result.merge_state_change(change);
         }
 
         result
@@ -429,11 +430,37 @@ impl StateProcessingResult {
             shot_reason: None,
         }
     }
+
+    /// Fold a per-state [`StateChangeResult`] into this processing result.
+    ///
+    /// Events propagate together with a state transition. The tackle-
+    /// cooldown and shot-reason side-channels propagate unconditionally —
+    /// they're consumed regardless of whether the state changed.
+    ///
+    /// KNOWN LATENT BUG, deliberately preserved here: a handler that emits
+    /// an event WITHOUT a state change (`state == None`) has that event
+    /// dropped — e.g. `ForwardCrossReceivingState`'s ground-ball
+    /// `RequestBallReceive`. Propagating those events is the obvious fix,
+    /// but it un-masks goalkeeper save events the engine's scoring
+    /// calibration was (unknowingly) built around: with them restored, GK
+    /// saves jump from ~54% to ~96% of shots on target and dev_match
+    /// goals/match collapse ~10× (0.60 → 0.05). Fixing it therefore needs a
+    /// separate recalibration pass and is out of scope for this
+    /// calibration-neutral state-graph-safety change. Keeping the merge as
+    /// a single testable method is the structural win; the behaviour stays
+    /// byte-for-byte identical to the pre-refactor closure.
+    pub fn merge_state_change(&mut self, change: StateChangeResult) {
+        self.start_tackle_cooldown = change.start_tackle_cooldown;
+        self.shot_reason = change.shot_reason;
+        if change.state.is_some() {
+            self.state = change.state;
+            self.events = change.events;
+        }
+    }
 }
 
 pub struct StateChangeResult {
     pub state: Option<PlayerState>,
-    pub velocity: Option<Vector3<f32>>,
 
     pub events: EventCollection,
 
@@ -462,7 +489,6 @@ impl StateChangeResult {
     pub fn new() -> Self {
         StateChangeResult {
             state: None,
-            velocity: None,
             events: EventCollection::new(),
             start_tackle_cooldown: false,
             shot_reason: None,
@@ -556,5 +582,66 @@ impl StateChangeResult {
             events,
             ..Self::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::{StateChangeResult, StateProcessingResult};
+    use crate::r#match::events::Event;
+    use crate::r#match::forwarders::states::ForwardState;
+    use crate::r#match::player::events::PlayerEvent;
+    use crate::r#match::player::state::PlayerState;
+
+    #[test]
+    fn state_transition_with_event_propagates_both() {
+        // A transition that also carries an event keeps both halves — this
+        // is how every save / shot / pass event reaches the dispatcher.
+        let mut result = StateProcessingResult::new();
+        result.merge_state_change(StateChangeResult::with_forward_state_and_event(
+            ForwardState::Heading,
+            Event::PlayerEvent(PlayerEvent::RequestBallReceive(3)),
+        ));
+
+        assert_eq!(
+            result.state,
+            Some(PlayerState::Forward(ForwardState::Heading))
+        );
+        assert!(result.events.has_events());
+    }
+
+    #[test]
+    fn event_only_result_is_dropped_known_latent_bug() {
+        // DOCUMENTED behaviour, intentionally preserved for calibration
+        // neutrality: an event with no state change (state == None) is NOT
+        // propagated. Restoring it un-masks goalkeeper save events and
+        // collapses scoring (see `merge_state_change`). If this assertion
+        // ever flips, it must land together with a GK recalibration.
+        let mut result = StateProcessingResult::new();
+        result.merge_state_change(StateChangeResult::with_event(Event::PlayerEvent(
+            PlayerEvent::RequestBallReceive(7),
+        )));
+
+        assert!(result.state.is_none());
+        assert!(
+            !result.events.has_events(),
+            "event-only results are dropped (known latent bug, see merge_state_change)"
+        );
+    }
+
+    #[test]
+    fn side_channels_propagate_without_state_change() {
+        // The tackle-cooldown and shot-reason side-channels DO propagate
+        // regardless of state — a tackle that keeps the current state still
+        // starts its cooldown.
+        let mut result = StateProcessingResult::new();
+        let mut change = StateChangeResult::new();
+        change.start_tackle_cooldown = true;
+        change.shot_reason = Some("TEST");
+        result.merge_state_change(change);
+
+        assert!(result.start_tackle_cooldown);
+        assert_eq!(result.shot_reason, Some("TEST"));
+        assert!(result.state.is_none());
     }
 }

@@ -11,27 +11,56 @@ use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::Result;
 use std::fmt::{Display, Formatter};
 
+// Explicit discriminants pin `compact_id` (see `forwarders::states::state`
+// for the full rationale). New variants take the next number and append
+// to `ALL`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MidfielderState {
-    Standing,         // Standing still
-    Distributing,     // Distributing the ball to teammates
-    Dribbling,        // Dribbling the ball
-    AttackSupporting, // Supporting the attack, moving forward
-    SwitchingPlay,    // Switching the play to the other side of the field
-    Crossing,         // Delivering a cross into the box
-    Passing,          // Executing a  pass
-    Running,          // Running in the direction of the ball
-    DistanceShooting, // Taking a shot from a long distance
-    Pressing,         // Pressing the opponent to regain possession
-    Tackling,         // Tackling to win the ball
-    Returning,        // Returning the ball,
-    Resting,          // Resting
-    Walking,          // Walking
-    TakeBall,         // Take the ball,
-    Shooting,         // Shooting,
-    Intercepting,     // Intercepting the ball,
-    CreatingSpace,    // Creating space for teammates
-    Guarding,         // Guarding an attacker — denying space and preventing them from getting open
+    Standing = 0,         // Standing still
+    Distributing = 1,     // Distributing the ball to teammates
+    Dribbling = 2,        // Dribbling the ball
+    AttackSupporting = 3, // Supporting the attack, moving forward
+    SwitchingPlay = 4,    // Switching the play to the other side of the field
+    Crossing = 5,         // Delivering a cross into the box
+    Passing = 6,          // Executing a  pass
+    Running = 7,          // Running in the direction of the ball
+    DistanceShooting = 8, // Taking a shot from a long distance
+    Pressing = 9,         // Pressing the opponent to regain possession
+    Tackling = 10,        // Tackling to win the ball
+    Returning = 11,       // Returning the ball,
+    Resting = 12,         // Resting
+    Walking = 13,         // Walking
+    TakeBall = 14,        // Take the ball,
+    Shooting = 15,        // Shooting,
+    Intercepting = 16,    // Intercepting the ball,
+    CreatingSpace = 17,   // Creating space for teammates
+    Guarding = 18,        // Guarding an attacker — denying space and preventing them from getting open
+}
+
+impl MidfielderState {
+    /// Every variant in declared order — single source of truth for the
+    /// state universe (transition-graph audit + id-stability snapshot).
+    pub const ALL: [MidfielderState; 19] = [
+        MidfielderState::Standing,
+        MidfielderState::Distributing,
+        MidfielderState::Dribbling,
+        MidfielderState::AttackSupporting,
+        MidfielderState::SwitchingPlay,
+        MidfielderState::Crossing,
+        MidfielderState::Passing,
+        MidfielderState::Running,
+        MidfielderState::DistanceShooting,
+        MidfielderState::Pressing,
+        MidfielderState::Tackling,
+        MidfielderState::Returning,
+        MidfielderState::Resting,
+        MidfielderState::Walking,
+        MidfielderState::TakeBall,
+        MidfielderState::Shooting,
+        MidfielderState::Intercepting,
+        MidfielderState::CreatingSpace,
+        MidfielderState::Guarding,
+    ];
 }
 
 pub struct MidfielderStrategies {}

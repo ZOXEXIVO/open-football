@@ -9,12 +9,14 @@ pub mod positions;
 pub mod state;
 pub mod statistics;
 pub mod strategies;
+pub mod transition;
 mod waypoints;
 
 pub use behaviours::*;
 pub use context::*;
 use itertools::Itertools;
 pub use player::*;
+pub use transition::{GraphEdge, GraphInvariantViolation, TransitionGraph, TransitionSource};
 
 // Re-export positions items except conflicting ones
 pub use positions::ball as position_ball;

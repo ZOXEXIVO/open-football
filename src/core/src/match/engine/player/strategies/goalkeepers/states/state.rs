@@ -11,29 +11,60 @@ use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::Result;
 use std::fmt::{Display, Formatter};
 
+// Explicit discriminants pin `compact_id` (see `forwarders::states::state`
+// for the full rationale). New variants take the next number and append
+// to `ALL`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GoalkeeperState {
-    Standing,         // Standing
-    Resting,          // Resting
-    Jumping,          // Jumping
-    Diving,           // Diving to save the ball
-    Catching,         // Catching the ball with hands
-    Punching,         // Punching the ball away
-    Kicking,          // Kicking the ball
-    Clearing,         // Emergency clearance - boot the ball away
-    HoldingBall,      // Holding the ball in hands
-    Throwing,         // Throwing the ball with hands
-    PickingUpBall,    // Picking up the ball from the ground
-    Distributing,     // Distributing the ball after catching it
-    ComingOut,        // Coming out of the goal to intercept
-    Passing,          // Passing the ball
-    ReturningToGoal,  // Returning to the goal after coming out
-    Tackling,         // Tackling the ball
-    Shooting,         // Shoot to goal
-    PreparingForSave, // Preparing to make a save
-    Walking,          // Walking
-    TakeBall,         // Take the ball,
-    Running,          // Running
+    Standing = 0,          // Standing
+    Resting = 1,           // Resting
+    Jumping = 2,           // Jumping
+    Diving = 3,            // Diving to save the ball
+    Catching = 4,          // Catching the ball with hands
+    Punching = 5,          // Punching the ball away
+    Kicking = 6,           // Kicking the ball
+    Clearing = 7,          // Emergency clearance - boot the ball away
+    HoldingBall = 8,       // Holding the ball in hands
+    Throwing = 9,          // Throwing the ball with hands
+    PickingUpBall = 10,    // Picking up the ball from the ground
+    Distributing = 11,     // Distributing the ball after catching it
+    ComingOut = 12,        // Coming out of the goal to intercept
+    Passing = 13,          // Passing the ball
+    ReturningToGoal = 14,  // Returning to the goal after coming out
+    Tackling = 15,         // Tackling the ball
+    Shooting = 16,         // Shoot to goal
+    PreparingForSave = 17, // Preparing to make a save
+    Walking = 18,          // Walking
+    TakeBall = 19,         // Take the ball,
+    Running = 20,          // Running
+}
+
+impl GoalkeeperState {
+    /// Every variant in declared order — single source of truth for the
+    /// state universe (transition-graph audit + id-stability snapshot).
+    pub const ALL: [GoalkeeperState; 21] = [
+        GoalkeeperState::Standing,
+        GoalkeeperState::Resting,
+        GoalkeeperState::Jumping,
+        GoalkeeperState::Diving,
+        GoalkeeperState::Catching,
+        GoalkeeperState::Punching,
+        GoalkeeperState::Kicking,
+        GoalkeeperState::Clearing,
+        GoalkeeperState::HoldingBall,
+        GoalkeeperState::Throwing,
+        GoalkeeperState::PickingUpBall,
+        GoalkeeperState::Distributing,
+        GoalkeeperState::ComingOut,
+        GoalkeeperState::Passing,
+        GoalkeeperState::ReturningToGoal,
+        GoalkeeperState::Tackling,
+        GoalkeeperState::Shooting,
+        GoalkeeperState::PreparingForSave,
+        GoalkeeperState::Walking,
+        GoalkeeperState::TakeBall,
+        GoalkeeperState::Running,
+    ];
 }
 
 pub struct GoalkeeperStrategies {}

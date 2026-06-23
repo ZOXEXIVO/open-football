@@ -1,5 +1,8 @@
 use super::*;
+use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::player::events::players::FoulResolver;
+use crate::r#match::player::state::PlayerState;
+use crate::r#match::player::transition::TransitionSource;
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
@@ -55,6 +58,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // boundary clamp here would drag them to (0, 0) — the pitch's
         // top-left corner — which then gets recorded as a ghost sample
         // by `write_match_positions`.
+        //
+        // Light ticks advance position from the velocity the last AI tick
+        // set, but deliberately do NOT touch `in_state_time`: state
+        // timeouts and the fatigue curve are calibrated in AI ticks (full
+        // `game_tick_inner` passes), and the state machine only runs on
+        // those. Advancing the timer here would double its rate relative
+        // to AI decisions and halve every state timeout — a calibration
+        // change, not a graph fix. See `MatchPlayer::in_state_time`.
         for player in field.players.iter_mut().filter(|p| !p.is_sent_off) {
             player.check_boundary_collision(context);
             player.move_to();
@@ -121,20 +132,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // sim for them to walk up during, and they can't run the length
         // of the pitch inside the cross window).
         if !field.ball.pending_corner_teleports.is_empty() {
-            use crate::r#match::defenders::states::DefenderState;
-            use crate::r#match::player::state::PlayerState;
             let teleports = std::mem::take(&mut field.ball.pending_corner_teleports);
             for (player_id, pos) in teleports {
                 if let Some(idx) = field.player_index(player_id) {
                     let p = &mut field.players[idx];
                     p.position = pos;
                     p.velocity = Vector3::zeros();
-                    p.in_state_time = 0;
                     // Force the AttackingCorner state directly — the CB may
                     // have been in any defensive state when the corner was
                     // won, and not all of them carry the entry hook. This
-                    // guarantees they attack the delivery.
-                    p.state = PlayerState::Defender(DefenderState::AttackingCorner);
+                    // guarantees they attack the delivery. `transition_to`
+                    // also resets in_state_time so the run starts at entry.
+                    p.transition_to(
+                        PlayerState::Defender(DefenderState::AttackingCorner),
+                        TransitionSource::SetPiece,
+                    );
                 }
             }
         }

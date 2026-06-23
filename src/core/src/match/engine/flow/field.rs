@@ -3,7 +3,7 @@ use crate::club::staff::CoachMatchSnapshot;
 use crate::r#match::ball::Ball;
 use crate::r#match::{
     FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, POSITION_POSITIONING, PlayerSide,
-    PositionType,
+    PositionType, TransitionSource,
 };
 use nalgebra::Vector3;
 
@@ -100,7 +100,9 @@ impl MatchField {
             p.position = p.start_position;
             p.velocity = Vector3::zeros();
 
-            p.set_default_state();
+            // Formation rebuild on a restart — resets each player's state
+            // timer along with the state (via `transition_to`).
+            p.set_default_state(TransitionSource::Reset);
         });
     }
 
@@ -264,7 +266,7 @@ impl MatchField {
         player_in.tactical_position.regenerate_waypoints(side);
         player_in.start_position = start_pos;
         player_in.position = start_pos;
-        player_in.set_default_state();
+        player_in.set_default_state(TransitionSource::Substitution);
 
         // Replace the outgoing player in the field
         if let Some(out_slot) = self.players.iter_mut().find(|p| p.id == player_out_id) {

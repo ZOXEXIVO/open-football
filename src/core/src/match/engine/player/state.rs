@@ -6,6 +6,7 @@ use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MovementEffort};
 
 use nalgebra::Vector3;
@@ -25,6 +26,12 @@ pub enum PlayerState {
 impl PlayerState {
     /// Cheap integer ID for fast dedup — avoids `to_string()` allocation.
     /// Each (outer variant, inner variant) pair maps to a unique u16.
+    ///
+    /// The id is embedded in replay / position records, so it must stay
+    /// stable across releases. The inner `*s as u16` reads the inner
+    /// enum's **explicit** discriminant (every state enum pins them), and
+    /// `compact_id_snapshot` in this file's tests fails loudly if any
+    /// value drifts — so it never silently depends on variant order.
     #[inline]
     pub fn compact_id(&self) -> u16 {
         match self {
@@ -34,6 +41,46 @@ impl PlayerState {
             PlayerState::Midfielder(s) => 300 + (*s as u16),
             PlayerState::Forward(s) => 400 + (*s as u16),
         }
+    }
+
+    /// Every state in the engine's universe, role-then-declaration order.
+    /// The single source of truth for the transition-graph audit and the
+    /// compact-id stability snapshot. Built from each role's `ALL`
+    /// registry, so adding a state in one place flows through here.
+    pub fn all() -> Vec<PlayerState> {
+        let mut states = Vec::with_capacity(1 + 21 + 20 + 19 + 19);
+        states.push(PlayerState::Injured);
+        states.extend(GoalkeeperState::ALL.map(PlayerState::Goalkeeper));
+        states.extend(DefenderState::ALL.map(PlayerState::Defender));
+        states.extend(MidfielderState::ALL.map(PlayerState::Midfielder));
+        states.extend(ForwardState::ALL.map(PlayerState::Forward));
+        states
+    }
+
+    /// States a player may occupy with no inbound transition: the per-role
+    /// kickoff defaults the match *starts* in (via `set_default_state`)
+    /// before any transition fires. The transition-graph audit exempts
+    /// these from the "every state has an inbound edge" rule.
+    pub fn entry_states() -> [PlayerState; 4] {
+        [
+            PlayerState::Goalkeeper(GoalkeeperState::Standing),
+            PlayerState::Defender(DefenderState::Standing),
+            PlayerState::Midfielder(MidfielderState::Standing),
+            PlayerState::Forward(ForwardState::Standing),
+        ]
+    }
+
+    /// States reserved / not yet wired into the in-match state machine.
+    ///
+    /// `Injured` has a handler (`CommonInjuredState`) and a `compact_id`,
+    /// but **no code path transitions a player into it during a match** —
+    /// in-match injuries are intentionally future work (fitness/injury
+    /// modelling lives in the development pipeline, not the engine). It is
+    /// kept as a deliberate placeholder. The audit treats reserved states
+    /// as both entry (no inbound required) and terminal (no outbound
+    /// required) so the unwired state is not flagged.
+    pub fn reserved_states() -> [PlayerState; 1] {
+        [PlayerState::Injured]
     }
 }
 
@@ -181,7 +228,92 @@ impl PlayerMatchState {
     }
 
     fn change_state(player: &mut MatchPlayer, state: PlayerState) {
-        player.in_state_time = 0;
-        player.state = state;
+        // Normal state-machine hand-off: a state handler returned a new
+        // state via `StateChangeResult`. Routed through the single
+        // transition API so the timer reset and graph audit are uniform.
+        player.transition_to(state, TransitionSource::Handler);
+    }
+}
+
+#[cfg(test)]
+mod state_id_tests {
+    use super::PlayerState;
+    use crate::r#match::defenders::states::DefenderState;
+    use crate::r#match::forwarders::states::ForwardState;
+    use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+    use crate::r#match::midfielders::states::MidfielderState;
+
+    #[test]
+    fn role_discriminants_match_declaration_order() {
+        // Each role enum's discriminant must equal its index in `ALL`.
+        // This is what makes `compact_id` independent of variant *position*:
+        // reorder a variant and its discriminant no longer matches its
+        // slot, failing here before any replay could be misnumbered.
+        for (i, s) in GoalkeeperState::ALL.iter().enumerate() {
+            assert_eq!(*s as u16, i as u16, "GoalkeeperState::ALL[{i}]");
+        }
+        for (i, s) in DefenderState::ALL.iter().enumerate() {
+            assert_eq!(*s as u16, i as u16, "DefenderState::ALL[{i}]");
+        }
+        for (i, s) in MidfielderState::ALL.iter().enumerate() {
+            assert_eq!(*s as u16, i as u16, "MidfielderState::ALL[{i}]");
+        }
+        for (i, s) in ForwardState::ALL.iter().enumerate() {
+            assert_eq!(*s as u16, i as u16, "ForwardState::ALL[{i}]");
+        }
+    }
+
+    #[test]
+    fn compact_id_snapshot() {
+        // Pin the entire id space. If a state is added, removed, reordered
+        // or renumbered, this fails — the signal to bump the replay format
+        // intentionally rather than by accident.
+        let all = PlayerState::all();
+        assert_eq!(all.len(), 1 + 21 + 20 + 19 + 19, "state count changed");
+        assert_eq!(GoalkeeperState::ALL.len(), 21);
+        assert_eq!(DefenderState::ALL.len(), 20);
+        assert_eq!(MidfielderState::ALL.len(), 19);
+        assert_eq!(ForwardState::ALL.len(), 19);
+
+        let mut ids: Vec<u16> = all.iter().map(|s| s.compact_id()).collect();
+        let unique: std::collections::BTreeSet<u16> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), ids.len(), "compact_ids must be unique");
+
+        ids.sort_unstable();
+        let mut expected: Vec<u16> = vec![0]; // Injured
+        expected.extend(100..=120u16); // 21 GK
+        expected.extend(200..=219u16); // 20 DEF
+        expected.extend(300..=318u16); // 19 MID
+        expected.extend(400..=418u16); // 19 FWD
+        assert_eq!(ids, expected, "compact_id space drifted");
+
+        // Anchor a few named states so an intra-band reorder is caught
+        // even though the band-set check above would not notice it.
+        assert_eq!(PlayerState::Injured.compact_id(), 0);
+        assert_eq!(
+            PlayerState::Goalkeeper(GoalkeeperState::Standing).compact_id(),
+            100
+        );
+        assert_eq!(
+            PlayerState::Defender(DefenderState::AttackingCorner).compact_id(),
+            219
+        );
+        assert_eq!(
+            PlayerState::Midfielder(MidfielderState::Guarding).compact_id(),
+            318
+        );
+        assert_eq!(
+            PlayerState::Forward(ForwardState::CrossReceiving).compact_id(),
+            411
+        );
+    }
+
+    #[test]
+    fn injured_is_reserved_and_not_an_entry_state() {
+        // Documents the dead-state decision: Injured is reserved (no
+        // inbound transition in the match engine), not an entry state.
+        assert!(PlayerState::reserved_states().contains(&PlayerState::Injured));
+        assert!(!PlayerState::entry_states().contains(&PlayerState::Injured));
+        assert_eq!(PlayerState::Injured.compact_id(), 0);
     }
 }

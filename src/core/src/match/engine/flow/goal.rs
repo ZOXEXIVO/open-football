@@ -1,7 +1,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::GoalSide;
 use crate::r#match::field::MatchField;
-use crate::r#match::{MatchContext, PlayerSide};
+use crate::r#match::{MatchContext, PlayerSide, TransitionSource};
 use nalgebra::Vector3;
 
 use super::super::engine::MatchFieldSize;
@@ -94,7 +94,10 @@ pub fn assign_kickoff(field: &mut MatchField, side: PlayerSide) {
         if let Some(kicker) = field.players.iter_mut().find(|p| p.id == player_id) {
             kicker.position = ball_pos;
             kicker.velocity = Vector3::zeros();
-            kicker.set_default_state();
+            kicker.set_default_state(TransitionSource::Reset);
+            // `set_default_state` is timer-preserving; the kickoff taker
+            // reset its timer explicitly in the pre-refactor engine, so
+            // keep that to stay calibration-neutral.
             kicker.in_state_time = 0;
         }
         field.ball.current_owner = Some(player_id);

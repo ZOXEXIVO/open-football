@@ -1491,6 +1491,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::helper_diag::reset();
     core::mid_run_diag::reset();
     core::time_band_diag::reset();
+    core::r#match::TransitionGraph::reset();
     {
         use std::sync::atomic::Ordering;
         core::save_accounting_stats::SAVE_TICKS_REACHED.store(0, Ordering::Relaxed);
@@ -2891,6 +2892,67 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         "  block→corner branch fired={}  save-parry→corner branch fired={}",
         mr[14], mr[15]
     );
+
+    // Player state-transition graph — the union of every distinct
+    // `from -> to` edge (tagged by source) observed across the batch.
+    // Dumped as Graphviz DOT and checked against the structural
+    // invariants: every non-entry state reachable, every non-terminal
+    // state has an exit. This is the population-scale transition graph,
+    // so it exercises the audit on real play rather than synthetic edges.
+    {
+        let edges = core::r#match::TransitionGraph::edges();
+        let dot = core::r#match::TransitionGraph::render_dot(&edges);
+        let dot_path = "player_state_transitions.dot";
+        let written = std::fs::write(dot_path, &dot).is_ok();
+        println!();
+        println!("--- STATE TRANSITION GRAPH ---");
+        if written {
+            println!("  {} distinct edges → {}", edges.len(), dot_path);
+        } else {
+            println!("  {} distinct edges (DOT write failed)", edges.len());
+        }
+
+        // Edge-source breakdown (handler vs the out-of-band overrides).
+        let mut by_source: std::collections::BTreeMap<&str, usize> =
+            std::collections::BTreeMap::new();
+        for e in &edges {
+            *by_source.entry(e.source.as_tag()).or_insert(0) += 1;
+        }
+        let src_summary: Vec<String> =
+            by_source.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        println!("  by source: {}", src_summary.join("  "));
+
+        // Structural invariants over the OBSERVED graph. Entry = the four
+        // kickoff defaults + reserved (Injured); terminal = reserved.
+        let universe = core::r#match::player::state::PlayerState::all();
+        let mut entry = core::r#match::player::state::PlayerState::entry_states().to_vec();
+        entry.extend(core::r#match::player::state::PlayerState::reserved_states());
+        let terminal = core::r#match::player::state::PlayerState::reserved_states().to_vec();
+        let violations = core::r#match::TransitionGraph::audit(&edges, &universe, &entry, &terminal);
+
+        // Only flag states actually exercised this run — an unreached
+        // state is "not observed", not a structural dead-end.
+        let observed: std::collections::HashSet<u16> = edges
+            .iter()
+            .flat_map(|e| [e.from.compact_id(), e.to.compact_id()])
+            .collect();
+        let real: Vec<_> = violations
+            .into_iter()
+            .filter(|v| match v {
+                core::r#match::GraphInvariantViolation::Unreachable(id)
+                | core::r#match::GraphInvariantViolation::DeadEnd(id) => observed.contains(id),
+            })
+            .collect();
+        println!("  states observed: {}/{}", observed.len(), universe.len());
+        if real.is_empty() {
+            println!("  invariants: OK (no observed unreachable / dead-end states)");
+        } else {
+            println!("  invariants: {} violation(s) among observed states:", real.len());
+            for v in &real {
+                println!("    {v:?}");
+            }
+        }
+    }
 
     // Shot-gate waterfall — each row is the absolute count of forward-has-ball
     // ticks that survived every gate so far. The % drop column is the share

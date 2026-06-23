@@ -67,9 +67,10 @@ pub use rating::*;
 
 // Re-export player items except conflicting ones
 pub use player::{
-    BallOperationsImpl, MatchPlayer, MatchPlayerLite, PlayerSide, behaviours, closure,
-    common_states, decision, defender_states, defenders, forwarders, goalkeepers, midfielders,
-    objects, passing, team,
+    BallOperationsImpl, GraphEdge, GraphInvariantViolation, MatchPlayer, MatchPlayerLite,
+    PlayerSide, TransitionGraph, TransitionSource, behaviours, closure, common_states, decision,
+    defender_states, defenders, forwarders, goalkeepers, midfielders, objects, passing, team,
+    transition,
 };
 
 // Re-export specific types from player submodules that code expects at this level

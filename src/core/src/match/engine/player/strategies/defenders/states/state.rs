@@ -10,28 +10,58 @@ use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::Result;
 use std::fmt::{Display, Formatter};
 
+// Explicit discriminants pin `compact_id` (see `forwarders::states::state`
+// for the full rationale). New variants take the next number and append
+// to `ALL`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DefenderState {
-    Standing,        // Standing
-    Covering,        // Covering the ball
-    PushingUp,       // Pushing the ball up
-    Resting,         // Resting after an attack
-    Passing,         // Passing the ball
-    Running,         // Running in the direction of the ball
-    Intercepting,    // Intercepting a pass
-    Marking,         // Marking an attacker
-    Clearing,        // Clearing the ball from the danger zone
-    Heading,         // Heading the ball, often during corners or crosses
-    Tackling,        // Tackling the ball
-    Pressing,        // Pressing the opponent
-    TrackingBack,    // Tracking back to defense after an attack
-    HoldingLine,     // Holding the defensive line
-    Returning,       // Returning the ball,
-    Walking,         // Walking around,
-    TakeBall,        // Take the ball,
-    Shooting,        // Shoting the ball,
-    Guarding,        // Guarding an attacker — denying space and preventing them from getting open
-    AttackingCorner, // Pushed up to attack an attacking corner (run into the box, head on goal)
+    Standing = 0,         // Standing
+    Covering = 1,         // Covering the ball
+    PushingUp = 2,        // Pushing the ball up
+    Resting = 3,          // Resting after an attack
+    Passing = 4,          // Passing the ball
+    Running = 5,          // Running in the direction of the ball
+    Intercepting = 6,     // Intercepting a pass
+    Marking = 7,          // Marking an attacker
+    Clearing = 8,         // Clearing the ball from the danger zone
+    Heading = 9,          // Heading the ball, often during corners or crosses
+    Tackling = 10,        // Tackling the ball
+    Pressing = 11,        // Pressing the opponent
+    TrackingBack = 12,    // Tracking back to defense after an attack
+    HoldingLine = 13,     // Holding the defensive line
+    Returning = 14,       // Returning the ball,
+    Walking = 15,         // Walking around,
+    TakeBall = 16,        // Take the ball,
+    Shooting = 17,        // Shoting the ball,
+    Guarding = 18,        // Guarding an attacker — denying space and preventing them from getting open
+    AttackingCorner = 19, // Pushed up to attack an attacking corner (run into the box, head on goal)
+}
+
+impl DefenderState {
+    /// Every variant in declared order — single source of truth for the
+    /// state universe (transition-graph audit + id-stability snapshot).
+    pub const ALL: [DefenderState; 20] = [
+        DefenderState::Standing,
+        DefenderState::Covering,
+        DefenderState::PushingUp,
+        DefenderState::Resting,
+        DefenderState::Passing,
+        DefenderState::Running,
+        DefenderState::Intercepting,
+        DefenderState::Marking,
+        DefenderState::Clearing,
+        DefenderState::Heading,
+        DefenderState::Tackling,
+        DefenderState::Pressing,
+        DefenderState::TrackingBack,
+        DefenderState::HoldingLine,
+        DefenderState::Returning,
+        DefenderState::Walking,
+        DefenderState::TakeBall,
+        DefenderState::Shooting,
+        DefenderState::Guarding,
+        DefenderState::AttackingCorner,
+    ];
 }
 
 pub struct DefenderStrategies {}
