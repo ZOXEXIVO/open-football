@@ -30,6 +30,37 @@ const DEFAULT_AMORTIZATION_YEARS: u8 = 4;
 struct TransferExecution;
 
 impl TransferExecution {
+    /// History identity of the squad a player physically occupies at
+    /// `club_id` — own slug + league for a senior own team (Main/B/Second),
+    /// the club's Main-team alias for a Reserve/youth squad (and as the
+    /// fallback when the player isn't found on a roster team). Mirrors the
+    /// seeder's `team_info_for`, so the spell a loan/transfer departs
+    /// matches the one the player's history actually carries.
+    ///
+    /// Using the club Main team for a B/Second player would mark the wrong
+    /// (Main) spell departed and leave the player's real reserve-squad spell
+    /// active — the History projection then phantom-drops the genuinely new
+    /// club. Core-side mirror of the web layer's `get_source_history_info`.
+    fn resolve_history_source_info(
+        country: &Country,
+        club_id: u32,
+        player_id: u32,
+    ) -> Option<TeamInfo> {
+        let club = country.clubs.iter().find(|c| c.id == club_id)?;
+        let target = match club.teams.find_team_with_player(player_id) {
+            Some(team) if team.team_type.is_own_team() => team,
+            _ => club.teams.main().or_else(|| club.teams.teams.first())?,
+        };
+        let (league_name, league_slug) = resolve_selling_league_labels(country, target.league_id);
+        Some(TeamInfo {
+            name: target.name.clone(),
+            slug: target.slug.clone(),
+            reputation: target.reputation.world,
+            league_name,
+            league_slug,
+        })
+    }
+
     /// Add a player to a club's **Main** team. Resolves the main team by
     /// type (the main team is NOT guaranteed to be `teams[0]`); falls back
     /// to the first team only when no Main team exists so a signing is
@@ -757,6 +788,16 @@ fn execute_loan_within_country(
     let mut selling_league_id = None;
     let mut from_team_id = 0u32;
 
+    // History identity of the squad the player physically occupies —
+    // own slug + league for Main/B/Second, Main alias for Reserve/youth.
+    // Resolved up-front (immutable borrow, before the move-to-reserve and
+    // take below) so the loan departs the player's REAL active spell
+    // instead of the club Main team; otherwise the History projection
+    // phantom-drops the new loan club. The shock still anchors on the
+    // parent Main team via `from_info`.
+    let history_source_info =
+        TransferExecution::resolve_history_source_info(country, selling_club_id, player_id);
+
     if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
         if let Some(main_team) = selling_club.teams.main() {
             selling_league_id = main_team.league_id;
@@ -842,6 +883,9 @@ fn execute_loan_within_country(
         // Always record history — use fallback TeamInfo if club info couldn't be resolved
         let from = from_info.unwrap_or_else(empty_team_info);
         let to = to_info.unwrap_or_else(empty_team_info);
+        // Depart the player's actual squad spell; fall back to the parent
+        // Main identity when the squad couldn't be resolved.
+        let history_source = history_source_info.unwrap_or_else(|| from.clone());
         let borrower_score = country
             .clubs
             .iter()
@@ -881,6 +925,7 @@ fn execute_loan_within_country(
             resolve_selling_league_reputation(country, selling_league_id);
         player.complete_loan(LoanCompletion {
             from: &from,
+            history_source: &history_source,
             to: &to,
             loan_fee,
             date,
@@ -1326,6 +1371,13 @@ fn execute_loan_across_countries(
         .map(|c| resolve_selling_league_reputation(c, selling_league_id))
         .unwrap_or(0);
 
+    // Squad the player physically occupies — the loan must depart THIS
+    // spell, not the club Main team. Resolved before the take mutates the
+    // roster; the shock still anchors on the parent Main team via `from_info`.
+    let history_source_info = data.country(selling_country_id).and_then(|c| {
+        TransferExecution::resolve_history_source_info(c, selling_club_id, player_id)
+    });
+
     let taken = take_player_from_selling_country(
         data,
         player_id,
@@ -1400,8 +1452,12 @@ fn execute_loan_across_countries(
         borrower_score,
         parent_desire,
     );
+    // Depart the player's actual squad spell; fall back to the parent
+    // Main identity when the squad couldn't be resolved.
+    let history_source = history_source_info.unwrap_or_else(|| from_info.clone());
     player.complete_loan(LoanCompletion {
         from: &from_info,
+        history_source: &history_source,
         to: &to,
         loan_fee,
         date,
@@ -3090,6 +3146,319 @@ mod development_pathway_tests {
             DevPathwayFixtures::dev_candidates(&data),
             1,
             "two foreign loanees leave room under the cap of three"
+        );
+    }
+}
+
+#[cfg(test)]
+mod loan_history_source_tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::continent::Continent;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::transfers::offer::PersonalTermsOffer;
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
+        PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, StaffCollection, Team, TeamCollection, TeamReputation, TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    /// Fixtures for the loan-source-identity regression. A selling club
+    /// with both a Main and a Second team, a player parked on the Second
+    /// squad, and a domestic borrower. Wrapped on a unit struct per the
+    /// project's no-global-helpers convention.
+    struct LoanHistoryFixtures;
+
+    impl LoanHistoryFixtures {
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn training_schedule() -> TrainingSchedule {
+            TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            )
+        }
+
+        fn player(id: u32) -> crate::Player {
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Maxim".to_string(), "Chernov".to_string()))
+                .birth_date(Self::d(2005, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Striker,
+                        level: 16,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap()
+        }
+
+        fn team(
+            id: u32,
+            club_id: u32,
+            name: &str,
+            slug: &str,
+            league_id: u32,
+            team_type: TeamType,
+            players: Vec<crate::Player>,
+        ) -> Team {
+            Team::builder()
+                .id(id)
+                .league_id(Some(league_id))
+                .club_id(club_id)
+                .name(name.to_string())
+                .slug(slug.to_string())
+                .team_type(team_type)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(2000, 2000, 4000))
+                .training_schedule(Self::training_schedule())
+                .build()
+                .unwrap()
+        }
+
+        fn club(id: u32, name: &str, teams: Vec<Team>) -> Club {
+            Club::new(
+                id,
+                name.to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(teams),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn league(id: u32, name: &str, slug: &str) -> League {
+            League::new(
+                id,
+                name.to_string(),
+                slug.to_string(),
+                1,
+                5500,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            )
+        }
+
+        fn team_info(name: &str, slug: &str, league_name: &str, league_slug: &str) -> TeamInfo {
+            TeamInfo {
+                name: name.to_string(),
+                slug: slug.to_string(),
+                reputation: 2000,
+                league_name: league_name.to_string(),
+                league_slug: league_slug.to_string(),
+            }
+        }
+
+        /// Single-country world: Arsenal Tula (Main + Second) loans the
+        /// `player_on_second` flag's player to Orel. When the flag is set
+        /// the player is parked on the Second squad with an active
+        /// `arsenal-tula-2` history spell; otherwise he sits on the Main
+        /// squad. Returns `(data, transfer)`.
+        fn world(player_on_second: bool) -> (SimulatorData, DeferredTransfer) {
+            let main_info = Self::team_info(
+                "Arsenal Tula",
+                "arsenal-tula",
+                "First Division",
+                "first-division",
+            );
+            let second_info = Self::team_info(
+                "Arsenal Tula 2",
+                "arsenal-tula-2",
+                "Second Division B3",
+                "second-division-b3",
+            );
+
+            let mut player = Self::player(500);
+            player
+                .statistics_history
+                .seed_initial_team(&main_info, Self::d(2026, 8, 1), false);
+            if player_on_second {
+                // Demoted Main -> Second: closes the Main spell and opens an
+                // active Second-team spell, mirroring the reported state.
+                player.on_intra_club_move(
+                    &main_info,
+                    &second_info,
+                    true,
+                    true,
+                    Self::d(2026, 9, 1),
+                );
+            }
+
+            let (main_players, second_players) = if player_on_second {
+                (Vec::new(), vec![player])
+            } else {
+                (vec![player], Vec::new())
+            };
+
+            let arsenal_main = Self::team(
+                11,
+                100,
+                "Arsenal Tula",
+                "arsenal-tula",
+                10,
+                TeamType::Main,
+                main_players,
+            );
+            let arsenal_second = Self::team(
+                12,
+                100,
+                "Arsenal Tula 2",
+                "arsenal-tula-2",
+                11,
+                TeamType::Second,
+                second_players,
+            );
+            let arsenal = Self::club(100, "Arsenal Tula", vec![arsenal_main, arsenal_second]);
+
+            let orel_main = Self::team(21, 200, "Orel", "orel", 10, TeamType::Main, Vec::new());
+            let orel = Self::club(200, "Orel", vec![orel_main]);
+
+            let country = Country::builder()
+                .id(1)
+                .code("ru".to_string())
+                .slug("russia".to_string())
+                .name("Russia".to_string())
+                .continent_id(1)
+                .reputation(5500)
+                .leagues(LeagueCollection::new(vec![
+                    Self::league(10, "First Division", "first-division"),
+                    Self::league(11, "Second Division B3", "second-division-b3"),
+                ]))
+                .clubs(vec![arsenal, orel])
+                .build()
+                .unwrap();
+
+            let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+            let data = SimulatorData::new(
+                Self::d(2026, 9, 15).and_hms_opt(12, 0, 0).unwrap(),
+                vec![continent],
+                GlobalCompetitions::new(Vec::new()),
+            );
+
+            let transfer = DeferredTransfer {
+                player_id: 500,
+                selling_country_id: 1,
+                selling_club_id: 100,
+                buying_country_id: 1,
+                buying_club_id: 200,
+                fee: 0.0,
+                is_loan: true,
+                has_option_to_buy: false,
+                agreed_annual_wage: Some(100_000),
+                buying_league_reputation: 5500,
+                sell_on_percentage: None,
+                loan_future_fee: None,
+                personal_terms: None as Option<PersonalTermsOffer>,
+                offer_clauses: Vec::new(),
+            };
+            (data, transfer)
+        }
+
+        /// The loaned-out player after he has arrived at Orel.
+        fn loaned_player(data: &SimulatorData) -> crate::Player {
+            data.country(1)
+                .unwrap()
+                .clubs
+                .iter()
+                .find(|c| c.id == 200)
+                .unwrap()
+                .teams
+                .teams
+                .iter()
+                .flat_map(|t| t.players.players.iter())
+                .find(|p| p.id == 500)
+                .cloned()
+                .expect("loaned player must be on the borrowing club")
+        }
+    }
+
+    /// Regression: a player loaned out of the Second team must depart his
+    /// real `arsenal-tula-2` spell, leaving the new Orel loan as the active
+    /// row. Before the fix the loan departed the club Main team, so the
+    /// Second spell stayed active and the History projection phantom-dropped
+    /// the Orel row (the reported bug).
+    #[test]
+    fn loan_out_of_second_team_departs_second_spell_and_shows_loan_club() {
+        let date = LoanHistoryFixtures::d(2026, 9, 15);
+        let (mut data, transfer) = LoanHistoryFixtures::world(true);
+        assert!(
+            execute_transfer(&mut data, &transfer, date),
+            "domestic loan must complete"
+        );
+
+        let player = LoanHistoryFixtures::loaned_player(&data);
+        let current = &player.statistics_history.current;
+
+        let orel = current
+            .iter()
+            .find(|e| e.team_slug == "orel")
+            .expect("the Orel loan club must appear in history");
+        assert!(orel.is_loan, "the Orel row must be flagged as a loan");
+        assert!(
+            orel.departed_date.is_none(),
+            "the Orel loan must be the active spell"
+        );
+
+        let second = current
+            .iter()
+            .find(|e| e.team_slug == "arsenal-tula-2")
+            .expect("the Second-team spell must still be present");
+        assert!(
+            second.departed_date.is_some(),
+            "the loan must depart the player's real Second-team spell"
+        );
+    }
+
+    /// The common case is untouched: a player loaned straight off the Main
+    /// team departs the Main spell exactly as before, with Orel active.
+    #[test]
+    fn loan_out_of_main_team_still_departs_main_spell() {
+        let date = LoanHistoryFixtures::d(2026, 9, 15);
+        let (mut data, transfer) = LoanHistoryFixtures::world(false);
+        assert!(
+            execute_transfer(&mut data, &transfer, date),
+            "domestic loan must complete"
+        );
+
+        let player = LoanHistoryFixtures::loaned_player(&data);
+        let current = &player.statistics_history.current;
+
+        assert!(
+            current
+                .iter()
+                .any(|e| e.team_slug == "orel" && e.is_loan && e.departed_date.is_none()),
+            "the Orel loan must be the active spell"
+        );
+        let main = current
+            .iter()
+            .find(|e| e.team_slug == "arsenal-tula")
+            .expect("the Main-team spell must be present");
+        assert!(
+            main.departed_date.is_some(),
+            "loaning off the Main team must depart the Main spell"
         );
     }
 }

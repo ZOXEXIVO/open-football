@@ -90,7 +90,15 @@ impl Club {
                 .unwrap_or_else(|| self.name.clone());
 
             let youth_team_type = self.teams.teams[idx].team_type;
-            let graduated = self.academy.graduate_to_youth(date, to_graduate);
+            let mut graduated = self.academy.graduate_to_youth(date, to_graduate);
+            // Loan-ready-age safety net: also pull up any prospect within a
+            // year of the 18-year-old age-out release who didn't make the
+            // readiness-ranked cut. A 17-year-old belongs in the youth setup
+            // (where the squad-utilization surplus pass can send him out on a
+            // development loan), not waiting in the academy to be deleted at
+            // 18 without ever having played senior football.
+            const LOAN_READY_ACADEMY_AGE: u8 = 17;
+            graduated.extend(self.academy.graduate_age_overdue(date, LOAN_READY_ACADEMY_AGE));
             if !graduated.is_empty() {
                 debug!(
                     "academy {}: {} players graduated (contract: {}, assigned: {:?}, was {})",

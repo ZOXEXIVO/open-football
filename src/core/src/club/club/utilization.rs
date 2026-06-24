@@ -5,7 +5,10 @@ use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::pipeline::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
-use crate::{ContractType, Person, PlayerStatusType, ReputationLevel, TransferItem};
+use crate::{
+    ContractType, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel, Team,
+    TransferItem,
+};
 use chrono::NaiveDate;
 use log::debug;
 
@@ -60,6 +63,21 @@ impl Club {
 
         for (ti, team) in self.teams.iter().enumerate() {
             if ti == main_idx {
+                continue;
+            }
+
+            // Youth squads (U18..U23) play friendly youth leagues, so they
+            // never accumulate the official appearances the idle-days signal
+            // below relies on — the early-season gate would skip them every
+            // single tick, which is why a youth side can carry three keepers
+            // forever. A youth team also plays only once a week, so depth
+            // beyond what one match needs never gets minutes and is better
+            // off on a development loan. Assess youth squads on POSITIONAL
+            // SURPLUS instead — generic across positions and contract types
+            // (this is the one path that loans full-time *and* youth-contract
+            // prospects out).
+            if team.team_type.is_youth() {
+                Self::collect_youth_surplus_loans(team, ti, &mut loan_players);
                 continue;
             }
 
@@ -310,6 +328,78 @@ impl Club {
                 ));
         }
     }
+
+    /// Collect development loan-outs for one youth squad by positional
+    /// surplus. A youth side fields and rotates one match a week, so it
+    /// needs only so many per position; the rest are blocked depth that
+    /// develops better playing senior football on loan. Keeps the best
+    /// `keep` by current ability and loans the remainder — a manager-pinned
+    /// player in the surplus simply stays. Players already on loan / listed,
+    /// or without a contract, are left alone. Contract type is deliberately
+    /// not checked: this is the one path that loans both full-time and
+    /// youth-contract prospects out.
+    fn collect_youth_surplus_loans(
+        team: &Team,
+        team_idx: usize,
+        loan_players: &mut Vec<(usize, u32, String)>,
+    ) {
+        use PlayerFieldPositionGroup as G;
+        for group in [G::Goalkeeper, G::Defender, G::Midfielder, G::Forward] {
+            let keep = YouthSquadDepth::keep_for(group);
+            let mut active: Vec<(u32, u8, bool)> = team
+                .players
+                .iter()
+                .filter(|p| {
+                    p.position().position_group() == group
+                        && !p.is_on_loan()
+                        && p.contract.is_some()
+                        && {
+                            let s = p.statuses.get();
+                            !s.contains(&PlayerStatusType::Lst)
+                                && !s.contains(&PlayerStatusType::Loa)
+                        }
+                })
+                .map(|p| {
+                    (
+                        p.id,
+                        p.player_attributes.current_ability,
+                        p.is_force_match_selection,
+                    )
+                })
+                .collect();
+            if active.len() <= keep {
+                continue;
+            }
+            // Keep the best `keep` by current ability; the rest are surplus.
+            active.sort_by(|a, b| b.1.cmp(&a.1));
+            for (player_id, _, pinned) in active.into_iter().skip(keep) {
+                if !pinned {
+                    loan_players.push((
+                        team_idx,
+                        player_id,
+                        "dec_reason_young_develop".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Per-position depth a single youth squad keeps before the remainder are
+/// loaned out for development. Smaller than a senior squad's depth: a youth
+/// side plays once a week, so a third keeper or a deep outfield reserve
+/// never sees minutes and develops better on loan.
+struct YouthSquadDepth;
+
+impl YouthSquadDepth {
+    fn keep_for(group: PlayerFieldPositionGroup) -> usize {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 2,
+            PlayerFieldPositionGroup::Defender => 7,
+            PlayerFieldPositionGroup::Midfielder => 7,
+            PlayerFieldPositionGroup::Forward => 5,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -376,6 +466,35 @@ mod tests {
                 .unwrap();
             p.statistics.played = played;
             p
+        }
+
+        /// A full-time youth goalkeeper (the case the user hit: U19 keepers
+        /// on full contracts, so the youth-contract skip doesn't apply).
+        fn gk(id: u32, ca: u8, age: u8) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ca;
+            attrs.potential_ability = ca.saturating_add(30);
+            attrs.condition = 10_000;
+            let mut contract =
+                PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
+            contract.squad_status = PlayerSquadStatus::NotYetSet;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("G".into(), format!("K{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(2026 - age as i32, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Goalkeeper,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(contract))
+                .build()
+                .unwrap()
         }
 
         fn team(id: u32, tt: TeamType, players: Vec<Player>) -> Team {
@@ -519,6 +638,45 @@ mod tests {
         assert!(
             !Fx::listed(&club, 203),
             "an injured player must not be transfer-listed off idle days"
+        );
+    }
+
+    /// The reported case: a U19 squad carries THREE keepers on full-time
+    /// contracts. The youth-contract skip doesn't apply (they're full-time)
+    /// and the old early-season gate skipped the squad forever (youth
+    /// leagues are friendlies → no official minutes). The positional-surplus
+    /// path keeps the best two and loans the third out for development.
+    #[test]
+    fn youth_team_surplus_keeper_is_loan_listed_for_development() {
+        let main: Vec<Player> = (1..=5)
+            .map(|i| Fx::player(i, 130, 130, 27, PlayerSquadStatus::FirstTeamRegular, 20, 0))
+            .collect();
+        let u19 = vec![Fx::gk(401, 90, 18), Fx::gk(402, 85, 18), Fx::gk(403, 80, 18)];
+        let mut club = Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![
+                Fx::team(10, TeamType::Main, main),
+                Fx::team(11, TeamType::U19, u19),
+            ]),
+            ClubFacilities::default(),
+        );
+
+        club.audit_squad_utilization(Fx::date());
+
+        assert!(
+            Fx::has(&club, 403, PlayerStatusType::Loa),
+            "the surplus third keeper must be loan-listed for development"
+        );
+        assert!(
+            !Fx::has(&club, 401, PlayerStatusType::Loa)
+                && !Fx::has(&club, 402, PlayerStatusType::Loa),
+            "the two best keepers stay at the club"
         );
     }
 }

@@ -138,6 +138,13 @@ pub struct TransferCompletion<'a> {
 
 pub struct LoanCompletion<'a> {
     pub from: &'a TeamInfo,
+    /// History identity of the squad the player physically occupies
+    /// (own slug for Main/B/Second, Main alias for Reserve/youth). The
+    /// loan departs THIS spell. Distinct from `from`, which stays the
+    /// parent Main team so the transfer-shock prestige anchor remains the
+    /// player's club rather than the lower-rep reserve squad he was parked
+    /// on. Equal to `from` for a player loaned straight off the Main team.
+    pub history_source: &'a TeamInfo,
     pub to: &'a TeamInfo,
     pub loan_fee: f64,
     pub date: NaiveDate,

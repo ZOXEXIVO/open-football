@@ -70,6 +70,44 @@ impl ClubAcademy {
         graduated
     }
 
+    /// Graduate every academy player at or above `min_age` into the youth
+    /// pathway, bypassing the normal readiness-ranked, throughput-capped
+    /// selection. These prospects are within a year of the academy's
+    /// 18-year-old age-out release (`release_aged_out_players`); a 17-year-
+    /// old belongs in the senior youth setup, not the kids' academy. Moving
+    /// them to a youth team gives them a real development window — youth
+    /// minutes or a development loan (the youth squad-utilization surplus
+    /// pass, which is contract-agnostic, loans the overflow) — instead of
+    /// being released unused. Without this, a prospect who never makes the
+    /// readiness cut is simply deleted at 18, never having had a loan.
+    pub fn graduate_age_overdue(&mut self, date: NaiveDate, min_age: u8) -> Vec<Player> {
+        let ids: Vec<u32> = self
+            .players
+            .players
+            .iter()
+            .filter(|p| p.age(date) >= min_age)
+            .map(|p| p.id)
+            .collect();
+
+        let mut graduated = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(mut player) = self.players.take_player(&id) {
+                let expiration =
+                    NaiveDate::from_ymd_opt(date.year() + 3, date.month(), date.day().min(28))
+                        .unwrap_or(date);
+                let salary = GraduationSalary::for_ca(player.player_attributes.current_ability);
+                player.contract = Some(PlayerClubContract::new_youth(salary, expiration));
+                graduated.push(player);
+            }
+        }
+
+        self.graduates_produced += graduated.len() as u16;
+        if !graduated.is_empty() {
+            self.last_graduation_year = Some(date.year());
+        }
+        graduated
+    }
+
     /// Number of additional "elite overshoot" graduates the academy is
     /// willing to push into the U18 even after the normal target has
     /// been filled. Returns 0 if no elite prospect exists.
@@ -328,6 +366,41 @@ mod tests {
         assert_eq!(academy.graduation_ceiling(28, 8, 2), 2);
         // Plenty of room: clean pass-through.
         assert_eq!(academy.graduation_ceiling(10, 5, 1), 6);
+    }
+
+    #[test]
+    fn age_overdue_prospects_graduate_before_aging_out() {
+        // A loan-ready-age (17) prospect who never made the readiness-ranked
+        // cut must still leave the academy for the youth setup, where the
+        // squad-utilization surplus pass can send him out on a development
+        // loan — instead of waiting in the academy to be released at 18
+        // without ever having played senior football. A younger prospect
+        // still belongs in the academy and stays.
+        let date = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
+        let mut academy = ClubAcademy::new(8);
+        let overdue = prospect(17, 60, 110, 9.0, 8500, date);
+        let overdue_id = overdue.id;
+        academy.players.add(overdue);
+        let young = prospect(15, 60, 110, 9.0, 8500, date);
+        let young_id = young.id;
+        academy.players.add(young);
+
+        let graduated = academy.graduate_age_overdue(date, 17);
+
+        assert_eq!(graduated.len(), 1, "only the 17-year-old is pulled up");
+        assert_eq!(graduated[0].id, overdue_id);
+        assert!(
+            graduated[0].contract.is_some(),
+            "the age-overdue prospect graduates on a youth contract"
+        );
+        assert!(
+            academy.players.players.iter().any(|p| p.id == young_id),
+            "the younger prospect stays in the academy"
+        );
+        assert!(
+            !academy.players.players.iter().any(|p| p.id == overdue_id),
+            "the age-overdue prospect has left the academy"
+        );
     }
 
     #[test]

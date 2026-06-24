@@ -142,7 +142,7 @@ impl Player {
         let desire_carry = self.snapshot_desire_carry();
         let source_club_reputation = l.from.reputation;
         let source_league_reputation = l.parent_league_reputation;
-        self.on_loan(l.from, l.to, l.loan_fee, l.date);
+        self.on_loan(l.history_source, l.to, l.loan_fee, l.date);
         self.reset_on_club_change();
         if let Some(parent) = self.contract.as_mut() {
             parent.loan_to_club_id = Some(borrowing_id);

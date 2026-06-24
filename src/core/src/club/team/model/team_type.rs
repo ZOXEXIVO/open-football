@@ -42,6 +42,18 @@ impl TeamType {
         }
     }
 
+    /// Age-restricted development squads (U18..U23). They compete in
+    /// friendly youth leagues, so they never accumulate the *official*
+    /// appearances the senior squad-utilization audit reads — the idle-days
+    /// / official-games signals don't apply to them, and they must be
+    /// assessed on positional depth instead.
+    pub fn is_youth(&self) -> bool {
+        matches!(
+            self,
+            TeamType::U18 | TeamType::U19 | TeamType::U20 | TeamType::U21 | TeamType::U23
+        )
+    }
+
     /// Senior squads that compete in a real league under their own brand.
     /// Used by the player-history pipeline (so a B/Second player's stats
     /// show their actual team and league) and by the web layer to decide

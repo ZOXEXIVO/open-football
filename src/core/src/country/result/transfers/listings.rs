@@ -151,15 +151,58 @@ impl CountryResult {
             // player is stranded flagged-but-invisible to every buyer.
             for team in club.teams.teams.iter().skip(1) {
                 for player in &team.players.players {
+                    if player.is_on_loan() || player.is_force_match_selection {
+                        continue;
+                    }
+                    let statuses = player.statuses.get();
+
+                    // Board loan flag (`Loa`) on a reserve/youth player —
+                    // stamped by the squad-utilization audit, the surplus
+                    // demotion, or an accepted loan-request talk — must
+                    // become a real loan listing, or the badge is cosmetic
+                    // and no club can ever bid (the numeric evaluation above
+                    // reads only the main roster, so these players are
+                    // otherwise stranded off-market). Idempotent via the
+                    // existing-listing guard; the flag-setter already wrote
+                    // the decision-history entry, so `dec_reason_club_listed`
+                    // suppresses a duplicate. Fee mirrors the main-squad
+                    // board loan listing (zero — the borrower-side scan sets
+                    // the actual terms), keeping the path consistent.
+                    if statuses.contains(&PlayerStatusType::Loa)
+                        && player.contract.is_some()
+                        && country
+                            .transfer_market
+                            .get_listing_by_player(player.id)
+                            .is_none()
+                    {
+                        listings_to_add.push(PendingListing {
+                            player_id: player.id,
+                            club_id: club.id,
+                            team_id: team.id,
+                            asking_price: CurrencyValue {
+                                amount: 0.0,
+                                currency: Currency::Usd,
+                            },
+                            listing_type: TransferListingType::Loan,
+                            reason: "dec_reason_club_listed".to_string(),
+                            decided_by: decided_by.clone(),
+                        });
+                        continue;
+                    }
+
+                    // Explicit permanent club listings: the season-start
+                    // surplus trim flags players across every team via
+                    // `contract.is_transfer_listed`. Those flags must still
+                    // become market listings, carrying the player's real
+                    // team, or the player is stranded flagged-but-invisible.
                     let flagged = player
                         .contract
                         .as_ref()
                         .map(|c| c.is_transfer_listed)
                         .unwrap_or(false);
-                    if !flagged || player.is_on_loan() || player.is_force_match_selection {
+                    if !flagged {
                         continue;
                     }
-                    let statuses = player.statuses.get();
                     if statuses.contains(&PlayerStatusType::Lst)
                         || statuses.contains(&PlayerStatusType::Loa)
                         || statuses.contains(&PlayerStatusType::Frt)
@@ -1335,6 +1378,77 @@ mod tests {
                 .count(),
             1,
             "exactly one listing decision — written when the player was flagged"
+        );
+    }
+
+    #[test]
+    fn loa_flagged_reserve_player_reaches_loan_market_with_own_team_id() {
+        // A reserve/youth player carrying the board loan badge (`Loa`) —
+        // stamped by the squad-utilization audit — must become a real loan
+        // listing on the country market, or the badge is cosmetic and no
+        // club can ever bid. The listing must carry his real team id and be
+        // a loan (not transfer) listing.
+        let today = Fixture::date(2026, 6, 12);
+        let main_player = Fixture::player(101);
+        let mut reserve_player = Fixture::player(202);
+        reserve_player.statuses.add(today, PlayerStatusType::Loa);
+        {
+            let contract = reserve_player.contract.as_mut().unwrap();
+            contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        }
+        let club = Fixture::club(vec![
+            Fixture::team(10, "main", TeamType::Main, vec![main_player]),
+            Fixture::team(11, "reserve", TeamType::Reserve, vec![reserve_player]),
+        ]);
+        let mut country = Fixture::country(club);
+        let mut summary = TransferActivitySummary::new();
+
+        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+
+        let listing = country
+            .transfer_market
+            .listings
+            .iter()
+            .find(|l| l.player_id == 202)
+            .expect("a Loa-flagged reserve player must reach the loan market");
+        assert_eq!(
+            listing.listing_type,
+            TransferListingType::Loan,
+            "the board loan badge must produce a loan listing, not a transfer listing"
+        );
+        assert_eq!(
+            listing.team_id, 11,
+            "the loan listing must carry the player's real (reserve) team"
+        );
+    }
+
+    #[test]
+    fn loa_flagged_reserve_player_is_loan_listed_once_across_passes() {
+        // The listing pass runs every day a window is open; a Loa-flagged
+        // reserve player must be listed exactly once, not re-listed daily.
+        let today = Fixture::date(2026, 6, 12);
+        let main_player = Fixture::player(101);
+        let mut reserve_player = Fixture::player(203);
+        reserve_player.statuses.add(today, PlayerStatusType::Loa);
+        let club = Fixture::club(vec![
+            Fixture::team(10, "main", TeamType::Main, vec![main_player]),
+            Fixture::team(11, "reserve", TeamType::Reserve, vec![reserve_player]),
+        ]);
+        let mut country = Fixture::country(club);
+        let mut summary = TransferActivitySummary::new();
+
+        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+
+        let loan_listings = country
+            .transfer_market
+            .listings
+            .iter()
+            .filter(|l| l.player_id == 203 && l.listing_type == TransferListingType::Loan)
+            .count();
+        assert_eq!(
+            loan_listings, 1,
+            "a Loa-flagged player must be loan-listed exactly once, not re-listed each pass"
         );
     }
 
