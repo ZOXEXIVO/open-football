@@ -1,9 +1,11 @@
 use chrono::NaiveDate;
 use log::debug;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::SimulatorData;
+use crate::club::player::transfer::FreeAgentBlockReason;
+use crate::country::result::transfers::FreeAgentBumpBatch;
 use crate::country::result::transfers::types::can_club_accept_player;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
@@ -1270,6 +1272,57 @@ impl PipelineProcessor {
         );
     }
 
+    /// World-wide free-agent market-state bump. Applies every country's
+    /// offer / reject / block-reason records (aggregated into `batch` by
+    /// `WorldMatchdayResult::collect_free_agent_bumps`) in a SINGLE pass
+    /// over `data.free_agents`.
+    ///
+    /// Replaces the per-country bump inside `apply_deferred_transfer_ops`,
+    /// which walked the whole pool once for every country
+    /// (`O(countries × pool)`). Global dedup realises the documented
+    /// "one bump per player per tick" intent: a pool player pursued by
+    /// two countries on the same day is now bumped once, not twice.
+    ///
+    /// Order within the pass matches the old per-country order — offer
+    /// before block — so an offer that lands today clears the
+    /// failed-approach streak before any same-day block can regrow it.
+    pub fn apply_free_agent_market_bumps_batch(
+        data: &mut SimulatorData,
+        batch: &FreeAgentBumpBatch,
+        current_date: NaiveDate,
+    ) {
+        if batch.is_empty() {
+            return;
+        }
+        let offered: HashSet<u32> = batch.offered_ids.iter().copied().collect();
+        let rejected: HashSet<u32> = batch.rejected_ids.iter().copied().collect();
+        // Merge block reasons to the highest-ranked (closest-to-signing)
+        // reason per player across every country that recorded one.
+        let mut merged: HashMap<u32, FreeAgentBlockReason> = HashMap::new();
+        for (player_id, reason) in &batch.block_reasons {
+            merged
+                .entry(*player_id)
+                .and_modify(|existing| {
+                    if reason.rank() > existing.rank() {
+                        *existing = *reason;
+                    }
+                })
+                .or_insert(*reason);
+        }
+
+        for player in data.free_agents.iter_mut() {
+            if offered.contains(&player.id) {
+                player.on_offer_received(current_date);
+            }
+            if rejected.contains(&player.id) {
+                player.on_offer_rejected();
+            }
+            if let Some(reason) = merged.get(&player.id) {
+                player.on_market_blocked(current_date, *reason);
+            }
+        }
+    }
+
     /// Shared world walk behind the transfer- and release-flavoured
     /// cleanups. `listing_terminal` is the status open listings end in:
     /// `Completed` when the player was signed, `Cancelled` when he was
@@ -1405,6 +1458,75 @@ impl PipelineProcessor {
         }
     }
 
+    /// Resolve which foreign club currently holds `player_id`, for a
+    /// buyer based in `buyer_country_id`. Tries the O(1) global
+    /// player-location index first and verifies the hit (the index can
+    /// be one tick stale after an intra-tick move), falling back to a
+    /// full world scan only on a miss or a stale entry. Returns
+    /// `(country_id, club_id, price_level, continent_id, country_code)`
+    /// for the selling side, or `None` when the player can't be located
+    /// in any country other than the buyer's.
+    ///
+    /// Replaces the previous per-candidate triple-nested world scan
+    /// (`O(candidates × all_clubs)`); the index hit is the common path.
+    fn resolve_foreign_player_club(
+        data: &SimulatorData,
+        buyer_country_id: u32,
+        player_id: u32,
+    ) -> Option<(u32, u32, f32, u32, String)> {
+        // Fast path: global player-location index (O(1)).
+        if let Some((_continent_id, loc_country_id, loc_club_id, _team_id)) = data
+            .indexes
+            .as_ref()
+            .and_then(|idx| idx.get_player_location(player_id))
+        {
+            if loc_country_id != buyer_country_id {
+                if let Some(country) = data.country(loc_country_id) {
+                    // Verify the player really is at this club — the
+                    // index may be one tick stale after an intra-tick
+                    // move; on a stale hit fall through to the scan.
+                    let present = country
+                        .club(loc_club_id)
+                        .map(|c| c.teams.contains_player(player_id))
+                        .unwrap_or(false);
+                    if present {
+                        return Some((
+                            country.id,
+                            loc_club_id,
+                            country.settings.pricing.price_level,
+                            country.continent_id,
+                            country.code.clone(),
+                        ));
+                    }
+                }
+            }
+            // Index hit pointed at the buyer's own country or was stale —
+            // fall through to the authoritative scan below.
+        }
+
+        // Slow path: full world scan, foreign-only (skips the buyer's
+        // country). Reached only on an index miss or a stale entry.
+        for continent in &data.continents {
+            for country in &continent.countries {
+                if country.id == buyer_country_id {
+                    continue;
+                }
+                for club in &country.clubs {
+                    if club.teams.contains_player(player_id) {
+                        return Some((
+                            country.id,
+                            club.id,
+                            country.settings.pricing.price_level,
+                            country.continent_id,
+                            country.code.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn initiate_foreign_negotiations(
         data: &mut SimulatorData,
         country_id: u32,
@@ -1515,33 +1637,11 @@ impl PipelineProcessor {
         let mut foreign_rejected: Vec<PlausibilityReject> = Vec::new();
 
         for cand in candidates {
-            // Find player globally
-            let mut found = None;
-            for continent in &data.continents {
-                for country in &continent.countries {
-                    if country.id == country_id {
-                        continue;
-                    }
-                    for club in &country.clubs {
-                        if club.teams.contains_player(cand.player_id) {
-                            found = Some((
-                                country.id,
-                                club.id,
-                                country.settings.pricing.price_level,
-                                country.continent_id,
-                                country.code.clone(),
-                            ));
-                            break;
-                        }
-                    }
-                    if found.is_some() {
-                        break;
-                    }
-                }
-                if found.is_some() {
-                    break;
-                }
-            }
+            // Resolve the player's current foreign club via the O(1)
+            // global index (verified, with a full-scan fallback for a
+            // stale entry) instead of re-walking the whole world per
+            // candidate.
+            let found = Self::resolve_foreign_player_club(data, country_id, cand.player_id);
 
             let (
                 sell_country_id,

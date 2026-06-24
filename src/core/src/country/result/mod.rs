@@ -116,7 +116,13 @@ impl CountryResult {
         // failed the `new_season_started` check is recovered the next
         // time any league does flip the gate.
         if any_new_season {
-            Self::snapshot_player_season_statistics(data, self.country_id);
+            // Career-history snapshot was hoisted out of this serial
+            // drain into a parallel season-start pass in the simulator
+            // tick (`snapshot_country` across every just-ended-season
+            // country at once). It runs BEFORE this drain, so every
+            // borrowing club has frozen its loanees' stats before the
+            // cross-country loan returns below move them home — the same
+            // "snapshot before loan returns" ordering, now world-wide.
             Self::process_loan_returns(data, country_id, current_date);
             // Retirement already runs inside process_end_of_period above,
             // via Self::process_player_retirements when the season ends.

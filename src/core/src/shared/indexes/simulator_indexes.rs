@@ -1,5 +1,6 @@
 use crate::SimulatorData;
 use crate::continent::Continent;
+use crate::country::Country;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -245,34 +246,48 @@ impl SimulatorDataIndexes {
 
     /// Rebuild only the player indexes (after transfers move players between clubs)
     pub fn refresh_player_indexes(&mut self, data: &SimulatorData) {
-        // Build per-continent player-index shards in parallel; player ids
-        // are globally unique so the merge is a disjoint `extend`. Both
-        // the ID-based map and the positional map are rebuilt here so a
-        // post-transfer caller sees consistent state on either path.
+        // Build player-index shards in parallel; player ids are globally
+        // unique so the merge is a disjoint `extend`. Both the ID-based
+        // map and the positional map are rebuilt here so a post-transfer
+        // caller sees consistent state on either path.
         type IdShard = HashMap<u32, (u32, u32, u32, u32)>;
         type PosShard = HashMap<u32, (u32, u32, u32, u32)>;
 
-        let shards: Vec<(IdShard, PosShard)> = data
+        // Fan out over COUNTRIES rather than continents: the continent
+        // count is tiny and lopsided (Europe dwarfs the others), so a
+        // per-continent par_iter pins one worker on Europe while the rest
+        // idle. Pre-flatten to (continent_idx, continent_id, country_idx,
+        // &country) tuples with a cheap serial enumerate, then shard per
+        // country in parallel — ~50+ balanced tasks instead of ~6 skewed
+        // ones. Values are identical to the per-continent build.
+        let country_refs: Vec<(u32, u32, u32, &Country)> = data
             .continents
-            .par_iter()
+            .iter()
             .enumerate()
-            .map(|(ci, continent)| {
+            .flat_map(|(ci, continent)| {
                 let ci = ci as u32;
+                let continent_id = continent.id;
+                continent
+                    .countries
+                    .iter()
+                    .enumerate()
+                    .map(move |(coi, country)| (ci, continent_id, coi as u32, country))
+            })
+            .collect();
+
+        let shards: Vec<(IdShard, PosShard)> = country_refs
+            .par_iter()
+            .map(|&(ci, continent_id, coi, country)| {
                 let mut id_shard: IdShard = HashMap::new();
                 let mut pos_shard: PosShard = HashMap::new();
-                for (coi, country) in continent.countries.iter().enumerate() {
-                    let coi = coi as u32;
-                    for (cli, club) in country.clubs.iter().enumerate() {
-                        let cli = cli as u32;
-                        for (ti, team) in club.teams.teams.iter().enumerate() {
-                            let ti = ti as u32;
-                            for player in &team.players.players {
-                                id_shard.insert(
-                                    player.id,
-                                    (continent.id, country.id, club.id, team.id),
-                                );
-                                pos_shard.insert(player.id, (ci, coi, cli, ti));
-                            }
+                for (cli, club) in country.clubs.iter().enumerate() {
+                    let cli = cli as u32;
+                    for (ti, team) in club.teams.teams.iter().enumerate() {
+                        let ti = ti as u32;
+                        for player in &team.players.players {
+                            id_shard
+                                .insert(player.id, (continent_id, country.id, club.id, team.id));
+                            pos_shard.insert(player.id, (ci, coi, cli, ti));
                         }
                     }
                 }

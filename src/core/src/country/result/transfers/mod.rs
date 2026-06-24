@@ -91,6 +91,39 @@ impl DeferredTransferOps {
     }
 }
 
+/// World-wide aggregate of free-agent market bumps, collected from every
+/// country's `DeferredTransferOps` before the serial Phase-C drain.
+///
+/// Each per-country `apply_deferred_transfer_ops` used to walk the ENTIRE
+/// `data.free_agents` pool twice (offer/reject bump + block-reason stamp),
+/// once for every country — `O(countries × pool)`. The orchestrator now
+/// concatenates every country's bump ids into one of these and runs a
+/// SINGLE pass over the pool via
+/// [`PipelineProcessor::apply_free_agent_market_bumps_batch`], matching the
+/// documented "one bump per player per tick" intent across the whole world
+/// (the previous per-country dedup still allowed a player pursued by two
+/// countries to be bumped twice).
+#[derive(Default)]
+pub struct FreeAgentBumpBatch {
+    /// Pool players that fielded an offer this tick (any country).
+    pub offered_ids: Vec<u32>,
+    /// Pool players whose acceptance roll failed this tick (any country).
+    pub rejected_ids: Vec<u32>,
+    /// Per-player skip reasons from every country's matcher; merged to the
+    /// highest-ranked reason per player before stamping.
+    pub block_reasons: Vec<(u32, FreeAgentBlockReason)>,
+}
+
+impl FreeAgentBumpBatch {
+    /// True when no country recorded any free-agent market activity this
+    /// tick — lets the orchestrator skip the pool pass entirely.
+    pub fn is_empty(&self) -> bool {
+        self.offered_ids.is_empty()
+            && self.rejected_ids.is_empty()
+            && self.block_reasons.is_empty()
+    }
+}
+
 impl CountryResult {
     /// Phase-A entry: runs the country-local transfer market pipeline
     /// (negotiations, free agents, listings, scouting, recruitment
@@ -239,48 +272,14 @@ impl CountryResult {
         // collapsing O(countries × signings × countries) into a single
         // parallel pass over the world.
 
-        // Apply free-agent market state — bump 30-day window / rejected
-        // counters on each global-pool player that fielded an offer.
-        // Collapsed to one bump per player per tick: the emergency
-        // pass, the staged-negotiation flow, and the resolver can each
-        // record the same player on the same day (retries at a second
-        // club, offer + rejection chains), and double-counting would
-        // inflate the pressure signals the decay model reads.
-        if !ops.global_offered_ids.is_empty() || !ops.global_rejected_ids.is_empty() {
-            let offered: HashSet<u32> = ops.global_offered_ids.iter().copied().collect();
-            let rejected: HashSet<u32> = ops.global_rejected_ids.iter().copied().collect();
-            for player in data.free_agents.iter_mut() {
-                if offered.contains(&player.id) {
-                    player.on_offer_received(current_date);
-                }
-                if rejected.contains(&player.id) {
-                    player.on_offer_rejected();
-                }
-            }
-        }
-
-        // Stamp the tick's block reasons. Merged to the highest-ranked
-        // (closest-to-signing) reason per player before applying;
-        // `on_market_blocked` keeps the same-day max across the other
-        // countries' ops that ran earlier this tick.
-        if !ops.global_block_reasons.is_empty() {
-            let mut merged: HashMap<u32, FreeAgentBlockReason> = HashMap::new();
-            for (player_id, reason) in &ops.global_block_reasons {
-                merged
-                    .entry(*player_id)
-                    .and_modify(|existing| {
-                        if reason.rank() > existing.rank() {
-                            *existing = *reason;
-                        }
-                    })
-                    .or_insert(*reason);
-            }
-            for player in data.free_agents.iter_mut() {
-                if let Some(reason) = merged.get(&player.id) {
-                    player.on_market_blocked(current_date, *reason);
-                }
-            }
-        }
+        // Free-agent market-state bumps (offer / reject / block-reason)
+        // were likewise hoisted into the orchestrator: every country's
+        // `global_offered_ids` / `global_rejected_ids` /
+        // `global_block_reasons` are aggregated into a single
+        // `FreeAgentBumpBatch` and applied in ONE pass over
+        // `data.free_agents` per tick via
+        // `PipelineProcessor::apply_free_agent_market_bumps_batch`,
+        // collapsing the old O(countries × pool) double-walk.
 
         // Execute global free-agent signings (Move-on-Free players from
         // `data.free_agents`).
@@ -623,8 +622,10 @@ mod side_channel_tests {
     //! across the emergency pass, the staged-negotiation flow, and the
     //! resolver — the same player can legitimately appear several times
     //! in one tick (retry at a second club, offer + rejection chain).
-    //! Phase C must collapse them to one market-state bump per player
-    //! per tick.
+    //! These per-country vecs are aggregated world-wide into a
+    //! `FreeAgentBumpBatch` and applied in ONE pass over the pool by
+    //! `PipelineProcessor::apply_free_agent_market_bumps_batch`, which
+    //! must collapse them to one market-state bump per player per tick.
 
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
@@ -710,10 +711,16 @@ mod side_channel_tests {
         let player = SideChannelFixtures::pool_player(900, date);
         let mut data = SideChannelFixtures::simulator(date, vec![player]);
 
-        let mut ops = DeferredTransferOps::empty(1);
-        ops.global_offered_ids = vec![900, 900, 900];
-        ops.global_rejected_ids = vec![900, 900];
-        CountryResult::apply_deferred_transfer_ops(&mut data, ops, date);
+        // Same-day duplicates — whether from one country's retries or from
+        // several countries pursuing the same pool player this tick — are
+        // concatenated into the world-wide batch and must still count once
+        // after the single dedup'd pool pass.
+        let batch = FreeAgentBumpBatch {
+            offered_ids: vec![900, 900, 900],
+            rejected_ids: vec![900, 900],
+            block_reasons: Vec::new(),
+        };
+        PipelineProcessor::apply_free_agent_market_bumps_batch(&mut data, &batch, date);
 
         let state = data.free_agents[0]
             .free_agent_state()

@@ -1,4 +1,5 @@
 use super::CountryResult;
+use crate::Country;
 use crate::TeamInfo;
 use crate::league::Season;
 use crate::simulator::SimulatorData;
@@ -11,6 +12,25 @@ impl CountryResult {
     /// Snapshot every player's statistics into career history for one or
     /// more just-ended seasons.
     ///
+    /// Thin `&mut SimulatorData` wrapper around [`snapshot_country`] —
+    /// kept so test paths (and any one-off caller) can address a country
+    /// by id. The production tick resolves the country once and calls
+    /// [`snapshot_country`] directly inside a parallel season-start pass
+    /// across every just-ended-season country.
+    pub(super) fn snapshot_player_season_statistics(data: &mut SimulatorData, country_id: u32) {
+        let date = data.date.date();
+        if let Some(country) = data.country_mut(country_id) {
+            Self::snapshot_country(country, date);
+        }
+    }
+
+    /// Country-local season snapshot. Operates on `&mut Country` only —
+    /// no cross-country reads or writes — so the orchestrator can run it
+    /// across every just-ended-season country in parallel (the season is
+    /// staggered, but several leagues share an end date, so the country
+    /// dimension is worth fanning out; each country's club walk is
+    /// already parallel internally).
+    ///
     /// Catches up from the per-country watermark
     /// (`Country::last_snapshotted_season_year`): if today's
     /// `ended_season` is N years past the watermark, the snapshot fires
@@ -20,8 +40,7 @@ impl CountryResult {
     /// per season the player existed at the club. After each season is
     /// processed the watermark advances so future ticks don't redo
     /// already-frozen years.
-    pub(super) fn snapshot_player_season_statistics(data: &mut SimulatorData, country_id: u32) {
-        let date = data.date.date();
+    pub(crate) fn snapshot_country(country: &mut Country, date: NaiveDate) {
         // The just-ended season is identified by CALENDAR year, matching
         // how the schedule defines a season: it regenerates on the
         // league's configured season-start day with `Season::new(date.year())`
@@ -49,10 +68,7 @@ impl CountryResult {
         // `watermark + 1` so any year whose `new_season_started` gate
         // dropped is recovered in chronological order when the next
         // gate event eventually fires.
-        let watermark = data
-            .country(country_id)
-            .and_then(|c| c.last_snapshotted_season_year);
-        let first_year = match watermark {
+        let first_year = match country.last_snapshotted_season_year {
             Some(w) => w.saturating_add(1),
             None => target_ended_year,
         };
@@ -73,16 +89,8 @@ impl CountryResult {
             // missing" pattern for multi-season loans whose Italian
             // 2027/28 gate dropped.
             let drain_live_stats = year == target_ended_year;
-            Self::snapshot_one_season(
-                data,
-                country_id,
-                Season::new(year),
-                date,
-                drain_live_stats,
-            );
-            if let Some(country) = data.country_mut(country_id) {
-                country.last_snapshotted_season_year = Some(year);
-            }
+            Self::snapshot_one_season(country, Season::new(year), date, drain_live_stats);
+            country.last_snapshotted_season_year = Some(year);
         }
     }
 
@@ -96,21 +104,15 @@ impl CountryResult {
     /// year — see the comment at the loop site for why splitting the
     /// drain matters.
     fn snapshot_one_season(
-        data: &mut SimulatorData,
-        country_id: u32,
+        country: &mut Country,
         ended_season: Season,
         date: NaiveDate,
         drain_live_stats: bool,
     ) {
         info!(
             "📋 Season snapshot: saving player statistics for season {} (country {})",
-            ended_season.start_year, country_id
+            ended_season.start_year, country.id
         );
-
-        let country = match data.country_mut(country_id) {
-            Some(c) => c,
-            None => return,
-        };
 
         // Build league lookup so we can resolve team.league_id -> (name, slug)
         let league_lookup: HashMap<u32, (String, String)> = country

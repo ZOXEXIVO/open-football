@@ -56,6 +56,19 @@ pub struct ManagerCandidate {
     pub source: CandidateSource,
 }
 
+/// A poachable in-post manager, captured by ONE world walk before the
+/// per-club shortlist refresh. Holds a borrow of the seated manager
+/// plus the requester-independent filter inputs (its club id and the
+/// club's world reputation). Each refreshing club then filters this
+/// shared snapshot by its own reputation ceiling and rescores the
+/// survivors — collapsing the old `O(searching_clubs × all_clubs)`
+/// re-walk into `O(all_clubs)` plus a cheap per-requester pass.
+struct EmployedCandidateRaw<'a> {
+    manager: &'a Staff,
+    club_id: u32,
+    club_world_rep: u16,
+}
+
 /// State machine for an in-flight approach. One day per state advance:
 /// `Made` (day 0) → either `CompensationDemanded` or `Rejected` (day 1)
 /// → `CompensationAgreed` or `Rejected` (day 2) → `TermsAccepted` or
@@ -669,101 +682,95 @@ impl ManagerShortlist {
         scored
     }
 
-    /// Enumerate currently-employed managers across the world that a
-    /// requesting club might shortlist. Returns one `ManagerCandidate`
-    /// per hireable head coach at a club whose reputation is at most
-    /// `rep_ceiling` (i.e. clubs strictly smaller than the requesting
-    /// club, by a margin) AND whose manager is performing above the
-    /// board's expectations.
+    /// Walk the world ONCE and collect every poachable in-post manager
+    /// with the requester-independent filters already applied: a Main
+    /// team is present, the board has a season target set, the board is
+    /// happy (confidence ≥ 70 ≈ the manager is over-delivering), and a
+    /// Manager actually occupies the seat. The per-requester reputation
+    /// ceiling and scoring are applied later in [`combined`] against
+    /// this shared snapshot.
+    ///
+    /// Parallel read-only sweep over `data` — runs ONCE per shortlist
+    /// refresh tick, replacing the previous per-club world re-walk
+    /// (`O(searching_clubs × all_clubs)` → `O(all_clubs)`).
     ///
     /// Cross-border by default — a Premier League club can poach from
-    /// La Liga or the Eredivisie. Slice D can add language/work-permit
-    /// modifiers; for now any continent is fair game.
-    pub fn enumerate_employed(
-        data: &SimulatorData,
-        requesting_rep: u16,
-        today: NaiveDate,
-    ) -> Vec<ManagerCandidate> {
-        let rep_ceiling = ((requesting_rep as f32) * 0.8) as u16;
-        let mut out: Vec<ManagerCandidate> = Vec::new();
-
-        for continent in &data.continents {
-            for country in &continent.countries {
-                for club in &country.clubs {
-                    let main_team = match club
-                        .teams
-                        .iter()
-                        .find(|t| matches!(t.team_type, TeamType::Main))
-                    {
-                        Some(t) => t,
-                        None => continue,
-                    };
-                    if main_team.reputation.world > rep_ceiling {
-                        continue;
-                    }
-                    // Performance filter: only consider managers at
-                    // clubs outperforming their season target. Avoid
-                    // poaching someone who's already failing.
-                    let Some(targets) = &club.board.season_targets else {
-                        continue;
-                    };
-                    // Overperforming proxy: confidence >= 70 means the
-                    // board is happy, i.e. the manager is over-delivering.
-                    // Cheaper than re-deriving league standings here.
-                    if club.board.confidence.level < 70 {
-                        continue;
-                    }
-                    let _ = targets; // future: finer filtering
-
-                    let Some(manager) = main_team.staffs.find_by_position(StaffPosition::Manager)
-                    else {
-                        continue;
-                    };
-                    let Some(score) =
-                        ManagerCandidateScorer::score_employed(manager, requesting_rep, today)
-                    else {
-                        continue;
-                    };
-                    let target_salary =
-                        ManagerCandidateScorer::target_salary(manager, requesting_rep, today);
-                    out.push(ManagerCandidate {
-                        staff_id: manager.id,
-                        fit_score: score,
-                        target_salary,
-                        source: CandidateSource::Employed {
-                            current_club_id: club.id,
-                        },
-                    });
+    /// La Liga or the Eredivisie; any continent is fair game.
+    fn enumerate_employed_pool(data: &SimulatorData) -> Vec<EmployedCandidateRaw<'_>> {
+        data.continents
+            .par_iter()
+            .flat_map(|c| c.countries.par_iter())
+            .flat_map(|country| country.clubs.par_iter())
+            .filter_map(|club| {
+                let main_team = club
+                    .teams
+                    .iter()
+                    .find(|t| matches!(t.team_type, TeamType::Main))?;
+                // Performance filter: only consider managers at clubs
+                // outperforming their season target. The season-target
+                // presence and confidence checks are requester-
+                // independent, so they belong in the one-time walk.
+                club.board.season_targets.as_ref()?;
+                // Overperforming proxy: confidence >= 70 means the board
+                // is happy, i.e. the manager is over-delivering. Cheaper
+                // than re-deriving league standings here.
+                if club.board.confidence.level < 70 {
+                    return None;
                 }
-            }
-        }
-        out
+                let manager = main_team.staffs.find_by_position(StaffPosition::Manager)?;
+                Some(EmployedCandidateRaw {
+                    manager,
+                    club_id: club.id,
+                    club_world_rep: main_team.reputation.world,
+                })
+            })
+            .collect()
     }
 
     /// Build the full shortlist for a club — free agents + viable
-    /// employed targets, merged and ranked. Replaces the
-    /// free-agent-only shortlist for clubs that have committed to
-    /// slice C.
-    pub fn combined(
-        data: &SimulatorData,
+    /// employed targets, merged and ranked. The employed candidates are
+    /// filtered out of the shared `employed` snapshot built once by
+    /// [`enumerate_employed_pool`]: only clubs whose reputation is at
+    /// most `rep_ceiling` (i.e. strictly smaller than the requester by a
+    /// margin) survive, each rescored against the requester's
+    /// reputation. Cheap per-requester pass — no world walk here.
+    fn combined(
+        free_agent_staff: &[Staff],
+        employed: &[EmployedCandidateRaw<'_>],
         requesting_club_id: u32,
         requesting_rep: u16,
         today: NaiveDate,
     ) -> Vec<ManagerCandidate> {
         let mut combined: Vec<ManagerCandidate> =
-            Self::from_free_agents(&data.free_agent_staff, requesting_rep, today);
+            Self::from_free_agents(free_agent_staff, requesting_rep, today);
 
-        let employed = Self::enumerate_employed(data, requesting_rep, today);
-        for c in employed {
-            // Don't shortlist the club's own current manager (paranoia
-            // — the rep-ceiling filter should already exclude self,
-            // but a club at the rep boundary could match itself).
-            if let CandidateSource::Employed { current_club_id } = c.source {
-                if current_club_id == requesting_club_id {
-                    continue;
-                }
+        let rep_ceiling = ((requesting_rep as f32) * 0.8) as u16;
+        for raw in employed {
+            // Only poach from clubs strictly smaller than us by a margin.
+            if raw.club_world_rep > rep_ceiling {
+                continue;
             }
-            combined.push(c);
+            // Don't shortlist the club's own current manager (paranoia
+            // — the rep-ceiling filter should already exclude self, but
+            // a club at the rep boundary could match itself).
+            if raw.club_id == requesting_club_id {
+                continue;
+            }
+            let Some(score) =
+                ManagerCandidateScorer::score_employed(raw.manager, requesting_rep, today)
+            else {
+                continue;
+            };
+            let target_salary =
+                ManagerCandidateScorer::target_salary(raw.manager, requesting_rep, today);
+            combined.push(ManagerCandidate {
+                staff_id: raw.manager.id,
+                fit_score: score,
+                target_salary,
+                source: CandidateSource::Employed {
+                    current_club_id: raw.club_id,
+                },
+            });
         }
 
         combined.sort_unstable_by(|a, b| b.fit_score.cmp(&a.fit_score));
@@ -884,18 +891,36 @@ impl ManagerMarketTick {
             return;
         }
 
+        // Walk the world ONCE for poachable in-post managers, then let
+        // each refreshing club filter + rescore that shared snapshot
+        // against its own reputation. Previously every refreshing club
+        // re-walked the entire world inside `combined` — O(searching ×
+        // all_clubs); now it is O(all_clubs) + a cheap per-requester
+        // pass over the snapshot.
+        let employed_pool = ManagerShortlist::enumerate_employed_pool(data);
+
         // Build candidate lists outside the mutable-club borrow, then
-        // write back. Reads from the pool AND from every other club's
-        // main team (for employed-target enumeration in slice C) — so
-        // this is a read-only sweep over `data` before the write phase.
-        // Each per-club shortlist build is independent → parallel.
+        // write back. Reads from the free-agent pool AND from the shared
+        // employed snapshot (both immutable borrows of `data`), so this
+        // is a read-only sweep before the write phase. Each per-club
+        // shortlist build is independent → parallel.
         let updates: Vec<(u32, Vec<ManagerCandidate>)> = to_refresh
             .par_iter()
             .map(|&(club_id, club_rep)| {
-                let shortlist = ManagerShortlist::combined(data, club_id, club_rep, today);
+                let shortlist = ManagerShortlist::combined(
+                    &data.free_agent_staff,
+                    &employed_pool,
+                    club_id,
+                    club_rep,
+                    today,
+                );
                 (club_id, shortlist)
             })
             .collect();
+
+        // Drop the snapshot's immutable borrow of `data` before the
+        // mutable write-back loop below.
+        drop(employed_pool);
 
         for (club_id, shortlist) in updates {
             if let Some(club) = data.club_mut(club_id) {

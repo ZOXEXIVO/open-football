@@ -22,6 +22,7 @@ use crate::continent::ContinentAwardOutcome;
 use crate::continent::ContinentBuildOutput;
 use crate::continent::ContinentResult;
 use crate::continent::national::world as national_world;
+use crate::country::CountryResult;
 use crate::country::result::transfers::free_agent_audit::FreeAgentMarketAuditor;
 use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use crate::league::result::WorldSnapshot;
@@ -35,6 +36,7 @@ use awards::{
 use chrono::{Datelike, Duration, Weekday};
 use rayon::prelude::*;
 use std::any::Any;
+use std::collections::HashSet;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -305,6 +307,42 @@ impl FootballSimulator {
             // `cleanup_player_transfer_interest_batch`.
             let all_signed_ids = world_matchday.collect_domestic_signed_ids();
             PipelineProcessor::cleanup_player_transfer_interest_batch(data, &all_signed_ids);
+
+            // Free-agent market bumps (offer / reject / block-reason)
+            // were per-country, each walking the whole `data.free_agents`
+            // pool — O(countries × pool). Aggregate every country's bumps
+            // and apply them in ONE pass over the pool before the drain,
+            // mirroring the interest-cleanup batch above.
+            let fa_bumps = world_matchday.collect_free_agent_bumps();
+            PipelineProcessor::apply_free_agent_market_bumps_batch(
+                data,
+                &fa_bumps,
+                current_date.date(),
+            );
+
+            // Season-start career-history snapshot. Used to run serially
+            // per country inside the drain (each country's club walk was
+            // parallel, but the country dimension was not). Hoisted here
+            // so every just-ended-season country is snapshotted in ONE
+            // fan-out across countries × clubs. Runs BEFORE the drain so
+            // borrowing clubs freeze their loanees' stats before the
+            // cross-country loan returns (inside the drain) move them
+            // home — the "snapshot before loan returns" ordering, now
+            // applied world-wide. Country-local mutation only ⇒ safe in
+            // `countries.par_iter_mut`.
+            let new_season_country_ids = world_matchday.collect_new_season_country_ids();
+            if !new_season_country_ids.is_empty() {
+                let new_season_set: HashSet<u32> = new_season_country_ids.into_iter().collect();
+                let snapshot_date = current_date.date();
+                data.continents
+                    .par_iter_mut()
+                    .flat_map(|c| c.countries.par_iter_mut())
+                    .for_each(|country| {
+                        if new_season_set.contains(&country.id) {
+                            CountryResult::snapshot_country(country, snapshot_date);
+                        }
+                    });
+            }
 
             world_matchday.drain_into(data, &mut result);
         }

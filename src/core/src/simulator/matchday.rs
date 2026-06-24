@@ -43,6 +43,7 @@ use crate::SimulationResult;
 use crate::SimulatorData;
 use crate::ai::PendingAiRequest;
 use crate::continent::{Continent, ContinentBuildOutput, ContinentBuildState, ContinentResult};
+use crate::country::result::transfers::FreeAgentBumpBatch;
 use crate::league::result::WorldSnapshot;
 use crate::r#match::{Match, MatchResult};
 
@@ -224,6 +225,44 @@ impl<'gc> WorldMatchdayResult<'gc> {
             .flat_map(|cr| cr.countries.iter())
             .filter_map(|country_r| country_r.deferred_transfer_ops.as_ref())
             .flat_map(|ops| ops.domestic_signed_ids.iter().copied())
+            .collect()
+    }
+
+    /// Aggregate every country's free-agent market bumps (offer / reject
+    /// / block-reason) into one [`FreeAgentBumpBatch`]. Fed to the
+    /// world-wide `apply_free_agent_market_bumps_batch` pass so the
+    /// `data.free_agents` pool is walked ONCE per tick instead of once
+    /// per country (the per-country drain was `O(countries × pool)`).
+    pub fn collect_free_agent_bumps(&self) -> FreeAgentBumpBatch {
+        let mut batch = FreeAgentBumpBatch::default();
+        for ops in self
+            .continents
+            .iter()
+            .flat_map(|cr| cr.countries.iter())
+            .filter_map(|country_r| country_r.deferred_transfer_ops.as_ref())
+        {
+            batch.offered_ids.extend(ops.global_offered_ids.iter().copied());
+            batch
+                .rejected_ids
+                .extend(ops.global_rejected_ids.iter().copied());
+            batch
+                .block_reasons
+                .extend(ops.global_block_reasons.iter().copied());
+        }
+        batch
+    }
+
+    /// Country ids whose season just rolled over this tick (any of their
+    /// leagues flagged `new_season_started`). Fed to the parallel
+    /// season-start career-history snapshot so every just-ended-season
+    /// country is snapshotted in one fan-out before the serial drain
+    /// runs the cross-country loan returns.
+    pub fn collect_new_season_country_ids(&self) -> Vec<u32> {
+        self.continents
+            .iter()
+            .flat_map(|cr| cr.countries.iter())
+            .filter(|country_r| country_r.leagues.iter().any(|l| l.new_season_started))
+            .map(|country_r| country_r.country_id)
             .collect()
     }
 
