@@ -18,6 +18,13 @@ use tokio::sync::{Mutex, RwLock};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Upper bound on the handshake write+read once the TCP connect has
+/// succeeded. Without it a worker that accepts the socket but never
+/// replies (half-open peer, host frozen right after accept) would hang
+/// `add_worker` (a blocked HTTP request) and stall the heartbeat loop
+/// forever. The exchange is a couple of tiny frames, so this only ever
+/// fires on a genuinely unresponsive peer.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One worker as seen by the coordinator. Holds a single TCP
 /// connection to the worker process — the worker itself runs incoming
@@ -313,12 +320,14 @@ impl WorkerRegistry {
             coordinator_version: coordinator_version.clone(),
             protocol_version: PROTOCOL_VERSION,
         };
-        if let Err(e) = Frame::write(&mut stream, &handshake).await {
-            return Self::unreachable(address, format!("handshake write: {}", e));
-        }
-        let response: Response = match Frame::read(&mut stream).await {
-            Ok(r) => r,
-            Err(e) => return Self::unreachable(address, format!("handshake read: {}", e)),
+        let exchange = async {
+            Frame::write(&mut stream, &handshake).await?;
+            Frame::read(&mut stream).await
+        };
+        let response: Response = match tokio::time::timeout(HANDSHAKE_TIMEOUT, exchange).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => return Self::unreachable(address, format!("handshake io: {}", e)),
+            Err(_) => return Self::unreachable(address, "handshake timeout".to_string()),
         };
 
         match response {

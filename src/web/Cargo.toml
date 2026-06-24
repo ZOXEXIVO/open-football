@@ -16,21 +16,21 @@ match-stub = ["core/match-stub"]
 core = { path = "../core" }
 database = { path = "../database" }
 axum = "0.8.9"
-log = "0.4.29"
+log = "0.4.33"
 tokio = { version = "1.52.3", features = ["full"] }
 tower = "0.5.3"
-tower-http = { version = "0.6.10", features = ["fs", "catch-panic"] }
+tower-http = { version = "0.7.0", features = ["fs", "catch-panic"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-chrono = "0.4.44"
-itertools = "0.14.0"
+serde_json = "1.0.150"
+chrono = "0.4.45"
+itertools = "0.15.0"
 askama = "0.16.0"
 askama_web = { version = "0.16.0", features = ["axum-0.8"] }
 async-compression = { version = "0.4.42", features = ["gzip", "tokio"] }
-ollama-rs = "0.3.4"
+ollama-rs = "0.3.5"
 rust-embed = "8.11"
 mime_guess = "2.0.5"
 hostname = "0.4.2"
-sysinfo = { version = "0.39.1", features = ["system"] }
+sysinfo = { version = "0.39.5", features = ["system"] }
 bincode = { version = "2.0", features = ["serde"] }
-toml = "0.9"
+toml = "1.1"

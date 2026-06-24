@@ -50,8 +50,29 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::net::TcpStream;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
+
+/// Upper bound on a single remote batch round-trip (request write +
+/// response read). A stopped or wedged worker that never delivers a
+/// FIN/RST — host slept, cable pulled, process paused, or simply hung —
+/// would otherwise leave `Frame::read` blocked forever. That matters
+/// here far more than for a typical client: the dispatch slot task is
+/// awaited synchronously by the matchday's rayon thread (which is itself
+/// inside `block_on`), so one unresponsive worker freezes the entire
+/// simulation with no way to cancel mid-day. The timeout converts that
+/// unbounded hang into an ordinary batch failure the fence/requeue/
+/// safety-net path already handles: the worker is marked Unreachable,
+/// its chunk retried on a healthy slot, and processing continues.
+///
+/// One minute — far above the realistic worst case (chunks are only
+/// `2 × threads` fast matches, which a live worker answers in well under
+/// a second even on modest hardware) so a slow-but-alive worker is never
+/// fenced by accident. A false fence is self-healing anyway: its chunk
+/// runs elsewhere and the heartbeat redials it within `HEARTBEAT_INTERVAL`.
+const REMOTE_BATCH_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct DistributedDispatcher {
     registry: WorkerRegistry,
@@ -353,6 +374,29 @@ impl DistributedDispatcher {
         out
     }
 
+    /// Send one request over a worker's connection and read its reply,
+    /// bounded by [`REMOTE_BATCH_TIMEOUT`]. On timeout the partially
+    /// driven write/read future is dropped; the caller then fences the
+    /// worker and discards the connection, so the half-consumed stream is
+    /// never reused.
+    async fn request_with_timeout(stream: &mut TcpStream, req: &Request) -> io::Result<Response> {
+        match tokio::time::timeout(REMOTE_BATCH_TIMEOUT, async {
+            Frame::write(stream, req).await?;
+            Frame::read(stream).await
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "no response within {}s — worker fenced",
+                    REMOTE_BATCH_TIMEOUT.as_secs()
+                ),
+            )),
+        }
+    }
+
     async fn play_remote_league(
         worker: &ReadyWorker,
         registry: &WorkerRegistry,
@@ -367,10 +411,7 @@ impl DistributedDispatcher {
 
         let mut stream = worker.connection.lock().await;
         let timer = LatencyTimer::start();
-        let recv: io::Result<Response> = match Frame::write(&mut *stream, &req).await {
-            Ok(()) => Frame::read(&mut *stream).await,
-            Err(e) => Err(e),
-        };
+        let recv = Self::request_with_timeout(&mut stream, &req).await;
         drop(stream);
         let latency = timer.elapsed_ms();
 
@@ -548,10 +589,7 @@ impl DistributedDispatcher {
 
         let mut stream = worker.connection.lock().await;
         let timer = LatencyTimer::start();
-        let recv: io::Result<Response> = match Frame::write(&mut *stream, &req).await {
-            Ok(()) => Frame::read(&mut *stream).await,
-            Err(e) => Err(e),
-        };
+        let recv = Self::request_with_timeout(&mut stream, &req).await;
         drop(stream);
         let latency = timer.elapsed_ms();
 
