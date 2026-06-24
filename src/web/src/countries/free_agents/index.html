@@ -29,7 +29,7 @@
                             {% if !player.first_name.is_empty() %}{{ player.first_name }}&nbsp;{% endif %}{{ player.last_name }}
                         </a>
                         {% if !player.status_message.is_empty() %}
-                        <div class="fa-status"><span class="fa-stage">{{ player.market_stage }}</span> · {{ player.days_free }}d · {{ player.status_message }}</div>
+                        <div class="fa-status">{{ player.status_message }}</div>
                         {% endif %}
                     </td>
                     <td class="sq-age">{{ player.age }}</td>

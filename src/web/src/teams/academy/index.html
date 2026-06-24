@@ -4,65 +4,54 @@
 
 {% block content %}
 <div class="fm-page">
-    <section class="fm-panel fm-info-panel">
-        <div class="fm-panel-head">
-            <h3>{{ i18n.t("academy") }}</h3>
-        </div>
-        <div class="fm-info-body">
-            <div class="fm-info-grid fm-info-grid-3">
-                <div class="fm-info-tile fm-info-tile-machine">
-                    <div class="fm-info-tile-icon"><i class="fa fa-graduation-cap"></i></div>
-                    <div class="fm-info-tile-body">
-                        <div class="fm-info-tile-value">{{ academy_level }}/20</div>
-                        <div class="fm-info-tile-label">{{ i18n.t("academy_level") }} &middot; {{ i18n.t("academy_tier") }} {{ academy_tier }}/10</div>
-                    </div>
-                </div>
-                <div class="fm-info-tile fm-info-tile-machine">
-                    <div class="fm-info-tile-icon"><i class="fa fa-star"></i></div>
-                    <div class="fm-info-tile-body">
-                        <div class="fm-info-tile-value">{{ pathway_reputation }}/100</div>
-                        <div class="fm-info-tile-label">{{ i18n.t("academy_pathway_reputation") }}</div>
-                    </div>
-                </div>
-                <div class="fm-info-tile fm-info-tile-machine">
-                    <div class="fm-info-tile-icon"><i class="fa fa-compass"></i></div>
-                    <div class="fm-info-tile-body">
-                        <div class="fm-info-machine-value">{{ i18n.t(identity_key) }}</div>
-                        <div class="fm-info-tile-label">{{ i18n.t("academy_identity") }}</div>
-                    </div>
+    <div class="fm-academy-overview">
+        <div class="fm-info-grid fm-info-grid-3">
+            <div class="fm-info-tile fm-info-tile-machine">
+                <div class="fm-info-tile-icon"><i class="fa fa-graduation-cap"></i></div>
+                <div class="fm-info-tile-body">
+                    <div class="fm-info-tile-value">{{ academy_level }}/20</div>
+                    <div class="fm-info-tile-label">{{ i18n.t("academy_level") }} &middot; {{ i18n.t("academy_tier") }} {{ academy_tier }}/10</div>
                 </div>
             </div>
-            {% if !recruitment_priority_keys.is_empty() %}
-            <div class="fm-info-chips">
-                <span class="fm-info-chips-label"><i class="fa fa-bullseye"></i> {{ i18n.t("academy_recruitment_priorities") }}</span>
-                {% for k in recruitment_priority_keys %}<span class="fm-tag">{{ i18n.t(k) }}</span>{% endfor %}
+            <div class="fm-info-tile fm-info-tile-machine">
+                <div class="fm-info-tile-icon"><i class="fa fa-star"></i></div>
+                <div class="fm-info-tile-body">
+                    <div class="fm-info-tile-value">{{ pathway_reputation }}/100</div>
+                    <div class="fm-info-tile-label">{{ i18n.t("academy_pathway_reputation") }}</div>
+                </div>
             </div>
-            {% endif %}
-            <div class="fm-info-grid fm-info-grid-3">
-                <div class="fm-info-tile fm-info-tile-machine">
-                    <div class="fm-info-tile-icon"><i class="fa fa-layer-group"></i></div>
-                    <div class="fm-info-tile-body">
-                        <div class="fm-info-machine-value">{{ foundation_count }} / {{ development_count }} / {{ professional_count }}</div>
-                        <div class="fm-info-tile-label">{{ i18n.t("academy_phase_foundation") }} / {{ i18n.t("academy_phase_development") }} / {{ i18n.t("academy_phase_professional") }}</div>
-                    </div>
-                </div>
-                <div class="fm-info-tile fm-info-tile-machine">
-                    <div class="fm-info-tile-icon"><i class="fa fa-arrow-up"></i></div>
-                    <div class="fm-info-tile-body">
-                        <div class="fm-info-tile-value">{{ ready_for_youth_count }}</div>
-                        <div class="fm-info-tile-label">{{ i18n.t("academy_ready_for_youth") }}</div>
-                    </div>
-                </div>
-                <div class="fm-info-tile fm-info-tile-machine">
-                    <div class="fm-info-tile-icon"><i class="fa fa-triangle-exclamation"></i></div>
-                    <div class="fm-info-tile-body">
-                        <div class="fm-info-tile-value">{{ at_risk_count }}</div>
-                        <div class="fm-info-tile-label">{{ i18n.t("academy_at_risk") }}</div>
-                    </div>
+            <div class="fm-info-tile fm-info-tile-machine">
+                <div class="fm-info-tile-icon"><i class="fa fa-compass"></i></div>
+                <div class="fm-info-tile-body">
+                    <div class="fm-info-machine-value">{{ i18n.t(identity_key) }}</div>
+                    <div class="fm-info-tile-label">{{ i18n.t("academy_identity") }}</div>
                 </div>
             </div>
         </div>
-    </section>
+        <div class="fm-info-grid fm-info-grid-3">
+            <div class="fm-info-tile fm-info-tile-machine">
+                <div class="fm-info-tile-icon"><i class="fa fa-layer-group"></i></div>
+                <div class="fm-info-tile-body">
+                    <div class="fm-info-machine-value">{{ foundation_count }} / {{ development_count }} / {{ professional_count }}</div>
+                    <div class="fm-info-tile-label">{{ i18n.t("academy_phase_foundation") }} / {{ i18n.t("academy_phase_development") }} / {{ i18n.t("academy_phase_professional") }}</div>
+                </div>
+            </div>
+            <div class="fm-info-tile fm-info-tile-machine">
+                <div class="fm-info-tile-icon"><i class="fa fa-arrow-up"></i></div>
+                <div class="fm-info-tile-body">
+                    <div class="fm-info-tile-value">{{ ready_for_youth_count }}</div>
+                    <div class="fm-info-tile-label">{{ i18n.t("academy_ready_for_youth") }}</div>
+                </div>
+            </div>
+            <div class="fm-info-tile fm-info-tile-machine">
+                <div class="fm-info-tile-icon"><i class="fa fa-triangle-exclamation"></i></div>
+                <div class="fm-info-tile-body">
+                    <div class="fm-info-tile-value">{{ at_risk_count }}</div>
+                    <div class="fm-info-tile-label">{{ i18n.t("academy_at_risk") }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <section class="fm-panel">
         <div class="fm-panel-head">

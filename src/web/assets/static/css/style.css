@@ -4595,6 +4595,15 @@ a:active {
     min-width: 0;
 }
 
+/* Academy overview: bare info tiles (no card chrome) sitting flush
+   with the players panel below. Replaces the old .fm-info-panel card. */
+.fm-academy-overview {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
 .fm-info-body {
     padding: 12px 14px;
     display: flex;
