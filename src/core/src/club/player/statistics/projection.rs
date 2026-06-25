@@ -739,6 +739,18 @@ impl PlayerStatisticsProjection {
             b.season
                 .start_year
                 .cmp(&a.season.start_year)
+                // Within a season, loan spells sort ABOVE the parent /
+                // home-club row. A home row can otherwise acquire a
+                // seq_id HIGHER than a loan that chronologically preceded
+                // it: a loan return lands the player on the Main team, and
+                // `move_loan_returns_to_reserve` then opens a *fresh*
+                // reserve spell (`record_intra_club_move`) with a new
+                // seq_id — so the season-long home floats above the loan
+                // it contained. Main-home players never get that re-place,
+                // so their home keeps its original (pre-loan) seq and the
+                // loan already sorts on top; ordering loans first makes the
+                // reserve case match, independent of the inflated seq.
+                .then(b.is_loan.cmp(&a.is_loan))
                 .then(b.seq_id.cmp(&a.seq_id))
         });
 
@@ -1252,6 +1264,95 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].season.start_year, 2025);
         assert_eq!(rows[1].season.start_year, 2024);
+    }
+
+    #[test]
+    fn loan_sorts_above_reserve_home_row_within_season() {
+        // User-reported repro (Ruslan Pichienko): a reserve-home player's
+        // "Spartak Moscow 2" parent row rendered ABOVE the "Dinamo
+        // Vladivostok" loan that chronologically came first in the same
+        // 2026/27 season. Root cause: after the Vladivostok loan returned,
+        // the player landed on the Main team and
+        // `move_loan_returns_to_reserve` opened a FRESH reserve spell, so
+        // the season-long home row took a seq_id (30) higher than the loan
+        // it contained (20). Pure seq-desc ordering then floats the home
+        // above the loan. Main-home players never get re-placed to the
+        // reserve, which is why "it works for Main teams".
+        let mut hist = PlayerStatisticsHistory::new();
+        // Frozen 2026/27: the earlier loan (low seq) + the inflated home row.
+        hist.season_ledger.push(PlayerStatLedgerEntry {
+            seq_id: 20,
+            season_start_year: 2026,
+            team_slug: "dinamo-vladivostok".to_string(),
+            team_name: "Dinamo Vladivostok".to_string(),
+            team_reputation: 100,
+            league_slug: "second-division-a-silver".to_string(),
+            league_name: "Second Division A Silver".to_string(),
+            competition_kind: PlayerStatCompetitionKind::League,
+            competition_slug: "second-division-a-silver".to_string(),
+            is_loan: true,
+            transfer_fee: Some(0.0),
+            statistics: PlayerStatistics::default(),
+        });
+        hist.season_ledger.push(PlayerStatLedgerEntry {
+            // Inflated by the post-loan-return reserve re-placement.
+            seq_id: 30,
+            season_start_year: 2026,
+            team_slug: "spartak-moscow-2".to_string(),
+            team_name: "Spartak Moscow 2".to_string(),
+            team_reputation: 200,
+            league_slug: "second-division-b2".to_string(),
+            league_name: "Second Division B2".to_string(),
+            competition_kind: PlayerStatCompetitionKind::League,
+            competition_slug: "second-division-b2".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics::default(),
+        });
+        // Active 2027/28 spell on a fresh loan.
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "Dinamo Vologda".to_string(),
+            team_slug: "dinamo-vologda".to_string(),
+            team_reputation: 100,
+            league_name: "Second Division B2".to_string(),
+            league_slug: "second-division-b2".to_string(),
+            is_loan: true,
+            transfer_fee: Some(0.0),
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2027, 7, 7),
+            departed_date: None,
+            seq_id: 40,
+        });
+
+        let live_league = stats(3, 0);
+        let live_friendly = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &live_league,
+            friendly: &live_friendly,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2027, 10, 1));
+
+        let pos = |slug: &str, year: u16| {
+            rows.iter()
+                .position(|r| r.team_slug == slug && r.season.start_year == year)
+        };
+        let vladivostok = pos("dinamo-vladivostok", 2026).expect("Vladivostok loan row missing");
+        let home = pos("spartak-moscow-2", 2026).expect("Spartak Moscow 2 home row missing");
+        assert!(
+            vladivostok < home,
+            "loan (Dinamo Vladivostok) must sort above the parent home row \
+             (Spartak Moscow 2) in the same season; got vladivostok={vladivostok}, home={home}"
+        );
+
+        // Sanity: the active current-season spell stays on top overall.
+        assert_eq!(
+            rows.first().map(|r| r.team_slug.as_str()),
+            Some("dinamo-vologda"),
+            "active current-season spell stays at the top"
+        );
     }
 
     #[test]

@@ -932,6 +932,81 @@ impl PlayerStatisticsHistory {
         is_loan: bool,
         last_transfer_date: Option<NaiveDate>,
     ) {
+        // Carry-forward: a still-active market move the player joined too
+        // late to feature in — ZERO official apps — is really a NEXT-season
+        // spell. `Season::from_date`'s August boundary mis-stamps a late /
+        // off-season move into the just-ended season even though its
+        // matches are all played next season. Freezing a 0-app row for it
+        // pins an empty placeholder to the wrong season (the "return
+        // mid-season then go straight to the next move" case), so we skip
+        // every freeze path below and carry the spell — fee included —
+        // into the next season where its games are actually recorded.
+        //
+        // Common gates (all carried moves):
+        //   * `transfer_fee.is_some()` — a real market move. Home /
+        //     youth-alias seeds carry no fee, so a quiet season at the
+        //     career-home club always keeps its row, and a continued
+        //     loan re-seeded with no fee isn't re-carried each year.
+        //   * `departed_date.is_none()` — the player is STILL there (the
+        //     spell continues next season). A loan that already RETURNED,
+        //     or a club the player was bought by then loaned out of, is
+        //     departed at season end and still freezes its 0-app row.
+        //   * 0 official apps (the closing team's live `current_stats`
+        //     count, so a move that actually featured is frozen normally).
+        //
+        // Loan vs permanent split — only the START time differs:
+        //   * LOAN — a temporary spell: carry when it began in the last 30%
+        //     of the season or later (an off-season join sits past the
+        //     matches-end date, so its time-at-club is 0 and clears the
+        //     same bar). A loan begun earlier is a real, if unproductive,
+        //     spell and stays.
+        //   * PERMANENT (transfer / free signing) — the player's NEW club:
+        //     carry only an OFF-SEASON join (after the matches ended,
+        //     before the next season). A late IN-SEASON signing — even
+        //     days before the end — establishes the player's club for that
+        //     season and stays (a €10M deadline buy must show that year).
+        let season_matches_end = season.end_date();
+        let season_span_days = (season_matches_end - season.start_date()).num_days().max(1);
+        let next_season_start = Season::new(season.start_year + 1).start_date();
+        let carried_forward: Vec<(String, bool, Option<f64>)> = self
+            .current
+            .iter()
+            .filter(|e| {
+                if e.departed_date.is_some() || e.transfer_fee.is_none() {
+                    return false;
+                }
+                let mut games = e.statistics.total_games();
+                if e.team_slug == team.slug && e.is_loan == is_loan {
+                    games += current_stats.total_games();
+                }
+                if games > 0 {
+                    return false;
+                }
+                if !e.is_loan {
+                    // Permanent move: off-season window only.
+                    return e.joined_date > season_matches_end
+                        && e.joined_date < next_season_start;
+                }
+                // Loan: joined in the last 30% of the season (or after it).
+                let days_in_season = (season_matches_end - e.joined_date).num_days().max(0);
+                (days_in_season as f64 / season_span_days as f64) * 100.0 < 30.0
+            })
+            .map(|e| (e.team_slug.clone(), e.is_loan, e.transfer_fee))
+            .collect();
+        let is_carried_forward = |slug: &str, loan: bool| -> bool {
+            carried_forward.iter().any(|(s, l, _)| s == slug && *l == loan)
+        };
+        // Fee a carried spell brings into the next season (None when the
+        // (slug, loan) pair isn't a carried move), so the destination's
+        // transfer fee surfaces where the games are played rather than
+        // being lost to the fee-less season re-seed.
+        let carried_fee = |slug: &str, loan: bool| -> Option<f64> {
+            carried_forward
+                .iter()
+                .find(|(s, l, _)| s == slug && *l == loan)
+                .and_then(|(_, _, fee)| *fee)
+        };
+
         // Canonical ledger write — happens before the legacy filters
         // see the data so a drop in `items` cannot hide the row from
         // the projection. Every current-season spell is recorded with
@@ -962,6 +1037,9 @@ impl PlayerStatisticsHistory {
             .collect();
         let mut closing_team_recorded = false;
         for (entry_team, entry_loan, entry_fee, entry_stats) in entries_snapshot {
+            if is_carried_forward(&entry_team.slug, entry_loan) {
+                continue;
+            }
             let mut stats = entry_stats;
             if entry_team.slug == team.slug && entry_loan == is_loan {
                 stats.merge_from(&current_stats);
@@ -976,7 +1054,7 @@ impl PlayerStatisticsHistory {
                 stats,
             );
         }
-        if !closing_team_recorded {
+        if !closing_team_recorded && !is_carried_forward(&team.slug, is_loan) {
             // No matching current entry (e.g. mid-season loan return at
             // a club we never created a current row for) — record the
             // closing team's contribution directly so the row exists.
@@ -1033,6 +1111,9 @@ impl PlayerStatisticsHistory {
             // created by mid-season transfers (e.g. transfer fee lost).
             let entries = std::mem::take(&mut self.current);
             for entry in entries {
+                if is_carried_forward(&entry.team_slug, entry.is_loan) {
+                    continue;
+                }
                 let dominated_by_frozen = self.items.iter().any(|i| {
                     i.season.start_year == season.start_year
                         && i.team_slug == entry.team_slug
@@ -1087,13 +1168,14 @@ impl PlayerStatisticsHistory {
             // there for rationale.
             merge_same_season_team_items(&mut self.items, season.start_year);
 
-            // Re-seed for next season
+            // Re-seed for next season — carry a summer-window move's fee
+            // forward so the destination row shows it where it's played.
             let new_season_start = Season::new(season.start_year + 1).start_date();
             self.upsert_current(
                 team,
                 PlayerStatistics::default(),
                 is_loan,
-                None,
+                carried_fee(&team.slug, is_loan),
                 new_season_start,
             );
             return;
@@ -1144,6 +1226,9 @@ impl PlayerStatisticsHistory {
             .any(|e| e.statistics.total_games() > 0 || e.transfer_fee.is_some());
 
         for entry in entries {
+            if is_carried_forward(&entry.team_slug, entry.is_loan) {
+                continue;
+            }
             let games = entry.statistics.total_games();
             let end_date = entry.departed_date.unwrap_or(season_end);
             let days_at_club = (end_date - entry.joined_date).num_days().max(0);
@@ -1206,13 +1291,15 @@ impl PlayerStatisticsHistory {
         // are dropped during the merge.
         merge_same_season_team_items(&mut self.items, season.start_year);
 
-        // Seed the new season with an empty entry for the current club
+        // Seed the new season with an empty entry for the current club —
+        // carrying a summer-window move's fee forward so the destination
+        // row shows it in the season its games are played.
         let new_season_start = Season::new(season.start_year + 1).start_date();
         self.upsert_current(
             team,
             PlayerStatistics::default(),
             is_loan,
-            None,
+            carried_fee(&team.slug, is_loan),
             new_season_start,
         );
     }
@@ -2045,6 +2132,258 @@ mod club_career_apps_tests {
             .find(|i| i.season.start_year == 2026 && i.team_slug == "zabbar" && i.is_loan)
             .unwrap();
         assert_eq!(loan_row.statistics.played, 12);
+    }
+
+    #[test]
+    fn summer_window_loan_does_not_freeze_phantom_row_in_prior_season() {
+        // User-reported repro (Ruslan Pichienko): a 7 July loan to Dinamo
+        // Vologda — created in the summer window that `Season::from_date`
+        // attributes to the just-ended 2026/27 season — was frozen as a
+        // 0-app "2026/27 Dinamo Vologda" row even though every match is
+        // played in 2027/28. A still-active loan covering under 30% of the
+        // closing season must be carried into the next season, not frozen
+        // as an empty placeholder here.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "Dinamo Vologda".to_string(),
+            team_slug: "dinamo-vologda".to_string(),
+            team_reputation: 100,
+            league_name: "Second Division B2".to_string(),
+            league_slug: "second-division-b2".to_string(),
+            is_loan: true,
+            transfer_fee: Some(0.0),
+            statistics: PlayerStatistics::default(),
+            // Summer window: from_date(2027-07-07) == 2026/27, but the
+            // season ended 2027-05-31, so the spell covers 0% of it.
+            joined_date: d(2027, 7, 7),
+            departed_date: None,
+            seq_id: 5,
+        });
+
+        let vologda = TeamInfo {
+            name: "Dinamo Vologda".to_string(),
+            slug: "dinamo-vologda".to_string(),
+            reputation: 100,
+            league_name: "Second Division B2".to_string(),
+            league_slug: "second-division-b2".to_string(),
+        };
+        hist.record_season_end(
+            Season::new(2026),
+            PlayerStatistics::default(),
+            &vologda,
+            true,
+            Some(d(2027, 7, 7)),
+        );
+
+        // No 0-app 2026/27 Vologda row in the canonical ledger (the source
+        // the History projection reads)...
+        assert!(
+            !hist.season_ledger.iter().any(|e| {
+                e.season_start_year == 2026
+                    && e.team_slug == "dinamo-vologda"
+                    && e.competition_kind == PlayerStatCompetitionKind::League
+            }),
+            "summer-window loan must not freeze a 2026/27 ledger row"
+        );
+        // ...nor in the legacy frozen items.
+        assert!(
+            !hist
+                .items
+                .iter()
+                .any(|i| i.season.start_year == 2026 && i.team_slug == "dinamo-vologda"),
+            "summer-window loan must not freeze a 2026/27 items row"
+        );
+        // The loan is carried into the next season as an active spell —
+        // with its fee preserved — so its 2027/28 games are recorded where
+        // they're actually played.
+        assert!(
+            hist.current.iter().any(|e| {
+                e.team_slug == "dinamo-vologda"
+                    && e.is_loan
+                    && e.departed_date.is_none()
+                    && e.transfer_fee == Some(0.0)
+            }),
+            "the loan must continue as an active spell (fee carried) for the next season"
+        );
+    }
+
+    #[test]
+    fn summer_window_transfer_carries_to_next_season_with_fee() {
+        // Generalization of the summer-window rule to PERMANENT transfers:
+        // a 7 July transfer (fee €5M) lands in the just-ended 2026/27
+        // season window but is played in 2027/28. It must not freeze a
+        // 0-app 2026/27 row, and the fee must travel to the next season.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "Zenit".to_string(),
+            team_slug: "zenit".to_string(),
+            team_reputation: 9_000,
+            league_name: "Russian Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+            is_loan: false,
+            transfer_fee: Some(5_000_000.0),
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2027, 7, 7),
+            departed_date: None,
+            seq_id: 7,
+        });
+
+        let zenit = TeamInfo {
+            name: "Zenit".to_string(),
+            slug: "zenit".to_string(),
+            reputation: 9_000,
+            league_name: "Russian Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+        };
+        hist.record_season_end(
+            Season::new(2026),
+            PlayerStatistics::default(),
+            &zenit,
+            false,
+            Some(d(2027, 7, 7)),
+        );
+
+        assert!(
+            !hist.season_ledger.iter().any(|e| {
+                e.season_start_year == 2026 && e.team_slug == "zenit"
+            }) && !hist.items.iter().any(|i| {
+                i.season.start_year == 2026 && i.team_slug == "zenit"
+            }),
+            "summer-window transfer must not freeze a 2026/27 phantom row"
+        );
+        assert!(
+            hist.current.iter().any(|e| {
+                e.team_slug == "zenit"
+                    && !e.is_loan
+                    && e.departed_date.is_none()
+                    && e.transfer_fee == Some(5_000_000.0)
+            }),
+            "the transfer (fee €5M) must continue into the next season"
+        );
+    }
+
+    #[test]
+    fn season_start_signing_with_zero_apps_is_not_carried_forward() {
+        // Guard: a signing DURING the season (here the season start) that
+        // simply never featured is NOT an off-season move — it must still
+        // freeze its 0-app row in the season the player actually belonged
+        // to the club, even with a fee. Only June/July off-season moves
+        // (joined after the matches ended, before the next season) carry.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "Khimki".to_string(),
+            team_slug: "khimki".to_string(),
+            team_reputation: 1_000,
+            league_name: "First League".to_string(),
+            league_slug: "first-league".to_string(),
+            is_loan: true,
+            transfer_fee: Some(0.0),
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2026, 8, 5),
+            departed_date: None,
+            seq_id: 9,
+        });
+
+        let khimki = TeamInfo {
+            name: "Khimki".to_string(),
+            slug: "khimki".to_string(),
+            reputation: 1_000,
+            league_name: "First League".to_string(),
+            league_slug: "first-league".to_string(),
+        };
+        hist.record_season_end(
+            Season::new(2026),
+            PlayerStatistics::default(),
+            &khimki,
+            true,
+            None,
+        );
+
+        assert!(
+            hist.season_ledger.iter().any(|e| {
+                e.season_start_year == 2026
+                    && e.team_slug == "khimki"
+                    && e.competition_kind == PlayerStatCompetitionKind::League
+            }),
+            "a season-start 0-app signing must still freeze its current-season row"
+        );
+    }
+
+    #[test]
+    fn end_of_season_loan_with_zero_apps_carries_to_next_season() {
+        // User-reported repro: a manual free loan to Bari on 30 May 2027 —
+        // a single day before the 2026/27 season ends — produced a 0-app
+        // 2026/27 Bari phantom alongside the 2027/28 loan. A loan begun
+        // that late never featured, so it belongs to the next season; the
+        // parent (Juventus) row for the season is untouched.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "Juventus".to_string(),
+            team_slug: "juventus".to_string(),
+            team_reputation: 9_000,
+            league_name: "Serie A".to_string(),
+            league_slug: "serie-a".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2026, 8, 1),
+            departed_date: Some(d(2027, 5, 30)),
+            seq_id: 1,
+        });
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "Bari".to_string(),
+            team_slug: "bari".to_string(),
+            team_reputation: 2_000,
+            league_name: "Serie B".to_string(),
+            league_slug: "serie-b".to_string(),
+            is_loan: true,
+            transfer_fee: Some(0.0),
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2027, 5, 30),
+            departed_date: None,
+            seq_id: 2,
+        });
+
+        let bari = TeamInfo {
+            name: "Bari".to_string(),
+            slug: "bari".to_string(),
+            reputation: 2_000,
+            league_name: "Serie B".to_string(),
+            league_slug: "serie-b".to_string(),
+        };
+        hist.record_season_end(
+            Season::new(2026),
+            PlayerStatistics::default(),
+            &bari,
+            true,
+            Some(d(2027, 5, 30)),
+        );
+
+        assert!(
+            !hist.season_ledger.iter().any(|e| {
+                e.season_start_year == 2026 && e.team_slug == "bari"
+            }) && !hist.items.iter().any(|i| {
+                i.season.start_year == 2026 && i.team_slug == "bari"
+            }),
+            "an end-of-season 0-app loan must not freeze a phantom prior-season row"
+        );
+        assert!(
+            hist.season_ledger.iter().any(|e| {
+                e.season_start_year == 2026 && e.team_slug == "juventus"
+            }) || hist.items.iter().any(|i| {
+                i.season.start_year == 2026 && i.team_slug == "juventus"
+            }),
+            "the parent club's season row is unaffected"
+        );
+        assert!(
+            hist.current.iter().any(|e| {
+                e.team_slug == "bari"
+                    && e.is_loan
+                    && e.departed_date.is_none()
+                    && e.transfer_fee == Some(0.0)
+            }),
+            "the loan continues into the next season (fee carried)"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────
