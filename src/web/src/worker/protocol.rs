@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 /// `HandshakeResponse::version`) is the primary gate; this is a finer
 /// belt-and-braces signal for builds that share a binary version but
 /// diverged at the wire layer.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// v2: added `Request::Ping` / `Response::Pong` liveness probe.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Request {
@@ -25,6 +27,12 @@ pub enum Request {
     PlayBatch {
         items: Vec<MatchEnvelope>,
     },
+    /// Liveness probe sent by the coordinator's health monitor over an
+    /// otherwise-idle worker connection. The worker answers
+    /// `Response::Pong` immediately; a missing or late reply means the
+    /// socket is dead even though no match batch has failed on it yet.
+    /// Cheap enough to send every few seconds.
+    Ping,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +59,9 @@ pub enum Response {
     Error {
         reason: String,
     },
+    /// Reply to `Request::Ping`. Its mere arrival (in time) is the proof
+    /// of life; it carries no payload.
+    Pong,
 }
 
 /// Per-item envelope inside `Request::PlayBatch`. Two variants cover the

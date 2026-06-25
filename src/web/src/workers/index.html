@@ -7,23 +7,23 @@
     <section class="fm-panel">
         <div class="fm-panel-head">
             <h3>{{ i18n.t("workers_total_match_workers") }}</h3>
-            <span class="fm-panel-count">{{ ready }}/{{ total }} {{ i18n.t("workers_ready_label") }}</span>
+            <span class="fm-panel-count"><span id="js-summary-ready">{{ ready }}</span>/<span id="js-summary-total">{{ total }}</span> {{ i18n.t("workers_ready_label") }}</span>
         </div>
         <div class="fm-workers-summary-grid">
             <div class="fm-workers-summary-tile">
-                <div class="fm-workers-summary-value">{{ total_threads }}</div>
+                <div class="fm-workers-summary-value" id="js-summary-threads">{{ total_threads }}</div>
                 <div class="fm-workers-summary-label">{{ i18n.t("workers_total_threads") }}</div>
             </div>
             <div class="fm-workers-summary-tile">
-                <div class="fm-workers-summary-value">{{ total_batches }}</div>
+                <div class="fm-workers-summary-value" id="js-summary-batches">{{ total_batches }}</div>
                 <div class="fm-workers-summary-label">{{ i18n.t("workers_batches_sent") }}</div>
             </div>
             <div class="fm-workers-summary-tile">
-                <div class="fm-workers-summary-value">{{ total_matches }}</div>
+                <div class="fm-workers-summary-value" id="js-summary-matches">{{ total_matches }}</div>
                 <div class="fm-workers-summary-label">{{ i18n.t("workers_matches_done") }}</div>
             </div>
             <div class="fm-workers-summary-tile fm-workers-summary-bad">
-                <div class="fm-workers-summary-value">{{ total_failures }}</div>
+                <div class="fm-workers-summary-value" id="js-summary-failures">{{ total_failures }}</div>
                 <div class="fm-workers-summary-label">{{ i18n.t("workers_failures") }}</div>
             </div>
         </div>
@@ -56,17 +56,20 @@
                 </thead>
                 <tbody>
                     {% for w in workers %}
-                    <tr class="fm-worker-row fm-worker-{{ w.status_label }}">
+                    <tr class="fm-worker-row fm-worker-{{ w.status_label }}" data-address="{{ w.address }}">
                         <td>
-                            <span class="fm-worker-badge fm-worker-badge-{{ w.status_label }}">
+                            <span class="fm-worker-badge fm-worker-badge-{{ w.status_label }} js-worker-badge">
                                 {% if w.status_label == "ready" %}{{ i18n.t("workers_status_ready") }}
                                 {% else if w.status_label == "local" %}{{ i18n.t("workers_status_local") }}
                                 {% else if w.status_label == "version_mismatch" %}{{ i18n.t("workers_status_version_mismatch") }}
                                 {% else if w.status_label == "unreachable" %}{{ i18n.t("workers_status_unreachable") }}
                                 {% else %}{{ i18n.t("workers_status_connecting") }}{% endif %}
                             </span>
-                            {% if !w.status_detail.is_empty() %}
-                            <div class="fm-worker-status-detail">{{ w.status_detail }}</div>
+                            <div class="fm-worker-status-detail js-worker-detail"{% if w.status_detail.is_empty() %} hidden{% endif %}>{{ w.status_detail }}</div>
+                            {% if w.status_label != "local" %}
+                            <div class="fm-worker-seen js-worker-seen"{% if w.seen_label.is_none() %} hidden{% endif %}>
+                                <i class="fa fa-clock-o" aria-hidden="true"></i> <span class="js-worker-seen-val">{% if let Some(seen) = w.seen_label %}{{ seen }}{% endif %}</span>
+                            </div>
                             {% endif %}
                         </td>
                         <td class="fm-worker-host">
@@ -80,12 +83,12 @@
                             {% if w.cpu_brand.is_empty() %}<span class="fm-muted">—</span>{% else %}{{ w.cpu_brand }}{% endif %}
                         </td>
                         <td class="fm-num">{{ w.threads }}</td>
-                        <td class="fm-num">{% if w.status_label == "local" %}<span class="fm-muted">—</span>{% else %}{{ w.batches_sent }}{% endif %}</td>
-                        <td class="fm-num">{% if w.status_label == "local" %}<span class="fm-muted">—</span>{% else %}{{ w.matches_completed }}{% endif %}</td>
-                        <td class="fm-num{% if w.failures > 0 %} fm-num-bad{% endif %}">{% if w.status_label == "local" %}<span class="fm-muted">—</span>{% else %}{{ w.failures }}{% endif %}</td>
-                        <td class="fm-num">{% if let Some(lat) = w.last_latency_ms %}{{ lat }}{% else %}<span class="fm-muted">—</span>{% endif %}</td>
-                        <td class="fm-num">{% if let Some(mps) = w.throughput_mps %}{{ mps }}{% else %}<span class="fm-muted">—</span>{% endif %}</td>
-                        <td class="fm-worker-error">
+                        <td class="fm-num js-worker-batches">{% if w.status_label == "local" %}<span class="fm-muted">—</span>{% else %}{{ w.batches_sent }}{% endif %}</td>
+                        <td class="fm-num js-worker-matches">{% if w.status_label == "local" %}<span class="fm-muted">—</span>{% else %}{{ w.matches_completed }}{% endif %}</td>
+                        <td class="fm-num js-worker-failures{% if w.failures > 0 %} fm-num-bad{% endif %}">{% if w.status_label == "local" %}<span class="fm-muted">—</span>{% else %}{{ w.failures }}{% endif %}</td>
+                        <td class="fm-num js-worker-last-ms">{% if let Some(lat) = w.last_latency_ms %}{{ lat }}{% else %}<span class="fm-muted">—</span>{% endif %}</td>
+                        <td class="fm-num js-worker-speed">{% if let Some(mps) = w.throughput_mps %}{{ mps }}{% else %}<span class="fm-muted">—</span>{% endif %}</td>
+                        <td class="fm-worker-error js-worker-error">
                             {% if let Some(err) = w.last_error %}<span class="fm-num-bad">{{ err }}</span>{% else %}<span class="fm-muted">—</span>{% endif %}
                         </td>
                     </tr>
@@ -222,6 +225,118 @@
             submitBtn.disabled = false;
         });
     });
+})();
+</script>
+<script>
+/* Live status poller — refreshes the worker table in place every few
+   seconds so the operator sees the health monitor ping, fence, and
+   reconnect workers without reloading. Only updates existing rows
+   (matched by address); new/removed rows still need a reload, which the
+   add dialog already triggers. */
+(function() {
+    var POLL_MS = 4000;
+    var statusText = {
+        ready: "{{ i18n.t("workers_status_ready") }}",
+        unreachable: "{{ i18n.t("workers_status_unreachable") }}",
+        version_mismatch: "{{ i18n.t("workers_status_version_mismatch") }}",
+        connecting: "{{ i18n.t("workers_status_connecting") }}",
+        local: "{{ i18n.t("workers_status_local") }}"
+    };
+    var MUTED = '<span class="fm-muted">—</span>';
+
+    function fmtAge(secs) {
+        if (secs == null) { return null; }
+        if (secs < 60) { return secs + 's'; }
+        if (secs < 3600) { return Math.floor(secs / 60) + 'm'; }
+        if (secs < 86400) { return Math.floor(secs / 3600) + 'h'; }
+        return Math.floor(secs / 86400) + 'd';
+    }
+
+    function setText(id, val) {
+        var el = document.getElementById(id);
+        if (el) { el.textContent = val; }
+    }
+
+    function show(el, visible) {
+        if (!el) { return; }
+        if (visible) { el.removeAttribute('hidden'); }
+        else { el.setAttribute('hidden', ''); }
+    }
+
+    function updateRow(row, w) {
+        var badge = row.querySelector('.js-worker-badge');
+        if (badge) {
+            badge.className = 'fm-worker-badge fm-worker-badge-' + w.status_label + ' js-worker-badge';
+            badge.textContent = statusText[w.status_label] || w.status_label;
+        }
+        row.className = 'fm-worker-row fm-worker-' + w.status_label;
+
+        var detail = row.querySelector('.js-worker-detail');
+        if (detail) {
+            detail.textContent = w.status_detail || '';
+            show(detail, !!w.status_detail);
+        }
+
+        var seen = row.querySelector('.js-worker-seen');
+        if (seen) {
+            var age = fmtAge(w.last_seen_secs);
+            var seenVal = seen.querySelector('.js-worker-seen-val');
+            if (seenVal) { seenVal.textContent = age || ''; }
+            show(seen, age != null);
+        }
+
+        setCell(row, '.js-worker-batches', w.batches_sent);
+        setCell(row, '.js-worker-matches', w.matches_completed);
+
+        var fail = row.querySelector('.js-worker-failures');
+        if (fail) {
+            fail.textContent = w.failures;
+            fail.classList.toggle('fm-num-bad', w.failures > 0);
+        }
+
+        setCellMaybe(row, '.js-worker-last-ms', w.last_latency_ms);
+        setCellMaybe(row, '.js-worker-speed', w.throughput_mps);
+
+        var err = row.querySelector('.js-worker-error');
+        if (err) {
+            err.innerHTML = w.last_error
+                ? '<span class="fm-num-bad"></span>'
+                : MUTED;
+            if (w.last_error) { err.firstChild.textContent = w.last_error; }
+        }
+    }
+
+    function setCell(row, sel, val) {
+        var el = row.querySelector(sel);
+        if (el) { el.textContent = val; }
+    }
+    function setCellMaybe(row, sel, val) {
+        var el = row.querySelector(sel);
+        if (!el) { return; }
+        if (val == null) { el.innerHTML = MUTED; }
+        else { el.textContent = val; }
+    }
+
+    function poll() {
+        fetch('/api/workers/status', { headers: { 'Accept': 'application/json' } })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(d) {
+                if (!d) { return; }
+                setText('js-summary-ready', d.ready);
+                setText('js-summary-total', d.total);
+                setText('js-summary-threads', d.total_threads);
+                setText('js-summary-batches', d.total_batches);
+                setText('js-summary-matches', d.total_matches);
+                setText('js-summary-failures', d.total_failures);
+                d.workers.forEach(function(w) {
+                    var row = document.querySelector('tr[data-address="' + w.address + '"]');
+                    if (row) { updateRow(row, w); }
+                });
+            })
+            .catch(function() { /* transient — try again next tick */ });
+    }
+
+    setInterval(poll, POLL_MS);
 })();
 </script>
 {% endblock %}

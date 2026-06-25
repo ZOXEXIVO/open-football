@@ -163,6 +163,13 @@ impl WorkerConnection {
                     let resp = Response::PlayBatch { items: outcomes };
                     Frame::write(&mut self.stream, &resp).await?;
                 }
+                Request::Ping => {
+                    // Liveness probe — answer immediately. The worker's
+                    // serve loop is single-threaded per connection, so a
+                    // prompt pong proves both the socket and this task are
+                    // healthy and not wedged.
+                    Frame::write(&mut self.stream, &Response::Pong).await?;
+                }
                 Request::Handshake { .. } => {
                     // Already handshaked. A second handshake is a
                     // protocol violation; reply with an error and

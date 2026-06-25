@@ -9,7 +9,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::MatchRuntime;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 pub struct WorkersPageRequest {
@@ -66,11 +66,30 @@ pub struct WorkerRowDto {
     /// thread count for that first dispatch.
     pub throughput_mps: Option<String>,
     pub last_error: Option<String>,
+    /// Compact "last seen" age (e.g. `5s`, `2m`), or `None` for the local
+    /// row / a worker never yet contacted. Live-updated by the page poller.
+    pub seen_label: Option<String>,
 }
 
 impl WorkerRowDto {
+    /// Compact relative age for a "last seen N ago" readout. Mirrors the
+    /// `fmtAge` helper in the page poller so the server-rendered value and
+    /// the polled value read the same.
+    fn format_age(secs: u64) -> String {
+        if secs < 60 {
+            format!("{}s", secs)
+        } else if secs < 3600 {
+            format!("{}m", secs / 60)
+        } else if secs < 86_400 {
+            format!("{}h", secs / 3600)
+        } else {
+            format!("{}d", secs / 86_400)
+        }
+    }
+
     fn from_snapshot(w: WorkerSnapshot) -> Self {
         let throughput_mps = w.throughput_mps().map(|v| format!("{:.1}", v));
+        let seen_label = w.last_seen_secs.map(Self::format_age);
         let (status_label, status_detail) = match &w.status {
             WorkerStatus::Connecting => ("connecting", String::new()),
             WorkerStatus::Ready => ("ready", String::new()),
@@ -93,6 +112,7 @@ impl WorkerRowDto {
             last_latency_ms: w.stats.last_latency_ms,
             throughput_mps,
             last_error: w.stats.last_error,
+            seen_label,
         }
     }
 
@@ -117,6 +137,7 @@ impl WorkerRowDto {
             last_latency_ms: None,
             throughput_mps,
             last_error: None,
+            seen_label: None,
         }
     }
 }
@@ -201,4 +222,119 @@ pub async fn workers_add_action(
 ) -> impl IntoResponse {
     let address = format!("{}:{}", body.host.trim(), body.port);
     Json(state.workers.add_worker(address).await)
+}
+
+/// Live status payload polled by the workers page. Mirrors the figures the
+/// page renders server-side so the table — status badges, "last seen",
+/// per-worker counters and the summary tiles — refreshes in place as the
+/// health monitor pings, fences, and reconnects workers, without a full
+/// page reload. New/removed rows still require a reload (workers are only
+/// added by the operator, which reloads anyway).
+#[derive(Serialize)]
+pub struct WorkersStatusDto {
+    pub ready: usize,
+    pub total: usize,
+    pub total_threads: usize,
+    pub total_batches: u64,
+    pub total_matches: u64,
+    pub total_failures: u64,
+    pub workers: Vec<WorkerStatusDto>,
+}
+
+#[derive(Serialize)]
+pub struct WorkerStatusDto {
+    pub address: String,
+    pub status_label: &'static str,
+    pub status_detail: String,
+    pub last_seen_secs: Option<u64>,
+    pub threads: usize,
+    pub version: String,
+    pub batches_sent: u64,
+    pub matches_completed: u64,
+    pub failures: u64,
+    pub last_latency_ms: Option<u64>,
+    pub throughput_mps: Option<String>,
+    pub last_error: Option<String>,
+}
+
+impl WorkersStatusDto {
+    fn from_snapshot(snapshot: Vec<WorkerSnapshot>) -> Self {
+        // Match the page's summary: ready/total count only remote workers,
+        // total_threads adds the local in-process pool on top.
+        let total = snapshot.len();
+        let mut ready = 0usize;
+        let mut total_threads = MatchRuntime::engine_pool().num_threads();
+        let mut total_batches = 0u64;
+        let mut total_matches = 0u64;
+        let mut total_failures = 0u64;
+        let mut workers = Vec::with_capacity(total);
+        for w in snapshot {
+            if matches!(w.status, WorkerStatus::Ready) {
+                ready += 1;
+            }
+            total_threads += w.threads;
+            total_batches = total_batches.saturating_add(w.stats.batches_sent);
+            total_matches = total_matches.saturating_add(w.stats.matches_completed);
+            total_failures = total_failures.saturating_add(w.stats.failures);
+            workers.push(WorkerStatusDto::from_snapshot(w));
+        }
+        WorkersStatusDto {
+            ready,
+            total,
+            total_threads,
+            total_batches,
+            total_matches,
+            total_failures,
+            workers,
+        }
+    }
+}
+
+impl WorkerStatusDto {
+    fn from_snapshot(w: WorkerSnapshot) -> Self {
+        let throughput_mps = w.throughput_mps().map(|v| format!("{:.1}", v));
+        let status_detail = match &w.status {
+            WorkerStatus::VersionMismatch { worker_version } => worker_version.clone(),
+            WorkerStatus::Unreachable { reason } => reason.clone(),
+            _ => String::new(),
+        };
+        WorkerStatusDto {
+            status_label: w.status.label(),
+            status_detail,
+            last_seen_secs: w.last_seen_secs,
+            address: w.address,
+            threads: w.threads,
+            version: w.version,
+            batches_sent: w.stats.batches_sent,
+            matches_completed: w.stats.matches_completed,
+            failures: w.stats.failures,
+            last_latency_ms: w.stats.last_latency_ms,
+            throughput_mps,
+            last_error: w.stats.last_error,
+        }
+    }
+}
+
+/// JSON snapshot of every worker's live status, polled by the workers page.
+pub async fn workers_status_action(
+    State(state): State<GameAppData>,
+) -> impl IntoResponse {
+    let snapshot = state.workers.snapshot().await;
+    Json(WorkersStatusDto::from_snapshot(snapshot))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WorkerRowDto;
+
+    #[test]
+    fn format_age_picks_compact_unit() {
+        assert_eq!(WorkerRowDto::format_age(0), "0s");
+        assert_eq!(WorkerRowDto::format_age(59), "59s");
+        assert_eq!(WorkerRowDto::format_age(60), "1m");
+        assert_eq!(WorkerRowDto::format_age(3599), "59m");
+        assert_eq!(WorkerRowDto::format_age(3600), "1h");
+        assert_eq!(WorkerRowDto::format_age(86_399), "23h");
+        assert_eq!(WorkerRowDto::format_age(86_400), "1d");
+    }
 }

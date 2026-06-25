@@ -15,15 +15,29 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, RwLock};
+use tokio::time::MissedTickBehavior;
 
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+/// How often the health monitor wakes. Each pass redials every
+/// non-`Ready` worker (fast auto-rejoin after a drop) and actively pings
+/// any stale `Ready` worker (silent-death detection). Short enough that a
+/// returning worker rejoins within seconds, not the previous half-minute.
+const HEALTH_INTERVAL: Duration = Duration::from_secs(5);
+/// A `Ready` worker is pinged only once this long has passed since the
+/// last proof of life (a completed batch or a prior pong). Workers busy
+/// crunching batches refresh their liveness constantly and are never
+/// pinged; only genuinely idle ones are probed.
+const PING_STALE_AFTER: Duration = Duration::from_secs(15);
+/// Upper bound on a liveness ping round-trip before the worker is
+/// declared dead and fenced. A live worker answers a pong in well under a
+/// millisecond, so this only ever fires on a wedged or vanished peer.
+const PING_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Upper bound on the handshake write+read once the TCP connect has
 /// succeeded. Without it a worker that accepts the socket but never
 /// replies (half-open peer, host frozen right after accept) would hang
-/// `add_worker` (a blocked HTTP request) and stall the heartbeat loop
-/// forever. The exchange is a couple of tiny frames, so this only ever
-/// fires on a genuinely unresponsive peer.
+/// `add_worker` (a blocked HTTP request) and stall the health-monitor
+/// loop forever. The exchange is a couple of tiny frames, so this only
+/// ever fires on a genuinely unresponsive peer.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One worker as seen by the coordinator. Holds a single TCP
@@ -40,6 +54,38 @@ pub struct Worker {
     pub cpu_brand: String,
     pub stats: WorkerStats,
     pub connection: Option<Arc<Mutex<TcpStream>>>,
+    /// Last moment we had proof this worker is alive: a successful
+    /// handshake, a completed batch, or a liveness pong. Drives the
+    /// health monitor's ping cadence (only stale `Ready` workers are
+    /// pinged) and the "last seen" readout on the workers page. `None`
+    /// until the first successful contact.
+    pub last_seen: Option<Instant>,
+}
+
+impl Worker {
+    /// Splice a fresh handshake result into this existing slot while
+    /// preserving the accumulated `stats` (batches / matches / failures)
+    /// and the last-known host metadata when the redial itself failed — a
+    /// worker that drops and reconnects keeps its running totals instead
+    /// of resetting to zero on every blip, and its row keeps naming the
+    /// machine while it's momentarily down.
+    fn apply_handshake(&mut self, fresh: Worker, now: Instant) {
+        let became_ready = fresh.status.is_ready();
+        self.status = fresh.status;
+        self.connection = fresh.connection;
+        self.version = fresh.version;
+        self.threads = fresh.threads;
+        if !fresh.computer_name.is_empty() {
+            self.computer_name = fresh.computer_name;
+        }
+        if !fresh.cpu_brand.is_empty() {
+            self.cpu_brand = fresh.cpu_brand;
+        }
+        if became_ready {
+            self.last_seen = Some(now);
+            self.stats.last_error = None;
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -99,11 +145,12 @@ impl WorkerRegistry {
     /// Build an empty registry. Remote workers are added at runtime from
     /// the /workers page via [`add_worker`](Self::add_worker); until one
     /// is, the dispatcher returns `Err` for every batch and the pool
-    /// falls back to local rayon. The heartbeat task is spawned here so
-    /// runtime-added workers that drop are redialed automatically.
+    /// falls back to local rayon. The health-monitor task is spawned here
+    /// so runtime-added workers that drop are pinged and redialed
+    /// automatically.
     ///
     /// Must be called from within a Tokio runtime (it spawns the
-    /// heartbeat task) — that always holds for the coordinator, which
+    /// health-monitor task) — that always holds for the coordinator, which
     /// constructs the registry inside `#[tokio::main]`.
     pub fn empty() -> Self {
         let registry = WorkerRegistry {
@@ -111,26 +158,30 @@ impl WorkerRegistry {
             local_throughput_mpms: Arc::new(RwLock::new(None)),
             coordinator_version: env!("CARGO_PKG_VERSION"),
         };
-        registry.spawn_heartbeat();
+        registry.spawn_health_monitor();
         registry
     }
 
     /// Dial a single worker at runtime, run the version-checked
     /// handshake, and splice the result into the registry. An existing
-    /// entry with the same address is replaced, so re-adding redials.
-    /// Returns the outcome (status + reported metadata) for the web
-    /// "add worker" dialog. The entry is stored regardless of outcome
-    /// so a `VersionMismatch` / `Unreachable` worker shows up in the
-    /// table and the heartbeat keeps retrying it.
+    /// entry with the same address is merged in place (stats preserved),
+    /// so re-adding redials. Returns the outcome (status + reported
+    /// metadata) for the web "add worker" dialog. The entry is stored
+    /// regardless of outcome so a `VersionMismatch` / `Unreachable` worker
+    /// shows up in the table and the health monitor keeps retrying it.
     pub async fn add_worker(&self, address: String) -> AddWorkerOutcome {
         let coordinator_version = self.coordinator_version.to_string();
         info!("worker registry: adding {}", address);
         let worker = Self::connect_and_handshake(address, coordinator_version).await;
         let outcome = AddWorkerOutcome::from_worker(&worker);
+        let now = Instant::now();
         {
             let mut guard = self.inner.write().await;
             match guard.iter_mut().find(|w| w.address == worker.address) {
-                Some(existing) => *existing = worker,
+                // Re-adding an existing address merges in place so a
+                // manual re-add keeps the worker's accumulated stats
+                // (same as an automatic reconnect).
+                Some(existing) => existing.apply_handshake(worker, now),
                 None => guard.push(worker),
             }
         }
@@ -152,6 +203,7 @@ impl WorkerRegistry {
                 computer_name: w.computer_name.clone(),
                 cpu_brand: w.cpu_brand.clone(),
                 stats: w.stats.clone(),
+                last_seen_secs: w.last_seen.map(|t| t.elapsed().as_secs()),
             })
             .collect()
     }
@@ -225,6 +277,10 @@ impl WorkerRegistry {
                     w.stats.matches_completed =
                         w.stats.matches_completed.saturating_add(matches as u64);
                     w.stats.last_error = None;
+                    // A completed batch is the strongest proof of life —
+                    // refresh it so the health monitor leaves a busy
+                    // worker alone instead of pinging it.
+                    w.last_seen = Some(Instant::now());
                     if matches > 0 && latency_ms > 0 {
                         let observed = matches as f64 / latency_ms as f64;
                         w.stats.throughput_mpms = Some(match w.stats.throughput_mpms {
@@ -251,60 +307,160 @@ impl WorkerRegistry {
         }
     }
 
-    fn spawn_heartbeat(&self) {
+    fn spawn_health_monitor(&self) {
         let registry = self.clone();
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(HEARTBEAT_INTERVAL);
-            ticker.tick().await; // skip the immediate first tick
+            let mut ticker = tokio::time::interval(HEALTH_INTERVAL);
+            // A slow round (a redial can sit on CONNECT_TIMEOUT) must not
+            // make ticks pile up and fire back-to-back — wait the full
+            // interval after each round instead.
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            ticker.tick().await; // consume the immediate first tick
             loop {
                 ticker.tick().await;
-                registry.heartbeat_round().await;
+                registry.health_round().await;
             }
         });
     }
 
-    /// One heartbeat pass: redial every non-Ready entry and re-handshake.
-    /// Ready entries are left alone so we don't disturb an in-flight batch.
-    async fn heartbeat_round(&self) {
-        let to_dial: Vec<(usize, String)> = {
+    /// One health pass. Two jobs, both run concurrently and OFF the
+    /// registry lock (a redial can sit on `CONNECT_TIMEOUT`, and the
+    /// dispatcher needs the read lock for every batch):
+    ///
+    /// * **Stale `Ready` workers** (no proof of life within
+    ///   `PING_STALE_AFTER`) get a liveness ping over their existing
+    ///   connection. The ping uses `try_lock`, so it never contends with
+    ///   an in-flight batch — a locked connection is busy, hence alive. A
+    ///   failed or timed-out ping fences the worker (`Unreachable`,
+    ///   connection dropped) so the next pass redials it. This is what
+    ///   catches a worker whose socket died silently while the simulator
+    ///   was idle — the case the old redial-only heartbeat missed, which
+    ///   left a dead worker stuck `Ready` and unreconnectable.
+    /// * **Every non-`Ready` worker** is redialed and re-handshaked. On
+    ///   success its slot flips back to `Ready` with accumulated stats
+    ///   preserved, so a worker that dropped and came back rejoins the
+    ///   pool automatically — no operator action, no failed batch needed.
+    ///
+    /// Results are spliced back in by address (not index) so a concurrent
+    /// add/redial can't write the wrong slot.
+    async fn health_round(&self) {
+        let now = Instant::now();
+        let probes: Vec<Probe> = {
             let guard = self.inner.read().await;
             guard
                 .iter()
-                .enumerate()
-                .filter(|(_, w)| !w.status.is_ready())
-                .map(|(i, w)| (i, w.address.clone()))
+                .filter_map(|w| match (&w.status, &w.connection) {
+                    (WorkerStatus::Ready, Some(conn)) => {
+                        let stale = w
+                            .last_seen
+                            .map_or(true, |t| now.duration_since(t) >= PING_STALE_AFTER);
+                        stale.then(|| Probe::Ping {
+                            address: w.address.clone(),
+                            conn: Arc::clone(conn),
+                        })
+                    }
+                    _ => Some(Probe::Redial {
+                        address: w.address.clone(),
+                    }),
+                })
                 .collect()
         };
-        if to_dial.is_empty() {
+        if probes.is_empty() {
             return;
         }
+
         let coordinator_version = self.coordinator_version.to_string();
-        let handles: Vec<_> = to_dial
+        let handles: Vec<_> = probes
             .into_iter()
-            .map(|(idx, addr)| {
+            .map(|probe| {
                 let v = coordinator_version.clone();
                 tokio::spawn(async move {
-                    let worker = Self::connect_and_handshake(addr, v).await;
-                    (idx, worker)
+                    match probe {
+                        Probe::Ping { address, conn } => ProbeResult::Ping {
+                            address,
+                            outcome: Self::ping_worker(&conn).await,
+                        },
+                        Probe::Redial { address } => {
+                            let worker = Self::connect_and_handshake(address.clone(), v).await;
+                            ProbeResult::Redial { address, worker }
+                        }
+                    }
                 })
             })
             .collect();
-        // Drain handles WITHOUT holding the write lock — each
-        // reconnect attempt can sit on CONNECT_TIMEOUT (5 s), and the
-        // dispatcher's `ready_handles().await` needs the read lock for
-        // every dispatched batch. Take the lock only when we have the
-        // results in hand and splice them in.
+
         let mut results = Vec::with_capacity(handles.len());
         for h in handles {
-            if let Ok(pair) = h.await {
-                results.push(pair);
+            if let Ok(r) = h.await {
+                results.push(r);
             }
         }
+
+        let now = Instant::now();
         let mut guard = self.inner.write().await;
-        for (idx, fresh) in results {
-            if let Some(slot) = guard.get_mut(idx) {
-                *slot = fresh;
+        for result in results {
+            match result {
+                ProbeResult::Ping { address, outcome } => {
+                    let Some(w) = guard.iter_mut().find(|w| w.address == address) else {
+                        continue;
+                    };
+                    match outcome {
+                        PingOutcome::Pong => {
+                            w.last_seen = Some(now);
+                            w.stats.last_error = None;
+                        }
+                        // Busy with a batch ⇒ provably alive; nothing to do.
+                        PingOutcome::Busy => {}
+                        PingOutcome::Dead(reason) => {
+                            // Only fence it if it's still the Ready entry we
+                            // pinged — a concurrent reconnect may already
+                            // have refreshed this slot.
+                            if w.status.is_ready() {
+                                warn!("worker {}: ping failed — {}; fencing", address, reason);
+                                w.stats.last_error = Some(reason.clone());
+                                w.status = WorkerStatus::Unreachable { reason };
+                                w.connection = None;
+                            }
+                        }
+                    }
+                }
+                ProbeResult::Redial { address, worker } => {
+                    if let Some(w) = guard.iter_mut().find(|w| w.address == address) {
+                        // Don't clobber a worker that became Ready meanwhile
+                        // (e.g. a manual re-add landed during this round).
+                        if !w.status.is_ready() {
+                            w.apply_handshake(worker, now);
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    /// Send one `Ping` over an idle worker connection and wait for the
+    /// `Pong`, bounded by `PING_TIMEOUT`. `try_lock` keeps this off any
+    /// connection a batch is currently using: a locked connection means
+    /// the worker is busy, which is itself proof of life, so we report
+    /// `Busy` and leave the slot untouched. Because the dispatcher holds
+    /// the same `Mutex` for a whole batch round-trip, a ping and a batch
+    /// can never interleave on the wire.
+    async fn ping_worker(conn: &Arc<Mutex<TcpStream>>) -> PingOutcome {
+        let mut stream = match conn.try_lock() {
+            Ok(s) => s,
+            Err(_) => return PingOutcome::Busy,
+        };
+        let exchange = async {
+            Frame::write(&mut *stream, &Request::Ping).await?;
+            Frame::read::<Response>(&mut *stream).await
+        };
+        match tokio::time::timeout(PING_TIMEOUT, exchange).await {
+            Ok(Ok(Response::Pong)) => PingOutcome::Pong,
+            Ok(Ok(other)) => PingOutcome::Dead(format!(
+                "unexpected ping reply: {:?}",
+                std::mem::discriminant(&other)
+            )),
+            Ok(Err(e)) => PingOutcome::Dead(format!("ping io: {}", e)),
+            Err(_) => PingOutcome::Dead("ping timeout".to_string()),
         }
     }
 
@@ -354,6 +510,7 @@ impl WorkerRegistry {
                         cpu_brand,
                         stats: WorkerStats::default(),
                         connection: None,
+                        last_seen: None,
                     };
                 }
                 if protocol_version != PROTOCOL_VERSION {
@@ -375,6 +532,7 @@ impl WorkerRegistry {
                         cpu_brand,
                         stats: WorkerStats::default(),
                         connection: None,
+                        last_seen: None,
                     };
                 }
                 info!(
@@ -390,6 +548,7 @@ impl WorkerRegistry {
                     cpu_brand,
                     stats: WorkerStats::default(),
                     connection: Some(Arc::new(Mutex::new(stream))),
+                    last_seen: Some(Instant::now()),
                 }
             }
             Response::HandshakeRejected { reason } => {
@@ -413,8 +572,39 @@ impl WorkerRegistry {
             cpu_brand: String::new(),
             stats: WorkerStats::default(),
             connection: None,
+            last_seen: None,
         }
     }
+}
+
+/// One scheduled probe in a [`WorkerRegistry::health_round`]: either ping
+/// an idle `Ready` worker over its live connection, or redial a non-`Ready`
+/// one. Built under the read lock, then executed concurrently off-lock.
+enum Probe {
+    Ping {
+        address: String,
+        conn: Arc<Mutex<TcpStream>>,
+    },
+    Redial {
+        address: String,
+    },
+}
+
+/// The result of running a [`Probe`], applied back into the registry by
+/// address once the whole round has finished.
+enum ProbeResult {
+    Ping { address: String, outcome: PingOutcome },
+    Redial { address: String, worker: Worker },
+}
+
+/// Outcome of a single liveness ping.
+enum PingOutcome {
+    /// Worker answered the ping — alive.
+    Pong,
+    /// Connection was locked by an in-flight batch — alive, skip.
+    Busy,
+    /// No (valid) reply within the timeout — fence the worker.
+    Dead(String),
 }
 
 pub struct WorkerSnapshot {
@@ -425,6 +615,9 @@ pub struct WorkerSnapshot {
     pub computer_name: String,
     pub cpu_brand: String,
     pub stats: WorkerStats,
+    /// Seconds since the last proof of life, or `None` if never contacted.
+    /// Rendered as a relative "last seen" age on the workers page.
+    pub last_seen_secs: Option<u64>,
 }
 
 /// Outcome of a runtime [`WorkerRegistry::add_worker`] call, serialized

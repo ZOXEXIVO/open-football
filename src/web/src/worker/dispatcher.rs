@@ -71,7 +71,7 @@ use tokio::sync::Mutex;
 /// `2 × threads` fast matches, which a live worker answers in well under
 /// a second even on modest hardware) so a slow-but-alive worker is never
 /// fenced by accident. A false fence is self-healing anyway: its chunk
-/// runs elsewhere and the heartbeat redials it within `HEARTBEAT_INTERVAL`.
+/// runs elsewhere and the health monitor redials it within `HEALTH_INTERVAL`.
 const REMOTE_BATCH_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct DistributedDispatcher {

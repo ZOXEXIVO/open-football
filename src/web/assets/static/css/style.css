@@ -10748,6 +10748,18 @@ html:has(.fm-workers-page) {
     color: #8a9caa;
 }
 
+.fm-worker-seen {
+    margin-top: 3px;
+    font-size: 10px;
+    color: #51626d;
+    white-space: nowrap;
+}
+
+.fm-worker-seen .fa {
+    font-size: 9px;
+    opacity: 0.8;
+}
+
 .fm-muted {
     color: #51626d;
 }
