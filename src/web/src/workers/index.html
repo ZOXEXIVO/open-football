@@ -52,6 +52,7 @@
                         <th class="fm-num">{{ i18n.t("workers_th_last_ms") }}</th>
                         <th class="fm-num">{{ i18n.t("workers_th_speed_mps") }}</th>
                         <th>{{ i18n.t("workers_th_last_error") }}</th>
+                        <th class="fm-worker-actions-col" aria-label="{{ i18n.t("workers_remove_tooltip") }}"></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -66,11 +67,6 @@
                                 {% else %}{{ i18n.t("workers_status_connecting") }}{% endif %}
                             </span>
                             <div class="fm-worker-status-detail js-worker-detail"{% if w.status_detail.is_empty() %} hidden{% endif %}>{{ w.status_detail }}</div>
-                            {% if w.status_label != "local" %}
-                            <div class="fm-worker-seen js-worker-seen"{% if w.seen_label.is_none() %} hidden{% endif %}>
-                                <i class="fa fa-clock-o" aria-hidden="true"></i> <span class="js-worker-seen-val">{% if let Some(seen) = w.seen_label %}{{ seen }}{% endif %}</span>
-                            </div>
-                            {% endif %}
                         </td>
                         <td class="fm-worker-host">
                             {% if w.computer_name.is_empty() %}<span class="fm-muted">—</span>{% else %}{{ w.computer_name }}{% endif %}
@@ -90,6 +86,13 @@
                         <td class="fm-num js-worker-speed">{% if let Some(mps) = w.throughput_mps %}{{ mps }}{% else %}<span class="fm-muted">—</span>{% endif %}</td>
                         <td class="fm-worker-error js-worker-error">
                             {% if let Some(err) = w.last_error %}<span class="fm-num-bad">{{ err }}</span>{% else %}<span class="fm-muted">—</span>{% endif %}
+                        </td>
+                        <td class="fm-worker-actions">
+                            {% if w.status_label != "local" %}
+                            <button type="button" class="fm-worker-remove-btn js-worker-remove" data-address="{{ w.address }}" title="{{ i18n.t("workers_remove_tooltip") }}" aria-label="{{ i18n.t("workers_remove_tooltip") }}">
+                                <i class="fa fa-trash"></i>
+                            </button>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -228,6 +231,32 @@
 })();
 </script>
 <script>
+/* Remove-worker buttons: confirm, POST to /api/workers/remove, then
+   reload so the row (and the summary tiles) drop out. */
+(function() {
+    var confirmMsg = "{{ i18n.t("workers_remove_confirm") }}";
+    document.querySelectorAll('.js-worker-remove').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var address = btn.getAttribute('data-address');
+            if (!address) { return; }
+            if (!window.confirm(confirmMsg + '\n' + address)) { return; }
+            btn.disabled = true;
+            fetch('/api/workers/remove', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ address: address })
+            })
+            .then(function(resp) {
+                if (!resp.ok) { throw new Error('http ' + resp.status); }
+                return resp.json();
+            })
+            .then(function() { location.reload(); })
+            .catch(function() { btn.disabled = false; });
+        });
+    });
+})();
+</script>
+<script>
 /* Live status poller — refreshes the worker table in place every few
    seconds so the operator sees the health monitor ping, fence, and
    reconnect workers without reloading. Only updates existing rows
@@ -243,14 +272,6 @@
         local: "{{ i18n.t("workers_status_local") }}"
     };
     var MUTED = '<span class="fm-muted">—</span>';
-
-    function fmtAge(secs) {
-        if (secs == null) { return null; }
-        if (secs < 60) { return secs + 's'; }
-        if (secs < 3600) { return Math.floor(secs / 60) + 'm'; }
-        if (secs < 86400) { return Math.floor(secs / 3600) + 'h'; }
-        return Math.floor(secs / 86400) + 'd';
-    }
 
     function setText(id, val) {
         var el = document.getElementById(id);
@@ -275,14 +296,6 @@
         if (detail) {
             detail.textContent = w.status_detail || '';
             show(detail, !!w.status_detail);
-        }
-
-        var seen = row.querySelector('.js-worker-seen');
-        if (seen) {
-            var age = fmtAge(w.last_seen_secs);
-            var seenVal = seen.querySelector('.js-worker-seen-val');
-            if (seenVal) { seenVal.textContent = age || ''; }
-            show(seen, age != null);
         }
 
         setCell(row, '.js-worker-batches', w.batches_sent);

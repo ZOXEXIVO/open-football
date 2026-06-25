@@ -2253,6 +2253,8 @@
   "workers_remote_setup_lead_2": "Then start a worker process:",
   "workers_remote_setup_none": "None configured",
   "workers_remote_setup_title": "Remote workers setup",
+  "workers_remove_confirm": "Remove this worker?",
+  "workers_remove_tooltip": "Remove worker",
   "workers_status_connecting": "Connecting",
   "workers_status_local": "Local",
   "workers_status_ready": "Ready",

@@ -10791,6 +10791,47 @@ html:has(.fm-workers-page) {
     color: #6fce80;
 }
 
+/* Per-row remove-worker button in the actions column. Danger styling
+   mirrors the add button's shape; the column is narrow and centered. */
+.fm-worker-actions-col {
+    width: 36px;
+}
+
+.fm-worker-actions {
+    text-align: center;
+    white-space: nowrap;
+}
+
+.fm-worker-remove-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border-radius: 5px;
+    border: 1px solid rgba(201, 74, 74, 0.4);
+    background: rgba(201, 74, 74, 0.12);
+    color: #d2706f;
+    font-size: 12px;
+    cursor: pointer;
+    transition:
+        background 120ms ease,
+        border-color 120ms ease,
+        color 120ms ease;
+}
+
+.fm-worker-remove-btn:hover {
+    background: rgba(201, 74, 74, 0.24);
+    border-color: rgba(201, 74, 74, 0.7);
+    color: #e88a89;
+}
+
+.fm-worker-remove-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 /* Add-worker modal dialog. */
 .fm-worker-dialog {
     width: min(420px, calc(100vw - 32px));

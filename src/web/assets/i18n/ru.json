@@ -2252,6 +2252,8 @@
   "workers_status_connecting": "Подключение",
   "workers_status_local": "Локальный",
   "workers_status_ready": "Готов",
+  "workers_remove_confirm": "Удалить этого воркера?",
+  "workers_remove_tooltip": "Удалить воркер",
   "workers_status_unreachable": "Недоступен",
   "workers_status_version_mismatch": "Несовпадение версий",
   "workers_table_title": "Обработчики",

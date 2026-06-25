@@ -66,30 +66,11 @@ pub struct WorkerRowDto {
     /// thread count for that first dispatch.
     pub throughput_mps: Option<String>,
     pub last_error: Option<String>,
-    /// Compact "last seen" age (e.g. `5s`, `2m`), or `None` for the local
-    /// row / a worker never yet contacted. Live-updated by the page poller.
-    pub seen_label: Option<String>,
 }
 
 impl WorkerRowDto {
-    /// Compact relative age for a "last seen N ago" readout. Mirrors the
-    /// `fmtAge` helper in the page poller so the server-rendered value and
-    /// the polled value read the same.
-    fn format_age(secs: u64) -> String {
-        if secs < 60 {
-            format!("{}s", secs)
-        } else if secs < 3600 {
-            format!("{}m", secs / 60)
-        } else if secs < 86_400 {
-            format!("{}h", secs / 3600)
-        } else {
-            format!("{}d", secs / 86_400)
-        }
-    }
-
     fn from_snapshot(w: WorkerSnapshot) -> Self {
         let throughput_mps = w.throughput_mps().map(|v| format!("{:.1}", v));
-        let seen_label = w.last_seen_secs.map(Self::format_age);
         let (status_label, status_detail) = match &w.status {
             WorkerStatus::Connecting => ("connecting", String::new()),
             WorkerStatus::Ready => ("ready", String::new()),
@@ -112,7 +93,6 @@ impl WorkerRowDto {
             last_latency_ms: w.stats.last_latency_ms,
             throughput_mps,
             last_error: w.stats.last_error,
-            seen_label,
         }
     }
 
@@ -137,7 +117,6 @@ impl WorkerRowDto {
             last_latency_ms: None,
             throughput_mps,
             last_error: None,
-            seen_label: None,
         }
     }
 }
@@ -323,18 +302,26 @@ pub async fn workers_status_action(
     Json(WorkersStatusDto::from_snapshot(snapshot))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::WorkerRowDto;
+/// Body of the "remove worker" button POST — the address of the worker
+/// row the operator clicked.
+#[derive(Deserialize)]
+pub struct RemoveWorkerRequest {
+    pub address: String,
+}
 
-    #[test]
-    fn format_age_picks_compact_unit() {
-        assert_eq!(WorkerRowDto::format_age(0), "0s");
-        assert_eq!(WorkerRowDto::format_age(59), "59s");
-        assert_eq!(WorkerRowDto::format_age(60), "1m");
-        assert_eq!(WorkerRowDto::format_age(3599), "59m");
-        assert_eq!(WorkerRowDto::format_age(3600), "1h");
-        assert_eq!(WorkerRowDto::format_age(86_399), "23h");
-        assert_eq!(WorkerRowDto::format_age(86_400), "1d");
-    }
+/// Outcome of a remove request: `removed` is `false` when no worker with
+/// that address was registered (e.g. a double-click after a reload).
+#[derive(Serialize)]
+pub struct RemoveWorkerResponse {
+    pub removed: bool,
+}
+
+/// Drop a worker from the registry by address. The local in-process slot
+/// has no registry entry, so it can never be removed this way.
+pub async fn workers_remove_action(
+    State(state): State<GameAppData>,
+    Json(body): Json<RemoveWorkerRequest>,
+) -> impl IntoResponse {
+    let removed = state.workers.remove_worker(body.address.trim()).await;
+    Json(RemoveWorkerResponse { removed })
 }

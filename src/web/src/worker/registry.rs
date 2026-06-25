@@ -188,6 +188,23 @@ impl WorkerRegistry {
         outcome
     }
 
+    /// Remove a worker from the registry by address. Dropping the slot
+    /// drops its connection `Arc`, so the health monitor stops redialing
+    /// it and the dispatcher stops routing new batches to it. A batch
+    /// already in flight holds its own cloned connection handle and
+    /// finishes normally — only future work is withheld. Returns `true`
+    /// when a matching worker was found and removed.
+    pub async fn remove_worker(&self, address: &str) -> bool {
+        let mut guard = self.inner.write().await;
+        let before = guard.len();
+        guard.retain(|w| w.address != address);
+        let removed = guard.len() != before;
+        if removed {
+            info!("worker registry: removed {}", address);
+        }
+        removed
+    }
+
     /// Read-only snapshot of every worker, in config order. Cheap to
     /// build (clones the small per-worker metadata; the connection
     /// `Arc` stays shared). Used by the home page renderer.
