@@ -66,7 +66,6 @@
                                 {% else if w.status_label == "unreachable" %}{{ i18n.t("workers_status_unreachable") }}
                                 {% else %}{{ i18n.t("workers_status_connecting") }}{% endif %}
                             </span>
-                            <div class="fm-worker-status-detail js-worker-detail"{% if w.status_detail.is_empty() %} hidden{% endif %}>{{ w.status_detail }}</div>
                         </td>
                         <td class="fm-worker-host">
                             {% if w.computer_name.is_empty() %}<span class="fm-muted">—</span>{% else %}{{ w.computer_name }}{% endif %}
@@ -86,6 +85,7 @@
                         <td class="fm-num js-worker-speed">{% if let Some(mps) = w.throughput_mps %}{{ mps }}{% else %}<span class="fm-muted">—</span>{% endif %}</td>
                         <td class="fm-worker-error js-worker-error">
                             {% if let Some(err) = w.last_error %}<span class="fm-num-bad">{{ err }}</span>{% else %}<span class="fm-muted">—</span>{% endif %}
+                            <div class="fm-worker-status-detail js-worker-detail"{% if w.status_detail.is_empty() %} hidden{% endif %}>{{ w.status_detail }}</div>
                         </td>
                         <td class="fm-worker-actions">
                             {% if w.status_label != "local" %}
