@@ -3423,7 +3423,7 @@ fn cohesion_swap_never_drops_force_selected_starter() {
 // ========== MatchSelectionGameModel + new layered terms ==========
 
 mod game_model_tests {
-    use super::super::balance::LineupBalanceScorer;
+    use super::super::balance::{LineupBalanceReading, LineupBalanceScorer, LineupBalanceWeights};
     use super::super::bench_scenarios::{BenchScenario, BenchScenarioPlan, BenchScenarioScorer};
     use super::super::model::{
         CompetitionSelectionRules, EligibilityDecision, EligibilityEvaluator,
@@ -3677,31 +3677,63 @@ mod game_model_tests {
 
     #[test]
     fn lineup_balance_score_changes_with_objective() {
+        // End-to-end smoke: a real selected XI scores in-range under both
+        // objectives via the public scoring path (no RNG-dependent inequality).
         let team = generate_test_team();
         let staff = generate_test_staff();
         let result = SquadSelector::select(&team, &staff);
         let player_by_id: std::collections::HashMap<u32, &Player> =
             team.players.players().iter().map(|p| (p.id, *p)).collect();
+        for objective in [TacticalObjective::ProtectLead, TacticalObjective::ChaseGame] {
+            let s = LineupBalanceScorer::score(&result.main_squad, &player_by_id, objective);
+            assert!(
+                (0.0..=100.0).contains(&s),
+                "balance score out of range: {} ({:?})",
+                s,
+                objective
+            );
+        }
 
-        let security = LineupBalanceScorer::score(
-            &result.main_squad,
-            &player_by_id,
-            TacticalObjective::ProtectLead,
-        );
-        let creation = LineupBalanceScorer::score(
-            &result.main_squad,
-            &player_by_id,
-            TacticalObjective::ChaseGame,
-        );
+        // Deterministic core of the contract: the per-objective weight tables
+        // must reorder the same reading. A defence-heavy XI rates higher under
+        // ProtectLead; an attack-heavy XI does the reverse.
+        let defensive = LineupBalanceReading {
+            defensive_security: 90.0,
+            aerial_security: 85.0,
+            leadership_spine: 80.0,
+            pace_recovery: 70.0,
+            ball_progression: 35.0,
+            chance_creation: 20.0,
+            pressing_capacity: 40.0,
+            set_piece_quality: 35.0,
+            left_right_symmetry: 60.0,
+        };
+        let attacking = LineupBalanceReading {
+            defensive_security: 25.0,
+            aerial_security: 20.0,
+            leadership_spine: 35.0,
+            pace_recovery: 40.0,
+            ball_progression: 85.0,
+            chance_creation: 90.0,
+            pressing_capacity: 80.0,
+            set_piece_quality: 75.0,
+            left_right_symmetry: 60.0,
+        };
 
-        // The same XI evaluated under two different objectives yields
-        // different totals — the per-objective weight tables actually
-        // weigh different bands.
+        let protect = LineupBalanceWeights::for_objective(TacticalObjective::ProtectLead);
+        let chase = LineupBalanceWeights::for_objective(TacticalObjective::ChaseGame);
+
         assert!(
-            (security - creation).abs() > 0.1,
-            "expected non-trivial difference between objectives: security={} creation={}",
-            security,
-            creation
+            protect.fold(&defensive) - chase.fold(&defensive) > 5.0,
+            "defensive XI should rate higher under ProtectLead: protect={} chase={}",
+            protect.fold(&defensive),
+            chase.fold(&defensive)
+        );
+        assert!(
+            chase.fold(&attacking) - protect.fold(&attacking) > 5.0,
+            "attacking XI should rate higher under ChaseGame: protect={} chase={}",
+            protect.fold(&attacking),
+            chase.fold(&attacking)
         );
     }
 }
