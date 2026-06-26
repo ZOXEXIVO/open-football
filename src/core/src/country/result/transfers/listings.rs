@@ -1,6 +1,7 @@
 use super::types::{SquadAnalysis, TransferActivitySummary};
 use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::contract::{AffordabilityInput, ContractStalemate};
+use crate::club::player::transfer::processing::UNHAPPY_LISTING_MIN_DAYS;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection};
 use crate::country::result::CountryResult;
@@ -10,27 +11,12 @@ use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::{TransferListing, TransferListingType};
 use crate::{
-    Club, Country, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
-    PlayerPositionType, PlayerSquadStatus, PlayerStatusType, ReputationLevel,
+    Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus,
+    PlayerStatusType, ReputationLevel,
 };
 use chrono::NaiveDate;
 use log::debug;
 use std::collections::HashMap;
-
-/// Ambition-fit factor at or below which a formally-`Unh` player's
-/// grievance is read as a durable, market-listing reason rather than
-/// playing-time frustration. Matches the happiness processor's
-/// "serious concern" bar so the two systems agree on what an "ambition
-/// mismatch" is.
-const DURABLE_AMBITION_FIT: f32 = -8.0;
-/// Lookback window (days) for the durable-unhappiness mood / conflict
-/// events read by [`CountryResult::unhappiness_is_durable`].
-const DURABLE_EVENT_WINDOW_DAYS: u16 = 60;
-/// Weekly unhappy-eligible ticks at or above which the mood counts as
-/// long-term persistent unhappiness — well beyond the two-tick wait that
-/// first hardens the `Unh` status, so a fresh playing-time dip never
-/// qualifies but a months-long unresolved grievance does.
-const DURABLE_UNHAPPY_STREAK: u8 = 6;
 
 #[cfg_attr(test, derive(Debug))]
 pub(crate) enum ListingDecision {
@@ -590,9 +576,8 @@ impl CountryResult {
             .map(|t| t.reputation.level())
             .unwrap_or(ReputationLevel::Amateur);
 
-        // Affordability evidence for the contract-stalemate checks. Built
-        // once here and reused by both the unhappy-durability classifier
-        // and the contract-stalemate trigger at the end of this function.
+        // Affordability evidence for the contract-stalemate trigger at the
+        // end of this function.
         let affordability = AffordabilityInput {
             wage_budget_headroom: club
                 .board
@@ -650,15 +635,21 @@ impl CountryResult {
         // `Unh` status is also reached by playing-time frustration — a
         // benched but still-useful squad member — and shipping such a
         // player out is the wrong response: the manager-talk and loan
-        // paths own him. Only list an unhappy player when the grievance is
-        // one the club genuinely cannot fix by giving him minutes
-        // (`unhappiness_is_durable`). A playing-time-only complaint instead
-        // routes by squad value: useful seniors / rotation and not-yet-
-        // evaluated players are kept, a development-profile youngster is
-        // loaned for minutes, and only a genuinely surplus unhappy player
-        // is actually transfer-listed.
+        // paths own him. We only treat the unhappiness as a sell signal
+        // once it has held for 6+ months (`UNHAPPY_LISTING_MIN_DAYS`)
+        // without resolving — a sustained grievance the club has had a
+        // full half-season to fix. The same threshold gates the player's
+        // own transfer request, so the two systems escalate together.
+        // Before then a playing-time complaint routes by squad value:
+        // useful seniors / rotation and not-yet-evaluated players are kept,
+        // a development-profile youngster is loaned for minutes, and only a
+        // genuinely surplus unhappy player is actually transfer-listed.
         if statuses.contains(&PlayerStatusType::Unh) {
-            if Self::unhappiness_is_durable(player, date, affordability) {
+            let unhappy_days = player
+                .statuses
+                .held_for_days(PlayerStatusType::Unh, date)
+                .unwrap_or(0);
+            if unhappy_days >= UNHAPPY_LISTING_MIN_DAYS {
                 return ListingDecision::Transfer {
                     reason: "dec_reason_player_unhappy".to_string(),
                 };
@@ -869,76 +860,6 @@ impl CountryResult {
         ListingDecision::Transfer {
             reason: base_reason,
         }
-    }
-
-    /// Is a formally-`Unh` player unhappy for a *durable* reason that
-    /// warrants putting him on the market, rather than playing-time
-    /// frustration a still-useful squad member should be kept or loaned
-    /// through?
-    ///
-    /// `Unh` used to transfer-list a player outright. But the status is
-    /// reached by lack of minutes too, and selling a useful but benched
-    /// player is the wrong response — the manager-talk / loan paths handle
-    /// him. We only treat the unhappiness as a sell signal when the
-    /// grievance is one minutes can't fix: a settled ambition mismatch,
-    /// homesickness, a serious dressing-room conflict, an exhausted /
-    /// unaffordable contract renewal, or unhappiness that has persisted
-    /// across many weekly ticks. Every signal is a typed field / event —
-    /// no decision-history string matching. (A formal transfer *request*,
-    /// `Req`, is the strongest durable signal and is handled before this.)
-    fn unhappiness_is_durable(
-        player: &Player,
-        date: NaiveDate,
-        affordability: AffordabilityInput,
-    ) -> bool {
-        let happiness = &player.happiness;
-
-        // Ambition mismatch — the relegation / wrong-size-club exodus. The
-        // structural ambition_fit factor, at the same -8.0 bar the
-        // happiness model treats as a serious concern.
-        if happiness.factors.ambition_fit <= DURABLE_AMBITION_FIT {
-            return true;
-        }
-
-        // Homesickness — a player openly angling for a move home after
-        // failing to settle. Ongoing typed mood, not a one-off.
-        if happiness.has_recent_event(
-            &HappinessEventType::WantsReturnHome,
-            DURABLE_EVENT_WINDOW_DAYS,
-        ) {
-            return true;
-        }
-
-        // Long-term persistent unhappiness — the mood has held across many
-        // weekly unhappy-eligible ticks without resolving.
-        if happiness.unhappy_streak >= DURABLE_UNHAPPY_STREAK {
-            return true;
-        }
-
-        // Serious dressing-room conflict — a single severe blow-up
-        // (|magnitude| >= 4) or repeated friction (two or more rows in the
-        // window). A lone routine "had words" does not qualify. Mirrors the
-        // happiness processor's persistence-bypass test on the typed
-        // `ConflictWithTeammate` events.
-        let (conflict_rows, severe_conflict) = happiness
-            .recent_events
-            .iter()
-            .filter(|e| {
-                e.event_type == HappinessEventType::ConflictWithTeammate
-                    && e.days_ago <= DURABLE_EVENT_WINDOW_DAYS
-            })
-            .fold((0u32, false), |(n, severe), e| {
-                (n + 1, severe || e.magnitude.abs() >= 4.0)
-            });
-        if conflict_rows >= 2 || severe_conflict {
-            return true;
-        }
-
-        // Exhausted / unaffordable contract renewal — the renewal manager
-        // has tried and been rejected, and the stalemate permits a listing
-        // for this player's squad status.
-        let stalemate = ContractStalemate::assess(player, date, affordability);
-        stalemate.rejections_12m > 0 && stalemate.permits_listing()
     }
 
     /// Is this a player the club would keep on non-numeric grounds?
@@ -1527,15 +1448,17 @@ mod tests {
         );
     }
 
-    /// A durable grievance (here a deep ambition mismatch) on an `Unh`
-    /// player still lists him — the reroute only spares playing-time-only
-    /// unhappiness.
+    /// An `Unh` player who has carried the status for 6+ months is put up
+    /// for sale — sustained, unresolved unhappiness is a durable sell
+    /// signal even for an otherwise-useful squad member.
     #[test]
-    fn unhappy_with_durable_reason_is_still_listed() {
+    fn unhappy_for_six_months_is_listed() {
         let today = Fixture::date(2026, 5, 1);
         let mut player = Fixture::player(103);
-        player.statuses.add(today, PlayerStatusType::Unh);
-        player.happiness.factors.ambition_fit = -10.0; // durable mismatch
+        // Unhappy since well over six months ago.
+        player
+            .statuses
+            .add(today - chrono::Duration::days(200), PlayerStatusType::Unh);
         let club = Fixture::club(vec![Fixture::team(
             10,
             "main",
@@ -1548,7 +1471,38 @@ mod tests {
             CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
         assert!(
             matches!(decision, ListingDecision::Transfer { ref reason } if reason == "dec_reason_player_unhappy"),
-            "durable unhappiness must still list — saw {:?}",
+            "an unhappy player past six months must be listed — saw {:?}",
+            decision
+        );
+    }
+
+    /// A player who only recently became `Unh` is NOT listed on
+    /// unhappiness alone — even with a deep ambition mismatch on the books,
+    /// the manager-talk / loan paths own him until the mood has held for
+    /// six months. A useful rotation player is kept.
+    #[test]
+    fn recently_unhappy_player_is_kept_until_six_months() {
+        let today = Fixture::date(2026, 5, 1);
+        let mut player = Fixture::player(106);
+        player.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::FirstTeamSquadRotation;
+        // Unhappy for two months — well short of the six-month listing gate.
+        player
+            .statuses
+            .add(today - chrono::Duration::days(60), PlayerStatusType::Unh);
+        player.happiness.factors.ambition_fit = -10.0;
+        let club = Fixture::club(vec![Fixture::team(
+            10,
+            "main",
+            TeamType::Main,
+            vec![player],
+        )]);
+        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let player_ref = &club.teams.teams[0].players.players[0];
+        let decision =
+            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        assert!(
+            matches!(decision, ListingDecision::Keep),
+            "a recently-unhappy useful player must be kept until six months — saw {:?}",
             decision
         );
     }

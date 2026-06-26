@@ -310,6 +310,20 @@ impl WorkerRegistry {
                 }
                 BatchOutcome::Failed(reason) => {
                     w.stats.failures = w.stats.failures.saturating_add(1);
+                    // A failed play-batch (process-matches) request means the
+                    // host is gone — I/O error, error response, or fenced on
+                    // timeout. Fencing it (status → Unreachable + drop the
+                    // connection) removes it from the next dispatch's ready
+                    // set. Log the state transition here, where it actually
+                    // happens, mirroring the health-monitor's ping-fence line
+                    // — so a host vanishing from the pool is always traceable
+                    // to the batch that killed it, not just the dispatcher's
+                    // requeue note. `reason` is borrowed by the log before it
+                    // moves into `last_error` below.
+                    warn!(
+                        "worker {}: batch failed — {}; fencing host (status → unreachable, connection dropped, failures={})",
+                        address, reason, w.stats.failures
+                    );
                     w.stats.last_error = Some(reason);
                     w.status = WorkerStatus::Unreachable {
                         reason: w

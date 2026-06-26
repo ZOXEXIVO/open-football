@@ -232,6 +232,10 @@ impl CountryResult {
             PipelineProcessor::evaluate_board_approvals(country, current_date);
             PipelineProcessor::initiate_negotiations(country, current_date);
             PipelineProcessor::scan_loan_market(country, current_date);
+            // Seller-side push: National+ clubs broadcast their loan-listed
+            // players to scouts tier-by-tier (high → low) instead of only
+            // waiting to be scanned.
+            PipelineProcessor::broadcast_listed_loans(country, current_date);
             PipelineProcessor::scan_foreign_loan_market(country, &foreign_players, current_date);
         }
 

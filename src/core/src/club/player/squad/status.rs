@@ -39,6 +39,21 @@ impl PlayerStatus {
         self.statuses.iter().map(|s| s.status).collect()
     }
 
+    /// Number of whole days the given status has been continuously held as
+    /// of `now`, or `None` when the player is not currently carrying it.
+    ///
+    /// `add` only appends a status the player isn't already carrying (every
+    /// caller guards with `!contains`) and `remove` drops it, so for the
+    /// single-instance market statuses (`Unh`, `Req`, …) the stored
+    /// `start_date` marks the beginning of the current continuous spell —
+    /// and this returns that spell's length.
+    pub fn held_for_days(&self, status: PlayerStatusType, now: NaiveDate) -> Option<i64> {
+        self.statuses
+            .iter()
+            .find(|s| s.status == status)
+            .map(|s| (now - s.start_date).num_days())
+    }
+
     /// True iff the player is currently away on international duty at any
     /// level — senior (`Int`) or under-21 (`IntU21`). Club match-day
     /// selection treats both the same: the player is unavailable.

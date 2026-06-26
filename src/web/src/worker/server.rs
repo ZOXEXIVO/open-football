@@ -6,6 +6,7 @@
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND};
 use crate::worker::protocol::{MatchEnvelope, MatchOutcome, Request, Response, PROTOCOL_VERSION};
+use crate::worker::registry::LatencyTimer;
 use crate::worker::transport::Frame;
 use core::MatchRuntime;
 use core::r#match::{Match, MatchResult, MatchSquad, Score};
@@ -146,6 +147,11 @@ impl WorkerConnection {
                     // heartbeat tickers — otherwise a long matchday
                     // would freeze every other concurrent batch and
                     // the listener's accept loop.
+                    // `items` moves into the closure, so grab the count
+                    // first and time just the processing (not the response
+                    // write) for the completion log below.
+                    let count = items.len();
+                    let timer = LatencyTimer::start();
                     let outcomes = match tokio::task::spawn_blocking(move || {
                         Self::play_batch(items)
                     })
@@ -160,6 +166,11 @@ impl WorkerConnection {
                             continue;
                         }
                     };
+                    info!(
+                        "worker: processed batch matches={} in {} ms",
+                        count,
+                        timer.elapsed_ms()
+                    );
                     let resp = Response::PlayBatch { items: outcomes };
                     Frame::write(&mut self.stream, &resp).await?;
                 }

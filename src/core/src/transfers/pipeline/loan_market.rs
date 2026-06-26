@@ -12,7 +12,8 @@ use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
-use crate::transfers::pipeline::{LoanOutStatus, TransferRequestStatus};
+use crate::transfers::pipeline::{LoanBroadcast, LoanOutStatus, TransferRequestStatus};
+use std::collections::HashSet;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
@@ -706,6 +707,301 @@ impl PipelineProcessor {
     }
 
     // ============================================================
+    // Step 7a-bis: Staged Loan-Availability Broadcast (seller-side push)
+    // ============================================================
+
+    /// Days a broadcast sits at one reputation tier before, unanswered, it
+    /// widens to the next tier down.
+    const BROADCAST_RESPONSE_DAYS: i64 = 14;
+
+    /// Seller-side loan placement. A resource-rich parent club (National
+    /// reputation or above) actively offers each loan-listed player to
+    /// other clubs instead of only waiting to be scanned: it broadcasts
+    /// the player to the highest realistic reputation tier first (its own
+    /// level), and an interested club responds by opening a loan
+    /// negotiation — the existing seller-acceptance path then resolves it.
+    /// If no club at the current tier responds within
+    /// [`Self::BROADCAST_RESPONSE_DAYS`], the net widens one tier down and
+    /// re-offers, cascading high → low until the player is placed.
+    ///
+    /// Complements the borrower-driven [`Self::scan_loan_market`] (pull): a
+    /// prized prospect at a giant whom no small club happens to scan still
+    /// gets placed, because the parent goes looking. Weekly cadence;
+    /// domestic only (a foreign push compounds with the cross-border gates
+    /// in [`Self::scan_foreign_loan_market`]). Reuses the same realism
+    /// gates the borrower side applies — would-get-minutes depth and the
+    /// reputation-drop floor — so a push never lands a player on a bench or
+    /// somewhere that makes no sporting sense.
+    pub fn broadcast_listed_loans(country: &mut Country, date: NaiveDate) {
+        // Weekly cadence — the squad-wide push is heavier than the daily
+        // listed-market scan, and a placement decision needn't be revisited
+        // every day.
+        if date.weekday() != Weekday::Mon {
+            return;
+        }
+
+        // Players with an in-flight negotiation already have a pending
+        // response: don't widen their net or open a second approach. Their
+        // broadcast entry is preserved (not pruned) so a failed negotiation
+        // resumes the cascade where it left off.
+        let in_negotiation: HashSet<u32> = country
+            .transfer_market
+            .negotiations
+            .values()
+            .map(|n| n.player_id)
+            .collect();
+
+        // ── Pass 1 (read): broadcastable players ────────────────────────
+        // A player is broadcastable when he carries an Available loan
+        // listing (the same source the borrower scan reads — which also
+        // guarantees `start_negotiation` has a listing to anchor on) AND
+        // his parent club is resource-rich enough to run a push (National+).
+        struct Broadcastable {
+            player_id: u32,
+            parent_club_id: u32,
+            parent_tier: ReputationLevel,
+            parent_rep: u16,
+            parent_best_in_group: u8,
+            group: PlayerFieldPositionGroup,
+            ability: u8,
+            is_development: bool,
+            asking: f64,
+        }
+
+        let mut broadcastable: Vec<Broadcastable> = Vec::new();
+        for listing in &country.transfer_market.listings {
+            if listing.listing_type != TransferListingType::Loan
+                || listing.status != TransferListingStatus::Available
+            {
+                continue;
+            }
+            let Some(parent_club) = country.clubs.iter().find(|c| c.id == listing.club_id) else {
+                continue;
+            };
+            let Some(parent_team) = parent_club
+                .teams
+                .main()
+                .or_else(|| parent_club.teams.teams.first())
+            else {
+                continue;
+            };
+            let parent_tier = parent_team.reputation.level();
+            // Resource gate: only National-and-above clubs run a push;
+            // smaller clubs fall back to passive listing.
+            if !matches!(
+                parent_tier,
+                ReputationLevel::National | ReputationLevel::Continental | ReputationLevel::Elite
+            ) {
+                continue;
+            }
+            let Some(player) = Self::find_player_in_country(country, listing.player_id) else {
+                continue;
+            };
+            if player.is_on_loan() {
+                continue;
+            }
+            let group = player.position().position_group();
+            let parent_best_in_group = parent_team
+                .players
+                .iter()
+                .filter(|p| p.position().position_group() == group)
+                .map(|p| p.player_attributes.current_ability)
+                .max()
+                .unwrap_or(0);
+            let is_development = player.age(date) <= UnsolicitedLoanTarget::DEVELOPMENT_AGE
+                || parent_club.transfer_plan.loan_out_candidates.iter().any(|cand| {
+                    cand.player_id == listing.player_id
+                        && cand.reason.expects_guaranteed_minutes()
+                });
+            broadcastable.push(Broadcastable {
+                player_id: listing.player_id,
+                parent_club_id: listing.club_id,
+                parent_tier,
+                parent_rep: parent_team.reputation.world,
+                parent_best_in_group,
+                group,
+                ability: player.player_attributes.current_ability,
+                is_development,
+                asking: listing.asking_price.amount,
+            });
+        }
+
+        // Prune broadcasts whose player is no longer broadcastable (sold,
+        // recalled, loan agreed, parent fell below the resource tier). Runs
+        // even when the list is empty so the map never accumulates.
+        let live_ids: Vec<u32> = broadcastable.iter().map(|b| b.player_id).collect();
+        Self::prune_loan_broadcasts(country, &live_ids);
+        if broadcastable.is_empty() {
+            return;
+        }
+
+        // ── Pass 2 (mut clubs): advance each broadcast's tier ───────────
+        // Open a broadcast at the parent's own tier; widen one tier down
+        // once the current tier has gone unanswered past the response
+        // window. In-negotiation players are left frozen.
+        for b in &broadcastable {
+            if in_negotiation.contains(&b.player_id) {
+                continue;
+            }
+            let Some(club) = country.clubs.iter_mut().find(|c| c.id == b.parent_club_id) else {
+                continue;
+            };
+            let next = match club.transfer_plan.loan_broadcasts.get(&b.player_id) {
+                None => LoanBroadcast {
+                    tier: b.parent_tier,
+                    since: date,
+                },
+                Some(prev) => {
+                    if (date - prev.since).num_days() >= Self::BROADCAST_RESPONSE_DAYS {
+                        LoanBroadcast {
+                            tier: prev.tier.next_lower(),
+                            since: date,
+                        }
+                    } else {
+                        prev.clone()
+                    }
+                }
+            };
+            club.transfer_plan.loan_broadcasts.insert(b.player_id, next);
+        }
+
+        // ── Pass 3 (read): pick a borrower at each broadcast's tier ─────
+        struct PushAction {
+            borrower_id: u32,
+            player_id: u32,
+            selling_club_id: u32,
+            offer_amount: f64,
+        }
+        let mut actions: Vec<PushAction> = Vec::new();
+        for b in &broadcastable {
+            if in_negotiation.contains(&b.player_id) {
+                continue;
+            }
+            let Some(tier) = country
+                .clubs
+                .iter()
+                .find(|c| c.id == b.parent_club_id)
+                .and_then(|c| c.transfer_plan.loan_broadcasts.get(&b.player_id))
+                .map(|br| br.tier)
+            else {
+                continue;
+            };
+
+            // Best club AT this tier that would actually play him: highest
+            // world reputation within the tier wins — the strongest
+            // development environment that still guarantees minutes.
+            let mut best: Option<(u32, u16)> = None;
+            for club in &country.clubs {
+                if club.id == b.parent_club_id || club.is_rival(b.parent_club_id) {
+                    continue;
+                }
+                let Some(team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
+                    continue;
+                };
+                if team.reputation.level() != tier {
+                    continue;
+                }
+                if country
+                    .transfer_market
+                    .has_active_negotiation_for(b.player_id, club.id)
+                {
+                    continue;
+                }
+                let borrower_rep = team.reputation.world;
+                let depth = BorrowerPositionDepth::snapshot(team);
+                if !depth.has_room_for(b.group, b.ability)
+                    || !depth.would_get_loan_minutes(b.group, b.ability, b.is_development)
+                    || !Self::loan_reputation_drop_ok(
+                        borrower_rep,
+                        b.parent_rep,
+                        b.ability,
+                        b.parent_best_in_group,
+                        b.is_development,
+                    )
+                {
+                    continue;
+                }
+                match best {
+                    Some((_, best_rep)) if borrower_rep <= best_rep => {}
+                    _ => best = Some((club.id, borrower_rep)),
+                }
+            }
+            if let Some((borrower_id, _)) = best {
+                actions.push(PushAction {
+                    borrower_id,
+                    player_id: b.player_id,
+                    selling_club_id: b.parent_club_id,
+                    offer_amount: FormattingUtils::round_fee(b.asking * 0.8),
+                });
+            }
+        }
+
+        // ── Pass 4 (mut market): open the loan negotiations ─────────────
+        // The interested club's "response". The player already carries an
+        // Available loan listing, so `start_negotiation` has its anchor.
+        for action in actions {
+            let selling_rep = Self::get_club_reputation(country, action.selling_club_id);
+            let buying_rep = Self::get_club_reputation(country, action.borrower_id);
+            let (p_age, p_ambition) =
+                Self::get_player_negotiation_data(country, action.player_id, date);
+
+            let offer = TransferOffer {
+                base_fee: CurrencyValue {
+                    amount: action.offer_amount,
+                    currency: Currency::Usd,
+                },
+                clauses: Vec::new(),
+                salary_contribution: None,
+                contract_length_years: None,
+                loan_duration_months: Some(10),
+                personal_terms: None,
+                offering_club_id: action.borrower_id,
+                offered_date: date,
+            };
+
+            if let Some(neg_id) = country.transfer_market.start_negotiation(
+                action.player_id,
+                action.borrower_id,
+                offer,
+                date,
+                selling_rep,
+                buying_rep,
+                p_age,
+                p_ambition,
+            ) {
+                let (p_name, sc_name) = Self::resolve_player_and_club_name(
+                    country,
+                    action.player_id,
+                    action.selling_club_id,
+                );
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.is_loan = true;
+                    negotiation.reason = "Loan placement — parent broadcast to scouts".to_string();
+                    negotiation.player_name = p_name;
+                    negotiation.selling_club_name = sc_name;
+                }
+                debug!(
+                    "Loan broadcast: parent {} placed listed player {} at borrower {}",
+                    action.selling_club_id, action.player_id, action.borrower_id
+                );
+            }
+        }
+    }
+
+    /// Drop broadcast entries whose player is no longer broadcastable.
+    /// `live_ids` is the set still in play this pass; everything else is
+    /// removed so the per-club map stays bounded.
+    fn prune_loan_broadcasts(country: &mut Country, live_ids: &[u32]) {
+        for club in &mut country.clubs {
+            if !club.transfer_plan.loan_broadcasts.is_empty() {
+                club.transfer_plan
+                    .loan_broadcasts
+                    .retain(|pid, _| live_ids.contains(pid));
+            }
+        }
+    }
+
+    // ============================================================
     // Step 7b: Loan Market Scanning (other countries)
     // ============================================================
 
@@ -743,7 +1039,22 @@ impl PipelineProcessor {
                             p.skill_ability,
                             p.club_best_in_group,
                         ));
-                if !approachable || p.country_reputation > country_rep {
+                if !approachable {
+                    return false;
+                }
+                // Country-reputation step-down. A player from a more
+                // prestigious footballing nation isn't a realistic loan-in
+                // for a smaller country — EXCEPT development-profile
+                // youngsters, who routinely drop a national tier for
+                // guaranteed senior minutes (Russia → Belarus, an Argentine
+                // prospect → a smaller league). The region-prestige gate
+                // below and the club-rep reality band downstream still bound
+                // how far the move can fall.
+                if !Self::foreign_loan_country_rep_ok(
+                    p.country_reputation,
+                    country_rep,
+                    ForeignUnsolicitedLoanTarget::is_development(p.age),
+                ) {
                     return false;
                 }
                 let player_region = ScoutingRegion::from_country(p.continent_id, &p.country_code);
@@ -1075,6 +1386,33 @@ impl PipelineProcessor {
         let very_raw = player_ability.saturating_add(25) <= parent_best_in_group;
         let floor = if very_raw { 0.12 } else { 0.25 };
         borrower_rep as f32 >= parent_rep as f32 * floor
+    }
+
+    /// Cross-border country-reputation gate for the foreign loan market.
+    /// A player from a more prestigious footballing nation isn't a
+    /// realistic loan-in for a smaller country: an established fringe
+    /// player would rather stay or move sideways than drop a national tier
+    /// for a bit-part role abroad, so the borrower's country must be at
+    /// least as reputable as the player's.
+    ///
+    /// `is_development` lifts the gate entirely — the deliberate exception.
+    /// A development-profile youngster (≤23) routinely loans DOWN a country
+    /// tier for guaranteed senior minutes (Russia → Belarus, an Argentine
+    /// prospect → a smaller league); vetoing that on country reputation
+    /// alone is exactly what blocked the realistic "go abroad to play"
+    /// move. The drop is still bounded downstream by the region-prestige
+    /// gate and the club-rep reality band, so this can't launder a
+    /// wonderkid into a clearly smaller ecosystem. Mirrors the
+    /// `is_development` lift in [`Self::loan_reputation_drop_ok`].
+    fn foreign_loan_country_rep_ok(
+        player_country_rep: u16,
+        borrower_country_rep: u16,
+        is_development: bool,
+    ) -> bool {
+        if is_development {
+            return true;
+        }
+        player_country_rep <= borrower_country_rep
     }
 
     /// List loan-out candidates on the transfer market.
@@ -1580,6 +1918,29 @@ mod borrower_gate_tests {
             2000, 9000, 120, 130, true
         ));
     }
+
+    #[test]
+    fn foreign_loan_country_rep_gate_lifts_for_development_step_down() {
+        // Higher-reputation nation → lower (e.g. Russia → Belarus): an
+        // established fringe player can't drop a national tier on loan.
+        assert!(!PipelineProcessor::foreign_loan_country_rep_ok(
+            7000, 5000, false
+        ));
+        // ...but a development-profile youngster going abroad for senior
+        // minutes is exactly the move the gate is meant to permit. The
+        // region-prestige and club-rep gates still bound how far he falls.
+        assert!(PipelineProcessor::foreign_loan_country_rep_ok(
+            7000, 5000, true
+        ));
+        // Equal-or-lower-reputation source never trips the gate regardless
+        // of profile — there's no step-down to guard against.
+        assert!(PipelineProcessor::foreign_loan_country_rep_ok(
+            5000, 7000, false
+        ));
+        assert!(PipelineProcessor::foreign_loan_country_rep_ok(
+            5000, 5000, false
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -1803,13 +2164,15 @@ mod scan_loan_market_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
+    use crate::shared::{Currency, CurrencyValue};
+    use crate::transfers::market::{TransferListing, TransferListingOrigin, TransferListingType};
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
         Player, PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition,
         PlayerPositionType, PlayerPositions, PlayerSkills, PlayerSquadStatus, StaffCollection, Team,
         TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
-    use chrono::{Datelike, NaiveDate, NaiveTime, Weekday};
+    use chrono::{Datelike, Duration, NaiveDate, NaiveTime, Weekday};
 
     /// End-to-end fixture for the loan-market scan: a parent club, a
     /// borrowing club, and one country wrapping both. Wrapped in a unit
@@ -1921,6 +2284,27 @@ mod scan_loan_market_tests {
                 .build()
                 .unwrap()
         }
+
+        /// Put an Available loan listing on the market for `player_id`,
+        /// advertised free (a development loan). This is what the seller-
+        /// side broadcast reads — the equivalent of the parent club having
+        /// loan-listed the player.
+        fn loan_list(country: &mut Country, player_id: u32, club_id: u32, team_id: u32) {
+            country
+                .transfer_market
+                .add_listing(TransferListing::new_with_origin(
+                    player_id,
+                    club_id,
+                    team_id,
+                    CurrencyValue {
+                        amount: 0.0,
+                        currency: Currency::Usd,
+                    },
+                    Self::monday(),
+                    TransferListingType::Loan,
+                    TransferListingOrigin::SellerListed,
+                ));
+        }
     }
 
     /// The headline case: an Elite club's young, unlisted reserve keeper is
@@ -2029,6 +2413,154 @@ mod scan_loan_market_tests {
         assert_eq!(
             listing.asking_price.amount, 0.0,
             "a development loan must be advertised free so a poor club's loan-fee cap can't filter it"
+        );
+    }
+
+    /// Seller-side push: a National+ club broadcasts its loan-listed
+    /// youngster and a same-tier club with a keeper vacancy responds on the
+    /// first cycle — no waiting for that club to happen to scan.
+    #[test]
+    fn broadcast_places_listed_youth_at_a_same_tier_taker() {
+        let date = Fx::monday();
+
+        // National parent (world 5500): a blocked young keeper in the
+        // reserves, loan-listed.
+        let parent_main = Fx::team(
+            10,
+            1,
+            TeamType::Main,
+            5500,
+            vec![
+                Fx::keeper(101, 120, 120, 28, false),
+                Fx::keeper(102, 118, 118, 26, false),
+                Fx::keeper(103, 115, 115, 30, false),
+            ],
+        );
+        let parent_reserve =
+            Fx::team(11, 1, TeamType::Reserve, 4000, vec![Fx::keeper(200, 70, 150, 18, true)]);
+        let parent = Fx::club(1, vec![parent_main, parent_reserve], 50_000_000);
+
+        // National taker at the same tier (world 5500) with a keeper vacancy.
+        let borrower_main = Fx::team(
+            20,
+            2,
+            TeamType::Main,
+            5500,
+            vec![
+                Fx::keeper(301, 55, 55, 27, false),
+                Fx::keeper(302, 50, 50, 29, false),
+            ],
+        );
+        let borrower = Fx::club(2, vec![borrower_main], 5_000_000);
+
+        let mut country = Fx::country(vec![parent, borrower]);
+        Fx::loan_list(&mut country, 200, 1, 11);
+
+        PipelineProcessor::broadcast_listed_loans(&mut country, date);
+
+        assert!(
+            country.transfer_market.has_active_negotiation_for(200, 2),
+            "a National+ club should broadcast its loan-listed youngster and a same-tier club \
+             with a vacancy responds"
+        );
+    }
+
+    /// The headline River-Plate case: an Elite parent, the only realistic
+    /// taker a Regional club. The broadcast must open at the parent's own
+    /// (Elite) tier and widen one rung per unanswered window — Elite →
+    /// Continental → National → Regional — before the Regional club is
+    /// offered the player. High reputation first, cascading down.
+    #[test]
+    fn broadcast_cascades_from_high_to_low_until_a_taker_responds() {
+        let d0 = Fx::monday(); // 2026-01-05, a Monday
+
+        let parent_main = Fx::team(
+            10,
+            1,
+            TeamType::Main,
+            9000,
+            vec![
+                Fx::keeper(101, 120, 120, 28, false),
+                Fx::keeper(102, 118, 118, 26, false),
+                Fx::keeper(103, 115, 115, 30, false),
+            ],
+        );
+        let parent_reserve =
+            Fx::team(11, 1, TeamType::Reserve, 6000, vec![Fx::keeper(200, 70, 150, 18, true)]);
+        let parent = Fx::club(1, vec![parent_main, parent_reserve], 50_000_000);
+
+        let borrower_main = Fx::team(
+            20,
+            2,
+            TeamType::Main,
+            4000,
+            vec![
+                Fx::keeper(301, 55, 55, 27, false),
+                Fx::keeper(302, 50, 50, 29, false),
+            ],
+        );
+        let borrower = Fx::club(2, vec![borrower_main], 5_000_000);
+
+        let mut country = Fx::country(vec![parent, borrower]);
+        Fx::loan_list(&mut country, 200, 1, 11);
+
+        // Cycle 1: opens at Elite — no Elite taker exists, nobody responds.
+        PipelineProcessor::broadcast_listed_loans(&mut country, d0);
+        assert!(
+            !country.transfer_market.has_active_negotiation_for(200, 2),
+            "no Elite club exists to take him on the first broadcast"
+        );
+
+        // Widen one tier per 14-day window: Continental, then National.
+        PipelineProcessor::broadcast_listed_loans(&mut country, d0 + Duration::days(14));
+        PipelineProcessor::broadcast_listed_loans(&mut country, d0 + Duration::days(28));
+        assert!(
+            !country.transfer_market.has_active_negotiation_for(200, 2),
+            "still being offered above the Regional taker's tier"
+        );
+
+        // Fourth window reaches Regional — the club with a vacancy responds.
+        PipelineProcessor::broadcast_listed_loans(&mut country, d0 + Duration::days(42));
+        assert!(
+            country.transfer_market.has_active_negotiation_for(200, 2),
+            "once the net widens to Regional, the club with a vacancy responds"
+        );
+    }
+
+    /// Resource gate: a below-National parent doesn't have the loan-
+    /// management reach to run a push, so it never broadcasts — it falls
+    /// back to passive listing no matter what takers exist.
+    #[test]
+    fn broadcast_skipped_for_a_below_national_parent() {
+        let date = Fx::monday();
+
+        // Regional parent (world 4000) — below the resource threshold.
+        let parent_main = Fx::team(
+            10,
+            1,
+            TeamType::Main,
+            4000,
+            vec![
+                Fx::keeper(101, 90, 90, 28, false),
+                Fx::keeper(102, 88, 88, 26, false),
+            ],
+        );
+        let parent_reserve =
+            Fx::team(11, 1, TeamType::Reserve, 3000, vec![Fx::keeper(200, 60, 120, 18, true)]);
+        let parent = Fx::club(1, vec![parent_main, parent_reserve], 5_000_000);
+
+        let borrower_main =
+            Fx::team(20, 2, TeamType::Main, 3500, vec![Fx::keeper(301, 40, 40, 27, false)]);
+        let borrower = Fx::club(2, vec![borrower_main], 1_000_000);
+
+        let mut country = Fx::country(vec![parent, borrower]);
+        Fx::loan_list(&mut country, 200, 1, 11);
+
+        PipelineProcessor::broadcast_listed_loans(&mut country, date);
+
+        assert!(
+            !country.transfer_market.has_active_negotiation_for(200, 2),
+            "a Regional parent lacks the loan-management resource to run a push"
         );
     }
 }

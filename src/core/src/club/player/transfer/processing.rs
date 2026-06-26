@@ -19,6 +19,16 @@ use chrono::{NaiveDate, NaiveDateTime};
 const CONTINENT_EUROPE: u32 = 1;
 const CONTINENT_SOUTH_AMERICA: u32 = 3;
 
+/// Minimum number of days a player must *continuously* hold the `Unh`
+/// status before generic unhappiness escalates into a formal transfer
+/// request — and, through the country listing pass, an actual transfer
+/// listing. ≈ 6 months: the manager-talk and loan paths get a full half
+/// season to resolve the grievance before the club acts on it. Shared
+/// with the country listing pass (`evaluate_player_listing`) so the
+/// request and the listing agree on exactly when unhappiness becomes a
+/// sell signal.
+pub(crate) const UNHAPPY_LISTING_MIN_DAYS: i64 = 182;
+
 /// Inputs the weekly tick collects from `GlobalContext` once and feeds
 /// into [`Player::process_transfer_desire`]. Decoupled from
 /// `GlobalContext` so the desire logic stays unit-testable and the
@@ -595,20 +605,26 @@ impl Player {
             active_reasons.push(TransferRequestReason::PoorBehaviour);
         }
 
+        // Generic unhappiness only escalates to a formal request once the
+        // mood has held for ~6 months — long enough for the manager-talk /
+        // loan paths to have tried and failed to resolve it. A fresher
+        // grievance keeps the player unsettled but not yet asking out.
         let has_unh_long = self
             .statuses
-            .statuses
-            .iter()
-            .any(|s| s.status == PlayerStatusType::Unh && (now - s.start_date).num_days() > 30);
+            .held_for_days(PlayerStatusType::Unh, now)
+            .is_some_and(|d| d >= UNHAPPY_LISTING_MIN_DAYS);
         if has_unh_long {
             active_reasons.push(TransferRequestReason::LongUnhappiness);
         }
 
+        // A genuine ambition mismatch (wrong-size club / relegation slide)
+        // is a distinct, faster grievance — a fortnight of unhappiness on
+        // top of a clearly-too-small club is enough to want a move.
         if !recently_transferred && self.happiness.factors.ambition_fit <= -7.0 {
-            let has_unh_short =
-                self.statuses.statuses.iter().any(|s| {
-                    s.status == PlayerStatusType::Unh && (now - s.start_date).num_days() > 14
-                });
+            let has_unh_short = self
+                .statuses
+                .held_for_days(PlayerStatusType::Unh, now)
+                .is_some_and(|d| d > 14);
             if has_unh_short {
                 active_reasons.push(TransferRequestReason::AmbitionMismatch);
             }
@@ -1687,9 +1703,11 @@ mod career_desire_tests {
     fn req_clears_when_all_reasons_resolved() {
         let today = d(2026, 5, 1);
         let mut p = build(28, 14.0, 12.0, 10.0, 12.0, 30, 130, 5000, 200, today);
+        // Unhappy well past the six-month listing gate so LongUnhappiness is
+        // the single active reason driving the request.
         p.statuses.add(
             today
-                .checked_sub_signed(chrono::Duration::days(40))
+                .checked_sub_signed(chrono::Duration::days(200))
                 .unwrap(),
             PlayerStatusType::Unh,
         );

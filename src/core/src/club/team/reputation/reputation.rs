@@ -427,6 +427,21 @@ impl ReputationLevel {
     pub fn cycles_aging_squad(&self) -> bool {
         matches!(self, ReputationLevel::Elite | ReputationLevel::Continental)
     }
+
+    /// The next tier down, saturating at `Amateur`. Drives the staged
+    /// loan-availability broadcast: a parent club offers a listed player
+    /// to the highest realistic tier first, then widens the net one rung
+    /// at a time each time the offer goes unanswered.
+    pub fn next_lower(self) -> ReputationLevel {
+        match self {
+            ReputationLevel::Elite => ReputationLevel::Continental,
+            ReputationLevel::Continental => ReputationLevel::National,
+            ReputationLevel::National => ReputationLevel::Regional,
+            ReputationLevel::Regional => ReputationLevel::Local,
+            ReputationLevel::Local => ReputationLevel::Amateur,
+            ReputationLevel::Amateur => ReputationLevel::Amateur,
+        }
+    }
 }
 
 /// Reputation trend
