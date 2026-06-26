@@ -2238,6 +2238,10 @@ a:active {
     text-align: center;
 }
 
+.fm-squad-fa .sq-pos {
+    text-align: center;
+}
+
 /* ============================================
    TEAM SCHEDULE PAGE
    ============================================ */
@@ -4959,9 +4963,9 @@ a:active {
     justify-content: center;
     box-sizing: border-box;
     padding: 6px;
-    color: #01b6a4;
-    background: linear-gradient(160deg, #00453eb8 0%, #10433e 100%);
-    border: 1px solid #165953;
+    color: #88a4b8;
+    background: linear-gradient(160deg, #243240 0%, #1d2832 100%);
+    border: 1px solid #2c3c4a;
     border-radius: 6px;
     box-shadow:
         0 1px 0 rgba(255, 255, 255, 0.06) inset,
@@ -4976,8 +4980,8 @@ a:active {
 }
 
 .fm-holiday-btn:hover {
-    border-color: #1d7a70;
-    color: #19d4c2;
+    border-color: #3a5468;
+    color: #ffffff;
     transform: translateY(-1px);
     box-shadow:
         0 1px 0 rgba(255, 255, 255, 0.08) inset,

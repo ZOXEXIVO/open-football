@@ -8,8 +8,9 @@ use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use chrono::Datelike;
+use core::PlayerPositionType;
 use core::transfers::TransferType;
-use core::utils::FormattingUtils;
+use core::utils::{DateUtils, FormattingUtils};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -59,6 +60,11 @@ pub struct SeasonOption {
 pub struct CompletedTransferItem {
     pub player_slug: String,
     pub player_name: String,
+    pub position: String,
+    pub country_slug: String,
+    pub country_code: String,
+    pub country_name: String,
+    pub age: String,
     pub from_team: String,
     pub from_team_slug: String,
     pub to_team: String,
@@ -152,7 +158,12 @@ pub async fn league_transfers_action(
     // Completed transfers involving league teams, filtered by season.
     // Use from_team_id (specific team) when available; fall back to club_id for
     // foreign transfers (where from_team_id is 0) and for the buying side.
-    let completed_transfers: Vec<CompletedTransferItem> = country
+    //
+    // Position / nationality / age are read from the live player record (the
+    // transfer log only stores the player's name); the whole list is then
+    // ordered by playing position — GK, defence, midfield, attack — exactly
+    // like the squad page. Players we can no longer resolve sort to the bottom.
+    let mut transfer_rows: Vec<(Option<PlayerPositionType>, CompletedTransferItem)> = country
         .transfer_market
         .transfer_history
         .iter()
@@ -166,9 +177,37 @@ pub async fn league_transfers_action(
         .map(|t| {
             let from_team_slug = get_first_team_slug(simulator_data, country, t.from_club_id);
             let to_team_slug = get_first_team_slug(simulator_data, country, t.to_club_id);
-            CompletedTransferItem {
+
+            let player = simulator_data.player(t.player_id);
+            let position_sort = player.map(|p| p.position());
+            let position = player
+                .map(|p| p.positions.display_positions_compact())
+                .unwrap_or_else(|| "-".to_string());
+            let (country_slug, country_code, country_name) = player
+                .and_then(|p| {
+                    simulator_data
+                        .country(p.country_id)
+                        .map(|c| (c.slug.clone(), c.code.clone(), c.name.clone()))
+                        .or_else(|| {
+                            simulator_data
+                                .country_info
+                                .get(&p.country_id)
+                                .map(|i| (i.slug.clone(), i.code.clone(), i.name.clone()))
+                        })
+                })
+                .unwrap_or_default();
+            let age = player
+                .map(|p| DateUtils::age(p.birth_date, sim_date).to_string())
+                .unwrap_or_else(|| "-".to_string());
+
+            let item = CompletedTransferItem {
                 player_slug: player_history_slug(simulator_data, t.player_id, &t.player_name),
                 player_name: t.player_name.clone(),
+                position,
+                country_slug,
+                country_code,
+                country_name,
+                age,
                 from_team: t.from_team_name.clone(),
                 from_team_slug,
                 to_team: t.to_team_name.clone(),
@@ -180,9 +219,22 @@ pub async fn league_transfers_action(
                 },
                 is_loan: matches!(&t.transfer_type, TransferType::Loan(_)),
                 date: t.transfer_date.format("%d.%m.%Y").to_string(),
-            }
+            };
+
+            (position_sort, item)
         })
         .collect();
+
+    // Squad-style ordering: GK -> Def -> Mid -> Fwd, with unresolved players last.
+    transfer_rows.sort_by(|a, b| match (a.0, b.0) {
+        (Some(pa), Some(pb)) => pa.partial_cmp(&pb).unwrap_or(std::cmp::Ordering::Equal),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+
+    let completed_transfers: Vec<CompletedTransferItem> =
+        transfer_rows.into_iter().map(|(_, item)| item).collect();
 
     // Active negotiations
     let active_negotiations: Vec<NegotiationItem> = country

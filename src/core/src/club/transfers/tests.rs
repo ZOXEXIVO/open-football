@@ -255,6 +255,67 @@ fn loan_focused_club_skips_long_contract_under_loan_approach() {
 }
 
 #[test]
+fn loan_fee_stays_far_below_permanent_price() {
+    let date = d(2026, 7, 1);
+    // A valuable midfielder in his prime.
+    let player = make_player(
+        7,
+        d(2000, 1, 1),
+        PlayerPositionType::MidfielderCenter,
+        150,
+        160,
+        Some(d(2029, 6, 30)),
+    );
+
+    let s = ClubTransferStrategy::from_club_context(
+        1,
+        Some(CurrencyValue {
+            amount: 200_000_000.0,
+            currency: Currency::Usd,
+        }),
+        85,
+        vec![PlayerPositionType::MidfielderCenter],
+        &ClubPhilosophy::Balanced,
+        &vision(FinancialStance::Balanced),
+        0.6,
+    );
+
+    // Permanent move: the buyer pays around the full asking.
+    let permanent_asking = CurrencyValue {
+        amount: 40_000_000.0,
+        currency: Currency::Usd,
+    };
+    let perm_ctx = ctx_for(date, 100_000_000.0);
+    let permanent = s.calculate_initial_offer_with_context(&player, &permanent_asking, &perm_ctx);
+
+    // Loan move: the pipeline hands the strategy a loan FEE (a few percent
+    // of the player's value), not his full price. The old anchor floored
+    // the offer at 85% of full value, ballooning the loan fee up to nearly
+    // the permanent price — this guards against that regression.
+    let loan_fee_asking = CurrencyValue {
+        amount: permanent_asking.amount * 0.06,
+        currency: Currency::Usd,
+    };
+    let mut loan_ctx = ctx_for(date, 100_000_000.0);
+    loan_ctx.approach = TransferApproach::Loan;
+    let loan = s.calculate_initial_offer_with_context(&player, &loan_fee_asking, &loan_ctx);
+
+    assert!(
+        money_amount(&loan.base_fee) < money_amount(&permanent.base_fee) * 0.25,
+        "loan fee {} must stay far below the permanent fee {}",
+        money_amount(&loan.base_fee),
+        money_amount(&permanent.base_fee),
+    );
+    // And it should track the advertised loan fee, not re-inflate past it.
+    assert!(
+        money_amount(&loan.base_fee) <= loan_fee_asking.amount * 1.1,
+        "loan fee {} must stay near the advertised loan fee {}",
+        money_amount(&loan.base_fee),
+        loan_fee_asking.amount,
+    );
+}
+
+#[test]
 fn older_player_gets_shorter_contract_and_appearance_clause() {
     let date = d(2026, 7, 1);
     // 32-year-old veteran with a few goals.

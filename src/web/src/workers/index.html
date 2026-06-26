@@ -3,33 +3,58 @@
 {% block html_title %}{{ i18n.t("workers_title") }} | {{ i18n.t("site_name") }}{% endblock %}
 
 {% block content %}
+<style>
+/* Workers summary rendered as academy-style "top cards" — no panel wrapper. */
+.fm-workers-overview {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px;
+    margin-bottom: 14px;
+}
+.fm-workers-overview .fm-info-tile-bad .fm-info-tile-value {
+    color: #e87a7a;
+}
+</style>
 <div class="fm-page fm-workers-page">
-    <section class="fm-panel">
-        <div class="fm-panel-head">
-            <h3>{{ i18n.t("workers_total_match_workers") }}</h3>
-            <span class="fm-panel-count"><span id="js-summary-ready">{{ ready }}</span>/<span id="js-summary-total">{{ total }}</span> {{ i18n.t("workers_ready_label") }}</span>
-        </div>
-        <div class="fm-workers-summary-grid">
-            <div class="fm-workers-summary-tile">
-                <div class="fm-workers-summary-value" id="js-summary-threads">{{ total_threads }}</div>
-                <div class="fm-workers-summary-label">{{ i18n.t("workers_total_threads") }}</div>
-            </div>
-            <div class="fm-workers-summary-tile">
-                <div class="fm-workers-summary-value" id="js-summary-batches">{{ total_batches }}</div>
-                <div class="fm-workers-summary-label">{{ i18n.t("workers_batches_sent") }}</div>
-            </div>
-            <div class="fm-workers-summary-tile">
-                <div class="fm-workers-summary-value" id="js-summary-matches">{{ total_matches }}</div>
-                <div class="fm-workers-summary-label">{{ i18n.t("workers_matches_done") }}</div>
-            </div>
-            <div class="fm-workers-summary-tile fm-workers-summary-bad">
-                <div class="fm-workers-summary-value" id="js-summary-failures">{{ total_failures }}</div>
-                <div class="fm-workers-summary-label">{{ i18n.t("workers_failures") }}</div>
+    <div class="fm-workers-overview">
+        <div class="fm-info-tile fm-info-tile-machine">
+            <div class="fm-info-tile-icon"><i class="fa fa-server"></i></div>
+            <div class="fm-info-tile-body">
+                <div class="fm-info-tile-value"><span id="js-summary-ready">{{ ready }}</span>/<span id="js-summary-total">{{ total }}</span></div>
+                <div class="fm-info-tile-label">{{ i18n.t("workers_total_match_workers") }}</div>
             </div>
         </div>
-    </section>
+        <div class="fm-info-tile fm-info-tile-machine">
+            <div class="fm-info-tile-icon"><i class="fa fa-microchip"></i></div>
+            <div class="fm-info-tile-body">
+                <div class="fm-info-tile-value" id="js-summary-threads">{{ total_threads }}</div>
+                <div class="fm-info-tile-label">{{ i18n.t("workers_total_threads") }}</div>
+            </div>
+        </div>
+        <div class="fm-info-tile fm-info-tile-machine">
+            <div class="fm-info-tile-icon"><i class="fa fa-paper-plane"></i></div>
+            <div class="fm-info-tile-body">
+                <div class="fm-info-tile-value" id="js-summary-batches">{{ total_batches }}</div>
+                <div class="fm-info-tile-label">{{ i18n.t("workers_batches_sent") }}</div>
+            </div>
+        </div>
+        <div class="fm-info-tile fm-info-tile-machine">
+            <div class="fm-info-tile-icon"><i class="fa fa-futbol"></i></div>
+            <div class="fm-info-tile-body">
+                <div class="fm-info-tile-value" id="js-summary-matches">{{ total_matches }}</div>
+                <div class="fm-info-tile-label">{{ i18n.t("workers_matches_done") }}</div>
+            </div>
+        </div>
+        <div class="fm-info-tile fm-info-tile-machine fm-info-tile-bad">
+            <div class="fm-info-tile-icon"><i class="fa fa-triangle-exclamation"></i></div>
+            <div class="fm-info-tile-body">
+                <div class="fm-info-tile-value" id="js-summary-failures">{{ total_failures }}</div>
+                <div class="fm-info-tile-label">{{ i18n.t("workers_failures") }}</div>
+            </div>
+        </div>
+    </div>
 
-    <section class="fm-panel mt-3">
+    <section class="fm-panel">
         <div class="fm-panel-head">
             <h3>{{ i18n.t("workers_table_title") }}</h3>
             <button type="button" class="fm-workers-add-btn" id="fm-workers-add-open" title="{{ i18n.t("workers_add_tooltip") }}" aria-label="{{ i18n.t("workers_add_tooltip") }}">

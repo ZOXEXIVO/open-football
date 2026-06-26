@@ -9,6 +9,67 @@
 {% endblock %}
 
 {% block content %}
+<style>
+/* --- League transfer history table ---
+   Compact columns keep fixed widths at every size. On wide screens the
+   flexible columns (Name/From/To/Fee) stretch into four equal columns;
+   below 1200px the global responsive rule turns .fm-panel into a
+   horizontal-scroll container, so the table reverts to content sizing and
+   scrolls sideways instead of crushing its columns. */
+.fm-transfer-history-table .sq-pos {
+    width: 92px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fm-transfer-history-table .sq-age {
+    width: 48px;
+}
+.fm-transfer-history-table .sq-nat {
+    width: 42px;
+    overflow: hidden;
+}
+.fm-transfer-history-table .sq-date {
+    width: 96px;
+    white-space: nowrap;
+}
+.fm-transfer-history-table .sq-fee {
+    text-align: center;
+    white-space: nowrap;
+}
+.fm-transfer-history-table .sq-nat .flag {
+    vertical-align: middle;
+}
+
+/* Wide screens: fixed layout makes Name, From, To and Fee four equal,
+   stretched columns sharing the leftover width. */
+@media (min-width: 1200px) {
+    .fm-transfer-history-table {
+        table-layout: fixed;
+        width: 100%;
+    }
+    .fm-transfer-history-table .sq-name,
+    .fm-transfer-history-table .sq-from,
+    .fm-transfer-history-table .sq-to {
+        width: auto;
+        white-space: normal;
+        word-break: break-word;
+    }
+    .fm-transfer-history-table .sq-fee {
+        width: auto;
+    }
+}
+
+/* Narrow screens: the panel scrolls sideways (global rule). Give the
+   flexible columns a readable minimum so they don't collapse. */
+@media (max-width: 1199.98px) {
+    .fm-transfer-history-table .sq-name,
+    .fm-transfer-history-table .sq-from,
+    .fm-transfer-history-table .sq-to {
+        min-width: 150px;
+        white-space: nowrap;
+    }
+}
+</style>
 <div class="fm-page">
     <section class="fm-panel">
         <div class="fm-panel-head">
@@ -25,25 +86,37 @@
         </div>
         <div class="fm-ttab-content" id="tab-permanent">
             {% if has_permanent_transfers %}
-            <table class="fm-squad fm-squad-center">
+            <table class="fm-squad fm-transfer-history-table">
                 <thead>
                     <tr>
-                        <th>{{ i18n.t("player") }}</th>
-                        <th>{{ i18n.t("from") }}</th>
-                        <th>{{ i18n.t("to") }}</th>
-                        <th>{{ i18n.t("fee") }}</th>
-                        <th>{{ i18n.t("date") }}</th>
+                        <th class="sq-pos">{{ i18n.t("position") }}</th>
+                        <th class="sq-age">{{ i18n.t("age") }}</th>
+                        <th class="sq-nat">{{ i18n.t("nat") }}</th>
+                        <th class="sq-name">{{ i18n.t("name") }}</th>
+                        <th class="sq-from">{{ i18n.t("from") }}</th>
+                        <th class="sq-to">{{ i18n.t("to") }}</th>
+                        <th class="sq-fee">{{ i18n.t("fee") }}</th>
+                        <th class="sq-date">{{ i18n.t("date") }}</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for item in completed_transfers %}
                     {% if !item.is_loan %}
                     <tr>
+                        <td class="sq-pos">{{ item.position }}</td>
+                        <td class="sq-age">{{ item.age }}</td>
+                        <td class="sq-nat">
+                            {% if !item.country_code.is_empty() %}
+                            <a href="/{{ lang }}/countries/{{ item.country_slug }}">
+                                <span class="flag flag-{{ item.country_code }}" title="{{ item.country_name }}"></span>
+                            </a>
+                            {% endif %}
+                        </td>
                         <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
-                        <td><a href="/{{ lang }}/teams/{{ item.from_team_slug }}">{{ item.from_team }}</a></td>
-                        <td><a href="/{{ lang }}/teams/{{ item.to_team_slug }}">{{ item.to_team }}</a></td>
-                        <td><span class="fm-transfer-fee">{{ item.fee }}</span></td>
-                        <td>{{ item.date }}</td>
+                        <td class="sq-from"><a href="/{{ lang }}/teams/{{ item.from_team_slug }}">{{ item.from_team }}</a></td>
+                        <td class="sq-to"><a href="/{{ lang }}/teams/{{ item.to_team_slug }}">{{ item.to_team }}</a></td>
+                        <td class="sq-fee"><span class="fm-transfer-fee">{{ item.fee }}</span></td>
+                        <td class="sq-date">{{ item.date }}</td>
                     </tr>
                     {% endif %}
                     {% endfor %}
@@ -55,25 +128,37 @@
         </div>
         <div class="fm-ttab-content" id="tab-loans" style="display:none">
             {% if has_loan_transfers %}
-            <table class="fm-squad fm-squad-center">
+            <table class="fm-squad fm-transfer-history-table">
                 <thead>
                     <tr>
-                        <th>{{ i18n.t("player") }}</th>
-                        <th>{{ i18n.t("from") }}</th>
-                        <th>{{ i18n.t("to") }}</th>
-                        <th>{{ i18n.t("fee") }}</th>
-                        <th>{{ i18n.t("date") }}</th>
+                        <th class="sq-pos">{{ i18n.t("position") }}</th>
+                        <th class="sq-age">{{ i18n.t("age") }}</th>
+                        <th class="sq-nat">{{ i18n.t("nat") }}</th>
+                        <th class="sq-name">{{ i18n.t("name") }}</th>
+                        <th class="sq-from">{{ i18n.t("from") }}</th>
+                        <th class="sq-to">{{ i18n.t("to") }}</th>
+                        <th class="sq-fee">{{ i18n.t("fee") }}</th>
+                        <th class="sq-date">{{ i18n.t("date") }}</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for item in completed_transfers %}
                     {% if item.is_loan %}
                     <tr>
+                        <td class="sq-pos">{{ item.position }}</td>
+                        <td class="sq-age">{{ item.age }}</td>
+                        <td class="sq-nat">
+                            {% if !item.country_code.is_empty() %}
+                            <a href="/{{ lang }}/countries/{{ item.country_slug }}">
+                                <span class="flag flag-{{ item.country_code }}" title="{{ item.country_name }}"></span>
+                            </a>
+                            {% endif %}
+                        </td>
                         <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
-                        <td><a href="/{{ lang }}/teams/{{ item.from_team_slug }}">{{ item.from_team }}</a></td>
-                        <td><a href="/{{ lang }}/teams/{{ item.to_team_slug }}">{{ item.to_team }}</a></td>
-                        <td><span class="fm-loan-badge">{{ item.fee }}</span></td>
-                        <td>{{ item.date }}</td>
+                        <td class="sq-from"><a href="/{{ lang }}/teams/{{ item.from_team_slug }}">{{ item.from_team }}</a></td>
+                        <td class="sq-to"><a href="/{{ lang }}/teams/{{ item.to_team_slug }}">{{ item.to_team }}</a></td>
+                        <td class="sq-fee"><span class="fm-loan-badge">{{ item.fee }}</span></td>
+                        <td class="sq-date">{{ item.date }}</td>
                     </tr>
                     {% endif %}
                     {% endfor %}

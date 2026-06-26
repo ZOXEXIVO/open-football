@@ -10,12 +10,12 @@
         {% if players.is_empty() %}
         <div class="fm-empty">{{ i18n.t("no_free_agents") }}</div>
         {% else %}
-        <table class="fm-squad">
+        <table class="fm-squad fm-squad-fa">
             <thead>
                 <tr>
-                    <th>{{ i18n.t("position") }}</th>
-                    <th class="sq-name">{{ i18n.t("name") }}</th>
+                    <th class="sq-pos">{{ i18n.t("position") }}</th>
                     <th class="sq-age">{{ i18n.t("age") }}</th>
+                    <th class="sq-name">{{ i18n.t("name") }}</th>
                     <th class="sq-ability">{{ i18n.t("ability") }}</th>
                     <th class="sq-potential">{{ i18n.t("potential") }}</th>
                 </tr>
@@ -24,6 +24,7 @@
                 {% for player in players %}
                 <tr>
                     <td class="sq-pos">{{ player.position }}</td>
+                    <td class="sq-age">{{ player.age }}</td>
                     <td class="sq-name">
                         <a href="/{{ lang }}/players/{{ player.slug }}">
                             {% if !player.first_name.is_empty() %}{{ player.first_name }}&nbsp;{% endif %}{{ player.last_name }}
@@ -32,7 +33,6 @@
                         <div class="fa-status">{{ player.status_message }}</div>
                         {% endif %}
                     </td>
-                    <td class="sq-age">{{ player.age }}</td>
                     <td>
                         <div class="fm-stars">
                             {% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}

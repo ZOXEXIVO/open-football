@@ -609,8 +609,19 @@ impl ClubTransferStrategy {
         let aggression = self.negotiation.buying_aggressiveness as f64;
         let fee_discipline = self.negotiation.fee_discipline as f64;
 
+        // For a loan, the incoming `asking_price` is already the loan FEE
+        // (a few percent of the player's value), not his permanent price.
+        // The permanent anchor below floors the offer at 85% of full value
+        // — applying that to a loan re-inflates the fee back to nearly the
+        // whole transfer price (the "loan fee == full price" bug). Loans
+        // anchor purely on the advertised loan fee instead.
+        let is_loan = ctx.is_loan();
+
         // 1) Anchor: blend asking price and our valuation.
-        let mut offer_amount = if asking_price.amount > 0.0 {
+        let mut offer_amount = if is_loan {
+            // Negotiate around the loan fee; a free loan (asking 0) stays free.
+            asking_price.amount * (0.80 + aggression * 0.18)
+        } else if asking_price.amount > 0.0 {
             let market_anchor = asking_price.amount.max(player_value.amount * 0.85);
             market_anchor * (0.74 + aggression * 0.23)
         } else {
@@ -680,6 +691,16 @@ impl ClubTransferStrategy {
         let overpay_cap = player_value.amount * self.negotiation.max_overpay_ratio as f64;
         if overpay_cap > 0.0 && offer_amount > overpay_cap {
             offer_amount = overpay_cap;
+        }
+
+        // 3b) Loan-fee hard ceiling. Whatever the anchor and the pushes
+        // produced, a temporary loan fee must never approach the permanent
+        // price — cap it at a small fraction of the player's full value.
+        if is_loan && player_value.amount > 0.0 {
+            let loan_fee_ceiling = player_value.amount * 0.20;
+            if offer_amount > loan_fee_ceiling {
+                offer_amount = loan_fee_ceiling;
+            }
         }
 
         // 4) Budget cap. Critical requests + aggressive buyer get
