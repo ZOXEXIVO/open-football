@@ -2534,6 +2534,107 @@ mod development_pathway_tests {
             )
         }
 
+        /// Goalkeeper variant of [`Self::player`] — same profile, GK slot.
+        fn gk_player(id: u32, birth_year: i32, ca: u8) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ca;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Dev".to_string(), format!("GK{id}")))
+                .birth_date(Self::d(birth_year, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Goalkeeper,
+                        level: 16,
+                    }],
+                })
+                .player_attributes(attrs)
+                .build()
+                .unwrap()
+        }
+
+        /// Buyer whose two senior keepers sit clearly above the prospect, so
+        /// the GK `blocked_depth_for` gate (1 clearly-better keeper) fires.
+        fn gk_buyer(rep: u16) -> Club {
+            let keepers = vec![
+                Self::gk_player(201, 1996, 150),
+                Self::gk_player(202, 1997, 148),
+            ];
+            Self::club(
+                Self::BUYER_ID,
+                "Buyer",
+                Self::team(21, Self::BUYER_ID, rep, keepers),
+            )
+        }
+
+        /// Like [`Self::world`] but the prospect is a GOALKEEPER and the buyer
+        /// is keeper-deep — used to prove the keeper half of the development-
+        /// loan pathway now that GK prospects can be signed.
+        fn gk_world(buyer_rep: u16, birth_year: i32) -> (SimulatorData, DeferredTransfer) {
+            let prospect = Self::gk_player(Self::PROSPECT_ID, birth_year, 60);
+            let seller = Self::club(
+                Self::SELLER_ID,
+                "Seller",
+                Self::team(11, Self::SELLER_ID, 5000, vec![prospect]),
+            );
+            let buyer = Self::gk_buyer(buyer_rep);
+
+            let league = League::new(
+                10,
+                "L".to_string(),
+                "league".to_string(),
+                1,
+                5500,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            );
+            let country = Country::builder()
+                .id(1)
+                .code("en".to_string())
+                .slug("england".to_string())
+                .name("england".to_string())
+                .continent_id(1)
+                .reputation(5500)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(vec![seller, buyer])
+                .build()
+                .unwrap();
+            let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+            let data = SimulatorData::new(
+                Self::date().and_hms_opt(12, 0, 0).unwrap(),
+                vec![continent],
+                GlobalCompetitions::new(Vec::new()),
+            );
+
+            let transfer = DeferredTransfer {
+                player_id: Self::PROSPECT_ID,
+                selling_country_id: 1,
+                selling_club_id: Self::SELLER_ID,
+                buying_country_id: 1,
+                buying_club_id: Self::BUYER_ID,
+                fee: 2_000_000.0,
+                is_loan: false,
+                has_option_to_buy: false,
+                agreed_annual_wage: Some(100_000),
+                buying_league_reputation: 5500,
+                sell_on_percentage: Some(0.15),
+                loan_future_fee: None,
+                personal_terms: None,
+                offer_clauses: Vec::new(),
+            };
+            (data, transfer)
+        }
+
         /// A player farmed out by the buyer: lives on a foreign roster
         /// with a borrower-side loan contract pointing back at the buyer.
         fn loaned_out_by_buyer(id: u32) -> Player {
@@ -2805,6 +2906,40 @@ mod development_pathway_tests {
             DevPathwayFixtures::dev_candidates(&data),
             1,
             "second staging pass must not duplicate the candidate"
+        );
+    }
+
+    /// The keeper half of the pathway: an Elite club buys a teenage GOALKEEPER
+    /// and, with two senior keepers ahead of him, the development pathway
+    /// farms him out on loan. This is the move the prospect-signing fix
+    /// enables — keepers used to be omitted from the prospect pipeline, so a
+    /// big club never signed (and therefore never farmed out) a young keeper.
+    #[test]
+    fn goalkeeper_prospect_is_farmed_out_on_development_loan() {
+        let (mut data, purchase) = DevPathwayFixtures::gk_world(8500, 2008);
+        let date = DevPathwayFixtures::date();
+
+        assert!(execute_transfer(&mut data, &purchase, date));
+
+        let country = data.country(1).unwrap();
+        let buyer = country
+            .clubs
+            .iter()
+            .find(|c| c.id == DevPathwayFixtures::BUYER_ID)
+            .unwrap();
+        let candidate = buyer
+            .transfer_plan
+            .loan_out_candidates
+            .iter()
+            .find(|c| c.player_id == DevPathwayFixtures::PROSPECT_ID)
+            .expect(
+                "a bought teenage keeper blocked by two seniors must be staged \
+                 for a development loan",
+            );
+        assert_eq!(
+            candidate.reason,
+            PipelineLoanOutReason::DevelopmentPathway,
+            "the staged keeper loan must use the development-pathway reason"
         );
     }
 

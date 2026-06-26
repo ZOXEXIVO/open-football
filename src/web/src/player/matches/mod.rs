@@ -171,11 +171,27 @@ pub async fn player_matches_action(
             })
             .collect();
 
-        // Continental competition matches for this club
+        // Continental competition matches the player actually appeared in.
+        // Gate on a recorded result AND match stats for this player: the
+        // global match store is keyed by the same match_id the bracket holds,
+        // so unplayed fixtures (no result, empty match_id) and bench-only
+        // absences are filtered out — same contract as the league block above.
         let continental_matches = simulator_data.continental_matches_for_club(team.club_id);
         for (comp_name, home_club_id, away_club_id, date, match_id, match_result) in
             continental_matches
         {
+            let Some((home_goals, away_goals)) = match_result else {
+                continue;
+            };
+            let appeared = simulator_data
+                .match_store
+                .get(match_id)
+                .and_then(|mr| mr.details.as_ref())
+                .is_some_and(|d| d.player_stats.contains_key(&player.id));
+            if !appeared {
+                continue;
+            }
+
             let is_home = home_club_id == team.club_id;
             let opponent_club_id = if is_home { away_club_id } else { home_club_id };
 
@@ -200,7 +216,7 @@ pub async fn player_matches_action(
                     opponent_name,
                     is_home,
                     competition_name: comp_name.to_string(),
-                    result: match_result.map(|(home_goals, away_goals)| PlayerMatchResult {
+                    result: Some(PlayerMatchResult {
                         match_id: match_id.to_string(),
                         home_goals,
                         away_goals,
@@ -209,35 +225,42 @@ pub async fn player_matches_action(
             ));
         }
 
-        // National team competition matches (qualifying, tournament)
+        // National team matches the player actually appeared in. The fixture
+        // stores the same match_id used as the global match-store key, so the
+        // player_stats lookup proves they were on the pitch. The old
+        // squad-membership / caps heuristic listed every national fixture once
+        // a player had any cap — including games they sat out, or another
+        // country's games for a player capped elsewhere.
         if let Some(country) = simulator_data.country_by_club(team.club_id) {
-            let is_in_squad = country
-                .national_team
-                .squad
-                .iter()
-                .any(|s| s.player_id == player.id);
-            if is_in_squad || player.player_attributes.international_apps > 0 {
-                for fixture in &country.national_team.schedule {
-                    if let Some(ref result) = fixture.result {
-                        let datetime = fixture.date.and_hms_opt(20, 0, 0).unwrap();
-                        match_items.push((
-                            datetime,
-                            PlayerMatchItem {
-                                date: fixture.date.format("%d.%m.%Y").to_string(),
-                                time: "20:00".to_string(),
-                                opponent_slug: String::new(),
-                                opponent_name: fixture.opponent_country_name.clone(),
-                                is_home: fixture.is_home,
-                                competition_name: fixture.competition_name.clone(),
-                                result: Some(PlayerMatchResult {
-                                    match_id: fixture.match_id.clone(),
-                                    home_goals: result.home_score,
-                                    away_goals: result.away_score,
-                                }),
-                            },
-                        ));
-                    }
+            for fixture in &country.national_team.schedule {
+                let Some(ref result) = fixture.result else {
+                    continue;
+                };
+                let appeared = simulator_data
+                    .match_store
+                    .get(&fixture.match_id)
+                    .and_then(|mr| mr.details.as_ref())
+                    .is_some_and(|d| d.player_stats.contains_key(&player.id));
+                if !appeared {
+                    continue;
                 }
+                let datetime = fixture.date.and_hms_opt(20, 0, 0).unwrap();
+                match_items.push((
+                    datetime,
+                    PlayerMatchItem {
+                        date: fixture.date.format("%d.%m.%Y").to_string(),
+                        time: "20:00".to_string(),
+                        opponent_slug: String::new(),
+                        opponent_name: fixture.opponent_country_name.clone(),
+                        is_home: fixture.is_home,
+                        competition_name: fixture.competition_name.clone(),
+                        result: Some(PlayerMatchResult {
+                            match_id: fixture.match_id.clone(),
+                            home_goals: result.home_score,
+                            away_goals: result.away_score,
+                        }),
+                    },
+                ));
             }
         }
 

@@ -15,56 +15,54 @@
 
 {% block content %}
 <div class="fm-page">
-    <div class="fm-stats-bar">
-        <section class="fm-panel fm-info-panel">
-            <div class="fm-panel-head">
-                <h3>{{ i18n.t("info_panel_title") }}</h3>
-                <button class="fm-holiday-btn" id="holiday-btn" onclick="handleHolidayClick()">
-                    <span class="fm-holiday-label">{{ i18n.t("go_on_holiday") }}</span>
-                    <div class="fm-holiday-spinner"><div class="spinner"></div></div>
-                </button>
+    <div class="fm-home-overview">
+        <div class="fm-info-grid fm-info-grid-home">
+            <div class="fm-info-tile fm-info-tile-machine">
+                <div class="fm-info-tile-icon"><i class="fa fa-microchip"></i></div>
+                <div class="fm-info-tile-body">
+                    <div class="fm-info-machine-value">{{ cpu_brand }}</div>
+                    <div class="fm-info-tile-label">{{ i18n.t("info_machine") }}</div>
+                </div>
+                <a class="fm-workers-chip" href="/{{ lang }}/workers"
+                   title="{{ workers_ready }}/{{ workers_count }} {{ i18n.t("workers_chip_tooltip_suffix") }}">
+                    <span class="fm-workers-chip-count">{{ workers_ready }}</span>
+                    <span class="fm-workers-chip-stack">
+                        <span class="fm-workers-chip-sublabel">{{ i18n.t("workers_chip_external") }}</span>
+                        <span class="fm-workers-chip-label">{{ i18n.t("workers_chip_workers") }}</span>
+                    </span>
+                </a>
             </div>
-            <div class="fm-info-body">
-                <div class="fm-info-grid">
-                    <div class="fm-info-tile fm-info-tile-machine">
-                        <div class="fm-info-tile-icon"><i class="fa fa-microchip"></i></div>
-                        <div class="fm-info-tile-body">
-                            <div class="fm-info-machine-value">{{ cpu_brand }}</div>
-                            <div class="fm-info-tile-label">{{ i18n.t("info_machine") }}</div>
-                        </div>
-                        <a class="fm-workers-chip" href="/{{ lang }}/workers"
-                           title="{{ workers_ready }}/{{ workers_count }} {{ i18n.t("workers_chip_tooltip_suffix") }}">
-                            <span class="fm-workers-chip-count">{{ workers_ready }}</span>
-                            <span class="fm-workers-chip-stack">
-                                <span class="fm-workers-chip-sublabel">{{ i18n.t("workers_chip_external") }}</span>
-                                <span class="fm-workers-chip-label">{{ i18n.t("workers_chip_workers") }}</span>
-                            </span>
-                        </a>
-                    </div>
-                    <div class="fm-info-tile fm-info-tile-countries">
-                        <div class="fm-info-tile-icon"><i class="fa fa-globe"></i></div>
-                        <div class="fm-info-tile-body">
-                            <div class="fm-info-tile-value">{{ total_countries }}</div>
-                            <div class="fm-info-tile-label">{{ i18n.t("stats_countries") }}</div>
-                        </div>
-                    </div>
-                    <div class="fm-info-tile fm-info-tile-clubs">
-                        <div class="fm-info-tile-icon"><i class="fa fa-trophy"></i></div>
-                        <div class="fm-info-tile-body">
-                            <div class="fm-info-tile-value">{{ total_clubs }}</div>
-                            <div class="fm-info-tile-label">{{ i18n.t("stats_clubs") }}</div>
-                        </div>
-                    </div>
-                    <div class="fm-info-tile fm-info-tile-players">
-                        <div class="fm-info-tile-icon"><i class="fa fa-users"></i></div>
-                        <div class="fm-info-tile-body">
-                            <div class="fm-info-tile-value">{{ total_players }}</div>
-                            <div class="fm-info-tile-label">{{ i18n.t("stats_players") }}</div>
-                        </div>
-                    </div>
+            <div class="fm-info-tile fm-info-tile-countries">
+                <div class="fm-info-tile-icon"><i class="fa fa-globe"></i></div>
+                <div class="fm-info-tile-body">
+                    <div class="fm-info-tile-value">{{ total_countries }}</div>
+                    <div class="fm-info-tile-label">{{ i18n.t("stats_countries") }}</div>
                 </div>
             </div>
-        </section>
+            <div class="fm-info-tile fm-info-tile-clubs">
+                <div class="fm-info-tile-icon"><i class="fa fa-trophy"></i></div>
+                <div class="fm-info-tile-body">
+                    <div class="fm-info-tile-value">{{ total_clubs }}</div>
+                    <div class="fm-info-tile-label">{{ i18n.t("stats_clubs") }}</div>
+                </div>
+            </div>
+            <div class="fm-info-tile fm-info-tile-players">
+                <div class="fm-info-tile-icon"><i class="fa fa-users"></i></div>
+                <div class="fm-info-tile-body">
+                    <div class="fm-info-tile-value">{{ total_players }}</div>
+                    <div class="fm-info-tile-label">{{ i18n.t("stats_players") }}</div>
+                </div>
+            </div>
+            <button class="fm-holiday-btn" id="holiday-btn" type="button"
+                    onclick="handleHolidayClick()"
+                    title="{{ i18n.t("go_on_holiday") }}"
+                    aria-label="{{ i18n.t("go_on_holiday") }}">
+                <i class="fa fa-umbrella-beach fm-holiday-ic fm-holiday-ic-go"></i>
+                <i class="fa fa-briefcase fm-holiday-ic fm-holiday-ic-back"></i>
+                <div class="fm-holiday-spinner"><div class="spinner"></div></div>
+                <span class="fm-holiday-label">{{ i18n.t("go_on_holiday") }}</span>
+            </button>
+        </div>
     </div>
     <script>
     var _holidayTexts = {
@@ -80,10 +78,14 @@
         var processing = processBtn.classList.contains('fm-processing');
         if (processing) {
             label.textContent = _holidayTexts.ret;
+            btn.title = _holidayTexts.ret;
+            btn.setAttribute('aria-label', _holidayTexts.ret);
             btn.classList.add('fm-holiday-active');
             btn.classList.remove('fm-holiday-cancelling');
         } else {
             label.textContent = _holidayTexts.go;
+            btn.title = _holidayTexts.go;
+            btn.setAttribute('aria-label', _holidayTexts.go);
             btn.classList.remove('fm-holiday-active');
             btn.classList.remove('fm-holiday-cancelling');
         }

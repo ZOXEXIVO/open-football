@@ -61,27 +61,46 @@ impl Club {
         let mut loan_players: Vec<(usize, u32, String)> = Vec::new();
         let mut transfer_players: Vec<(usize, u32, String)> = Vec::new();
 
+        // Per-group main-team promotion floor — the current ability at/above
+        // which a non-main player is promoted to the first team by the weekly
+        // `rebalance_squads`. The youth development-loan pass only fires BELOW
+        // this bar, so a promotion-bound prospect is left for the rebalance to
+        // promote rather than loaned away.
+        let main_floor = MainPromotionFloor::snapshot(&self.teams.teams[main_idx]);
+
         for (ti, team) in self.teams.iter().enumerate() {
             if ti == main_idx {
                 continue;
             }
 
-            // Youth squads (U18..U23) play friendly youth leagues, so they
-            // never accumulate the official appearances the idle-days signal
-            // below relies on — the early-season gate would skip them every
-            // single tick, which is why a youth side can carry three keepers
-            // forever. A youth team also plays only once a week, so depth
-            // beyond what one match needs never gets minutes and is better
-            // off on a development loan. Assess youth squads on POSITIONAL
-            // SURPLUS instead — generic across positions and contract types
-            // (this is the one path that loans full-time *and* youth-contract
-            // prospects out).
-            if team.team_type.is_youth() {
-                Self::collect_youth_surplus_loans(team, ti, &mut loan_players);
+            // Squads that don't play official/league football — youth sides
+            // (U18..U23) AND any non-main team without a league — never
+            // accumulate the official appearances the idle-days signal below
+            // relies on (friendlies don't count), so the early-season gate
+            // would skip them every single tick (a youth side could carry
+            // three keepers forever; a league-less reserve side never sheds
+            // anyone). Assess them on positional SURPLUS instead — generic
+            // across positions and contract types (the one path that loans
+            // full-time *and* youth-contract prospects out). Youth sides
+            // additionally get age-based development loans: a senior-ready
+            // youngster blocked from the first team should go out for minutes,
+            // not stagnate in the youth squad.
+            let plays_league_football = team.league_id.is_some() && !team.team_type.is_youth();
+            if !plays_league_football {
+                Self::collect_surplus_loans(team, ti, &mut loan_players);
+                if team.team_type.is_youth() {
+                    Self::collect_youth_development_loans(
+                        team,
+                        ti,
+                        &main_floor,
+                        date,
+                        &mut loan_players,
+                    );
+                }
                 continue;
             }
 
-            // Thin-sample protection: until this squad has played a
+            // Thin-sample protection: until this league squad has played a
             // meaningful number of official matches, a player's idle days
             // don't yet distinguish "surplus" from "hasn't had his chance".
             if SquadEvidenceContext::from_squad(&team.players).is_early_season() {
@@ -329,22 +348,27 @@ impl Club {
         }
     }
 
-    /// Collect development loan-outs for one youth squad by positional
-    /// surplus. A youth side fields and rotates one match a week, so it
-    /// needs only so many per position; the rest are blocked depth that
-    /// develops better playing senior football on loan. Keeps the best
-    /// `keep` by current ability and loans the remainder — a manager-pinned
-    /// player in the surplus simply stays. Players already on loan / listed,
-    /// or without a contract, are left alone. Contract type is deliberately
-    /// not checked: this is the one path that loans both full-time and
-    /// youth-contract prospects out.
-    fn collect_youth_surplus_loans(
+    /// Collect development loan-outs for one non-competing squad (a youth
+    /// side, or any non-main team without a league) by positional surplus.
+    /// Such a side fields and rotates roughly one match a week, so it needs
+    /// only so many per position; the rest are blocked depth that develops
+    /// better playing senior football on loan. Keeps the best `keep` by
+    /// current ability and loans the remainder — a manager-pinned player in
+    /// the surplus simply stays. Players already on loan / listed, or without
+    /// a contract, are left alone. Contract type is deliberately not checked:
+    /// this is the one path that loans both full-time and youth-contract
+    /// prospects out.
+    fn collect_surplus_loans(
         team: &Team,
         team_idx: usize,
         loan_players: &mut Vec<(usize, u32, String)>,
     ) {
-        use PlayerFieldPositionGroup as G;
-        for group in [G::Goalkeeper, G::Defender, G::Midfielder, G::Forward] {
+        for group in [
+            PlayerFieldPositionGroup::Goalkeeper,
+            PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Forward,
+        ] {
             let keep = YouthSquadDepth::keep_for(group);
             let mut active: Vec<(u32, u8, bool)> = team
                 .players
@@ -383,12 +407,159 @@ impl Club {
             }
         }
     }
+
+    /// Age-based development loans for ONE youth squad: a youngster old enough
+    /// for senior football (>= `YouthDevelopmentLoanPolicy::SENIOR_LOAN_AGE`)
+    /// who won't make the first team (current ability below the main-team
+    /// promotion floor at his position) should go out on loan for minutes
+    /// rather than stagnate in the youth side. Complements
+    /// [`Self::collect_surplus_loans`]: that one loans positional *surplus*
+    /// (deep groups); this one loans *blocked but ready* youngsters even when
+    /// the group is not over-depth. Never strips a group below the minimum it
+    /// needs to field a match, never re-flags a player the surplus pass already
+    /// took, and never touches a promotion-bound prospect (the rebalance
+    /// promotes him) or an on-loan / listed / pinned / contract-less player.
+    fn collect_youth_development_loans(
+        team: &Team,
+        team_idx: usize,
+        main_floor: &MainPromotionFloor,
+        date: NaiveDate,
+        loan_players: &mut Vec<(usize, u32, String)>,
+    ) {
+        for group in [
+            PlayerFieldPositionGroup::Goalkeeper,
+            PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Forward,
+        ] {
+            let floor = main_floor.get(group);
+            let min_field = YouthDevelopmentLoanPolicy::min_field(group);
+
+            // Stay-eligible players in this group, excluding anyone the
+            // surplus pass already flagged. (id, age, current ability).
+            let active: Vec<(u32, u8, u8)> = team
+                .players
+                .iter()
+                .filter(|p| {
+                    p.position().position_group() == group
+                        && !p.is_on_loan()
+                        && p.contract.is_some()
+                        && !p.is_force_match_selection
+                        && {
+                            let s = p.statuses.get();
+                            !s.contains(&PlayerStatusType::Lst)
+                                && !s.contains(&PlayerStatusType::Loa)
+                        }
+                        && !loan_players.iter().any(|(_, id, _)| *id == p.id)
+                })
+                .map(|p| (p.id, p.age(date), p.player_attributes.current_ability))
+                .collect();
+
+            let mut remaining = active.len();
+            if remaining <= min_field {
+                continue;
+            }
+
+            // Senior-ready youngsters below the first-team bar, oldest first
+            // (most ready for senior football, least served by another year of
+            // youth rotation). Loan them down to the fielding minimum.
+            let mut candidates: Vec<(u32, u8)> = active
+                .iter()
+                .filter(|(_, age, ca)| {
+                    *age >= YouthDevelopmentLoanPolicy::SENIOR_LOAN_AGE && *ca < floor
+                })
+                .map(|(id, age, _)| (*id, *age))
+                .collect();
+            candidates.sort_by(|a, b| b.1.cmp(&a.1));
+
+            for (player_id, _age) in candidates {
+                if remaining <= min_field {
+                    break;
+                }
+                loan_players.push((team_idx, player_id, "dec_reason_young_develop".to_string()));
+                remaining -= 1;
+            }
+        }
+    }
 }
 
-/// Per-position depth a single youth squad keeps before the remainder are
-/// loaned out for development. Smaller than a senior squad's depth: a youth
-/// side plays once a week, so a third keeper or a deep outfield reserve
-/// never sees minutes and develops better on loan.
+/// Per-group main-team promotion floor: the current ability at/above which a
+/// non-main player is promoted to the first team by the weekly
+/// `rebalance_squads`. The youth development-loan pass reads it so a
+/// promotion-bound prospect (at/above the bar) is left for the rebalance to
+/// promote rather than loaned away. Depths mirror `MIN_MAIN_DEPTH` in
+/// squad.rs — keep them in sync.
+struct MainPromotionFloor {
+    floors: [(PlayerFieldPositionGroup, u8); 4],
+}
+
+impl MainPromotionFloor {
+    /// CA an understrength group falls back to (squad.rs `DEPTH_GAP_FLOOR`):
+    /// when the main is short at a position any decent youth fills the gap, so
+    /// there is no "below the first team" band to loan from.
+    const DEPTH_GAP_FLOOR: u8 = 60;
+
+    /// Below this many players at a group the main team is short there.
+    /// Mirrors squad.rs `MIN_MAIN_DEPTH`.
+    fn min_depth(group: PlayerFieldPositionGroup) -> usize {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 2,
+            PlayerFieldPositionGroup::Defender => 6,
+            PlayerFieldPositionGroup::Midfielder => 6,
+            PlayerFieldPositionGroup::Forward => 4,
+        }
+    }
+
+    fn snapshot(main: &Team) -> Self {
+        MainPromotionFloor {
+            floors: [
+                (
+                    PlayerFieldPositionGroup::Goalkeeper,
+                    Self::for_group(main, PlayerFieldPositionGroup::Goalkeeper),
+                ),
+                (
+                    PlayerFieldPositionGroup::Defender,
+                    Self::for_group(main, PlayerFieldPositionGroup::Defender),
+                ),
+                (
+                    PlayerFieldPositionGroup::Midfielder,
+                    Self::for_group(main, PlayerFieldPositionGroup::Midfielder),
+                ),
+                (
+                    PlayerFieldPositionGroup::Forward,
+                    Self::for_group(main, PlayerFieldPositionGroup::Forward),
+                ),
+            ],
+        }
+    }
+
+    fn for_group(main: &Team, group: PlayerFieldPositionGroup) -> u8 {
+        let (count, worst) = main
+            .players
+            .iter()
+            .filter(|p| p.position().position_group() == group)
+            .map(|p| p.player_attributes.current_ability)
+            .fold((0usize, u8::MAX), |(c, w), a| (c + 1, w.min(a)));
+        if count < Self::min_depth(group) {
+            Self::DEPTH_GAP_FLOOR
+        } else {
+            worst.saturating_add(1)
+        }
+    }
+
+    fn get(&self, group: PlayerFieldPositionGroup) -> u8 {
+        self.floors
+            .iter()
+            .find(|(g, _)| *g == group)
+            .map(|(_, f)| *f)
+            .unwrap_or(u8::MAX)
+    }
+}
+
+/// Per-position depth a single non-competing squad keeps before the remainder
+/// are loaned out for development. Smaller than a senior squad's depth: such a
+/// side plays roughly once a week, so a third keeper or a deep outfield
+/// reserve never sees minutes and develops better on loan.
 struct YouthSquadDepth;
 
 impl YouthSquadDepth {
@@ -398,6 +569,32 @@ impl YouthSquadDepth {
             PlayerFieldPositionGroup::Defender => 7,
             PlayerFieldPositionGroup::Midfielder => 7,
             PlayerFieldPositionGroup::Forward => 5,
+        }
+    }
+}
+
+/// Policy for the age-based youth development-loan pass
+/// ([`Club::collect_youth_development_loans`]).
+struct YouthDevelopmentLoanPolicy;
+
+impl YouthDevelopmentLoanPolicy {
+    /// Age at/above which a youth player is treated as ready for senior loan
+    /// football. Below it he keeps developing in the youth side rather than
+    /// being shipped to a senior club too early.
+    const SENIOR_LOAN_AGE: u8 = 18;
+
+    /// Players a youth squad must retain per group so it can still field a
+    /// match — the development-loan pass never strips a group below this. A
+    /// 4-4-2 fielding-XI footprint; deeper squads loan the senior-ready fringe
+    /// above it. Deliberately below [`YouthSquadDepth::keep_for`]: the surplus
+    /// pass trims to a comfortable rotation depth, this pass then loans the
+    /// blocked-but-ready players down toward a usable XI.
+    fn min_field(group: PlayerFieldPositionGroup) -> usize {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 1,
+            PlayerFieldPositionGroup::Defender => 4,
+            PlayerFieldPositionGroup::Midfielder => 4,
+            PlayerFieldPositionGroup::Forward => 2,
         }
     }
 }
@@ -501,6 +698,27 @@ mod tests {
             TeamBuilder::new()
                 .id(id)
                 .league_id(Some(1))
+                .club_id(100)
+                .name(format!("t{id}"))
+                .slug(format!("t{id}"))
+                .team_type(tt)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(500, 500, 500))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        /// Like [`Self::team`] but with NO league — a friendly-only squad,
+        /// the case the early-season idle gate used to skip forever.
+        fn team_no_league(id: u32, tt: TeamType, players: Vec<Player>) -> Team {
+            TeamBuilder::new()
+                .id(id)
+                .league_id(None)
                 .club_id(100)
                 .name(format!("t{id}"))
                 .slug(format!("t{id}"))
@@ -677,6 +895,146 @@ mod tests {
             !Fx::has(&club, 401, PlayerStatusType::Loa)
                 && !Fx::has(&club, 402, PlayerStatusType::Loa),
             "the two best keepers stay at the club"
+        );
+    }
+
+    /// B: a non-main team WITHOUT a league plays only friendlies, so the
+    /// official-appearance idle gate used to skip it forever. It is now
+    /// assessed on positional surplus like a youth side, so depth beyond the
+    /// rotation need is loan-listed.
+    #[test]
+    fn league_less_reserve_surplus_is_loan_listed() {
+        let main: Vec<Player> = (1..=5)
+            .map(|i| Fx::player(i, 130, 130, 27, PlayerSquadStatus::FirstTeamRegular, 20, 0))
+            .collect();
+        // Nine midfielders on a league-less Second team — keep_for(MID)=7, so
+        // the two weakest are surplus and must be loan-listed.
+        let reserve: Vec<Player> = (300..309)
+            .map(|i| Fx::player(i, 90, 90, 24, PlayerSquadStatus::NotYetSet, 0, 0))
+            .collect();
+        let mut club = Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![
+                Fx::team(10, TeamType::Main, main),
+                Fx::team_no_league(11, TeamType::Second, reserve),
+            ]),
+            ClubFacilities::default(),
+        );
+
+        club.audit_squad_utilization(Fx::date());
+
+        let loaned = (300..309)
+            .filter(|id| Fx::has(&club, *id, PlayerStatusType::Loa))
+            .count();
+        assert_eq!(
+            loaned, 2,
+            "surplus beyond keep_for(MID)=7 on a league-less side must be loan-listed"
+        );
+    }
+
+    /// C: two U19 keepers blocked by a three-deep main GK line. They are NOT a
+    /// positional surplus (<= keep_for(GK)=2) but they ARE senior-ready and
+    /// can't break in, so the older one is sent out on a development loan; the
+    /// youth side keeps one to field a match.
+    #[test]
+    fn senior_ready_youth_blocked_from_first_team_is_loaned() {
+        let main = vec![Fx::gk(1, 150, 28), Fx::gk(2, 150, 28), Fx::gk(3, 150, 28)];
+        let u19 = vec![Fx::gk(401, 80, 19), Fx::gk(402, 80, 18)];
+        let mut club = Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![
+                Fx::team(10, TeamType::Main, main),
+                Fx::team(11, TeamType::U19, u19),
+            ]),
+            ClubFacilities::default(),
+        );
+
+        club.audit_squad_utilization(Fx::date());
+
+        assert!(
+            Fx::has(&club, 401, PlayerStatusType::Loa),
+            "the older blocked U19 keeper should get a development loan"
+        );
+        assert!(
+            !Fx::has(&club, 402, PlayerStatusType::Loa),
+            "the youth side must keep one keeper to field a match"
+        );
+    }
+
+    /// C never strips a youth group below its fielding minimum — a side's ONLY
+    /// keeper is kept even when blocked and senior-ready.
+    #[test]
+    fn last_youth_keeper_is_never_loaned() {
+        let main = vec![Fx::gk(1, 150, 28), Fx::gk(2, 150, 28), Fx::gk(3, 150, 28)];
+        let u19 = vec![Fx::gk(401, 80, 19)];
+        let mut club = Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![
+                Fx::team(10, TeamType::Main, main),
+                Fx::team(11, TeamType::U19, u19),
+            ]),
+            ClubFacilities::default(),
+        );
+
+        club.audit_squad_utilization(Fx::date());
+
+        assert!(
+            !Fx::has(&club, 401, PlayerStatusType::Loa),
+            "a youth side's only keeper must never be loaned out"
+        );
+    }
+
+    /// C respects the promotion bar: a youngster above the main-team promotion
+    /// floor is left for the rebalance to promote, not loaned; only the
+    /// below-floor (genuinely blocked) keeper goes out.
+    #[test]
+    fn promotion_ready_youth_is_left_for_promotion() {
+        // Main two keepers at CA 90 → promotion floor = 91.
+        let main = vec![Fx::gk(1, 90, 28), Fx::gk(2, 90, 28)];
+        // 401 clears the floor (promotion-bound); 402 is below it (blocked).
+        let u19 = vec![Fx::gk(401, 120, 19), Fx::gk(402, 70, 19)];
+        let mut club = Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![
+                Fx::team(10, TeamType::Main, main),
+                Fx::team(11, TeamType::U19, u19),
+            ]),
+            ClubFacilities::default(),
+        );
+
+        club.audit_squad_utilization(Fx::date());
+
+        assert!(
+            !Fx::has(&club, 401, PlayerStatusType::Loa),
+            "a promotion-ready youth keeper must be kept for promotion, not loaned"
+        );
+        assert!(
+            Fx::has(&club, 402, PlayerStatusType::Loa),
+            "the blocked below-floor keeper should still get a development loan"
         );
     }
 }

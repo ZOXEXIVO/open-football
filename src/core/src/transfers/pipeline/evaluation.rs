@@ -976,6 +976,61 @@ impl PipelineProcessor {
                     }
                 }
             }
+
+            // Goalkeeper development signing — handled separately from the
+            // outfield youth loop above. A club carries far fewer keepers and
+            // treats keeper succession as its own project, so GK is NOT part
+            // of the multi-slot outfield prospect budget (folding it in would
+            // crowd out outfield prospects and shift that calibration).
+            // Instead a youth-minded club with no young keeper in its
+            // first-team picture grooms a single high-upside prospect; the
+            // post-purchase pathway then typically farms him out on loan for
+            // senior minutes (see `DevelopmentLoanPathway::stage_after_purchase`)
+            // — the Chelsea / Man City model of buying a teenage keeper years
+            // before he's needed. Keepers were previously omitted from the
+            // prospect pipeline entirely, so big clubs never scouted young
+            // goalkeepers at all. First-team count (not youth squads) is used
+            // on purpose: the club's existing U18 academy keeper is a separate,
+            // earlier pipeline stage and must not suppress the first-team
+            // succession project.
+            let young_keepers = squad
+                .iter()
+                .filter(|p| {
+                    p.primary_position.position_group() == PlayerFieldPositionGroup::Goalkeeper
+                        && p.age <= youth_age_max
+                })
+                .count();
+            // Aggressive developers keep a small keeper pool on the books;
+            // everyone else grooms one future #1 at a time.
+            let want_young_keepers = if matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
+                2
+            } else {
+                1
+            };
+            // Skip if a GK request already exists (a QualityUpgrade or
+            // SuccessionPlanning keeper need from the steps above) — one GK
+            // request per window is enough.
+            let already_requesting_gk = requests
+                .iter()
+                .any(|r| r.position.position_group() == PlayerFieldPositionGroup::Goalkeeper);
+            if young_keepers < want_young_keepers && !already_requesting_gk {
+                let alloc = (budget_per_need * 0.3).min(available_budget - budget_used);
+                if alloc > 0.0 {
+                    requests.push(TransferRequest::new(
+                        next_id,
+                        PlayerPositionType::Goalkeeper,
+                        TransferNeedPriority::Optional,
+                        TransferNeedReason::DevelopmentSigning,
+                        // Low current-ability floor — potential over now,
+                        // same profile as the outfield prospect requests.
+                        avg_ability.saturating_sub(40),
+                        avg_ability.saturating_sub(15),
+                        alloc,
+                    ));
+                    next_id += 1;
+                    budget_used += alloc;
+                }
+            }
         }
 
         // ──────────────────────────────────────────────────────────
@@ -2732,6 +2787,183 @@ mod stalled_prospect_tests {
                 .iter()
                 .any(|c| c.player_id == 1),
             "a player on international duty must not be loan-listed for low minutes"
+        );
+    }
+}
+
+#[cfg(test)]
+mod goalkeeper_prospect_tests {
+    //! The keeper half of the youth prospect pipeline. `DevelopmentSigning`
+    //! requests used to be emitted for Defender/Midfielder/Forward only, so a
+    //! big club never scouted a young goalkeeper. These tests pin the new
+    //! dedicated GK-prospect block: a youth-minded club with no young keeper
+    //! on its first team grooms one, and a club that already has a young
+    //! keeper does not double up.
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, MatchTacticType, PersonAttributes,
+        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositions,
+        PlayerSkills, StaffCollection, Tactics, TeamBuilder, TeamCollection, TeamReputation,
+        TeamType, TrainingSchedule,
+    };
+    use chrono::{NaiveDate, NaiveTime};
+
+    struct GkFx;
+
+    impl GkFx {
+        fn date() -> NaiveDate {
+            // September — outside the January loan-out branches; pure
+            // request-generation context.
+            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap()
+        }
+
+        fn player(id: u32, pos: PlayerPositionType, ca: u8, age: i32) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ca;
+            attrs.potential_ability = ca.saturating_add(30);
+            attrs.condition = 10_000;
+            let contract =
+                PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("G".into(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(2026 - age, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: pos,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(contract))
+                .build()
+                .unwrap()
+        }
+
+        /// A well-stocked Continental main team (→ Balanced philosophy, so
+        /// `wants_youth` is true). Two senior keepers, no young keeper. Each
+        /// outfield group carries two 19-year-olds so the OUTFIELD youth
+        /// pipeline is already satisfied and consumes no budget, and the
+        /// midfield sits one body below its depth requirement so a single
+        /// cheap `DepthCover` need seeds `budget_per_need`. No GK need is
+        /// produced by the earlier steps, so the new GK-prospect block is the
+        /// only thing that can emit the keeper request. CA 185 keeps every
+        /// group comfortably above the tier baseline (no QualityUpgrade).
+        fn continental_club() -> Club {
+            const SENIOR: u8 = 185;
+            const YOUNG: u8 = 140;
+            let mut players = vec![
+                // 2 senior keepers, age 28 → not "young" (youth_age_max = 21).
+                Self::player(1, PlayerPositionType::Goalkeeper, SENIOR, 28),
+                Self::player(2, PlayerPositionType::Goalkeeper, SENIOR, 28),
+            ];
+            // DEF: 4 senior + 2 young = 6 (== depth req 6 → no need).
+            for i in 0..4u32 {
+                players.push(Self::player(10 + i, PlayerPositionType::DefenderCenter, SENIOR, 27));
+            }
+            players.push(Self::player(20, PlayerPositionType::DefenderCenter, YOUNG, 19));
+            players.push(Self::player(21, PlayerPositionType::DefenderCenter, YOUNG, 19));
+            // MID: 2 senior + 2 young = 4 (< depth req 5 → DepthCover seed).
+            players.push(Self::player(30, PlayerPositionType::MidfielderCenter, SENIOR, 27));
+            players.push(Self::player(31, PlayerPositionType::MidfielderCenter, SENIOR, 27));
+            players.push(Self::player(32, PlayerPositionType::MidfielderCenter, YOUNG, 19));
+            players.push(Self::player(33, PlayerPositionType::MidfielderCenter, YOUNG, 19));
+            // FWD: 1 senior + 2 young = 3 (== depth req 3 → no need).
+            players.push(Self::player(40, PlayerPositionType::Striker, SENIOR, 27));
+            players.push(Self::player(41, PlayerPositionType::Striker, YOUNG, 19));
+            players.push(Self::player(42, PlayerPositionType::Striker, YOUNG, 19));
+
+            let main = TeamBuilder::new()
+                .id(10)
+                .league_id(Some(1))
+                .club_id(100)
+                .name("Main".into())
+                .slug("main".into())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                // home·0.2 + national·0.3 + world·0.5 = 0.70 → Continental.
+                .reputation(TeamReputation::new(7000, 7000, 7000))
+                .tactics(Some(Tactics::new(MatchTacticType::T442)))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap();
+
+            Club::new(
+                100,
+                "Continental FC".to_string(),
+                Location::new(1),
+                ClubFinances::new(100_000_000, Vec::new()),
+                ClubAcademy::new(10),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![main]),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn gk_development_request(eval: &SquadEvaluation) -> Option<&TransferRequest> {
+            eval.requests.iter().find(|r| {
+                r.reason == TransferNeedReason::DevelopmentSigning
+                    && r.position.position_group() == PlayerFieldPositionGroup::Goalkeeper
+            })
+        }
+    }
+
+    #[test]
+    fn youth_minded_club_signs_a_goalkeeper_prospect() {
+        let club = GkFx::continental_club();
+        // Precondition: a prospect-developing tier (Continental → Balanced).
+        assert_eq!(
+            club.teams.teams[0].reputation.level(),
+            ReputationLevel::Continental
+        );
+
+        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None);
+
+        let gk = GkFx::gk_development_request(&eval);
+        assert!(
+            gk.is_some(),
+            "a youth-minded club with no young keeper must now generate a GK \
+             DevelopmentSigning request; got: {:?}",
+            eval.requests
+                .iter()
+                .map(|r| (r.position, r.reason.clone()))
+                .collect::<Vec<_>>()
+        );
+        // It must use the raw-prospect age band, not a ready-made keeper.
+        assert!(
+            gk.unwrap().preferred_age_max <= 21,
+            "a GK development signing should target teenagers / early-20s"
+        );
+    }
+
+    #[test]
+    fn club_with_a_young_keeper_does_not_double_up() {
+        // Swap a senior keeper for a 19-year-old: the first team already has a
+        // young keeper in the pipeline, so no GK prospect should be signed.
+        let mut club = GkFx::continental_club();
+        {
+            let team = &mut club.teams.teams[0];
+            team.players.players.retain(|p| p.id != 2);
+            team.players
+                .add(GkFx::player(2, PlayerPositionType::Goalkeeper, 140, 19));
+        }
+
+        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None);
+        assert!(
+            GkFx::gk_development_request(&eval).is_none(),
+            "a club that already has a young keeper must not sign another keeper prospect"
         );
     }
 }
