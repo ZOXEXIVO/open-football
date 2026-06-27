@@ -22,6 +22,16 @@ match = ["match-logs", "match-stub"]
 match-logs = ["simulator_core/match-logs", "web/match-logs"]
 match-stub = ["simulator_core/match-stub", "web/match-stub"]
 
+# Optimized build that keeps full debug info + symbols so a sampling
+# profiler (samply) can resolve stacks. `inherits = "release"` ⇒ same
+# opt-level/LTO as production, so the trace reflects real hot paths.
+# Build the headless profiling harness with it:
+#   cargo build --profile profiling --example profile_sim
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+
 [dependencies]
 simulator_core = { path = "src/core", package = "core" }
 web = { path = "src/web" }

@@ -14,6 +14,7 @@
 //! per-save overrides can be plumbed in later without re-touching the
 //! call sites.
 
+use crate::PlayerSquadStatus;
 use crate::transfers::ReportRiskFlag;
 use crate::transfers::pipeline::plausibility::EffectivePlayerReputation;
 use crate::transfers::pipeline::{PlayerSummary, ScoutingRecommendation};
@@ -183,6 +184,16 @@ pub struct RealismConfig {
     /// the buyer's. Reputation is on a 0-10000 scale, so ~2000 ≈ one full
     /// reputation tier (Regional → National, National → Continental).
     pub club_rep_gap_blocking: i16,
+    /// Widened club-rep gap that bounds the listed / loan-listed exemption.
+    /// A player his club is willing to sell or loan out is reachable by
+    /// smaller clubs — but availability does not erase the level gap. A club
+    /// more than this far below the seller (≈ two tiers) still cannot
+    /// realistically host, pay, or attract a top-club player even on a loan,
+    /// so it falls through to the normal first-team-regular / prominence
+    /// blocks instead of being waved straight through. Wider than
+    /// `club_rep_gap_blocking` because being listed genuinely does widen a
+    /// player's reach — just not without limit.
+    pub listed_exemption_gap_blocking: i16,
     /// Player world-rep gap above which the player himself is too prominent
     /// for the buyer's level. A player past this gap is hard-blocked as a
     /// first-team regular at a much bigger club — neither youth nor an
@@ -336,6 +347,7 @@ impl Default for ScoutingConfig {
             },
             realism: RealismConfig {
                 club_rep_gap_blocking: 2000,
+                listed_exemption_gap_blocking: 4500,
                 player_rep_gap_blocking: 1500,
                 first_team_regular_apps: 15,
                 near_free_contract_months: 12,
@@ -351,6 +363,46 @@ impl Default for ScoutingConfig {
                 single_observation_confidence: 0.4,
             },
         }
+    }
+}
+
+// ============================================================
+// Realism-gate target shape
+// ============================================================
+
+/// The minimal target shape the realism gate reasons about. Lets the
+/// `PlayerSummary`-based scouting pool and the raw-`Player` match-scouting
+/// path share one realism implementation instead of drifting apart.
+#[derive(Debug, Clone)]
+pub struct RealismTarget {
+    pub club_world_reputation: i16,
+    pub world_reputation: i16,
+    pub current_reputation: i16,
+    pub home_reputation: i16,
+    pub appearances: u16,
+    pub age: u8,
+    pub contract_months_remaining: i16,
+    pub salary: u32,
+    pub estimated_value: f64,
+    pub is_listed: bool,
+    pub is_loan_listed: bool,
+    /// Declared squad role at the selling club. A backup / not-needed player
+    /// is attainable from a much bigger club; a first-team regular or key
+    /// player is not.
+    pub squad_status: PlayerSquadStatus,
+}
+
+impl RealismTarget {
+    /// True when the player's declared role makes him surplus to the selling
+    /// club — a backup or an unwanted player a smaller club could realistically
+    /// take. First-team regulars, key players, and rotation options are not
+    /// surplus (a `NotYetSet` status is treated as not-surplus — absence of a
+    /// role is not evidence of one).
+    fn is_squad_surplus(&self) -> bool {
+        matches!(
+            self.squad_status,
+            PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::NotNeeded
+        )
     }
 }
 
@@ -580,50 +632,96 @@ impl ScoutingConfig {
     /// Decide whether a target is realistic for a buyer at the given
     /// reputation tier.
     ///
-    /// The gate runs in layers, hardest exemption first:
-    ///   1. Listed / loan-listed → always realistic. Parent club is
-    ///      explicitly willing to part with the player.
-    ///   2. Selling club is not much bigger than the buyer → realistic.
-    ///      We only block scouting "up."
-    ///   3. Backup / fringe player (low appearance count) → realistic.
-    ///      Reserves at giant clubs move to smaller clubs all the time.
-    ///   4. Player is *individually* prominent (high world reputation) →
-    ///      hard block. Youth and expiring-contract exemptions do not
-    ///      rescue this case: a 21-y-o star at a giant club, or an
-    ///      out-of-contract elite, is still unattainable for a tier-3
-    ///      buyer because the wage and standing are out of reach.
-    ///   5. Sub-prominent first-team regular at a bigger club may still
-    ///      pass via a soft exemption:
-    ///        - young development prospect (≤ youth_exempt_age_max), or
-    ///        - near-free contract AND wages/value fit the buyer's tier.
-    ///   6. Otherwise: not realistic.
+    /// We only ever gate scouting **up** (a much bigger selling club); peer
+    /// and smaller clubs are unrestricted. When scouting up, a smaller club
+    /// can realistically pursue the player only when BOTH:
+    ///   * it can **afford** him — salary and value within its tier
+    ///     (`target_affordable_for_buyer`), AND
+    ///   * he is **attainable** from the bigger club, via one of:
+    ///       1. an explicit listing / loan-listing, within a widened tier band
+    ///          (`listed_exemption_gap_blocking`) — even a player on the market
+    ///          will not drop several tiers;
+    ///       2. a backup / not-needed squad role (surplus to the big club);
+    ///       3. a fringe playing-time profile (few career games);
+    ///       4. a young development prospect not yet individually prominent;
+    ///       5. a contract running down (free-transfer pickup).
+    /// A first-team regular or key player the bigger club is keeping is out of
+    /// reach regardless of budget.
     ///
-    /// The previous shape had a flat near-free / youth pass that ignored
-    /// the player's own stature, letting a 21-y-o academy-graduate
-    /// first-team regular or an expiring elite slip through.
+    /// This encodes the realistic rule: a lower club only chases a top club's
+    /// player when he fits its budget AND is surplus there — it is not in the
+    /// market for the giant's first-choice keeper.
     pub fn is_target_realistic(&self, buyer_world_rep: i16, target: &PlayerSummary) -> bool {
+        self.is_target_realistic_fields(
+            buyer_world_rep,
+            &RealismTarget {
+                club_world_reputation: target.club_world_reputation,
+                world_reputation: target.world_reputation,
+                current_reputation: target.current_reputation,
+                home_reputation: target.home_reputation,
+                appearances: target.appearances,
+                age: target.age,
+                contract_months_remaining: target.contract_months_remaining,
+                salary: target.salary,
+                estimated_value: target.estimated_value,
+                is_listed: target.is_listed,
+                is_loan_listed: target.is_loan_listed,
+                squad_status: target.seller_ctx.squad_status.clone(),
+            },
+        )
+    }
+
+    /// Field-level core of [`Self::is_target_realistic`], shared with the
+    /// match-scouting path (which reasons about a raw `Player`, not a
+    /// `PlayerSummary`). Same policy documented on that method.
+    pub fn is_target_realistic_fields(
+        &self,
+        buyer_world_rep: i16,
+        target: &RealismTarget,
+    ) -> bool {
         let r = &self.realism;
 
-        if target.is_listed || target.is_loan_listed {
-            return true;
-        }
-
+        // Only gate scouting "up": a peer or smaller selling club places no
+        // restriction on who a buyer may track.
         let club_too_big = target.club_world_reputation > buyer_world_rep + r.club_rep_gap_blocking;
         if !club_too_big {
             return true;
         }
 
-        let is_regular = target.appearances >= r.first_team_regular_apps;
-        if !is_regular {
+        // Scouting up at a much bigger club. The budget gate is universal
+        // here: a smaller side cannot fund a giant's player — fee or wages —
+        // whatever his squad role, so an unaffordable target is never
+        // realistic. (The user-visible rule: "fits its budget".)
+        if !self.target_affordable_for_buyer(buyer_world_rep, target) {
+            return false;
+        }
+
+        // Affordable — but he must also be *attainable* from the bigger club.
+
+        // 1. Explicitly on the market, within a sane tier band (even a listed
+        //    player will not drop several divisions).
+        if (target.is_listed || target.is_loan_listed)
+            && target.club_world_reputation <= buyer_world_rep + r.listed_exemption_gap_blocking
+        {
             return true;
         }
 
-        // Prominence is judged on EFFECTIVE reputation, not bare world rep:
-        // a recognised name in his own market (high current / home standing)
-        // is unattainable for a much smaller buyer even when his
-        // international footprint is modest. `max(world, blend)` means a
-        // player whose current / home rep sit at or below his world rep is
-        // judged exactly as before — the blend only ever raises the bar.
+        // 2. Surplus by squad role — a backup or unwanted player. (The
+        //    user-visible rule: "backup / not-needed status".)
+        if target.is_squad_surplus() {
+            return true;
+        }
+
+        // 3. Fringe by playing time — few career games reads as a reserve /
+        //    backup profile even if the contract status wasn't set to one.
+        if target.appearances < r.first_team_regular_apps {
+            return true;
+        }
+
+        // 4. Young development prospect not yet an individually prominent
+        //    name. Prominence is judged on EFFECTIVE reputation (a recognised
+        //    name in his own market is out of reach even with a modest world
+        //    profile); `max(world, blend)` only ever raises the bar.
         let effective_rep = EffectivePlayerReputation::compute(
             target.world_reputation,
             target.current_reputation,
@@ -632,29 +730,30 @@ impl ScoutingConfig {
         )
         .max(target.world_reputation);
         let player_too_prominent = effective_rep > buyer_world_rep + r.player_rep_gap_blocking;
-        if player_too_prominent {
-            return false;
-        }
-
-        if target.age <= r.youth_exempt_age_max {
+        if target.age <= r.youth_exempt_age_max && !player_too_prominent {
             return true;
         }
 
+        // 5. Contract running down → a free-transfer pickup, within the same
+        //    tier band as a listing. An expiring first-teamer at a giant club
+        //    drops at most a couple of tiers on a free, not to the 4th tier.
         if target.contract_months_remaining > 0
             && target.contract_months_remaining <= r.near_free_contract_months
-            && self.target_affordable_for_buyer(buyer_world_rep, target)
+            && target.club_world_reputation <= buyer_world_rep + r.listed_exemption_gap_blocking
         {
             return true;
         }
 
+        // Otherwise: a first-team regular the bigger club is keeping → out of
+        // reach for a smaller club regardless of budget.
         false
     }
 
-    /// Linear-tier affordability check. The buyer's reputation sets a
-    /// salary and value ceiling; the target must fit both. Used to gate
-    /// the near-free contract exemption so that an out-of-contract elite
-    /// on top-club wages doesn't slip through to a much smaller buyer.
-    fn target_affordable_for_buyer(&self, buyer_world_rep: i16, target: &PlayerSummary) -> bool {
+    /// Linear-tier affordability check — the universal budget gate for
+    /// scouting "up". The buyer's reputation sets a salary and value ceiling;
+    /// the target must fit both. A tiny club cannot fund a giant's player's
+    /// fee or wages, whatever his squad role.
+    fn target_affordable_for_buyer(&self, buyer_world_rep: i16, target: &RealismTarget) -> bool {
         let r = &self.realism;
         let buyer_tier = buyer_world_rep.max(0) as f64;
         let max_salary = buyer_tier * r.salary_per_rep_point;
@@ -694,6 +793,7 @@ mod tests {
         world_rep: i16,
         salary: u32,
         estimated_value: f64,
+        squad_status: PlayerSquadStatus,
     }
 
     impl Default for Target {
@@ -708,6 +808,7 @@ mod tests {
                 world_rep: 4000,
                 salary: 500_000,
                 estimated_value: 1_500_000.0,
+                squad_status: PlayerSquadStatus::FirstTeamRegular,
             }
         }
     }
@@ -754,7 +855,7 @@ mod tests {
                     league_reputation: 5500,
                     league_id: None,
                     position_group_rank: 0,
-                    squad_status: PlayerSquadStatus::FirstTeamRegular,
+                    squad_status: self.squad_status.clone(),
                     is_transfer_requested: false,
                     is_unhappy: false,
                     in_debt: false,
@@ -916,6 +1017,9 @@ mod tests {
 
     const LOWER_TIER_BUYER: i16 = 3500;
     const TOP_TIER_BUYER: i16 = 7500;
+    /// A 3rd/4th-tier side (Strogino-ish) — several reputation tiers below a
+    /// top-flight seller. Used to verify availability does not erase the gap.
+    const FOURTH_TIER_BUYER: i16 = 1500;
 
     #[test]
     fn realism_blocks_top_club_first_team_regular_for_lower_tier_buyer() {
@@ -986,6 +1090,132 @@ mod tests {
         }
         .build();
         assert!(c.is_target_realistic(LOWER_TIER_BUYER, &listed));
+    }
+
+    #[test]
+    fn realism_blocks_loan_listed_top_club_regular_for_vastly_lower_buyer() {
+        let c = ScoutingConfig::default();
+        // The Pichienko case: a loan-listed first-choice keeper at a giant
+        // club (7500). A mid-tier club may pursue a loan, but a side several
+        // tiers below (1500) cannot realistically host / pay / attract him —
+        // availability does not erase the level gap, so the listing exemption
+        // no longer waves him through and the prominence block catches him.
+        let loan_listed_regular = Target {
+            world_rep: 6000,
+            is_loan_listed: true,
+            ..Target::default() // club_world_rep 7500, appearances 32 (regular)
+        }
+        .build();
+        assert!(
+            !c.is_target_realistic(FOURTH_TIER_BUYER, &loan_listed_regular),
+            "a 4th-tier side must not scout a loan-listed top-club first-teamer"
+        );
+        // Control: a mid/lower-tier club (within the widened band) still can —
+        // a plausible loan destination is not over-blocked.
+        assert!(
+            c.is_target_realistic(LOWER_TIER_BUYER, &loan_listed_regular),
+            "a mid-tier club may still pursue the loan-listed player"
+        );
+    }
+
+    #[test]
+    fn realism_blocks_transfer_listed_top_club_regular_for_vastly_lower_buyer() {
+        let c = ScoutingConfig::default();
+        // Same level gap, permanent listing: a transfer-listed prominent
+        // first-teamer at a giant club is still out of a 4th-tier side's reach.
+        let listed_regular = Target {
+            world_rep: 6000,
+            is_listed: true,
+            ..Target::default()
+        }
+        .build();
+        assert!(!c.is_target_realistic(FOURTH_TIER_BUYER, &listed_regular));
+    }
+
+    #[test]
+    fn realism_still_allows_listed_low_rep_youth_for_vastly_lower_buyer() {
+        let c = ScoutingConfig::default();
+        // Beyond the listed band the gate falls through to the normal layers
+        // — which must still pass a genuine surplus youngster (few career
+        // games, low rep) the big club has loan-listed for development.
+        let listed_youth = Target {
+            appearances: 4,
+            age: 19,
+            world_rep: 2200,
+            is_loan_listed: true,
+            ..Target::default()
+        }
+        .build();
+        assert!(
+            c.is_target_realistic(FOURTH_TIER_BUYER, &listed_youth),
+            "a surplus loan-listed youngster stays reachable via the fringe path"
+        );
+    }
+
+    // ── The two-condition rule: a lower club may pursue a top club's player
+    //    only when he both FITS ITS BUDGET and is a BACKUP / NOT-NEEDED squad
+    //    member. ──
+
+    #[test]
+    fn realism_allows_affordable_backup_at_top_club_for_lower_buyer() {
+        let c = ScoutingConfig::default();
+        // A declared backup at a giant club — an established keeper by minutes
+        // but explicitly second choice — on wages/value a mid-tier club can
+        // fund. Reachable: surplus + affordable.
+        let backup = Target {
+            appearances: 20, // a regular by minutes…
+            squad_status: PlayerSquadStatus::MainBackupPlayer, // …but a backup by role
+            salary: 500_000,
+            estimated_value: 1_500_000.0,
+            world_rep: 4000,
+            ..Target::default()
+        }
+        .build();
+        assert!(
+            c.is_target_realistic(LOWER_TIER_BUYER, &backup),
+            "an affordable backup at a top club is a realistic lower-club target"
+        );
+    }
+
+    #[test]
+    fn realism_blocks_unaffordable_backup_at_top_club_for_lower_buyer() {
+        let c = ScoutingConfig::default();
+        // Same backup role, but on top-club wages a tier-3 club can't fund.
+        // Budget condition fails → not realistic even though he is surplus.
+        let pricey_backup = Target {
+            appearances: 20,
+            squad_status: PlayerSquadStatus::MainBackupPlayer,
+            salary: 5_000_000,
+            estimated_value: 15_000_000.0,
+            world_rep: 4000,
+            ..Target::default()
+        }
+        .build();
+        assert!(
+            !c.is_target_realistic(LOWER_TIER_BUYER, &pricey_backup),
+            "a backup the buyer can't afford is not a realistic target"
+        );
+    }
+
+    #[test]
+    fn realism_blocks_affordable_first_team_regular_at_top_club_for_lower_buyer() {
+        let c = ScoutingConfig::default();
+        // A first-team regular at a giant club, even on cheap terms, is not in
+        // the market for a lower club — he is not surplus. Role condition fails.
+        let regular = Target {
+            appearances: 30,
+            squad_status: PlayerSquadStatus::FirstTeamRegular,
+            salary: 500_000,
+            estimated_value: 1_500_000.0,
+            world_rep: 4000,
+            age: 27,
+            ..Target::default()
+        }
+        .build();
+        assert!(
+            !c.is_target_realistic(LOWER_TIER_BUYER, &regular),
+            "an affordable first-team regular is still out of a lower club's reach"
+        );
     }
 
     #[test]

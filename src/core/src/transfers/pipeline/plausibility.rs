@@ -761,6 +761,26 @@ impl TransferMovePlausibility {
         // A soft signal can rescue a *merely* important player on a big (not
         // huge) drop — but never a very-important player or a huge drop.
         let soft_rescue = matches!(strength, AvailabilityStrength::Soft) && !very_important && !huge_drop;
+        // Availability opens the importance gate — but only within a plausible
+        // level band. A *huge* sporting drop on a permanent move stays
+        // implausible for PUBLIC interest on a *passive / club-driven* Real
+        // signal (a listing, near-expiry, a "not needed" tag, a distressed
+        // seller): a vastly-smaller club is not a credible public suitor for a
+        // top-flight first-teamer, and the fee gate that would otherwise filter
+        // it sits *above* the public-interest stage — so without this an
+        // available giant's first-choice keeper still surfaces 4th-tier sides
+        // under "interested clubs". Only the player's *own* declared exit — a
+        // transfer request — or a pre-negotiated escape (a triggered release
+        // clause) carries his endorsement of so large a drop and reopens it
+        // (the move then still dies at the fee / willingness gates). Loans are
+        // governed by their own credibility gate below.
+        let huge_drop_self_unlocked =
+            inputs.is_transfer_requested || inputs.release_clause_triggered;
+        let level_gate_open = if huge_drop && !inputs.is_loan {
+            huge_drop_self_unlocked
+        } else {
+            hard_gate_open
+        };
 
         // ── Public-interest gate ──────────────────────────────────────
         // Quiet scouting is always allowed (a club may watch anyone). These
@@ -772,7 +792,9 @@ impl TransferMovePlausibility {
         // not public interest.
 
         // Important first-team type at a much stronger club, approached cold.
-        if inputs.is_unsolicited && important && big_drop && !hard_gate_open && !soft_rescue {
+        // A merely-big drop is opened by a Real signal (`level_gate_open ==
+        // hard_gate_open`); a *huge* drop only by a Forced clause.
+        if inputs.is_unsolicited && important && big_drop && !level_gate_open && !soft_rescue {
             let cap = if very_important && huge_drop {
                 TransferMoveStage::CanScoutQuietly
             } else {
@@ -1909,6 +1931,109 @@ mod tests {
             matches!(v, TransferPlausibilityVerdict::Allow(_)),
             "{:?}",
             v
+        );
+    }
+
+    // ── A *huge* permanent sporting drop is not publicly credible on a passive
+    //    / club-driven availability signal. The Pichienko / Strogino case: an
+    //    important, first-choice keeper at a giant club, made available (listed
+    //    / loan-listed / near-expiry after a rejected renewal), then approached
+    //    for a PERMANENT move by a vastly smaller (4th-tier) club. The fee gate
+    //    that would filter the tiny buyer sits *above* the public-interest
+    //    stage, so `clubs_interested_in_player` (which keys on
+    //    CanShowPublicInterest) would otherwise surface the small club under
+    //    "interested clubs". Only the player's own transfer request, or a Forced
+    //    release clause, reopens the level gap; a merely-big drop is unaffected. ──
+    #[test]
+    fn huge_permanent_drop_resists_real_availability_for_public_interest() {
+        // Giant seller, tiny buyer — a far bigger gap than the (deliberately
+        // big-but-not-huge) base case.
+        let mut huge = base_inputs();
+        huge.position_group = PlayerFieldPositionGroup::Goalkeeper;
+        huge.seller_rep = 0.86;
+        huge.buyer_rep = 0.26;
+        huge.seller_world_rep = 7600;
+        huge.buyer_world_rep = 1400;
+        huge.seller_league_rep = 6200;
+        huge.buyer_league_rep = 1500;
+        huge.seller_position_rank = 0;
+        huge.player_ca = 150;
+        huge.best_group_ca_at_seller = 150;
+
+        let drop = TransferPlausibilityEvaluator::sporting_drop(&huge);
+        assert!(
+            drop >= thresholds::HUGE_SPORTING_DROP,
+            "fixture must be a huge drop: {drop}"
+        );
+        let importance = TransferPlausibilityEvaluator::player_importance(&huge);
+        assert!(
+            importance >= thresholds::IMPORTANT,
+            "a first-choice keeper is important: {importance}"
+        );
+
+        // Genuinely listed for a permanent move (a Real signal) — yet a 4th-tier
+        // club still cannot show PUBLIC interest across so large a level gap.
+        let mut listed = huge.clone();
+        listed.is_listed = true;
+        let a = TransferMovePlausibility::assess(&listed);
+        assert_eq!(a.diagnostics.availability, AvailabilityStrength::Real);
+        assert!(
+            !a.reaches(TransferMoveStage::CanShowPublicInterest),
+            "a tiny club must not publicly chase a giant's first-choice keeper on a \
+             huge drop; got {:?}",
+            a.stage
+        );
+        assert_eq!(
+            a.blocking_reason,
+            Some(TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub)
+        );
+
+        // The interested-clubs panel's own degenerate input — estimated_value
+        // left at 0.0 turns a near-expiry deal Real for every buyer — must also
+        // stay gated.
+        let mut panel_like = huge.clone();
+        panel_like.contract_months_remaining = 5; // near expiry
+        panel_like.estimated_value = 0.0; // what clubs_interested_in_player passes
+        let p = TransferMovePlausibility::assess(&panel_like);
+        assert_eq!(p.diagnostics.availability, AvailabilityStrength::Real);
+        assert!(
+            !p.reaches(TransferMoveStage::CanShowPublicInterest),
+            "near-expiry + zero-value (the interested-clubs panel input) must not \
+             open public interest on a huge drop; got {:?}",
+            p.stage
+        );
+
+        // Control 1 — a Forced clause (a negotiated escape) DOES open it: the
+        // release route was bought for exactly this.
+        let mut forced = huge.clone();
+        forced.release_clause_triggered = true;
+        assert!(
+            TransferMovePlausibility::assess(&forced)
+                .reaches(TransferMoveStage::CanShowPublicInterest),
+            "a triggered release clause bypasses the level gap"
+        );
+
+        // Control 1b — the player's *own* transfer request also reopens it: he
+        // has personally declared he wants out, so a public link is plausible
+        // (the move still dies downstream at the fee / willingness gates).
+        let mut requested = huge.clone();
+        requested.is_transfer_requested = true;
+        assert!(
+            TransferMovePlausibility::assess(&requested)
+                .reaches(TransferMoveStage::CanShowPublicInterest),
+            "a transfer-requested player can still attract a public link on a huge drop"
+        );
+
+        // Control 2 — the SAME Real listing on a merely-big (not huge) drop
+        // still opens public interest, exactly as before (no regression).
+        let mut big_not_huge = base_inputs();
+        big_not_huge.is_listed = true;
+        let b = TransferMovePlausibility::assess(&big_not_huge);
+        assert_eq!(b.diagnostics.availability, AvailabilityStrength::Real);
+        assert!(
+            b.reaches(TransferMoveStage::CanShowPublicInterest),
+            "a big-but-not-huge listed drop must remain publicly credible; got {:?}",
+            b.stage
         );
     }
 

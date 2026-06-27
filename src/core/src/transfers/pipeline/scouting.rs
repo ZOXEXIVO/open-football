@@ -11,7 +11,7 @@ use crate::transfers::pipeline::processor::{
     PipelineProcessor, PlayerSummary, SellerPlausibilityContext,
 };
 use crate::transfers::pipeline::recruitment::ScoutMonitoringSource;
-use crate::transfers::pipeline::scouting_config::ScoutingConfig;
+use crate::transfers::pipeline::scouting_config::{RealismTarget, ScoutingConfig};
 use crate::transfers::pipeline::{
     ClubTransferPlan, DetailedScoutingReport, PlayerObservation, ReportRiskFlag,
     ScoutMatchAssignment, ScoutingAssignment, ScoutingRecommendation, TransferNeedPriority,
@@ -460,6 +460,55 @@ impl PipelineProcessor {
                         Some(a) => a,
                         None => continue,
                     };
+
+                    // Realism gate — the same policy the pool path applies via
+                    // `is_target_realistic`. A scout at the match still sees
+                    // everyone, but we don't open persistent monitoring on a
+                    // player this club could never realistically sign (e.g. a
+                    // much smaller side tracking a giant's first-choice keeper).
+                    // Without this the match route bypasses the reputation band
+                    // entirely and re-surfaces the very monitoring the pool
+                    // gate blocks.
+                    let buyer_world_rep = Self::club_world_reputation(club);
+                    let seller_league_rep = target_team
+                        .league_id
+                        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                        .map(|l| l.reputation)
+                        .unwrap_or(0);
+                    let (target_contract_months, target_salary) = player
+                        .contract
+                        .as_ref()
+                        .map(|c| {
+                            let days = (c.expiration - current_date).num_days().max(0);
+                            ((days / 30).min(i16::MAX as i64) as i16, c.salary)
+                        })
+                        .unwrap_or((0, 0));
+                    let target_statuses = player.statuses.get();
+                    let realism_target = RealismTarget {
+                        club_world_reputation: Self::club_world_reputation(target_club),
+                        world_reputation: player.player_attributes.world_reputation,
+                        current_reputation: player.player_attributes.current_reputation,
+                        home_reputation: player.player_attributes.home_reputation,
+                        appearances: player.statistics.total_games(),
+                        age: player_age,
+                        contract_months_remaining: target_contract_months,
+                        salary: target_salary,
+                        estimated_value: player.value(
+                            current_date,
+                            seller_league_rep,
+                            target_team.reputation.market_value_score(),
+                        ),
+                        is_listed: target_statuses.contains(&PlayerStatusType::Lst),
+                        is_loan_listed: target_statuses.contains(&PlayerStatusType::Loa),
+                        squad_status: player
+                            .contract
+                            .as_ref()
+                            .map(|c| c.squad_status.clone())
+                            .unwrap_or(PlayerSquadStatus::NotYetSet),
+                    };
+                    if !config.is_target_realistic_fields(buyer_world_rep, &realism_target) {
+                        continue;
+                    }
 
                     let existing_obs = assignment
                         .observations

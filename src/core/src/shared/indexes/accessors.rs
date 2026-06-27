@@ -7,8 +7,9 @@ use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::pipeline::plausibility::{
     TransferMovePlausibility, TransferMoveStage, TransferPlausibilityBuilder,
 };
+use crate::transfers::pipeline::scouting_config::{RealismTarget, ScoutingConfig};
 use crate::transfers::pipeline::{ClubTransferPlan, ScoutPlayerMonitoring};
-use crate::{Club, Player, SimulatorData, Staff, Team};
+use crate::{Club, Person, Player, PlayerSquadStatus, PlayerStatusType, SimulatorData, Staff, Team};
 use chrono::NaiveDate;
 
 /// One row in the player-transfers UI showing who is watching a player.
@@ -895,6 +896,60 @@ impl SimulatorData {
             })
             .unwrap_or((None, None));
 
+        // Realism gate inputs, resolved once. A club that could never
+        // realistically sign this player should not surface as "watching"
+        // him — a far-smaller side tracking a giant's first-choice keeper is
+        // the stale-monitoring artifact the scouting target gate now prevents
+        // at the source. Mirrors `clubs_interested_in_player`'s filtering so
+        // the two transfer panels stay consistent. An active negotiation is a
+        // real, public pursuit and is exempted below.
+        let now = self.date.date();
+        let scouting_cfg = ScoutingConfig::default();
+        let player_realism: Option<RealismTarget> = self.player_with_team(player_id).map(|(p, t)| {
+            let main_team = self.club(t.club_id).and_then(|c| {
+                c.teams
+                    .teams
+                    .iter()
+                    .find(|tm| matches!(tm.team_type, TeamType::Main))
+            });
+            let club_world_rep = main_team.map(|tm| tm.reputation.world as i16).unwrap_or(0);
+            let club_market_value = main_team
+                .map(|tm| tm.reputation.market_value_score())
+                .unwrap_or(0);
+            let league_rep = t
+                .league_id
+                .and_then(|lid| self.league(lid))
+                .map(|l| l.reputation)
+                .unwrap_or(0);
+            let statuses = p.statuses.get();
+            let (contract_months_remaining, salary) = p
+                .contract
+                .as_ref()
+                .map(|c| {
+                    let days = (c.expiration - now).num_days().max(0);
+                    ((days / 30).min(i16::MAX as i64) as i16, c.salary)
+                })
+                .unwrap_or((0, 0));
+            RealismTarget {
+                club_world_reputation: club_world_rep,
+                world_reputation: p.player_attributes.world_reputation,
+                current_reputation: p.player_attributes.current_reputation,
+                home_reputation: p.player_attributes.home_reputation,
+                appearances: p.statistics.total_games(),
+                age: p.age(now),
+                contract_months_remaining,
+                salary,
+                estimated_value: p.value(now, league_rep, club_market_value),
+                is_listed: statuses.contains(&PlayerStatusType::Lst),
+                is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
+                squad_status: p
+                    .contract
+                    .as_ref()
+                    .map(|c| c.squad_status.clone())
+                    .unwrap_or(PlayerSquadStatus::NotYetSet),
+            }
+        });
+
         for continent in &self.continents {
             for country in &continent.countries {
                 for club in &country.clubs {
@@ -941,6 +996,24 @@ impl SimulatorData {
                         && !plan.known_players.iter().any(|m| m.player_id == player_id)
                     {
                         continue;
+                    }
+
+                    // Drop out-of-reach watchers (e.g. a 4th-tier side tracking
+                    // a top-club first-teamer) — unless a real negotiation is
+                    // already underway, which is always shown.
+                    if !in_negotiation {
+                        if let Some(rt) = &player_realism {
+                            let buyer_world_rep = club
+                                .teams
+                                .teams
+                                .iter()
+                                .find(|t| matches!(t.team_type, TeamType::Main))
+                                .map(|t| t.reputation.world as i16)
+                                .unwrap_or(0);
+                            if !scouting_cfg.is_target_realistic_fields(buyer_world_rep, rt) {
+                                continue;
+                            }
+                        }
                     }
 
                     if monitorings.is_empty() {
@@ -2035,7 +2108,7 @@ mod interested_clubs_tests {
     use crate::transfers::negotiation::TransferNegotiation;
     use crate::transfers::offer::TransferOffer;
     use crate::transfers::pipeline::{
-        DetailedScoutingReport, ScoutingRecommendation, ShortlistCandidate,
+        DetailedScoutingReport, ScoutMonitoringSource, ScoutingRecommendation, ShortlistCandidate,
         ShortlistCandidateStatus, TransferShortlist,
     };
     use crate::{
@@ -2061,14 +2134,25 @@ mod interested_clubs_tests {
         /// world profile but a strong domestic (current/home) standing, and
         /// a `FirstTeamRegular` contract. No availability signal.
         fn maximenko() -> Player {
+            Self::maximenko_with_expiry(NaiveDate::from_ymd_opt(2029, 6, 30).unwrap())
+        }
+
+        /// Same first-team keeper, but his deal is winding down (near
+        /// expiry) — the passive, club-driven availability the Pichienko
+        /// case turns on after a rejected renewal. Still a strong first-team
+        /// regular; only his contract horizon has shrunk.
+        fn maximenko_near_expiry() -> Player {
+            Self::maximenko_with_expiry(NaiveDate::from_ymd_opt(2026, 12, 31).unwrap())
+        }
+
+        fn maximenko_with_expiry(expiration: NaiveDate) -> Player {
             let mut attrs = PlayerAttributes::default();
             attrs.current_ability = 165;
             attrs.potential_ability = 170;
             attrs.world_reputation = 3000;
             attrs.current_reputation = 6000;
             attrs.home_reputation = 6500;
-            let mut contract =
-                PlayerClubContract::new(700_000, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
+            let mut contract = PlayerClubContract::new(700_000, expiration);
             contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
             PlayerBuilder::new()
                 .id(MAXIMENKO)
@@ -2152,7 +2236,11 @@ mod interested_clubs_tests {
         /// strong league) and the provided weak buyer club (country 1, weak
         /// league). The buyer's league id is 100, the seller's 200.
         fn sim(buyer: Club) -> SimulatorData {
-            let spartak = Self::club(SPARTAK, "Spartak", 200, 7000, vec![Self::maximenko()]);
+            Self::sim_with_seller(buyer, Self::maximenko())
+        }
+
+        fn sim_with_seller(buyer: Club, seller_player: Player) -> SimulatorData {
+            let spartak = Self::club(SPARTAK, "Spartak", 200, 7000, vec![seller_player]);
             let seller_country = Self::country(2, "ru", 6500, vec![spartak]);
             let buyer_country = Self::country(1, "it", 2000, vec![buyer]);
             let continent = Continent::new(
@@ -2195,6 +2283,68 @@ mod interested_clubs_tests {
             "a weak foreign club's private shortlist must not surface as \
              interest: {:?}",
             interested
+        );
+    }
+
+    // The Pichienko case: the strong first-teamer is now AVAILABLE — his
+    // contract is winding down (a passive, club-driven Real signal), and a
+    // weak lower-league club has him shortlisted. He must STILL not surface
+    // as interested: a far-smaller side is not a credible *public* suitor
+    // across so huge a level gap, and the fee gate that would filter it sits
+    // *above* the public-interest stage. Without the huge-drop level gate the
+    // near-expiry signal would open public interest and surface the club.
+    #[test]
+    fn available_strong_first_teamer_is_not_public_interest_for_weak_club() {
+        let mut samb = Fx::weak_buyer();
+        let mut sl = TransferShortlist::new(9001, 0.0);
+        sl.candidates.push(ShortlistCandidate {
+            player_id: MAXIMENKO,
+            score: 0.5,
+            estimated_fee: 0.0,
+            status: ShortlistCandidateStatus::Available,
+        });
+        samb.transfer_plan.shortlists.push(sl);
+
+        let data = Fx::sim_with_seller(samb, Fx::maximenko_near_expiry());
+        let interested = data.clubs_interested_in_player(MAXIMENKO);
+        assert!(
+            !interested.iter().any(|(id, _, _)| *id == SAMBENEDETTESE),
+            "a near-expiry (passively available) strong first-teamer must not \
+             surface a far-smaller club as interested: {:?}",
+            interested
+        );
+    }
+
+    // Scout-monitoring layer: even an active monitoring row from a far-
+    // smaller club must not surface in the player's "Scout Monitoring" panel
+    // for a top-club first-team regular — the same realism the scouting
+    // target gate enforces at the source, applied to the live view so a
+    // stale row from before the gate doesn't keep showing.
+    #[test]
+    fn weak_club_scout_monitoring_of_top_first_teamer_is_filtered_out() {
+        let mut keeper = Fx::maximenko_near_expiry();
+        keeper.statistics.played = 25; // an established first-team regular
+
+        let mut samb = Fx::weak_buyer();
+        let mut mon = ScoutPlayerMonitoring::new(
+            1,
+            0,
+            MAXIMENKO,
+            ScoutMonitoringSource::StaffRecommendation,
+            Fx::date(),
+        );
+        mon.record_observation(160, 165, 0.8, 1.0, 0.0, Vec::new(), Fx::date(), false);
+        samb.transfer_plan.scout_monitoring.push(mon);
+
+        let data = Fx::sim_with_seller(samb, keeper);
+        let monitoring = data.player_monitoring_details(MAXIMENKO);
+        assert!(
+            !monitoring.iter().any(|m| m.club_id == SAMBENEDETTESE),
+            "a 4th-tier side must not surface as monitoring a top-club first-teamer: {:?}",
+            monitoring
+                .iter()
+                .map(|m| m.club_name.clone())
+                .collect::<Vec<_>>()
         );
     }
 
