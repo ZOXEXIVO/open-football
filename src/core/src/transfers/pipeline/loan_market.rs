@@ -1070,10 +1070,15 @@ impl PipelineProcessor {
                     return false;
                 }
                 let player_region = ScoutingRegion::from_country(p.continent_id, &p.country_code);
-                // Block cross-region loans where the player's home region is
-                // significantly more prestigious. Real players don't loan down
-                // into a clearly smaller football ecosystem for a bit-part role.
-                player_region.league_prestige() <= club_region_prestige + 0.20
+                // Cross-region prestige step-down. A settled player won't loan
+                // down into a clearly smaller ecosystem for a bit-part role, but
+                // a development youngster drops abroad for guaranteed minutes
+                // (an Italian U18 → Romania). See `foreign_loan_region_ok`.
+                Self::foreign_loan_region_ok(
+                    player_region.league_prestige(),
+                    club_region_prestige,
+                    ForeignUnsolicitedLoanTarget::is_development(p.age),
+                )
             })
             .collect();
 
@@ -1425,6 +1430,29 @@ impl PipelineProcessor {
             return true;
         }
         player_country_rep <= borrower_country_rep
+    }
+
+    /// Cross-region prestige step-down for a foreign loan. A settled player from
+    /// a more prestigious football region won't loan down into a clearly smaller
+    /// ecosystem for a bit-part role — but a development youngster (≤23) accepts
+    /// a much larger drop to go abroad for guaranteed minutes (an Italian U18 →
+    /// Romania / Russia). Without this lift a Western-European prospect was
+    /// region-LOCKED: only borrowers within +0.20 of his own 1.0 prestige
+    /// qualify, i.e. only Western Europe, so a giant's youngster never moved
+    /// abroad at all. The wider development allowance reaches the mid regions
+    /// (Eastern Europe / Scandinavia / South America, ~0.45-0.50) for senior
+    /// football but still falls short of the bottom regions, and the downstream
+    /// club-rep reality band bounds the actual destination. Mirrors the
+    /// development lift in [`Self::foreign_loan_country_rep_ok`].
+    fn foreign_loan_region_ok(
+        player_region_prestige: f32,
+        club_region_prestige: f32,
+        is_development: bool,
+    ) -> bool {
+        // A settled player tolerates only a small step down in region prestige;
+        // a development youngster goes much further for minutes.
+        let allowance = if is_development { 0.55 } else { 0.20 };
+        player_region_prestige <= club_region_prestige + allowance
     }
 
     /// List loan-out candidates on the transfer market.
@@ -1952,6 +1980,24 @@ mod borrower_gate_tests {
         assert!(PipelineProcessor::foreign_loan_country_rep_ok(
             5000, 5000, false
         ));
+    }
+
+    #[test]
+    fn foreign_loan_region_gate_lifts_for_development_step_down() {
+        // Italy (Western Europe, 1.0) → Romania/Russia (Eastern Europe, 0.50).
+        // A settled player won't loan down two prestige bands for a bit-part
+        // role — the 0.50 gap exceeds the 0.20 cover allowance.
+        assert!(!PipelineProcessor::foreign_loan_region_ok(1.0, 0.50, false));
+        // ...but a development youngster going abroad for senior minutes is
+        // exactly the "go abroad to play" move the region gate used to block —
+        // the wider development allowance clears the gap. The downstream
+        // club-rep band still bounds how far he actually falls.
+        assert!(PipelineProcessor::foreign_loan_region_ok(1.0, 0.50, true));
+        // The development lift stays bounded: a top-region prospect still can't
+        // reach the very bottom regions (e.g. South Asia, 0.10) from 1.0.
+        assert!(!PipelineProcessor::foreign_loan_region_ok(1.0, 0.10, true));
+        // Moving to an equal-or-more-prestigious region is never blocked.
+        assert!(PipelineProcessor::foreign_loan_region_ok(0.50, 1.0, false));
     }
 }
 
