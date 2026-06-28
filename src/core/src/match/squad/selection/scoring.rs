@@ -930,6 +930,62 @@ impl ScoringEngine {
         (rest_bonus + minutes_bonus) * rotation_factor
     }
 
+    /// Official matches a loanee is assumed to feature in across a season. Used
+    /// to turn his annual loan wage into a per-match figure, so the per-start fee
+    /// can be read as "how many matches' worth of his wage does one start pay".
+    const LOAN_FEE_REFERENCE_MATCHES: f32 = 40.0;
+    /// Scales the fee/wage ratio into a selection nudge. Tuned so a typical
+    /// development-loan fee lands a starting pull around 0.6-0.9 — enough to tip
+    /// a genuinely close call, never enough to start a clearly worse player.
+    const LOAN_FEE_PULL_SCALE: f32 = 0.6;
+    /// Upper bound on the starting-XI loan-fee nudge. Sits below the quality
+    /// term's reach (perceived_quality alone spans several points) so the fee
+    /// shapes borderline selection without overriding a real ability gap.
+    const LOAN_FEE_START_PULL_CAP: f32 = 1.0;
+    /// Upper bound on the bench loan-fee nudge — deliberately smaller, since a
+    /// benched loanee only earns the reduced substitute fee if he comes on.
+    const LOAN_FEE_BENCH_PULL_CAP: f32 = 0.5;
+
+    /// Selection pull from a loan match-fee — the borrowing club's financial
+    /// reason to FIELD a loanee. Shared by the starting-XI scorer (`for_starting`
+    /// true) and the bench scorer (`for_starting` false) so the two never drift.
+    ///
+    /// The club banks the parent-funded fee every time it plays the loanee in an
+    /// official match: the full fee for a start, the reduced substitute share off
+    /// the bench (see [`PlayerClubContract::loan_fee_for_appearance`]). Measuring
+    /// that fee against one match's worth of the wage the borrower itself pays
+    /// him yields a size-agnostic "is this worth playing him for" ratio — a
+    /// Premier-League borrower's beefy fee and a minnow's modest one both read on
+    /// the same scale. The ratio is scaled down and tightly capped, so it only
+    /// ever tips a close call, and it is zero in friendlies (no fee is paid
+    /// there) and for non-loanees / fee-less loans.
+    pub fn loan_match_fee_pull(
+        &self,
+        player: &Player,
+        for_starting: bool,
+        is_friendly: bool,
+    ) -> f32 {
+        if is_friendly {
+            return 0.0;
+        }
+        let Some(loan) = player.contract_loan.as_ref() else {
+            return 0.0;
+        };
+        let fee = loan.loan_fee_for_appearance(for_starting);
+        if fee == 0 {
+            return 0.0;
+        }
+        let wage = loan.salary.max(1) as f32;
+        let per_match_wage = (wage / Self::LOAN_FEE_REFERENCE_MATCHES).max(1.0);
+        let ratio = fee as f32 / per_match_wage;
+        let cap = if for_starting {
+            Self::LOAN_FEE_START_PULL_CAP
+        } else {
+            Self::LOAN_FEE_BENCH_PULL_CAP
+        };
+        (ratio * Self::LOAN_FEE_PULL_SCALE).clamp(0.0, cap)
+    }
+
     /// Domestic-cup opportunity bias. On top of the normal quality /
     /// readiness / status scoring, early cup rounds tilt minutes toward
     /// rotation players, backups and prospects while protecting overloaded
@@ -1609,16 +1665,12 @@ impl ScoringEngine {
             }
         }
 
-        // Loan match fee incentive: if the parent club pays per appearance,
-        // the borrowing club has a financial reason to include the player.
-        if let Some(ref loan) = player.contract_loan {
-            if let Some(fee) = loan.loan_match_fee {
-                // Small score bonus proportional to the fee — capped so it
-                // nudges selection without overriding quality.
-                let fee_bonus = (fee as f32 / 10000.0).min(1.0);
-                score += fee_bonus;
-            }
-        }
+        // Loan match-fee incentive: the parent club pays the borrower per
+        // official appearance, so fielding the loanee is worth real money. The
+        // bench score uses the lighter substitute-fee pull — get him on the team
+        // sheet so he can come on — distinct from the stronger pull to actually
+        // start him in the XI (applied in `starting_slot_score`).
+        score += self.loan_match_fee_pull(player, false, is_friendly);
 
         score
     }
@@ -1793,6 +1845,116 @@ fn ramp(value: f32, lo: f32, hi: f32) -> f32 {
     }
     let span = (hi - lo).max(1.0);
     ((value - lo) / span).min(2.0)
+}
+
+#[cfg(test)]
+mod loan_match_fee_pull_tests {
+    //! The loan match-fee selection pull — a borrowing club's financial reason
+    //! to field an inbound loanee. Locks the contract: positive but bounded for
+    //! a fee-carrying loan, stronger for a start than off the bench, and silent
+    //! for non-loanees and in friendlies (no fee is paid there).
+    use super::*;
+    use crate::PlayerClubContract;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::staff::StaffStub;
+    use crate::shared::fullname::FullName;
+    use crate::{PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills};
+    use chrono::NaiveDate;
+
+    struct Fixture;
+
+    impl Fixture {
+        fn engine() -> ScoringEngine {
+            let mut s = StaffStub::default();
+            s.id = 7;
+            ScoringEngine::from_staff(&s)
+        }
+
+        fn player_on_loan(fee: Option<u32>, loan_wage: u32) -> Player {
+            let mut p = PlayerBuilder::new()
+                .id(202)
+                .full_name(FullName::new("Loan".into(), "Ee".into()))
+                .birth_date(NaiveDate::from_ymd_opt(2004, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 14,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap();
+            let mut loan = PlayerClubContract::new_loan(
+                loan_wage,
+                NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+                10,
+                1,
+                20,
+            );
+            loan.loan_match_fee = fee;
+            p.contract_loan = Some(loan);
+            p
+        }
+    }
+
+    #[test]
+    fn fee_loan_gets_positive_bounded_start_pull() {
+        let e = Fixture::engine();
+        let p = Fixture::player_on_loan(Some(2_000), 50_000);
+        let pull = e.loan_match_fee_pull(&p, true, false);
+        assert!(pull > 0.0, "fee-carrying loanee must earn a starting pull");
+        assert!(
+            pull <= ScoringEngine::LOAN_FEE_START_PULL_CAP,
+            "start pull must stay capped: {pull}"
+        );
+    }
+
+    #[test]
+    fn start_pull_exceeds_bench_pull() {
+        let e = Fixture::engine();
+        let p = Fixture::player_on_loan(Some(2_000), 50_000);
+        let start = e.loan_match_fee_pull(&p, true, false);
+        let bench = e.loan_match_fee_pull(&p, false, false);
+        assert!(bench > 0.0);
+        assert!(
+            start > bench,
+            "starting earns the full fee so it must pull harder than the bench (start {start} vs bench {bench})"
+        );
+    }
+
+    #[test]
+    fn no_pull_in_friendly_or_for_non_loanee() {
+        let e = Fixture::engine();
+        let p = Fixture::player_on_loan(Some(2_000), 50_000);
+        assert_eq!(
+            e.loan_match_fee_pull(&p, true, true),
+            0.0,
+            "no fee is paid in friendlies"
+        );
+
+        let fee_less = Fixture::player_on_loan(None, 50_000);
+        assert_eq!(e.loan_match_fee_pull(&fee_less, true, false), 0.0);
+
+        let mut regular = Fixture::player_on_loan(Some(2_000), 50_000);
+        regular.contract_loan = None;
+        assert_eq!(e.loan_match_fee_pull(&regular, true, false), 0.0);
+    }
+
+    #[test]
+    fn bigger_fee_pulls_harder() {
+        let e = Fixture::engine();
+        let small = Fixture::player_on_loan(Some(200), 50_000);
+        let big = Fixture::player_on_loan(Some(1_000), 50_000);
+        let small_pull = e.loan_match_fee_pull(&small, true, false);
+        let big_pull = e.loan_match_fee_pull(&big, true, false);
+        assert!(
+            big_pull > small_pull,
+            "a beefier fee is a stronger reason to start him (big {big_pull} vs small {small_pull})"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -250,6 +250,33 @@ impl PlayerClubContract {
         100u8.saturating_sub(self.loan_wage_contribution_pct.unwrap_or(100))
     }
 
+    /// Fraction of the per-match loan fee the borrowing club banks when the
+    /// loanee comes off the bench rather than starting. A start pays the full
+    /// `loan_match_fee`; a cameo pays this share. Keeping the bulk of the money
+    /// on the start is what points the incentive — and the match-day selection
+    /// nudge that mirrors it — at *starting* the player, not just dressing him.
+    /// Shared by the post-match settlement (`process_loan_match_fees`) and the
+    /// selection scorer (`ScoringEngine::loan_match_fee_pull`) so the payout and
+    /// the pull to play him never drift apart.
+    pub const LOAN_SUB_FEE_FRACTION: f32 = 0.4;
+
+    /// Money the borrowing club earns for fielding this loanee in one official
+    /// match, given whether he `started`. Zero when the loan carries no match
+    /// fee. A start pays the full fee; a substitute cameo pays
+    /// [`Self::LOAN_SUB_FEE_FRACTION`] of it.
+    pub fn loan_fee_for_appearance(&self, started: bool) -> u32 {
+        match self.loan_match_fee {
+            Some(fee) if fee > 0 => {
+                if started {
+                    fee
+                } else {
+                    (fee as f32 * Self::LOAN_SUB_FEE_FRACTION).round() as u32
+                }
+            }
+            _ => 0,
+        }
+    }
+
     pub fn is_expired(&self, now: NaiveDateTime) -> bool {
         self.expiration < now.date()
     }
@@ -691,6 +718,51 @@ impl ContractClause {
     /// any more — the brittle `* 100 + pct` encoding is gone.)
     pub fn resolved_percentage(&self, default_pct: u8) -> u8 {
         self.percentage.filter(|p| *p > 0).unwrap_or(default_pct)
+    }
+}
+
+#[cfg(test)]
+mod loan_fee_tests {
+    use super::*;
+
+    struct Fixture;
+
+    impl Fixture {
+        fn loan(fee: Option<u32>) -> PlayerClubContract {
+            let mut c = PlayerClubContract::new_loan(
+                50_000,
+                NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+                10,
+                1,
+                20,
+            );
+            c.loan_match_fee = fee;
+            c
+        }
+    }
+
+    #[test]
+    fn start_pays_full_fee_sub_pays_reduced() {
+        let c = Fixture::loan(Some(1_000));
+        assert_eq!(c.loan_fee_for_appearance(true), 1_000);
+        // A cameo off the bench earns the reduced share — strictly positive but
+        // strictly less than a start, keeping the incentive pointed at starting.
+        let sub = c.loan_fee_for_appearance(false);
+        assert!(sub < 1_000 && sub > 0, "sub={sub}");
+        assert_eq!(
+            sub,
+            (1_000.0 * PlayerClubContract::LOAN_SUB_FEE_FRACTION).round() as u32
+        );
+    }
+
+    #[test]
+    fn no_fee_means_no_payment() {
+        let none = Fixture::loan(None);
+        assert_eq!(none.loan_fee_for_appearance(true), 0);
+        assert_eq!(none.loan_fee_for_appearance(false), 0);
+        let zero = Fixture::loan(Some(0));
+        assert_eq!(zero.loan_fee_for_appearance(true), 0);
+        assert_eq!(zero.loan_fee_for_appearance(false), 0);
     }
 }
 

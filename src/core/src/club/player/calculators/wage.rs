@@ -99,10 +99,13 @@ impl WageCalculator {
         (borrower, match_fee)
     }
 
-    /// Loan split with awareness of the borrower's appetite. Bigger /
-    /// hungrier borrowers cover more of the wage and pay a beefier match
-    /// fee; small clubs developing a parent loanee cover less and earn the
-    /// top-up. `borrower_score` and `parent_desire_to_develop` are 0..1.
+    /// Loan split with awareness of the borrower's appetite and the parent's
+    /// urgency to develop. Bigger / hungrier borrowers cover more of the wage
+    /// and pay a beefier match fee; small clubs developing a parent loanee cover
+    /// less and earn the top-up. A development-keen parent also raises the
+    /// per-start match fee — paying the borrower to actually play its prospect,
+    /// which is what makes a development loan attractive to take on.
+    /// `borrower_score` and `parent_desire_to_develop` are 0..1.
     pub fn loan_wage_split_v2(
         parent_annual_wage: u32,
         borrower_score: f32,
@@ -115,9 +118,13 @@ impl WageCalculator {
         let share =
             (share - (parent_desire_to_develop.clamp(0.0, 1.0) as f64) * 0.10).clamp(0.30, 0.85);
         let borrower = (parent * share).max(2_400.0) as u32;
-        // Match fee climbs steeply with borrower size — Premier-League
-        // borrowers pay enough that benching the loanee actually hurts.
-        let match_fee_pct = 0.005 + (borrower_score.clamp(0.0, 1.0) as f64) * 0.012;
+        // Match fee climbs with borrower size AND with how badly the parent
+        // wants the player developed: a club loaning out a prized prospect pays
+        // a beefier per-start fee to make the borrower actually field him, so
+        // benching the loanee leaves real money on the table. Both inputs 0..1.
+        let match_fee_pct = 0.005
+            + (borrower_score.clamp(0.0, 1.0) as f64) * 0.012
+            + (parent_desire_to_develop.clamp(0.0, 1.0) as f64) * 0.010;
         let match_fee = (parent * match_fee_pct).max(150.0) as u32;
         (borrower, match_fee)
     }
@@ -540,6 +547,20 @@ mod tests {
         assert!(
             no_dev >= dev_focused,
             "no_dev={no_dev} dev_focused={dev_focused}"
+        );
+    }
+
+    #[test]
+    fn loan_v2_dev_focus_raises_match_fee() {
+        // A parent keen to develop its prospect pays the borrower a bigger
+        // per-start fee — the incentive that makes a development loan worth
+        // taking and the loanee worth starting.
+        let parent = 200_000u32;
+        let (_, no_dev_fee) = WageCalculator::loan_wage_split_v2(parent, 0.6, 0.0);
+        let (_, dev_focused_fee) = WageCalculator::loan_wage_split_v2(parent, 0.6, 1.0);
+        assert!(
+            dev_focused_fee > no_dev_fee,
+            "dev_focused_fee={dev_focused_fee} no_dev_fee={no_dev_fee}"
         );
     }
 

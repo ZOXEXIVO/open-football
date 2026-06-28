@@ -111,6 +111,15 @@ impl SelectionScoringContext<'_> {
         )
     }
 
+    /// Starting-XI pull from an inbound loanee's match fee — the borrowing
+    /// club's financial reason to put him in the lineup. Full-fee (starting)
+    /// pull; zero for non-loanees, fee-less loans, and friendlies. See
+    /// [`ScoringEngine::loan_match_fee_pull`].
+    fn loan_match_fee_start(&self, player: &Player) -> f32 {
+        self.engine
+            .loan_match_fee_pull(player, true, self.is_friendly)
+    }
+
     /// Future-aware pathway adjustment for a starting-XI slot. `available` is
     /// the full pool, used for the same-role quality / successor checks.
     fn future_pathway_start(
@@ -1148,6 +1157,7 @@ impl SelectionScoringContext<'_> {
             + self.role_duty_adjustment(player, slot)
             + self.eligibility_rule_penalty(player)
             + self.medical_caution_adjustment(player)
+            + self.loan_match_fee_start(player)
     }
 
     /// Opponent-matchup nudge, gated by the presence of a richer game

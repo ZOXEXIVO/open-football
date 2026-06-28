@@ -1405,26 +1405,48 @@ impl LeagueResult {
     }
 
     fn process_loan_match_fees<D: LeagueProcessAccess>(details: &MatchResultRaw, data: &mut D) {
-        // Collect fee transfers: (parent_club_id, borrowing_club_id, fee)
+        // Collect fee transfers: (parent_club_id, borrowing_club_id, fee).
+        //
+        // The parent-funded fee is earned only by putting the loanee on the
+        // pitch — and it's weighted toward *starting* him: a start banks the
+        // full fee, a substitute cameo only the reduced share (see
+        // `PlayerClubContract::loan_fee_for_appearance`). Tying the money to a
+        // start is precisely what gives the borrowing club a reason to name the
+        // player in its XI rather than stash him on the bench.
         let mut fee_transfers: Vec<(u32, u32, u32)> = Vec::new();
 
-        let all_players = details
+        // `main` is the starting XI; `substitutes_used` are the bench players
+        // who actually came on. Pair each id with whether it started so the fee
+        // can be sized accordingly.
+        let appearances = details
             .left_team_players
             .main
             .iter()
-            .chain(details.left_team_players.substitutes_used.iter())
-            .chain(details.right_team_players.main.iter())
-            .chain(details.right_team_players.substitutes_used.iter());
+            .map(|id| (*id, true))
+            .chain(
+                details
+                    .left_team_players
+                    .substitutes_used
+                    .iter()
+                    .map(|id| (*id, false)),
+            )
+            .chain(details.right_team_players.main.iter().map(|id| (*id, true)))
+            .chain(
+                details
+                    .right_team_players
+                    .substitutes_used
+                    .iter()
+                    .map(|id| (*id, false)),
+            );
 
-        for &player_id in all_players {
+        for (player_id, started) in appearances {
             if let Some(player) = data.player(player_id) {
                 if let Some(ref loan) = player.contract_loan {
-                    if let (Some(fee), Some(parent_id), Some(borrowing_id)) = (
-                        loan.loan_match_fee,
-                        loan.loan_from_club_id,
-                        loan.loan_to_club_id,
-                    ) {
-                        if fee > 0 {
+                    let fee = loan.loan_fee_for_appearance(started);
+                    if fee > 0 {
+                        if let (Some(parent_id), Some(borrowing_id)) =
+                            (loan.loan_from_club_id, loan.loan_to_club_id)
+                        {
                             fee_transfers.push((parent_id, borrowing_id, fee));
                         }
                     }
