@@ -20,12 +20,12 @@ use crate::transfers::pipeline::{
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;
 use crate::{
-    ClubPhilosophy, Country, Person, PlayerSquadStatus, PlayerStatusType, ReputationLevel,
-    StaffEventType, StaffPosition, TeamType,
+    ClubPhilosophy, Country, Person, PlayerSquadStatus, PlayerStatusType, StaffEventType,
+    StaffPosition, TeamType,
 };
 use chrono::Weekday;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 struct ScoutAssignmentAction {
     club_id: u32,
@@ -893,6 +893,38 @@ impl PipelineProcessor {
         players
     }
 
+    /// Regions a club's scouting NETWORK can spot talent in, widening
+    /// CONTINUOUSLY with reputation — there is no hard tier cutoff. Every club
+    /// knows its own backyard; as a club grows it extends its net outward along
+    /// its real transfer corridors (ordered by historical flow weight), and the
+    /// world's giants reach across the entire globe. Breadth is
+    /// `overall_score`-proportional (0..1 → a fraction of all regions), so a club
+    /// that climbs the reputation ladder gains reach smoothly rather than
+    /// flipping on at an arbitrary "Elite" line. Returned home-outward, so the
+    /// caller can read it as "the regions this club reaches, nearest first".
+    fn reputation_scout_regions(home: ScoutingRegion, overall_score: f32) -> Vec<ScoutingRegion> {
+        // Home-outward ordering: own region, then trade corridors (authored
+        // highest-weight-first), then any region off the corridor map.
+        let mut ordered: Vec<ScoutingRegion> = Vec::with_capacity(ScoutingRegion::all().len());
+        ordered.push(home);
+        for (region, _weight) in home.transfer_corridors() {
+            if !ordered.contains(region) {
+                ordered.push(*region);
+            }
+        }
+        for region in ScoutingRegion::all() {
+            if !ordered.contains(region) {
+                ordered.push(*region);
+            }
+        }
+        // Reputation sets how deep into that ordering the club reaches: a minnow
+        // only its backyard, a giant the whole list.
+        let total = ordered.len() as f32;
+        let budget = (overall_score.clamp(0.0, 1.0) * total).round() as usize;
+        ordered.truncate(budget.max(1)); // always at least the home backyard
+        ordered
+    }
+
     pub fn process_scouting(
         country: &mut Country,
         foreign_players: &[PlayerSummary],
@@ -934,6 +966,24 @@ impl PipelineProcessor {
             // simpler club-rep-gap test passes) still gets blocked.
             let buyer_plausibility_ctx = BuyerPlausibilityContext::build(country, club);
 
+            // The club's scouting NETWORK reach — which regions of the world it
+            // can spot talent in. Widens CONTINUOUSLY with reputation (see
+            // `reputation_scout_regions`): a minnow sees only its own backyard, a
+            // mid club its main trade corridors, a giant the whole globe. No hard
+            // tier cutoff. Built once per club and shared by every assignment; the
+            // country-reputation step-down on the foreign filter still bounds it.
+            let home_region = ScoutingRegion::from_country(country.continent_id, &country.code);
+            let club_overall_score = club
+                .teams
+                .main()
+                .or_else(|| club.teams.teams.first())
+                .map(|t| t.reputation.overall_score())
+                .unwrap_or(0.0);
+            let club_scout_reach: HashSet<ScoutingRegion> =
+                Self::reputation_scout_regions(home_region, club_overall_score)
+                    .into_iter()
+                    .collect();
+
             for assignment in &plan.scouting_assignments {
                 if assignment.completed {
                     continue;
@@ -960,28 +1010,9 @@ impl PipelineProcessor {
                     .map(|s| &s.staff_attributes.knowledge);
 
                 const EMPTY_REGIONS: &[ScoutingRegion] = &[];
-                // Top clubs run a GLOBAL scouting network: an Elite club sees
-                // talent in EVERY region, not just the handful its individual
-                // scouts personally cover. This is how a giant scouts a teenager
-                // in Africa or South America, signs him permanently, then loans
-                // him out to develop — the DevelopmentSigning → permanent buy →
-                // DevelopmentLoanPathway chain downstream already handles the
-                // rest. Reputation-CURRENT, so a club that climbs to Elite gains
-                // the reach (and the country-reputation step-down on the foreign
-                // filter below still stops a minnow scouting Serie A).
-                let club_is_elite = club
-                    .teams
-                    .main()
-                    .or_else(|| club.teams.teams.first())
-                    .map(|t| t.reputation.level() == ReputationLevel::Elite)
-                    .unwrap_or(false);
-                let scout_known_regions: &[ScoutingRegion] = if club_is_elite {
-                    ScoutingRegion::all()
-                } else {
-                    scout_knowledge
-                        .map(|k| k.known_regions.as_slice())
-                        .unwrap_or(EMPTY_REGIONS)
-                };
+                let scout_known_regions: &[ScoutingRegion] = scout_knowledge
+                    .map(|k| k.known_regions.as_slice())
+                    .unwrap_or(EMPTY_REGIONS);
 
                 let observe_chance = config.daily_observation_chance(judging_ability);
                 if IntegerUtils::random(0, 100) > observe_chance {
@@ -1059,22 +1090,25 @@ impl PipelineProcessor {
                 let mut matching: Vec<&PlayerSummary> =
                     all_players.iter().filter(player_filter).collect();
 
-                // Foreign players from scout's known regions (region-based matching)
-                // Only scout leagues with equal or lower reputation than our own country.
-                // e.g. Italian clubs can scout Nigeria, but Nigerian clubs cannot scout Serie A.
-                if !scout_known_regions.is_empty() {
-                    let foreign_matching: Vec<&PlayerSummary> = foreign_players
-                        .iter()
-                        .filter(|p| p.country_reputation <= country_reputation)
-                        .filter(|p| {
-                            let player_region =
-                                ScoutingRegion::from_country(p.continent_id, &p.country_code);
-                            scout_known_regions.contains(&player_region)
-                        })
-                        .filter(player_filter)
-                        .collect();
-                    matching.extend(foreign_matching);
-                }
+                // Foreign players are visible if their region falls inside the
+                // club's reputation-driven network reach OR a scout personally
+                // knows it. Only countries with equal-or-lower reputation than our
+                // own are scoutable — e.g. an Italian club can scout Nigeria, but
+                // a Nigerian club can't scout Serie A. `club_scout_reach` always
+                // holds at least the home region, so the foreign sweep runs for
+                // every club; how far it reaches is what scales with reputation.
+                let foreign_matching: Vec<&PlayerSummary> = foreign_players
+                    .iter()
+                    .filter(|p| p.country_reputation <= country_reputation)
+                    .filter(|p| {
+                        let player_region =
+                            ScoutingRegion::from_country(p.continent_id, &p.country_code);
+                        club_scout_reach.contains(&player_region)
+                            || scout_known_regions.contains(&player_region)
+                    })
+                    .filter(player_filter)
+                    .collect();
+                matching.extend(foreign_matching);
 
                 if matching.is_empty() {
                     continue;
@@ -1585,5 +1619,48 @@ impl PipelineProcessor {
         }
 
         players.last().unwrap()
+    }
+}
+
+#[cfg(test)]
+mod scout_reach_tests {
+    use super::*;
+
+    /// Scouting reach widens continuously with reputation — no hard tier line.
+    #[test]
+    fn reach_scales_continuously_with_reputation() {
+        let home = ScoutingRegion::WesternEurope;
+        let total = ScoutingRegion::all().len();
+
+        // A giant reaches the whole world...
+        let giant = PipelineProcessor::reputation_scout_regions(home, 1.0);
+        assert_eq!(giant.len(), total);
+
+        // ...a minnow only its own backyard...
+        let minnow = PipelineProcessor::reputation_scout_regions(home, 0.0);
+        assert_eq!(minnow, vec![home]);
+
+        // ...and clubs in between land strictly in between, monotonically.
+        let small = PipelineProcessor::reputation_scout_regions(home, 0.3);
+        let big = PipelineProcessor::reputation_scout_regions(home, 0.7);
+        assert!(minnow.len() < small.len());
+        assert!(small.len() < big.len(), "small {} >= big {}", small.len(), big.len());
+        assert!(big.len() < giant.len());
+
+        // Home is always covered and always first (nearest-out ordering).
+        assert_eq!(small[0], home);
+        assert_eq!(big[0], home);
+    }
+
+    /// A top European club reaches the talent-rich corridors (South America,
+    /// West/North Africa) so it can scout a wonderkid there, sign him, and loan
+    /// him out — the whole point of global scouting for a giant.
+    #[test]
+    fn top_european_club_reaches_talent_corridors() {
+        let reach =
+            PipelineProcessor::reputation_scout_regions(ScoutingRegion::WesternEurope, 0.85);
+        assert!(reach.contains(&ScoutingRegion::SouthAmerica));
+        assert!(reach.contains(&ScoutingRegion::WestAfrica));
+        assert!(reach.contains(&ScoutingRegion::NorthAfrica));
     }
 }
