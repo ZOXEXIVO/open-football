@@ -408,8 +408,10 @@ impl ReputationFactors {
     }
 }
 
-/// Reputation level categories
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Reputation level categories. Declared low → high so the derived `Ord`
+/// ranks `Amateur < Local < … < Elite` — callers compare tiers directly
+/// (e.g. a borrower below a loanee's parent tier).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReputationLevel {
     Amateur,
     Local,
@@ -441,6 +443,19 @@ impl ReputationLevel {
             ReputationLevel::Local => ReputationLevel::Amateur,
             ReputationLevel::Amateur => ReputationLevel::Amateur,
         }
+    }
+
+    /// True when a club of this tier runs the seller-side loan broadcast:
+    /// resource-rich clubs (National and above) actively place their listed
+    /// loanees instead of waiting to be scanned. Shared by the broadcast's
+    /// eligibility gate and the borrower scan — which defers to the broadcast
+    /// for such a club's development loanees rather than letting a lower club
+    /// snatch the prospect before the parent picks the best home for him.
+    pub fn runs_loan_broadcast(self) -> bool {
+        matches!(
+            self,
+            ReputationLevel::National | ReputationLevel::Continental | ReputationLevel::Elite
+        )
     }
 }
 

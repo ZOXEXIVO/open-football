@@ -43,6 +43,11 @@ impl PipelineProcessor {
             ability: u8,
             age: u8,
             position_group: PlayerFieldPositionGroup,
+            /// Parent club's reputation tier. A development loanee whose parent
+            /// runs a loan broadcast (National+) is placed by that broadcast —
+            /// which evaluates the whole market and picks the best home — so a
+            /// borrower BELOW this tier defers to it instead of scanning him.
+            parent_tier: ReputationLevel,
             /// Parent club's main-team world reputation — drives the
             /// reputation-drop realism gate on the borrower side.
             parent_rep: u16,
@@ -108,6 +113,9 @@ impl PipelineProcessor {
                     ability: player.player_attributes.current_ability,
                     age: player.age(date),
                     position_group: group,
+                    parent_tier: parent_team
+                        .map(|t| t.reputation.level())
+                        .unwrap_or(ReputationLevel::Amateur),
                     parent_rep,
                     parent_best_in_group,
                     is_development,
@@ -141,6 +149,15 @@ impl PipelineProcessor {
 
                 for team in &club.teams.teams {
                     for player in team.players.iter() {
+                        // Loan-listed players are handled by the listed-market
+                        // scan above (and the parent broadcast). The unsolicited
+                        // path is for cold approaches to players who AREN'T
+                        // listed, so skip the listed ones — avoids double-handling
+                        // and stops a lower club snatching a broadcast-reserved
+                        // prospect here, bypassing the listed-scan deferral.
+                        if player.statuses.get().contains(&PlayerStatusType::Loa) {
+                            continue;
+                        }
                         let age = player.age(date);
                         let asset_class = asset_ctx.classify(player, date);
                         let is_development = match UnsolicitedLoanTarget::classify(
@@ -182,6 +199,7 @@ impl PipelineProcessor {
                             ability: player.player_attributes.current_ability,
                             age,
                             position_group: group,
+                            parent_tier: parent_team.reputation.level(),
                             parent_rep,
                             parent_best_in_group,
                             is_development,
@@ -318,6 +336,18 @@ impl PipelineProcessor {
                 !borrower_depth.has_room_for(group, loan_ability)
             };
 
+            // A development loanee whose resource-rich parent (National+) runs a
+            // loan broadcast is PLACED by that broadcast: the parent evaluates
+            // the whole market at once and sends him to the best club where he
+            // still starts. A club below the parent's tier must not snatch him
+            // first via its own scan — it can only get him if the parent's
+            // broadcast picks it. Clubs at or above the parent's tier are
+            // unaffected, and non-development (cover/surplus) loans are never
+            // reserved.
+            let broadcast_reserved = |l: &LoanListing| -> bool {
+                l.is_development && l.parent_tier.runs_loan_broadcast() && rep_level < l.parent_tier
+            };
+
             // Check unfulfilled transfer requests first. Emergency
             // free-agent depth requests are excluded — they're
             // serviced by the free-agent matcher only, not by loans.
@@ -357,6 +387,7 @@ impl PipelineProcessor {
                     .filter(|l| {
                         l.club_id != club.id
                             && !club.is_rival(l.club_id) // no loans from rivals
+                            && !broadcast_reserved(l)
                             && l.position_group == pos_group
                             && l.ability >= relaxed_min
                             && l.age <= relaxed_age_max
@@ -421,6 +452,7 @@ impl PipelineProcessor {
                     .filter(|l| {
                         l.club_id != club.id
                             && !club.is_rival(l.club_id)
+                            && !broadcast_reserved(l)
                             && l.age <= MAX_LOAN_TARGET_AGE
                             // Squad-average floor is for cover loans; a youth
                             // match-practice loan leans on the minutes gate.
@@ -470,6 +502,7 @@ impl PipelineProcessor {
                     .filter(|l| {
                         l.club_id != club.id
                             && !club.is_rival(l.club_id)
+                            && !broadcast_reserved(l)
                             && l.age <= MAX_LOAN_TARGET_AGE
                             // Squad-average floor is for cover loans; a youth
                             // match-practice loan leans on the minutes gate.
@@ -788,10 +821,7 @@ impl PipelineProcessor {
             let parent_tier = parent_team.reputation.level();
             // Resource gate: only National-and-above clubs run a push;
             // smaller clubs fall back to passive listing.
-            if !matches!(
-                parent_tier,
-                ReputationLevel::National | ReputationLevel::Continental | ReputationLevel::Elite
-            ) {
+            if !parent_tier.runs_loan_broadcast() {
                 continue;
             }
             let Some(player) = Self::find_player_in_country(country, listing.player_id) else {
@@ -877,19 +907,32 @@ impl PipelineProcessor {
             if in_negotiation.contains(&b.player_id) {
                 continue;
             }
-            let Some(tier) = country
-                .clubs
-                .iter()
-                .find(|c| c.id == b.parent_club_id)
-                .and_then(|c| c.transfer_plan.loan_broadcasts.get(&b.player_id))
-                .map(|br| br.tier)
-            else {
-                continue;
+            // A development loanee is shopped to the WHOLE market at once: the
+            // parent evaluates every club that would actually play him and sends
+            // him to the best (highest-reputation) one — the strongest
+            // environment where he still STARTS — instead of cascading down to
+            // the first taker. The `would_get_loan_minutes` gate keeps him from
+            // being placed too high (a keeper must be the undisputed #1), so the
+            // "best passer" naturally falls to a lower club only when no higher
+            // one has room. Cover / surplus loans keep the staged high → low
+            // cascade and are placed at the current broadcast tier.
+            let restrict_tier = if b.is_development {
+                None
+            } else {
+                match country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == b.parent_club_id)
+                    .and_then(|c| c.transfer_plan.loan_broadcasts.get(&b.player_id))
+                    .map(|br| br.tier)
+                {
+                    Some(t) => Some(t),
+                    None => continue,
+                }
             };
 
-            // Best club AT this tier that would actually play him: highest
-            // world reputation within the tier wins — the strongest
-            // development environment that still guarantees minutes.
+            // Highest world reputation among clubs that would actually play him
+            // wins — the strongest environment that still guarantees minutes.
             let mut best: Option<(u32, u16)> = None;
             for club in &country.clubs {
                 if club.id == b.parent_club_id || club.is_rival(b.parent_club_id) {
@@ -898,8 +941,10 @@ impl PipelineProcessor {
                 let Some(team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
                     continue;
                 };
-                if team.reputation.level() != tier {
-                    continue;
+                if let Some(tier) = restrict_tier {
+                    if team.reputation.level() != tier {
+                        continue;
+                    }
                 }
                 if country
                     .transfer_market
@@ -2465,13 +2510,15 @@ mod scan_loan_market_tests {
         );
     }
 
-    /// The headline River-Plate case: an Elite parent, the only realistic
-    /// taker a Regional club. The broadcast must open at the parent's own
-    /// (Elite) tier and widen one rung per unanswered window — Elite →
-    /// Continental → National → Regional — before the Regional club is
-    /// offered the player. High reputation first, cascading down.
+    /// Non-development (surplus) loan: an Elite parent, the only realistic taker
+    /// a Regional club. A surplus player still cascades — the broadcast opens at
+    /// the parent's own (Elite) tier and widens one rung per unanswered window,
+    /// Elite → Continental → National → Regional, before the Regional club is
+    /// offered him. High reputation first, cascading down. (Development loanees
+    /// instead skip the cascade and are placed at the best taker immediately —
+    /// see `broadcast_places_development_loanee_at_best_taker_immediately`.)
     #[test]
-    fn broadcast_cascades_from_high_to_low_until_a_taker_responds() {
+    fn broadcast_cascades_non_development_loan_high_to_low() {
         let d0 = Fx::monday(); // 2026-01-05, a Monday
 
         let parent_main = Fx::team(
@@ -2485,8 +2532,10 @@ mod scan_loan_market_tests {
                 Fx::keeper(103, 115, 115, 30, false),
             ],
         );
+        // A 30-year-old surplus keeper (not a development loanee), so the staged
+        // high → low cascade applies rather than immediate best-taker placement.
         let parent_reserve =
-            Fx::team(11, 1, TeamType::Reserve, 6000, vec![Fx::keeper(200, 70, 150, 18, true)]);
+            Fx::team(11, 1, TeamType::Reserve, 6000, vec![Fx::keeper(200, 70, 150, 30, false)]);
         let parent = Fx::club(1, vec![parent_main, parent_reserve], 50_000_000);
 
         let borrower_main = Fx::team(
@@ -2524,6 +2573,55 @@ mod scan_loan_market_tests {
         assert!(
             country.transfer_market.has_active_negotiation_for(200, 2),
             "once the net widens to Regional, the club with a vacancy responds"
+        );
+    }
+
+    /// A DEVELOPMENT loanee is shopped to the whole market at once: the parent
+    /// evaluates every club that would actually play him and places him at the
+    /// best — here the only realistic — taker on the FIRST broadcast, with no
+    /// slow tier cascade. Same Elite-parent / Regional-taker shape as the
+    /// non-development cascade above, but the youngster lands immediately
+    /// instead of after four unanswered windows.
+    #[test]
+    fn broadcast_places_development_loanee_at_best_taker_immediately() {
+        let d0 = Fx::monday();
+
+        let parent_main = Fx::team(
+            10,
+            1,
+            TeamType::Main,
+            9000,
+            vec![
+                Fx::keeper(101, 120, 120, 28, false),
+                Fx::keeper(102, 118, 118, 26, false),
+                Fx::keeper(103, 115, 115, 30, false),
+            ],
+        );
+        // An 18-year-old development keeper: a prospect who needs minutes.
+        let parent_reserve =
+            Fx::team(11, 1, TeamType::Reserve, 6000, vec![Fx::keeper(200, 70, 150, 18, true)]);
+        let parent = Fx::club(1, vec![parent_main, parent_reserve], 50_000_000);
+
+        let borrower_main = Fx::team(
+            20,
+            2,
+            TeamType::Main,
+            4000,
+            vec![
+                Fx::keeper(301, 55, 55, 27, false),
+                Fx::keeper(302, 50, 50, 29, false),
+            ],
+        );
+        let borrower = Fx::club(2, vec![borrower_main], 5_000_000);
+
+        let mut country = Fx::country(vec![parent, borrower]);
+        Fx::loan_list(&mut country, 200, 1, 11);
+
+        PipelineProcessor::broadcast_listed_loans(&mut country, d0);
+        assert!(
+            country.transfer_market.has_active_negotiation_for(200, 2),
+            "a development loanee is placed at the best (only) taker on the first \
+             broadcast, not after a tier cascade"
         );
     }
 

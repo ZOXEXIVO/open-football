@@ -3065,15 +3065,18 @@ mod development_pathway_tests {
         let (mut data, purchase) = DevPathwayFixtures::world(8500, 2008, None);
         let date = DevPathwayFixtures::date();
 
-        // A realistic borrower: small (Regional) club whose forwards sit
-        // at the prospect's level, so the development loan buys minutes.
+        // A realistic borrower whose forwards sit at the prospect's level, so
+        // the development loan buys minutes. Reputation 6000 makes it the
+        // HIGHEST-reputation club where he'd still start, so the parent's
+        // evaluate-the-whole-market broadcast picks it — the strongest
+        // environment that still guarantees him games.
         let borrower = DevPathwayFixtures::club(
             BORROWER_ID,
             "Borrower",
             DevPathwayFixtures::team(
                 41,
                 BORROWER_ID,
-                3000,
+                6000,
                 vec![
                     DevPathwayFixtures::player(401, 1997, 55),
                     DevPathwayFixtures::player(402, 1998, 52),
@@ -3103,17 +3106,22 @@ mod development_pathway_tests {
             "purchase inside the window must list the prospect for loan immediately"
         );
 
-        // 2. The small club's loan scan finds the listed prospect and
-        // opens a loan negotiation.
+        // 2. The parent's loan broadcast evaluates the market and places the
+        // listed prospect at the best — here the only realistic — taker, the
+        // small club. (A development loanee from a National+ parent is reserved
+        // for the parent broadcast, which picks the best home; the borrower's
+        // own scan defers to it, so the broadcast, not the scan, opens the
+        // negotiation. Run on the Monday after the Sunday fixture date.)
         {
             let country = data.country_mut(1).unwrap();
-            PipelineProcessor::scan_loan_market(country, date);
+            let monday = date.succ_opt().expect("a Monday follows the Sunday fixture date");
+            PipelineProcessor::broadcast_listed_loans(country, monday);
             let negotiation = country
                 .transfer_market
                 .negotiations
                 .values()
                 .find(|n| n.player_id == DevPathwayFixtures::PROSPECT_ID)
-                .expect("borrower's loan scan must open a negotiation for the listed prospect");
+                .expect("the parent broadcast must open a loan negotiation for the listed prospect");
             assert!(negotiation.is_loan, "the approach must be a loan");
             assert_eq!(
                 negotiation.buying_club_id, BORROWER_ID,
