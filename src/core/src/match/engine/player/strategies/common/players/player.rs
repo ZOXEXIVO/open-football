@@ -123,7 +123,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         let randomness = (1.0 - heading_skill) * 0.4; // 0.0-0.4 based on skill
 
         let rng = &self.ctx.context.rng;
-        let lateral_offset = rng.random_range(-randomness..randomness);
+        let lateral_offset = rng.jitter(0.0, randomness);
 
         // Perpendicular direction for lateral spread
         let perp = Vector3::new(-away_from_goal.y, away_from_goal.x, 0.0);

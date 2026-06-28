@@ -1588,16 +1588,8 @@ impl PlayerEventDispatcher {
         };
 
         // Add random targeting error
-        let mut target_error_x = if max_position_error > f32::EPSILON {
-            rng.random_range(-max_position_error..max_position_error)
-        } else {
-            0.0
-        };
-        let mut target_error_y = if max_position_error > f32::EPSILON {
-            rng.random_range(-max_position_error..max_position_error)
-        } else {
-            0.0
-        };
+        let mut target_error_x = rng.jitter(0.0, max_position_error);
+        let mut target_error_y = rng.jitter(0.0, max_position_error);
 
         // Miskick chance — heavily gated by technique. Elite technique
         // basically never miskicks; poor technique (≤6) fires wild ~8%
@@ -1661,9 +1653,7 @@ impl PlayerEventDispatcher {
         // Bad players hit passes with inconsistent power
         let power_consistency = 1.0 + (skills.technique * skills.stamina * 0.1);
         let power_variation_range = (1.0 - overall_quality) * 0.35;
-        let power_variation = rng.random_range(
-            power_consistency - power_variation_range..power_consistency + power_variation_range,
-        );
+        let power_variation = rng.jitter(power_consistency, power_variation_range);
         let adjusted_force = event_model.pass_force * power_variation;
 
         // Calculate horizontal velocity to reach target
@@ -2059,7 +2049,7 @@ impl PlayerEventDispatcher {
                 // Skill affects consistency
                 let execution_quality = skills.overall_quality();
                 let error_range = (1.0 - execution_quality) * 0.12;
-                let error = rng.random_range(1.0 - error_range..1.0 + error_range);
+                let error = rng.jitter(1.0, error_range);
 
                 ideal_z * error * tiny_random
             }
@@ -2075,7 +2065,7 @@ impl PlayerEventDispatcher {
                 let execution_quality =
                     (skills.overall_quality() + skills.long_shots + skills.crossing) / 3.0;
                 let error_range = (1.0 - execution_quality) * 0.18;
-                let error = rng.random_range(1.0 - error_range..1.0 + error_range);
+                let error = rng.jitter(1.0, error_range);
 
                 ideal_z * error * tiny_random
             }
@@ -2092,7 +2082,7 @@ impl PlayerEventDispatcher {
 
                 // Execution error for this difficult skill
                 let error_range = (1.0 - chip_ability) * 0.25;
-                let error = rng.random_range(1.0 - error_range..1.0 + error_range);
+                let error = rng.jitter(1.0, error_range);
 
                 base_chip_height * error * tiny_random
             }

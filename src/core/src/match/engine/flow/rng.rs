@@ -107,6 +107,27 @@ impl MatchRng {
         low + (high - low) * self.unit_f32()
     }
 
+    /// Symmetric jitter: uniform in `[center - half_width, center + half_width)`.
+    ///
+    /// A zero (or negative) `half_width` yields no jitter and returns
+    /// `center` exactly. This is the load-bearing case: engine code derives
+    /// the half-width from skill as `(1.0 - skill) * k`, which collapses to
+    /// `0.0` for a max-skill player (heading 20, or passing/technique/vision
+    /// all maxed). Feeding `center..center` to `random_range` panics with
+    /// "cannot sample empty range" — that crashed national-competition
+    /// matches, which field the highest-quality players. The non-degenerate
+    /// branch draws via the same generic `random_range`, so the RNG stream
+    /// and distribution stay identical to a hand-written
+    /// `random_range(center - half_width..center + half_width)`.
+    #[inline]
+    pub fn jitter(&self, center: f32, half_width: f32) -> f32 {
+        if half_width > f32::EPSILON {
+            self.random_range(center - half_width..center + half_width)
+        } else {
+            center
+        }
+    }
+
     /// Generic range — drop-in for `rng.random_range(low..high)` so
     /// callers don't have to pick between `range_f32` / `range_i32`
     /// / `range_u64` based on the inferred type. Borrows the inner
@@ -202,5 +223,27 @@ mod tests {
     fn seed_is_exposed_for_diagnostics() {
         let r = MatchRng::from_seed(0xDEADBEEF);
         assert_eq!(r.seed(), 0xDEADBEEF);
+    }
+
+    #[test]
+    fn jitter_zero_half_width_returns_center_without_panicking() {
+        // A max-skill player produces `(1.0 - skill) * k == 0.0`, which used
+        // to feed `random_range(center..center)` and panic with "cannot
+        // sample empty range" (crashed national-competition matches).
+        let r = MatchRng::from_seed(123);
+        assert_eq!(r.jitter(1.0, 0.0), 1.0);
+        assert_eq!(r.jitter(0.0, 0.0), 0.0);
+        // Negative half-widths (e.g. `overall_quality` rounding past 1.0)
+        // must also be inert rather than producing a reversed range.
+        assert_eq!(r.jitter(2.5, -0.1), 2.5);
+    }
+
+    #[test]
+    fn jitter_stays_within_symmetric_band() {
+        let r = MatchRng::from_seed(99);
+        for _ in 0..1024 {
+            let v = r.jitter(1.0, 0.35);
+            assert!((0.65..1.35).contains(&v), "out of band: {v}");
+        }
     }
 }
