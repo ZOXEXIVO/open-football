@@ -90,6 +90,24 @@
                         <span class="fm-detail-label">{{ i18n.t("loan_wage") }}</span>
                         <span class="fm-detail-value">${{ loan.salary }} {{ i18n.t("per_year") }}</span>
                     </div>
+                    {% if let Some(fee) = loan.match_fee %}
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("loan_match_fee") }}</span>
+                        <span class="fm-detail-value">${{ fee }} {{ i18n.t("per_match") }}</span>
+                    </div>
+                    {% endif %}
+                    {% if let Some(pct) = loan.wage_contribution %}
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("loan_wage_contribution") }}</span>
+                        <span class="fm-detail-value">{{ pct }}</span>
+                    </div>
+                    {% endif %}
+                    {% if let Some(apps) = loan.min_appearances %}
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("loan_min_appearances") }}</span>
+                        <span class="fm-detail-value">{{ apps }}</span>
+                    </div>
+                    {% endif %}
                     <div class="fm-personal-detail">
                         <span class="fm-detail-label">{{ i18n.t("loan_expiry") }}</span>
                         <span class="fm-detail-value">{{ loan.expiration }}</span>

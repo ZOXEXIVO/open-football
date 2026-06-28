@@ -82,6 +82,13 @@ pub struct LoanDetailDto {
     pub to_club_slug: String,
     pub salary: String,
     pub expiration: String,
+    /// Per-match fee the parent club pays the borrower for fielding the loanee
+    /// (full for a start). `None` when the loan carries no match fee.
+    pub match_fee: Option<String>,
+    /// Percentage of the wage the borrowing club covers, e.g. "60%".
+    pub wage_contribution: Option<String>,
+    /// Minimum official appearances the borrower committed to give the loanee.
+    pub min_appearances: Option<u16>,
 }
 
 pub struct BonusDto {
@@ -443,6 +450,12 @@ fn build_loan_detail(player: &Player, data: &SimulatorData, i18n: &I18n) -> Opti
         to_club_slug: to_slug,
         salary: FormattingUtils::format_money(loan.salary as f64),
         expiration: loan.expiration.format("%d.%m.%Y").to_string(),
+        match_fee: loan
+            .loan_match_fee
+            .filter(|fee| *fee > 0)
+            .map(|fee| FormattingUtils::format_money(fee as f64)),
+        wage_contribution: loan.loan_wage_contribution_pct.map(|pct| format!("{pct}%")),
+        min_appearances: loan.loan_min_appearances,
     })
 }
 

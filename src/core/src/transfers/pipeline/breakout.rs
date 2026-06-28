@@ -84,6 +84,39 @@ impl BreakoutPerformanceSignal {
     pub(in crate::transfers::pipeline) const BREAKOUT_THRESHOLD: f32 = 45.0;
 
     pub(in crate::transfers::pipeline) fn compute(inp: &BreakoutInputs) -> BreakoutPerformanceSignal {
+        // ── League-reputation discount ──
+        // Lower-division output is real but worth less on the wider market.
+        // Discount, never erase: a strong enough lower-league breakout still
+        // clears the bar for clubs a tier or two up.
+        let rep_frac = (inp.league_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+        let discount = 0.45 + 0.55 * rep_frac;
+        let score = (Self::raw_output(inp) * discount).clamp(0.0, 100.0);
+
+        BreakoutPerformanceSignal { score }
+    }
+
+    /// Breakout score WITHOUT the league-reputation discount — used for youth
+    /// discovery. Youth squads play friendly-classified age-group football whose
+    /// "league reputation" is near zero and is NOT a meaningful
+    /// opposition-strength proxy (every U18 plays other U18s), so applying the
+    /// discount would crush a genuine prospect's output below the bar purely
+    /// because his league has no senior standing. Skipping it judges the talent
+    /// on its raw output, the way a scout in the stands at an academy game would.
+    /// The senior pass keeps the discount.
+    pub(in crate::transfers::pipeline) fn compute_undiscounted(
+        inp: &BreakoutInputs,
+    ) -> BreakoutPerformanceSignal {
+        BreakoutPerformanceSignal {
+            score: Self::raw_output(inp).clamp(0.0, 100.0),
+        }
+    }
+
+    /// Observable, league-reputation-independent output score: the shared core
+    /// of [`Self::compute`] (which then applies the reputation discount) and
+    /// [`Self::compute_undiscounted`] (which doesn't). Built only from visible
+    /// numbers — goals, assists, regressed rating, scoring-chart standing,
+    /// recent awards — never hidden ability.
+    fn raw_output(inp: &BreakoutInputs) -> f32 {
         let appearances = inp.appearances as f32;
 
         // ── Position-adjusted output rate (goals + assists per app) ──
@@ -132,21 +165,10 @@ impl BreakoutPerformanceSignal {
         // ── Recent individual awards (corroboration, capped) ──
         let award_points = (inp.recent_award_points * 3.0).clamp(0.0, 16.0);
 
-        let raw_output =
-            (output_points + rating_points + standing_points + award_points).clamp(0.0, 100.0);
-
-        // ── League-reputation discount ──
-        // Lower-division output is real but worth less on the wider market.
-        // Discount, never erase: a strong enough lower-league breakout still
-        // clears the bar for clubs a tier or two up.
-        let rep_frac = (inp.league_reputation as f32 / 10000.0).clamp(0.0, 1.0);
-        let discount = 0.45 + 0.55 * rep_frac;
-        let score = (raw_output * discount).clamp(0.0, 100.0);
-
-        BreakoutPerformanceSignal { score }
+        (output_points + rating_points + standing_points + award_points).clamp(0.0, 100.0)
     }
 
-    /// `true` when the discounted score clears [`Self::BREAKOUT_THRESHOLD`].
+    /// `true` when the score clears [`Self::BREAKOUT_THRESHOLD`].
     pub(in crate::transfers::pipeline) fn is_breakout(&self) -> bool {
         self.score >= Self::BREAKOUT_THRESHOLD
     }
@@ -326,6 +348,34 @@ impl LeaguePerformanceLookup {
         );
         BreakoutPerformanceSignal::compute(&inputs)
     }
+
+    /// Breakout signal for a YOUTH-squad player. Reads his age-group output from
+    /// the FRIENDLY bucket — youth football is friendly-classified, so his
+    /// `statistics` (official) are empty and only `friendly_statistics` carry his
+    /// goals/assists/rating — and uses the undiscounted score so the near-zero
+    /// youth-league reputation doesn't bury him. Scoring-chart standing and
+    /// awards stay at the youth-empty defaults (a youngster never enters a senior
+    /// chart), so the signal rides on output and rating: exactly the visible
+    /// evidence a scout takes away from watching the U18s.
+    pub(in crate::transfers::pipeline) fn breakout_for_youth(
+        &self,
+        player: &Player,
+        appearances: u16,
+        average_rating: f32,
+        age: u8,
+    ) -> BreakoutPerformanceSignal {
+        let inputs = self.breakout_inputs(
+            player.id,
+            player.position().position_group(),
+            player.friendly_statistics.goals,
+            player.friendly_statistics.assists,
+            appearances,
+            average_rating,
+            age,
+            0, // league_reputation unused — the youth path skips the discount
+        );
+        BreakoutPerformanceSignal::compute_undiscounted(&inputs)
+    }
 }
 
 #[cfg(test)]
@@ -367,6 +417,25 @@ mod tests {
                 is_league_top_scorer: true,
                 scoring_rank: Some(1),
                 recent_award_points: 6.0,
+            }
+        }
+
+        /// A 17-year-old academy striker dominating age-group football: 20 goals
+        /// in 28 youth (friendly) games, strong rating — but his youth "league"
+        /// has near-zero reputation and he has no senior scoring-chart standing
+        /// or awards. The exact profile that was sitting invisible.
+        fn youth_academy_striker() -> BreakoutInputs {
+            BreakoutInputs {
+                position_group: PlayerFieldPositionGroup::Forward,
+                goals: 20,
+                assists: 5,
+                appearances: 28,
+                average_rating: 7.0,
+                age: 17,
+                league_reputation: 300,
+                is_league_top_scorer: false,
+                scoring_rank: None,
+                recent_award_points: 0.0,
             }
         }
     }
@@ -505,5 +574,37 @@ mod tests {
         };
         assert!(BreakoutPerformanceSignal::compute(&strong_keeper).score > 0.0);
         assert!(!BreakoutPerformanceSignal::compute(&plain_keeper).is_breakout());
+    }
+
+    #[test]
+    fn undiscounted_score_is_at_least_the_discounted_score() {
+        // The undiscounted score is the pre-discount ceiling, so for any input
+        // it can never be below the league-rep-discounted score.
+        let inp = BreakoutFixtures::lower_division_breakout_striker();
+        let discounted = BreakoutPerformanceSignal::compute(&inp).score;
+        let undiscounted = BreakoutPerformanceSignal::compute_undiscounted(&inp).score;
+        assert!(
+            undiscounted >= discounted,
+            "undiscounted {undiscounted} must be >= discounted {discounted}"
+        );
+    }
+
+    #[test]
+    fn youth_standout_surfaces_only_without_the_reputation_discount() {
+        // A dominant academy striker in a near-zero-reputation youth league.
+        // With the league-rep discount applied he is buried below the bar (the
+        // bug that left U18 stars invisible); the youth path scores him
+        // undiscounted, so a genuine prospect reads as a breakout and surfaces.
+        let inp = BreakoutFixtures::youth_academy_striker();
+        assert!(
+            !BreakoutPerformanceSignal::compute(&inp).is_breakout(),
+            "discounted: the youth-league reputation should bury the score ({})",
+            BreakoutPerformanceSignal::compute(&inp).score
+        );
+        assert!(
+            BreakoutPerformanceSignal::compute_undiscounted(&inp).is_breakout(),
+            "undiscounted: a dominant academy striker must read as a breakout ({})",
+            BreakoutPerformanceSignal::compute_undiscounted(&inp).score
+        );
     }
 }

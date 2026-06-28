@@ -22,6 +22,15 @@
 //! bar; a top club still won't monitor a player who is no upgrade, no resale
 //! prospect, and fills no need.
 //!
+//! Youth squads are covered too. Their matches are friendly-classified, so a
+//! youngster's output lives in his `friendly_statistics` and his age-group
+//! "league" carries no senior reputation. For a youth team the watch reads the
+//! friendly bucket and scores it undiscounted
+//! ([`crate::transfers::pipeline::breakout::LeaguePerformanceLookup::breakout_for_youth`]),
+//! so an academy standout — an U18 banging in goals — surfaces to plausible
+//! clubs as scout monitoring instead of staying invisible behind a
+//! zero-reputation age-group league.
+//!
 //! Per project convention this is a method on [`PipelineProcessor`]; every
 //! type is reached through a `use` at the file header.
 
@@ -96,21 +105,35 @@ impl PipelineProcessor {
                 .unwrap_or(0);
 
             for team in &club.teams.teams {
+                let is_youth_squad = team.team_type.is_youth();
                 for player in &team.players.players {
                     if player.is_on_loan() {
                         continue;
                     }
                     let group = player.position().position_group();
-                    let appearances = player.statistics.total_games();
-                    let average_rating = player.statistics.average_rating_realistic(group);
                     let age = player.age(date);
-                    let breakout = performance_lookup.breakout_for_player(
-                        player,
-                        appearances,
-                        average_rating,
-                        age,
-                        parent_league_reputation,
-                    );
+                    // Youth squads play friendly-classified age-group football, so
+                    // a youngster's goals and rating live in the FRIENDLY bucket
+                    // and his form is judged on the undiscounted signal — a scout
+                    // watching the U18s rates the talent on what he sees, not on
+                    // the (near-zero) standing of a youth league. Senior squads
+                    // keep the official-stats, league-rep-discounted path.
+                    let breakout = if is_youth_squad {
+                        let appearances = player.friendly_statistics.total_games();
+                        let average_rating =
+                            player.friendly_statistics.average_rating_realistic(group);
+                        performance_lookup.breakout_for_youth(player, appearances, average_rating, age)
+                    } else {
+                        let appearances = player.statistics.total_games();
+                        let average_rating = player.statistics.average_rating_realistic(group);
+                        performance_lookup.breakout_for_player(
+                            player,
+                            appearances,
+                            average_rating,
+                            age,
+                            parent_league_reputation,
+                        )
+                    };
                     if !breakout.is_breakout() {
                         continue;
                     }
