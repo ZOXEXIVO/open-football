@@ -917,10 +917,17 @@ impl PipelineProcessor {
                 ordered.push(*region);
             }
         }
-        // Reputation sets how deep into that ordering the club reaches: a minnow
-        // only its backyard, a giant the whole list.
+        // Reputation sets how deep into that ordering the club reaches — and a
+        // big club's scouting punches ABOVE its raw reputation share (it invests
+        // in a global network), saturating at full world coverage. So the top
+        // tiers (Continental and up) reach most or all of the world while smaller
+        // clubs stay near home: with the boost, a club is global once its
+        // overall_score clears ~0.77 (high-Continental / Elite). A minnow still
+        // gets only its backyard.
+        const REACH_BOOST: f32 = 1.3;
         let total = ordered.len() as f32;
-        let budget = (overall_score.clamp(0.0, 1.0) * total).round() as usize;
+        let reach_fraction = (overall_score.clamp(0.0, 1.0) * REACH_BOOST).min(1.0);
+        let budget = (reach_fraction * total).round() as usize;
         ordered.truncate(budget.max(1)); // always at least the home backyard
         ordered
     }
@@ -1646,6 +1653,15 @@ mod scout_reach_tests {
         assert!(minnow.len() < small.len());
         assert!(small.len() < big.len(), "small {} >= big {}", small.len(), big.len());
         assert!(big.len() < giant.len());
+
+        // A Continental club (a second-tier giant, ~0.65) reaches MOST of the
+        // world — the reach boost lifts the upper tiers toward global.
+        let continental = PipelineProcessor::reputation_scout_regions(home, 0.65);
+        assert!(
+            continental.len() >= 12,
+            "Continental reach {} should be near-global",
+            continental.len()
+        );
 
         // Home is always covered and always first (nearest-out ordering).
         assert_eq!(small[0], home);
