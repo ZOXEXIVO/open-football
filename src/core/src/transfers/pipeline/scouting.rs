@@ -20,8 +20,8 @@ use crate::transfers::pipeline::{
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;
 use crate::{
-    ClubPhilosophy, Country, Person, PlayerSquadStatus, PlayerStatusType, StaffEventType,
-    StaffPosition, TeamType,
+    ClubPhilosophy, Country, Person, PlayerSquadStatus, PlayerStatusType, ReputationLevel,
+    StaffEventType, StaffPosition, TeamType,
 };
 use chrono::Weekday;
 use std::cmp::Ordering;
@@ -960,9 +960,28 @@ impl PipelineProcessor {
                     .map(|s| &s.staff_attributes.knowledge);
 
                 const EMPTY_REGIONS: &[ScoutingRegion] = &[];
-                let scout_known_regions: &[ScoutingRegion] = scout_knowledge
-                    .map(|k| k.known_regions.as_slice())
-                    .unwrap_or(EMPTY_REGIONS);
+                // Top clubs run a GLOBAL scouting network: an Elite club sees
+                // talent in EVERY region, not just the handful its individual
+                // scouts personally cover. This is how a giant scouts a teenager
+                // in Africa or South America, signs him permanently, then loans
+                // him out to develop — the DevelopmentSigning → permanent buy →
+                // DevelopmentLoanPathway chain downstream already handles the
+                // rest. Reputation-CURRENT, so a club that climbs to Elite gains
+                // the reach (and the country-reputation step-down on the foreign
+                // filter below still stops a minnow scouting Serie A).
+                let club_is_elite = club
+                    .teams
+                    .main()
+                    .or_else(|| club.teams.teams.first())
+                    .map(|t| t.reputation.level() == ReputationLevel::Elite)
+                    .unwrap_or(false);
+                let scout_known_regions: &[ScoutingRegion] = if club_is_elite {
+                    ScoutingRegion::all()
+                } else {
+                    scout_knowledge
+                        .map(|k| k.known_regions.as_slice())
+                        .unwrap_or(EMPTY_REGIONS)
+                };
 
                 let observe_chance = config.daily_observation_chance(judging_ability);
                 if IntegerUtils::random(0, 100) > observe_chance {
