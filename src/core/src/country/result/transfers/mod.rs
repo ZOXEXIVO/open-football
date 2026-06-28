@@ -231,11 +231,15 @@ impl CountryResult {
             PipelineProcessor::build_shortlists(country, current_date);
             PipelineProcessor::evaluate_board_approvals(country, current_date);
             PipelineProcessor::initiate_negotiations(country, current_date);
-            PipelineProcessor::scan_loan_market(country, current_date);
-            // Seller-side push: National+ clubs broadcast their loan-listed
-            // players to scouts tier-by-tier (high → low) instead of only
-            // waiting to be scanned.
+            // Seller-side push runs BEFORE the borrower scan: a National+ parent
+            // evaluates the whole market and places each loan-listed development
+            // prospect at the best (highest-level) club where he'd still start,
+            // so it gets first crack at sending him UP rather than a constantly-
+            // scanning lower club snatching him first. The scan then fills
+            // everything the broadcast didn't place — the bulk of loan volume —
+            // so prospects are never starved of takers (no scan deferral).
             PipelineProcessor::broadcast_listed_loans(country, current_date);
+            PipelineProcessor::scan_loan_market(country, current_date);
             PipelineProcessor::scan_foreign_loan_market(country, &foreign_players, current_date);
         }
 

@@ -43,11 +43,6 @@ impl PipelineProcessor {
             ability: u8,
             age: u8,
             position_group: PlayerFieldPositionGroup,
-            /// Parent club's reputation tier. A development loanee whose parent
-            /// runs a loan broadcast (National+) is placed by that broadcast —
-            /// which evaluates the whole market and picks the best home — so a
-            /// borrower BELOW this tier defers to it instead of scanning him.
-            parent_tier: ReputationLevel,
             /// Parent club's main-team world reputation — drives the
             /// reputation-drop realism gate on the borrower side.
             parent_rep: u16,
@@ -113,9 +108,6 @@ impl PipelineProcessor {
                     ability: player.player_attributes.current_ability,
                     age: player.age(date),
                     position_group: group,
-                    parent_tier: parent_team
-                        .map(|t| t.reputation.level())
-                        .unwrap_or(ReputationLevel::Amateur),
                     parent_rep,
                     parent_best_in_group,
                     is_development,
@@ -149,15 +141,6 @@ impl PipelineProcessor {
 
                 for team in &club.teams.teams {
                     for player in team.players.iter() {
-                        // Loan-listed players are handled by the listed-market
-                        // scan above (and the parent broadcast). The unsolicited
-                        // path is for cold approaches to players who AREN'T
-                        // listed, so skip the listed ones — avoids double-handling
-                        // and stops a lower club snatching a broadcast-reserved
-                        // prospect here, bypassing the listed-scan deferral.
-                        if player.statuses.get().contains(&PlayerStatusType::Loa) {
-                            continue;
-                        }
                         let age = player.age(date);
                         let asset_class = asset_ctx.classify(player, date);
                         let is_development = match UnsolicitedLoanTarget::classify(
@@ -199,7 +182,6 @@ impl PipelineProcessor {
                             ability: player.player_attributes.current_ability,
                             age,
                             position_group: group,
-                            parent_tier: parent_team.reputation.level(),
                             parent_rep,
                             parent_best_in_group,
                             is_development,
@@ -336,18 +318,6 @@ impl PipelineProcessor {
                 !borrower_depth.has_room_for(group, loan_ability)
             };
 
-            // A development loanee whose resource-rich parent (National+) runs a
-            // loan broadcast is PLACED by that broadcast: the parent evaluates
-            // the whole market at once and sends him to the best club where he
-            // still starts. A club below the parent's tier must not snatch him
-            // first via its own scan — it can only get him if the parent's
-            // broadcast picks it. Clubs at or above the parent's tier are
-            // unaffected, and non-development (cover/surplus) loans are never
-            // reserved.
-            let broadcast_reserved = |l: &LoanListing| -> bool {
-                l.is_development && l.parent_tier.runs_loan_broadcast() && rep_level < l.parent_tier
-            };
-
             // Check unfulfilled transfer requests first. Emergency
             // free-agent depth requests are excluded — they're
             // serviced by the free-agent matcher only, not by loans.
@@ -387,7 +357,6 @@ impl PipelineProcessor {
                     .filter(|l| {
                         l.club_id != club.id
                             && !club.is_rival(l.club_id) // no loans from rivals
-                            && !broadcast_reserved(l)
                             && l.position_group == pos_group
                             && l.ability >= relaxed_min
                             && l.age <= relaxed_age_max
@@ -452,7 +421,6 @@ impl PipelineProcessor {
                     .filter(|l| {
                         l.club_id != club.id
                             && !club.is_rival(l.club_id)
-                            && !broadcast_reserved(l)
                             && l.age <= MAX_LOAN_TARGET_AGE
                             // Squad-average floor is for cover loans; a youth
                             // match-practice loan leans on the minutes gate.
@@ -502,7 +470,6 @@ impl PipelineProcessor {
                     .filter(|l| {
                         l.club_id != club.id
                             && !club.is_rival(l.club_id)
-                            && !broadcast_reserved(l)
                             && l.age <= MAX_LOAN_TARGET_AGE
                             // Squad-average floor is for cover loans; a youth
                             // match-practice loan leans on the minutes gate.
