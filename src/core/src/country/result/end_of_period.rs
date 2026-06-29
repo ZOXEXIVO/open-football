@@ -7,20 +7,81 @@ use crate::simulator::SimulatorData;
 use crate::utils::{DateUtils, FormattingUtils, IntegerUtils};
 use crate::{
     AwardReputationInput, AwardReputationKind, ClubResult, Country, HappinessEventType, Person,
-    Player, PlayerHappiness, PlayerMessage, PlayerMessageType, PlayerStatusType,
-    SeasonOutcomeContext, SeasonOutcomeKind, StaffPosition, TeamInfo, TeamType, TrophyEventContext,
-    TrophyKind,
+    Player, PlayerFieldPositionGroup, PlayerHappiness, PlayerMessage, PlayerMessageType,
+    PlayerStatusType, SeasonOutcomeContext, SeasonOutcomeKind, StaffPosition, Team, TeamInfo,
+    TeamType, TrophyEventContext, TrophyKind,
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 struct LoanReturnEvent {
     player_id: u32,
     borrowing_club_id: u32,
     parent_club_id: u32,
     borrowing_info: TeamInfo,
+}
+
+/// Per-team view of which loaned-in players a borrower is warehousing.
+/// Keeps the top `ideal_squad_depth` of each position group by current
+/// ability; a loaned-in player outside that set — long-settled, barely
+/// featuring, and with no permanent option pending — is surplus the
+/// borrower over-loaned and should be returned to its parent early.
+struct WarehousedLoans {
+    kept_ids: HashSet<u32>,
+}
+
+impl WarehousedLoans {
+    /// A loaned-in player needs at least this many days settled before the
+    /// borrower's appearance record is judged enough to call him surplus.
+    const SETTLE_DAYS: i64 = 90;
+    /// At/under this appearance count over the settling window the loanee
+    /// is plainly not being used.
+    const UNUSED_APPS: u16 = 3;
+
+    fn for_team(team: &Team) -> Self {
+        let mut kept_ids: HashSet<u32> = HashSet::new();
+        let groups = [
+            PlayerFieldPositionGroup::Goalkeeper,
+            PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Forward,
+        ];
+        for group in groups {
+            let mut ranked: Vec<(u32, u8)> = team
+                .players
+                .iter()
+                .filter(|p| p.position().position_group() == group)
+                .map(|p| (p.id, p.player_attributes.current_ability))
+                .collect();
+            ranked.sort_by(|a, b| b.1.cmp(&a.1));
+            for (id, _) in ranked.into_iter().take(group.ideal_squad_depth()) {
+                kept_ids.insert(id);
+            }
+        }
+        WarehousedLoans { kept_ids }
+    }
+
+    /// True when `player` is a non-expiring loaned-in player the borrower is
+    /// warehousing — outside the kept set, settled past `SETTLE_DAYS` with
+    /// `UNUSED_APPS` or fewer appearances and no permanent option — so the
+    /// loan should be ended early. Owned players and kept (playing) loanees
+    /// return false.
+    fn is_surplus(&self, player: &Player, date: NaiveDate) -> bool {
+        let Some(loan) = player.contract_loan.as_ref() else {
+            return false;
+        };
+        loan.loan_from_club_id.is_some()
+            && loan.expiration > date
+            && !self.kept_ids.contains(&player.id)
+            && loan.loan_future_fee.is_none()
+            && loan
+                .started
+                .map(|s| (date - s).num_days() >= Self::SETTLE_DAYS)
+                .unwrap_or(false)
+            && (player.statistics.played + player.statistics.played_subs) < Self::UNUSED_APPS
+    }
 }
 
 impl CountryResult {
@@ -814,16 +875,20 @@ impl CountryResult {
             // Cheap short-circuit: most days most clubs have zero expiring
             // loans, and we'd otherwise clone the main team + league strings
             // unconditionally. Scan first, then allocate.
-            let has_expiring = club.teams.iter().any(|team| {
+            // Pass when the club holds ANY loaned-in player, not just an
+            // expiring one: a non-expiring surplus loan can still be drained
+            // early (see the warehouse check below), so it must reach the
+            // per-team scan rather than be short-circuited away here.
+            let has_loan_activity = club.teams.iter().any(|team| {
                 team.players.iter().any(|player| {
                     player
                         .contract_loan
                         .as_ref()
-                        .map(|lc| lc.expiration <= date && lc.loan_from_club_id.is_some())
+                        .map(|lc| lc.loan_from_club_id.is_some())
                         .unwrap_or(false)
                 })
             });
-            if !has_expiring {
+            if !has_loan_activity {
                 continue;
             }
 
@@ -853,25 +918,34 @@ impl CountryResult {
                         )
                     };
 
+                // Warehoused-loan drain: a borrower that over-loaned a
+                // position sends back the surplus loaned-in stock early,
+                // alongside the loans that have simply expired.
+                let warehoused = WarehousedLoans::for_team(team);
+
                 for player in team.players.iter() {
-                    if let Some(ref loan_contract) = player.contract_loan {
-                        if loan_contract.expiration <= date {
-                            if let Some(parent_club_id) = loan_contract.loan_from_club_id {
-                                events.push(LoanReturnEvent {
-                                    player_id: player.id,
-                                    borrowing_club_id: club.id,
-                                    parent_club_id,
-                                    borrowing_info: TeamInfo {
-                                        name: team_name.clone(),
-                                        slug: team_slug.clone(),
-                                        reputation: team_reputation,
-                                        league_name: main_league_name.clone(),
-                                        league_slug: main_league_slug.clone(),
-                                    },
-                                });
-                            }
-                        }
+                    let Some(ref loan_contract) = player.contract_loan else {
+                        continue;
+                    };
+                    let Some(parent_club_id) = loan_contract.loan_from_club_id else {
+                        continue;
+                    };
+                    let expiring = loan_contract.expiration <= date;
+                    if !(expiring || warehoused.is_surplus(player, date)) {
+                        continue;
                     }
+                    events.push(LoanReturnEvent {
+                        player_id: player.id,
+                        borrowing_club_id: club.id,
+                        parent_club_id,
+                        borrowing_info: TeamInfo {
+                            name: team_name.clone(),
+                            slug: team_slug.clone(),
+                            reputation: team_reputation,
+                            league_name: main_league_name.clone(),
+                            league_slug: main_league_slug.clone(),
+                        },
+                    });
                 }
             }
         }
@@ -1597,8 +1671,8 @@ mod tests {
     use crate::shared::Location;
     use crate::{
         Club, ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
-        PlayerCollection, PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder,
-        TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+        PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
+        StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -2278,6 +2352,77 @@ mod tests {
         assert_eq!(parent.salary, pre_salary);
         assert_eq!(parent.expiration, pre_expiration);
         assert!(!loanee.is_on_loan());
+    }
+
+    #[test]
+    fn warehoused_loaned_in_keeper_is_surplus_while_kept_and_owned_are_not() {
+        // GK ideal depth is 3. Five keepers sit on the borrower's books:
+        // three owned plus two loaned in. Only the loaned-in keeper ranked
+        // outside the top three — settled, unused — is surplus to return.
+        let date = d(2026, 11, 1);
+        let loan_end = d(2027, 5, 31); // not yet expired
+        let started = d(2026, 6, 1); // 153 days settled
+        let gk_pos = PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: PlayerPositionType::Goalkeeper,
+                level: 16,
+            }],
+        };
+
+        let mut owned_a = make_player(1);
+        owned_a.positions = gk_pos.clone();
+        owned_a.player_attributes.current_ability = 80;
+        let mut owned_b = make_player(2);
+        owned_b.positions = gk_pos.clone();
+        owned_b.player_attributes.current_ability = 78;
+        let mut owned_c = make_player(3);
+        owned_c.positions = gk_pos.clone();
+        owned_c.player_attributes.current_ability = 76;
+
+        // Loaned-in but the squad's best keeper: kept (he plays), not returned.
+        let mut loaned_kept = make_loanee(11, d(2030, 6, 30), 100, 200, loan_end);
+        loaned_kept.positions = gk_pos.clone();
+        loaned_kept.player_attributes.current_ability = 95;
+        loaned_kept.statistics.played = 0;
+        loaned_kept.contract_loan.as_mut().unwrap().started = Some(started);
+
+        // Loaned-in, low ability, settled and unused: the warehoused surplus.
+        let mut loaned_surplus = make_loanee(10, d(2030, 6, 30), 100, 200, loan_end);
+        loaned_surplus.positions = gk_pos.clone();
+        loaned_surplus.player_attributes.current_ability = 60;
+        loaned_surplus.statistics.played = 0;
+        loaned_surplus.contract_loan.as_mut().unwrap().started = Some(started);
+
+        let team = make_team(
+            200,
+            200,
+            1,
+            vec![owned_a, owned_b, owned_c, loaned_kept, loaned_surplus],
+        );
+        let warehoused = WarehousedLoans::for_team(&team);
+        let players = &team.players.players;
+
+        assert!(
+            warehoused.is_surplus(
+                players.iter().find(|p| p.id == 10).unwrap(),
+                date
+            ),
+            "a settled, unused loaned-in keeper outside the top three is surplus"
+        );
+        assert!(
+            !warehoused.is_surplus(
+                players.iter().find(|p| p.id == 11).unwrap(),
+                date
+            ),
+            "a loaned-in keeper who is the squad's best is kept, not returned"
+        );
+        assert!(
+            !warehoused.is_surplus(
+                players.iter().find(|p| p.id == 3).unwrap(),
+                date
+            ),
+            "an owned keeper is never force-returned by the warehouse drain"
+        );
     }
 
     // ── Manual / AI loan parent-contract safety ───────────────────

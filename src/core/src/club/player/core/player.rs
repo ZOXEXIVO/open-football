@@ -290,6 +290,16 @@ pub enum TransferRequestReason {
     LongUnhappiness,
     /// Ambition fit deeply red and `Unh` >14 days — structural mismatch.
     AmbitionMismatch,
+    /// Severe, settled prestige mismatch — an ambitious player has clearly
+    /// outgrown his club's stature and wants to step up, even without
+    /// active unhappiness. Distinct from `AmbitionMismatch`, which needs a
+    /// spell of `Unh` on top; this fires on the structural deficit alone.
+    OutgrownClub,
+    /// Long service at ONE club breeds a desire for a new challenge — a
+    /// settled, ambitious player who has been somewhere many years wants a
+    /// fresh test elsewhere even if the club still fits him. Tenure-driven,
+    /// distinct from `OutgrownClub` (a club beneath his stature).
+    NewChallenge,
     /// Salary unhappiness past the request horizon (540-730d).
     SalaryUnresolved,
     /// Chronic homesickness mood + low morale / club_fit.

@@ -1090,7 +1090,19 @@ impl PipelineProcessor {
                         } else {
                             assignment.min_ability
                         };
-                    p.age >= age_min && p.age <= age_max && p.skill_ability >= effective_min
+                    // Gate on ability blended with sustained MATCH OUTPUT —
+                    // the same `stats_bonus` (rating over a real appearance
+                    // sample) the scout applies downstream when grading the
+                    // report. The gate previously read raw skill only, so a
+                    // modest-CA striker banging in goals (a high-rated
+                    // season) was filtered out of the pool before any club
+                    // that could afford him ever looked: the overperformer
+                    // was invisible by construction. A thin sample yields a
+                    // ~0 bonus, so a two-game fluke still can't sneak in.
+                    let form_bonus = config.stats_bonus(p.appearances, p.average_rating);
+                    let effective_ability =
+                        (p.skill_ability as i16 + form_bonus).clamp(1, 200) as u8;
+                    p.age >= age_min && p.age <= age_max && effective_ability >= effective_min
                 };
 
                 // Domestic players (always visible)

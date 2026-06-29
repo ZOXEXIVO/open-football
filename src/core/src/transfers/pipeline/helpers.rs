@@ -1949,27 +1949,44 @@ mod breakout_sweep_tests {
     }
 
     #[test]
-    fn form_discovery_admits_unlisted_breakout_but_availability_mode_does_not() {
-        // The mechanism behind the year-round watch vs the in-window sweep:
-        // a not-yet-listed breakout is admitted ONLY in form-discovery mode
-        // (the watch opens scout monitoring on talent). The in-window sweep,
-        // which only surfaces advertised availability, rejects him — so he is
-        // not immediately pursued for a transfer just because his form spiked.
+    fn availability_sweep_admits_unlisted_breakout_only_for_a_clearly_bigger_buyer() {
+        // P1c: a not-yet-listed breakout (parent_club_score 0.40) is pursued
+        // by the in-window availability sweep (form_discovery_mode = false)
+        // ONLY when the buyer clearly outranks the parent club — the
+        // realistic "giant comes for the smaller club's breakout star". This
+        // converts the year-round breakout monitoring into an actual approach
+        // instead of a row that sits until the selling club lists an asset it
+        // has no reason to list. A peer/smaller buyer still can't pursue an
+        // unlisted player on form alone, and form-discovery mode admits him
+        // for monitoring regardless.
         let mut target = BreakoutFixtures::loan_listed_breakout_striker();
         target.is_loan_listed = false; // not on any list at all
         target.breakout_score = 60.0;
-        let weak_group_buyer = BreakoutFixtures::top_domestic_buyer(true);
 
-        // Availability mode (in-window listed sweep): not on the market → out.
-        assert_eq!(
-            evaluate_listed_target(&target, &weak_group_buyer),
-            ListedTargetVerdict::Reject(ListedRejectReason::NotListed),
-            "an unlisted player is not pursued by the availability-driven sweep"
+        // Clearly bigger buyer (0.72 vs parent 0.40): now pursued in-window.
+        let big_buyer = BreakoutFixtures::top_domestic_buyer(true);
+        assert!(
+            matches!(
+                evaluate_listed_target(&target, &big_buyer),
+                ListedTargetVerdict::Accept(_)
+            ),
+            "a clearly bigger club must be able to pursue an unlisted breakout star"
         );
 
-        // Form-discovery mode (year-round watch): admitted on form, then the
-        // ordinary realism gates decide — here the weak group is a real need.
-        let mut watch_buyer = weak_group_buyer;
+        // A buyer that does NOT clearly outrank the parent: still out. The
+        // availability gate is checked before the tier window, so this is a
+        // clean NotListed regardless of his tier fit.
+        let mut peer_buyer = BreakoutFixtures::top_domestic_buyer(true);
+        peer_buyer.buyer_rep_score = 0.45; // below parent 0.40 + 0.10 gap
+        assert_eq!(
+            evaluate_listed_target(&target, &peer_buyer),
+            ListedTargetVerdict::Reject(ListedRejectReason::NotListed),
+            "a peer/smaller club still can't pursue an unlisted player on form alone"
+        );
+
+        // Form-discovery mode (year-round watch): admitted for monitoring on
+        // form, independent of the rep gap.
+        let mut watch_buyer = BreakoutFixtures::top_domestic_buyer(true);
         watch_buyer.form_discovery_mode = true;
         assert!(
             matches!(

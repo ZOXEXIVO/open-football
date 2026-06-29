@@ -172,9 +172,20 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
     // — they only decide whether the player enters this path at all.
     let strong_breakout = target.breakout_score >= BreakoutPerformanceSignal::BREAKOUT_THRESHOLD;
     let publicly_available = target.is_listed || target.is_transfer_requested || target.is_unhappy;
+    // A clearly bigger club may pursue a smaller club's breakout star even
+    // when he isn't listed — the realistic "giant comes for the second-
+    // division top scorer". Bounded by a genuine breakout AND a real
+    // reputation gap to the parent club; the tier-window, affordability and
+    // plausibility gates below still apply, so this never becomes a
+    // free-for-all. It converts the year-round breakout MONITORING that
+    // `scan_breakout_form` builds into an actual in-window approach instead
+    // of a row that just sits on the books waiting for the player to be
+    // listed (which his selling club, holding an asset, rarely does).
+    let buyer_outranks_parent = ctx.buyer_rep_score >= target.parent_club_score + 0.10;
     let available_enough = publicly_available
         || (target.is_loan_listed && strong_breakout)
-        || (ctx.form_discovery_mode && strong_breakout);
+        || (ctx.form_discovery_mode && strong_breakout)
+        || (strong_breakout && buyer_outranks_parent);
     if !available_enough {
         return Reject(NotListed);
     }

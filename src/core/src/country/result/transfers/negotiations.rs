@@ -389,16 +389,14 @@ impl CountryResult {
         // negotiations skip the verdict (we don't have the player in
         // this country's clubs to inspect).
         let plausibility = Self::plausibility_for(country, neg_data, date);
-        let (seller_delta, min_fee_multiplier, importance) = match &plausibility {
-            Some(TransferPlausibilityVerdict::Allow(adj)) => {
-                let importance = Self::plausibility_importance(country, neg_data, date);
-                (
-                    adj.seller_acceptance_delta,
-                    adj.minimum_fee_multiplier,
-                    importance,
-                )
-            }
-            _ => (0.0_f32, 1.0_f64, 0.0_f32),
+        // Only the seller-acceptance delta is read up front now. The
+        // importance-driven *premium* (the old `minimum_fee_multiplier`
+        // wall) is no longer a reason to refuse to talk — it is negotiated
+        // in the club-negotiation phase via the seller reservation. See the
+        // note where `chance` is finalized below.
+        let seller_delta = match &plausibility {
+            Some(TransferPlausibilityVerdict::Allow(adj)) => adj.seller_acceptance_delta,
+            _ => 0.0_f32,
         };
 
         let ratio = if neg_data.asking_price > 0.0 {
@@ -455,34 +453,19 @@ impl CountryResult {
             }
         }
 
-        // Important-player floor: if the player counts as important and
-        // the offer doesn't clear the plausibility-driven minimum-fee
-        // multiplier, the seller refuses up front. Listed or distressed
-        // players slip past via the availability exemption in the
-        // plausibility evaluator (min_fee_multiplier shrinks back to 1).
-        if !neg_data.is_loan
-            && importance >= 0.78
-            && min_fee_multiplier > 1.0
-            && ratio < min_fee_multiplier
-        {
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                let reason = if importance >= 0.90 {
-                    NegotiationRejectionReason::PlayerTooImportant
-                } else {
-                    NegotiationRejectionReason::AskingPriceTooHigh
-                };
-                negotiation.reject_with_reason(reason);
-            }
-            Self::reopen_listing_for_player(country, neg_data.player_id);
-            PipelineProcessor::on_negotiation_resolved(
-                country,
-                neg_data.buying_club_id,
-                neg_data.player_id,
-                false,
-            );
-            return;
-        }
-
+        // Important players are harder to prise away, but the seller no
+        // longer refuses to TALK up front over an opening bid below a
+        // replacement-value premium. That premium is settled in the
+        // club-negotiation phase (seller reservation + buyer escalation),
+        // and the absolute lower bound is already enforced above by the
+        // `ratio < 0.45` insult guard and `SellerFeeFloor`. The importance
+        // friction now lives entirely in `seller_delta`, which lowers the
+        // engagement chance — so a happy key man still rarely moves, while
+        // a genuinely bigger, determined suitor (or a player who has
+        // outgrown his club and reads as available) can open talks and pay
+        // the premium. This is what unblocked permanent moves for
+        // established players: the old wall demanded an offer above the
+        // buyer's own maximum, so no bid could ever clear it.
         chance += seller_delta;
 
         if ratio >= 1.15 {
@@ -684,8 +667,17 @@ impl CountryResult {
         }
 
         let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
-        if rep_diff > 0.15 && importance < 0.85 {
-            seller_reservation -= 0.04;
+        if rep_diff > 0.15 {
+            // A clearly bigger suitor erodes the seller's leverage — the
+            // wider the reputation gap, the less a small club can hold a
+            // coveted player. This was previously cut off entirely for key
+            // men (importance >= 0.85), which left a small club's star
+            // unsellable to any giant; now the discount is softened at high
+            // importance, not removed, so the standout-at-a-minnow → giant
+            // move can actually clear the reservation.
+            let gap = ((rep_diff - 0.15) * 0.20).min(0.11) as f64;
+            let softener = if importance < 0.85 { 1.0 } else { 0.5 };
+            seller_reservation -= (0.04 + gap) * softener;
         }
 
         if neg_data.selling_country_id.is_none()
@@ -734,8 +726,20 @@ impl CountryResult {
                 // Aiming at the ask gives the escalation headroom to clear
                 // the reservation; SellerFeeFloor + the reservation bands
                 // still gate how high the buyer realistically goes.
+                // Escalate toward the price the seller will actually accept
+                // (asking × his reservation), not merely the asking price.
+                // A key man not pushing to leave commands a premium ABOVE
+                // asking; aiming only at asking left every such deal short
+                // of the reservation band, so it timed out. Clamped to
+                // [1.0, 1.30]×asking: never below asking (so the working
+                // available-player path is unchanged — its reservation is
+                // <= 1.0 and clamps to 1.0), and never above a 1.30 premium
+                // (well within the strategy overpay ceiling, so the buyer
+                // can plausibly fund it). `SellerFeeFloor` still bounds the
+                // bottom.
+                let reservation_mult = seller_reservation.clamp(1.0, 1.30);
                 let target = if neg_data.asking_price > 0.0 {
-                    neg_data.asking_price
+                    neg_data.asking_price * reservation_mult
                 } else {
                     negotiation.current_offer.base_fee.amount * 1.15
                 };
@@ -1351,6 +1355,42 @@ impl CountryResult {
                 return;
             }
 
+            // Reserve the agreed fee against the buyer's transfer budget the
+            // moment the deal closes, so two deals agreed in the same window
+            // can't both bank on the same money and one then silently
+            // collapse when its deferred execution finds the budget already
+            // spent. If the budget can't cover it the club genuinely can't
+            // fund the move — refuse it cleanly here rather than agree a deal
+            // that would evaporate at execution (the old silent drop: market
+            // history written then retracted, interest cleared, player never
+            // moved). The reservation is released at execution-start, where
+            // the real purchase accounting runs. Loans (lighter accounting)
+            // and pool free agents (already returned above) are exempt.
+            if !neg_data.is_loan {
+                let reserved = country
+                    .clubs
+                    .iter_mut()
+                    .find(|c| c.id == neg_data.buying_club_id)
+                    .map(|c| c.finance.reserve_transfer_budget(neg_data.offer_amount))
+                    .unwrap_or(true);
+                if !reserved {
+                    if let Some(negotiation) =
+                        country.transfer_market.negotiations.get_mut(&neg_id)
+                    {
+                        negotiation
+                            .reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
+                    }
+                    Self::reopen_listing_for_player(country, neg_data.player_id);
+                    PipelineProcessor::on_negotiation_resolved(
+                        country,
+                        neg_data.buying_club_id,
+                        neg_data.player_id,
+                        false,
+                    );
+                    return;
+                }
+            }
+
             // Resolve names: domestic from country, foreign from cached names
             let player_name = if is_foreign {
                 neg_data.player_name.clone()
@@ -1612,50 +1652,6 @@ impl CountryResult {
             date,
         );
         TransferMovePlausibility::player_terms_floor(&inputs)
-    }
-
-    /// Convenience: rebuild the same inputs and read off the importance
-    /// score. Used by the initial-approach floor that protects key
-    /// players from cheap bids.
-    fn plausibility_importance(
-        country: &Country,
-        neg_data: &NegotiationData,
-        date: NaiveDate,
-    ) -> f32 {
-        if neg_data.selling_country_id.is_some() {
-            return 0.0;
-        }
-        let buyer = match country
-            .clubs
-            .iter()
-            .find(|c| c.id == neg_data.buying_club_id)
-        {
-            Some(c) => c,
-            None => return 0.0,
-        };
-        let seller = match country
-            .clubs
-            .iter()
-            .find(|c| c.id == neg_data.selling_club_id)
-        {
-            Some(c) => c,
-            None => return 0.0,
-        };
-        let player = match find_player_in_country(country, neg_data.player_id) {
-            Some(p) => p,
-            None => return 0.0,
-        };
-        let inputs = TransferPlausibilityBuilder::from_clubs(
-            country,
-            buyer,
-            seller,
-            player,
-            neg_data.asking_price.max(neg_data.offer_amount),
-            neg_data.is_loan,
-            neg_data.is_unsolicited,
-            date,
-        );
-        TransferPlausibilityEvaluator::player_importance(&inputs)
     }
 
     /// Country-aware variant of [`Self::deadline_urgency`]. Reads the
@@ -2710,6 +2706,57 @@ mod seller_fee_floor_tests {
             neg.rejection_reason,
             Some(NegotiationRejectionReason::AskingPriceTooHigh),
             "the rejection must come from the market-value fee floor"
+        );
+    }
+
+    /// P0a regression: a FAIR (at-asking) bid for an important, non-listed
+    /// core player must no longer be walled off up front as
+    /// `PlayerTooImportant`. Before the floor/ceiling reconciliation the
+    /// importance multiplier (~1.85× asking for a core man) was an
+    /// unreachable wall, so any at-asking bid died deterministically with
+    /// `PlayerTooImportant` before a single acceptance roll — no buyer
+    /// could ever sign an established player. The bid may still fail the
+    /// acceptance roll (`SellerRefusedToNegotiate`), but never on the wall.
+    #[test]
+    fn fair_bid_for_core_player_is_not_walled_off_as_too_important() {
+        let target = Ff::player(
+            100,
+            150,
+            26,
+            5000,
+            PlayerSquadStatus::KeyPlayer,
+            Ff::far_contract(),
+        );
+        let mut country = Ff::country(vec![target]);
+        // Offer == asking (ratio 1.0), both far above the market-value
+        // floor so `SellerFeeFloor` passes and only the (now-removed)
+        // importance wall could have rejected it.
+        let neg = TransferNegotiation::new(
+            Ff::NEG_ID,
+            100,
+            0,
+            Ff::SELLER_ID,
+            Ff::BUYER_ID,
+            TransferOffer::new(
+                CurrencyValue::new(50_000_000.0, Currency::Usd),
+                Ff::BUYER_ID,
+                Ff::date(),
+            ),
+            Ff::date(),
+            0.75,
+            0.40,
+            26,
+            0.5,
+        );
+        country.transfer_market.negotiations.insert(Ff::NEG_ID, neg);
+        let nd = Ff::neg_data(100, 50_000_000.0, 50_000_000.0);
+        CountryResult::resolve_initial_approach(&mut country, Ff::NEG_ID, &nd, Ff::date());
+
+        let neg = &country.transfer_market.negotiations[&Ff::NEG_ID];
+        assert_ne!(
+            neg.rejection_reason,
+            Some(NegotiationRejectionReason::PlayerTooImportant),
+            "a fair at-asking bid must not be walled off as too-important"
         );
     }
 

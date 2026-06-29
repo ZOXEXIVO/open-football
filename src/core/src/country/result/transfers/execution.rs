@@ -357,6 +357,24 @@ pub(crate) fn execute_transfer(
     let buying_club_id = transfer.buying_club_id;
     let is_loan = transfer.is_loan;
 
+    // The fee was reserved against the buyer's transfer budget when the deal
+    // was agreed (see `resolve_medical`). Release that reservation up front
+    // so the real purchase accounting below runs against the restored
+    // budget — and so ANY early-out here (self-transfer, route block, squad
+    // full, lost race) leaves the budget intact instead of leaking the
+    // set-aside money. Loans never reserved, so they're skipped.
+    if !is_loan {
+        if let Some(buying_country) = data.country_mut(buying_country_id) {
+            if let Some(buying_club) = buying_country
+                .clubs
+                .iter_mut()
+                .find(|c| c.id == buying_club_id)
+            {
+                buying_club.finance.refund_transfer_budget(transfer.fee);
+            }
+        }
+    }
+
     // Safety: never transfer/loan a player to their own club
     if selling_club_id == buying_club_id {
         debug!(

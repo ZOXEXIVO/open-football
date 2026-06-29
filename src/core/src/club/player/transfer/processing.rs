@@ -630,6 +630,53 @@ impl Player {
             }
         }
 
+        // Outgrown club: an ambitious player at a club well beneath his
+        // stature wants to step UP even while otherwise settled — healthy
+        // career ambition, not a grievance. Unlike `AmbitionMismatch` it
+        // needs no spell of `Unh`; the structural prestige deficit alone
+        // drives it. Gated hard so only players who have genuinely outgrown
+        // their club agitate — a deep ambition-fit deficit, real personal
+        // ambition, still young enough to climb, and settled at the club
+        // for a full year (a recent signing gets his look first). This is
+        // the missing "good player at a small club finally moves up"
+        // signal; without it the market only ever recirculated unhappy or
+        // surplus players, so established players never moved.
+        if !recently_transferred
+            && self.happiness.factors.ambition_fit <= -10.0
+            && self.attributes.ambition >= 15.0
+            && age <= 28
+            && self
+                .days_since_transfer(now)
+                .map(|d| d >= 365)
+                .unwrap_or(true)
+        {
+            active_reasons.push(TransferRequestReason::OutgrownClub);
+        }
+
+        // New challenge: long service at ONE club breeds a desire for a fresh
+        // test, independent of whether he has outgrown it. This is the "many
+        // years at one club" case — a settled star at a big club who has won
+        // it all and wants a new league — which the prestige-based
+        // OutgrownClub signal (a too-small club + youth) misses. The tenure
+        // restlessness has already dented his morale via `ambition_fit`; this
+        // turns a long-festering itch into an actual request. Gated tightly —
+        // genuine ambition, below-average loyalty, a prime mobile age and a
+        // long stay — so a true one-club legend or a content servant stays
+        // put rather than every veteran walking out.
+        if !recently_transferred {
+            let years_at_club = self
+                .days_since_transfer(now)
+                .map(|d| d as f32 / 365.0)
+                .unwrap_or_else(|| (age as f32 - 17.0).max(0.0));
+            let restless_for_a_new_challenge = years_at_club >= 8.0
+                && self.attributes.ambition >= 16.0
+                && self.attributes.loyalty < 12.0
+                && (25..=30).contains(&age);
+            if restless_for_a_new_challenge {
+                active_reasons.push(TransferRequestReason::NewChallenge);
+            }
+        }
+
         if let Some(first_request) = self.happiness.last_salary_negotiation {
             let days = (now - first_request).num_days();
             if days > 540 && days <= 730 && self.happiness.factors.salary_satisfaction <= -5.0 {
@@ -1696,6 +1743,140 @@ mod career_desire_tests {
         assert!(
             p.transfer_request_reasons
                 .contains(&TransferRequestReason::AmbitionMismatch)
+        );
+    }
+
+    #[test]
+    fn outgrown_club_ambitious_player_requests_step_up_without_unhappiness() {
+        // Ambitious (16), young (24), long-settled (400d) striker whose
+        // club is far beneath his stature (ambition_fit -10) — but he is
+        // NOT unhappy. He should still hand in a request to step up, via
+        // the new OutgrownClub reason, with no Unh ever on his record.
+        let today = d(2026, 5, 1);
+        let mut p = build(24, 16.0, 12.0, 10.0, 12.0, 1, 150, 6000, 400, today);
+        p.happiness.factors.ambition_fit = -10.0;
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "es".to_string();
+        ctx.player_nationality_continent_id = 1;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &ctx);
+        assert!(
+            p.transfer_request_reasons
+                .contains(&TransferRequestReason::OutgrownClub),
+            "an ambitious player who outgrew his club should request a step up"
+        );
+        assert!(p.statuses.get().contains(&PlayerStatusType::Req));
+        assert!(
+            !p.statuses.get().contains(&PlayerStatusType::Unh),
+            "OutgrownClub must not require the player to be unhappy first"
+        );
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::AmbitionMismatch),
+            "AmbitionMismatch needs Unh; only OutgrownClub should fire here"
+        );
+    }
+
+    #[test]
+    fn content_player_at_fitting_club_does_not_request_step_up() {
+        // Same ambitious young player, but his club fits his stature
+        // (ambition_fit only mildly negative) — no desire to move on.
+        let today = d(2026, 5, 1);
+        let mut p = build(24, 16.0, 12.0, 10.0, 12.0, 1, 150, 6000, 400, today);
+        p.happiness.factors.ambition_fit = -3.0;
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "es".to_string();
+        ctx.player_nationality_continent_id = 1;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &ctx);
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::OutgrownClub)
+        );
+        assert!(!p.statuses.get().contains(&PlayerStatusType::Req));
+    }
+
+    #[test]
+    fn low_ambition_servant_does_not_outgrow_club() {
+        // A deep prestige deficit, but the player simply isn't ambitious
+        // (12): a loyal lower-league servant doesn't agitate to leave.
+        // Discovering HIM is the buyer side's job, not a want-away.
+        let today = d(2026, 5, 1);
+        let mut p = build(24, 12.0, 12.0, 14.0, 12.0, 1, 150, 6000, 400, today);
+        p.happiness.factors.ambition_fit = -12.0;
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "es".to_string();
+        ctx.player_nationality_continent_id = 1;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &ctx);
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::OutgrownClub),
+            "a low-ambition player doesn't agitate even at a too-small club"
+        );
+    }
+
+    #[test]
+    fn long_serving_ambitious_player_wants_a_new_challenge() {
+        let today = d(2026, 5, 1);
+        // 28-y-o, very ambitious (17), below-average loyalty (8), nine years
+        // at the same club. Even with a healthy ambition_fit (the club still
+        // fits him — he hasn't outgrown it) he wants a fresh test elsewhere.
+        let mut p = build(28, 17.0, 12.0, 8.0, 12.0, 1, 150, 6000, 9 * 365, today);
+        p.happiness.factors.ambition_fit = 2.0; // club still fits — not outgrown
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "es".to_string();
+        ctx.player_nationality_continent_id = 1;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &ctx);
+        assert!(
+            p.transfer_request_reasons
+                .contains(&TransferRequestReason::NewChallenge),
+            "a long-serving ambitious player should want a new challenge"
+        );
+        assert!(p.statuses.get().contains(&PlayerStatusType::Req));
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::OutgrownClub),
+            "he hasn't outgrown the club — the itch is tenure, not stature"
+        );
+    }
+
+    #[test]
+    fn loyal_one_club_man_stays_despite_long_service() {
+        let today = d(2026, 5, 1);
+        // Same long service and ambition, but a fiercely loyal club legend
+        // (loyalty 18) — he stays put.
+        let mut p = build(28, 17.0, 12.0, 18.0, 12.0, 1, 150, 6000, 9 * 365, today);
+        p.happiness.factors.ambition_fit = 2.0;
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "es".to_string();
+        ctx.player_nationality_continent_id = 1;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &ctx);
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::NewChallenge),
+            "a fiercely loyal club legend stays despite long service"
+        );
+    }
+
+    #[test]
+    fn recently_arrived_player_has_no_new_challenge_itch() {
+        let today = d(2026, 5, 1);
+        // Same ambitious profile but only two years at the club — far too
+        // freshly settled to be restless yet.
+        let mut p = build(28, 17.0, 12.0, 8.0, 12.0, 1, 150, 6000, 2 * 365, today);
+        p.happiness.factors.ambition_fit = 2.0;
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "es".to_string();
+        ctx.player_nationality_continent_id = 1;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &ctx);
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::NewChallenge),
+            "a player only two years in isn't itching for a move"
         );
     }
 

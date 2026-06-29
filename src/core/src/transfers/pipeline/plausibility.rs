@@ -1010,6 +1010,19 @@ impl TransferMovePlausibility {
             }
         }
 
+        // Upward / lateral move floor: a bigger or peer club should not
+        // bury a smaller club's standout beneath every listed or free
+        // alternative on its shortlist. The importance dampers above are a
+        // SELLER-side reality (he's dear and hard to prise away); they must
+        // not also make the BUYER rank his most desirable realistic target
+        // last. For a move that is NOT a step down for the player
+        // (`drop <= 0`, i.e. the buyer is same-or-bigger), floor the
+        // shortlist multiplier so the standout stays competitive on the
+        // board — the seller-side gates still make the actual deal hard.
+        if drop <= 0.0 {
+            adj.shortlist_score_multiplier = adj.shortlist_score_multiplier.max(0.70);
+        }
+
         adj
     }
 }

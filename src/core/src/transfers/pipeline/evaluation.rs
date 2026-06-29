@@ -114,15 +114,26 @@ pub(in crate::transfers::pipeline) fn compute_group_needs(
             continue;
         }
 
-        // (2) Quality upgrade — best player at this group below tier baseline
+        // (2) Quality upgrade — best player at this group below tier baseline.
+        // Ambition-adjusted tolerance: a club's appetite for an upgrade
+        // scales with its standing. The base `quality_tolerance` keeps small
+        // clubs patient, but a high-reputation side shops for an upgrade when
+        // its best is merely AT the tier standard rather than clearly below
+        // it — a title contender strengthens an adequate XI instead of
+        // settling for the divisional baseline. Without this, clubs only ever
+        // shopped to patch a hole, never to get better, so an established
+        // starter at another club was almost never a target. The budget split
+        // per need and the seller-side premium still bound how many of these
+        // actually complete.
         let baseline = PipelineProcessor::tier_starter_ca_score(rep_score, group);
+        let upgrade_tolerance = quality_tolerance - (rep_score * 5.0).round() as i16;
         let best_in_group = squad
             .iter()
             .filter(|p| p.primary_position.position_group() == group)
             .map(|p| p.current_ability)
             .max()
             .unwrap_or(0);
-        if (best_in_group as i16) < baseline as i16 - quality_tolerance {
+        if (best_in_group as i16) < baseline as i16 - upgrade_tolerance {
             needs.push(GroupNeed {
                 group,
                 representative_pos,

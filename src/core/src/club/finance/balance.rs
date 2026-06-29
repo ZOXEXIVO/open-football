@@ -214,6 +214,39 @@ impl ClubFinances {
         true
     }
 
+    /// Set `amount` aside from the transfer budget the moment a permanent
+    /// deal is AGREED, so two deals agreed in the same window can't both
+    /// bank on the same money and one then silently collapse when its
+    /// deferred execution finds the budget already gone. Returns `false`
+    /// (leaving the budget untouched) when it can't cover the fee — the
+    /// caller must then refuse the deal rather than agree one it can't
+    /// fund. Pure budget bookkeeping: no cash leaves and nothing amortizes
+    /// until the move actually executes (see [`Self::register_transfer_purchase`]).
+    /// A club with no transfer budget configured (`None`) is unconstrained,
+    /// so the reservation always succeeds.
+    pub fn reserve_transfer_budget(&mut self, amount: f64) -> bool {
+        let amount = amount.max(0.0);
+        if let Some(ref mut budget) = self.transfer_budget {
+            if budget.amount < amount {
+                return false;
+            }
+            budget.amount -= amount;
+        }
+        true
+    }
+
+    /// Release a reservation taken by [`Self::reserve_transfer_budget`].
+    /// Called at execution-start before the real purchase is booked (so the
+    /// normal `register_transfer_purchase` accounting runs against the
+    /// restored budget), and on a collapsed/abandoned deferred move (so the
+    /// set-aside money is never leaked). No-op when no transfer budget is set.
+    pub fn refund_transfer_budget(&mut self, amount: f64) {
+        let amount = amount.max(0.0);
+        if let Some(ref mut budget) = self.transfer_budget {
+            budget.amount += amount;
+        }
+    }
+
     /// Buying-side loan fee payment — immediate cash + immediate P&L,
     /// classified as `expense_loan_fees`. Loans use small fees and don't
     /// amortize like a permanent purchase.
@@ -659,6 +692,60 @@ mod ffp_tests {
         ]);
         let loss = f.three_year_loss(d(2025, 1));
         assert!(loss < 1_000_000, "old loss leaked in: {loss}");
+    }
+}
+
+#[cfg(test)]
+mod transfer_budget_reservation_tests {
+    use super::*;
+    use crate::shared::{Currency, CurrencyValue};
+
+    fn club_with_budget(budget: f64) -> ClubFinances {
+        ClubFinances::with_budgets(
+            0,
+            vec![],
+            Some(CurrencyValue::new(budget, Currency::Usd)),
+            None,
+        )
+    }
+
+    #[test]
+    fn reservation_gates_a_second_deal_that_would_overcommit() {
+        // Budget 100; the first 60 deal reserves; a second 60 deal can't be
+        // funded against the same money and is refused at agreement, not
+        // silently dropped when its deferred execution finds the budget gone.
+        let mut fin = club_with_budget(100.0);
+        assert!(
+            fin.reserve_transfer_budget(60.0),
+            "first deal fits the budget"
+        );
+        assert!(
+            !fin.reserve_transfer_budget(60.0),
+            "a second deal banking on the same money must be refused"
+        );
+    }
+
+    #[test]
+    fn refund_restores_a_reservation() {
+        // A collapsed / abandoned deal refunds its set-aside money so the
+        // budget is reusable and nothing leaks.
+        let mut fin = club_with_budget(100.0);
+        assert!(fin.reserve_transfer_budget(60.0));
+        fin.refund_transfer_budget(60.0);
+        assert!(
+            fin.reserve_transfer_budget(60.0),
+            "refund must free the budget for another deal"
+        );
+    }
+
+    #[test]
+    fn club_without_a_transfer_budget_is_unconstrained() {
+        // No mandate set (fresh world / test fixture): reservations always
+        // succeed and the refund is a harmless no-op.
+        let mut fin = ClubFinances::new(0, vec![]);
+        assert!(fin.reserve_transfer_budget(1_000_000.0));
+        fin.refund_transfer_budget(1_000_000.0);
+        assert!(fin.reserve_transfer_budget(5_000_000.0));
     }
 }
 

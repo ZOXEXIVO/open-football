@@ -486,8 +486,18 @@ impl TeamBehaviour {
                 calculate_playing_time_factor_for_complaint(player, &opp, &cfg) * frustration_mult;
 
             if playing_time_factor <= cfg.complaint_threshold {
-                let talk_type = if age < 23 {
-                    // Young players request loans, not just playing time
+                // A young player normally asks for a development LOAN, not a
+                // permanent exit. But a settled long-term backup — at the
+                // club a couple of seasons already, old enough that another
+                // loan back to the same bench won't unstick him — needs a
+                // PERMANENT move to actually start somewhere. Without this a
+                // perpetual #2 (e.g. a young keeper behind an entrenched
+                // starter) loans out and returns to the bench indefinitely,
+                // never settling anywhere he plays. The talk can still be
+                // resolved by giving him minutes; only a genuine, unfixable
+                // block escalates to Req → a permanent move.
+                let settled_long_term_backup = age >= 21 && opp.days_since_join >= 540;
+                let talk_type = if age < 23 && !settled_long_term_backup {
                     ManagerTalkType::LoanRequest
                 } else {
                     ManagerTalkType::PlayingTimeRequest

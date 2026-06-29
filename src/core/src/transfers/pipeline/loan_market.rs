@@ -11,9 +11,10 @@ use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
+use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
 use crate::transfers::pipeline::{LoanBroadcast, LoanOutStatus, TransferRequestStatus};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
@@ -28,6 +29,39 @@ use crate::{
 const MAX_LOAN_TARGET_AGE: u8 = 34;
 
 impl PipelineProcessor {
+    /// Pending **incoming-loan** targets per borrowing club, resolved to
+    /// `(position group, current ability)`. Folded into every borrower
+    /// depth snapshot so a loan already in flight counts against the
+    /// position cap — the cap then holds across the broadcast → domestic
+    /// → foreign scans within a tick (each registers its own negotiations
+    /// before the next runs) and across days while a loan negotiation is
+    /// still pending. Without it the depth gate saw only the physical
+    /// roster, so a club could open several keeper loans against the same
+    /// "1 GK" snapshot and overshoot the depth cap.
+    fn pending_incoming_loans_by_club(
+        country: &Country,
+    ) -> HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>> {
+        let mut map: HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>> = HashMap::new();
+        for negotiation in country.transfer_market.negotiations.values() {
+            if !negotiation.is_loan {
+                continue;
+            }
+            if !matches!(
+                negotiation.status,
+                NegotiationStatus::Pending | NegotiationStatus::Countered
+            ) {
+                continue;
+            }
+            if let Some(player) = Self::find_player_in_country(country, negotiation.player_id) {
+                map.entry(negotiation.buying_club_id).or_default().push((
+                    player.position().position_group(),
+                    player.player_attributes.current_ability,
+                ));
+            }
+        }
+        map
+    }
+
     // ============================================================
     // Step 6.5: Scan Loan Market — Small clubs proactively seek loans
     // ============================================================
@@ -212,6 +246,7 @@ impl PipelineProcessor {
         }
 
         let mut actions: Vec<LoanScanAction> = Vec::new();
+        let pending_loans = Self::pending_incoming_loans_by_club(country);
 
         for club in &country.clubs {
             if club.teams.teams.is_empty() {
@@ -311,7 +346,8 @@ impl PipelineProcessor {
             // Borrower-side depth snapshot — shared with the foreign
             // scan. A club with 3 mediocre GKs should still loan a
             // world-class GK, but not a 4th mediocre one.
-            let borrower_depth = BorrowerPositionDepth::snapshot(team);
+            let borrower_depth = BorrowerPositionDepth::snapshot(team)
+                .with_pending_loans(pending_loans.get(&club.id).map_or(&[], |v| v.as_slice()));
             let borrower_world_rep = team.reputation.world;
 
             let should_skip_loan = |group: PlayerFieldPositionGroup, loan_ability: u8| -> bool {
@@ -750,6 +786,7 @@ impl PipelineProcessor {
             .values()
             .map(|n| n.player_id)
             .collect();
+        let pending_loans = Self::pending_incoming_loans_by_club(country);
 
         // ── Pass 1 (read): broadcastable players ────────────────────────
         // A player is broadcastable when he carries an Available loan
@@ -870,6 +907,11 @@ impl PipelineProcessor {
             offer_amount: f64,
         }
         let mut actions: Vec<PushAction> = Vec::new();
+        // One borrower must not be handed two same-group loans in a single
+        // broadcast tick: per-player `has_active_negotiation_for` and the
+        // registered-loan snapshot both miss it, because broadcast actions
+        // aren't opened as negotiations until Pass 4.
+        let mut claimed_loans: HashSet<(u32, PlayerFieldPositionGroup)> = HashSet::new();
         for b in &broadcastable {
             if in_negotiation.contains(&b.player_id) {
                 continue;
@@ -919,8 +961,12 @@ impl PipelineProcessor {
                 {
                     continue;
                 }
+                if claimed_loans.contains(&(club.id, b.group)) {
+                    continue;
+                }
                 let borrower_rep = team.reputation.world;
-                let depth = BorrowerPositionDepth::snapshot(team);
+                let depth = BorrowerPositionDepth::snapshot(team)
+                    .with_pending_loans(pending_loans.get(&club.id).map_or(&[], |v| v.as_slice()));
                 if !depth.has_room_for(b.group, b.ability)
                     || !depth.would_get_loan_minutes(b.group, b.ability, b.is_development)
                     || !Self::loan_reputation_drop_ok(
@@ -945,6 +991,7 @@ impl PipelineProcessor {
                     selling_club_id: b.parent_club_id,
                     offer_amount: FormattingUtils::round_fee(b.asking * 0.8),
                 });
+                claimed_loans.insert((borrower_id, b.group));
             }
         }
 
@@ -1094,6 +1141,7 @@ impl PipelineProcessor {
         }
 
         let mut actions: Vec<ForeignLoanAction> = Vec::new();
+        let pending_loans = Self::pending_incoming_loans_by_club(country);
 
         for club in &country.clubs {
             if club.teams.teams.is_empty() {
@@ -1174,7 +1222,8 @@ impl PipelineProcessor {
             // domestic scan uses to avoid loaning into an already-full
             // position. Building it once here keeps the filter inside
             // `foreign_loans.iter()` cheap.
-            let borrower_position_depth = BorrowerPositionDepth::snapshot(team);
+            let borrower_position_depth = BorrowerPositionDepth::snapshot(team)
+                .with_pending_loans(pending_loans.get(&club.id).map_or(&[], |v| v.as_slice()));
 
             // Staged-plausibility buyer context, built once per club so the
             // foreign-loan filter can run the same cross-border veto the
@@ -1736,6 +1785,20 @@ impl BorrowerPositionDepth {
         BorrowerPositionDepth { rows }
     }
 
+    /// Fold in-flight incoming-loan targets (`(group, ability)`) into the
+    /// per-group ability lists, so `has_room_for` / `would_get_loan_minutes`
+    /// treat a loan being negotiated as if the player were already on the
+    /// roster. Builder form keeps the bare `snapshot` constructor for the
+    /// unit tests.
+    fn with_pending_loans(mut self, pending: &[(PlayerFieldPositionGroup, u8)]) -> Self {
+        for (group, ability) in pending {
+            if let Some(row) = self.rows.iter_mut().find(|(g, _, _)| g == group) {
+                row.2.push(*ability);
+            }
+        }
+        self
+    }
+
     fn row(
         &self,
         group: PlayerFieldPositionGroup,
@@ -1926,6 +1989,36 @@ mod borrower_gate_tests {
         assert!(
             !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, true),
             "a development loanee behind two starters won't get his minutes"
+        );
+    }
+
+    #[test]
+    fn pending_incoming_loan_counts_against_the_position_cap() {
+        // Two keepers on the books leave one slot under the GK cap of 3,
+        // so a comparable keeper would normally be allowed in.
+        let team = BorrowerFixtures::team(vec![
+            BorrowerFixtures::player(1, PlayerPositionType::Goalkeeper, 80),
+            BorrowerFixtures::player(2, PlayerPositionType::Goalkeeper, 70),
+        ]);
+        let bare = BorrowerPositionDepth::snapshot(&team);
+        assert!(
+            bare.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 78),
+            "two keepers leave room for a third under the cap"
+        );
+
+        // A keeper loan already in flight fills that last slot: the same
+        // comparable target is now squad bloat, while a clear upgrade still
+        // gets through. This is what stops a club opening several keeper
+        // loans against one unchanged snapshot.
+        let with_pending = BorrowerPositionDepth::snapshot(&team)
+            .with_pending_loans(&[(PlayerFieldPositionGroup::Goalkeeper, 72)]);
+        assert!(
+            !with_pending.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 78),
+            "a pending keeper loan fills the cap — no second comparable loan"
+        );
+        assert!(
+            with_pending.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 95),
+            "a clear upgrade is still allowed even with a loan in flight"
         );
     }
 

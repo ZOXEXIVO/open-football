@@ -1058,6 +1058,21 @@ impl PipelineProcessor {
             .max_by_key(|n| n.id)
             .map(|n| n.is_loan);
 
+        // Loan-scan deals carry no shortlist, so the shortlist loop below
+        // never marks their triggering request fulfilled — a daily-scanning
+        // club then keeps re-firing the same need and stacking more loans.
+        // Capture the loaned player's position group up front (before the
+        // mut club borrow) so we can close the matching open request once
+        // the loan lands. Domestic only: a foreign loanee isn't resolvable
+        // from this country, and the in-flight depth cap already gates those.
+        let loan_filled_group = if resolved_was_loan == Some(true) && accepted {
+            Self::find_player_in_country(country, player_id)
+                .map(|p| p.position().position_group())
+        } else {
+            None
+        };
+        let mut shortlist_matched = false;
+
         let mut manager_satisfaction_hit: f32 = 0.0;
         if let Some(club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             let plan = &mut club.transfer_plan;
@@ -1150,7 +1165,29 @@ impl PipelineProcessor {
                         }
                     }
 
+                    shortlist_matched = true;
                     break;
+                }
+            }
+
+            // No shortlist candidate matched and the resolved deal was a
+            // completed loan — i.e. a loan-scan signing. Mark the open
+            // request in that position group fulfilled so it stops re-firing
+            // and stacking further loans on an already-covered position.
+            if !shortlist_matched {
+                if let Some(group) = loan_filled_group {
+                    for request in plan.transfer_requests.iter_mut() {
+                        if request.position.position_group() != group {
+                            continue;
+                        }
+                        if matches!(
+                            request.status,
+                            TransferRequestStatus::Fulfilled | TransferRequestStatus::Abandoned
+                        ) {
+                            continue;
+                        }
+                        request.status = TransferRequestStatus::Fulfilled;
+                    }
                 }
             }
 

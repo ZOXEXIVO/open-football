@@ -499,7 +499,7 @@ impl Player {
         // 5. Ambition vs club level (structural) plus season trajectory
         // (dynamic). A high-ambition player at a big club fighting
         // relegation is unhappy even though the prestige fits.
-        let ambition_factor = self.calculate_ambition_fit(team_reputation, &season_state);
+        let ambition_factor = self.calculate_ambition_fit(team_reputation, &season_state, now);
         self.happiness.factors.ambition_fit = ambition_factor;
 
         // 6. Praise/discipline from recent events (tracked separately)
@@ -901,7 +901,12 @@ impl Player {
         -(5.0 + severity * 5.0)
     }
 
-    fn calculate_ambition_fit(&self, team_reputation: f32, season: &TeamSeasonState) -> f32 {
+    fn calculate_ambition_fit(
+        &self,
+        team_reputation: f32,
+        season: &TeamSeasonState,
+        now: NaiveDate,
+    ) -> f32 {
         let ambition = self.attributes.ambition;
         if ambition <= 10.0 {
             return 0.0;
@@ -911,8 +916,46 @@ impl Player {
             ambition_status_dampening(self.contract.as_ref().map(|c| &c.squad_status));
         let prestige = self.prestige_fit_component(ambition, team_reputation, status_dampening);
         let trajectory = self.season_trajectory_component(ambition, season, status_dampening);
+        // Itchy feet: many years at one club erode ambition satisfaction even
+        // when the club's size still fits — "I've done it all here".
+        let restlessness = self.tenure_restlessness_component(ambition, now);
 
-        (prestige + trajectory).clamp(-15.0, 12.0)
+        (prestige + trajectory - restlessness).clamp(-15.0, 12.0)
+    }
+
+    /// "Itchy feet": an ambitious player who has spent many years at ONE club
+    /// grows restless for a new challenge — even a contented one-club man
+    /// eventually wants to test himself elsewhere. Returns a NON-negative
+    /// magnitude the caller SUBTRACTS from ambition_fit, so a long stay dents
+    /// the happy value and, once it bites, feeds the same Unh /
+    /// `AmbitionMismatch` path a too-small club does. Scales with ambition
+    /// and tenure beyond a settled threshold, suppressed by loyalty (a true
+    /// club legend stays). Bounded so tenure alone never dominates the
+    /// structural club-size signal.
+    fn tenure_restlessness_component(&self, ambition: f32, now: NaiveDate) -> f32 {
+        // Years at the club. A one-club man (never transferred) has been here
+        // his whole career — approximate from age since a typical debut.
+        let age = DateUtils::age(self.birth_date, now);
+        let years_at_club = self
+            .last_transfer_date
+            .map(|d| ((now - d).num_days() as f32 / 365.0).max(0.0))
+            .unwrap_or_else(|| (age as f32 - 17.0).max(0.0));
+
+        // A stable, settled spell is healthy — nothing stirs until the stay
+        // is genuinely long, then restlessness builds with each extra year.
+        const SETTLED_YEARS: f32 = 6.0;
+        if years_at_club <= SETTLED_YEARS {
+            return 0.0;
+        }
+        let over = years_at_club - SETTLED_YEARS;
+
+        // Ambition drives the appetite for a new challenge; loyalty holds him.
+        let ambition_drive = ((ambition - 10.0) / 10.0).clamp(0.0, 1.0); // 0 at 10 → 1 at 20
+        let loyalty_hold = (self.attributes.loyalty / 20.0).clamp(0.0, 1.0); // 1 at max loyalty
+
+        // ~1 per year over the threshold at full ambition, halved by full
+        // loyalty, capped so tenure never exceeds the club-size component.
+        (over * ambition_drive * (1.0 - 0.5 * loyalty_hold)).min(5.0)
     }
 
     /// Classic "I joined a club befitting my stature" piece — compares
