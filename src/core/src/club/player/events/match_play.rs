@@ -27,8 +27,24 @@ impl Player {
     /// reputation update. All cross-cutting effects of "a match happened"
     /// live here instead of leaking into the league-result pipeline.
     pub fn on_match_played(&mut self, o: &MatchOutcome<'_>) {
-        self.record_match_appearance(o);
-        self.record_match_stats(o);
+        // The team the player physically turns out for in his career
+        // history: his active (non-departed) current-season spell. A
+        // league appearance for any OTHER team of the same club — a
+        // reserve pulled up to the main XI, or a senior fielded for the
+        // "2" side — is a borrowed appearance and books into a per-team
+        // secondary bucket so it shows as its own history row instead of
+        // folding under this spell. Empty when there is no active spell
+        // (freshly built player) — the appearance then books to the home
+        // bucket as before.
+        let home_slug = self
+            .statistics_history
+            .current
+            .iter()
+            .find(|e| e.departed_date.is_none())
+            .map(|e| e.team_slug.clone())
+            .unwrap_or_default();
+        self.record_match_appearance(o, &home_slug);
+        self.record_match_stats(o, &home_slug);
         // Cup appearances land in the per-competition buckets; rebuild the
         // rolled-up aggregate before the event pass reads it for
         // milestones (first-club goal, appearance / goal milestones, …).
@@ -144,7 +160,7 @@ impl Player {
         self.maybe_emit_big_match_bench(&snapshot);
     }
 
-    fn record_match_appearance(&mut self, o: &MatchOutcome<'_>) {
+    fn record_match_appearance(&mut self, o: &MatchOutcome<'_>, home_slug: &str) {
         // Tag the spell with the league_slug of the friendly we just
         // played, so a later `drain_match_stats` can stamp the canonical
         // Friendly ledger entry with the real source — youth-league
@@ -155,7 +171,7 @@ impl Player {
         if o.is_friendly && !o.competition_slug.is_empty() {
             self.friendly_source_slug = Some(o.competition_slug.to_string());
         }
-        let s = stats_bucket_mut(self, o);
+        let s = stats_bucket_mut(self, o, home_slug);
         match o.participation {
             MatchParticipation::Starter => s.played += 1,
             MatchParticipation::Substitute => s.played_subs += 1,
@@ -172,7 +188,7 @@ impl Player {
         }
     }
 
-    fn record_match_stats(&mut self, o: &MatchOutcome<'_>) {
+    fn record_match_stats(&mut self, o: &MatchOutcome<'_>, home_slug: &str) {
         // Feed the per-player form EMA before we mutate any stat bucket —
         // `effective_rating` is the post-settlement rating already used for
         // season averages and POM selection, so form stays consistent.
@@ -180,7 +196,7 @@ impl Player {
             self.load.update_form(o.effective_rating);
         }
 
-        let s = stats_bucket_mut(self, o);
+        let s = stats_bucket_mut(self, o, home_slug);
         s.goals += o.stats.goals;
         s.assists += o.stats.assists;
         s.shots_on_target += o.stats.shots_on_target as f32;
@@ -227,7 +243,7 @@ impl Player {
         // Subs who came on briefly don't get attributed the full team conceded.
         if self.position().is_goalkeeper() && matches!(o.participation, MatchParticipation::Starter)
         {
-            let s = stats_bucket_mut(self, o);
+            let s = stats_bucket_mut(self, o, home_slug);
             s.conceded += o.team_goals_against as u16;
             if o.team_goals_against == 0 {
                 s.clean_sheets += 1;
@@ -930,11 +946,31 @@ impl Player {
 /// match's competition slug; the rolled-up `cup_statistics` aggregate is
 /// rebuilt from those buckets in `on_match_played` once recording is
 /// done.
-fn stats_bucket_mut<'a>(player: &'a mut Player, o: &MatchOutcome<'_>) -> &'a mut PlayerStatistics {
+fn stats_bucket_mut<'a>(
+    player: &'a mut Player,
+    o: &MatchOutcome<'_>,
+    home_slug: &str,
+) -> &'a mut PlayerStatistics {
     if o.is_cup {
         player.cup_competition_statistics_mut(o.competition_slug)
     } else if o.is_friendly {
         &mut player.friendly_statistics
+    } else if let Some(team) = o
+        .played_for
+        .as_ref()
+        .filter(|t| !home_slug.is_empty() && t.slug != home_slug)
+    {
+        // Borrowed league appearance for another of the club's teams —
+        // book it under that team (stored in the player's history) so it
+        // surfaces as its own career-history row.
+        player.statistics_history.secondary_team_statistics_mut(
+            o.match_season_year,
+            team.slug,
+            team.name,
+            team.reputation,
+            team.league_slug,
+            team.league_name,
+        )
     } else {
         &mut player.statistics
     }

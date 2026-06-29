@@ -141,6 +141,7 @@ pub use club::{
     LifeSimulationSeverity,
     LifeSimulationTrigger,
     LiveCupSlice,
+    SecondaryTeamStatistics,
     LoanConcernReason,
     LoanDevelopmentConcernReason,
     LoanEventContext,

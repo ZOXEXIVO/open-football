@@ -63,6 +63,31 @@ pub struct CompetitionStatistics {
     pub statistics: PlayerStatistics,
 }
 
+/// League appearances a player made for a team OTHER than his rostered
+/// (active-spell) team this season — e.g. a reserve/Second-team player
+/// borrowed up to the main team for a top-division fixture, or a main
+/// player fielded for the club's lower-division "2" side. Stored per team
+/// (the full identity is captured at match time, the one thing only the
+/// match knows) on [`super::history::PlayerStatisticsHistory`], so career
+/// history can show a separate row for every team the player turned out
+/// for in a season instead of folding both teams' games under the active
+/// spell. The projection renders it directly for the in-progress season;
+/// the season-end snapshot freezes it into the canonical `season_ledger`
+/// like every other completed-season record.
+#[derive(Debug, Clone, Default)]
+pub struct SecondaryTeamStatistics {
+    /// Season this slice belongs to (`Season::from_date(match_date)`),
+    /// so a missed season-end can still freeze each slice under the right
+    /// year rather than collapsing them together.
+    pub season_start_year: u16,
+    pub team_slug: String,
+    pub team_name: String,
+    pub team_reputation: u16,
+    pub league_slug: String,
+    pub league_name: String,
+    pub statistics: PlayerStatistics,
+}
+
 impl PlayerStatistics {
     /// Total appearances (started + substitute)
     #[inline]

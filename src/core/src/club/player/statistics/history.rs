@@ -1,5 +1,5 @@
 use super::ledger::{PlayerStatCompetitionKind, PlayerStatLedgerEntry};
-use super::types::{PlayerStatistics, TeamInfo};
+use super::types::{PlayerStatistics, SecondaryTeamStatistics, TeamInfo};
 use crate::league::Season;
 use chrono::NaiveDate;
 use std::collections::HashSet;
@@ -27,6 +27,15 @@ pub struct PlayerStatisticsHistory {
     /// renderer. Empty for save files written before this field
     /// existed — those still fall back to the legacy adapter.
     pub season_ledger: Vec<PlayerStatLedgerEntry>,
+    /// Live, current-season league appearances the player made for a team
+    /// OTHER than his active spell — the borrowed-across-club-teams case (a
+    /// reserve fielded for the main XI, or a senior turning out for the "2"
+    /// side). One slice per team; the projection renders each as its own
+    /// in-progress-season History row, and the season-end snapshot freezes
+    /// them into `season_ledger`. The home team's league games stay in
+    /// `Player::statistics` as before, so this never double-counts. Empty
+    /// for the overwhelming common case (one team).
+    pub current_secondary: Vec<SecondaryTeamStatistics>,
     next_seq: u32,
 }
 
@@ -86,6 +95,7 @@ impl PlayerStatisticsHistory {
             current: Vec::new(),
             continental: Vec::new(),
             season_ledger: Vec::new(),
+            current_secondary: Vec::new(),
             next_seq: 0,
         }
     }
@@ -124,6 +134,7 @@ impl PlayerStatisticsHistory {
             current: Vec::new(),
             continental: Vec::new(),
             season_ledger,
+            current_secondary: Vec::new(),
             next_seq,
         }
     }
@@ -246,6 +257,87 @@ impl PlayerStatisticsHistory {
 
     pub fn is_empty(&self) -> bool {
         self.items.is_empty() && self.current.is_empty()
+    }
+
+    /// Mutable handle on the per-team league bucket for a team the player
+    /// is turning out for that is NOT his active-spell (home) team — a
+    /// borrowed appearance across two of the club's teams. Creates the
+    /// per-`(season, team)` slice on first appearance, carrying the team
+    /// identity resolved at match time (the one thing only the match
+    /// knows) so the season-end snapshot can freeze a proper ledger row.
+    /// The home team's league games never reach here; they stay in
+    /// `Player::statistics`.
+    pub fn secondary_team_statistics_mut(
+        &mut self,
+        season_start_year: u16,
+        team_slug: &str,
+        team_name: &str,
+        team_reputation: u16,
+        league_slug: &str,
+        league_name: &str,
+    ) -> &mut PlayerStatistics {
+        if let Some(idx) = self
+            .current_secondary
+            .iter()
+            .position(|s| s.team_slug == team_slug && s.season_start_year == season_start_year)
+        {
+            return &mut self.current_secondary[idx].statistics;
+        }
+        self.current_secondary.push(SecondaryTeamStatistics {
+            season_start_year,
+            team_slug: team_slug.to_string(),
+            team_name: team_name.to_string(),
+            team_reputation,
+            league_slug: league_slug.to_string(),
+            league_name: league_name.to_string(),
+            statistics: PlayerStatistics::default(),
+        });
+        &mut self
+            .current_secondary
+            .last_mut()
+            .expect("entry just pushed")
+            .statistics
+    }
+
+    /// Remove and return the live secondary slice for `team_slug`, if any.
+    /// Used when an intra-club move promotes the player to that team: his
+    /// prior borrowed appearances there are no longer "secondary" and fold
+    /// into the home record, so they don't render as a duplicate row.
+    pub fn take_secondary_for(&mut self, team_slug: &str) -> Option<PlayerStatistics> {
+        let pos = self
+            .current_secondary
+            .iter()
+            .position(|s| s.team_slug == team_slug)?;
+        Some(self.current_secondary.remove(pos).statistics)
+    }
+
+    /// Freeze every live secondary-team slice into the canonical
+    /// `season_ledger` (one League row per team, under its own season) and
+    /// clear the live store. Called at the real season-end so a player who
+    /// turned out for two of the club's teams keeps a separate
+    /// completed-season row for each.
+    pub fn freeze_secondary_into_ledger(&mut self) {
+        let slices = std::mem::take(&mut self.current_secondary);
+        for slice in slices {
+            if slice.statistics.total_games() == 0 {
+                continue;
+            }
+            let team = TeamInfo {
+                name: slice.team_name,
+                slug: slice.team_slug,
+                reputation: slice.team_reputation,
+                league_name: slice.league_name,
+                league_slug: slice.league_slug,
+            };
+            self.append_to_ledger(
+                slice.season_start_year,
+                &team,
+                PlayerStatCompetitionKind::League,
+                false,
+                None,
+                slice.statistics,
+            );
+        }
     }
 
     /// True when no current-season entry has been seeded yet, regardless of

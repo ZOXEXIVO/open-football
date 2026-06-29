@@ -5,7 +5,7 @@ use crate::PlayerPositionType;
 use crate::club::StaffPosition;
 use crate::club::player::contract::ContractBonusType;
 use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
-use crate::club::player::events::{MatchOutcome, MatchParticipation};
+use crate::club::player::events::{MatchOutcome, MatchParticipation, MatchTeamRef};
 use crate::club::player::personality::adaptation::AdaptationSquadContext;
 use crate::club::player::player::Player;
 use crate::club::staff::perception::PotentialEstimator;
@@ -19,6 +19,7 @@ use crate::club::team::{
 use crate::continent::competitions::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
 };
+use crate::league::Season;
 use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::engine::rating::RatingContext;
 use crate::r#match::engine::result::MatchResultRaw;
@@ -1990,6 +1991,35 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
         .map(|s| s.player_out_id)
         .collect();
 
+    // Resolve the team this side was fielded as, once. A player borrowed
+    // from another of the club's teams (a reserve pulled up to the main XI,
+    // or a senior turning out for the "2" side) has this differ from his
+    // active history spell, so league stats get attributed to the team he
+    // actually played for. Cloned to owned strings up front so the
+    // immutable team / league reads don't overlap the `player_mut` borrows
+    // in the loop below. Friendlies / cups carry their own buckets and
+    // don't need it.
+    let played_for_team: Option<(String, String, u16, String, String)> =
+        if is_friendly || is_cup {
+            None
+        } else {
+            data.team(side.team_id).map(|t| {
+                let (league_name, league_slug) = t
+                    .league_id
+                    .and_then(|lid| data.league(lid))
+                    .map(|l| (l.name.clone(), l.slug.clone()))
+                    .unwrap_or_default();
+                (
+                    t.slug.clone(),
+                    t.name.clone(),
+                    t.reputation.world,
+                    league_slug,
+                    league_name,
+                )
+            })
+        };
+    let match_season_year = Season::from_date(today_date).start_year;
+
     for (pid, participation) in all_ids {
         let stats = match details.player_stats.get(&pid) {
             Some(s) => s,
@@ -2025,6 +2055,16 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
                 team_lost,
                 is_continental,
                 opponent_team_id,
+                played_for: played_for_team.as_ref().map(
+                    |(slug, name, reputation, league_slug, league_name)| MatchTeamRef {
+                        slug,
+                        name,
+                        reputation: *reputation,
+                        league_slug,
+                        league_name,
+                    },
+                ),
+                match_season_year,
             });
             coach_observations.push(CoachObservationBuilder::build(
                 player,
@@ -2083,6 +2123,8 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
             team_lost,
             is_continental,
             opponent_team_id,
+            played_for: None,
+            match_season_year: 0,
         }
         .big_match_kind();
 

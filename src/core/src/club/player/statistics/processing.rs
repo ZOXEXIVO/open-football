@@ -218,6 +218,17 @@ impl Player {
         } else {
             PlayerStatistics::default()
         };
+        // Any prior BORROWED appearances for the DESTINATION team are no
+        // longer "secondary" — the player now plays there as home, so fold
+        // them into the live counter the new spell accumulates against.
+        // Without this they would render as a second, duplicate row for a
+        // team that already has a home spell. (`self.statistics` was just
+        // drained above, so this seeds the destination spell's counter.)
+        if to_senior {
+            if let Some(folded) = self.statistics_history.take_secondary_for(&to.slug) {
+                self.statistics.merge_from(&folded);
+            }
+        }
         let is_loan = self.is_on_loan();
         self.statistics_history.record_intra_club_move(
             stats,
@@ -269,6 +280,10 @@ impl Player {
             is_loan,
             self.last_transfer_date,
         );
+        // Freeze any borrowed (other-team) league appearances into the
+        // canonical ledger so each team the player turned out for keeps its
+        // own completed-season row.
+        self.statistics_history.freeze_secondary_into_ledger();
         // Buy-back protection only needs to last one season — same
         // contract as `on_season_end`.
         self.sold_from = None;
@@ -305,6 +320,10 @@ impl Player {
             is_loan,
             self.last_transfer_date,
         );
+        // Freeze any borrowed (other-team) league appearances into the
+        // canonical ledger so each team the player turned out for keeps its
+        // own completed-season row.
+        self.statistics_history.freeze_secondary_into_ledger();
         // Preserve last_transfer_date across seasons — clearing it destroyed
         // the settling-in protection that prevents clubs from immediately
         // dumping recently-signed players.  The date is already archived in
@@ -551,6 +570,139 @@ mod tests {
             league_name: "Serie A".to_string(),
             league_slug: "serie-a".to_string(),
         }
+    }
+
+    fn team_with_league(name: &str, slug: &str, lname: &str, lslug: &str) -> TeamInfo {
+        TeamInfo {
+            name: name.to_string(),
+            slug: slug.to_string(),
+            reputation: 100,
+            league_name: lname.to_string(),
+            league_slug: lslug.to_string(),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Player turns out for TWO teams of the same club in one season —
+    // a reserve/Second player borrowed up to the main XI (the Pedro /
+    // Zenit + Zenit 2 case). Each team must get its OWN history row;
+    // the borrowed games must NOT fold under the active-spell team.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn two_teams_same_season_split_into_two_rows() {
+        let mut player = make_player();
+        let zenit2 = team_with_league(
+            "Zenit 2",
+            "zenit-2-st-petersburg",
+            "Second Division B2",
+            "russian-second-division-b-group-2",
+        );
+
+        // Rostered at Zenit 2 (home): 16 Second-Division games, 9 goals.
+        player
+            .statistics_history
+            .seed_initial_team(&zenit2, make_date(2026, 8, 1), false);
+        player.statistics = make_stats(16, 9);
+
+        // Borrowed up to the main XI: 18 Premier League games, 3 goals —
+        // the match-record path routes these into the per-team secondary
+        // store because the played-for team differs from the active spell.
+        {
+            let s = player.statistics_history.secondary_team_statistics_mut(
+                2026,
+                "zenit",
+                "Zenit",
+                9000,
+                "russian-premier-league",
+                "Premier League",
+            );
+            *s = make_stats(18, 3);
+        }
+
+        let empty = PlayerStatistics::default();
+        let live = crate::PlayerLiveStatsInput {
+            league: &player.statistics,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let rows = crate::PlayerStatisticsProjection::player_history_rows(
+            &player.statistics_history,
+            &live,
+            make_date(2027, 2, 1),
+        );
+
+        let zenit2_row = rows
+            .iter()
+            .find(|r| r.team_slug == "zenit-2-st-petersburg")
+            .expect("Zenit 2 (Second Division) row must appear");
+        let zenit_row = rows
+            .iter()
+            .find(|r| r.team_slug == "zenit")
+            .expect("Zenit (Premier League) borrowed row must appear");
+        assert_eq!(zenit2_row.statistics.goals, 9, "Zenit 2 keeps its 9 SD goals");
+        assert_eq!(zenit2_row.statistics.played, 16);
+        assert_eq!(
+            zenit_row.statistics.goals, 3,
+            "borrowed PL games show under Zenit, not folded into Zenit 2"
+        );
+        assert_eq!(zenit_row.statistics.played, 18);
+    }
+
+    #[test]
+    fn two_teams_same_season_freeze_at_season_end() {
+        let mut player = make_player();
+        let zenit2 = team_with_league(
+            "Zenit 2",
+            "zenit-2-st-petersburg",
+            "Second Division B2",
+            "russian-second-division-b-group-2",
+        );
+        player
+            .statistics_history
+            .seed_initial_team(&zenit2, make_date(2026, 8, 1), false);
+        player.statistics = make_stats(16, 9);
+        {
+            let s = player.statistics_history.secondary_team_statistics_mut(
+                2026,
+                "zenit",
+                "Zenit",
+                9000,
+                "russian-premier-league",
+                "Premier League",
+            );
+            *s = make_stats(18, 3);
+        }
+
+        // Season ends while rostered at Zenit 2.
+        player.on_season_end(Season::new(2026), &zenit2, make_date(2027, 6, 5));
+
+        // Borrowed games frozen under Zenit in the canonical ledger; the
+        // live secondary store is cleared.
+        assert!(
+            player.statistics_history.current_secondary.is_empty(),
+            "secondary store drained at season end"
+        );
+        let zenit_ledger = player
+            .statistics_history
+            .season_ledger
+            .iter()
+            .find(|e| {
+                e.team_slug == "zenit"
+                    && e.competition_kind == crate::PlayerStatCompetitionKind::League
+            })
+            .expect("frozen Zenit League ledger row");
+        assert_eq!(zenit_ledger.statistics.goals, 3);
+        assert_eq!(zenit_ledger.season_start_year, 2026);
+        // The home Zenit 2 row was frozen by record_season_end.
+        let zenit2_item = player
+            .statistics_history
+            .items
+            .iter()
+            .find(|i| i.team_slug == "zenit-2-st-petersburg")
+            .expect("frozen Zenit 2 row");
+        assert_eq!(zenit2_item.statistics.goals, 9);
     }
 
     // ---------------------------------------------------------------

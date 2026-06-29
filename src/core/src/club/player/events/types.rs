@@ -16,6 +16,23 @@ pub enum MatchParticipation {
     Substitute,
 }
 
+/// Identity of the team a player was fielded for in a match. Usually the
+/// player's own (rostered) team, but for a borrowed appearance across two
+/// teams of the same club (a reserve/Second player pulled up to the main
+/// XI, or vice versa) it differs from the player's active history spell.
+/// Carried on [`MatchOutcome`] so league stat bookkeeping can attribute
+/// the appearance to the correct team — the home team's games stay on
+/// `Player::statistics`, everything else lands in the per-team secondary
+/// bucket and surfaces as its own career-history row.
+#[derive(Debug, Clone, Copy)]
+pub struct MatchTeamRef<'a> {
+    pub slug: &'a str,
+    pub name: &'a str,
+    pub reputation: u16,
+    pub league_slug: &'a str,
+    pub league_name: &'a str,
+}
+
 /// Everything the Player needs to react to a finished match. Constructed
 /// by the league/match-result pipeline and handed over one player at a
 /// time; the Player owns all resulting stat bookkeeping, morale events,
@@ -55,6 +72,17 @@ pub struct MatchOutcome<'a> {
     /// Opponent team id, when known. Used by the relationship-arc
     /// emit path to name the rival in the headline / detail row.
     pub opponent_team_id: Option<u32>,
+    /// The team this player was actually fielded for. `None` when the
+    /// caller doesn't resolve it; only the league-result pipeline
+    /// populates it. Drives per-team league attribution so a borrowed
+    /// appearance for another of the club's teams gets its own history
+    /// row instead of folding under the player's active-spell team.
+    pub played_for: Option<MatchTeamRef<'a>>,
+    /// Season start-year this match belongs to (`Season::from_date`).
+    /// Used only when booking a borrowed (secondary-team) league
+    /// appearance so it freezes under the right season; ignored for the
+    /// home bucket. 0 when unresolved.
+    pub match_season_year: u16,
 }
 
 impl<'a> MatchOutcome<'a> {

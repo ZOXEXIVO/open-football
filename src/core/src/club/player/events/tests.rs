@@ -6,7 +6,7 @@
 //! `Player` and `MatchOutcome` data — splitting fixtures per domain
 //! would duplicate ~50 lines of boilerplate per file with no payoff.
 
-use super::types::{MatchOutcome, MatchParticipation};
+use super::types::{MatchOutcome, MatchParticipation, MatchTeamRef};
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::condition::InjuryRiskInputs;
 use crate::club::player::player::Player;
@@ -128,6 +128,8 @@ fn outcome<'a>(
         team_lost: lost,
         is_continental: is_cup,
         opponent_team_id: Some(999),
+        played_for: None,
+        match_season_year: 0,
     }
 }
 
@@ -137,6 +139,119 @@ fn count_events(p: &Player, kind: &HappinessEventType) -> usize {
         .iter()
         .filter(|e| e.event_type == *kind)
         .count()
+}
+
+fn seed_home(p: &mut Player, slug: &str, league_slug: &str) {
+    p.statistics_history.seed_initial_team(
+        &crate::TeamInfo {
+            name: slug.to_string(),
+            slug: slug.to_string(),
+            reputation: 100,
+            league_name: league_slug.to_string(),
+            league_slug: league_slug.to_string(),
+        },
+        d(2026, 8, 1),
+        false,
+    );
+}
+
+// ── Per-team league attribution (borrowed across two club teams) ──
+
+#[test]
+fn borrowed_appearance_books_to_secondary_team_not_home() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    // Rostered (home) at Zenit 2 in the Second Division.
+    seed_home(&mut p, "zenit-2", "russian-second-division-b-group-2");
+
+    // A Premier League appearance fielded for the MAIN team (borrowed up).
+    let s = stats(7.5, 2, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = MatchOutcome {
+        stats: &s,
+        effective_rating: 7.5,
+        participation: MatchParticipation::Starter,
+        is_friendly: false,
+        is_cup: false,
+        competition_slug: "russian-premier-league",
+        is_motm: false,
+        team_goals_for: 2,
+        team_goals_against: 0,
+        league_weight: 1.0,
+        world_weight: 1.0,
+        is_derby: false,
+        team_won: true,
+        team_lost: false,
+        is_continental: false,
+        opponent_team_id: Some(999),
+        played_for: Some(MatchTeamRef {
+            slug: "zenit",
+            name: "Zenit",
+            reputation: 9000,
+            league_slug: "russian-premier-league",
+            league_name: "Premier League",
+        }),
+        match_season_year: 2026,
+    };
+    p.on_match_played(&o);
+
+    // The borrowed goal lands in the per-team secondary store under Zenit,
+    // NOT in the home (Zenit 2) league counter.
+    assert_eq!(
+        p.statistics.goals, 0,
+        "home counter must stay empty for a borrowed game"
+    );
+    let sec = p
+        .statistics_history
+        .current_secondary
+        .iter()
+        .find(|s| s.team_slug == "zenit")
+        .expect("borrowed appearance recorded under the main team");
+    assert_eq!(sec.statistics.goals, 2);
+    assert_eq!(sec.statistics.played, 1);
+}
+
+#[test]
+fn home_appearance_books_to_player_statistics() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    seed_home(&mut p, "zenit-2", "russian-second-division-b-group-2");
+
+    // A Second-Division appearance for his OWN (home) team.
+    let s = stats(7.0, 1, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = MatchOutcome {
+        stats: &s,
+        effective_rating: 7.0,
+        participation: MatchParticipation::Starter,
+        is_friendly: false,
+        is_cup: false,
+        competition_slug: "russian-second-division-b-group-2",
+        is_motm: false,
+        team_goals_for: 1,
+        team_goals_against: 0,
+        league_weight: 1.0,
+        world_weight: 1.0,
+        is_derby: false,
+        team_won: true,
+        team_lost: false,
+        is_continental: false,
+        opponent_team_id: Some(999),
+        played_for: Some(MatchTeamRef {
+            slug: "zenit-2",
+            name: "Zenit 2",
+            reputation: 100,
+            league_slug: "russian-second-division-b-group-2",
+            league_name: "Second Division B2",
+        }),
+        match_season_year: 2026,
+    };
+    p.on_match_played(&o);
+
+    assert_eq!(
+        p.statistics.goals, 1,
+        "home-team game books to the normal league counter"
+    );
+    assert!(
+        p.statistics_history.current_secondary.is_empty(),
+        "no secondary slice for a home game"
+    );
 }
 
 // ── DecisiveGoal ──────────────────────────────────────────────

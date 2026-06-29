@@ -70,6 +70,7 @@ pub use player::{
     ClubDirectionEvidence,
     ClubDirectionKind,
     CompetitionStatistics,
+    SecondaryTeamStatistics,
     ConflictLocation,
     ContractBonus,
     ContractBonusType,

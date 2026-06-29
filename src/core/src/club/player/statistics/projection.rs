@@ -240,6 +240,37 @@ impl PlayerStatisticsProjection {
             });
         }
 
+        // ── 3b. Live secondary-team league appearances ────────────
+        //
+        // In-progress-season league games the player made for ANOTHER of
+        // his club's teams (a reserve pulled up to the main XI, or a senior
+        // fielded for the "2" side). These live on the player's history
+        // until the season-end snapshot freezes them, so the projection
+        // reads them straight from `current_secondary` and emits one
+        // current-season League row per team — the page then shows a line
+        // for every team the player turned out for this season instead of
+        // folding both teams' games under the active spell. seq_id 0 keeps
+        // these below the active home row in the per-season sort.
+        for slice in &history.current_secondary {
+            if slice.statistics.total_games() == 0 {
+                continue;
+            }
+            ledger.push(PlayerStatLedgerEntry {
+                seq_id: 0,
+                season_start_year: slice.season_start_year,
+                team_slug: slice.team_slug.clone(),
+                team_name: slice.team_name.clone(),
+                team_reputation: slice.team_reputation,
+                league_slug: slice.league_slug.clone(),
+                league_name: slice.league_name.clone(),
+                competition_kind: PlayerStatCompetitionKind::League,
+                competition_slug: slice.league_slug.clone(),
+                is_loan: false,
+                transfer_fee: None,
+                statistics: slice.statistics.clone(),
+            });
+        }
+
         // Resolve the active spell's `(team_slug, season_year)` once.
         // Live cup / friendly slices belong to *this* spell only — never
         // to a past row, and never to a departed current-season row.
