@@ -192,6 +192,78 @@ where
     effective_skill(player, accessor(player), ctx)
 }
 
+/// Pre-factored fatigue scalars for a single `(player, minute)`.
+///
+/// Everything in [`effective_skill`] except the final `base` multiply
+/// depends ONLY on `(player, category, minute)` — `cond_pct`, the band
+/// `powf`, the mitigation blend, the cap, the late-game-mental extra and
+/// `crowd_arousal`. A profile builder reads 24–33 attributes for the
+/// same player across only the three categories, recomputing those
+/// scalars (incl. the `powf`) on every read. `SkillBands` computes them
+/// ONCE per category, so each read collapses to the same three
+/// multiplies the original did.
+///
+/// [`apply`](Self::apply) is **bit-identical** to [`effective_skill`]:
+/// it performs `(base * recovered * extra * crowd).clamp(1.0, 20.0)` with
+/// the exact same operands in the exact same left-to-right order, and the
+/// `recovered` / `extra` / `crowd` values are produced by the same
+/// private helpers. The `effective_skill_bit_identical_to_bands` test
+/// pins this across a grid of conditions, minutes, categories and bases.
+#[derive(Debug, Clone, Copy)]
+pub struct SkillBands {
+    recovered_technical: f32,
+    recovered_mental: f32,
+    recovered_explosive: f32,
+    /// `late_game_mental_extra` for the Mental category (1.0 for the
+    /// other two, which the constructor folds in at `apply` time).
+    extra_mental: f32,
+    crowd: f32,
+}
+
+impl SkillBands {
+    /// Compute the three per-category `recovered` scalars + the mental
+    /// late-game extra + crowd, once for this `(player, minute)`.
+    #[inline]
+    pub fn for_player(player: &MatchPlayer, minute: u32) -> Self {
+        let cond_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
+        let mitigation = mitigation_score(player);
+        let cap = mitigation_cap(cond_pct);
+        // Same expression as `effective_skill`'s `recovered`, per category.
+        let recover = |category: SkillCategory| -> f32 {
+            let band = band_multipliers(cond_pct, category);
+            1.0 - (1.0 - band) * (1.0 - mitigation * cap)
+        };
+        SkillBands {
+            recovered_technical: recover(SkillCategory::Technical),
+            recovered_mental: recover(SkillCategory::Mental),
+            recovered_explosive: recover(SkillCategory::Explosive),
+            extra_mental: late_game_mental_extra(
+                player,
+                ActionContext {
+                    minute,
+                    category: SkillCategory::Mental,
+                },
+            ),
+            crowd: player.crowd_arousal,
+        }
+    }
+
+    /// Effective skill for `base` in the given category. Bit-identical to
+    /// `effective_skill(player, base, ActionContext { minute, category })`.
+    #[inline]
+    pub fn apply(&self, base: f32, category: SkillCategory) -> f32 {
+        let (recovered, extra) = match category {
+            // `late_game_mental_extra` returns exactly 1.0 for the
+            // non-mental categories, so multiplying by this literal is an
+            // IEEE-754 identity — the four-factor product matches.
+            SkillCategory::Technical => (self.recovered_technical, 1.0),
+            SkillCategory::Mental => (self.recovered_mental, self.extra_mental),
+            SkillCategory::Explosive => (self.recovered_explosive, 1.0),
+        };
+        (base * recovered * extra * self.crowd).clamp(1.0, 20.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +307,55 @@ mod tests {
         let p = build_player(9000, 14.0, 14.0);
         let eff = effective_skill(&p, 15.0, ActionContext::technical(45));
         assert!((eff - 15.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn effective_skill_bit_identical_to_bands() {
+        // ES-1 correctness pin: the factored `SkillBands::apply` must
+        // return *exactly* the same bits as the per-read `effective_skill`
+        // for every (condition, minute, category, base, crowd, stamina,
+        // determination) combination the engine can hit. Any drift here
+        // would silently shift calibration, so assert bit-equality (==),
+        // not approximate.
+        let categories = [
+            SkillCategory::Technical,
+            SkillCategory::Mental,
+            SkillCategory::Explosive,
+        ];
+        let conditions: [i16; 8] = [10000, 9000, 8001, 7999, 5000, 3000, 1500, 0];
+        let minutes: [u32; 7] = [0, 30, 64, 69, 70, 85, 120];
+        let bases: [f32; 6] = [1.0, 4.3, 7.0, 11.5, 17.0, 20.0];
+        let staminas: [f32; 3] = [4.0, 12.0, 19.0];
+        let crowds: [f32; 3] = [0.93, 1.0, 1.06];
+
+        for &cond in &conditions {
+            for &stam in &staminas {
+                let mut p = build_player(cond, stam, stam);
+                for &crowd in &crowds {
+                    p.crowd_arousal = crowd;
+                    for &minute in &minutes {
+                        let bands = SkillBands::for_player(&p, minute);
+                        for &cat in &categories {
+                            let ctx = ActionContext {
+                                minute,
+                                category: cat,
+                            };
+                            for &base in &bases {
+                                let reference = effective_skill(&p, base, ctx);
+                                let factored = bands.apply(base, cat);
+                                assert_eq!(
+                                    reference.to_bits(),
+                                    factored.to_bits(),
+                                    "mismatch cond={cond} stam={stam} crowd={crowd} \
+                                     minute={minute} cat={cat:?} base={base}: \
+                                     reference={reference} factored={factored}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use super::*;
+use super::phase_prof::PhaseProf;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::player::events::players::FoulResolver;
 use crate::r#match::player::state::PlayerState;
@@ -6,6 +7,7 @@ use crate::r#match::player::transition::TransitionSource;
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // ───────────────────────────────────────────────────────────────────────
@@ -37,6 +39,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         events: &mut EventCollection,
     ) {
         events.clear();
+
+        let prof_t = PhaseProf::enabled().then(Instant::now);
 
         field.ball.update_light(context, &field.players, events);
         Self::apply_pending_set_piece_teleport(field);
@@ -75,6 +79,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             EventDispatcher::dispatch(events, field, context, match_data, true);
             handle_goal_reset(field, context);
         }
+
+        if let Some(t) = prof_t {
+            PhaseProf::add(PhaseProf::P_LIGHT, t.elapsed().as_nanos() as u64);
+        }
     }
 
     pub(super) fn game_tick_inner(
@@ -84,10 +92,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         tick_ctx: &mut GameTickContext,
         events: &mut EventCollection,
     ) {
+        let prof_on = PhaseProf::enabled();
+
+        let t = prof_on.then(Instant::now);
         tick_ctx.update(field);
+        if let Some(t) = t {
+            PhaseProf::add(PhaseProf::P_TICKCTX, t.elapsed().as_nanos() as u64);
+        }
 
         events.clear();
 
+        let t = prof_on.then(Instant::now);
         Self::play_ball(field, context, tick_ctx, events);
         Self::apply_pending_set_piece_teleport(field);
         Self::apply_pending_save_credit(field);
@@ -102,11 +117,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // TakeBall force-override fires for a player who already has
         // the ball.
         tick_ctx.refresh_ball(field);
+        if let Some(t) = t {
+            PhaseProf::add(PhaseProf::P_BALL, t.elapsed().as_nanos() as u64);
+        }
+
+        let t = prof_on.then(Instant::now);
         Self::play_players(field, context, tick_ctx, events);
+        if let Some(t) = t {
+            PhaseProf::add(PhaseProf::P_PLAYERS, t.elapsed().as_nanos() as u64);
+        }
 
+        let t = prof_on.then(Instant::now);
         EventDispatcher::dispatch(events, field, context, match_data, true);
-
         handle_goal_reset(field, context);
+        if let Some(t) = t {
+            PhaseProf::add(PhaseProf::P_DISPATCH, t.elapsed().as_nanos() as u64);
+        }
     }
 
     /// Corner kicks and goal kicks rewrite ball ownership inside `ball.update`,

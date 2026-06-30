@@ -581,7 +581,10 @@ impl StateProcessingHandler for MidfielderRunningState {
             }
 
             // Enhanced passing decision — look for a good pass
-            if ownership_ticks > 15 && ctx.ball().has_stable_possession() && self.should_pass(ctx) {
+            if ownership_ticks > 15
+                && ctx.ball().has_stable_possession()
+                && self.should_pass(ctx, &mid_profile)
+            {
                 if let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx) {
                     return Some(StateChangeResult::with_midfielder_state_and_event(
                         MidfielderState::Running,
@@ -1088,8 +1091,10 @@ impl MidfielderRunningState {
     /// Enhanced passing decision driven by the unified midfielder
     /// skill profile (pass execution, progressive selection, press
     /// resistance) instead of raw vision/passing/decisions thresholds.
-    fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
-        let profile = MidfielderSkillProfile::from_ctx(ctx);
+    // `profile` is threaded in from the caller (built once per process()
+    // tick) — `from_ctx` is a pure function of the frozen tick snapshot, so
+    // the passed value is bit-identical to a fresh rebuild here.
+    fn should_pass(&self, ctx: &StateProcessingContext, profile: &MidfielderSkillProfile) -> bool {
         let pressing_intensity = self.calculate_pressing_intensity(ctx);
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 

@@ -43,8 +43,6 @@ impl Ball {
         } else {
             self.check_ball_ownership(context, players, events);
         }
-
-        self.flags.running_for_ball = self.is_players_running_to_ball(players);
     }
 
     /// Skill-rolled first touch at pass reception — the producer for the
@@ -694,24 +692,6 @@ impl Ball {
         }
 
         notified_players
-    }
-
-    fn is_players_running_to_ball(&self, players: &[MatchPlayer]) -> bool {
-        let ball_position = self.position;
-
-        for player in players {
-            let vel_sq = player.velocity.norm_squared();
-            if vel_sq < 0.001 {
-                continue; // Standing still
-            }
-            let to_ball = ball_position - player.position;
-            let dot_product = to_ball.dot(&player.velocity);
-            if dot_product > 0.0 {
-                return true;
-            }
-        }
-
-        false
     }
 
     fn check_ball_ownership(

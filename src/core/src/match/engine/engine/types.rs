@@ -5,7 +5,6 @@
 use crate::r#match::field::MatchField;
 use crate::r#match::{MatchPlayer, MatchSquad};
 use crate::{PlayerPositionType, Tactics};
-use std::collections::HashMap;
 
 pub enum MatchEvent {
     MatchPlayed(u32, bool, u8),
@@ -78,58 +77,126 @@ pub struct PlayerEntry {
     pub position: PlayerPositionType,
 }
 
+const PLAYER_SLOT_TABLE_SIZE: usize = 128;
+/// Sentinel `index` meaning "empty slot" in `id_slots`.
+const PLAYER_SLOT_EMPTY: u32 = u32::MAX;
+
+/// Player lookup store for the match. Holds every player (both teams'
+/// starters + substitutes) in a contiguous `Vec` and resolves `by_id`
+/// through a small open-addressing `id → index` table — the same pattern
+/// the `SpatialGrid` / `PlayerFieldData` use. Replaces a `HashMap<u32,
+/// MatchPlayer>`: keeping the large `MatchPlayer` values OUT of the probe
+/// table makes lookups cache-friendly (the table is ~1 KB and stays hot
+/// instead of the keys being scattered across big inline buckets), the
+/// multiply-hash never collides for distinct ids, and `raw_players` now
+/// iterates in deterministic insertion order (one fewer source of
+/// run-to-run non-determinism).
 pub struct MatchPlayerCollection {
-    players: HashMap<u32, MatchPlayer>,
+    players: Vec<MatchPlayer>,
+    id_slots: [(u32, u32); PLAYER_SLOT_TABLE_SIZE],
     /// Compact index for fast cache-friendly iteration
     pub entries: Vec<PlayerEntry>,
 }
 
 impl MatchPlayerCollection {
+    #[inline]
+    fn slot_of(id: u32) -> usize {
+        (id.wrapping_mul(2654435761) as usize) & (PLAYER_SLOT_TABLE_SIZE - 1)
+    }
+
+    fn lookup_index(&self, id: u32) -> Option<usize> {
+        let mut idx = Self::slot_of(id);
+        for _ in 0..PLAYER_SLOT_TABLE_SIZE {
+            let (slot_id, slot_index) = self.id_slots[idx];
+            if slot_index == PLAYER_SLOT_EMPTY {
+                return None;
+            }
+            if slot_id == id {
+                return Some(slot_index as usize);
+            }
+            idx = (idx + 1) & (PLAYER_SLOT_TABLE_SIZE - 1);
+        }
+        None
+    }
+
+    /// Insert one `id → index` mapping into the open-addressing table.
+    fn insert_slot(&mut self, id: u32, index: u32) {
+        let mut idx = Self::slot_of(id);
+        loop {
+            if self.id_slots[idx].1 == PLAYER_SLOT_EMPTY {
+                self.id_slots[idx] = (id, index);
+                return;
+            }
+            idx = (idx + 1) & (PLAYER_SLOT_TABLE_SIZE - 1);
+        }
+    }
+
+    /// Rebuild the table from the current `players` order. Cheap (≤128
+    /// inserts) and only runs at construction or on the rare roster
+    /// mutation (substitution) that shifts indices.
+    fn rebuild_slots(&mut self) {
+        self.id_slots = [(0, PLAYER_SLOT_EMPTY); PLAYER_SLOT_TABLE_SIZE];
+        for i in 0..self.players.len() {
+            let id = self.players[i].id;
+            self.insert_slot(id, i as u32);
+        }
+    }
+
     pub fn from_squads(home_squad: &MatchSquad, away_squad: &MatchSquad) -> Self {
-        let mut players = HashMap::new();
+        let mut players = Vec::with_capacity(48);
         let mut entries = Vec::with_capacity(44);
 
-        let add = |p: &MatchPlayer,
-                   map: &mut HashMap<u32, MatchPlayer>,
-                   entries: &mut Vec<PlayerEntry>| {
+        // Starters of both teams carry a PlayerEntry (the compact iteration
+        // index used by teammates()/opponents()); substitutes are
+        // lookup-only until they come on (added to `entries` via
+        // `update_player` at the swap).
+        for p in &home_squad.main_squad {
             entries.push(PlayerEntry {
                 id: p.id,
                 team_id: p.team_id,
                 position: p.tactical_position.current_position,
             });
-            map.insert(p.id, p.clone());
-        };
-
-        for p in &home_squad.main_squad {
-            add(p, &mut players, &mut entries);
+            players.push(p.clone());
         }
         for p in &away_squad.main_squad {
-            add(p, &mut players, &mut entries);
+            entries.push(PlayerEntry {
+                id: p.id,
+                team_id: p.team_id,
+                position: p.tactical_position.current_position,
+            });
+            players.push(p.clone());
         }
-
-        let add_lookup_only = |p: &MatchPlayer, map: &mut HashMap<u32, MatchPlayer>| {
-            map.insert(p.id, p.clone());
-        };
         for p in &home_squad.substitutes {
-            add_lookup_only(p, &mut players);
+            players.push(p.clone());
         }
         for p in &away_squad.substitutes {
-            add_lookup_only(p, &mut players);
+            players.push(p.clone());
         }
 
-        MatchPlayerCollection { players, entries }
+        let mut collection = MatchPlayerCollection {
+            players,
+            id_slots: [(0, PLAYER_SLOT_EMPTY); PLAYER_SLOT_TABLE_SIZE],
+            entries,
+        };
+        collection.rebuild_slots();
+        collection
     }
 
     pub fn by_id(&self, player_id: u32) -> Option<&MatchPlayer> {
-        self.players.get(&player_id)
+        self.lookup_index(player_id).map(|i| &self.players[i])
     }
 
     pub fn raw_players(&self) -> impl Iterator<Item = &MatchPlayer> {
-        self.players.values()
+        self.players.iter()
     }
 
     pub fn remove_player(&mut self, player_id: u32) {
-        self.players.remove(&player_id);
+        if let Some(i) = self.lookup_index(player_id) {
+            // swap_remove is O(1) but moves the last player into slot `i`,
+            // so the index table must be rebuilt afterwards.
+            self.players.swap_remove(i);
+            self.rebuild_slots();
+        }
         self.entries.retain(|e| e.id != player_id);
     }
 
@@ -146,7 +213,14 @@ impl MatchPlayerCollection {
                 position: pos,
             });
         }
-        self.players.insert(player_id, player);
+        if let Some(i) = self.lookup_index(player_id) {
+            // In-place replace — index unchanged, table stays valid.
+            self.players[i] = player;
+        } else {
+            let index = self.players.len() as u32;
+            self.players.push(player);
+            self.insert_slot(player_id, index);
+        }
     }
 }
 

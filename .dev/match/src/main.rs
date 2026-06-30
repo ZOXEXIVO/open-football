@@ -869,6 +869,92 @@ fn run_league(n_teams: usize, rounds: usize, min_lvl: u8, max_lvl: u8) {
     println!("\n  (Gls = full-season tally; includes penalties / set-pieces the engine produced.)");
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Seeded benchmark — `dev_match bench [N] [level]`
+//
+// Runs N matches SINGLE-THREADED with fixed per-match seeds and
+// fixed-skill (calibrated, condition-normalised) squads. Primary use: a
+// low-variance A/B TIMING harness for engine optimizations — `per_match`
+// is stable (~1%) across runs and across builds, so a real speedup shows
+// up clearly.
+//
+// NOTE: `checksum` / `avg_goals` are only a COARSE regression signal, not
+// an exact bit-for-bit oracle: the engine still carries residual
+// non-determinism beyond the seeded match RNG (e.g. HashMap iteration
+// order and any thread-RNG paths), so the scoreline varies run-to-run even
+// with identical squads + seed. Use it to catch GROSS calibration shifts;
+// prove true neutrality with a targeted unit test (see e.g.
+// `effective_skill_bit_identical_to_bands`) or the project's calibration
+// suite.
+// ───────────────────────────────────────────────────────────────────────────
+/// Seeded timing + coarse calibration benchmark. Bundled into a struct so
+/// the harness exposes no loose helper functions.
+struct Bench;
+
+impl Bench {
+    fn run(n: usize, level: u8) {
+        let level = if level == 0 { 14 } else { level };
+        let start = std::time::Instant::now();
+        let mut checksum: u64 = 0;
+        let mut total_goals: u64 = 0;
+        for i in 0..n {
+            let mut home = make_squad_calibrated(1, level);
+            let mut away = make_squad_calibrated(2, level);
+            Self::fix_squad_deterministic(&mut home);
+            Self::fix_squad_deterministic(&mut away);
+            // Distinct, deterministic seed per match (golden-ratio mix).
+            let seed = 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(i as u64 + 1);
+            let result = FootballEngine::<840, 545>::play_seeded(
+                home,
+                away,
+                false,
+                false,
+                false,
+                Some(seed),
+            );
+            let score = result.score.as_ref().unwrap();
+            let h = score.home_team.get() as u64;
+            let a = score.away_team.get() as u64;
+            total_goals += h + a;
+            checksum = checksum
+                .wrapping_mul(1_000_003)
+                .wrapping_add(h.wrapping_mul(131).wrapping_add(a).wrapping_add(i as u64));
+        }
+        let secs = start.elapsed().as_secs_f64();
+        println!(
+            "BENCH n={} level={} time={:.3}s per_match={:.4}s total_goals={} avg_goals={:.2} checksum={:#018x}",
+            n,
+            level,
+            secs,
+            secs / n.max(1) as f64,
+            total_goals,
+            total_goals as f64 / n.max(1) as f64,
+            checksum
+        );
+    }
+
+    /// Normalise the RNG-derived (non-skill) fields the engine reads during
+    /// a match so a calibrated squad is as deterministic as possible.
+    /// `make_squad_calibrated` already pins every skill; this pins
+    /// condition / jadedness / traits / birth_date / fatigue carry-ins,
+    /// which `generate_player` otherwise rolls randomly.
+    fn fix_squad_deterministic(squad: &mut MatchSquad) {
+        for mp in squad
+            .main_squad
+            .iter_mut()
+            .chain(squad.substitutes.iter_mut())
+        {
+            mp.player_attributes.condition = 10_000;
+            mp.player_attributes.jadedness = 0;
+            mp.traits = Vec::new();
+            mp.birth_date = NaiveDate::from_ymd_opt(1995, 1, 1).unwrap();
+            mp.starting_condition = 10_000;
+            mp.starting_recovery_debt = 0.0;
+            mp.is_force_match_selection = false;
+        }
+    }
+}
+
 fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  dev_match                       open browser viewer (random squad levels)");
@@ -914,6 +1000,12 @@ fn main() {
             let level_a: Option<u8> = args.get(2).and_then(|s| s.parse().ok());
             let level_b: Option<u8> = args.get(3).and_then(|s| s.parse().ok());
             run_viewer(level_a, level_b);
+        }
+        // Deterministic seeded timing + calibration-neutrality benchmark.
+        "bench" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
+            let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);
+            Bench::run(n, level);
         }
         // Generator diagnostic: dumps mean outfield skills per level so
         // we can see whether `make_squad_simple(level)` actually responds

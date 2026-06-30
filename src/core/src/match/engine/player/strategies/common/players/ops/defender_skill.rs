@@ -1,8 +1,6 @@
 use crate::r#match::MatchPlayer;
 use crate::r#match::StateProcessingContext;
-use crate::r#match::player::strategies::players::ops::effective_skill::{
-    ActionContext as EffActionContext, effective_skill,
-};
+use crate::r#match::player::strategies::players::ops::effective_skill::{SkillBands, SkillCategory};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 
 // ---------------------------------------------------------------------------
@@ -139,40 +137,39 @@ impl DefenderSkillProfile {
     }
 
     pub fn from_player(player: &MatchPlayer, inputs: &DefenderSkillInputs) -> Self {
-        let tech = EffActionContext::technical(inputs.minute);
-        let mental = EffActionContext::mental(inputs.minute);
-        let expl = EffActionContext::explosive(inputs.minute);
+        let bands = SkillBands::for_player(player, inputs.minute);
         let s = &player.skills;
 
-        // ── Effective skill reads ────────────────────────────────────
-        let tackling_eff = effective_skill(player, s.technical.tackling, tech);
-        let marking_eff = effective_skill(player, s.technical.marking, tech);
-        let heading_eff = effective_skill(player, s.technical.heading, tech);
-        let passing_eff = effective_skill(player, s.technical.passing, tech);
-        let technique_eff = effective_skill(player, s.technical.technique, tech);
-        let first_touch_eff = effective_skill(player, s.technical.first_touch, tech);
-        let crossing_eff = effective_skill(player, s.technical.crossing, tech);
+        // ── Effective skill reads (factored fatigue bands; bit-identical
+        //    to per-read effective_skill — see SkillBands) ──────────────
+        let tackling_eff = bands.apply(s.technical.tackling, SkillCategory::Technical);
+        let marking_eff = bands.apply(s.technical.marking, SkillCategory::Technical);
+        let heading_eff = bands.apply(s.technical.heading, SkillCategory::Technical);
+        let passing_eff = bands.apply(s.technical.passing, SkillCategory::Technical);
+        let technique_eff = bands.apply(s.technical.technique, SkillCategory::Technical);
+        let first_touch_eff = bands.apply(s.technical.first_touch, SkillCategory::Technical);
+        let crossing_eff = bands.apply(s.technical.crossing, SkillCategory::Technical);
 
-        let positioning_eff = effective_skill(player, s.mental.positioning, mental);
-        let anticipation_eff = effective_skill(player, s.mental.anticipation, mental);
-        let concentration_eff = effective_skill(player, s.mental.concentration, mental);
-        let decisions_eff = effective_skill(player, s.mental.decisions, mental);
-        let composure_eff = effective_skill(player, s.mental.composure, mental);
-        let bravery_eff = effective_skill(player, s.mental.bravery, mental);
-        let aggression_eff = effective_skill(player, s.mental.aggression, mental);
-        let teamwork_eff = effective_skill(player, s.mental.teamwork, mental);
-        let work_rate_eff = effective_skill(player, s.mental.work_rate, mental);
-        let leadership_eff = effective_skill(player, s.mental.leadership, mental);
-        let vision_eff = effective_skill(player, s.mental.vision, mental);
-        let off_ball_eff = effective_skill(player, s.mental.off_the_ball, mental);
+        let positioning_eff = bands.apply(s.mental.positioning, SkillCategory::Mental);
+        let anticipation_eff = bands.apply(s.mental.anticipation, SkillCategory::Mental);
+        let concentration_eff = bands.apply(s.mental.concentration, SkillCategory::Mental);
+        let decisions_eff = bands.apply(s.mental.decisions, SkillCategory::Mental);
+        let composure_eff = bands.apply(s.mental.composure, SkillCategory::Mental);
+        let bravery_eff = bands.apply(s.mental.bravery, SkillCategory::Mental);
+        let aggression_eff = bands.apply(s.mental.aggression, SkillCategory::Mental);
+        let teamwork_eff = bands.apply(s.mental.teamwork, SkillCategory::Mental);
+        let work_rate_eff = bands.apply(s.mental.work_rate, SkillCategory::Mental);
+        let leadership_eff = bands.apply(s.mental.leadership, SkillCategory::Mental);
+        let vision_eff = bands.apply(s.mental.vision, SkillCategory::Mental);
+        let off_ball_eff = bands.apply(s.mental.off_the_ball, SkillCategory::Mental);
 
-        let strength_eff = effective_skill(player, s.physical.strength, expl);
-        let jumping_eff = effective_skill(player, s.physical.jumping, expl);
-        let pace_eff = effective_skill(player, s.physical.pace, expl);
-        let acceleration_eff = effective_skill(player, s.physical.acceleration, expl);
-        let agility_eff = effective_skill(player, s.physical.agility, expl);
-        let balance_eff = effective_skill(player, s.physical.balance, tech);
-        let stamina_eff = effective_skill(player, s.physical.stamina, expl);
+        let strength_eff = bands.apply(s.physical.strength, SkillCategory::Explosive);
+        let jumping_eff = bands.apply(s.physical.jumping, SkillCategory::Explosive);
+        let pace_eff = bands.apply(s.physical.pace, SkillCategory::Explosive);
+        let acceleration_eff = bands.apply(s.physical.acceleration, SkillCategory::Explosive);
+        let agility_eff = bands.apply(s.physical.agility, SkillCategory::Explosive);
+        let balance_eff = bands.apply(s.physical.balance, SkillCategory::Technical);
+        let stamina_eff = bands.apply(s.physical.stamina, SkillCategory::Explosive);
 
         // ── Normalised reads ─────────────────────────────────────────
         let tackling01 = norm01(tackling_eff);

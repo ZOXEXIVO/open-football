@@ -203,9 +203,11 @@ impl EventDispatcher {
     ) {
         // Inline storage for the recursion buffer — most chained
         // events fan out to 0-2 follow-ups; only a goal-reset cascade
-        // ever fills more than the inline cap.
-        let mut remaining_events: EventCollection =
-            EventCollection::with_capacity(DISPATCH_REMAINING_INLINE_CAP);
+        // ever fills more than the inline cap. `new()` keeps the same
+        // 4-slot inline buffer but leaves the overflow Vec unallocated
+        // until something actually spills (the dominant path never does),
+        // avoiding a heap alloc+free on every dispatch.
+        let mut remaining_events: EventCollection = EventCollection::new();
 
         for event in events {
             match event {

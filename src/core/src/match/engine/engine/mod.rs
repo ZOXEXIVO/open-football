@@ -255,6 +255,7 @@ impl<const W: usize, const H: usize> Default for FootballEngine<W, H> {
     }
 }
 
+pub mod phase_prof;
 mod positions;
 mod run;
 mod shape;

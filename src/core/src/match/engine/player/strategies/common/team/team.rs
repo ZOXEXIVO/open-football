@@ -65,6 +65,30 @@ impl<'b> TeamOperationsImpl<'b> {
     /// recycle gate's job is to avoid blind hopeful balls when no one
     /// is anywhere near goal at all. Distance alone covers that.
     pub fn is_attack_ready(&self) -> bool {
+        let player_id = self.ctx.player.id;
+        let tick = self.ctx.current_tick();
+        let cached = self
+            .ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(player_id, tick)
+            .is_attack_ready;
+        if let Some(v) = cached {
+            debug_assert_eq!(v, self.compute_is_attack_ready(), "is_attack_ready cache mismatch");
+            return v;
+        }
+        let v = self.compute_is_attack_ready();
+        self.ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(player_id, tick)
+            .is_attack_ready = Some(v);
+        v
+    }
+
+    fn compute_is_attack_ready(&self) -> bool {
         let ctx = self.ctx;
         let goal_pos = ctx.player().opponent_goal_position();
         ctx.players()
@@ -158,6 +182,30 @@ impl<'b> TeamOperationsImpl<'b> {
     /// or scoreline — it is where 2-0 counter goals and tired late
     /// winners come from.
     pub fn counter_window(&self) -> bool {
+        let player_id = self.ctx.player.id;
+        let tick = self.ctx.current_tick();
+        let cached = self
+            .ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(player_id, tick)
+            .counter_window;
+        if let Some(v) = cached {
+            debug_assert_eq!(v, self.compute_counter_window(), "counter_window cache mismatch");
+            return v;
+        }
+        let v = self.compute_counter_window();
+        self.ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(player_id, tick)
+            .counter_window = Some(v);
+        v
+    }
+
+    fn compute_counter_window(&self) -> bool {
         let ctx = self.ctx;
         let current_tick = ctx.context.current_tick();
         let ticks_since_gain =
@@ -281,6 +329,30 @@ impl<'b> TeamOperationsImpl<'b> {
     }
 
     pub fn is_control_ball(&self) -> bool {
+        let player_id = self.ctx.player.id;
+        let tick = self.ctx.current_tick();
+        let cached = self
+            .ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(player_id, tick)
+            .is_control_ball;
+        if let Some(v) = cached {
+            debug_assert_eq!(v, self.compute_is_control_ball(), "is_control_ball cache mismatch");
+            return v;
+        }
+        let v = self.compute_is_control_ball();
+        self.ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(player_id, tick)
+            .is_control_ball = Some(v);
+        v
+    }
+
+    fn compute_is_control_ball(&self) -> bool {
         let current_player_team_id = self.ctx.player.team_id;
 
         // First check: if a player from player's team has the ball
@@ -398,6 +470,34 @@ impl<'b> TeamOperationsImpl<'b> {
     }
 
     pub fn is_teammate_chasing_ball(&self) -> bool {
+        let player_id = self.ctx.player.id;
+        let tick = self.ctx.current_tick();
+        let cached = self
+            .ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(player_id, tick)
+            .is_teammate_chasing_ball;
+        if let Some(v) = cached {
+            debug_assert_eq!(
+                v,
+                self.compute_is_teammate_chasing_ball(),
+                "is_teammate_chasing_ball cache mismatch"
+            );
+            return v;
+        }
+        let v = self.compute_is_teammate_chasing_ball();
+        self.ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(player_id, tick)
+            .is_teammate_chasing_ball = Some(v);
+        v
+    }
+
+    fn compute_is_teammate_chasing_ball(&self) -> bool {
         let ball_position = self.ctx.tick_context.positions.ball.position;
 
         self.ctx.players().teammates().all().any(|player| {

@@ -417,6 +417,39 @@ impl<'p> DefensiveOperationsImpl<'p> {
     /// role changes with geometry (e.g. primary gets dribbled past →
     /// old cover promotes to primary next tick).
     pub fn defensive_role_for_ball_carrier(&self) -> DefensiveRole {
+        // Per-(player, tick) memo: this is reached 2–3× within one
+        // defender's tick (e.g. DefenderStanding checks `is_primary_or_
+        // emergency` then `let role = …`), each a full defender-rank scan.
+        // Deterministic over the frozen snapshot, so the memo is
+        // bit-identical (debug_assert guards every hit).
+        let player_id = self.ctx.player.id;
+        let tick = self.ctx.current_tick();
+        let cached = self
+            .ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(player_id, tick)
+            .defensive_role;
+        if let Some(v) = cached {
+            debug_assert_eq!(
+                v,
+                self.compute_defensive_role_for_ball_carrier(),
+                "defensive_role_for_ball_carrier cache mismatch"
+            );
+            return v;
+        }
+        let v = self.compute_defensive_role_for_ball_carrier();
+        self.ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(player_id, tick)
+            .defensive_role = Some(v);
+        v
+    }
+
+    fn compute_defensive_role_for_ball_carrier(&self) -> DefensiveRole {
         let Some(ball_carrier) = self.ctx.players().opponents().with_ball().next() else {
             return DefensiveRole::Hold;
         };

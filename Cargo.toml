@@ -22,6 +22,16 @@ match = ["match-logs", "match-stub"]
 match-logs = ["simulator_core/match-logs", "web/match-logs"]
 match-stub = ["simulator_core/match-stub", "web/match-stub"]
 
+# Production release codegen. Fat LTO + a single codegen unit let the
+# compiler inline across the whole core crate (the entire match-AI hot path
+# lives there) — measured ~3% on the match engine alone, bit-identical
+# (Rust keeps IEEE-strict float math regardless of inlining). Deliberately
+# NOT `panic = "abort"`: the world simulator relies on rayon's per-continent
+# catch_unwind isolation (a single match panic must not abort the process).
+[profile.release]
+lto = true
+codegen-units = 1
+
 # Optimized build that keeps full debug info + symbols so a sampling
 # profiler (samply) can resolve stacks. `inherits = "release"` ⇒ same
 # opt-level/LTO as production, so the trace reflects real hot paths.

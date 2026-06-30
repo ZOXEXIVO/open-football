@@ -1,8 +1,6 @@
 use crate::r#match::MatchPlayer;
 use crate::r#match::StateProcessingContext;
-use crate::r#match::player::strategies::players::ops::effective_skill::{
-    ActionContext as EffActionContext, effective_skill,
-};
+use crate::r#match::player::strategies::players::ops::effective_skill::{SkillBands, SkillCategory};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 
 // ---------------------------------------------------------------------------
@@ -127,44 +125,43 @@ impl GoalkeeperSkillProfile {
     }
 
     pub fn from_player(player: &MatchPlayer, inputs: &GoalkeeperSkillInputs) -> Self {
-        let tech = EffActionContext::technical(inputs.minute);
-        let mental = EffActionContext::mental(inputs.minute);
-        let expl = EffActionContext::explosive(inputs.minute);
+        let bands = SkillBands::for_player(player, inputs.minute);
         let s = &player.skills;
 
-        // ── Goalkeeping (technical-feel) reads ────────────────────────
-        let reflexes_eff = effective_skill(player, s.goalkeeping.reflexes, tech);
-        let handling_eff = effective_skill(player, s.goalkeeping.handling, tech);
-        let one_on_ones_eff = effective_skill(player, s.goalkeeping.one_on_ones, tech);
-        let aerial_reach_eff = effective_skill(player, s.goalkeeping.aerial_reach, tech);
-        let punching_eff = effective_skill(player, s.goalkeeping.punching, tech);
-        let kicking_eff = effective_skill(player, s.goalkeeping.kicking, tech);
-        let throwing_eff = effective_skill(player, s.goalkeeping.throwing, tech);
-        let gk_passing_eff = effective_skill(player, s.goalkeeping.passing, tech);
-        let gk_first_touch_eff = effective_skill(player, s.goalkeeping.first_touch, tech);
-        let rushing_out_eff = effective_skill(player, s.goalkeeping.rushing_out, tech);
-        let command_of_area_eff = effective_skill(player, s.goalkeeping.command_of_area, mental);
-        let communication_eff = effective_skill(player, s.goalkeeping.communication, mental);
+        // ── Goalkeeping (technical-feel) reads (factored fatigue bands;
+        //    bit-identical to per-read effective_skill — see SkillBands) ─
+        let reflexes_eff = bands.apply(s.goalkeeping.reflexes, SkillCategory::Technical);
+        let handling_eff = bands.apply(s.goalkeeping.handling, SkillCategory::Technical);
+        let one_on_ones_eff = bands.apply(s.goalkeeping.one_on_ones, SkillCategory::Technical);
+        let aerial_reach_eff = bands.apply(s.goalkeeping.aerial_reach, SkillCategory::Technical);
+        let punching_eff = bands.apply(s.goalkeeping.punching, SkillCategory::Technical);
+        let kicking_eff = bands.apply(s.goalkeeping.kicking, SkillCategory::Technical);
+        let throwing_eff = bands.apply(s.goalkeeping.throwing, SkillCategory::Technical);
+        let gk_passing_eff = bands.apply(s.goalkeeping.passing, SkillCategory::Technical);
+        let gk_first_touch_eff = bands.apply(s.goalkeeping.first_touch, SkillCategory::Technical);
+        let rushing_out_eff = bands.apply(s.goalkeeping.rushing_out, SkillCategory::Technical);
+        let command_of_area_eff = bands.apply(s.goalkeeping.command_of_area, SkillCategory::Mental);
+        let communication_eff = bands.apply(s.goalkeeping.communication, SkillCategory::Mental);
 
         // ── Mental reads ─────────────────────────────────────────────
-        let positioning_eff = effective_skill(player, s.mental.positioning, mental);
-        let anticipation_eff = effective_skill(player, s.mental.anticipation, mental);
-        let concentration_eff = effective_skill(player, s.mental.concentration, mental);
-        let decisions_eff = effective_skill(player, s.mental.decisions, mental);
-        let composure_eff = effective_skill(player, s.mental.composure, mental);
-        let bravery_eff = effective_skill(player, s.mental.bravery, mental);
-        let teamwork_eff = effective_skill(player, s.mental.teamwork, mental);
-        let vision_eff = effective_skill(player, s.mental.vision, mental);
-        let determination01 = skill01(effective_skill(player, s.mental.determination, mental));
+        let positioning_eff = bands.apply(s.mental.positioning, SkillCategory::Mental);
+        let anticipation_eff = bands.apply(s.mental.anticipation, SkillCategory::Mental);
+        let concentration_eff = bands.apply(s.mental.concentration, SkillCategory::Mental);
+        let decisions_eff = bands.apply(s.mental.decisions, SkillCategory::Mental);
+        let composure_eff = bands.apply(s.mental.composure, SkillCategory::Mental);
+        let bravery_eff = bands.apply(s.mental.bravery, SkillCategory::Mental);
+        let teamwork_eff = bands.apply(s.mental.teamwork, SkillCategory::Mental);
+        let vision_eff = bands.apply(s.mental.vision, SkillCategory::Mental);
+        let determination01 = skill01(bands.apply(s.mental.determination, SkillCategory::Mental));
 
         // ── Physical reads ───────────────────────────────────────────
-        let agility_eff = effective_skill(player, s.physical.agility, expl);
-        let acceleration_eff = effective_skill(player, s.physical.acceleration, expl);
-        let pace_eff = effective_skill(player, s.physical.pace, expl);
-        let jumping_eff = effective_skill(player, s.physical.jumping, expl);
-        let strength_eff = effective_skill(player, s.physical.strength, expl);
-        let balance_eff = effective_skill(player, s.physical.balance, tech);
-        let stamina_eff = effective_skill(player, s.physical.stamina, expl);
+        let agility_eff = bands.apply(s.physical.agility, SkillCategory::Explosive);
+        let acceleration_eff = bands.apply(s.physical.acceleration, SkillCategory::Explosive);
+        let pace_eff = bands.apply(s.physical.pace, SkillCategory::Explosive);
+        let jumping_eff = bands.apply(s.physical.jumping, SkillCategory::Explosive);
+        let strength_eff = bands.apply(s.physical.strength, SkillCategory::Explosive);
+        let balance_eff = bands.apply(s.physical.balance, SkillCategory::Technical);
+        let stamina_eff = bands.apply(s.physical.stamina, SkillCategory::Explosive);
         let nat_fitness01 = skill01(s.physical.natural_fitness);
         let match_readiness01 = skill01(s.physical.match_readiness);
 

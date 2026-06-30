@@ -706,6 +706,224 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // User-reported (Ruslan Pichienko): a Second-team player loaned OUT
+    // to another club (Sibit), plays 16 games there, then returns and is
+    // moved back to the reserve. His 16 loan games must stay under the
+    // LOAN club — they must NOT be re-attributed to the parent "2" side.
+    //
+    // Faithfully mirrors the runtime path: complete_loan → on_loan
+    // (departs the Spartak-2 spell, opens the Sibit loan spell);
+    // matches accumulate against the active Sibit spell; loan return
+    // lands the player on the parent MAIN team (on_loan_return), then
+    // staff move him back to the reserve (on_intra_club_move).
+    // ---------------------------------------------------------------
+    #[test]
+    fn loaned_out_reserve_player_keeps_loan_club_row_on_return() {
+        let mut player = make_player();
+        let spartak2 = team_with_league(
+            "Spartak Moscow 2",
+            "spartak-moscow-2",
+            "Second Division B2",
+            "russian-second-division-b-group-2",
+        );
+        let spartak_main = team_with_league(
+            "Spartak Moscow",
+            "spartak-moscow",
+            "Premier League",
+            "russian-premier-league",
+        );
+        let sibit = team_with_league(
+            "Sibit",
+            "sibit",
+            "Second Division A",
+            "russian-second-division-a-silver",
+        );
+
+        // Rostered at Spartak 2.
+        player
+            .statistics_history
+            .seed_initial_team(&spartak2, make_date(2026, 8, 1), false);
+
+        // Loaned out to Sibit (departs the Spartak-2 spell, opens a Sibit
+        // loan spell that becomes the active home spell).
+        player.on_loan(&spartak2, &sibit, 0.0, make_date(2026, 8, 10));
+
+        // Plays 16 league games at Sibit — during the loan the active
+        // spell IS Sibit, so the match path books these into
+        // `player.statistics` (home_slug == sibit).
+        player.statistics = make_stats(16, 5);
+
+        // Loan returns: the player lands on the parent MAIN team, then
+        // staff move him back to the reserve "2" side.
+        player.on_loan_return(&sibit, &spartak_main, make_date(2027, 5, 31));
+        player.on_intra_club_move(&spartak_main, &spartak2, true, true, make_date(2027, 6, 1));
+
+        // Season ends while rostered at Spartak 2.
+        player.on_season_end(Season::new(2026), &spartak2, make_date(2027, 6, 5));
+
+        // The 16 games are booked under Sibit (loan), in their own row.
+        let sibit_row = player
+            .statistics_history
+            .season_ledger
+            .iter()
+            .find(|e| {
+                e.team_slug == "sibit"
+                    && e.competition_kind == crate::PlayerStatCompetitionKind::League
+            })
+            .expect("Sibit loan League ledger row must exist");
+        assert_eq!(
+            sibit_row.statistics.played, 16,
+            "16 games must stay under the loan club"
+        );
+        assert!(sibit_row.is_loan, "the Sibit spell is a loan");
+
+        // NOT one game leaks into the parent Spartak 2 row.
+        let spartak2_games: u16 = player
+            .statistics_history
+            .season_ledger
+            .iter()
+            .filter(|e| {
+                e.team_slug == "spartak-moscow-2"
+                    && e.competition_kind == crate::PlayerStatCompetitionKind::League
+            })
+            .map(|e| e.statistics.played)
+            .sum();
+        assert_eq!(
+            spartak2_games, 0,
+            "no loan games may be re-attributed to the parent Spartak 2 row"
+        );
+
+        // And the rendered History page shows the Sibit loan row with its
+        // 16 games, not a Spartak-2 row carrying them.
+        let empty = PlayerStatistics::default();
+        let live = crate::PlayerLiveStatsInput {
+            league: &empty,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let rows = crate::PlayerStatisticsProjection::player_history_rows(
+            &player.statistics_history,
+            &live,
+            make_date(2027, 10, 1),
+        );
+        let sibit_view = rows
+            .iter()
+            .find(|r| r.team_slug == "sibit")
+            .expect("Sibit row must render on the History page");
+        assert_eq!(sibit_view.statistics.played, 16);
+        assert!(sibit_view.is_loan);
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.team_slug == "spartak-moscow-2" && r.statistics.played > 0),
+            "no Spartak 2 row may carry the loan games"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // User-reported (Ruslan Pichienko): a TWO-YEAR loan to Krylya
+    // Sovetov. BOTH loan seasons must carry the "Loan" label — the
+    // reported bug is the SECOND season (2029/30) rendering without it.
+    // A continued loan is re-seeded at the intermediate season-end; the
+    // is_loan flag has to survive that re-seed and the final freeze.
+    // ---------------------------------------------------------------
+    #[test]
+    fn two_season_loan_keeps_loan_label_both_seasons() {
+        let mut player = make_player();
+        let spartak2 = team_with_league(
+            "Spartak Moscow 2",
+            "spartak-moscow-2",
+            "Second Division B2",
+            "russian-second-division-b-group-2",
+        );
+        let spartak_main = team_with_league(
+            "Spartak Moscow",
+            "spartak-moscow",
+            "Premier League",
+            "russian-premier-league",
+        );
+        let krylya = team_with_league(
+            "Krylya Sovetov",
+            "krylya-sovetov",
+            "First League",
+            "russian-first-league",
+        );
+
+        player
+            .statistics_history
+            .seed_initial_team(&spartak2, make_date(2028, 8, 1), false);
+
+        // Loaned to Krylya on a TWO-YEAR deal (expires summer 2030).
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500,
+            make_date(2030, 5, 31),
+            99,
+            0,
+            100,
+        ));
+        player.on_loan(&spartak2, &krylya, 0.0, make_date(2028, 8, 10));
+
+        // Season 1 of the loan (2028/29): 20 games at Krylya.
+        player.statistics = make_stats(20, 4);
+        // Intermediate season-end while STILL on loan.
+        player.on_season_end(Season::new(2028), &krylya, make_date(2029, 6, 5));
+
+        // Season 2 of the loan (2029/30): 16 more games at Krylya.
+        player.statistics = make_stats(16, 3);
+        // Loan expires; player returns and is moved back to the reserve.
+        player.on_loan_return(&krylya, &spartak_main, make_date(2030, 5, 31));
+        player.contract_loan = None;
+        player.on_intra_club_move(&spartak_main, &spartak2, true, true, make_date(2030, 6, 1));
+        player.on_season_end(Season::new(2029), &spartak2, make_date(2030, 6, 5));
+
+        // Both Krylya seasons must be frozen as LOANS.
+        let krylya_rows: Vec<_> = player
+            .statistics_history
+            .season_ledger
+            .iter()
+            .filter(|e| {
+                e.team_slug == "krylya-sovetov"
+                    && e.competition_kind == crate::PlayerStatCompetitionKind::League
+            })
+            .collect();
+        let row_2028 = krylya_rows
+            .iter()
+            .find(|e| e.season_start_year == 2028)
+            .expect("2028/29 Krylya League row");
+        let row_2029 = krylya_rows
+            .iter()
+            .find(|e| e.season_start_year == 2029)
+            .expect("2029/30 Krylya League row");
+        assert!(row_2028.is_loan, "2028/29 Krylya must be a loan");
+        assert!(
+            row_2029.is_loan,
+            "2029/30 Krylya (second loan season) must ALSO be a loan"
+        );
+
+        // And the rendered History page labels both seasons as loans.
+        let empty = PlayerStatistics::default();
+        let live = crate::PlayerLiveStatsInput {
+            league: &empty,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let rows = crate::PlayerStatisticsProjection::player_history_rows(
+            &player.statistics_history,
+            &live,
+            make_date(2030, 10, 1),
+        );
+        for year in [2028u16, 2029] {
+            let view = rows
+                .iter()
+                .find(|r| r.team_slug == "krylya-sovetov" && r.season.start_year == year)
+                .unwrap_or_else(|| panic!("Krylya {year} row must render"));
+            assert!(view.is_loan, "Krylya {year} row must show the Loan label");
+        }
+    }
+
+    // ---------------------------------------------------------------
     // on_transfer: resets stats and creates history
     // ---------------------------------------------------------------
 

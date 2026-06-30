@@ -1,4 +1,5 @@
 use super::*;
+use super::phase_prof::PhaseProf;
 use crate::r#match::engine::context::MatchEngineConfig;
 use crate::r#match::engine::rating::{RatingExpectationContext, TeamRatingSummary};
 
@@ -68,6 +69,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             return Self::play_stub(left_squad, right_squad);
         }
 
+        PhaseProf::init_from_env();
         let perf = PerfCounters::instance();
         let match_start = Instant::now();
         let score = Score::new(left_squad.team_id, right_squad.team_id);
@@ -174,6 +176,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let result = Self::build_result(field, context, match_position_data);
         perf.record_match_result_processing(result_start.elapsed());
         perf.record_match_total(match_start.elapsed());
+        if PhaseProf::enabled() {
+            PhaseProf::report_and_reset("match");
+        }
         result
     }
 
@@ -699,6 +704,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let result = PlayMatchStateResult::default();
         let inner_start = Instant::now();
         let mut tick_count: u64 = 0;
+        let prof_on = PhaseProf::enabled();
 
         let mut next_sub_time_ms: u64 = 0;
         let mut sub_times_initialized = false;
@@ -767,6 +773,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // Coach evaluates every 500 ticks (~5 seconds of match time)
             if coach_eval_counter >= 500 {
                 coach_eval_counter = 0;
+                let prof_t = prof_on.then(Instant::now);
                 Self::evaluate_coaches(field, context);
                 // Once every coach-eval slice, also probe for situational
                 // formation overrides — the manager swap to a chasing /
@@ -774,6 +781,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // single match arm and an equality check against the
                 // current type per side.
                 Self::evaluate_situational_shape(field, &mut *context);
+                if let Some(t) = prof_t {
+                    PhaseProf::add(
+                        PhaseProf::P_COACH,
+                        t.elapsed().as_nanos() as u64,
+                    );
+                }
                 // Condition-trajectory sampling for the dev harness —
                 // average condition per position group per 15-min band.
                 // Rides the coach cadence so it costs one 22-player walk
@@ -875,7 +888,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             if tactical_eval_counter >= tactical_interval {
                 let interval = tactical_eval_counter;
                 tactical_eval_counter = 0;
+                let prof_t = prof_on.then(Instant::now);
                 Self::refresh_tactical_states(field, context, interval);
+                if let Some(t) = prof_t {
+                    PhaseProf::add(
+                        PhaseProf::P_TACTICAL,
+                        t.elapsed().as_nanos() as u64,
+                    );
+                }
                 // refresh_tactical_states may have repointed
                 // ball_zone — re-snapshot to avoid spuriously
                 // re-triggering the window on the next tick.

@@ -68,7 +68,9 @@ impl StateProcessingHandler for DefenderPressingState {
             // Poor pressers run a smaller bubble; elite pressers commit
             // a bit further. Replaces the static base + intensity formula.
             let intensity = ctx.team().press_intensity();
-            let def_profile = DefenderSkillProfile::from_ctx(ctx);
+            // Reuse `def_profile` from the top of process() — `from_ctx` is
+            // pure over the frozen tick snapshot, so rebuilding here would
+            // return the identical value.
             let profile_bonus = def_profile.press_profile * 18.0;
             let pressing_threshold = if ctx.ball().on_own_side()
                 && ctx.ball().distance_to_own_goal()

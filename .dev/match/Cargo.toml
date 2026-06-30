@@ -19,3 +19,13 @@ tower-http = { version = "0.6", features = ["cors"] }
 env_logger = "0.11"
 log = "0.4"
 rand = "0.10"
+
+# Match the optimized production profile so the bench reflects real
+# codegen. Fat LTO + a single codegen unit let the compiler inline across
+# the whole core crate (the entire AI hot path lives there). Bit-identical
+# results — Rust keeps IEEE-strict float math regardless of inlining. NB:
+# deliberately NOT `panic = "abort"` — the world sim relies on rayon's
+# per-continent catch_unwind isolation.
+[profile.release]
+lto = true
+codegen-units = 1
