@@ -350,9 +350,10 @@ impl PipelineProcessor {
                 .with_pending_loans(pending_loans.get(&club.id).map_or(&[], |v| v.as_slice()));
             let borrower_world_rep = team.reputation.world;
 
-            let should_skip_loan = |group: PlayerFieldPositionGroup, loan_ability: u8| -> bool {
-                !borrower_depth.has_room_for(group, loan_ability)
-            };
+            let should_skip_loan =
+                |group: PlayerFieldPositionGroup, loan_ability: u8, development: bool| -> bool {
+                    !borrower_depth.has_room_for(group, loan_ability, development)
+                };
 
             // Check unfulfilled transfer requests first. Emergency
             // free-agent depth requests are excluded — they're
@@ -376,8 +377,10 @@ impl PipelineProcessor {
                     continue;
                 }
 
-                // Skip if position is full AND loan wouldn't be an upgrade
-                if should_skip_loan(pos_group, request.min_ability) {
+                // Skip if position is full AND loan wouldn't be an upgrade.
+                // Request-driven cover uses the strict bar — a club with a
+                // full line asked for depth elsewhere, not a keeper prospect.
+                if should_skip_loan(pos_group, request.min_ability, false) {
                     continue;
                 }
 
@@ -467,7 +470,7 @@ impl PipelineProcessor {
                                 .has_active_negotiation_for(l.player_id, club.id)
                             && !actions.iter().any(|a| a.player_id == l.player_id)
                             && !scanned_position_groups.contains(&l.position_group)
-                            && !should_skip_loan(l.position_group, l.ability)
+                            && !should_skip_loan(l.position_group, l.ability, l.is_development)
                             && borrower_depth.would_get_loan_minutes(
                                 l.position_group,
                                 l.ability,
@@ -516,7 +519,7 @@ impl PipelineProcessor {
                                 .has_active_negotiation_for(l.player_id, club.id)
                             && !actions.iter().any(|a| a.player_id == l.player_id)
                             && !scanned_position_groups.contains(&l.position_group)
-                            && !should_skip_loan(l.position_group, l.ability)
+                            && !should_skip_loan(l.position_group, l.ability, l.is_development)
                             && borrower_depth.would_get_loan_minutes(
                                 l.position_group,
                                 l.ability,
@@ -581,7 +584,7 @@ impl PipelineProcessor {
                             // Will he actually play here? Position-aware, and
                             // for keepers the strict plausible-#1 rule — this
                             // is the realism check for a development loan.
-                            && !should_skip_loan(l.position_group, l.ability)
+                            && !should_skip_loan(l.position_group, l.ability, l.is_development)
                             && borrower_depth.would_get_loan_minutes(
                                 l.position_group,
                                 l.ability,
@@ -967,7 +970,7 @@ impl PipelineProcessor {
                 let borrower_rep = team.reputation.world;
                 let depth = BorrowerPositionDepth::snapshot(team)
                     .with_pending_loans(pending_loans.get(&club.id).map_or(&[], |v| v.as_slice()));
-                if !depth.has_room_for(b.group, b.ability)
+                if !depth.has_room_for(b.group, b.ability, b.is_development)
                     || !depth.would_get_loan_minutes(b.group, b.ability, b.is_development)
                     || !Self::loan_reputation_drop_ok(
                         borrower_rep,
@@ -1286,7 +1289,11 @@ impl PipelineProcessor {
                             // already there. Mirrors the domestic
                             // `should_skip_loan` shape so we don't
                             // import a 4th mid-tier GK on top of three.
-                            && borrower_position_depth.has_room_for(p.position_group, p.skill_ability)
+                            && borrower_position_depth.has_room_for(
+                                p.position_group,
+                                p.skill_ability,
+                                ForeignUnsolicitedLoanTarget::is_development(p.age),
+                            )
                             // The loan must buy minutes — not a bench
                             // seat behind a wall of better players.
                             // Young loanees (the development profile)
@@ -1343,6 +1350,104 @@ impl PipelineProcessor {
                     });
                     scanned_position_groups.push(pos_group);
                     scans += 1;
+                }
+            }
+
+            // ── Proactive foreign development pickup (no request needed) ──
+            //
+            // The request loop above only signs a foreign loanee when THIS
+            // club already asked for the position — so a giant's loan-listed
+            // prospect (a River Plate youth keeper no domestic club can field
+            // as a #1) has no cross-border outlet, because the seller
+            // broadcast is domestic-only. Mirror the domestic opportunistic /
+            // unsolicited scan here: a National / Regional club proactively
+            // takes a loan-listed DEVELOPMENT prospect from a same-region,
+            // equal-or-higher-rep country when it would actually play him.
+            // The country-rep / region step-downs (already lifted for
+            // development when `foreign_loans` was built) plus the
+            // borrower-depth minutes gate keep the drop plausible and
+            // guarantee minutes, so prospects circulate across the continent
+            // (Argentina → Uruguay / Chile / …) without landing on a bench.
+            // Bounded by the same per-club scan budget as the request path.
+            let team_rep = team.reputation.world;
+            if scans < max_scans {
+                if let Some(best) = foreign_loans
+                    .iter()
+                    .filter(|p| {
+                        p.is_loan_listed
+                            && ForeignUnsolicitedLoanTarget::is_development(p.age)
+                            && !club.is_rival(p.club_id)
+                            && !scanned_position_groups.contains(&p.position_group)
+                            && p.estimated_value * 0.1 <= max_loan_fee
+                            && !country
+                                .transfer_market
+                                .has_active_negotiation_for(p.player_id, club.id)
+                            && !actions.iter().any(|a| a.player.player_id == p.player_id)
+                            // Reputation reality band — identical to the
+                            // request path, so a prospect still can't drop
+                            // into a far smaller ecosystem than his club's.
+                            && p.home_reputation <= (team_rep as f32 * 2.0) as i16
+                            && team_rep >= (p.home_reputation.max(0) as f32 * 0.35) as u16
+                            && {
+                                let player_region = ScoutingRegion::from_country(
+                                    p.continent_id,
+                                    &p.country_code,
+                                );
+                                scout_regions.contains(&player_region)
+                            }
+                            // Development profile throughout (gated above), so
+                            // every borrower-side gate runs at its dev setting:
+                            // the relaxed keeper room check (Fix A) lets him
+                            // into a full-but-weak line, and the minutes gate
+                            // guarantees he competes rather than sits.
+                            && borrower_position_depth.has_room_for(
+                                p.position_group,
+                                p.skill_ability,
+                                true,
+                            )
+                            && borrower_position_depth.would_get_loan_minutes(
+                                p.position_group,
+                                p.skill_ability,
+                                true,
+                            )
+                            && Self::loan_reputation_drop_ok(
+                                team_rep,
+                                p.club_world_reputation.max(0) as u16,
+                                p.skill_ability,
+                                p.club_best_in_group,
+                                true,
+                            )
+                            && !matches!(
+                                TransferPlausibilityBuilder::evaluate_summary(
+                                    &buyer_loan_ctx,
+                                    p,
+                                    true,
+                                    true,
+                                    date,
+                                ),
+                                Some(TransferPlausibilityVerdict::HardReject(_))
+                            )
+                    })
+                    .max_by_key(|p| {
+                        // Same-region destinations first, then raw quality —
+                        // the continent's own prospects circulate locally
+                        // before a further-flung club is considered.
+                        let same_region =
+                            ScoutingRegion::from_country(p.continent_id, &p.country_code)
+                                == club_region;
+                        (same_region as u8, p.skill_ability)
+                    })
+                {
+                    // Terminal branch for this club: nothing after this reads
+                    // the scan counter or the scanned-groups set, so the loan
+                    // action is all that's needed.
+                    let loan_fee = FormattingUtils::round_fee(best.estimated_value * 0.1 * 0.8);
+                    actions.push(ForeignLoanAction {
+                        club_id: club.id,
+                        player: (*best).clone(),
+                        offer_amount: loan_fee,
+                        reason: "Loan signing — development prospect from abroad".to_string(),
+                    });
                 }
             }
         }
@@ -1809,16 +1914,42 @@ impl BorrowerPositionDepth {
     /// True when adding a loan player at `group` makes sense — either
     /// there's room (count < max) or the incoming player is clearly
     /// stronger than the existing best in that group.
-    fn has_room_for(&self, group: PlayerFieldPositionGroup, candidate_ability: u8) -> bool {
+    ///
+    /// `development` relaxes the full-line rule for GOALKEEPERS only. A full
+    /// keeper line normally blocks anything short of a clear +10 upgrade, but
+    /// that traps a giant's keeper prospects: keepers develop late (so a
+    /// prospect's CA is low) and every club already carries its cap of three,
+    /// so a River Plate youth keeper is a plausible loanee almost nowhere. For
+    /// a development keeper loan the line admits ONE over-cap loanee who is a
+    /// genuine upgrade on the group's WEAKEST keeper (the fringe keeper he
+    /// displaces); `would_get_loan_minutes` then guarantees he competes for
+    /// the shirt, which is the whole point. Bounded to one: once a keeper loan
+    /// is already inbound the pending-loan fold pushes the count past the cap
+    /// and the strict bar returns, so this never re-opens the loan-in
+    /// over-accumulation the cap exists to prevent. Cover loans and every
+    /// outfield group keep the strict clear-upgrade bar.
+    fn has_room_for(
+        &self,
+        group: PlayerFieldPositionGroup,
+        candidate_ability: u8,
+        development: bool,
+    ) -> bool {
         match self.row(group) {
             Some((_, max, abilities)) => {
                 if abilities.len() < *max {
                     return true;
                 }
+                let best = abilities.iter().copied().max().unwrap_or(0);
+                if development
+                    && group == PlayerFieldPositionGroup::Goalkeeper
+                    && abilities.len() == *max
+                {
+                    let worst = abilities.iter().copied().min().unwrap_or(0);
+                    return candidate_ability >= worst.saturating_add(8);
+                }
                 // Group is full — only accept if the incoming player
                 // would clearly upgrade the position (≥10 CA over the
                 // current best).
-                let best = abilities.iter().copied().max().unwrap_or(0);
                 candidate_ability >= best.saturating_add(10)
             }
             None => true,
@@ -1921,11 +2052,11 @@ mod borrower_gate_tests {
         ]);
         let depth = BorrowerPositionDepth::snapshot(&team);
         assert!(
-            !depth.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 85),
+            !depth.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 85, false),
             "comparable keeper into a full group is squad bloat"
         );
         assert!(
-            depth.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 95),
+            depth.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 95, false),
             "a clear upgrade (≥10 over the best) is still allowed"
         );
     }
@@ -2002,7 +2133,7 @@ mod borrower_gate_tests {
         ]);
         let bare = BorrowerPositionDepth::snapshot(&team);
         assert!(
-            bare.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 78),
+            bare.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 78, false),
             "two keepers leave room for a third under the cap"
         );
 
@@ -2013,12 +2144,87 @@ mod borrower_gate_tests {
         let with_pending = BorrowerPositionDepth::snapshot(&team)
             .with_pending_loans(&[(PlayerFieldPositionGroup::Goalkeeper, 72)]);
         assert!(
-            !with_pending.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 78),
+            !with_pending.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 78, false),
             "a pending keeper loan fills the cap — no second comparable loan"
         );
         assert!(
-            with_pending.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 95),
+            with_pending.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 95, false),
             "a clear upgrade is still allowed even with a loan in flight"
+        );
+    }
+
+    /// A development keeper loan may join a full-but-weak GK line: a giant's
+    /// prospect who is a clear upgrade on the borrower's WEAKEST keeper gets
+    /// in (and `would_get_loan_minutes` guarantees he competes), where the
+    /// strict cover bar would have demanded an impossible +10 over their best.
+    #[test]
+    fn development_keeper_joins_full_but_weak_line() {
+        // A weak, full three-keeper line (best 78) — no prospect could ever
+        // clear best+10 = 88, so cover loans are locked out entirely.
+        let team = BorrowerFixtures::team(vec![
+            BorrowerFixtures::player(1, PlayerPositionType::Goalkeeper, 78),
+            BorrowerFixtures::player(2, PlayerPositionType::Goalkeeper, 75),
+            BorrowerFixtures::player(3, PlayerPositionType::Goalkeeper, 72),
+        ]);
+        let depth = BorrowerPositionDepth::snapshot(&team);
+
+        // Cover loan: still blocked (85 < best 78 + 10).
+        assert!(
+            !depth.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 85, false),
+            "a cover keeper still needs the clear +10 upgrade"
+        );
+        // Development loan: an 85 prospect clears the weakest (72) + 8 = 80,
+        // so he joins to compete for the shirt.
+        assert!(
+            depth.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 85, true),
+            "a development keeper who clearly beats the fringe keeper joins a full weak line"
+        );
+        // A marginal keeper who barely beats the fringe keeper is still bloat.
+        assert!(
+            !depth.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 79, true),
+            "a keeper who is not clearly better than the weakest is still squad bloat"
+        );
+    }
+
+    /// The development relaxation admits only ONE over-cap keeper: once a loan
+    /// is inbound (folded in via `with_pending_loans`, pushing the count past
+    /// the cap) the strict bar returns, so a club can't stockpile loanees.
+    #[test]
+    fn development_keeper_relaxation_is_bounded_to_one_over_cap() {
+        let team = BorrowerFixtures::team(vec![
+            BorrowerFixtures::player(1, PlayerPositionType::Goalkeeper, 78),
+            BorrowerFixtures::player(2, PlayerPositionType::Goalkeeper, 75),
+            BorrowerFixtures::player(3, PlayerPositionType::Goalkeeper, 72),
+        ]);
+        // One keeper loan already in flight → count is now 4 (> cap 3).
+        let with_pending = BorrowerPositionDepth::snapshot(&team)
+            .with_pending_loans(&[(PlayerFieldPositionGroup::Goalkeeper, 85)]);
+        assert!(
+            !with_pending.has_room_for(PlayerFieldPositionGroup::Goalkeeper, 84, true),
+            "a second development keeper is blocked once one is already inbound"
+        );
+    }
+
+    /// The relaxation is keeper-specific: a full outfield line keeps the
+    /// strict clear-upgrade bar even for development loans.
+    #[test]
+    fn development_relaxation_does_not_apply_to_outfield() {
+        let team = BorrowerFixtures::team(vec![
+            BorrowerFixtures::player(1, PlayerPositionType::MidfielderCenter, 78),
+            BorrowerFixtures::player(2, PlayerPositionType::MidfielderCenter, 75),
+            BorrowerFixtures::player(3, PlayerPositionType::MidfielderCenter, 72),
+            BorrowerFixtures::player(4, PlayerPositionType::MidfielderCenter, 70),
+            BorrowerFixtures::player(5, PlayerPositionType::MidfielderCenter, 68),
+            BorrowerFixtures::player(6, PlayerPositionType::MidfielderCenter, 66),
+            BorrowerFixtures::player(7, PlayerPositionType::MidfielderCenter, 64),
+            BorrowerFixtures::player(8, PlayerPositionType::MidfielderCenter, 62),
+        ]);
+        let depth = BorrowerPositionDepth::snapshot(&team);
+        // Full midfield (cap 8, best 78): a development midfielder still needs
+        // the clear +10 (≥ 88), unlike keepers.
+        assert!(
+            !depth.has_room_for(PlayerFieldPositionGroup::Midfielder, 85, true),
+            "outfield development loans keep the strict full-line bar"
         );
     }
 
@@ -2564,6 +2770,59 @@ mod scan_loan_market_tests {
         assert_eq!(
             listing.asking_price.amount, 0.0,
             "a development loan must be advertised free so a poor club's loan-fee cap can't filter it"
+        );
+    }
+
+    /// Fix A end-to-end through the seller push: a full-but-weak GK line no
+    /// longer blocks a development keeper. The borrower already fields THREE
+    /// keepers (78 / 75 / 72), so a cover loan would need an impossible 88 to
+    /// clear best + 10 — but an 85-CA loan-listed prospect is a clear upgrade
+    /// on the fringe keeper he displaces, so the broadcast now places him
+    /// where before no club could take him.
+    #[test]
+    fn broadcast_places_development_keeper_into_full_but_weak_line() {
+        let date = Fx::monday();
+
+        let parent_main = Fx::team(
+            10,
+            1,
+            TeamType::Main,
+            9000,
+            vec![
+                Fx::keeper(101, 120, 120, 28, false),
+                Fx::keeper(102, 118, 118, 26, false),
+                Fx::keeper(103, 115, 115, 30, false),
+            ],
+        );
+        let parent_reserve =
+            Fx::team(11, 1, TeamType::Reserve, 6000, vec![Fx::keeper(200, 85, 150, 19, true)]);
+        let parent = Fx::club(1, vec![parent_main, parent_reserve], 50_000_000);
+
+        // A FULL three-deep GK line — but weak enough that the prospect
+        // clearly beats the fringe keeper.
+        let borrower_main = Fx::team(
+            20,
+            2,
+            TeamType::Main,
+            4000,
+            vec![
+                Fx::keeper(301, 78, 78, 27, false),
+                Fx::keeper(302, 75, 75, 29, false),
+                Fx::keeper(303, 72, 72, 31, false),
+            ],
+        );
+        let mut borrower = Fx::club(2, vec![borrower_main], 5_000_000);
+        borrower.transfer_plan.initialized = true;
+
+        let mut country = Fx::country(vec![parent, borrower]);
+        Fx::loan_list(&mut country, 200, 1, 11);
+
+        PipelineProcessor::broadcast_listed_loans(&mut country, date);
+
+        assert!(
+            country.transfer_market.has_active_negotiation_for(200, 2),
+            "the broadcast should place a clearly-better development keeper into a full-but-weak \
+             GK line — the case Fix A unblocks"
         );
     }
 
