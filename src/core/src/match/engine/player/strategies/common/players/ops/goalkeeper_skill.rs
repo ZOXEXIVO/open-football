@@ -26,7 +26,7 @@ pub struct GoalkeeperSkillInputs {
 
 /// Continuous selection / execution profile for goalkeepers. All values
 /// are in 0..1 unless noted.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GoalkeeperSkillProfile {
     /// Composite shot-stopping ability: reflexes/handling/agility blend.
     pub shot_stopping: f32,
@@ -111,17 +111,42 @@ fn handling_curve(x: f32) -> f32 {
 }
 
 impl GoalkeeperSkillProfile {
+    /// Cross-tick memoized per (condition, jadedness, minute) — see
+    /// `DefenderSkillProfile::from_player_memo` for the pattern. The GK
+    /// profile's only in-match-varying inputs are those three integers
+    /// (everything else it reads is static skills / crowd arousal), so
+    /// the cached copy is bit-identical between key changes; the debug
+    /// oracle recomputes on every hit.
     pub fn from_ctx(ctx: &StateProcessingContext) -> Self {
         let player = ctx.player;
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let condition_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
-        Self::from_player(
-            player,
-            &GoalkeeperSkillInputs {
-                minute,
-                condition_pct,
-            },
-        )
+        let inputs = GoalkeeperSkillInputs {
+            minute,
+            condition_pct,
+        };
+
+        let key = (player.player_attributes.condition as u16 as u64)
+            | (player.player_attributes.jadedness as u16 as u64) << 16
+            | (minute as u64 & 0xFF) << 32;
+        let cached = ctx
+            .tick_context
+            .profile_memos
+            .borrow()
+            .goalkeeper_get(player.id, key);
+        if let Some(profile) = cached {
+            debug_assert!(
+                profile == Self::from_player(player, &inputs),
+                "goalkeeper-profile cross-tick memo mismatch"
+            );
+            return profile;
+        }
+        let profile = Self::from_player(player, &inputs);
+        ctx.tick_context
+            .profile_memos
+            .borrow_mut()
+            .goalkeeper_put(player.id, key, profile);
+        profile
     }
 
     pub fn from_player(player: &MatchPlayer, inputs: &GoalkeeperSkillInputs) -> Self {

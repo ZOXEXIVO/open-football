@@ -79,6 +79,22 @@ impl PlayerFieldData {
         }
     }
 
+    /// `position(player_id)` without the hash probe for callers that
+    /// already know the player's slot (`items` order == `field.players`
+    /// then `field.substitutes` order, so a `field.players` index maps
+    /// 1:1). The id check keeps it exact: on any mismatch (roster drift)
+    /// it falls back to the id-keyed lookup, so the returned value is
+    /// always what `position()` would produce.
+    #[inline]
+    pub fn position_by_index(&self, index: usize, player_id: u32) -> Vector3<f32> {
+        if let Some(item) = self.items.get(index) {
+            if item.player_id == player_id {
+                return item.position;
+            }
+        }
+        self.position(player_id)
+    }
+
     #[inline]
     pub fn has_player(&self, player_id: u32) -> bool {
         self.lookup_index(player_id).is_some()

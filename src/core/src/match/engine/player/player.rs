@@ -588,8 +588,14 @@ impl MatchPlayer {
             .collect();
     }
 
+    /// Full AI tick for this player. `field_index` is the player's slot
+    /// in `field.players` — it lets the waypoint refresh read the
+    /// position store by index instead of an id hash probe (the store's
+    /// order is `field.players` then substitutes, so the slot maps 1:1;
+    /// the accessor verifies the id and falls back to the probe).
     pub fn update(
         &mut self,
+        field_index: usize,
         context: &MatchContext,
         tick_context: &GameTickContext,
         events: &mut EventCollection,
@@ -600,7 +606,7 @@ impl MatchPlayer {
 
         events.add_from_collection(player_events);
 
-        self.update_waypoint_index(tick_context);
+        self.update_waypoint_index_at(field_index, tick_context);
 
         self.check_boundary_collision(context);
         self.move_to();
@@ -852,6 +858,21 @@ impl MatchPlayer {
         }
         self.waypoint_manager.update(
             &tick_context.positions.players.position(self.id),
+            &self.cached_waypoints,
+        );
+    }
+
+    /// `update_waypoint_index` with the player's known `field.players`
+    /// slot — same stored position, one hash probe less per tick.
+    fn update_waypoint_index_at(&mut self, field_index: usize, tick_context: &GameTickContext) {
+        if self.cached_waypoints.is_empty() {
+            self.rebuild_waypoint_cache();
+        }
+        self.waypoint_manager.update(
+            &tick_context
+                .positions
+                .players
+                .position_by_index(field_index, self.id),
             &self.cached_waypoints,
         );
     }

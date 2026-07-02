@@ -11,6 +11,43 @@
 //!  - poor chemistry: 6..10% chance both target same attacking space
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+
+/// Multiply-fold hasher for the small integer pair keys below. The
+/// std `RandomState`/SipHash showed up in match CPU traces (the pass
+/// evaluator probes a pair per candidate per decision); a fixed
+/// multiplicative fold is ~5× cheaper and deterministic. Only lookups
+/// use the map (no iteration), so hasher choice cannot affect results.
+#[derive(Default)]
+pub struct PairKeyHasher(u64);
+
+impl Hasher for PairKeyHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        // Generic fallback (derived `Hash` for `(u32, u32)` uses
+        // `write_u32`, so this path stays cold).
+        for &b in bytes {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.0 = (self.0 ^ i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        // Final avalanche so low-entropy ids spread across buckets.
+        let mut x = self.0;
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+        x ^= x >> 33;
+        x
+    }
+}
+
+type PairKeyState = BuildHasherDefault<PairKeyHasher>;
 
 /// Player roles that matter for chemistry priors. Lighter than the full
 /// PlayerPositionType — chemistry only cares about positional family +
@@ -144,7 +181,7 @@ fn is_adjacent_roles(a: Role, b: Role) -> bool {
 /// IDs so order doesn't matter. Lazily filled by callers.
 #[derive(Debug, Clone, Default)]
 pub struct ChemistryMap {
-    pairs: HashMap<(u32, u32), f32>,
+    pairs: HashMap<(u32, u32), f32, PairKeyState>,
 }
 
 fn pair_key(a: u32, b: u32) -> (u32, u32) {

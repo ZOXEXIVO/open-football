@@ -619,9 +619,21 @@ impl<'p> PlayerOperationsImpl<'p> {
         // than cubic — at d=20 (half of radius) strength is 11.25 vs
         // 1.4 under cubic. Keeps the force meaningful across the whole
         // "could bunch here" band, not just at the very-close edge.
-        for other_player in teammates.nearby(SEPARATION_RADIUS) {
+        //
+        // The raw grid iterator already yields each neighbour's distance
+        // (same center / operand order as the `magnitude()` this loop
+        // used to recompute; player z is always 0 so the 2D and 3D norms
+        // are bit-equal). Same query the `nearby(SEPARATION_RADIUS)`
+        // wrapper issued — min distance 1.0 mirrors `nearby_range`.
+        let grid = &self.ctx.tick_context.grid;
+        for (other_player, distance) in grid.teammates_full(
+            self.ctx.player.id,
+            self.ctx.player.team_id,
+            player_pos,
+            1.0,
+            SEPARATION_RADIUS,
+        ) {
             let to_other = other_player.position - player_pos;
-            let distance = to_other.magnitude();
 
             if distance > 0.0 {
                 let inv_dist = 1.0 / distance;
@@ -647,9 +659,15 @@ impl<'p> PlayerOperationsImpl<'p> {
         // controls their movement cleanly.
         let i_have_ball = self.ctx.ball().owner_id() == Some(self.ctx.player.id);
         if !i_have_ball {
-            for other_player in opponents.nearby(OPP_SEPARATION_RADIUS) {
+            // Same raw-iterator distance reuse as the teammate loop; the
+            // opponents `nearby` wrapper had no minimum distance.
+            for (other_player, distance) in grid.opponents_full(
+                self.ctx.player.id,
+                self.ctx.player.team_id,
+                player_pos,
+                OPP_SEPARATION_RADIUS,
+            ) {
                 let to_other = other_player.position - player_pos;
-                let distance = to_other.magnitude();
 
                 if distance > 0.0 {
                     let inv_dist = 1.0 / distance;

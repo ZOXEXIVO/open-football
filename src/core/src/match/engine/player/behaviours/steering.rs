@@ -39,8 +39,11 @@ impl<'a> SteeringBehavior<'a> {
             SteeringBehavior::Seek { target } => {
                 let to_target = *target - player.position;
                 let max_speed = player.max_speed_with_condition_cached();
-                let desired_velocity = if to_target.norm() > 0.0 {
-                    to_target.normalize() * max_speed
+                // `normalize()` recomputes the norm — reuse the guard's
+                // (`v / n` is exactly what normalize does).
+                let distance = to_target.norm();
+                let desired_velocity = if distance > 0.0 {
+                    (to_target / distance) * max_speed
                 } else {
                     Vector3::zeros()
                 };
@@ -96,9 +99,10 @@ impl<'a> SteeringBehavior<'a> {
                     max_speed
                 };
 
-                // Calculate desired velocity direction
+                // Calculate desired velocity direction. `to_target /
+                // distance` == `normalize()` with the norm already in hand.
                 let desired_velocity = if distance > 0.0 {
-                    to_target.normalize() * desired_speed
+                    (to_target / distance) * desired_speed
                 } else {
                     Vector3::zeros()
                 };
@@ -175,7 +179,7 @@ impl<'a> SteeringBehavior<'a> {
                 };
 
                 let desired_velocity = if interception_distance > 0.0 {
-                    to_interception.normalize() * desired_speed
+                    (to_interception / interception_distance) * desired_speed
                 } else {
                     Vector3::zeros()
                 };
@@ -208,8 +212,9 @@ impl<'a> SteeringBehavior<'a> {
                 let to_player = player.position - *target;
                 let max_speed = player.max_speed_with_condition_cached();
 
-                let desired_velocity = if to_player.norm() > 0.0 {
-                    to_player.normalize() * max_speed
+                let flee_distance = to_player.norm();
+                let desired_velocity = if flee_distance > 0.0 {
+                    (to_player / flee_distance) * max_speed
                 } else {
                     Vector3::zeros()
                 };
@@ -280,8 +285,9 @@ impl<'a> SteeringBehavior<'a> {
             SteeringBehavior::Flee { target } => {
                 let to_player = player.position - *target;
                 let max_speed = player.max_speed_with_condition_cached();
-                let desired_velocity = if to_player.norm() > 0.0 {
-                    to_player.normalize() * max_speed
+                let flee_distance = to_player.norm();
+                let desired_velocity = if flee_distance > 0.0 {
+                    (to_player / flee_distance) * max_speed
                 } else {
                     Vector3::zeros()
                 };
@@ -328,7 +334,7 @@ impl<'a> SteeringBehavior<'a> {
 
                 // Calculate desired velocity toward waypoint with slight offset for natural movement
                 let direction = if distance > 0.0 {
-                    to_waypoint.normalize()
+                    to_waypoint / distance
                 } else {
                     Vector3::zeros()
                 };

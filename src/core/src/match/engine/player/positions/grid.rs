@@ -351,6 +351,40 @@ impl SpatialGrid {
         }
     }
 
+    /// Smallest squared distance from `player_id` to any query-visible
+    /// same/other-team entry — the whole-board reduction behind the
+    /// `exists(radius)` fast path: `∃ entry with dist_sq ≤ r²` ⇔
+    /// `nearest_dist_sq ≤ r²`, with the same entry set, the same center
+    /// (the player's grid-stored position) and the same squared-distance
+    /// values a radius query would filter on. `f32::INFINITY` when no
+    /// candidate exists (matching the empty iterator).
+    pub fn nearest_dist_sq(&self, player_id: u32, same_team: bool) -> f32 {
+        let Some(i) = self.lookup_index(player_id) else {
+            return f32::INFINITY;
+        };
+        let center = self.all_players[i].position;
+        let team_id = self.all_players[i].team_id;
+        let mut best = f32::INFINITY;
+        for (slot, gp) in self.all_players[..self.num_players].iter().enumerate() {
+            if self.query_mask & (1 << slot) == 0 {
+                continue;
+            }
+            if gp.id == player_id {
+                continue;
+            }
+            if (gp.team_id == team_id) != same_team {
+                continue;
+            }
+            let dx = gp.position.x - center.x;
+            let dy = gp.position.y - center.y;
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq < best {
+                best = dist_sq;
+            }
+        }
+        best
+    }
+
     /// Lookup full GridPlayer data by ID.
     #[inline]
     pub fn player_at(&self, player_id: u32) -> Option<&GridPlayer> {

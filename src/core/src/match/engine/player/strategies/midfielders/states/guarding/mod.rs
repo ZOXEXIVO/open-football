@@ -185,6 +185,9 @@ impl MidfielderGuardingState {
     fn find_guard_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
         let own_goal = ctx.ball().direction_to_own_goal();
         let ball_position = ctx.tick_context.positions.ball.position;
+        // Our grid-stored position, fetched once — Factor 5 used to
+        // re-probe both ids through `grid.get` per candidate.
+        let my_grid_pos = ctx.tick_context.grid.position_of(ctx.player.id);
 
         let mut best_target: Option<MatchPlayerLite> = None;
         let mut best_score = f32::MIN;
@@ -217,20 +220,27 @@ impl MidfielderGuardingState {
                 }
             }
 
-            // Factor 4: Unmarked bonus — no defender or midfielder covering this attacker
-            // From the opponent's POV, our teammates are their "opponents"
+            // Factor 4: Unmarked bonus — no defender or midfielder covering
+            // this attacker. "Opponents of the opponent" are our teammates,
+            // so query our team around the candidate's grid position
+            // directly — same entry set/order as `grid.opponents(opponent.
+            // id, 15.0)` (the Lite's position IS the grid-stored one),
+            // minus the per-candidate id probe.
             let has_nearby_cover = ctx
                 .tick_context
                 .grid
-                .opponents(opponent.id, 15.0)
-                .any(|(t_id, _)| t_id != ctx.player.id);
+                .teammates_full(opponent.id, ctx.player.team_id, opponent.position, 0.0, 15.0)
+                .any(|(gp, _)| gp.id != ctx.player.id);
 
             if !has_nearby_cover {
                 score += 35.0;
             }
 
-            // Factor 5: Closeness to us
-            let dist_to_us = opponent.distance(ctx);
+            // Factor 5: Closeness to us — same 2D math as `grid.get`
+            // (grid-stored positions, identical operand order).
+            let dx = opponent.position.x - my_grid_pos.x;
+            let dy = opponent.position.y - my_grid_pos.y;
+            let dist_to_us = (dx * dx + dy * dy).sqrt();
             score += (60.0 - dist_to_us.min(60.0)) / 3.0;
 
             if score > best_score {

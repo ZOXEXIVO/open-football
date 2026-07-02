@@ -129,7 +129,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     player.lod_skip_update(context);
                     return;
                 }
-                player.update(context, tick_context, events)
+                player.update(idx, context, tick_context, events)
             });
     }
 
@@ -184,11 +184,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field
             .players
             .iter_mut()
-            .filter(|player| !player.is_sent_off)
-            .filter(|player| {
+            .enumerate()
+            .filter(|(_, player)| !player.is_sent_off)
+            .filter(|(_, player)| {
                 player.tactical_position.current_position.position_group()
                     == PlayerFieldPositionGroup::Goalkeeper
             })
-            .for_each(|player| player.update(context, tick_context, events));
+            .for_each(|(idx, player)| player.update(idx, context, tick_context, events));
     }
 }

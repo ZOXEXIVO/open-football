@@ -1,6 +1,7 @@
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::player::strategies::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     MatchField, MatchObjectsPositions, MatchPlayerCollection, PassOriginRestart, PlayerSide,
@@ -63,6 +64,7 @@ pub struct GameTickContext {
 pub struct ProfileMemos {
     defender: Vec<(u32, u64, DefenderSkillProfile)>,
     midfielder: Vec<(u32, u64, MidfielderSkillProfile)>,
+    goalkeeper: Vec<(u32, u64, GoalkeeperSkillProfile)>,
 }
 
 impl ProfileMemos {
@@ -70,6 +72,27 @@ impl ProfileMemos {
         ProfileMemos {
             defender: Vec::with_capacity(24),
             midfielder: Vec::with_capacity(24),
+            goalkeeper: Vec::with_capacity(4),
+        }
+    }
+
+    #[inline]
+    pub fn goalkeeper_get(&self, player_id: u32, key: u64) -> Option<GoalkeeperSkillProfile> {
+        self.goalkeeper
+            .iter()
+            .find(|(id, k, _)| *id == player_id && *k == key)
+            .map(|(_, _, p)| *p)
+    }
+
+    pub fn goalkeeper_put(&mut self, player_id: u32, key: u64, profile: GoalkeeperSkillProfile) {
+        if let Some(row) = self
+            .goalkeeper
+            .iter_mut()
+            .find(|(id, _, _)| *id == player_id)
+        {
+            *row = (player_id, key, profile);
+        } else {
+            self.goalkeeper.push((player_id, key, profile));
         }
     }
 
@@ -130,6 +153,20 @@ pub struct PlayerTickCache {
     /// memo is bit-identical.
     pub defender_profile: Option<DefenderSkillProfile>,
     pub midfielder_profile: Option<MidfielderSkillProfile>,
+    /// Deepest outfield opponent's x (the offside line) as computed by
+    /// `MidfielderAttackSupportingState::is_offside_risk` — a roster
+    /// min-scan that does not depend on the candidate position being
+    /// tested, yet ran once per candidate. `Some(inner)` = computed this
+    /// tick (`inner` = the scan's `Option<f32>`).
+    pub offside_last_defender_x: Option<Option<f32>>,
+    /// Squared distance to the nearest query-visible opponent / teammate
+    /// (grid entry set; `f32::INFINITY` = none). Backs the `exists(r)`
+    /// fast path — states probe several radii per tick and each probe
+    /// used to walk the grid window; one whole-board min per (player,
+    /// tick) answers them all exactly (`nearest ≤ r²` ⇔ the query
+    /// iterator is non-empty).
+    pub nearest_opponent_sq: Option<f32>,
+    pub nearest_teammate_sq: Option<f32>,
 }
 
 impl Default for PlayerTickCache {
@@ -153,6 +190,9 @@ impl PlayerTickCache {
             defensive_role: None,
             defender_profile: None,
             midfielder_profile: None,
+            offside_last_defender_x: None,
+            nearest_opponent_sq: None,
+            nearest_teammate_sq: None,
         }
     }
 
@@ -170,6 +210,9 @@ impl PlayerTickCache {
             self.defensive_role = None;
             self.defender_profile = None;
             self.midfielder_profile = None;
+            self.offside_last_defender_x = None;
+            self.nearest_opponent_sq = None;
+            self.nearest_teammate_sq = None;
         }
         self
     }
@@ -202,8 +245,13 @@ impl GameTickContext {
         self.positions.update(field);
         self.grid.update(field);
         self.space.update(field);
-        self.chase.update(&self.positions);
-        self.roster.update(players, &self.positions);
+        // `chase` and the roster's per-team ball-distance `control` table
+        // are NOT refreshed here: their only readers run in play_players,
+        // and `refresh_ball` (between play_ball and play_players) rebuilds
+        // both against the post-physics ball anyway — computing them here
+        // was pure dead work (verified: nothing in the ball module touches
+        // `tick_context.chase` / `roster.control_*`).
+        self.roster.update_entries(players, &self.positions);
     }
 
     /// Cheaper refresh used during shot-flight light ticks where only
@@ -364,6 +412,12 @@ pub struct RosterJoin {
     /// player per tick. Lexicographic (dist_sq, id) with a second slot
     /// so a query can exclude the asking player exactly.
     control: [(u32, [Option<ChaseEntry>; 2]); 2],
+    /// Per-team entry indices, ascending — the team-filtered iterators
+    /// (`teammates().all()`, `opponents().all()`, by-position variants)
+    /// walk only their ~11 relevant entries instead of filtering all 22
+    /// per call. Ascending indices reproduce the full-walk yield order
+    /// exactly.
+    team_rows: [(u32, Vec<u8>); 2],
 }
 
 impl RosterJoin {
@@ -371,10 +425,24 @@ impl RosterJoin {
         RosterJoin {
             entries: Vec::with_capacity(22),
             control: [(0, [None; 2]), (0, [None; 2])],
+            team_rows: [(0, Vec::with_capacity(12)), (0, Vec::with_capacity(12))],
         }
     }
 
     pub fn update(&mut self, players: &MatchPlayerCollection, positions: &MatchObjectsPositions) {
+        self.update_entries(players, positions);
+        self.refresh_control(positions.ball.position);
+    }
+
+    /// Refresh the joined entries WITHOUT rebuilding the per-team ball
+    /// `control` table. Used by the per-tick context update, whose
+    /// control table would be dead work — `refresh_ball` rebuilds it
+    /// against the post-physics ball before any consumer runs.
+    pub fn update_entries(
+        &mut self,
+        players: &MatchPlayerCollection,
+        positions: &MatchObjectsPositions,
+    ) {
         let n = players.entries.len();
         self.entries.truncate(n);
         for (i, entry) in players.entries.iter().enumerate() {
@@ -426,7 +494,50 @@ impl RosterJoin {
                 self.entries.push(live);
             }
         }
-        self.refresh_control(positions.ball.position);
+
+        // Per-team index rows (ascending = entries order). Rebuilt every
+        // update — 22 pushes, trivial next to the join above.
+        self.team_rows[0].1.clear();
+        self.team_rows[1].1.clear();
+        for (i, e) in self.entries.iter().enumerate() {
+            let row = if self.team_rows[0].1.is_empty() || self.team_rows[0].0 == e.team_id {
+                self.team_rows[0].0 = e.team_id;
+                &mut self.team_rows[0].1
+            } else {
+                self.team_rows[1].0 = e.team_id;
+                &mut self.team_rows[1].1
+            };
+            row.push(i as u8);
+        }
+    }
+
+    /// Entry indices for `team_id` (`same == true`) or for the other
+    /// team (`same == false`), ascending. Empty when no such team.
+    #[inline]
+    fn row(&self, team_id: u32, same: bool) -> &[u8] {
+        for (tid, rows) in &self.team_rows {
+            if !rows.is_empty() && ((*tid == team_id) == same) {
+                return rows;
+            }
+        }
+        &[]
+    }
+
+    /// Iterate `team_id`'s entries in entries order — the exact
+    /// subsequence a full `iter().filter(team_id ==)` walk yields.
+    #[inline]
+    pub fn iter_team(&self, team_id: u32) -> impl Iterator<Item = &RosterEntryLive> + '_ {
+        self.row(team_id, true)
+            .iter()
+            .map(move |&i| &self.entries[i as usize])
+    }
+
+    /// Iterate the OTHER team's entries in entries order.
+    #[inline]
+    pub fn iter_other_team(&self, team_id: u32) -> impl Iterator<Item = &RosterEntryLive> + '_ {
+        self.row(team_id, false)
+            .iter()
+            .map(move |&i| &self.entries[i as usize])
     }
 
     /// Rebuild the per-team ball-distance table from the joined entries.

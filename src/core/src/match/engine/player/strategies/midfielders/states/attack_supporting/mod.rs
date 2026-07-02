@@ -852,8 +852,53 @@ impl MidfielderAttackSupportingState {
 
     /// Check if position risks being offside
     fn is_offside_risk(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> bool {
-        let last_defender = ctx
-            .players()
+        // The last-defender scan doesn't depend on the candidate
+        // `position` being tested, but this predicate runs for several
+        // candidates within one tick — memoize the scan result per
+        // (player, tick). Inputs (roster snapshot, side) are tick-frozen,
+        // so the memo is bit-identical (debug oracle on every hit).
+        let tick = ctx.current_tick();
+        let cached = ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .offside_last_defender_x;
+        let defender_x = match cached {
+            Some(x) => {
+                debug_assert_eq!(
+                    x,
+                    Self::last_defender_x(ctx),
+                    "offside last-defender memo mismatch"
+                );
+                x
+            }
+            None => {
+                let x = Self::last_defender_x(ctx);
+                ctx.tick_context
+                    .player_agg_cache
+                    .borrow_mut()
+                    .slot_mut(ctx.player.id, tick)
+                    .offside_last_defender_x = Some(x);
+                x
+            }
+        };
+
+        if let Some(defender_x) = defender_x {
+            match ctx.player.side {
+                Some(PlayerSide::Left) => position.x > defender_x + 5.0,
+                Some(PlayerSide::Right) => position.x < defender_x - 5.0,
+                None => false,
+            }
+        } else {
+            false
+        }
+    }
+
+    /// The deepest outfield opponent's x — the offside line whose scan
+    /// [`is_offside_risk`](Self::is_offside_risk) memoizes per tick.
+    fn last_defender_x(ctx: &StateProcessingContext) -> Option<f32> {
+        ctx.players()
             .opponents()
             .all()
             .filter(|opp| !opp.tactical_positions.is_goalkeeper())
@@ -869,17 +914,8 @@ impl MidfielderAttackSupportingState {
                     None => 0.0,
                 };
                 b_x.partial_cmp(&a_x).unwrap_or(Ordering::Equal)
-            });
-
-        if let Some(defender) = last_defender {
-            match ctx.player.side {
-                Some(PlayerSide::Left) => position.x > defender.position.x + 5.0,
-                Some(PlayerSide::Right) => position.x < defender.position.x - 5.0,
-                None => false,
-            }
-        } else {
-            false
-        }
+            })
+            .map(|defender| defender.position.x)
     }
 
     /// Check if should make a late run into the box. Off-the-ball

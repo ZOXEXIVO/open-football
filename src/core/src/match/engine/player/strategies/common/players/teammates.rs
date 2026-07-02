@@ -38,17 +38,14 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
         position_group: PlayerFieldPositionGroup,
         team_id: u32,
     ) -> impl Iterator<Item = MatchPlayerLite> + 'b {
-        // Iterates the per-tick roster join — same entries set and
-        // order as `context.players.entries`, positions pre-joined from
-        // the live store (one probe per player per tick instead of one
-        // per element per call).
+        // Walks the roster join's per-team index row — same subsequence
+        // (entries order) a full-roster team filter yielded, touching
+        // only the ~11 relevant entries.
         self.ctx
             .tick_context
             .roster
-            .iter()
-            .filter(move |entry| {
-                entry.team_id == team_id && entry.position_type.position_group() == position_group
-            })
+            .iter_team(team_id)
+            .filter(move |entry| entry.position_type.position_group() == position_group)
             .map(|entry| MatchPlayerLite {
                 id: entry.id,
                 position: entry.position,
@@ -65,9 +62,9 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
         self.ctx
             .tick_context
             .roster
-            .iter()
+            .iter_team(team_id)
             .filter(move |entry| {
-                if entry.id == player_id || entry.team_id != team_id {
+                if entry.id == player_id {
                     return false;
                 }
 
@@ -165,12 +162,54 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
     }
 
     pub fn exists(&self, max_distance: f32) -> bool {
-        const MIN_DISTANCE: f32 = 0.0;
-
-        self.ctx
+        // Same nearest-distance fast path as the opponents variant —
+        // see `PlayerOpponentsOperationsImpl::exists`. (The query's
+        // MIN_DISTANCE was 0.0, so `dist_sq < 0` never filtered and the
+        // boolean reduces to the nearest-teammate comparison exactly.)
+        let tick = self.ctx.current_tick();
+        let cached = self
+            .ctx
             .tick_context
-            .grid
-            .teammates(self.ctx.player.id, MIN_DISTANCE, max_distance)
-            .any(|_| true)
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(self.ctx.player.id, tick)
+            .nearest_teammate_sq;
+        let nearest_sq = match cached {
+            Some(v) => {
+                debug_assert_eq!(
+                    v,
+                    self.ctx
+                        .tick_context
+                        .grid
+                        .nearest_dist_sq(self.ctx.player.id, true),
+                    "nearest-teammate memo mismatch"
+                );
+                v
+            }
+            None => {
+                let v = self
+                    .ctx
+                    .tick_context
+                    .grid
+                    .nearest_dist_sq(self.ctx.player.id, true);
+                self.ctx
+                    .tick_context
+                    .player_agg_cache
+                    .borrow_mut()
+                    .slot_mut(self.ctx.player.id, tick)
+                    .nearest_teammate_sq = Some(v);
+                v
+            }
+        };
+        debug_assert_eq!(
+            nearest_sq <= max_distance * max_distance,
+            self.ctx
+                .tick_context
+                .grid
+                .teammates(self.ctx.player.id, 0.0, max_distance)
+                .any(|_| true),
+            "teammates-exists fast path mismatch"
+        );
+        nearest_sq <= max_distance * max_distance
     }
 }

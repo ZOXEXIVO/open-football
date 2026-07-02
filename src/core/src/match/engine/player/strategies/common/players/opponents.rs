@@ -74,11 +74,55 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
     }
 
     pub fn exists(&self, distance: f32) -> bool {
-        self.ctx
+        // `∃ opponent within r` ⇔ `nearest opponent dist² ≤ r²` over the
+        // same grid entry set / center / squared distances the radius
+        // query filters on — so one whole-board min per (player, tick)
+        // (memoized below) answers every radius probed this tick.
+        let tick = self.ctx.current_tick();
+        let cached = self
+            .ctx
             .tick_context
-            .grid
-            .opponents(self.ctx.player.id, distance)
-            .any(|_| true)
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(self.ctx.player.id, tick)
+            .nearest_opponent_sq;
+        let nearest_sq = match cached {
+            Some(v) => {
+                debug_assert_eq!(
+                    v,
+                    self.ctx
+                        .tick_context
+                        .grid
+                        .nearest_dist_sq(self.ctx.player.id, false),
+                    "nearest-opponent memo mismatch"
+                );
+                v
+            }
+            None => {
+                let v = self
+                    .ctx
+                    .tick_context
+                    .grid
+                    .nearest_dist_sq(self.ctx.player.id, false);
+                self.ctx
+                    .tick_context
+                    .player_agg_cache
+                    .borrow_mut()
+                    .slot_mut(self.ctx.player.id, tick)
+                    .nearest_opponent_sq = Some(v);
+                v
+            }
+        };
+        debug_assert_eq!(
+            nearest_sq <= distance * distance,
+            self.ctx
+                .tick_context
+                .grid
+                .opponents(self.ctx.player.id, distance)
+                .any(|_| true),
+            "opponents-exists fast path mismatch"
+        );
+        nearest_sq <= distance * distance
     }
 
     pub fn goalkeeper(&'b self) -> impl Iterator<Item = MatchPlayerLite> + 'b {
@@ -97,15 +141,14 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
         position_group: PlayerFieldPositionGroup,
         team_id: u32,
     ) -> impl Iterator<Item = MatchPlayerLite> + 'b {
-        // Iterates the per-tick roster join — same entries set/order,
-        // positions pre-joined once per tick (see `RosterJoin`).
+        // Walks the roster join's per-team index row — same subsequence
+        // (entries order) the full-roster team filter yielded, touching
+        // only the ~11 relevant entries.
         self.ctx
             .tick_context
             .roster
-            .iter()
-            .filter(move |entry| {
-                entry.team_id != team_id && entry.position_type.position_group() == position_group
-            })
+            .iter_other_team(team_id)
+            .filter(move |entry| entry.position_type.position_group() == position_group)
             .map(|entry| MatchPlayerLite {
                 id: entry.id,
                 position: entry.position,
@@ -119,16 +162,15 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
         team_id: u32,
         has_ball: Option<bool>,
     ) -> impl Iterator<Item = MatchPlayerLite> + 'b {
+        // `player_id` is on OUR team, so the other-team row can never
+        // contain it — the old `entry.id == player_id` arm is subsumed
+        // by the team split.
+        let _ = player_id;
         self.ctx
             .tick_context
             .roster
-            .iter()
+            .iter_other_team(team_id)
             .filter(move |entry| {
-                // Check if player matches team criteria (different team)
-                if entry.id == player_id || entry.team_id == team_id {
-                    return false;
-                }
-
                 // Check if player matches has_ball criteria
                 match has_ball {
                     None => true,
