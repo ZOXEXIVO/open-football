@@ -1,5 +1,7 @@
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 use crate::r#match::player::strategies::players::DefensiveRole;
+use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     MatchField, MatchObjectsPositions, MatchPlayerCollection, PassOriginRestart, PlayerSide,
     ShotTarget, Space, SpatialGrid,
@@ -42,6 +44,70 @@ pub struct GameTickContext {
     /// panics in debug/test runs (it already caught a wrong team-level
     /// assumption here).
     pub player_agg_cache: RefCell<PlayerTickCache>,
+    /// Cross-tick per-player memos for the role skill profiles — see
+    /// `DefenderSkillProfile::from_player_memo`. Lives on the tick
+    /// context (single match thread) rather than `MatchPlayer` so the
+    /// player stays `Sync` for the parallel league/world harnesses.
+    pub profile_memos: RefCell<ProfileMemos>,
+}
+
+/// Cross-tick `(player_id, packed key, profile)` memo rows for the role
+/// skill profiles. The profiles are pure functions of static skills plus
+/// a handful of slowly-moving integers (condition, jadedness, minute,
+/// pressure counts — all packed into the key by the profile's
+/// `memo_key`), yet cost ~40 `powf` curve evaluations to build. Rows are
+/// keyed by player id (≤ 22 on-pitch entries — a linear scan is cheaper
+/// than any table at this size) and overwritten in place when the key
+/// moves.
+#[derive(Default)]
+pub struct ProfileMemos {
+    defender: Vec<(u32, u64, DefenderSkillProfile)>,
+    midfielder: Vec<(u32, u64, MidfielderSkillProfile)>,
+}
+
+impl ProfileMemos {
+    fn new() -> Self {
+        ProfileMemos {
+            defender: Vec::with_capacity(24),
+            midfielder: Vec::with_capacity(24),
+        }
+    }
+
+    #[inline]
+    pub fn defender_get(&self, player_id: u32, key: u64) -> Option<DefenderSkillProfile> {
+        self.defender
+            .iter()
+            .find(|(id, k, _)| *id == player_id && *k == key)
+            .map(|(_, _, p)| *p)
+    }
+
+    pub fn defender_put(&mut self, player_id: u32, key: u64, profile: DefenderSkillProfile) {
+        if let Some(row) = self.defender.iter_mut().find(|(id, _, _)| *id == player_id) {
+            *row = (player_id, key, profile);
+        } else {
+            self.defender.push((player_id, key, profile));
+        }
+    }
+
+    #[inline]
+    pub fn midfielder_get(&self, player_id: u32, key: u64) -> Option<MidfielderSkillProfile> {
+        self.midfielder
+            .iter()
+            .find(|(id, k, _)| *id == player_id && *k == key)
+            .map(|(_, _, p)| *p)
+    }
+
+    pub fn midfielder_put(&mut self, player_id: u32, key: u64, profile: MidfielderSkillProfile) {
+        if let Some(row) = self
+            .midfielder
+            .iter_mut()
+            .find(|(id, _, _)| *id == player_id)
+        {
+            *row = (player_id, key, profile);
+        } else {
+            self.midfielder.push((player_id, key, profile));
+        }
+    }
 }
 
 /// One player's cached per-tick aggregates. `None` = not computed yet for
@@ -56,6 +122,14 @@ pub struct PlayerTickCache {
     pub is_attack_ready: Option<bool>,
     pub is_best_to_chase_ball: Option<bool>,
     pub defensive_role: Option<DefensiveRole>,
+    /// Role skill profiles — ~26 banded skill reads + ~40 `powf` curve
+    /// evaluations each, and a state machine reaches `from_ctx` several
+    /// times within one tick (velocity() and process() both consult
+    /// them). Every input is tick-frozen (skills static, condition
+    /// updated once before the state runs, grid/ball snapshots), so the
+    /// memo is bit-identical.
+    pub defender_profile: Option<DefenderSkillProfile>,
+    pub midfielder_profile: Option<MidfielderSkillProfile>,
 }
 
 impl Default for PlayerTickCache {
@@ -77,6 +151,8 @@ impl PlayerTickCache {
             is_attack_ready: None,
             is_best_to_chase_ball: None,
             defensive_role: None,
+            defender_profile: None,
+            midfielder_profile: None,
         }
     }
 
@@ -92,6 +168,8 @@ impl PlayerTickCache {
             self.is_attack_ready = None;
             self.is_best_to_chase_ball = None;
             self.defensive_role = None;
+            self.defender_profile = None;
+            self.midfielder_profile = None;
         }
         self
     }
@@ -114,6 +192,7 @@ impl GameTickContext {
             chase,
             roster,
             player_agg_cache: RefCell::new(PlayerTickCache::new()),
+            profile_memos: RefCell::new(ProfileMemos::new()),
         }
     }
 
@@ -296,36 +375,56 @@ impl RosterJoin {
     }
 
     pub fn update(&mut self, players: &MatchPlayerCollection, positions: &MatchObjectsPositions) {
-        self.entries.clear();
-        for entry in &players.entries {
+        let n = players.entries.len();
+        self.entries.truncate(n);
+        for (i, entry) in players.entries.iter().enumerate() {
             let (position, velocity) = positions.players.pos_vel(entry.id);
-            let chase_ability_sq = match players.by_id(entry.id) {
-                Some(p) => {
-                    let pace_factor = p.skills.physical.pace / 20.0;
-                    let acceleration_factor = p.skills.physical.acceleration / 20.0;
-                    let position_factor = match entry.position.position_group() {
-                        PlayerFieldPositionGroup::Forward => 1.2,
-                        PlayerFieldPositionGroup::Midfielder => 1.1,
-                        PlayerFieldPositionGroup::Defender => 0.9,
-                        PlayerFieldPositionGroup::Goalkeeper => 0.5,
-                    };
-                    let ability = pace_factor * acceleration_factor * position_factor * 0.5 + 0.5;
-                    ability * ability
-                }
-                // Mirrors the old scan's `by_id → None => return false`
-                // arm ("candidate can't disqualify me"). A NaN denominator
-                // makes `dist_sq / chase_ability_sq < threshold` always
-                // false — the candidate is skipped, same as before.
-                None => f32::NAN,
+            // Skills are static in-match and the position factor keys off
+            // the entry's tactical position, so the denominator computed
+            // last tick is still exact while the same (id, position)
+            // occupies the same slot — the steady state between roster /
+            // shape changes. Only recompute (a `by_id` probe + a few
+            // flops) when that pairing breaks.
+            let cached = self.entries.get(i).and_then(|prev| {
+                (prev.id == entry.id && prev.position_type == entry.position)
+                    .then_some(prev.chase_ability_sq)
+            });
+            let chase_ability_sq = match cached {
+                Some(a) => a,
+                None => match players.by_id(entry.id) {
+                    Some(p) => {
+                        let pace_factor = p.skills.physical.pace / 20.0;
+                        let acceleration_factor = p.skills.physical.acceleration / 20.0;
+                        let position_factor = match entry.position.position_group() {
+                            PlayerFieldPositionGroup::Forward => 1.2,
+                            PlayerFieldPositionGroup::Midfielder => 1.1,
+                            PlayerFieldPositionGroup::Defender => 0.9,
+                            PlayerFieldPositionGroup::Goalkeeper => 0.5,
+                        };
+                        let ability =
+                            pace_factor * acceleration_factor * position_factor * 0.5 + 0.5;
+                        ability * ability
+                    }
+                    // Mirrors the old scan's `by_id → None => return false`
+                    // arm ("candidate can't disqualify me"). A NaN denominator
+                    // makes `dist_sq / chase_ability_sq < threshold` always
+                    // false — the candidate is skipped, same as before.
+                    None => f32::NAN,
+                },
             };
-            self.entries.push(RosterEntryLive {
+            let live = RosterEntryLive {
                 id: entry.id,
                 team_id: entry.team_id,
                 position_type: entry.position,
                 position,
                 velocity,
                 chase_ability_sq,
-            });
+            };
+            if let Some(slot) = self.entries.get_mut(i) {
+                *slot = live;
+            } else {
+                self.entries.push(live);
+            }
         }
         self.refresh_control(positions.ball.position);
     }

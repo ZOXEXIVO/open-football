@@ -25,7 +25,7 @@ pub struct DefenderSkillInputs {
 
 /// Continuous selection / execution profile for defenders. All values are
 /// in 0..1 unless noted.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DefenderSkillProfile {
     pub poor_penalty: f32,
     pub elite_lift: f32,
@@ -110,7 +110,39 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 }
 
 impl DefenderSkillProfile {
+    /// Memoized per (player, tick) — a defender's state machine reaches
+    /// this from both `velocity()` and `process()` within one tick, and
+    /// the ~26 banded skill reads + ~40 `powf` curves are the single
+    /// costliest pure computation in the AI. Every input is tick-frozen
+    /// (skills static in-match, condition updated once before the state
+    /// runs, grid / ball / in_state_time snapshots), so the memo is
+    /// bit-identical; the debug oracle recomputes and compares on every
+    /// hit.
     pub fn from_ctx(ctx: &StateProcessingContext) -> Self {
+        let tick = ctx.current_tick();
+        let cached = ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .defender_profile;
+        if let Some(profile) = cached {
+            debug_assert!(
+                profile == Self::compute_from_ctx(ctx),
+                "defender-profile memo mismatch"
+            );
+            return profile;
+        }
+        let profile = Self::compute_from_ctx(ctx);
+        ctx.tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .defender_profile = Some(profile);
+        profile
+    }
+
+    fn compute_from_ctx(ctx: &StateProcessingContext) -> Self {
         let player = ctx.player;
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let condition_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
@@ -133,7 +165,52 @@ impl DefenderSkillProfile {
             distance_to_opponent_goal: ctx.ball().distance_to_opponent_goal(),
             recent_high_intensity: ctx.in_state_time as f32 > 30.0,
         };
-        Self::from_player(player, &inputs)
+        Self::from_player_memo(ctx, &inputs)
+    }
+
+    /// Everything `from_player` reads that can vary in-match, packed into
+    /// one cross-tick memo key: condition, jadedness, minute and the two
+    /// pressure counts (≤ 11 opponents, so 8 bits each is exact). The
+    /// distance / recent-intensity inputs are declared but unused by the
+    /// profile body (see the `let _ = (...)` marker there), so they stay
+    /// out of the key. Everything else the body touches — skills, traits,
+    /// crowd arousal — is static for the whole match.
+    #[inline]
+    fn memo_key(player: &MatchPlayer, inputs: &DefenderSkillInputs) -> u64 {
+        (player.player_attributes.condition as u16 as u64)
+            | (player.player_attributes.jadedness as u16 as u64) << 16
+            | (inputs.minute as u64 & 0xFF) << 32
+            | (inputs.pressure_count_5u as u64 & 0xFF) << 40
+            | (inputs.pressure_count_10u as u64 & 0xFF) << 48
+    }
+
+    /// Cross-tick memoized `from_player`. Condition / jadedness / minute /
+    /// pressure counts move on a much slower cadence than the tick rate,
+    /// so the ~40 `powf` curve evaluations are only re-run when one of
+    /// them actually changes; the cached profile is bit-identical in
+    /// between (debug oracle on every hit). The memo rows live on the
+    /// tick context (see `ProfileMemos`) to keep `MatchPlayer` `Sync`.
+    fn from_player_memo(ctx: &StateProcessingContext, inputs: &DefenderSkillInputs) -> Self {
+        let player = ctx.player;
+        let key = Self::memo_key(player, inputs);
+        let cached = ctx
+            .tick_context
+            .profile_memos
+            .borrow()
+            .defender_get(player.id, key);
+        if let Some(profile) = cached {
+            debug_assert!(
+                profile == Self::from_player(player, inputs),
+                "defender-profile cross-tick memo mismatch"
+            );
+            return profile;
+        }
+        let profile = Self::from_player(player, inputs);
+        ctx.tick_context
+            .profile_memos
+            .borrow_mut()
+            .defender_put(player.id, key, profile);
+        profile
     }
 
     pub fn from_player(player: &MatchPlayer, inputs: &DefenderSkillInputs) -> Self {

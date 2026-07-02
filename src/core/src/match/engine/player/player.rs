@@ -28,6 +28,7 @@ use crate::{
 };
 use chrono::NaiveDate;
 use nalgebra::Vector3;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::fmt::*;
 
 #[cfg(debug_assertions)]
@@ -157,6 +158,56 @@ pub struct MatchPlayer {
     /// saves and finishing continuously instead of dialling any single
     /// outcome.
     pub crowd_arousal: f32,
+
+    /// Memo for `skills.max_speed_with_condition(condition)` keyed on
+    /// the condition value it was computed for. Skills are static
+    /// in-match and condition only moves when the fatigue accumulator
+    /// crosses a whole point, yet the fatigue processor, the velocity
+    /// speed cap and every steering behaviour re-derive this value —
+    /// 3-4 times per player per AI tick. Same pure function, same
+    /// inputs ⇒ the memoized value is bit-identical (the accessor
+    /// carries a debug oracle). Packed into one relaxed atomic (not a
+    /// `Cell`) so `MatchPlayer` stays `Sync` — league/world harnesses
+    /// share rosters across match threads.
+    max_speed_memo: MaxSpeedMemo,
+}
+
+/// `(condition, max_speed)` packed into one `AtomicU64` (key in the high
+/// half, `f32` bits in the low). Relaxed ordering is enough: the value is
+/// a pure function of its key, so a racing writer can only store the
+/// same bits.
+#[derive(Debug)]
+struct MaxSpeedMemo(AtomicU64);
+
+impl MaxSpeedMemo {
+    /// Real packed values keep the key in bits 32..48, so the top word
+    /// never reaches `u64::MAX`.
+    const EMPTY: u64 = u64::MAX;
+
+    fn new() -> Self {
+        MaxSpeedMemo(AtomicU64::new(Self::EMPTY))
+    }
+
+    #[inline]
+    fn get(&self) -> Option<(i16, f32)> {
+        let packed = self.0.load(Ordering::Relaxed);
+        if packed == Self::EMPTY {
+            return None;
+        }
+        Some(((packed >> 32) as u16 as i16, f32::from_bits(packed as u32)))
+    }
+
+    #[inline]
+    fn set(&self, key: i16, value: f32) {
+        let packed = ((key as u16 as u64) << 32) | value.to_bits() as u64;
+        self.0.store(packed, Ordering::Relaxed);
+    }
+}
+
+impl Clone for MaxSpeedMemo {
+    fn clone(&self) -> Self {
+        MaxSpeedMemo(AtomicU64::new(self.0.load(Ordering::Relaxed)))
+    }
 }
 
 impl MatchPlayer {
@@ -166,6 +217,26 @@ impl MatchPlayer {
     #[inline]
     pub fn age_at(&self, today: NaiveDate) -> u8 {
         DateUtils::age(self.birth_date, today)
+    }
+
+    /// `skills.max_speed_with_condition(condition)` through the
+    /// per-condition memo — see [`MatchPlayer::max_speed_memo`].
+    #[inline]
+    pub fn max_speed_with_condition_cached(&self) -> f32 {
+        let condition = self.player_attributes.condition;
+        if let Some((key, cached)) = self.max_speed_memo.get() {
+            if key == condition {
+                debug_assert_eq!(
+                    cached.to_bits(),
+                    self.skills.max_speed_with_condition(condition).to_bits(),
+                    "max-speed memo mismatch"
+                );
+                return cached;
+            }
+        }
+        let value = self.skills.max_speed_with_condition(condition);
+        self.max_speed_memo.set(condition, value);
+        value
     }
 }
 
@@ -279,6 +350,7 @@ impl MatchPlayer {
             starting_condition: player.player_attributes.condition,
             starting_recovery_debt: player.load.recovery_debt,
             crowd_arousal: 1.0,
+            max_speed_memo: MaxSpeedMemo::new(),
         }
     }
 
@@ -342,6 +414,7 @@ impl MatchPlayer {
             // Wire payloads predate the arousal field; the worker
             // re-stamps it at match start like the local path does.
             crowd_arousal: 1.0,
+            max_speed_memo: MaxSpeedMemo::new(),
         }
     }
 

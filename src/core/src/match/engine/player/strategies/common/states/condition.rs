@@ -68,10 +68,7 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
         // Calculate velocity-based fatigue (75% of total effect)
         // Use squared values to avoid sqrt — compare ratio² against threshold²
         let velocity_sq = ctx.player.velocity.norm_squared();
-        let max_speed = ctx
-            .player
-            .skills
-            .max_speed_with_condition(ctx.player.player_attributes.condition);
+        let max_speed = ctx.player.max_speed_with_condition_cached();
         let max_speed_sq = max_speed * max_speed;
 
         // intensity_ratio_sq = (speed / max_speed)²

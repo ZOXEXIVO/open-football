@@ -32,7 +32,7 @@ pub struct MidfielderSkillInputs {
 
 /// Continuous selection / execution profile for midfielders. All values
 /// are in 0..1 unless noted.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MidfielderSkillProfile {
     // Headline mappers
     pub poor_penalty: f32,
@@ -92,7 +92,35 @@ fn pow_curve(skill01: f32, exp: f32) -> f32 {
 
 impl MidfielderSkillProfile {
     /// Build the profile from a state processing context.
+    ///
+    /// Memoized per (player, tick) — see `DefenderSkillProfile::from_ctx`
+    /// for the rationale; all inputs are tick-frozen so the memo is
+    /// bit-identical, and the debug oracle recomputes on every hit.
     pub fn from_ctx(ctx: &StateProcessingContext) -> Self {
+        let tick = ctx.current_tick();
+        let cached = ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .midfielder_profile;
+        if let Some(profile) = cached {
+            debug_assert!(
+                profile == Self::compute_from_ctx(ctx),
+                "midfielder-profile memo mismatch"
+            );
+            return profile;
+        }
+        let profile = Self::compute_from_ctx(ctx);
+        ctx.tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .midfielder_profile = Some(profile);
+        profile
+    }
+
+    fn compute_from_ctx(ctx: &StateProcessingContext) -> Self {
         let player = ctx.player;
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let condition_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
@@ -116,7 +144,46 @@ impl MidfielderSkillProfile {
             ownership_ticks: ctx.tick_context.ball.ownership_duration as u64,
             recent_sprint_or_high_intensity: ctx.in_state_time as f32 > 30.0,
         };
-        Self::from_player(player, &inputs)
+        Self::from_player_memo(ctx, &inputs)
+    }
+
+    /// Cross-tick memo key — see `DefenderSkillProfile::memo_key`. The
+    /// distance / ownership / recent-intensity inputs are declared but
+    /// unused by the profile body (see the `let _ = (...)` marker), so
+    /// only condition, jadedness, minute and the exact pressure counts
+    /// participate.
+    #[inline]
+    fn memo_key(player: &MatchPlayer, inputs: &MidfielderSkillInputs) -> u64 {
+        (player.player_attributes.condition as u16 as u64)
+            | (player.player_attributes.jadedness as u16 as u64) << 16
+            | (inputs.minute as u64 & 0xFF) << 32
+            | (inputs.pressure_count_5u as u64 & 0xFF) << 40
+            | (inputs.pressure_count_10u as u64 & 0xFF) << 48
+    }
+
+    /// Cross-tick memoized `from_player` — bit-identical between key
+    /// changes; see `DefenderSkillProfile::from_player_memo`.
+    fn from_player_memo(ctx: &StateProcessingContext, inputs: &MidfielderSkillInputs) -> Self {
+        let player = ctx.player;
+        let key = Self::memo_key(player, inputs);
+        let cached = ctx
+            .tick_context
+            .profile_memos
+            .borrow()
+            .midfielder_get(player.id, key);
+        if let Some(profile) = cached {
+            debug_assert!(
+                profile == Self::from_player(player, inputs),
+                "midfielder-profile cross-tick memo mismatch"
+            );
+            return profile;
+        }
+        let profile = Self::from_player(player, inputs);
+        ctx.tick_context
+            .profile_memos
+            .borrow_mut()
+            .midfielder_put(player.id, key, profile);
+        profile
     }
 
     pub fn from_player(player: &MatchPlayer, inputs: &MidfielderSkillInputs) -> Self {

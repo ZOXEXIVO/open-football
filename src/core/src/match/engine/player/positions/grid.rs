@@ -30,51 +30,65 @@ impl Default for GridPlayer {
     }
 }
 
-#[derive(Clone, Copy)]
-struct GridCell {
-    players: [GridPlayer; MAX_PER_CELL],
-    count: u8,
-    generation: u32,
-}
+const NUM_CELLS: usize = GRID_ROWS * GRID_COLS;
 
-impl GridCell {
-    const fn new() -> Self {
-        GridCell {
-            players: [GridPlayer {
-                id: 0,
-                team_id: 0,
-                position: Vector3::new(0.0, 0.0, 0.0),
-                tactical_position: PlayerPositionType::Goalkeeper,
-            }; MAX_PER_CELL],
-            count: 0,
-            generation: 0,
-        }
-    }
-}
-
+/// Nearest-neighbour index over the 22-ish on-pitch players.
+///
+/// Layout note: this used to be a real 9×6 bucket grid whose queries
+/// walked every cell in the radius window. With only ~22 players on a
+/// 54-cell pitch, a 250-unit query visited ~40 mostly-empty cells —
+/// `NearbyIter::next` alone was ~27% of match CPU. The buckets are gone:
+/// `all_players` now holds everyone SORTED by (row-major cell key, field
+/// index), and `key_start` gives each cell key's slice of that array
+/// (prefix-sum offsets). A query walks one contiguous segment per window
+/// row — only the players actually inside the window, no empty-cell
+/// visits. The sort keeps the yield order identical to the old cell walk
+/// (cells row-major, insertion order within a cell), and `query_mask`
+/// reproduces its MAX_PER_CELL overflow rule (players past the 8th in
+/// one cell were invisible to queries), so results are bit-for-bit what
+/// the bucket walk produced.
 pub struct SpatialGrid {
-    cells: [[GridCell; GRID_COLS]; GRID_ROWS],
+    /// On-pitch players sorted by (cell key, field index). The full
+    /// roster is always present here (overflow players included) so
+    /// id-keyed lookups (`get` / `position_of` / `player_at`) never miss.
     all_players: [GridPlayer; MAX_GRID_PLAYERS],
+    /// `key_start[k]..key_start[k+1]` = the sorted-array slice holding
+    /// cell key `k`'s players. `key_start[NUM_CELLS] == num_players`.
+    key_start: [u8; NUM_CELLS + 1],
+    /// Bit i set ⇔ `all_players[i]` is visible to proximity queries.
+    /// Clear only for players dropped by the MAX_PER_CELL overflow rule.
+    query_mask: u32,
     num_players: usize,
     id_slots: [(u32, u8); SLOT_TABLE_SIZE],
-    generation: u32,
+    /// Last tick's (id, cell key) per FIELD index, plus the sorted
+    /// (key, field index) layout built from it. Players cross a 100-unit
+    /// cell boundary rarely relative to the tick rate, so most updates
+    /// keep the exact same layout — then only the position/tactical data
+    /// needs refreshing and the sort / prefix table / id table / overflow
+    /// mask all carry over.
+    prev_ids: [u32; MAX_GRID_PLAYERS],
+    prev_keys: [u16; MAX_GRID_PLAYERS],
+    order: [(u16, u8); MAX_GRID_PLAYERS],
+    layout_valid: bool,
 }
 
 impl SpatialGrid {
     pub fn new() -> Self {
-        // Use const array init to avoid Default requirement
-        const EMPTY_CELL: GridCell = GridCell::new();
         SpatialGrid {
-            cells: [[EMPTY_CELL; GRID_COLS]; GRID_ROWS],
             all_players: [GridPlayer {
                 id: 0,
                 team_id: 0,
                 position: Vector3::new(0.0, 0.0, 0.0),
                 tactical_position: PlayerPositionType::Goalkeeper,
             }; MAX_GRID_PLAYERS],
+            key_start: [0; NUM_CELLS + 1],
+            query_mask: 0,
             num_players: 0,
             id_slots: [(0, SLOT_EMPTY); SLOT_TABLE_SIZE],
-            generation: 0,
+            prev_ids: [0; MAX_GRID_PLAYERS],
+            prev_keys: [0; MAX_GRID_PLAYERS],
+            order: [(0, 0); MAX_GRID_PLAYERS],
+            layout_valid: false,
         }
     }
 
@@ -114,15 +128,21 @@ impl SpatialGrid {
         }
     }
 
+    /// Row-major cell key for a position — the sort key that reproduces
+    /// the old cell-walk visit order (rows ascending, columns within).
     #[inline]
-    fn cell_of(position: Vector3<f32>) -> (usize, usize) {
-        let col = (position.x / CELL_SIZE).max(0.0) as usize;
-        let row = (position.y / CELL_SIZE).max(0.0) as usize;
-        (row.min(GRID_ROWS - 1), col.min(GRID_COLS - 1))
+    fn cell_key_of(position: Vector3<f32>) -> u16 {
+        let col = ((position.x / CELL_SIZE).max(0.0) as usize).min(GRID_COLS - 1);
+        let row = ((position.y / CELL_SIZE).max(0.0) as usize).min(GRID_ROWS - 1);
+        (row * GRID_COLS + col) as u16
     }
 
+    /// Window of cell rows/cols a radius query must examine — identical
+    /// to the old bucket grid's window, so the visited-cell set (and with
+    /// it the yield order) is unchanged.
     fn cell_range(position: Vector3<f32>, radius: f32) -> (usize, usize, usize, usize) {
-        let (center_row, center_col) = Self::cell_of(position);
+        let center_col = ((position.x / CELL_SIZE).max(0.0) as usize).min(GRID_COLS - 1);
+        let center_row = ((position.y / CELL_SIZE).max(0.0) as usize).min(GRID_ROWS - 1);
         let cells_r = (radius / CELL_SIZE) as usize + 1;
         (
             center_row.saturating_sub(cells_r),
@@ -132,60 +152,95 @@ impl SpatialGrid {
         )
     }
 
-    /// O(N) update: refresh all positions and grid cell assignments.
-    /// Called every full tick from GameTickContext::update().
+    /// O(N) update: re-sort the roster into cell order, rebuild the
+    /// per-cell offsets and the id→index table. Called every full tick
+    /// from GameTickContext::update().
     pub fn update(&mut self, field: &MatchField) {
-        let n = field.players.len();
-        self.generation = self.generation.wrapping_add(1);
-        let current_gen = self.generation;
+        let n = field.players.len().min(MAX_GRID_PLAYERS);
 
-        // Detect roster changes (substitutions, sent-off players). The
-        // earlier heuristic only checked count + the first slot's id,
-        // which missed substitutions at any index > 0 — `field.players`
-        // length doesn't change on a sub (the slot is replaced in
-        // place), and the new id never made it into `id_slots`. That
-        // produced stale grid lookups (and panics downstream when AI
-        // strategies dereferenced the missing id). Compare every slot
-        // against the previous tick's snapshot; the loop is bounded by
-        // MAX_GRID_PLAYERS so this is still effectively O(1).
-        let mut ids_changed = n != self.num_players;
-        if !ids_changed {
-            for i in 0..n {
-                if self.all_players[i].id != field.players[i].id {
-                    ids_changed = true;
-                    break;
-                }
+        // Detect layout changes: any player crossing a cell boundary, a
+        // substitution swapping an id in place, or a roster-length
+        // change. When none happened, the sorted order / prefix table /
+        // id table / overflow mask from last tick are all still exact.
+        let mut layout_changed = !self.layout_valid || n != self.num_players;
+        for (i, p) in field.players.iter().take(n).enumerate() {
+            let key = Self::cell_key_of(p.position);
+            if self.prev_keys[i] != key || self.prev_ids[i] != p.id {
+                self.prev_keys[i] = key;
+                self.prev_ids[i] = p.id;
+                layout_changed = true;
             }
         }
+        self.num_players = n;
 
-        if ids_changed {
-            self.num_players = n;
-            self.id_slots = [(0, SLOT_EMPTY); SLOT_TABLE_SIZE];
-            for (i, p) in field.players.iter().enumerate() {
-                self.insert_slot(p.id, i as u8);
+        if !layout_changed {
+            // Fast path (the common case): same players in the same
+            // cells — refresh the live data in the existing slots.
+            for slot in 0..n {
+                let field_idx = self.order[slot].1 as usize;
+                let p = &field.players[field_idx];
+                let gp = &mut self.all_players[slot];
+                gp.position = p.position;
+                gp.tactical_position = p.tactical_position.current_position;
             }
+            return;
         }
 
-        for (i, p) in field.players.iter().enumerate() {
-            let gp = GridPlayer {
+        // (cell key, field index) pairs, insertion-sorted. Stable for
+        // equal keys because field index strictly increases — matching
+        // the old per-cell insertion order.
+        let mut order = [(0u16, 0u8); MAX_GRID_PLAYERS];
+        for i in 0..n {
+            let key = self.prev_keys[i];
+            let item = (key, i as u8);
+            let mut j = i;
+            while j > 0 && order[j - 1].0 > key {
+                order[j] = order[j - 1];
+                j -= 1;
+            }
+            order[j] = item;
+        }
+        self.order = order;
+        self.layout_valid = true;
+
+        // Write the sorted snapshot; drop players past the MAX_PER_CELL
+        // overflow rule from query visibility (parity with the old
+        // fixed-size buckets — they stay id-addressable). Count per-key
+        // occupancy for the prefix table as we go.
+        self.id_slots = [(0, SLOT_EMPTY); SLOT_TABLE_SIZE];
+        let mut counts = [0u8; NUM_CELLS];
+        let mut visible = 0u32;
+        let mut run_key = u16::MAX;
+        let mut run_len = 0usize;
+        for (slot, &(key, field_idx)) in order[..n].iter().enumerate() {
+            let p = &field.players[field_idx as usize];
+            self.all_players[slot] = GridPlayer {
                 id: p.id,
                 team_id: p.team_id,
                 position: p.position,
                 tactical_position: p.tactical_position.current_position,
             };
-            self.all_players[i] = gp;
-
-            let (row, col) = Self::cell_of(p.position);
-            let cell = &mut self.cells[row][col];
-            if cell.generation != current_gen {
-                cell.count = 0;
-                cell.generation = current_gen;
+            counts[key as usize] += 1;
+            if key == run_key {
+                run_len += 1;
+            } else {
+                run_key = key;
+                run_len = 1;
             }
-            if (cell.count as usize) < MAX_PER_CELL {
-                cell.players[cell.count as usize] = gp;
-                cell.count += 1;
+            if run_len <= MAX_PER_CELL {
+                visible |= 1 << slot;
             }
+            self.insert_slot(p.id, slot as u8);
         }
+        self.query_mask = visible;
+
+        // Prefix-sum the counts into slice offsets.
+        let mut acc = 0u8;
+        for (k, &c) in counts.iter().enumerate() {
+            self.key_start[k] = acc;
+            acc += c;
+        }
+        self.key_start[NUM_CELLS] = acc;
     }
 
     // ─── Public API (compatible with PlayerDistanceClosure) ───
@@ -245,10 +300,9 @@ impl SpatialGrid {
         let (r_min, r_max, c_min, c_max) = Self::cell_range(position, max_distance);
         NearbyIter {
             grid: self,
+            idx: 0,
+            seg_end: 0,
             row: r_min,
-            col: c_min,
-            cell_idx: 0,
-            _r_min: r_min,
             r_max,
             c_min,
             c_max,
@@ -273,10 +327,9 @@ impl SpatialGrid {
         let (r_min, r_max, c_min, c_max) = Self::cell_range(position, max_distance);
         NearbyIter {
             grid: self,
+            idx: 0,
+            seg_end: 0,
             row: r_min,
-            col: c_min,
-            cell_idx: 0,
-            _r_min: r_min,
             r_max,
             c_min,
             c_max,
@@ -313,62 +366,60 @@ impl SpatialGrid {
         max_distance: f32,
         same_team: bool,
     ) -> NearbyIter<'_> {
-        let info = self.lookup_index(player_id).map(|i| {
-            let gp = &self.all_players[i];
-            (gp.position, gp.team_id)
-        });
-
-        match info {
-            Some((position, team_id)) => {
-                let (r_min, r_max, c_min, c_max) = Self::cell_range(position, max_distance);
+        match self.lookup_index(player_id) {
+            Some(i) => {
+                let gp = &self.all_players[i];
+                let (r_min, r_max, c_min, c_max) = Self::cell_range(gp.position, max_distance);
                 NearbyIter {
                     grid: self,
+                    idx: 0,
+                    seg_end: 0,
                     row: r_min,
-                    col: c_min,
-                    cell_idx: 0,
-                    _r_min: r_min,
                     r_max,
                     c_min,
                     c_max,
                     same_team,
-                    team_id,
+                    team_id: gp.team_id,
                     player_id,
-                    position,
+                    position: gp.position,
                     radius_sq: max_distance * max_distance,
                     min_dist_sq: min_distance * min_distance,
                 }
             }
-            None => {
-                // Player not found — empty iterator (r_min > r_max)
-                NearbyIter {
-                    grid: self,
-                    row: 1,
-                    col: 0,
-                    cell_idx: 0,
-                    _r_min: 1,
-                    r_max: 0,
-                    c_min: 0,
-                    c_max: 0,
-                    same_team,
-                    team_id: 0,
-                    player_id,
-                    position: Vector3::zeros(),
-                    radius_sq: 0.0,
-                    min_dist_sq: 0.0,
-                }
-            }
+            // Player not found — empty iterator (row cursor past r_max).
+            None => NearbyIter {
+                grid: self,
+                idx: 0,
+                seg_end: 0,
+                row: 1,
+                r_max: 0,
+                c_min: 0,
+                c_max: 0,
+                same_team,
+                team_id: 0,
+                player_id,
+                position: Vector3::zeros(),
+                radius_sq: 0.0,
+                min_dist_sq: 0.0,
+            },
         }
     }
 }
 
 // ─── Iterator ───
 
+/// Walks the query window one cell-row at a time. Because the sorted
+/// array groups players by row-major cell key, each window row
+/// `[row*COLS + c_min, row*COLS + c_max]` is ONE contiguous slice — the
+/// iterator touches only players actually inside the window, in exactly
+/// the order the old per-cell walk yielded them.
 pub struct NearbyIter<'g> {
     grid: &'g SpatialGrid,
+    /// Cursor / end of the current row segment in the sorted array.
+    idx: usize,
+    seg_end: usize,
+    /// Next window row to open (`row > r_max` + drained segment = done).
     row: usize,
-    col: usize,
-    cell_idx: usize,
-    _r_min: usize,
     r_max: usize,
     c_min: usize,
     c_max: usize,
@@ -385,30 +436,19 @@ impl<'g> Iterator for NearbyIter<'g> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let current_gen = self.grid.generation;
-
         loop {
-            if self.row > self.r_max {
-                return None;
-            }
+            while self.idx < self.seg_end {
+                let i = self.idx;
+                self.idx += 1;
 
-            let cell = &self.grid.cells[self.row][self.col];
-            let count = if cell.generation == current_gen {
-                cell.count as usize
-            } else {
-                0
-            };
-
-            while self.cell_idx < count {
-                let gp = cell.players[self.cell_idx];
-                self.cell_idx += 1;
-
+                if self.grid.query_mask & (1 << i) == 0 {
+                    continue;
+                }
+                let gp = &self.grid.all_players[i];
                 if gp.id == self.player_id {
                     continue;
                 }
-
-                let is_same_team = gp.team_id == self.team_id;
-                if self.same_team != is_same_team {
+                if (gp.team_id == self.team_id) != self.same_team {
                     continue;
                 }
 
@@ -420,16 +460,17 @@ impl<'g> Iterator for NearbyIter<'g> {
                     continue;
                 }
 
-                return Some((gp, dist_sq.sqrt()));
+                return Some((*gp, dist_sq.sqrt()));
             }
 
-            // Advance to next cell
-            self.cell_idx = 0;
-            self.col += 1;
-            if self.col > self.c_max {
-                self.col = self.c_min;
-                self.row += 1;
+            // Open the next window row's slice.
+            if self.row > self.r_max {
+                return None;
             }
+            let base = self.row * GRID_COLS;
+            self.idx = self.grid.key_start[base + self.c_min] as usize;
+            self.seg_end = self.grid.key_start[base + self.c_max + 1] as usize;
+            self.row += 1;
         }
     }
 }

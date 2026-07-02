@@ -115,10 +115,7 @@ impl StateProcessingHandler for ForwardTakeBallState {
             // Average and scale the separation force
             separation_force = separation_force / (neighbor_count as f32);
             separation_force = separation_force
-                * ctx
-                    .player
-                    .skills
-                    .max_speed_with_condition(ctx.player.player_attributes.condition)
+                * ctx.player.max_speed_with_condition_cached()
                 * SEPARATION_WEIGHT
                 * separation_factor;
 
@@ -128,16 +125,10 @@ impl StateProcessingHandler for ForwardTakeBallState {
             // Limit to max speed
             let magnitude = arrive_velocity.magnitude();
             if magnitude
-                > ctx
-                    .player
-                    .skills
-                    .max_speed_with_condition(ctx.player.player_attributes.condition)
+                > ctx.player.max_speed_with_condition_cached()
             {
                 arrive_velocity = arrive_velocity
-                    * (ctx
-                        .player
-                        .skills
-                        .max_speed_with_condition(ctx.player.player_attributes.condition)
+                    * (ctx.player.max_speed_with_condition_cached()
                         / magnitude);
             }
         }

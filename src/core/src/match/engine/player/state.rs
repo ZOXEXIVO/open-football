@@ -153,9 +153,7 @@ impl PlayerMatchState {
                     .skills
                     .goalkeeper_max_speed(player.player_attributes.condition, speed_context)
             } else {
-                player
-                    .skills
-                    .max_speed_with_condition(player.player_attributes.condition)
+                player.max_speed_with_condition_cached()
             };
 
             // Ball-carrier speed multiplier. Real football: carrying
