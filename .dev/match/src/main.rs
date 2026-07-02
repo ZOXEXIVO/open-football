@@ -970,12 +970,178 @@ fn print_usage() {
     eprintln!("  dev_match audit_levels [N]      generator diagnostic: mean outfield skills per level (default 200 squads)");
     eprintln!("  dev_match audit_engine_gap [N] [lvlA] [lvlB]  engine diagnostic: direct-skill matches at supplied gap");
     eprintln!("                                      bypasses generator; reveals engine-only response to skill gap");
+    eprintln!("  dev_match subs [N] [level]      substitution-usage diagnostic: per-team subs distribution by result");
     eprintln!();
     eprintln!(
         "Random level range: {}–{} inclusive.",
         RANDOM_LEVEL_MIN, RANDOM_LEVEL_MAX
     );
     eprintln!("Viewer serves at http://localhost:18001");
+}
+
+// ── subs: substitution-usage diagnostic ────────────────────────────────
+//
+// Plays N matches with production-like squads (XI at `level`, bench 3
+// levels weaker, kickoff condition 82-96%) and prints how many
+// substitutions each team actually made, bucketed by the team's final
+// result. The production symptom this chases: teams —
+// disproportionately ones holding a lead — finishing with zero subs
+// and an untouched bench. Real-world reference (5-sub era): ~4.5
+// subs/team, zero-sub teams essentially nonexistent.
+fn run_subs_experiment(n_matches: usize, level: u8) {
+    println!(
+        "Substitution usage: {} matches, both squads level {}",
+        n_matches, level
+    );
+
+    struct SubsRow {
+        home_goals: u8,
+        away_goals: u8,
+        home_subs: usize,
+        away_subs: usize,
+    }
+
+    // Production-like squad: XI at `level`, bench 3 levels weaker
+    // (selection puts the best players on the pitch), and kickoff
+    // condition in the 82-96% band the persistence layer actually
+    // hands the engine mid-season (never a pristine 100%).
+    fn make_squad_production_like(team_id: u32, level: u8, seed: usize) -> MatchSquad {
+        let base_id = team_id * 100;
+        let bench_level = level.saturating_sub(3).max(1);
+        let cond = |k: usize| 8200 + ((seed * 7 + k * 131) % 1400) as i16;
+
+        let main_squad: Vec<MatchPlayer> = POSITIONS_442
+            .iter()
+            .enumerate()
+            .map(|(i, &pos)| {
+                let mut player = generate_player(base_id + i as u32, pos, level);
+                player.player_attributes.condition = cond(i);
+                MatchPlayer::from_player(team_id, &player, pos, false)
+            })
+            .collect();
+
+        let sub_positions: [PlayerPositionType; 7] = [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::MidfielderCenterLeft,
+            PlayerPositionType::MidfielderCenterRight,
+            PlayerPositionType::ForwardLeft,
+            PlayerPositionType::ForwardRight,
+        ];
+        let substitutes: Vec<MatchPlayer> = sub_positions
+            .iter()
+            .enumerate()
+            .map(|(i, &pos)| {
+                let mut player = generate_player(base_id + 11 + i as u32, pos, bench_level);
+                player.player_attributes.condition = cond(11 + i).min(9800);
+                MatchPlayer::from_player(team_id, &player, pos, true)
+            })
+            .collect();
+
+        MatchSquad {
+            team_id,
+            team_name: format!("Team {}", team_id),
+            tactics: Tactics::new(MatchTacticType::T442),
+            main_squad,
+            substitutes,
+            captain_id: None,
+            vice_captain_id: None,
+            penalty_taker_id: None,
+            free_kick_taker_id: None,
+            selection_omissions: Vec::new(),
+            coach_snapshot: None,
+        }
+    }
+
+    let rows: Vec<SubsRow> = (0..n_matches)
+        .into_par_iter()
+        .map(|i| {
+            let home = make_squad_production_like(1, level, i);
+            let away = make_squad_production_like(2, level, i + 1000);
+            let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
+            let score = result.score.as_ref().unwrap();
+            let home_subs = result
+                .substitutions
+                .iter()
+                .filter(|s| s.team_id == 1)
+                .count();
+            let away_subs = result
+                .substitutions
+                .iter()
+                .filter(|s| s.team_id == 2)
+                .count();
+            SubsRow {
+                home_goals: score.home_team.get(),
+                away_goals: score.away_team.get(),
+                home_subs,
+                away_subs,
+            }
+        })
+        .collect();
+
+    // Distribution of subs per team-match, overall and by result.
+    let mut dist = [0usize; 7]; // 0..=5, index 6 = ">5"
+    let mut by_result: std::collections::HashMap<&'static str, (usize, usize, usize)> =
+        std::collections::HashMap::new(); // result -> (teams, total_subs, zero_sub_teams)
+
+    for r in &rows {
+        for (subs, gf, ga) in [
+            (r.home_subs, r.home_goals, r.away_goals),
+            (r.away_subs, r.away_goals, r.home_goals),
+        ] {
+            dist[subs.min(6)] += 1;
+            let key = if gf > ga {
+                "win"
+            } else if gf < ga {
+                "loss"
+            } else {
+                "draw"
+            };
+            let e = by_result.entry(key).or_insert((0, 0, 0));
+            e.0 += 1;
+            e.1 += subs;
+            if subs == 0 {
+                e.2 += 1;
+            }
+        }
+    }
+
+    let total_teams = rows.len() * 2;
+    let total_subs: usize = rows.iter().map(|r| r.home_subs + r.away_subs).sum();
+    let total_goals: u32 = rows
+        .iter()
+        .map(|r| r.home_goals as u32 + r.away_goals as u32)
+        .sum();
+    println!(
+        "\nteam-matches: {}   avg subs/team: {:.2}   (real-world ~4.5)   goals/match: {:.2}",
+        total_teams,
+        total_subs as f32 / total_teams.max(1) as f32,
+        total_goals as f32 / rows.len().max(1) as f32
+    );
+    println!("subs-count distribution (per team-match):");
+    for (k, v) in dist.iter().enumerate() {
+        let label = if k == 6 { ">5".to_string() } else { k.to_string() };
+        println!(
+            "  {:>2}: {:>4}  ({:.0}%)",
+            label,
+            v,
+            *v as f32 / total_teams.max(1) as f32 * 100.0
+        );
+    }
+    println!("\nby final result:");
+    for key in ["win", "draw", "loss"] {
+        if let Some((teams, subs, zeros)) = by_result.get(key) {
+            println!(
+                "  {:>4}: {:>4} teams  avg {:.2} subs  zero-sub {:>3} ({:.0}%)",
+                key,
+                teams,
+                *subs as f32 / (*teams).max(1) as f32,
+                zeros,
+                *zeros as f32 / (*teams).max(1) as f32 * 100.0
+            );
+        }
+    }
 }
 
 fn main() {
@@ -1026,6 +1192,14 @@ fn main() {
             let a: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(6);
             let b: u8 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(18);
             run_audit_engine_gap(n, a, b);
+        }
+        // Substitution-usage diagnostic: plays N matches with full benches
+        // and reports the per-team subs-count distribution split by final
+        // result. Reproduces "some teams never sub" reports from production.
+        "subs" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(100);
+            let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);
+            run_subs_experiment(n, level);
         }
         "--help" | "-h" | "help" => {
             print_usage();

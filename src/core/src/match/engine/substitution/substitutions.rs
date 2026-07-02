@@ -297,13 +297,34 @@ impl Substitutions {
                     break;
                 }
 
-                let (threshold, protection_dampening) = if late_comfort {
+                let (base_threshold, protection_dampening) = if late_comfort {
                     (0.60, 0.5)
                 } else if comfortable_lead {
                     (0.70, 0.75)
                 } else {
                     (0.85, 1.0)
                 };
+                // Late-match bench-use urgency. Fresh legs become a
+                // strictly better asset as the match runs down, and
+                // real coaches use the bench late almost
+                // unconditionally — a 5-sub-era side averages ~4.5
+                // subs and finishing with an untouched bench is a
+                // once-a-season oddity. Without this decay the static
+                // threshold left a measurable share of teams
+                // (disproportionately leading ones, whose scorers
+                // carry star protection) at zero subs for the whole
+                // match. Ramp: full threshold until ~62', then down
+                // ~0.012/min so 70' ≈ -0.10, 80' ≈ -0.22, 87'+ = -0.30.
+                let late_urgency =
+                    ((match_minutes as f32 - 62.0) / 25.0).clamp(0.0, 1.0) * 0.30;
+                // Each sub already burned raises the bar for the next
+                // one — coaches keep the last change in the pocket for
+                // an emergency, so the 5th sub needs a materially
+                // stronger case than the 1st. Without this friction
+                // the urgency decay flips the failure mode from
+                // "teams never sub" to "every team unloads all 5".
+                let used_friction = 0.045 * used as f32;
+                let threshold = (base_threshold - late_urgency + used_friction).max(0.40);
 
                 let chosen = Self::best_discretionary_pair_with_coach(
                     field,
@@ -1692,6 +1713,49 @@ mod tests {
              ({}); subbed out = {:?}",
             winger_id,
             subbed_out_ids
+        );
+    }
+
+    #[test]
+    fn process_substitutions_uses_bench_late_despite_modest_fatigue_and_weak_bench() {
+        // Regression for the production "team finishes with an untouched
+        // bench" report (match 2026-08-15_1525_1529: the home side led
+        // 1-0 from the 19th minute to the 83rd and made zero subs). A
+        // leading team whose starters carry only NORMAL late-match
+        // fatigue (76% condition, modest drop from a sub-100% kickoff
+        // tank) and whose bench is materially weaker than the XI never
+        // cleared the static 0.85 discretionary threshold in any
+        // window — so the bench went unused for the whole match. The
+        // late-match urgency decay must let at least one routine
+        // fatigue sub fire by the 80th minute.
+        let (mut field, mut context) = make_match_context(1, 0, 80 * 60_000);
+
+        for p in field.players.iter_mut() {
+            if p.team_id == 1
+                && p.tactical_position.current_position != PlayerPositionType::Goalkeeper
+            {
+                // Persisted-condition reality: kickoff below 100%,
+                // ordinary in-match drain — NOT the deep 35% fatigue
+                // the old threshold effectively required.
+                p.starting_condition = 8200;
+                p.player_attributes.condition = 7600;
+            }
+        }
+        // Production benches hold the players who did NOT make the XI —
+        // materially lower ability than the starters they replace.
+        for p in field.substitutes.iter_mut() {
+            if p.team_id == 1 {
+                p.player_attributes.current_ability = 100;
+            }
+        }
+
+        process_substitutions(&mut field, &mut context, 5, d(2025, 1, 1));
+
+        assert!(
+            context.subs_used_by_team(1) >= 1,
+            "a leading team with ordinary late-match fatigue and a weaker \
+             bench must still use its bench by the 80th minute; subs used = {}",
+            context.subs_used_by_team(1)
         );
     }
 
