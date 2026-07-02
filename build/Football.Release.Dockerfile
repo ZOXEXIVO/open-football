@@ -1,5 +1,5 @@
 # Multi-platform release builder
-ARG RUST_VERSION=1.96.1
+ARG RUST_VERSION=1.96
 
 # ── Windows x86_64 ────────────────────────────────────────────────────
 
@@ -8,10 +8,10 @@ WORKDIR /src
 COPY ./ ./
 
 RUN sed -i 's|http://deb.debian.org/debian|https://mirror.yandex.ru/debian|g' \
-        /etc/apt/sources.list.d/debian.sources \
- && apt-get -o Acquire::Retries=5 update \
- && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 zip \
- && rm -rf /var/lib/apt/lists/*
+    /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 zip \
+    && rm -rf /var/lib/apt/lists/*
 RUN rustup target add x86_64-pc-windows-gnu
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target/x86_64-pc-windows-gnu \
@@ -41,8 +41,8 @@ ARG DRONE_TAG
 ARG DRONE_REPO
 
 RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirror.yandex.ru/mirrors/alpine|g' \
-        /etc/apk/repositories \
- && apk add --no-cache curl jq
+    /etc/apk/repositories \
+    && apk add --no-cache curl jq
 
 WORKDIR /release
 COPY --from=build-windows /dist/open-football-windows-x86_64.zip .
