@@ -2,6 +2,7 @@ pub use chrono::prelude::*;
 
 use crate::PeopleNameGeneratorData;
 use crate::TeamContext;
+use crate::TeamType;
 use crate::club::{BoardContext, ClubContext, ClubFinanceContext, PlayerContext, StaffContext};
 use crate::continent::ContinentContext;
 use crate::country::{CountryContext, SeasonDates};
@@ -92,6 +93,14 @@ impl<'gc> GlobalContext<'gc> {
     pub fn with_team(&self, team_id: u32) -> Self {
         let mut ctx = GlobalContext::clone(self);
         ctx.team = Some(TeamContext::new(team_id));
+        ctx
+    }
+
+    /// `with_team` plus the squad tier (Main / B / Reserve / …) so squad
+    /// behaviour passes can reason about life below the first team.
+    pub fn with_team_typed(&self, team_id: u32, team_type: TeamType) -> Self {
+        let mut ctx = GlobalContext::clone(self);
+        ctx.team = Some(TeamContext::new(team_id).with_type(team_type));
         ctx
     }
 

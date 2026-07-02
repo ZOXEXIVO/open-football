@@ -8,10 +8,15 @@ pub enum Event {
     PlayerEvent(PlayerEvent),
 }
 
-/// Inline capacity for the per-state EventCollection. Sized to cover
-/// the 0-1 event case (the dominant path) plus small bursts (tackle +
-/// foul, claim + clear) without spilling to the heap.
-pub const INLINE_EVENT_CAP: usize = 4;
+/// Inline capacity for the per-state EventCollection. One slot: a
+/// `StateProcessingResult` + `StateChangeResult` (each embedding one of
+/// these) is constructed and moved by value on the ~6M-updates/match hot
+/// path, and 0-1 events is the overwhelmingly dominant case — at cap 4
+/// the inline array alone was ~224 bytes of per-update construction and
+/// move traffic. Multi-event bursts (tackle + foul, claim + clear) spill
+/// to the overflow Vec — a handful of heap allocations per match, with
+/// iteration order (inline first, then overflow) unchanged.
+pub const INLINE_EVENT_CAP: usize = 1;
 /// Inline capacity for the dispatcher's `remaining_events` collection
 /// — slightly larger since downstream handlers can fan out before any
 /// spill occurs.

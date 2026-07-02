@@ -1,6 +1,7 @@
 use chrono::{Datelike, NaiveDate, Weekday};
 use log::debug;
 
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutingRegion;
@@ -13,13 +14,14 @@ use crate::transfers::pipeline::plausibility::{
 };
 use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
-use crate::transfers::pipeline::{LoanBroadcast, LoanOutStatus, TransferRequestStatus};
+use crate::transfers::pipeline::{AvailabilityBroadcast, LoanOutStatus, TransferRequestStatus};
 use std::collections::{HashMap, HashSet};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
-    ClubPhilosophy, Country, Person, Player, PlayerFieldPositionGroup, PlayerStatusType,
-    ReputationLevel, Team,
+    ClubPhilosophy, Country, HappinessEventCause, HappinessEventContext, HappinessEventScope,
+    HappinessEventSeverity, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
+    PlayerStatusType, ReputationLevel, Team,
 };
 
 // Loans fund short-term development or rotation minutes. Players older
@@ -884,13 +886,13 @@ impl PipelineProcessor {
                 continue;
             };
             let next = match club.transfer_plan.loan_broadcasts.get(&b.player_id) {
-                None => LoanBroadcast {
+                None => AvailabilityBroadcast {
                     tier: b.parent_tier,
                     since: date,
                 },
                 Some(prev) => {
                     if (date - prev.since).num_days() >= Self::BROADCAST_RESPONSE_DAYS {
-                        LoanBroadcast {
+                        AvailabilityBroadcast {
                             tier: prev.tier.next_lower(),
                             since: date,
                         }
@@ -1058,6 +1060,324 @@ impl PipelineProcessor {
             if !club.transfer_plan.loan_broadcasts.is_empty() {
                 club.transfer_plan
                     .loan_broadcasts
+                    .retain(|pid, _| live_ids.contains(pid));
+            }
+        }
+    }
+
+    // ============================================================
+    // Step 7a-ter: Staged Transfer-Availability Broadcast (stale listings)
+    // ============================================================
+
+    /// Days a permanent listing sits unsold before the player asks the
+    /// club to find him a destination and the scouts start actively
+    /// shopping him around.
+    const TRANSFER_BROADCAST_AFTER_DAYS: i64 = 90;
+
+    /// Seller-side placement for STALE permanent listings — the
+    /// permanent-transfer mirror of [`Self::broadcast_listed_loans`],
+    /// kept alongside it so the two cascades share every helper. A
+    /// transfer-listed player the pull-side market has ignored for three
+    /// months asks the club to find him a new team (a visible note on
+    /// his events feed), and the club's scouts respond by offering him
+    /// to other clubs: opening at the club's own reputation tier and
+    /// widening one tier down every unanswered response window, until a
+    /// club opens a normal purchase negotiation. Unlike the loan push
+    /// there is no National+ resource gate — a stranded listing is a
+    /// wage problem for any club. Together with the year-unsold
+    /// free-exit valve this guarantees a listing RESOLVES: sold via the
+    /// push, or the player leaves on a free.
+    pub fn broadcast_listed_transfers(country: &mut Country, date: NaiveDate) {
+        // Weekly cadence, mirroring the loan push.
+        if date.weekday() != Weekday::Mon {
+            return;
+        }
+
+        // In-flight negotiations already carry a pending response — don't
+        // widen their net or open a competing approach.
+        let in_negotiation: HashSet<u32> = country
+            .transfer_market
+            .negotiations
+            .values()
+            .map(|n| n.player_id)
+            .collect();
+
+        // ── Pass 1 (read): stale genuine seller listings ────────────────
+        // Synthetic / unsolicited listings never enter the push — only a
+        // listing the club actually advertised represents a player it
+        // wants moved.
+        struct Sellable {
+            player_id: u32,
+            parent_club_id: u32,
+            parent_tier: ReputationLevel,
+            group: PlayerFieldPositionGroup,
+            ability: u8,
+            asking: f64,
+        }
+
+        let mut sellable: Vec<Sellable> = Vec::new();
+        for listing in &country.transfer_market.listings {
+            if listing.listing_type != TransferListingType::Transfer
+                || listing.origin != TransferListingOrigin::SellerListed
+                || listing.status != TransferListingStatus::Available
+            {
+                continue;
+            }
+            if (date - listing.listed_date).num_days() < Self::TRANSFER_BROADCAST_AFTER_DAYS {
+                continue;
+            }
+            let Some(parent_club) = country.clubs.iter().find(|c| c.id == listing.club_id) else {
+                continue;
+            };
+            let Some(parent_team) = parent_club
+                .teams
+                .main()
+                .or_else(|| parent_club.teams.teams.first())
+            else {
+                continue;
+            };
+            let Some(player) = Self::find_player_in_country(country, listing.player_id) else {
+                continue;
+            };
+            if player.is_on_loan() {
+                continue;
+            }
+            sellable.push(Sellable {
+                player_id: listing.player_id,
+                parent_club_id: listing.club_id,
+                parent_tier: parent_team.reputation.level(),
+                group: player.position().position_group(),
+                ability: player.player_attributes.current_ability,
+                asking: listing.asking_price.amount,
+            });
+        }
+
+        let live_ids: Vec<u32> = sellable.iter().map(|s| s.player_id).collect();
+        Self::prune_transfer_broadcasts(country, &live_ids);
+        if sellable.is_empty() {
+            return;
+        }
+
+        // ── Pass 2 (mut clubs): open / advance each broadcast's tier ────
+        // A first-time entry is the player's ask made real — remember him
+        // so the player-mut pass below can put the request on his feed.
+        let mut newly_asking: Vec<u32> = Vec::new();
+        for s in &sellable {
+            if in_negotiation.contains(&s.player_id) {
+                continue;
+            }
+            let Some(club) = country.clubs.iter_mut().find(|c| c.id == s.parent_club_id) else {
+                continue;
+            };
+            let next = match club.transfer_plan.transfer_broadcasts.get(&s.player_id) {
+                None => {
+                    newly_asking.push(s.player_id);
+                    AvailabilityBroadcast {
+                        tier: s.parent_tier,
+                        since: date,
+                    }
+                }
+                Some(prev) => {
+                    if (date - prev.since).num_days() >= Self::BROADCAST_RESPONSE_DAYS {
+                        AvailabilityBroadcast {
+                            tier: prev.tier.next_lower(),
+                            since: date,
+                        }
+                    } else {
+                        prev.clone()
+                    }
+                }
+            };
+            club.transfer_plan
+                .transfer_broadcasts
+                .insert(s.player_id, next);
+        }
+
+        // ── Pass 2b (mut players): the ask itself ───────────────────────
+        // Three months unsold — the player (or his agent) formally tells
+        // the club to find him a real destination. Cooldowned so a
+        // cascade re-opened after a failed negotiation doesn't spam.
+        for player_id in newly_asking {
+            for club in &mut country.clubs {
+                for team in &mut club.teams.teams {
+                    if let Some(player) =
+                        team.players.players.iter_mut().find(|p| p.id == player_id)
+                    {
+                        let magnitude = HappinessConfig::default()
+                            .catalog
+                            .asked_club_to_arrange_transfer;
+                        let happiness_ctx = HappinessEventContext::new(
+                            HappinessEventCause::Other,
+                            HappinessEventSeverity::from_magnitude(magnitude),
+                            HappinessEventScope::Boardroom,
+                        );
+                        player.happiness.add_event_with_context_and_cooldown(
+                            HappinessEventType::AskedClubToArrangeTransfer,
+                            magnitude,
+                            None,
+                            happiness_ctx,
+                            120,
+                        );
+                    }
+                }
+            }
+        }
+
+        // ── Pass 3 (read): pick a buyer at each broadcast's tier ────────
+        struct PushAction {
+            buyer_id: u32,
+            player_id: u32,
+            selling_club_id: u32,
+            offer_amount: f64,
+        }
+        let mut actions: Vec<PushAction> = Vec::new();
+        // One buyer must not be handed two same-group purchases in a
+        // single broadcast tick — the actions aren't negotiations yet, so
+        // `has_active_negotiation_for` can't see them.
+        let mut claimed: HashSet<(u32, PlayerFieldPositionGroup)> = HashSet::new();
+        for s in &sellable {
+            if in_negotiation.contains(&s.player_id) {
+                continue;
+            }
+            let Some(tier) = country
+                .clubs
+                .iter()
+                .find(|c| c.id == s.parent_club_id)
+                .and_then(|c| c.transfer_plan.transfer_broadcasts.get(&s.player_id))
+                .map(|br| br.tier)
+            else {
+                continue;
+            };
+
+            // A modest push discount: three months unsold already proved
+            // the headline asking wrong; the responding club opens just
+            // under it and the normal negotiation resolves the rest (the
+            // seller-side fee floors still protect against a giveaway).
+            let offer_amount = FormattingUtils::round_fee(s.asking * 0.85);
+
+            // Highest world reputation among qualifying clubs at the
+            // current tier wins — the best home that would actually take
+            // him.
+            let mut best: Option<(u32, u16)> = None;
+            for club in &country.clubs {
+                if club.id == s.parent_club_id || club.is_rival(s.parent_club_id) {
+                    continue;
+                }
+                let Some(team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
+                    continue;
+                };
+                if team.reputation.level() != tier {
+                    continue;
+                }
+                if country
+                    .transfer_market
+                    .has_active_negotiation_for(s.player_id, club.id)
+                {
+                    continue;
+                }
+                if claimed.contains(&(club.id, s.group)) {
+                    continue;
+                }
+                // The buyer must be able to fund the fee from its window
+                // plan.
+                let plan = &club.transfer_plan;
+                let available = plan.total_budget - plan.spent - plan.reserved;
+                if offer_amount > available {
+                    continue;
+                }
+                // Tier-window realism: the player must be a plausible
+                // squad member at the buyer's level — neither so weak
+                // he'd never play (the cascade will reach a lower tier)
+                // nor above the buyer's target ceiling.
+                let rep_score = team.reputation.overall_score();
+                let floor = Self::tier_starter_ca_score(rep_score, s.group).saturating_sub(20);
+                let ceiling = Self::tier_target_ceiling_score(rep_score, s.group);
+                if s.ability < floor || s.ability > ceiling {
+                    continue;
+                }
+                // Depth: no point buying into a full position line.
+                let depth = BorrowerPositionDepth::snapshot(team);
+                if !depth.has_room_for(s.group, s.ability, false) {
+                    continue;
+                }
+                let rep = team.reputation.world;
+                match best {
+                    Some((_, best_rep)) if rep <= best_rep => {}
+                    _ => best = Some((club.id, rep)),
+                }
+            }
+            if let Some((buyer_id, _)) = best {
+                actions.push(PushAction {
+                    buyer_id,
+                    player_id: s.player_id,
+                    selling_club_id: s.parent_club_id,
+                    offer_amount,
+                });
+                claimed.insert((buyer_id, s.group));
+            }
+        }
+
+        // ── Pass 4 (mut market): open the purchase negotiations ─────────
+        // The interested club's "response". The player carries an
+        // Available seller listing, so `start_negotiation` has its anchor
+        // and the ordinary seller-acceptance path resolves the deal.
+        for action in actions {
+            let selling_rep = Self::get_club_reputation(country, action.selling_club_id);
+            let buying_rep = Self::get_club_reputation(country, action.buyer_id);
+            let (p_age, p_ambition) =
+                Self::get_player_negotiation_data(country, action.player_id, date);
+
+            let offer = TransferOffer {
+                base_fee: CurrencyValue {
+                    amount: action.offer_amount,
+                    currency: Currency::Usd,
+                },
+                clauses: Vec::new(),
+                salary_contribution: None,
+                contract_length_years: None,
+                loan_duration_months: None,
+                personal_terms: None,
+                offering_club_id: action.buyer_id,
+                offered_date: date,
+            };
+
+            if let Some(neg_id) = country.transfer_market.start_negotiation(
+                action.player_id,
+                action.buyer_id,
+                offer,
+                date,
+                selling_rep,
+                buying_rep,
+                p_age,
+                p_ambition,
+            ) {
+                let (p_name, sc_name) = Self::resolve_player_and_club_name(
+                    country,
+                    action.player_id,
+                    action.selling_club_id,
+                );
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.reason =
+                        "Transfer placement — club offered listed player to scouts".to_string();
+                    negotiation.player_name = p_name;
+                    negotiation.selling_club_name = sc_name;
+                }
+                debug!(
+                    "Transfer broadcast: club {} offered stale-listed player {} to buyer {}",
+                    action.selling_club_id, action.player_id, action.buyer_id
+                );
+            }
+        }
+    }
+
+    /// Drop transfer-broadcast entries whose player is no longer
+    /// broadcastable (sold, delisted, gone on a free). Mirror of
+    /// [`Self::prune_loan_broadcasts`].
+    fn prune_transfer_broadcasts(country: &mut Country, live_ids: &[u32]) {
+        for club in &mut country.clubs {
+            if !club.transfer_plan.transfer_broadcasts.is_empty() {
+                club.transfer_plan
+                    .transfer_broadcasts
                     .retain(|pid, _| live_ids.contains(pid));
             }
         }
@@ -3025,5 +3345,276 @@ mod scan_loan_market_tests {
             !country.transfer_market.has_active_negotiation_for(200, 2),
             "a Regional parent lacks the loan-management resource to run a push"
         );
+    }
+}
+
+#[cfg(test)]
+mod transfer_broadcast_tests {
+    //! The permanent-transfer mirror of the loan push: a transfer-listed
+    //! player unsold past the broadcast threshold asks the club to find
+    //! him a new team, and the scouts offer him around — a same-tier club
+    //! with room and budget responds by opening a normal (non-loan)
+    //! purchase negotiation.
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::transfers::market::TransferListing;
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes,
+        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerSquadStatus, StaffCollection,
+        TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::{Duration, NaiveTime};
+
+    struct Fx;
+
+    impl Fx {
+        fn monday() -> NaiveDate {
+            let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+            assert_eq!(d.weekday(), Weekday::Mon, "fixture date must be a Monday");
+            d
+        }
+
+        fn schedule() -> TrainingSchedule {
+            TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            )
+        }
+
+        /// CA of an at-tier midfield starter for a `world`-rep club — the
+        /// listed player is built exactly at the buyer's baseline so the
+        /// tier-window gate is satisfied by construction.
+        fn at_tier_ca(world: u16) -> u8 {
+            let score = TeamReputation::new(world, world, world).overall_score();
+            PipelineProcessor::tier_starter_ca_score(score, PlayerFieldPositionGroup::Midfielder)
+        }
+
+        fn player(id: u32, position: PlayerPositionType, ca: u8, age: u8) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ca;
+            attrs.potential_ability = ca;
+            attrs.condition = 10_000;
+            let mut contract =
+                PlayerClubContract::new(50_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
+            contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
+            contract.is_transfer_listed = true;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("T".into(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(2026 - age as i32, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(contract))
+                .build()
+                .unwrap()
+        }
+
+        fn team(id: u32, club_id: u32, world: u16, players: Vec<Player>) -> Team {
+            TeamBuilder::new()
+                .id(id)
+                .league_id(Some(1))
+                .club_id(club_id)
+                .name(format!("t{id}"))
+                .slug(format!("t{id}"))
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(world, world, world))
+                .training_schedule(Self::schedule())
+                .build()
+                .unwrap()
+        }
+
+        fn club(id: u32, teams: Vec<Team>, budget: f64) -> Club {
+            let mut club = Club::new(
+                id,
+                format!("Club{id}"),
+                Location::new(1),
+                ClubFinances::new(10_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(teams),
+                ClubFacilities::default(),
+            );
+            club.transfer_plan.initialized = true;
+            club.transfer_plan.total_budget = budget;
+            club
+        }
+
+        fn country(clubs: Vec<Club>) -> Country {
+            let league = League::new(
+                1,
+                "L".into(),
+                "l".into(),
+                1,
+                500,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            );
+            Country::builder()
+                .id(1)
+                .code("EN".into())
+                .slug("en".into())
+                .name("England".into())
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(clubs)
+                .build()
+                .unwrap()
+        }
+
+        /// One country: seller club 1 holding listed midfielder 400 (listed
+        /// `listed_days_ago` days back), buyer club 2 at the same tier with
+        /// an empty midfield and a funded plan.
+        fn market(listed_days_ago: i64, origin: TransferListingOrigin) -> Country {
+            const WORLD: u16 = 5_000;
+            let ca = Self::at_tier_ca(WORLD);
+            let seller_main = Fx::team(
+                10,
+                1,
+                WORLD,
+                vec![Fx::player(400, PlayerPositionType::MidfielderCenter, ca, 26)],
+            );
+            let seller = Fx::club(1, vec![seller_main], 1_000_000.0);
+
+            // Buyer roster is keepers-only, so the midfield line has room.
+            let buyer_main = Fx::team(
+                20,
+                2,
+                WORLD,
+                vec![Fx::player(401, PlayerPositionType::Goalkeeper, ca, 27)],
+            );
+            let buyer = Fx::club(2, vec![buyer_main], 5_000_000.0);
+
+            let mut country = Fx::country(vec![seller, buyer]);
+            country
+                .transfer_market
+                .add_listing(TransferListing::new_with_origin(
+                    400,
+                    1,
+                    10,
+                    CurrencyValue {
+                        amount: 1_000_000.0,
+                        currency: Currency::Usd,
+                    },
+                    Fx::monday() - Duration::days(listed_days_ago),
+                    TransferListingType::Transfer,
+                    origin,
+                ));
+            country
+        }
+
+        fn listed_player(country: &Country) -> &Player {
+            country.clubs[0].teams.teams[0]
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == 400)
+                .unwrap()
+        }
+    }
+
+    #[test]
+    fn stale_listing_is_broadcast_and_a_buyer_responds() {
+        let date = Fx::monday();
+        let mut country = Fx::market(100, TransferListingOrigin::SellerListed);
+
+        PipelineProcessor::broadcast_listed_transfers(&mut country, date);
+
+        // The push opened a normal purchase negotiation at the buyer.
+        assert!(
+            country.transfer_market.has_active_negotiation_for(400, 2),
+            "a same-tier club with room and budget must respond to the push"
+        );
+        let negotiation = country
+            .transfer_market
+            .negotiations
+            .values()
+            .find(|n| n.player_id == 400)
+            .unwrap();
+        assert!(!negotiation.is_loan, "the push opens a PERMANENT deal");
+
+        // The cascade state lives on the seller's plan.
+        assert!(
+            country.clubs[0]
+                .transfer_plan
+                .transfer_broadcasts
+                .contains_key(&400),
+            "the seller must be running a transfer broadcast for the player"
+        );
+
+        // The player's ask is on his feed.
+        assert!(
+            Fx::listed_player(&country)
+                .happiness
+                .recent_events
+                .iter()
+                .any(|e| e.event_type == HappinessEventType::AskedClubToArrangeTransfer),
+            "three months unsold — the player asks the club to find him a new team"
+        );
+    }
+
+    #[test]
+    fn fresh_listing_is_not_broadcast() {
+        let date = Fx::monday();
+        // Listed 30 days ago — the pull-side market still owns it.
+        let mut country = Fx::market(30, TransferListingOrigin::SellerListed);
+
+        PipelineProcessor::broadcast_listed_transfers(&mut country, date);
+
+        assert!(
+            !country.transfer_market.has_active_negotiation_for(400, 2),
+            "a fresh listing is not pushed"
+        );
+        assert!(
+            country.clubs[0].transfer_plan.transfer_broadcasts.is_empty(),
+            "no broadcast state for a fresh listing"
+        );
+        assert!(
+            !Fx::listed_player(&country)
+                .happiness
+                .recent_events
+                .iter()
+                .any(|e| e.event_type == HappinessEventType::AskedClubToArrangeTransfer),
+            "the player has nothing to complain about yet"
+        );
+    }
+
+    #[test]
+    fn synthetic_listing_is_never_broadcast() {
+        let date = Fx::monday();
+        // A stale SYNTHETIC listing backs someone's unsolicited approach —
+        // it does not represent a willingness to sell and must never be
+        // pushed around the market.
+        let mut country = Fx::market(100, TransferListingOrigin::SyntheticUnsolicited);
+
+        PipelineProcessor::broadcast_listed_transfers(&mut country, date);
+
+        assert!(
+            !country.transfer_market.has_active_negotiation_for(400, 2),
+            "synthetic listings never enter the seller push"
+        );
+        assert!(country.clubs[0].transfer_plan.transfer_broadcasts.is_empty());
     }
 }

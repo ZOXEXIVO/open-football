@@ -121,3 +121,13 @@ impl PhaseProf {
         });
     }
 }
+
+// NB: a one-off per-player AI sub-phase profiler (OF_AI_PROF: loose-ball
+// override / state velocity() / state process() / condition buckets
+// timed inside `StateProcessor`) was used in July 2026 to re-measure the
+// AI split after the chase-table/memo round — velocity ≈44.5%, process
+// ≈33.5%, condition ≈14.8%, override ≈7.2% (raw; override mostly timer
+// overhead). It was removed afterwards, like the June sub-phase timers,
+// because even the disabled atomic check on the ~6M-update path costs
+// ~1% per gate. Re-add locally from git history if a fresh split is
+// needed.

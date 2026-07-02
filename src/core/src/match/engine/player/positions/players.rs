@@ -93,6 +93,18 @@ impl PlayerFieldData {
         }
     }
 
+    /// Position and velocity in one probe. Missing-id fallbacks match
+    /// `position` / `velocity` exactly (off-field sentinel, zero vector).
+    #[inline]
+    pub fn pos_vel(&self, player_id: u32) -> (Vector3<f32>, Vector3<f32>) {
+        if let Some(idx) = self.lookup_index(player_id) {
+            let item = unsafe { self.items.get_unchecked(idx) };
+            (item.position, item.velocity)
+        } else {
+            (Vector3::new(-1000.0, -1000.0, 0.0), Vector3::zeros())
+        }
+    }
+
     /// Slice of active player metadata
     #[inline]
     pub fn as_slice(&self) -> &[PlayerFieldMetadata] {

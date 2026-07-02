@@ -198,6 +198,12 @@ impl TeamBehaviour {
         // from `ctx.club`.
         Self::process_title_ambition_audit(players, &ctx);
 
+        // Monthly reserve-ambition audit: senior players parked in a
+        // B / Reserve / Second squad dream of genuine first-team football.
+        // The weekly complaint pass below escalates the lingering mood
+        // into a loan / transfer request.
+        Self::process_reserve_ambition_audit(players, &ctx);
+
         // Monthly veteran career-stage audit: older players whose role has
         // faded weigh up retirement; veteran leaders signal coaching
         // interest. Informational late-career colour.

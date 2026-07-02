@@ -19,6 +19,10 @@ pub enum CareerDesireKind {
     /// the `HomeReturnOpportunity` event when emitted by the favourite-
     /// club permanent-signing branch.
     FavoriteClubHomecoming,
+    /// Senior player stuck in a reserve / B / second squad wants genuine
+    /// first-team football — a breakthrough at his own club or a move to
+    /// one where he'd start. Drives `WantsFirstTeamFootball`.
+    FirstTeamBreakthroughAmbition,
 }
 
 impl CareerDesireKind {
@@ -32,6 +36,9 @@ impl CareerDesireKind {
             CareerDesireKind::StrongerSquadAmbition => "career_desire_kind_stronger_squad",
             CareerDesireKind::TitleChallengeAmbition => "career_desire_kind_title_challenge",
             CareerDesireKind::FavoriteClubHomecoming => "career_desire_kind_favorite_club_homecoming",
+            CareerDesireKind::FirstTeamBreakthroughAmbition => {
+                "career_desire_kind_first_team_football"
+            }
         }
     }
 }
@@ -82,6 +89,10 @@ pub enum CareerDesireEvidence {
     PlayerAboveClubLevel,
     /// Player is in the prime of his career — the window to win matters.
     PrimeCareerWindow,
+    // ── First-team breakthrough (WantsFirstTeamFootball) ────────
+    /// Player has spent a long stretch in a reserve / B / second squad
+    /// without breaking into the first team.
+    StuckInReserveSquad,
 }
 
 impl CareerDesireEvidence {
@@ -125,6 +136,9 @@ impl CareerDesireEvidence {
                 "career_desire_evidence_player_above_club_level"
             }
             CareerDesireEvidence::PrimeCareerWindow => "career_desire_evidence_prime_career_window",
+            CareerDesireEvidence::StuckInReserveSquad => {
+                "career_desire_evidence_stuck_in_reserves"
+            }
         }
     }
 }

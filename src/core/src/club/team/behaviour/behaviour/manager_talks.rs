@@ -21,8 +21,8 @@ use crate::club::team::squad::SquadAssetContext;
 use crate::context::GlobalContext;
 use crate::utils::DateUtils;
 use crate::{
-    Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType, Staff,
-    StaffCollection,
+    HappinessEventType, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus,
+    PlayerStatusType, Staff, StaffCollection,
 };
 use chrono::NaiveDate;
 use log::debug;
@@ -364,6 +364,16 @@ impl TeamBehaviour {
 
         let current_date = ctx.simulation.date.date();
 
+        // Squad-tier context — the stuck-in-reserves escalation only
+        // applies when this behaviour pass runs for a senior reserve
+        // squad (B / Reserve / Second).
+        let reserve_team = ctx
+            .team
+            .as_ref()
+            .and_then(|t| t.team_type)
+            .map(|t| t.is_senior_reserve())
+            .unwrap_or(false);
+
         // Collect complaint candidates with priority score for sorting
         let mut candidates: Vec<(u32, ManagerTalkType, u32)> = Vec::new();
 
@@ -419,6 +429,58 @@ impl TeamBehaviour {
                 .as_ref()
                 .and_then(|c| c.loan_min_appearances);
             let gate = opp.can_judge(squad_status, &cfg, loan_min);
+
+            // ── Check 0: Senior stuck in a reserve squad ──
+            // He may be starting every reserve fixture, so the minutes
+            // model below sees no deficit — the grievance is the level,
+            // not the minutes. Once the monthly reserve-ambition audit
+            // has him dreaming of first-team football, ambition / age
+            // pressure decides when he takes it to the coach: younger
+            // players push for a development loan, older ones ask for
+            // the move itself (a failed talk becomes a transfer
+            // request). The interaction-log cooldown keeps a successful
+            // "be patient" chat from being re-litigated weekly.
+            if reserve_team && age >= 20 {
+                let settled = opp.days_since_join >= 365;
+                let dreaming = player
+                    .happiness
+                    .has_recent_event(&HappinessEventType::WantsFirstTeamFootball, 90);
+                let already_listed = player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.is_transfer_listed)
+                    .unwrap_or(false);
+                if settled && dreaming && !already_listed {
+                    let talk_type = if age < 23 {
+                        ManagerTalkType::LoanRequest
+                    } else {
+                        ManagerTalkType::PlayingTimeRequest
+                    };
+                    let topic = topic_for_talk(talk_type.clone());
+                    let on_cooldown = player.interactions.topic_on_cooldown(topic, current_date);
+
+                    // How hard he pushes: ambition leads, determination
+                    // backs it, age pressure builds through the mid-20s
+                    // (the breakthrough window closing), loyalty holds
+                    // him back. A modest 21-year-old waits; an ambitious
+                    // one asks for a loan; almost every non-loyal
+                    // mid-20s player eventually asks for the move.
+                    let ambition_factor = ambition / 20.0;
+                    let determination_factor = determination / 20.0;
+                    let age_pressure = ((age as f32 - 20.0) / 6.0).clamp(0.0, 1.0);
+                    let loyalty_brake = player.attributes.loyalty / 20.0 * 0.15;
+                    let desire = ambition_factor * 0.45
+                        + determination_factor * 0.20
+                        + age_pressure * 0.35
+                        - loyalty_brake;
+
+                    if !on_cooldown && desire > 0.50 {
+                        let priority = (desire * 100.0) as u32 + age as u32 * 10;
+                        candidates.push((player.id, talk_type, priority));
+                        continue;
+                    }
+                }
+            }
 
             // ── Check 1: Youth prospect wants real football (loan request) ──
             // Young players with prospect status who aren't getting meaningful
@@ -1403,6 +1465,165 @@ mod coach_termination_tests {
         assert_eq!(
             result.contract_terminations[0].reason,
             FreeAgentReleaseReason::MutualTermination
+        );
+    }
+}
+
+#[cfg(test)]
+mod reserve_escalation_tests {
+    //! The stuck-in-reserves escalation (Check 0 of
+    //! `process_playing_time_complaints`): a settled senior in a
+    //! B / Reserve / Second squad who has been dreaming of first-team
+    //! football takes it to the coach — a development loan when young,
+    //! the move itself (a failed talk → transfer request) when older.
+    use super::*;
+    use crate::club::StaffStub;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
+    use crate::context::{GlobalContext, SimulationContext};
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, TeamType,
+    };
+    use chrono::Datelike;
+
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 6, 12).unwrap()
+        }
+
+        fn ctx<'a>(team_type: TeamType) -> GlobalContext<'a> {
+            let dt = Self::date().and_hms_opt(0, 0, 0).unwrap();
+            GlobalContext::new(SimulationContext::new(dt)).with_team_typed(1, team_type)
+        }
+
+        fn head_coach_only() -> StaffCollection {
+            let mut staff = StaffStub::default();
+            staff.id = 1;
+            staff.contract = Some(StaffClubContract::new(
+                50_000,
+                NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+                StaffPosition::Manager,
+                StaffStatus::Active,
+            ));
+            StaffCollection::new(vec![staff])
+        }
+
+        /// A settled, homegrown (never transferred) reserve-squad
+        /// senior with the personality to push: decent ambition and
+        /// determination, ordinary loyalty. `dreaming` seeds the mood
+        /// the monthly reserve-ambition audit would have emitted.
+        fn reserve_player(age: u8, ambition: f32, dreaming: bool) -> Player {
+            let birth_year = Self::date().year() - age as i32;
+            let mut attrs = PersonAttributes::default();
+            attrs.ambition = ambition;
+            attrs.loyalty = 10.0;
+            let mut skills = PlayerSkills::default();
+            skills.mental.determination = 12.0;
+            let mut contract =
+                PlayerClubContract::new(30_000, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
+            contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
+            let mut pa = PlayerAttributes::default();
+            pa.current_ability = 90;
+            let mut player = PlayerBuilder::new()
+                .id(7)
+                .full_name(FullName::new("Stuck".to_string(), "Reserve".to_string()))
+                .birth_date(NaiveDate::from_ymd_opt(birth_year, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(attrs)
+                .skills(skills)
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(pa)
+                .contract(Some(contract))
+                .build()
+                .unwrap();
+            if dreaming {
+                player
+                    .happiness
+                    .add_event(HappinessEventType::WantsFirstTeamFootball, -3.0);
+            }
+            player
+        }
+
+        fn run(players: &PlayerCollection, team_type: TeamType) -> TeamBehaviourResult {
+            let staffs = Self::head_coach_only();
+            let mut result = TeamBehaviourResult::new();
+            TeamBehaviour::process_playing_time_complaints(
+                players,
+                &staffs,
+                &mut result,
+                &Self::ctx(team_type),
+            );
+            result
+        }
+    }
+
+    #[test]
+    fn stuck_dreaming_reserve_senior_raises_the_move() {
+        // 25-year-old — past the loan window, asks for the move itself.
+        let players = PlayerCollection::new(vec![Fx::reserve_player(25, 14.0, true)]);
+        let result = Fx::run(&players, TeamType::Second);
+        assert_eq!(result.manager_talks.len(), 1, "the stuck senior must raise it");
+        assert_eq!(result.manager_talks[0].player_id, 7);
+        assert_eq!(
+            result.manager_talks[0].talk_type,
+            ManagerTalkType::PlayingTimeRequest,
+            "a mid-20s stuck reserve asks for the move, not a loan"
+        );
+    }
+
+    #[test]
+    fn stuck_dreaming_young_reserve_asks_for_a_loan() {
+        // 21-year-old with big ambition — pushes for a development loan.
+        let players = PlayerCollection::new(vec![Fx::reserve_player(21, 18.0, true)]);
+        let result = Fx::run(&players, TeamType::Second);
+        assert_eq!(result.manager_talks.len(), 1);
+        assert_eq!(
+            result.manager_talks[0].talk_type,
+            ManagerTalkType::LoanRequest,
+            "a young stuck reserve pushes for a development loan"
+        );
+    }
+
+    #[test]
+    fn no_dream_means_no_escalation() {
+        // Same senior, but the reserve-ambition mood never fired — the
+        // escalation must wait for the dream, not invent one.
+        let players = PlayerCollection::new(vec![Fx::reserve_player(25, 14.0, false)]);
+        let result = Fx::run(&players, TeamType::Second);
+        assert!(
+            result.manager_talks.is_empty(),
+            "no first-team dream on record → no escalation"
+        );
+    }
+
+    #[test]
+    fn main_team_context_never_escalates_reserve_grievance() {
+        let players = PlayerCollection::new(vec![Fx::reserve_player(25, 14.0, true)]);
+        let result = Fx::run(&players, TeamType::Main);
+        assert!(
+            result.manager_talks.is_empty(),
+            "the stuck-in-reserves escalation only runs for senior reserve squads"
+        );
+    }
+
+    #[test]
+    fn modest_young_reserve_stays_patient() {
+        // 21-year-old with ordinary ambition — desire stays below the
+        // push threshold, so he keeps working and waits.
+        let players = PlayerCollection::new(vec![Fx::reserve_player(21, 10.0, true)]);
+        let result = Fx::run(&players, TeamType::Second);
+        assert!(
+            result.manager_talks.is_empty(),
+            "a modest 21-year-old doesn't force the issue yet"
         );
     }
 }

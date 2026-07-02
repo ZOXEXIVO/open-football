@@ -1123,6 +1123,110 @@ impl TeamBehaviour {
         }
     }
 
+    /// Monthly reserve-ambition audit. A senior player parked in a
+    /// B / Reserve / Second squad plays real football every week — but at
+    /// the wrong level, so the minutes-based playing-time machinery never
+    /// sees a grievance. This audit supplies the missing mood: he dreams
+    /// of genuine first-team football, at his own club or somewhere he'd
+    /// actually start. The weekly complaint pass escalates the lingering
+    /// mood into a loan / transfer request. Runs on day 1 only, and only
+    /// when the behaviour pass is executing for a senior reserve squad —
+    /// age-restricted youth teams (U18..U23) are the normal development
+    /// pathway, where being young in the youth side is a career on
+    /// track, not a career stuck.
+    pub(super) fn process_reserve_ambition_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let is_senior_reserve = ctx
+            .team
+            .as_ref()
+            .and_then(|t| t.team_type)
+            .map(|t| t.is_senior_reserve())
+            .unwrap_or(false);
+        if !is_senior_reserve {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            // Loanees belong to their parent club — their development
+            // grievances are the loan audits' concern.
+            if player.is_on_loan() {
+                continue;
+            }
+            let age = player.age(today);
+            // Teenagers in a reserve squad are still on a development
+            // arc; the dream starts once adulthood makes it a career.
+            if age < 20 {
+                continue;
+            }
+            // NotNeeded players have accepted their fate — the listing /
+            // release systems own their exit, not an ambition dream.
+            if player
+                .contract
+                .as_ref()
+                .map(|c| matches!(c.squad_status, PlayerSquadStatus::NotNeeded))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            // A fresh arrival is still settling in — no stuck-career
+            // story yet. Homegrown players (never transferred) pass.
+            if player
+                .days_since_transfer(today)
+                .map(|d| d < 300)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let ambition = player.attributes.ambition;
+            // A low-ambition veteran making a living in the reserves is
+            // a realistic career: he doesn't dream, he plays.
+            if ambition < 8.0 && age >= 29 {
+                continue;
+            }
+
+            let days_at_club = player
+                .days_since_transfer(today)
+                .map(|d| d.clamp(0, u32::MAX as i64) as u32)
+                .unwrap_or(0);
+
+            let mut desire =
+                CareerDesireEventContext::new(CareerDesireKind::FirstTeamBreakthroughAmbition)
+                    .with_player_ability(player.player_attributes.current_ability)
+                    .with_evidence(CareerDesireEvidence::StuckInReserveSquad);
+            if days_at_club > 0 {
+                desire = desire.with_days_at_club(days_at_club);
+            }
+            if ambition >= 14.0 {
+                desire = desire.with_evidence(CareerDesireEvidence::HighAmbition);
+            }
+            if (24..=31).contains(&age) {
+                desire = desire.with_evidence(CareerDesireEvidence::PrimeCareerWindow);
+            }
+
+            let magnitude = HappinessConfig::default().catalog.wants_first_team_football;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::ReputationAdmiration,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Personal,
+            )
+            .with_career_desire_context(desire)
+            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::WantsFirstTeamFootball,
+                magnitude,
+                None,
+                happiness_ctx,
+                60,
+            );
+        }
+    }
+
     /// Monthly late-career audit for contracted players. Older players
     /// whose role has faded begin to weigh up retirement; veteran leaders
     /// with the right temperament signal interest in coaching. Both gates
@@ -1387,7 +1491,7 @@ mod tests {
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, Player, PlayerAttributes, PlayerClubContract, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills,
+        PlayerPositionType, PlayerPositions, PlayerSkills, TeamContext, TeamType,
     };
     use chrono::NaiveDate;
 
@@ -1674,6 +1778,106 @@ mod tests {
             count(&players.players[0], HappinessEventType::WantsTitleChallenge),
             0,
             "a top-four side is a realistic title challenge — no grievance"
+        );
+    }
+
+    // ── WantsFirstTeamFootball ──────────────────────────────────
+
+    fn reserve_ctx<'a>(date: NaiveDate, team_type: TeamType) -> GlobalContext<'a> {
+        let mut ctx = month_ctx(date);
+        ctx.team = Some(TeamContext::new(1).with_type(team_type));
+        ctx
+    }
+
+    /// A 24-year-old homegrown regular of the second squad — never
+    /// transferred, decent ambition, not written off. The canonical
+    /// "stuck in the reserves for seasons" case.
+    fn stuck_reserve_player() -> Player {
+        with_contract(
+            build_player(1, NaiveDate::from_ymd_opt(2002, 1, 1).unwrap(), 90, 500, 12.0),
+            PlayerSquadStatus::MainBackupPlayer,
+        )
+    }
+
+    #[test]
+    fn stuck_senior_reserve_dreams_of_first_team() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![stuck_reserve_player()]);
+        TeamBehaviour::process_reserve_ambition_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Second),
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            1,
+            "a settled senior in the second squad should dream of first-team football"
+        );
+    }
+
+    #[test]
+    fn main_team_player_does_not_dream_of_first_team() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![stuck_reserve_player()]);
+        TeamBehaviour::process_reserve_ambition_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            0,
+            "the audit only applies to senior reserve squads"
+        );
+    }
+
+    #[test]
+    fn youth_squad_player_does_not_dream_yet() {
+        let today = first_of_month(2026, 6);
+        // 18-year-old in the second squad — still a development arc.
+        let teen = with_contract(
+            build_player(1, NaiveDate::from_ymd_opt(2008, 2, 1).unwrap(), 90, 500, 12.0),
+            PlayerSquadStatus::DecentYoungster,
+        );
+        let mut players = PlayerCollection::new(vec![teen]);
+        TeamBehaviour::process_reserve_ambition_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Second),
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            0,
+            "teenagers in a reserve squad are on the normal development pathway"
+        );
+    }
+
+    #[test]
+    fn fresh_signing_in_reserves_does_not_dream_yet() {
+        let today = first_of_month(2026, 6);
+        let mut p = stuck_reserve_player();
+        // Arrived 60 days ago — still settling in.
+        p.last_transfer_date = Some(today - chrono::Duration::days(60));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_reserve_ambition_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Second),
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            0,
+            "a fresh arrival has no stuck-career story yet"
+        );
+    }
+
+    #[test]
+    fn reserve_ambition_respects_cooldown() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![stuck_reserve_player()]);
+        let ctx = reserve_ctx(today, TeamType::Second);
+        TeamBehaviour::process_reserve_ambition_audit(&mut players, &ctx);
+        TeamBehaviour::process_reserve_ambition_audit(&mut players, &ctx);
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            1,
+            "monthly re-run inside the 60-day cooldown must not double-fire"
         );
     }
 

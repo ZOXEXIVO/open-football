@@ -34,6 +34,11 @@ pub enum FreeAgentReleaseReason {
     AcademyAgedOut,
     /// An under-16 free transfer release (no professional terms offered).
     Under16Release,
+    /// Player forced an exit after sitting unsold on the transfer list
+    /// for a year-plus: no buyer met the club's terms, the scouts'
+    /// availability push failed, so the deal is torn up by agreement and
+    /// he leaves for free rather than rotting listed-but-unsellable.
+    UnsoldListingExit,
 }
 
 impl FreeAgentReleaseReason {
@@ -48,6 +53,7 @@ impl FreeAgentReleaseReason {
             FreeAgentReleaseReason::FailedRenewalRelease => "dec_reason_released_failed_renewal",
             FreeAgentReleaseReason::AcademyAgedOut => "dec_reason_released_academy",
             FreeAgentReleaseReason::Under16Release => "dec_reason_under16_release",
+            FreeAgentReleaseReason::UnsoldListingExit => "dec_reason_unsold_listing_exit",
         }
     }
 }
@@ -522,6 +528,10 @@ mod tests {
             FreeAgentReleaseReason::Under16Release.history_reason(),
             "dec_reason_under16_release"
         );
+        assert_eq!(
+            FreeAgentReleaseReason::UnsoldListingExit.history_reason(),
+            "dec_reason_unsold_listing_exit"
+        );
 
         // Every variant must yield a distinct key — no two exits share a
         // narrative, which is the whole point of the model.
@@ -532,6 +542,7 @@ mod tests {
             FreeAgentReleaseReason::FailedRenewalRelease.history_reason(),
             FreeAgentReleaseReason::AcademyAgedOut.history_reason(),
             FreeAgentReleaseReason::Under16Release.history_reason(),
+            FreeAgentReleaseReason::UnsoldListingExit.history_reason(),
         ];
         let mut unique = keys.to_vec();
         unique.sort_unstable();

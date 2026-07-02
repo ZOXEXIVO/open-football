@@ -7,16 +7,18 @@ use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection};
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
-use crate::transfers::pipeline::LoanOutReason;
+use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor};
 use crate::transfers::window::PlayerValuationCalculator;
-use crate::transfers::{TransferListing, TransferListingType};
+use crate::transfers::{
+    TransferListing, TransferListingOrigin, TransferListingStatus, TransferListingType,
+};
 use crate::{
     Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus,
     PlayerStatusType, ReputationLevel,
 };
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate, Weekday};
 use log::debug;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[cfg_attr(test, derive(Debug))]
 pub(crate) enum ListingDecision {
@@ -300,6 +302,135 @@ impl CountryResult {
                     }
                 }
             }
+        }
+    }
+
+    /// Escape valve for players stranded on the transfer list. A listing
+    /// the market has ignored for a full year — asking price decayed, the
+    /// scouts' availability push exhausted, no live negotiation — stops
+    /// being a sale in progress and becomes a stalemate the player
+    /// refuses to live with: he pushes for a termination, the club
+    /// (already paying wages for a player it decided to sell) agrees,
+    /// pays the severance, and he leaves on a free. Without this valve a
+    /// dissatisfied player could sit listed for five seasons.
+    ///
+    /// Contracts already inside their final half-year are left to lapse
+    /// naturally instead — the renewal gate guarantees no new offer, so
+    /// expiry is the cheaper exit and needs no severance. Weekly cadence;
+    /// window-independent (tearing up a contract is legal year-round).
+    pub(crate) fn release_unsold_listed_players(country: &mut Country, date: NaiveDate) {
+        if date.weekday() != Weekday::Mon {
+            return;
+        }
+        const UNSOLD_EXIT_DAYS: i64 = 365;
+        const MIN_REMAINING_DAYS: i64 = 180;
+        // Stagger the valve so a save with a long-stale backlog doesn't
+        // dump every stranded player into the free-agent pool in one tick.
+        const MAX_EXITS_PER_CLUB_PER_PASS: usize = 2;
+
+        let in_negotiation: HashSet<u32> = country
+            .transfer_market
+            .negotiations
+            .values()
+            .map(|n| n.player_id)
+            .collect();
+
+        // Pass 1 (read): genuine seller listings that have gone unsold
+        // past the threshold, bounded per club.
+        let mut exits: Vec<(u32, u32)> = Vec::new(); // (player_id, club_id)
+        let mut per_club: HashMap<u32, usize> = HashMap::new();
+        for listing in &country.transfer_market.listings {
+            if listing.listing_type != TransferListingType::Transfer
+                || listing.origin != TransferListingOrigin::SellerListed
+                || listing.status != TransferListingStatus::Available
+            {
+                continue;
+            }
+            if (date - listing.listed_date).num_days() < UNSOLD_EXIT_DAYS {
+                continue;
+            }
+            if in_negotiation.contains(&listing.player_id) {
+                continue;
+            }
+            let taken = per_club.entry(listing.club_id).or_insert(0);
+            if *taken >= MAX_EXITS_PER_CLUB_PER_PASS {
+                continue;
+            }
+            let Some(player) = country
+                .clubs
+                .iter()
+                .filter(|c| c.id == listing.club_id)
+                .flat_map(|c| c.teams.teams.iter())
+                .flat_map(|t| t.players.players.iter())
+                .find(|p| p.id == listing.player_id)
+            else {
+                continue;
+            };
+            // A loaned-out or pinned player isn't the valve's to release;
+            // a near-expiry deal just runs out (renewals are blocked).
+            if player.is_on_loan() || player.is_force_match_selection {
+                continue;
+            }
+            let Some(contract) = player.contract.as_ref() else {
+                continue;
+            };
+            if (contract.expiration - date).num_days() < MIN_REMAINING_DAYS {
+                continue;
+            }
+            *taken += 1;
+            exits.push((listing.player_id, listing.club_id));
+        }
+        if exits.is_empty() {
+            return;
+        }
+
+        // Pass 2 (mut clubs): tear up the contract, pay the severance,
+        // drop the club-side asking-price entry.
+        for &(player_id, club_id) in &exits {
+            let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) else {
+                continue;
+            };
+            let mut payout: u32 = 0;
+            for team in &mut club.teams.teams {
+                team.transfer_list.remove(player_id);
+                if let Some(player) = team
+                    .players
+                    .players
+                    .iter_mut()
+                    .find(|p| p.id == player_id)
+                {
+                    payout = player
+                        .contract
+                        .as_ref()
+                        .map(|c| c.termination_cost(date))
+                        .unwrap_or(0);
+                    player.on_contract_terminated(date, FreeAgentReleaseReason::UnsoldListingExit);
+                    debug!(
+                        "Unsold-listing exit: player {} leaves club {} for free after a year on the list (severance {})",
+                        player_id, club_id, payout
+                    );
+                }
+            }
+            if payout > 0 {
+                club.finance
+                    .balance
+                    .push_expense_player_wages(payout as i64);
+            }
+        }
+
+        // Pass 3 (mut market): retire the listing rows and drop every
+        // club's standing interest — the player is bound for the
+        // free-agent pool, where the pool machinery owns his market.
+        for &(player_id, _) in &exits {
+            for listing in country
+                .transfer_market
+                .listings
+                .iter_mut()
+                .filter(|l| l.player_id == player_id)
+            {
+                listing.status = TransferListingStatus::Cancelled;
+            }
+            PipelineProcessor::clear_player_interest(country, player_id);
         }
     }
 
@@ -1299,6 +1430,107 @@ mod tests {
                 .count(),
             1,
             "exactly one listing decision — written when the player was flagged"
+        );
+    }
+
+    // ── Unsold-listing escape valve ─────────────────────────────
+
+    /// Fixtures for `release_unsold_listed_players`: one listed player
+    /// (id 101) on the main team whose market listing's age varies per
+    /// scenario.
+    struct ValveFx;
+
+    impl ValveFx {
+        /// 2026-06-01 is a Monday — the valve's weekly cadence day.
+        fn monday() -> NaiveDate {
+            Fixture::date(2026, 6, 1)
+        }
+
+        fn listed_country(listed_date: NaiveDate) -> Country {
+            let mut player = Fixture::player(101);
+            {
+                let contract = player.contract.as_mut().unwrap();
+                contract.expiration = Fixture::date(2029, 6, 30);
+                contract.is_transfer_listed = true;
+            }
+            let club =
+                Fixture::club(vec![Fixture::team(10, "main", TeamType::Main, vec![player])]);
+            let mut country = Fixture::country(club);
+            country.transfer_market.add_listing(TransferListing::new(
+                101,
+                100,
+                10,
+                CurrencyValue {
+                    amount: 500_000.0,
+                    currency: Currency::Usd,
+                },
+                listed_date,
+                TransferListingType::Transfer,
+            ));
+            country
+        }
+
+        fn player(country: &Country) -> &Player {
+            &country.clubs[0].teams.teams[0].players.players[0]
+        }
+    }
+
+    #[test]
+    fn year_unsold_listing_forces_free_exit() {
+        let today = ValveFx::monday();
+        // Listed 396 days ago — past the year threshold, no negotiation.
+        let mut country = ValveFx::listed_country(Fixture::date(2025, 5, 1));
+        CountryResult::release_unsold_listed_players(&mut country, today);
+
+        let player = ValveFx::player(&country);
+        assert!(player.contract.is_none(), "the deal must be torn up");
+        assert!(
+            player.statuses.get().contains(&PlayerStatusType::Frt),
+            "the free-agent sweep must be able to collect him"
+        );
+        assert_eq!(
+            player.release_reason(),
+            Some(FreeAgentReleaseReason::UnsoldListingExit),
+            "the exit must carry the unsold-listing narrative"
+        );
+        assert!(
+            country
+                .transfer_market
+                .listings
+                .iter()
+                .filter(|l| l.player_id == 101)
+                .all(|l| l.status == TransferListingStatus::Cancelled),
+            "the stranded listing row must be retired"
+        );
+    }
+
+    #[test]
+    fn recent_listing_is_not_torn_up() {
+        let today = ValveFx::monday();
+        // Listed ~3 months ago — a live sale, not a stalemate.
+        let mut country = ValveFx::listed_country(Fixture::date(2026, 3, 1));
+        CountryResult::release_unsold_listed_players(&mut country, today);
+        assert!(
+            ValveFx::player(&country).contract.is_some(),
+            "a listing months old is still a sale in progress"
+        );
+    }
+
+    #[test]
+    fn near_expiry_listed_contract_lapses_instead_of_terminating() {
+        let today = ValveFx::monday();
+        let mut country = ValveFx::listed_country(Fixture::date(2025, 5, 1));
+        // Final half-year of the deal — natural expiry is the cheaper
+        // exit; the renewal gate guarantees no new offer arrives.
+        country.clubs[0].teams.teams[0].players.players[0]
+            .contract
+            .as_mut()
+            .unwrap()
+            .expiration = Fixture::date(2026, 9, 1);
+        CountryResult::release_unsold_listed_players(&mut country, today);
+        assert!(
+            ValveFx::player(&country).contract.is_some(),
+            "final-half-year deals run out on their own — no severance needed"
         );
     }
 

@@ -3,6 +3,9 @@ use crate::r#match::{
 };
 use crate::{PlayerFieldPositionGroup, Tactics};
 use nalgebra::Vector3;
+// Only the debug-assert reference recomputation still needs `Ordering`;
+// in release the cfg-gated block compiles out along with this import.
+#[cfg(debug_assertions)]
 use std::cmp::Ordering;
 
 pub struct TeamOperationsImpl<'b> {
@@ -395,24 +398,52 @@ impl<'b> TeamOperationsImpl<'b> {
         }
 
         // If we get here, we need to check if any player from our team
-        // is closer to the ball than any opponent
-        let ball_pos = self.ctx.tick_context.positions.ball.position;
-
+        // is closer to the ball than any opponent. Reads the roster
+        // join's per-team control table instead of re-scanning both
+        // teams — the min values are identical (same entries, same
+        // operand order); the table just computes them once per tick.
+        let my_id = self.ctx.player.id;
         let closest_teammate_dist_sq = self
             .ctx
-            .players()
-            .teammates()
-            .all()
-            .map(|p| (p.position - ball_pos).norm_squared())
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            .tick_context
+            .roster
+            .control_min_excluding(current_player_team_id, my_id);
 
+        // Opponent lookup: `my_id` is not on the opposing team, so the
+        // exclusion is a no-op — matching the old opponents().all() scan
+        // (which filtered `entry.id == player_id` to no effect).
         let closest_opponent_dist_sq = self
             .ctx
-            .players()
-            .opponents()
-            .all()
-            .map(|p| (p.position - ball_pos).norm_squared())
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            .tick_context
+            .roster
+            .control_min_other_team(current_player_team_id, my_id);
+
+        #[cfg(debug_assertions)]
+        {
+            let ball_pos = self.ctx.tick_context.positions.ball.position;
+            let ref_team = self
+                .ctx
+                .players()
+                .teammates()
+                .all()
+                .map(|p| (p.position - ball_pos).norm_squared())
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            let ref_opp = self
+                .ctx
+                .players()
+                .opponents()
+                .all()
+                .map(|p| (p.position - ball_pos).norm_squared())
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            debug_assert_eq!(
+                closest_teammate_dist_sq, ref_team,
+                "control table teammate-min mismatch"
+            );
+            debug_assert_eq!(
+                closest_opponent_dist_sq, ref_opp,
+                "control table opponent-min mismatch"
+            );
+        }
 
         // If a teammate is significantly closer to the ball than any opponent
         // 0.7 distance ratio = 0.49 squared ratio
@@ -499,29 +530,69 @@ impl<'b> TeamOperationsImpl<'b> {
 
     fn compute_is_teammate_chasing_ball(&self) -> bool {
         let ball_position = self.ctx.tick_context.positions.ball.position;
+        let my_id = self.ctx.player.id;
+        let my_team = self.ctx.player.team_id;
+        // Same per-element expression as before, hoisted out of the loop
+        // (it doesn't depend on the candidate).
+        let my_dist_sq_scaled =
+            (ball_position - self.ctx.player.position).norm_squared() * 1.44; // 1.2^2
 
-        self.ctx.players().teammates().all().any(|player| {
-            // Check if player is heading toward the ball
-            let player_position = self.ctx.tick_context.positions.players.position(player.id);
-            let player_velocity = self.ctx.tick_context.positions.players.velocity(player.id);
-
-            if player_velocity.norm_squared() < 0.01 {
+        // Walk the per-tick roster join — position AND velocity are
+        // pre-joined, replacing three hash probes per candidate.
+        self.ctx.tick_context.roster.iter().any(|entry| {
+            if entry.id == my_id || entry.team_id != my_team {
                 return false;
             }
 
-            let direction_to_ball = (ball_position - player_position).normalize();
-            let player_direction = player_velocity.normalize();
+            if entry.velocity.norm_squared() < 0.01 {
+                return false;
+            }
+
+            let direction_to_ball = (ball_position - entry.position).normalize();
+            let player_direction = entry.velocity.normalize();
             let dot_product = direction_to_ball.dot(&player_direction);
 
             // Player is moving toward the ball (use norm_squared for distance comparison)
             dot_product > 0.85
-                && (ball_position - player_position).norm_squared()
-                    < (ball_position - self.ctx.player.position).norm_squared() * 1.44 // 1.2^2
+                && (ball_position - entry.position).norm_squared() < my_dist_sq_scaled
         })
     }
 
-    // Determine if this player is the best positioned to chase the ball
+    // Determine if this player is the best positioned to chase the ball.
+    // Memoized per (player, tick): `should_follow_waypoints` asks this on
+    // nearly every off-ball velocity evaluation and the state decision
+    // trees ask again in the same tick — the full teammate scan below is
+    // deterministic over the frozen tick snapshot, so one compute per
+    // player per tick is bit-identical.
     pub fn is_best_player_to_chase_ball(&self) -> bool {
+        let player_id = self.ctx.player.id;
+        let tick = self.ctx.current_tick();
+        let cached = self
+            .ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(player_id, tick)
+            .is_best_to_chase_ball;
+        if let Some(v) = cached {
+            debug_assert_eq!(
+                v,
+                self.compute_is_best_player_to_chase_ball(),
+                "is_best_to_chase_ball cache mismatch"
+            );
+            return v;
+        }
+        let v = self.compute_is_best_player_to_chase_ball();
+        self.ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(player_id, tick)
+            .is_best_to_chase_ball = Some(v);
+        v
+    }
+
+    fn compute_is_best_player_to_chase_ball(&self) -> bool {
         let ball_position = self.ctx.tick_context.positions.ball.position;
 
         // Don't chase the ball if a teammate already has it
@@ -557,30 +628,25 @@ impl<'b> TeamOperationsImpl<'b> {
 
         let threshold = player_score * 0.64; // 0.8^2
 
-        // Compare against teammates
-        !self.ctx.players().teammates().all().any(|teammate| {
-            let dist_sq = (ball_position - teammate.position).norm_squared();
+        // Compare against teammates via the per-tick roster join. The
+        // per-candidate `(pace·accel·pos_factor·0.5+0.5)²` denominator is
+        // precomputed once per tick (`RosterEntryLive::chase_ability_sq`,
+        // identical operand order), replacing a `by_id` skill lookup per
+        // candidate per call. A NaN denominator (missing player) makes
+        // the comparison false — same as the old `by_id → None` skip.
+        let my_id = self.ctx.player.id;
+        let my_team = self.ctx.player.team_id;
+        !self.ctx.tick_context.roster.iter().any(|entry| {
+            if entry.id == my_id || entry.team_id != my_team {
+                return false;
+            }
+            let dist_sq = (ball_position - entry.position).norm_squared();
             // Quick distance check
             if dist_sq > player_dist_sq {
                 return false;
             }
 
-            let skills = match self.ctx.context.players.by_id(teammate.id) {
-                Some(p) => &p.skills,
-                None => return false,
-            };
-
-            let pace_factor = skills.physical.pace / 20.0;
-            let acceleration_factor = skills.physical.acceleration / 20.0;
-            let position_factor = match teammate.tactical_positions.position_group() {
-                PlayerFieldPositionGroup::Forward => 1.2,
-                PlayerFieldPositionGroup::Midfielder => 1.1,
-                PlayerFieldPositionGroup::Defender => 0.9,
-                PlayerFieldPositionGroup::Goalkeeper => 0.5,
-            };
-
-            let ability = pace_factor * acceleration_factor * position_factor * 0.5 + 0.5;
-            let score = dist_sq / (ability * ability);
+            let score = dist_sq / entry.chase_ability_sq;
             score < threshold
         })
     }

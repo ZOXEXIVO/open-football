@@ -480,6 +480,9 @@ pub struct MoraleEventCatalog {
     // ── Career-desire / squad-ambition pressure ──────────────────
     pub wants_stronger_squad: f32,
     pub wants_title_challenge: f32,
+    /// Senior reserve-squad player dreaming of genuine first-team
+    /// football. Chronic drag while he stays stuck below the first team.
+    pub wants_first_team_football: f32,
 
     // ── Loan management pressure ─────────────────────────────────
     pub loan_development_concern: f32,
@@ -494,6 +497,8 @@ pub struct MoraleEventCatalog {
 
     // ── Manager-relationship arc & match-trust ───────────────────
     pub asked_for_private_talk: f32,
+    /// Listed-but-unsold player asks the club to find him a new team.
+    pub asked_club_to_arrange_transfer: f32,
     pub concerned_by_club_direction: f32,
     pub encouraged_by_squad_investment: f32,
     pub unhappy_with_tactical_role: f32,
@@ -711,6 +716,9 @@ impl Default for MoraleEventCatalog {
             // top-player transfer realism); stronger-squad sits a notch up.
             wants_stronger_squad: -3.0,
             wants_title_challenge: -4.0,
+            // A career visibly stalling in the reserves gnaws like the
+            // squad-ambition moods — chronic, not acute.
+            wants_first_team_football: -3.0,
             // Loan pressure — development concern and recall request both
             // sit above the routine minutes-concern note.
             loan_development_concern: -2.5,
@@ -726,6 +734,9 @@ impl Default for MoraleEventCatalog {
             // `asked_for_private_talk` is a request, not a verdict — the
             // morale hit is light; the renderer makes it feel weighty.
             asked_for_private_talk: -2.5,
+            // The ask itself is a mild frustration note — the unsold
+            // listing behind it is the real grievance.
+            asked_club_to_arrange_transfer: -1.5,
             concerned_by_club_direction: -4.0,
             encouraged_by_squad_investment: 3.5,
             // Tactical-role frustration is chronic; sits a notch below
@@ -895,12 +906,14 @@ impl MoraleEventCatalog {
             CoachingCareerInterest => self.coaching_career_interest,
             WantsStrongerSquad => self.wants_stronger_squad,
             WantsTitleChallenge => self.wants_title_challenge,
+            WantsFirstTeamFootball => self.wants_first_team_football,
             LoanDevelopmentConcern => self.loan_development_concern,
             LoanRecallRequested => self.loan_recall_requested,
             ReleaseClauseDemanded => self.release_clause_demanded,
             ContractTalksStalled => self.contract_talks_stalled,
             RejectedContractOffer => self.rejected_contract_offer,
             AskedForPrivateTalk => self.asked_for_private_talk,
+            AskedClubToArrangeTransfer => self.asked_club_to_arrange_transfer,
             ConcernedByClubDirection => self.concerned_by_club_direction,
             EncouragedBySquadInvestment => self.encouraged_by_squad_investment,
             UnhappyWithTacticalRole => self.unhappy_with_tactical_role,

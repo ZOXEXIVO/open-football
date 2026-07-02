@@ -531,12 +531,16 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::CoachingCareerInterest => "event_coaching_career_interest",
         HappinessEventType::WantsStrongerSquad => "event_wants_stronger_squad",
         HappinessEventType::WantsTitleChallenge => "event_wants_title_challenge",
+        HappinessEventType::WantsFirstTeamFootball => "event_wants_first_team_football",
         HappinessEventType::LoanDevelopmentConcern => "event_loan_development_concern",
         HappinessEventType::LoanRecallRequested => "event_loan_recall_requested",
         HappinessEventType::ReleaseClauseDemanded => "event_release_clause_demanded",
         HappinessEventType::ContractTalksStalled => "event_contract_talks_stalled",
         HappinessEventType::RejectedContractOffer => "event_rejected_contract_offer",
         HappinessEventType::AskedForPrivateTalk => "event_asked_for_private_talk",
+        HappinessEventType::AskedClubToArrangeTransfer => {
+            "event_asked_club_to_arrange_transfer"
+        }
         HappinessEventType::ConcernedByClubDirection => "event_concerned_by_club_direction",
         HappinessEventType::EncouragedBySquadInvestment => "event_encouraged_by_squad_investment",
         HappinessEventType::UnhappyWithTacticalRole => "event_unhappy_with_tactical_role",
@@ -2286,6 +2290,7 @@ impl CareerDesireRender {
                 | HappinessEventType::ContinentalAmbitionSatisfied
                 | HappinessEventType::WantsStrongerSquad
                 | HappinessEventType::WantsTitleChallenge
+                | HappinessEventType::WantsFirstTeamFootball
         )
     }
 
@@ -2347,6 +2352,7 @@ impl CareerDesireRender {
             K::StrongerSquadAmbition => "stronger_squad",
             K::TitleChallengeAmbition => "title_challenge",
             K::FavoriteClubHomecoming => "favorite_club_homecoming",
+            K::FirstTeamBreakthroughAmbition => "first_team_football",
         }
     }
 }

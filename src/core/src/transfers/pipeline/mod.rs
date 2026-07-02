@@ -788,15 +788,17 @@ pub struct LoanOutCandidate {
     pub loan_fee: f64,
 }
 
-/// Per-player state for the staged loan-availability broadcast (the
-/// seller-side "push" model). A resource-rich club (National+) doesn't
-/// just list a youngster and wait — its loan staff actively offer him to
-/// clubs, starting at the highest realistic reputation tier and widening
-/// the net one rung down each time the offer goes unanswered. Keyed by
-/// player id on [`ClubTransferPlan::loan_broadcasts`]; lives only while the
-/// player is loan-listed and not yet in a negotiation.
+/// Per-player state for a staged availability broadcast (the seller-side
+/// "push" model). The selling club doesn't just list a player and wait —
+/// its staff actively offer him to clubs, starting at the highest
+/// realistic reputation tier and widening the net one rung down each time
+/// the offer goes unanswered. Keyed by player id on
+/// [`ClubTransferPlan::loan_broadcasts`] (loan-listed players, National+
+/// parents) and [`ClubTransferPlan::transfer_broadcasts`] (permanent
+/// listings gone stale); lives only while the listing is live and the
+/// player isn't already in a negotiation.
 #[derive(Debug, Clone)]
-pub struct LoanBroadcast {
+pub struct AvailabilityBroadcast {
     /// Reputation tier the player is currently being offered to. Starts at
     /// the parent club's own tier and steps down via
     /// [`ReputationLevel::next_lower`] on each unanswered cycle.
@@ -913,7 +915,15 @@ pub struct ClubTransferPlan {
     /// "push": a National+ club offers each loan-listed player to clubs one
     /// reputation tier at a time, top-down. Empty for clubs below the
     /// resource threshold, who fall back to passive listing.
-    pub loan_broadcasts: HashMap<u32, LoanBroadcast>,
+    pub loan_broadcasts: HashMap<u32, AvailabilityBroadcast>,
+
+    /// Staged availability broadcasts for STALE permanent listings, keyed
+    /// by player id. Once a transfer-listed player has sat unsold past the
+    /// broadcast threshold, he asks the club to find him a destination and
+    /// the scouts start offering him around — the same tier-cascading push
+    /// as the loan broadcast, but with no resource gate: a stranded
+    /// listing is a wage problem for any club.
+    pub transfer_broadcasts: HashMap<u32, AvailabilityBroadcast>,
 
     /// COMPLETED permanent prospect purchases (DevelopmentSigning buys)
     /// this window. Together with [`Self::prospect_pursuits_active`] this
@@ -992,6 +1002,7 @@ impl ClubTransferPlan {
             shortlists: Vec::new(),
             loan_out_candidates: Vec::new(),
             loan_broadcasts: HashMap::new(),
+            transfer_broadcasts: HashMap::new(),
             prospect_buys_this_window: 0,
             prospect_pursuits_active: 0,
             staff_recommendations: Vec::new(),

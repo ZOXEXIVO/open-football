@@ -710,7 +710,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut sub_times_initialized = false;
         let mut et_bonus_granted = false;
 
-        let mut tick_ctx = GameTickContext::new(field);
+        let mut tick_ctx = GameTickContext::new(field, &context.players);
         let mut events = EventCollection::with_capacity(10);
 
         let mut tick_parity: u32 = 0;

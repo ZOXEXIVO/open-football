@@ -169,6 +169,26 @@ impl MatchField {
                 }
             }
         });
+
+        // Bench players must swap sides too. They sit in the live
+        // position store with their `side` field, and the side-based
+        // roster scans (loose-ball force/yield) classify them by it —
+        // leaving the bench on first-half sides made every bench player
+        // register as the WRONG team's "teammate" for the entire second
+        // half. A substitute coming on also inherits the outgoing
+        // player's slot, so keeping their own side current is the
+        // consistent invariant.
+        self.substitutes.iter_mut().for_each(|p| {
+            if let Some(side) = &p.side {
+                let new_side = match side {
+                    PlayerSide::Left => PlayerSide::Right,
+                    PlayerSide::Right => PlayerSide::Left,
+                };
+                p.side = Some(new_side);
+                p.tactical_position.regenerate_waypoints(Some(new_side));
+                p.rebuild_waypoint_cache();
+            }
+        });
     }
 
     pub fn get_player(&mut self, id: u32) -> Option<&MatchPlayer> {
@@ -305,7 +325,16 @@ fn setup_player_on_field(
             player.side = Some(side);
             player.tactical_position.regenerate_waypoints(Some(side));
             player.rebuild_waypoint_cache();
-            player.position = Vector3::new(1.0, 1.0, 0.0);
+            // Bench players are stashed at the same off-pitch sentinel as
+            // sent-off players — NOT at an on-pitch coordinate. They are
+            // part of the live position store (`PlayerFieldData` chains
+            // `field.substitutes`), so an on-pitch position here (the old
+            // (1.0, 1.0) — the pitch corner) made every distance-based
+            // roster scan see up to 14 phantom players stacked at that
+            // corner: the loose-ball "am I closest" veto could pick a
+            // bench player and nobody would chase a ball rolling there.
+            // Far off-pitch, they can never win a distance comparison.
+            player.position = Vector3::new(-500.0, -500.0, 0.0);
             subs.push(player);
         }
 

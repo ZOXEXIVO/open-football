@@ -379,6 +379,15 @@ impl ContractRenewalManager {
             return None;
         }
 
+        // A transfer-listed player gets no last-chance offer — the club
+        // already decided to move him on. His deal simply lapses and he
+        // walks for free. Checked on the contract flag as well as the
+        // statuses because club-side listers set `is_transfer_listed`
+        // without stamping `Lst`.
+        if contract.is_transfer_listed {
+            return None;
+        }
+
         let statuses = player.statuses.get();
         if statuses.contains(&PlayerStatusType::Req)
             || statuses.contains(&PlayerStatusType::Lst)
@@ -420,6 +429,16 @@ impl ContractRenewalManager {
         let contract = player.contract.as_ref()?;
         let days_remaining = (contract.expiration - date).num_days();
         if days_remaining <= 0 {
+            return None;
+        }
+
+        // Players on the transfer list are never offered new contracts —
+        // renewing a player the club is actively selling is contradictory
+        // paperwork that kept unsold listings alive for years. The
+        // contract flag matters as much as the statuses: club-side
+        // listers (surplus trim, salary fallback) set `is_transfer_listed`
+        // without stamping `Lst`.
+        if contract.is_transfer_listed {
             return None;
         }
 
@@ -1548,6 +1567,35 @@ mod expiry_evaluate_tests {
         assert!(
             ContractRenewalManager::evaluate_for_expiry(&p, today).is_none(),
             "the club already decided to move a listed player on"
+        );
+    }
+
+    #[test]
+    fn evaluate_for_expiry_skips_flagged_transfer_listed_player() {
+        // Club-side listers set `contract.is_transfer_listed` WITHOUT
+        // stamping `Lst` — the flag alone must block the last-chance
+        // offer, or listed players get renewed and linger for years.
+        let today = ExpiryFixtures::d(2026, 6, 10);
+        let mut p = ExpiryFixtures::player_with_expiration(today);
+        p.contract.as_mut().unwrap().is_transfer_listed = true;
+        assert!(
+            ContractRenewalManager::evaluate_for_expiry(&p, today).is_none(),
+            "a transfer-listed contract must simply lapse"
+        );
+    }
+
+    #[test]
+    fn evaluate_skips_flagged_transfer_listed_player() {
+        // The regular renewal path must equally refuse to open talks
+        // with a player the club is actively selling.
+        let today = ExpiryFixtures::d(2026, 6, 10);
+        // ~3 months of runway — well inside every renewal threshold, so
+        // only the listing flag can be the reason for silence.
+        let mut p = ExpiryFixtures::player_with_expiration(ExpiryFixtures::d(2026, 9, 10));
+        p.contract.as_mut().unwrap().is_transfer_listed = true;
+        assert!(
+            ContractRenewalManager::evaluate(&p, today).is_none(),
+            "players on the transfer list are never offered new contracts"
         );
     }
 

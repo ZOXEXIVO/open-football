@@ -28,8 +28,19 @@
 
 use crate::r#match::MatchPlayer;
 use crate::r#match::engine::player::strategies::common::players::ops::effective_skill::{
-    ActionContext, SkillCategory, effective_skill,
+    ActionContext, SkillBands, SkillCategory, effective_skill,
 };
+
+/// Category shorthands for the `SkillBands`-based reads below. Each
+/// composite builds the per-(player, minute) bands ONCE and applies them
+/// per attribute — `SkillBands::apply` is pinned bit-identical to the
+/// per-read `effective_skill` path (see
+/// `effective_skill_bit_identical_to_bands`), so this is purely a
+/// recompute-elimination: the band `powf` and mitigation blend run once
+/// per composite call instead of once per attribute read.
+const TECH: SkillCategory = SkillCategory::Technical;
+const MENT: SkillCategory = SkillCategory::Mental;
+const EXPL: SkillCategory = SkillCategory::Explosive;
 
 /// Standard 0..1 normaliser for a 1..20 skill value.
 #[inline]
@@ -54,17 +65,6 @@ where
     F: FnOnce(&MatchPlayer) -> f32,
 {
     effective_skill(player, accessor(player), ctx)
-}
-
-/// Convert a match minute (0..120) to the three `ActionContext`s the
-/// composites need.
-#[inline]
-fn ctxs(minute: u32) -> (ActionContext, ActionContext, ActionContext) {
-    (
-        ActionContext::technical(minute),
-        ActionContext::mental(minute),
-        ActionContext::explosive(minute),
-    )
 }
 
 /// Derive minute from a `MatchContext`-style total time in milliseconds.
@@ -101,14 +101,14 @@ pub fn readiness_factor(player: &MatchPlayer) -> f32 {
 /// `passing*0.38 + technique*0.20 + vision*0.16 + decisions*0.10
 ///  + composure*0.08 + concentration*0.08`
 pub fn passing_execution(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, _) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.technical.passing)) * 0.38
-        + n(eff(player, tech, |_| s.technical.technique)) * 0.20
-        + n(eff(player, mental, |_| s.mental.vision)) * 0.16
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.10
-        + n(eff(player, mental, |_| s.mental.composure)) * 0.08
-        + n(eff(player, mental, |_| s.mental.concentration)) * 0.08)
+    let v = (n(b.apply(s.technical.passing, TECH)) * 0.38
+        + n(b.apply(s.technical.technique, TECH)) * 0.20
+        + n(b.apply(s.mental.vision, MENT)) * 0.16
+        + n(b.apply(s.mental.decisions, MENT)) * 0.10
+        + n(b.apply(s.mental.composure, MENT)) * 0.08
+        + n(b.apply(s.mental.concentration, MENT)) * 0.08)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -117,15 +117,15 @@ pub fn passing_execution(player: &MatchPlayer, minute: u32) -> f32 {
 /// `passing*0.30 + vision*0.24 + technique*0.20 + decisions*0.10
 ///  + flair*0.06 + balance*0.04 + composure*0.06`
 pub fn long_passing(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, _) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.technical.passing)) * 0.30
-        + n(eff(player, mental, |_| s.mental.vision)) * 0.24
-        + n(eff(player, tech, |_| s.technical.technique)) * 0.20
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.10
-        + n(eff(player, mental, |_| s.mental.flair)) * 0.06
-        + n(eff(player, tech, |_| s.physical.balance)) * 0.04
-        + n(eff(player, mental, |_| s.mental.composure)) * 0.06)
+    let v = (n(b.apply(s.technical.passing, TECH)) * 0.30
+        + n(b.apply(s.mental.vision, MENT)) * 0.24
+        + n(b.apply(s.technical.technique, TECH)) * 0.20
+        + n(b.apply(s.mental.decisions, MENT)) * 0.10
+        + n(b.apply(s.mental.flair, MENT)) * 0.06
+        + n(b.apply(s.physical.balance, TECH)) * 0.04
+        + n(b.apply(s.mental.composure, MENT)) * 0.06)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -134,16 +134,16 @@ pub fn long_passing(player: &MatchPlayer, minute: u32) -> f32 {
 /// `first_touch*0.28 + technique*0.18 + composure*0.14 + anticipation*0.12
 ///  + balance*0.10 + agility*0.08 + decisions*0.06 + concentration*0.04`
 pub fn receiving_first_touch(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.technical.first_touch)) * 0.28
-        + n(eff(player, tech, |_| s.technical.technique)) * 0.18
-        + n(eff(player, mental, |_| s.mental.composure)) * 0.14
-        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.12
-        + n(eff(player, tech, |_| s.physical.balance)) * 0.10
-        + n(eff(player, expl, |_| s.physical.agility)) * 0.08
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.06
-        + n(eff(player, mental, |_| s.mental.concentration)) * 0.04)
+    let v = (n(b.apply(s.technical.first_touch, TECH)) * 0.28
+        + n(b.apply(s.technical.technique, TECH)) * 0.18
+        + n(b.apply(s.mental.composure, MENT)) * 0.14
+        + n(b.apply(s.mental.anticipation, MENT)) * 0.12
+        + n(b.apply(s.physical.balance, TECH)) * 0.10
+        + n(b.apply(s.physical.agility, EXPL)) * 0.08
+        + n(b.apply(s.mental.decisions, MENT)) * 0.06
+        + n(b.apply(s.mental.concentration, MENT)) * 0.04)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -165,14 +165,14 @@ fn curve(skill01: f32, exp: f32) -> f32 {
 /// `finishing^1.65*0.42 + composure^1.45*0.22 + first_touch^1.45*0.13
 ///  + technique^1.45*0.10 + decisions^1.35*0.08 + balance^1.25*0.05`
 pub fn shooting_close(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, _) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (curve(n(eff(player, tech, |_| s.technical.finishing)), 1.65) * 0.42
-        + curve(n(eff(player, mental, |_| s.mental.composure)), 1.45) * 0.22
-        + curve(n(eff(player, tech, |_| s.technical.first_touch)), 1.45) * 0.13
-        + curve(n(eff(player, tech, |_| s.technical.technique)), 1.45) * 0.10
-        + curve(n(eff(player, mental, |_| s.mental.decisions)), 1.35) * 0.08
-        + curve(n(eff(player, tech, |_| s.physical.balance)), 1.25) * 0.05)
+    let v = (curve(n(b.apply(s.technical.finishing, TECH)), 1.65) * 0.42
+        + curve(n(b.apply(s.mental.composure, MENT)), 1.45) * 0.22
+        + curve(n(b.apply(s.technical.first_touch, TECH)), 1.45) * 0.13
+        + curve(n(b.apply(s.technical.technique, TECH)), 1.45) * 0.10
+        + curve(n(b.apply(s.mental.decisions, MENT)), 1.35) * 0.08
+        + curve(n(b.apply(s.physical.balance, TECH)), 1.25) * 0.05)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -181,14 +181,14 @@ pub fn shooting_close(player: &MatchPlayer, minute: u32) -> f32 {
 /// `finishing^1.65*0.30 + technique^1.55*0.22 + long_shots^1.65*0.18
 ///  + composure^1.45*0.14 + decisions^1.35*0.10 + balance^1.25*0.06`
 pub fn shooting_medium(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, _) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (curve(n(eff(player, tech, |_| s.technical.finishing)), 1.65) * 0.30
-        + curve(n(eff(player, tech, |_| s.technical.technique)), 1.55) * 0.22
-        + curve(n(eff(player, tech, |_| s.technical.long_shots)), 1.65) * 0.18
-        + curve(n(eff(player, mental, |_| s.mental.composure)), 1.45) * 0.14
-        + curve(n(eff(player, mental, |_| s.mental.decisions)), 1.35) * 0.10
-        + curve(n(eff(player, tech, |_| s.physical.balance)), 1.25) * 0.06)
+    let v = (curve(n(b.apply(s.technical.finishing, TECH)), 1.65) * 0.30
+        + curve(n(b.apply(s.technical.technique, TECH)), 1.55) * 0.22
+        + curve(n(b.apply(s.technical.long_shots, TECH)), 1.65) * 0.18
+        + curve(n(b.apply(s.mental.composure, MENT)), 1.45) * 0.14
+        + curve(n(b.apply(s.mental.decisions, MENT)), 1.35) * 0.10
+        + curve(n(b.apply(s.physical.balance, TECH)), 1.25) * 0.06)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -197,14 +197,14 @@ pub fn shooting_medium(player: &MatchPlayer, minute: u32) -> f32 {
 /// `long_shots^1.75*0.38 + technique^1.60*0.24 + composure^1.45*0.13
 ///  + decisions^1.40*0.11 + strength^1.25*0.07 + balance^1.25*0.07`
 pub fn long_shot(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (curve(n(eff(player, tech, |_| s.technical.long_shots)), 1.75) * 0.38
-        + curve(n(eff(player, tech, |_| s.technical.technique)), 1.60) * 0.24
-        + curve(n(eff(player, mental, |_| s.mental.composure)), 1.45) * 0.13
-        + curve(n(eff(player, mental, |_| s.mental.decisions)), 1.40) * 0.11
-        + curve(n(eff(player, expl, |_| s.physical.strength)), 1.25) * 0.07
-        + curve(n(eff(player, tech, |_| s.physical.balance)), 1.25) * 0.07)
+    let v = (curve(n(b.apply(s.technical.long_shots, TECH)), 1.75) * 0.38
+        + curve(n(b.apply(s.technical.technique, TECH)), 1.60) * 0.24
+        + curve(n(b.apply(s.mental.composure, MENT)), 1.45) * 0.13
+        + curve(n(b.apply(s.mental.decisions, MENT)), 1.40) * 0.11
+        + curve(n(b.apply(s.physical.strength, EXPL)), 1.25) * 0.07
+        + curve(n(b.apply(s.physical.balance, TECH)), 1.25) * 0.07)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -218,17 +218,17 @@ pub fn long_shot(player: &MatchPlayer, minute: u32) -> f32 {
 ///  + acceleration*0.10 + balance*0.09 + composure*0.07
 ///  + decisions*0.05 + strength*0.03`
 pub fn dribble_attack(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.technical.dribbling)) * 0.25
-        + n(eff(player, tech, |_| s.technical.technique)) * 0.17
-        + n(eff(player, mental, |_| s.mental.flair)) * 0.10
-        + n(eff(player, expl, |_| s.physical.agility)) * 0.14
-        + n(eff(player, expl, |_| s.physical.acceleration)) * 0.10
-        + n(eff(player, tech, |_| s.physical.balance)) * 0.09
-        + n(eff(player, mental, |_| s.mental.composure)) * 0.07
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.05
-        + n(eff(player, expl, |_| s.physical.strength)) * 0.03)
+    let v = (n(b.apply(s.technical.dribbling, TECH)) * 0.25
+        + n(b.apply(s.technical.technique, TECH)) * 0.17
+        + n(b.apply(s.mental.flair, MENT)) * 0.10
+        + n(b.apply(s.physical.agility, EXPL)) * 0.14
+        + n(b.apply(s.physical.acceleration, EXPL)) * 0.10
+        + n(b.apply(s.physical.balance, TECH)) * 0.09
+        + n(b.apply(s.mental.composure, MENT)) * 0.07
+        + n(b.apply(s.mental.decisions, MENT)) * 0.05
+        + n(b.apply(s.physical.strength, EXPL)) * 0.03)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -238,17 +238,17 @@ pub fn dribble_attack(player: &MatchPlayer, minute: u32) -> f32 {
 ///  + strength*0.10 + balance*0.07 + agility*0.06 + concentration*0.05
 ///  + bravery*0.03`
 pub fn defensive_duel(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.technical.tackling)) * 0.24
-        + n(eff(player, mental, |_| s.mental.positioning)) * 0.17
-        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.15
-        + n(eff(player, tech, |_| s.technical.marking)) * 0.13
-        + n(eff(player, expl, |_| s.physical.strength)) * 0.10
-        + n(eff(player, tech, |_| s.physical.balance)) * 0.07
-        + n(eff(player, expl, |_| s.physical.agility)) * 0.06
-        + n(eff(player, mental, |_| s.mental.concentration)) * 0.05
-        + n(eff(player, mental, |_| s.mental.bravery)) * 0.03)
+    let v = (n(b.apply(s.technical.tackling, TECH)) * 0.24
+        + n(b.apply(s.mental.positioning, MENT)) * 0.17
+        + n(b.apply(s.mental.anticipation, MENT)) * 0.15
+        + n(b.apply(s.technical.marking, TECH)) * 0.13
+        + n(b.apply(s.physical.strength, EXPL)) * 0.10
+        + n(b.apply(s.physical.balance, TECH)) * 0.07
+        + n(b.apply(s.physical.agility, EXPL)) * 0.06
+        + n(b.apply(s.mental.concentration, MENT)) * 0.05
+        + n(b.apply(s.mental.bravery, MENT)) * 0.03)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -257,16 +257,16 @@ pub fn defensive_duel(player: &MatchPlayer, minute: u32) -> f32 {
 /// `anticipation*0.24 + positioning*0.20 + concentration*0.16 + acceleration*0.12
 ///  + pace*0.10 + marking*0.08 + decisions*0.06 + agility*0.04`
 pub fn interception(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, mental, |_| s.mental.anticipation)) * 0.24
-        + n(eff(player, mental, |_| s.mental.positioning)) * 0.20
-        + n(eff(player, mental, |_| s.mental.concentration)) * 0.16
-        + n(eff(player, expl, |_| s.physical.acceleration)) * 0.12
-        + n(eff(player, expl, |_| s.physical.pace)) * 0.10
-        + n(eff(player, tech, |_| s.technical.marking)) * 0.08
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.06
-        + n(eff(player, expl, |_| s.physical.agility)) * 0.04)
+    let v = (n(b.apply(s.mental.anticipation, MENT)) * 0.24
+        + n(b.apply(s.mental.positioning, MENT)) * 0.20
+        + n(b.apply(s.mental.concentration, MENT)) * 0.16
+        + n(b.apply(s.physical.acceleration, EXPL)) * 0.12
+        + n(b.apply(s.physical.pace, EXPL)) * 0.10
+        + n(b.apply(s.technical.marking, TECH)) * 0.08
+        + n(b.apply(s.mental.decisions, MENT)) * 0.06
+        + n(b.apply(s.physical.agility, EXPL)) * 0.04)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -275,19 +275,19 @@ pub fn interception(player: &MatchPlayer, minute: u32) -> f32 {
 /// `work_rate*0.24 + stamina*0.18 + aggression*0.14 + acceleration*0.12
 ///  + pace*0.10 + decisions*0.08 + teamwork*0.08 + concentration*0.06`
 pub fn pressing(player: &MatchPlayer, minute: u32) -> f32 {
-    let (_, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     // `stamina` is the fatigue mitigator itself, so reading it through
     // the explosive band still bumps it via the band when condition is
     // low — that's the desired direction (a tired player presses less).
     let s = &player.skills;
-    let v = (n(eff(player, mental, |_| s.mental.work_rate)) * 0.24
-        + n(eff(player, expl, |_| s.physical.stamina)) * 0.18
-        + n(eff(player, mental, |_| s.mental.aggression)) * 0.14
-        + n(eff(player, expl, |_| s.physical.acceleration)) * 0.12
-        + n(eff(player, expl, |_| s.physical.pace)) * 0.10
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.08
-        + n(eff(player, mental, |_| s.mental.teamwork)) * 0.08
-        + n(eff(player, mental, |_| s.mental.concentration)) * 0.06)
+    let v = (n(b.apply(s.mental.work_rate, MENT)) * 0.24
+        + n(b.apply(s.physical.stamina, EXPL)) * 0.18
+        + n(b.apply(s.mental.aggression, MENT)) * 0.14
+        + n(b.apply(s.physical.acceleration, EXPL)) * 0.12
+        + n(b.apply(s.physical.pace, EXPL)) * 0.10
+        + n(b.apply(s.mental.decisions, MENT)) * 0.08
+        + n(b.apply(s.mental.teamwork, MENT)) * 0.08
+        + n(b.apply(s.mental.concentration, MENT)) * 0.06)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -311,15 +311,15 @@ pub fn pressing(player: &MatchPlayer, minute: u32) -> f32 {
 /// (5% bravery makes the composite sum to 1.0 — runs in behind require
 /// some bravery, this isn't a free slot.)
 pub fn off_ball_attack(player: &MatchPlayer, minute: u32) -> f32 {
-    let (_, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, mental, |_| s.mental.off_the_ball)) * 0.35
-        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.20
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.15
-        + n(eff(player, expl, |_| s.physical.acceleration)) * 0.10
-        + n(eff(player, expl, |_| s.physical.pace)) * 0.08
-        + n(eff(player, mental, |_| s.mental.teamwork)) * 0.07
-        + n(eff(player, mental, |_| s.mental.bravery)) * 0.05)
+    let v = (n(b.apply(s.mental.off_the_ball, MENT)) * 0.35
+        + n(b.apply(s.mental.anticipation, MENT)) * 0.20
+        + n(b.apply(s.mental.decisions, MENT)) * 0.15
+        + n(b.apply(s.physical.acceleration, EXPL)) * 0.10
+        + n(b.apply(s.physical.pace, EXPL)) * 0.08
+        + n(b.apply(s.mental.teamwork, MENT)) * 0.07
+        + n(b.apply(s.mental.bravery, MENT)) * 0.05)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -328,14 +328,14 @@ pub fn off_ball_attack(player: &MatchPlayer, minute: u32) -> f32 {
 /// `composure*0.25 + decisions*0.25 + finishing*0.18 + long_shots*0.12
 ///  + vision*0.10 + teamwork*0.10`
 pub fn shot_selection(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, _) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, mental, |_| s.mental.composure)) * 0.25
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.25
-        + n(eff(player, tech, |_| s.technical.finishing)) * 0.18
-        + n(eff(player, tech, |_| s.technical.long_shots)) * 0.12
-        + n(eff(player, mental, |_| s.mental.vision)) * 0.10
-        + n(eff(player, mental, |_| s.mental.teamwork)) * 0.10)
+    let v = (n(b.apply(s.mental.composure, MENT)) * 0.25
+        + n(b.apply(s.mental.decisions, MENT)) * 0.25
+        + n(b.apply(s.technical.finishing, TECH)) * 0.18
+        + n(b.apply(s.technical.long_shots, TECH)) * 0.12
+        + n(b.apply(s.mental.vision, MENT)) * 0.10
+        + n(b.apply(s.mental.teamwork, MENT)) * 0.10)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -344,14 +344,14 @@ pub fn shot_selection(player: &MatchPlayer, minute: u32) -> f32 {
 /// `decisions*0.25 + vision*0.25 + passing*0.18 + composure*0.12
 ///  + teamwork*0.12 + flair*0.08`
 pub fn pass_selection(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, _) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, mental, |_| s.mental.decisions)) * 0.25
-        + n(eff(player, mental, |_| s.mental.vision)) * 0.25
-        + n(eff(player, tech, |_| s.technical.passing)) * 0.18
-        + n(eff(player, mental, |_| s.mental.composure)) * 0.12
-        + n(eff(player, mental, |_| s.mental.teamwork)) * 0.12
-        + n(eff(player, mental, |_| s.mental.flair)) * 0.08)
+    let v = (n(b.apply(s.mental.decisions, MENT)) * 0.25
+        + n(b.apply(s.mental.vision, MENT)) * 0.25
+        + n(b.apply(s.technical.passing, TECH)) * 0.18
+        + n(b.apply(s.mental.composure, MENT)) * 0.12
+        + n(b.apply(s.mental.teamwork, MENT)) * 0.12
+        + n(b.apply(s.mental.flair, MENT)) * 0.08)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -360,14 +360,14 @@ pub fn pass_selection(player: &MatchPlayer, minute: u32) -> f32 {
 /// `positioning*0.30 + anticipation*0.22 + concentration*0.18
 ///  + decisions*0.12 + teamwork*0.10 + acceleration*0.08`
 pub fn defensive_positioning(player: &MatchPlayer, minute: u32) -> f32 {
-    let (_, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, mental, |_| s.mental.positioning)) * 0.30
-        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.22
-        + n(eff(player, mental, |_| s.mental.concentration)) * 0.18
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.12
-        + n(eff(player, mental, |_| s.mental.teamwork)) * 0.10
-        + n(eff(player, expl, |_| s.physical.acceleration)) * 0.08)
+    let v = (n(b.apply(s.mental.positioning, MENT)) * 0.30
+        + n(b.apply(s.mental.anticipation, MENT)) * 0.22
+        + n(b.apply(s.mental.concentration, MENT)) * 0.18
+        + n(b.apply(s.mental.decisions, MENT)) * 0.12
+        + n(b.apply(s.mental.teamwork, MENT)) * 0.10
+        + n(b.apply(s.physical.acceleration, EXPL)) * 0.08)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -387,20 +387,20 @@ pub fn aerial_outfield_attacker(player: &MatchPlayer, minute: u32) -> f32 {
 }
 
 fn aerial_outfield_inner(player: &MatchPlayer, minute: u32, defender: bool) -> f32 {
-    let (tech, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
     let positioning_or_otb = if defender {
-        n(eff(player, mental, |_| s.mental.positioning))
+        n(b.apply(s.mental.positioning, MENT))
     } else {
-        n(eff(player, mental, |_| s.mental.off_the_ball))
+        n(b.apply(s.mental.off_the_ball, MENT))
     };
-    let v = (n(eff(player, tech, |_| s.technical.heading)) * 0.28
-        + n(eff(player, expl, |_| s.physical.jumping)) * 0.24
-        + n(eff(player, expl, |_| s.physical.strength)) * 0.16
-        + n(eff(player, mental, |_| s.mental.bravery)) * 0.12
+    let v = (n(b.apply(s.technical.heading, TECH)) * 0.28
+        + n(b.apply(s.physical.jumping, EXPL)) * 0.24
+        + n(b.apply(s.physical.strength, EXPL)) * 0.16
+        + n(b.apply(s.mental.bravery, MENT)) * 0.12
         + positioning_or_otb * 0.10
-        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.06
-        + n(eff(player, tech, |_| s.physical.balance)) * 0.04)
+        + n(b.apply(s.mental.anticipation, MENT)) * 0.06
+        + n(b.apply(s.physical.balance, TECH)) * 0.04)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -413,19 +413,18 @@ fn aerial_outfield_inner(player: &MatchPlayer, minute: u32, defender: bool) -> f
 /// `reflexes*0.30 + handling*0.18 + agility*0.16 + positioning*0.10
 ///  + concentration*0.10 + anticipation*0.08 + one_on_ones*0.08`
 pub fn gk_shot_stopping(player: &MatchPlayer, minute: u32) -> f32 {
-    let (_, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
     // GK skills are technical-feel (reflexes/handling/one_on_ones) so we
     // route them through the technical category which has the smallest
     // fatigue penalty.
-    let tech = ActionContext::technical(minute);
-    let v = (n(eff(player, tech, |_| s.goalkeeping.reflexes)) * 0.30
-        + n(eff(player, tech, |_| s.goalkeeping.handling)) * 0.18
-        + n(eff(player, expl, |_| s.physical.agility)) * 0.16
-        + n(eff(player, mental, |_| s.mental.positioning)) * 0.10
-        + n(eff(player, mental, |_| s.mental.concentration)) * 0.10
-        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.08
-        + n(eff(player, tech, |_| s.goalkeeping.one_on_ones)) * 0.08)
+    let v = (n(b.apply(s.goalkeeping.reflexes, TECH)) * 0.30
+        + n(b.apply(s.goalkeeping.handling, TECH)) * 0.18
+        + n(b.apply(s.physical.agility, EXPL)) * 0.16
+        + n(b.apply(s.mental.positioning, MENT)) * 0.10
+        + n(b.apply(s.mental.concentration, MENT)) * 0.10
+        + n(b.apply(s.mental.anticipation, MENT)) * 0.08
+        + n(b.apply(s.goalkeeping.one_on_ones, TECH)) * 0.08)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -434,15 +433,15 @@ pub fn gk_shot_stopping(player: &MatchPlayer, minute: u32) -> f32 {
 /// `aerial_reach*0.28 + command_of_area*0.20 + handling*0.14 + jumping*0.12
 ///  + strength*0.10 + bravery*0.08 + communication*0.08`
 pub fn gk_aerial(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.goalkeeping.aerial_reach)) * 0.28
-        + n(eff(player, mental, |_| s.goalkeeping.command_of_area)) * 0.20
-        + n(eff(player, tech, |_| s.goalkeeping.handling)) * 0.14
-        + n(eff(player, expl, |_| s.physical.jumping)) * 0.12
-        + n(eff(player, expl, |_| s.physical.strength)) * 0.10
-        + n(eff(player, mental, |_| s.mental.bravery)) * 0.08
-        + n(eff(player, mental, |_| s.goalkeeping.communication)) * 0.08)
+    let v = (n(b.apply(s.goalkeeping.aerial_reach, TECH)) * 0.28
+        + n(b.apply(s.goalkeeping.command_of_area, MENT)) * 0.20
+        + n(b.apply(s.goalkeeping.handling, TECH)) * 0.14
+        + n(b.apply(s.physical.jumping, EXPL)) * 0.12
+        + n(b.apply(s.physical.strength, EXPL)) * 0.10
+        + n(b.apply(s.mental.bravery, MENT)) * 0.08
+        + n(b.apply(s.goalkeeping.communication, MENT)) * 0.08)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -453,17 +452,14 @@ pub fn gk_aerial(player: &MatchPlayer, minute: u32) -> f32 {
 /// `communication*0.45 + command_of_area*0.25 + leadership*0.15
 ///  + concentration*0.10 + positioning*0.05`
 pub fn gk_communication(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, _) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, mental, |_| s.goalkeeping.communication)) * 0.45
-        + n(eff(player, mental, |_| s.goalkeeping.command_of_area)) * 0.25
-        + n(eff(player, mental, |_| s.mental.leadership)) * 0.15
-        + n(eff(player, mental, |_| s.mental.concentration)) * 0.10
-        + n(eff(player, mental, |_| s.mental.positioning)) * 0.05)
+    let v = (n(b.apply(s.goalkeeping.communication, MENT)) * 0.45
+        + n(b.apply(s.goalkeeping.command_of_area, MENT)) * 0.25
+        + n(b.apply(s.mental.leadership, MENT)) * 0.15
+        + n(b.apply(s.mental.concentration, MENT)) * 0.10
+        + n(b.apply(s.mental.positioning, MENT)) * 0.05)
         .clamp(0.0, 1.0);
-    // Suppress unused-variable warning when communication-only callers
-    // skip the tech band; it's still loaded above when handling fires.
-    let _ = tech;
     clamp_composite(v)
 }
 
@@ -474,14 +470,14 @@ pub fn gk_communication(player: &MatchPlayer, minute: u32) -> f32 {
 /// `aerial_reach*0.28 + command_of_area*0.22 + handling*0.18
 ///  + positioning*0.12 + anticipation*0.10 + jumping*0.10`
 pub fn gk_claim_cross(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.goalkeeping.aerial_reach)) * 0.28
-        + n(eff(player, mental, |_| s.goalkeeping.command_of_area)) * 0.22
-        + n(eff(player, tech, |_| s.goalkeeping.handling)) * 0.18
-        + n(eff(player, mental, |_| s.mental.positioning)) * 0.12
-        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.10
-        + n(eff(player, expl, |_| s.physical.jumping)) * 0.10)
+    let v = (n(b.apply(s.goalkeeping.aerial_reach, TECH)) * 0.28
+        + n(b.apply(s.goalkeeping.command_of_area, MENT)) * 0.22
+        + n(b.apply(s.goalkeeping.handling, TECH)) * 0.18
+        + n(b.apply(s.mental.positioning, MENT)) * 0.12
+        + n(b.apply(s.mental.anticipation, MENT)) * 0.10
+        + n(b.apply(s.physical.jumping, EXPL)) * 0.10)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -490,19 +486,19 @@ pub fn gk_claim_cross(player: &MatchPlayer, minute: u32) -> f32 {
 /// `goalkeeping.passing*0.24 + kicking*0.22 + throwing*0.18 + vision*0.12
 ///  + decisions*0.10 + composure*0.08 + technique/first_touch*0.06`
 pub fn gk_distribution(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, _) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
     // `technique/first_touch` slot — average the two technical reads
     // since the spec leaves it explicitly as either-or.
     let touch_avg = 0.5
-        * (n(eff(player, tech, |_| s.technical.technique))
-            + n(eff(player, tech, |_| s.goalkeeping.first_touch)));
-    let v = (n(eff(player, tech, |_| s.goalkeeping.passing)) * 0.24
-        + n(eff(player, tech, |_| s.goalkeeping.kicking)) * 0.22
-        + n(eff(player, tech, |_| s.goalkeeping.throwing)) * 0.18
-        + n(eff(player, mental, |_| s.mental.vision)) * 0.12
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.10
-        + n(eff(player, mental, |_| s.mental.composure)) * 0.08
+        * (n(b.apply(s.technical.technique, TECH))
+            + n(b.apply(s.goalkeeping.first_touch, TECH)));
+    let v = (n(b.apply(s.goalkeeping.passing, TECH)) * 0.24
+        + n(b.apply(s.goalkeeping.kicking, TECH)) * 0.22
+        + n(b.apply(s.goalkeeping.throwing, TECH)) * 0.18
+        + n(b.apply(s.mental.vision, MENT)) * 0.12
+        + n(b.apply(s.mental.decisions, MENT)) * 0.10
+        + n(b.apply(s.mental.composure, MENT)) * 0.08
         + touch_avg * 0.06)
         .clamp(0.0, 1.0);
     clamp_composite(v)
@@ -518,14 +514,14 @@ pub fn gk_distribution(player: &MatchPlayer, minute: u32) -> f32 {
 /// `pace*0.25 + acceleration*0.25 + agility*0.20 + balance*0.12
 ///  + stamina*0.10 + natural_fitness*0.08`
 pub fn mobility(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, _, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, expl, |_| s.physical.pace)) * 0.25
-        + n(eff(player, expl, |_| s.physical.acceleration)) * 0.25
-        + n(eff(player, expl, |_| s.physical.agility)) * 0.20
-        + n(eff(player, tech, |_| s.physical.balance)) * 0.12
-        + n(eff(player, expl, |_| s.physical.stamina)) * 0.10
-        + n(eff(player, expl, |_| s.physical.natural_fitness)) * 0.08)
+    let v = (n(b.apply(s.physical.pace, EXPL)) * 0.25
+        + n(b.apply(s.physical.acceleration, EXPL)) * 0.25
+        + n(b.apply(s.physical.agility, EXPL)) * 0.20
+        + n(b.apply(s.physical.balance, TECH)) * 0.12
+        + n(b.apply(s.physical.stamina, EXPL)) * 0.10
+        + n(b.apply(s.physical.natural_fitness, EXPL)) * 0.08)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -535,14 +531,14 @@ pub fn mobility(player: &MatchPlayer, minute: u32) -> f32 {
 /// `decisions*0.32 + composure*0.18 + concentration*0.18
 ///  + anticipation*0.14 + teamwork*0.10 + vision*0.08`
 pub fn decision_quality(player: &MatchPlayer, minute: u32) -> f32 {
-    let (_, mental, _) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, mental, |_| s.mental.decisions)) * 0.32
-        + n(eff(player, mental, |_| s.mental.composure)) * 0.18
-        + n(eff(player, mental, |_| s.mental.concentration)) * 0.18
-        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.14
-        + n(eff(player, mental, |_| s.mental.teamwork)) * 0.10
-        + n(eff(player, mental, |_| s.mental.vision)) * 0.08)
+    let v = (n(b.apply(s.mental.decisions, MENT)) * 0.32
+        + n(b.apply(s.mental.composure, MENT)) * 0.18
+        + n(b.apply(s.mental.concentration, MENT)) * 0.18
+        + n(b.apply(s.mental.anticipation, MENT)) * 0.14
+        + n(b.apply(s.mental.teamwork, MENT)) * 0.10
+        + n(b.apply(s.mental.vision, MENT)) * 0.08)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -553,14 +549,14 @@ pub fn decision_quality(player: &MatchPlayer, minute: u32) -> f32 {
 /// `dribbling*0.22 + technique*0.16 + pace*0.20 + acceleration*0.18
 ///  + agility*0.14 + balance*0.10`
 pub fn movement_speed_with_ball(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, _, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.technical.dribbling)) * 0.22
-        + n(eff(player, tech, |_| s.technical.technique)) * 0.16
-        + n(eff(player, expl, |_| s.physical.pace)) * 0.20
-        + n(eff(player, expl, |_| s.physical.acceleration)) * 0.18
-        + n(eff(player, expl, |_| s.physical.agility)) * 0.14
-        + n(eff(player, tech, |_| s.physical.balance)) * 0.10)
+    let v = (n(b.apply(s.technical.dribbling, TECH)) * 0.22
+        + n(b.apply(s.technical.technique, TECH)) * 0.16
+        + n(b.apply(s.physical.pace, EXPL)) * 0.20
+        + n(b.apply(s.physical.acceleration, EXPL)) * 0.18
+        + n(b.apply(s.physical.agility, EXPL)) * 0.14
+        + n(b.apply(s.physical.balance, TECH)) * 0.10)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -572,16 +568,16 @@ pub fn movement_speed_with_ball(player: &MatchPlayer, minute: u32) -> f32 {
 /// `acceleration*0.24 + pace*0.18 + anticipation*0.18 + bravery*0.12
 ///  + strength*0.10 + balance*0.08 + concentration*0.06 + decisions*0.04`
 pub fn loose_ball_claim(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, expl, |_| s.physical.acceleration)) * 0.24
-        + n(eff(player, expl, |_| s.physical.pace)) * 0.18
-        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.18
-        + n(eff(player, mental, |_| s.mental.bravery)) * 0.12
-        + n(eff(player, expl, |_| s.physical.strength)) * 0.10
-        + n(eff(player, tech, |_| s.physical.balance)) * 0.08
-        + n(eff(player, mental, |_| s.mental.concentration)) * 0.06
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.04)
+    let v = (n(b.apply(s.physical.acceleration, EXPL)) * 0.24
+        + n(b.apply(s.physical.pace, EXPL)) * 0.18
+        + n(b.apply(s.mental.anticipation, MENT)) * 0.18
+        + n(b.apply(s.mental.bravery, MENT)) * 0.12
+        + n(b.apply(s.physical.strength, EXPL)) * 0.10
+        + n(b.apply(s.physical.balance, TECH)) * 0.08
+        + n(b.apply(s.mental.concentration, MENT)) * 0.06
+        + n(b.apply(s.mental.decisions, MENT)) * 0.04)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -592,16 +588,16 @@ pub fn loose_ball_claim(player: &MatchPlayer, minute: u32) -> f32 {
 /// `tackling*0.30 + decisions*0.18 + positioning*0.14 + aggression*0.12
 ///  + composure*0.10 + strength*0.08 + agility*0.05 + bravery*0.03`
 pub fn tackle_timing(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.technical.tackling)) * 0.30
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.18
-        + n(eff(player, mental, |_| s.mental.positioning)) * 0.14
-        + n(eff(player, mental, |_| s.mental.aggression)) * 0.12
-        + n(eff(player, mental, |_| s.mental.composure)) * 0.10
-        + n(eff(player, expl, |_| s.physical.strength)) * 0.08
-        + n(eff(player, expl, |_| s.physical.agility)) * 0.05
-        + n(eff(player, mental, |_| s.mental.bravery)) * 0.03)
+    let v = (n(b.apply(s.technical.tackling, TECH)) * 0.30
+        + n(b.apply(s.mental.decisions, MENT)) * 0.18
+        + n(b.apply(s.mental.positioning, MENT)) * 0.14
+        + n(b.apply(s.mental.aggression, MENT)) * 0.12
+        + n(b.apply(s.mental.composure, MENT)) * 0.10
+        + n(b.apply(s.physical.strength, EXPL)) * 0.08
+        + n(b.apply(s.physical.agility, EXPL)) * 0.05
+        + n(b.apply(s.mental.bravery, MENT)) * 0.03)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -612,15 +608,15 @@ pub fn tackle_timing(player: &MatchPlayer, minute: u32) -> f32 {
 /// `rushing_out*0.26 + acceleration*0.18 + pace*0.12 + decisions*0.16
 ///  + anticipation*0.12 + bravery*0.08 + one_on_ones*0.08`
 pub fn gk_rush_out(player: &MatchPlayer, minute: u32) -> f32 {
-    let (tech, mental, expl) = ctxs(minute);
+    let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.goalkeeping.rushing_out)) * 0.26
-        + n(eff(player, expl, |_| s.physical.acceleration)) * 0.18
-        + n(eff(player, expl, |_| s.physical.pace)) * 0.12
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.16
-        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.12
-        + n(eff(player, mental, |_| s.mental.bravery)) * 0.08
-        + n(eff(player, tech, |_| s.goalkeeping.one_on_ones)) * 0.08)
+    let v = (n(b.apply(s.goalkeeping.rushing_out, TECH)) * 0.26
+        + n(b.apply(s.physical.acceleration, EXPL)) * 0.18
+        + n(b.apply(s.physical.pace, EXPL)) * 0.12
+        + n(b.apply(s.mental.decisions, MENT)) * 0.16
+        + n(b.apply(s.mental.anticipation, MENT)) * 0.12
+        + n(b.apply(s.mental.bravery, MENT)) * 0.08
+        + n(b.apply(s.goalkeeping.one_on_ones, TECH)) * 0.08)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }

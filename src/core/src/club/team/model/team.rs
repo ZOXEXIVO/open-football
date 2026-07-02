@@ -103,8 +103,11 @@ impl Team {
             self.id,
             self.players.simulate(player_ctx.with_player(None)),
             self.staffs.simulate(ctx.with_staff(None)),
-            self.behaviour
-                .simulate(&mut self.players, &mut self.staffs, ctx.with_team(self.id)),
+            self.behaviour.simulate(
+                &mut self.players,
+                &mut self.staffs,
+                ctx.with_team_typed(self.id, self.team_type),
+            ),
             TeamTraining::train(self, ctx.simulation.date, ctx.club_facilities_training()),
         )
     }

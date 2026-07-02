@@ -54,7 +54,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // allocating a fresh GameTickContext (grid+space buffers) every
         // light tick during the shot window.
         if field.ball.cached_shot_target.is_some() {
-            tick_ctx.update_for_goalkeeper_shot(field);
+            tick_ctx.update_for_goalkeeper_shot(field, &context.players);
             Self::play_goalkeepers(field, context, tick_ctx, events);
         }
 
@@ -95,7 +95,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let prof_on = PhaseProf::enabled();
 
         let t = prof_on.then(Instant::now);
-        tick_ctx.update(field);
+        tick_ctx.update(field, &context.players);
         if let Some(t) = t {
             PhaseProf::add(PhaseProf::P_TICKCTX, t.elapsed().as_nanos() as u64);
         }

@@ -12,7 +12,7 @@ use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::team::TeamOperationsImpl;
-use crate::r#match::{BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer};
+use crate::r#match::{BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer, PlayerSide};
 use log::debug;
 use nalgebra::Vector3;
 
@@ -165,6 +165,33 @@ impl PlayerFieldPositionGroup {
             let threshold = (my_dist - HYSTERESIS).max(0.0);
             threshold * threshold
         };
+        // "Any same-side entry (excluding me) closer than the threshold"
+        // ⇔ the side's min distance excluding me beats the threshold —
+        // read from the once-per-tick chase table instead of re-scanning
+        // the roster for every player.
+        let result = match tick_context.chase.best_other(my_side, player.id) {
+            Some(best) => best.dist_sq < yield_threshold_sq,
+            None => false,
+        };
+        debug_assert_eq!(
+            result,
+            Self::yield_takeball_scan(player, tick_context, ball_pos, yield_threshold_sq, my_side),
+            "loose-ball yield chase-table mismatch"
+        );
+        result
+    }
+
+    /// Reference implementation of the yield scan — the pre-table
+    /// per-player roster walk. Kept as the debug oracle: every table
+    /// answer is recomputed and compared in debug/test builds.
+    #[allow(dead_code)]
+    fn yield_takeball_scan(
+        player: &MatchPlayer,
+        tick_context: &GameTickContext,
+        ball_pos: Vector3<f32>,
+        yield_threshold_sq: f32,
+        my_side: PlayerSide,
+    ) -> bool {
         for tm in tick_context.positions.players.as_slice() {
             if tm.player_id == player.id || tm.side != my_side {
                 continue;
@@ -231,10 +258,10 @@ impl PlayerFieldPositionGroup {
         // Am I the strictly-closest teammate? Tie-break by player id so
         // two players at exactly equal distance don't both trigger.
         //
-        // CRITICAL: use `tick_context.positions.players` (live, updated
-        // every tick) rather than `context.players` (a static snapshot
-        // taken at match start, frozen thereafter). With the snapshot,
-        // every player compared their *current* position against every
+        // CRITICAL: use the live position store (via the chase table)
+        // rather than `context.players` (a static snapshot taken at
+        // match start, frozen thereafter). With the snapshot, every
+        // player compared their *current* position against every
         // teammate's *match-start* position — all of them thought they
         // were closest, all of them flipped to TakeBall at once.
         //
@@ -242,10 +269,40 @@ impl PlayerFieldPositionGroup {
         // doesn't carry team_id. Sent-off players are stashed at
         // (-500, -500), so they naturally fail any distance comparison
         // — no explicit filter needed.
+        //
+        // The chase table's lexicographic (dist_sq, id) minimum over the
+        // same entries reproduces the old scan exactly: "some other
+        // entry is strictly closer, or equally close with a lower id"
+        // ⇔ the best-other beats my (my_dist_sq, my id).
         let my_side = match player.side {
             Some(s) => s,
             None => return false,
         };
+        let result = match tick_context.chase.best_other(my_side, player.id) {
+            Some(best) => {
+                !(best.dist_sq < my_dist_sq
+                    || (best.dist_sq == my_dist_sq && best.id < player.id))
+            }
+            None => true,
+        };
+        debug_assert_eq!(
+            result,
+            Self::force_takeball_scan(player, tick_context, ball_pos, my_dist_sq, my_side),
+            "loose-ball force chase-table mismatch"
+        );
+        result
+    }
+
+    /// Reference implementation of the force scan — the pre-table
+    /// per-player roster walk, kept as the debug oracle.
+    #[allow(dead_code)]
+    fn force_takeball_scan(
+        player: &MatchPlayer,
+        tick_context: &GameTickContext,
+        ball_pos: Vector3<f32>,
+        my_dist_sq: f32,
+        my_side: PlayerSide,
+    ) -> bool {
         for tm in tick_context.positions.players.as_slice() {
             if tm.player_id == player.id || tm.side != my_side {
                 continue;

@@ -110,12 +110,10 @@ impl<'a> SteeringBehavior<'a> {
                 // Calculate steering force (the change in velocity needed)
                 let steering = desired_velocity - player.velocity;
 
-                // Limit steering force based on agility (with condition)
-                let max_force = player
-                    .skills
-                    .max_speed_with_condition(player.player_attributes.condition)
-                    * agility_normalized
-                    * 0.7;
+                // Limit steering force based on agility (with condition).
+                // Reuses the `max_speed` computed above — same pure
+                // function, same arguments.
+                let max_force = max_speed * agility_normalized * 0.7;
                 let steering = Self::limit_magnitude(steering, max_force);
 
                 // Apply steering force to current velocity to get new absolute velocity
@@ -196,13 +194,11 @@ impl<'a> SteeringBehavior<'a> {
 
                     desired_velocity * (1.0 - damping) + player.velocity * damping
                 } else {
-                    // Far from target - use normal steering accumulation
+                    // Far from target - use normal steering accumulation.
+                    // `max_speed` above is the same pure call — reuse it.
                     let steering = desired_velocity - player.velocity;
-                    let max_acceleration = player
-                        .skills
-                        .max_speed_with_condition(player.player_attributes.condition)
-                        * agility_normalized
-                        * acceleration_normalized;
+                    let max_acceleration =
+                        max_speed * agility_normalized * acceleration_normalized;
                     let limited_steering = Self::limit_magnitude(steering, max_acceleration);
 
                     let move_velocity = player.velocity + limited_steering;

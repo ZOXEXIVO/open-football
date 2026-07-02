@@ -425,6 +425,14 @@ pub enum HappinessEventType {
     /// by league-table context (position, points off the leader). Rare,
     /// mostly affects stars at mid-table clubs.
     WantsTitleChallenge,
+    /// Senior player stuck in a reserve / B / second squad dreams of
+    /// genuine first-team football — his own club's first team or a
+    /// club where he'd actually start. Distinct from
+    /// `LackOfPlayingTime`: he may be playing every reserve fixture;
+    /// the grievance is the *level*, not the minutes. Chronic mood
+    /// that escalates into loan / transfer requests via the weekly
+    /// playing-time complaint pass.
+    WantsFirstTeamFootball,
 
     // ── Loan management pressure ─────────────────────────────────
     /// A young player's loan is failing to develop him — benched, wrong
@@ -466,6 +474,12 @@ pub enum HappinessEventType {
     /// unhappy player. Carries a `ManagerInteractionEventContext` whose
     /// topic + tone hint the underlying driver.
     AskedForPrivateTalk,
+    /// Transfer-listed player, still unsold months after being listed,
+    /// formally asked the club to find him a new team — the trigger for
+    /// the scouts' availability broadcast that shops him around other
+    /// clubs. Mild frustration note, cooldowned; the exit itself is
+    /// handled by the sale / free-exit machinery.
+    AskedClubToArrangeTransfer,
     /// Ambitious or senior player worried about where the club is
     /// heading: key sales unreplaced, weakened squad, persistent
     /// underperformance, board direction. Distinct from

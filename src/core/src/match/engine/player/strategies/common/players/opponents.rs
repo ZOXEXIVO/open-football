@@ -97,18 +97,19 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
         position_group: PlayerFieldPositionGroup,
         team_id: u32,
     ) -> impl Iterator<Item = MatchPlayerLite> + 'b {
+        // Iterates the per-tick roster join — same entries set/order,
+        // positions pre-joined once per tick (see `RosterJoin`).
         self.ctx
-            .context
-            .players
-            .entries
+            .tick_context
+            .roster
             .iter()
             .filter(move |entry| {
-                entry.team_id != team_id && entry.position.position_group() == position_group
+                entry.team_id != team_id && entry.position_type.position_group() == position_group
             })
             .map(|entry| MatchPlayerLite {
                 id: entry.id,
-                position: self.ctx.tick_context.positions.players.position(entry.id),
-                tactical_positions: entry.position,
+                position: entry.position,
+                tactical_positions: entry.position_type,
             })
     }
 
@@ -119,9 +120,8 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
         has_ball: Option<bool>,
     ) -> impl Iterator<Item = MatchPlayerLite> + 'b {
         self.ctx
-            .context
-            .players
-            .entries
+            .tick_context
+            .roster
             .iter()
             .filter(move |entry| {
                 // Check if player matches team criteria (different team)
@@ -138,8 +138,8 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
             })
             .map(|entry| MatchPlayerLite {
                 id: entry.id,
-                position: self.ctx.tick_context.positions.players.position(entry.id),
-                tactical_positions: entry.position,
+                position: entry.position,
+                tactical_positions: entry.position_type,
             })
     }
 }

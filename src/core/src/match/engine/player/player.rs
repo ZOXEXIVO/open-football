@@ -13,7 +13,14 @@ use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::player::waypoints::WaypointManager;
-use crate::r#match::{ActivityIntensity, GameTickContext, MatchContext, StateProcessingContext};
+use crate::r#match::defenders::states::common::DefenderCondition;
+use crate::r#match::engine::engine::MATCH_HALF_TIME_MS;
+use crate::r#match::forwarders::states::common::ForwardCondition;
+use crate::r#match::goalkeepers::states::common::GoalkeeperCondition;
+use crate::r#match::midfielders::states::common::MidfielderCondition;
+use crate::r#match::{
+    ActivityIntensity, ConditionContext, GameTickContext, MatchContext, StateProcessingContext,
+};
 use crate::utils::DateUtils;
 use crate::{
     PersonAttributes, Player, PlayerAttributes, PlayerFieldPositionGroup, PlayerPositionType,
@@ -522,6 +529,65 @@ impl MatchPlayer {
 
         self.update_waypoint_index(tick_context);
 
+        self.check_boundary_collision(context);
+        self.move_to();
+    }
+
+    /// Reduced-cadence (LOD) update for a far-from-ball player in a
+    /// passive movement state (see `play_players`): the per-state
+    /// `velocity()`/`process()` pair — the expensive AI — is skipped
+    /// this full tick, while everything calibration-coupled still runs
+    /// at full rate:
+    ///
+    ///   * fatigue, at the intensity the state declared on its last
+    ///     processed tick (the fatigue model is 75% velocity-driven and
+    ///     velocity is unchanged on a skipped tick, so the drain matches
+    ///     what a processed tick would have produced);
+    ///   * `in_state_time` (state timeouts stay real-time — a skipped
+    ///     tick counts exactly like a processed no-transition tick);
+    ///   * the tackle cooldown and the periodic memory decay;
+    ///   * motion integration (previous velocity carries, boundary
+    ///     clamp applies — identical to a light tick).
+    ///
+    /// The player re-decides on the next full tick, ~20 ms later.
+    pub fn lod_skip_update(&mut self, context: &MatchContext) {
+        self.tick_tackle_cooldown();
+
+        let current_tick = context.current_tick();
+        if current_tick > 0 && current_tick % 100 == 0 {
+            self.memory.decay(current_tick);
+        }
+
+        let half_ms = MATCH_HALF_TIME_MS as f32;
+        let full_ms = half_ms * 2.0;
+        let match_progress = (context.total_match_time as f32 / full_ms).clamp(0.0, 1.0);
+        let intensity = self.last_activity_intensity;
+        let group = self.tactical_position.current_position.position_group();
+        let condition_ctx = ConditionContext {
+            in_state_time: self.in_state_time,
+            player: self,
+            match_progress,
+        };
+        match group {
+            PlayerFieldPositionGroup::Defender => {
+                DefenderCondition::new(intensity).process(condition_ctx)
+            }
+            PlayerFieldPositionGroup::Midfielder => {
+                MidfielderCondition::new(intensity).process(condition_ctx)
+            }
+            PlayerFieldPositionGroup::Forward => {
+                ForwardCondition::new(intensity).process(condition_ctx)
+            }
+            // Goalkeepers never take the LOD path (`play_players` only
+            // gates outfield passive states), but keep the dispatch
+            // total so a future gate change can't silently skip GK
+            // fatigue.
+            PlayerFieldPositionGroup::Goalkeeper => {
+                GoalkeeperCondition::new(intensity).process(condition_ctx)
+            }
+        }
+
+        self.in_state_time += 1;
         self.check_boundary_collision(context);
         self.move_to();
     }

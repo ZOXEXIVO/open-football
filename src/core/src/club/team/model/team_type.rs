@@ -54,6 +54,15 @@ impl TeamType {
         )
     }
 
+    /// Senior squads sitting below the first team (B / Reserve / Second).
+    /// A player here is an adult playing real football at the wrong level
+    /// — the "stuck in the reserves" career-ambition audits key off this,
+    /// while age-restricted youth squads (U18..U23) stay on the normal
+    /// development pathway.
+    pub fn is_senior_reserve(&self) -> bool {
+        matches!(self, TeamType::B | TeamType::Reserve | TeamType::Second)
+    }
+
     /// Senior squads that compete in a real league under their own brand.
     /// Used by the player-history pipeline (so a B/Second player's stats
     /// show their actual team and league) and by the web layer to decide

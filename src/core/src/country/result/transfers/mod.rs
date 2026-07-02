@@ -239,9 +239,22 @@ impl CountryResult {
             // everything the broadcast didn't place — the bulk of loan volume —
             // so prospects are never starved of takers (no scan deferral).
             PipelineProcessor::broadcast_listed_loans(country, current_date);
+            // Stale permanent listings get the same push, permanent
+            // flavor: a player unsold 90+ days asks the club to find him
+            // a move and the scouts offer him around, tier-cascading
+            // downward until a buyer responds. Paired with the
+            // year-unsold free-exit valve below, no listing lingers for
+            // seasons.
+            PipelineProcessor::broadcast_listed_transfers(country, current_date);
             PipelineProcessor::scan_loan_market(country, current_date);
             PipelineProcessor::scan_foreign_loan_market(country, &foreign_players, current_date);
         }
+
+        // Escape valve for stranded listings: a player still unsold a full
+        // year after being transfer-listed forces a mutual termination and
+        // leaves on a free. Window-independent — tearing up a contract is
+        // legal year-round; the free-agent sweep collects him next tick.
+        Self::release_unsold_listed_players(country, current_date);
 
         PipelineProcessor::refresh_shadow_reports(country, current_date);
         // Year-round breakout watch: discover high-form players on plausible

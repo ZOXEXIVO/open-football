@@ -1,4 +1,15 @@
 use super::*;
+use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::player::state::PlayerState;
+
+/// Reduced-cadence (LOD) distance gate: players further than this from
+/// the ball — in a passive movement state, while the ball is owned —
+/// run their full AI every OTHER full tick instead of every full tick.
+/// 250 units ≈ 31 m: far enough that a skipped decision costs ~20 ms of
+/// reaction latency on a player who is out of the play entirely.
+const LOD_DISTANCE_SQ: f32 = 250.0 * 250.0;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // ───────────────────────────────────────────────────────────────────────
@@ -86,11 +97,76 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         tick_context: &GameTickContext,
         events: &mut EventCollection,
     ) {
+        let ball_owned = tick_context.ball.is_owned;
+        let ball_owner = tick_context.ball.current_owner;
+        let ball_pos = tick_context.positions.ball.position;
+        // Stagger phase flips every full tick (full ticks land on every
+        // other engine tick, so `>> 1` advances once per full tick).
+        // Half the LOD-eligible players update on even phases, half on
+        // odd — the whole far side never skips the same tick.
+        let stagger = (context.current_tick() >> 1) & 1;
+
         field
             .players
             .iter_mut()
-            .filter(|player| !player.is_sent_off)
-            .for_each(|player| player.update(context, tick_context, events));
+            .enumerate()
+            .filter(|(_, player)| !player.is_sent_off)
+            .for_each(|(idx, player)| {
+                // Reduced AI cadence for players far away from an OWNED
+                // ball in passive shape-keeping states. The skipped tick
+                // is a light-tick-style move (previous velocity carries)
+                // with fatigue / state timers / cooldowns still running
+                // at full rate — see `MatchPlayer::lod_skip_update`.
+                // A loose ball disables the gate entirely: chase
+                // designation and interception windows need every
+                // player sharp.
+                if ball_owned
+                    && ball_owner != Some(player.id)
+                    && Self::lod_reduced_cadence_eligible(player.state)
+                    && (player.position - ball_pos).norm_squared() > LOD_DISTANCE_SQ
+                    && (idx as u64 & 1) == stagger
+                {
+                    player.lod_skip_update(context);
+                    return;
+                }
+                player.update(context, tick_context, events)
+            });
+    }
+
+    /// Passive shape-keeping states where a far-from-ball player's
+    /// decision can safely wait one extra full tick (~20 ms). Action
+    /// states (shooting, passing, tackling, heading, take-ball, every
+    /// goalkeeper state, …) always run at full cadence, as does any
+    /// state not explicitly listed here.
+    fn lod_reduced_cadence_eligible(state: PlayerState) -> bool {
+        match state {
+            PlayerState::Defender(s) => matches!(
+                s,
+                DefenderState::Standing
+                    | DefenderState::Walking
+                    | DefenderState::Running
+                    | DefenderState::Returning
+                    | DefenderState::Resting
+                    | DefenderState::HoldingLine
+            ),
+            PlayerState::Midfielder(s) => matches!(
+                s,
+                MidfielderState::Standing
+                    | MidfielderState::Walking
+                    | MidfielderState::Running
+                    | MidfielderState::Returning
+                    | MidfielderState::Resting
+            ),
+            PlayerState::Forward(s) => matches!(
+                s,
+                ForwardState::Standing
+                    | ForwardState::Walking
+                    | ForwardState::Running
+                    | ForwardState::Returning
+                    | ForwardState::Resting
+            ),
+            _ => false,
+        }
     }
 
     /// Run the AI for *only* the goalkeepers this tick. Used during
