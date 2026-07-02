@@ -466,11 +466,9 @@ impl PipelineProcessor {
                 plan.initialized = true;
 
                 // Apply position-glut transfer-list decisions. These
-                // are deterministic (not AI-driven) so they bypass
-                // `TransferListManager` and write Lst directly. Cheap
-                // — usually empty; non-empty only when a club has
-                // accumulated a positional surplus the AI hasn't
-                // picked off yet (e.g. the Gzira 10-GK case).
+                // write Lst directly. Cheap — usually empty; non-empty
+                // only when a club has accumulated a positional surplus
+                // (e.g. the Gzira 10-GK case).
                 if !eval.force_transfer_list.is_empty() {
                     if let Some(main_team) = club.teams.main_mut() {
                         for player_id in eval.force_transfer_list {

@@ -23,9 +23,9 @@ pub trait MatchDispatcher: Send + Sync {
     ) -> Result<Vec<(usize, MatchResultRaw)>, Vec<(usize, MatchSquad, MatchSquad, bool)>>;
 }
 
-/// Process-wide handle to the active [`MatchDispatcher`]. Mirrors the
-/// `AiServiceRegistry` pattern in `crate::ai` so the binary can wire a
-/// dispatcher at startup without `core` having to know what `web` does.
+/// Process-wide handle to the active [`MatchDispatcher`]. The binary
+/// wires a dispatcher at startup without `core` having to know what
+/// `web` does.
 pub struct MatchDispatcherRegistry;
 
 static DISPATCHER: OnceLock<Box<dyn MatchDispatcher>> = OnceLock::new();

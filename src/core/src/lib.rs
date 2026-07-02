@@ -1,4 +1,3 @@
-pub mod ai;
 pub mod club;
 pub mod competitions;
 pub mod config;
@@ -16,7 +15,6 @@ pub mod utils;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-pub use ai::*;
 pub use competitions::*;
 pub use config::SimulatorConfig;
 pub use continent::national::world::EmergencyCallupMetrics;

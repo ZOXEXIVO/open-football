@@ -25,10 +25,9 @@ const SAME_GROUP_COVER_MIN_LEVEL: u8 = 14;
 /// serious discipline/absence issue, or has genuine positional cover — to move
 /// him out of the senior group.
 ///
-/// Used by every internal squad-move path that can demote a Main player: the
-/// daily administrative sweep (`SquadManager::manage_critical_moves`) and the
-/// monthly AI squad composition (`SquadComposition::execute_advice`). Centralising
-/// it means an LLM squad move cannot bypass the invariant.
+/// Used by the internal squad-move path that can demote a Main player: the
+/// daily administrative sweep (`SquadManager::manage_critical_moves`).
+/// Centralising it means no squad move can bypass the invariant.
 pub(crate) struct MainSquadMoveGuard<'a> {
     main_team: &'a Team,
     date: NaiveDate,

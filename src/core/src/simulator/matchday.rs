@@ -24,10 +24,9 @@
 //!   2. `WorldMatchdayResult::process(continents, world)` — root
 //!      dispatch + per-continent fan-out, populates
 //!      `self.continents` with `Vec<ContinentResult>`.
-//!   3. `drain_ai_requests` feeds the batched AI processor.
-//!   4. After AI responses apply, `collect_domestic_signed_ids` feeds
-//!      the world-wide transfer-interest cleanup sweep.
-//!   5. `drain_into` consumes the wrapper and routes every
+//!   3. `collect_domestic_signed_ids` feeds the world-wide
+//!      transfer-interest cleanup sweep.
+//!   4. `drain_into` consumes the wrapper and routes every
 //!      `ContinentResult::process` into `data` and the tick's
 //!      `SimulationResult`.
 
@@ -41,7 +40,6 @@ use rayon::prelude::IntoParallelRefMutIterator;
 use crate::MatchRuntime;
 use crate::SimulationResult;
 use crate::SimulatorData;
-use crate::ai::PendingAiRequest;
 use crate::continent::{Continent, ContinentBuildOutput, ContinentBuildState, ContinentResult};
 use crate::country::result::transfers::FreeAgentBumpBatch;
 use crate::league::result::WorldSnapshot;
@@ -198,20 +196,6 @@ impl<'gc> WorldMatchdayResult<'gc> {
             .collect();
 
         self.continents = results;
-    }
-
-    /// Drain every continent's staged AI requests into a single
-    /// merged batch. Lock-free: every request travelled up the
-    /// result chain owned by exactly one Rayon worker, so the merge
-    /// is a plain `Vec::append`.
-    pub fn drain_ai_requests(&mut self) -> Vec<PendingAiRequest> {
-        let mut all_requests: Vec<PendingAiRequest> = Vec::new();
-        for cr in &mut self.continents {
-            if !cr.pending_ai_requests.is_empty() {
-                all_requests.append(&mut cr.pending_ai_requests);
-            }
-        }
-        all_requests
     }
 
     /// Collect every domestically-signed player id staged on each

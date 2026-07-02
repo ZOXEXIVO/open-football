@@ -12,8 +12,6 @@ pub use matchday::WorldMatchdayResult;
 pub use result::{SimulationResult, WorldWorkloadCounts};
 
 use crate::MatchRuntime;
-use crate::ai::AiBatchProcessor;
-use crate::club::ai::apply_ai_responses;
 use crate::club::board::manager_market;
 use crate::competitions::simulation::GlobalCompetitionSimulator;
 use crate::config::SimulatorConfig;
@@ -123,13 +121,9 @@ impl FootballSimulator {
         result.match_results.extend(national_match_results);
 
         // Phase ordering note:
-        // A simulates continents and surfaces AI requests inside each
-        // ContinentResult — no shared collector, no lock contention. B
-        // drains those requests, batch-executes them, and applies
-        // responses against the freshly-mutated data. C then drains the
-        // rest of each ContinentResult. Requests carry stable IDs
-        // (club_id, player_id, …) so Phase B mutations (contracts,
-        // morale, etc.) are safely visible to Phase C.
+        // A simulates continents, dispatching every continent's matchday
+        // in one global engine batch. C then drains each ContinentResult
+        // into `data` and the tick's `SimulationResult`.
 
         // Phase A: matchday simulation in two clearly separated halves.
         //
@@ -189,7 +183,7 @@ impl FootballSimulator {
             world_pool: &world_pool,
             global_free_agents: &global_fa_snapshot,
         };
-        let mut world_matchday: WorldMatchdayResult<'_> = {
+        let world_matchday: WorldMatchdayResult<'_> = {
             let _g = perf.scope(PerfPhase::ParallelContinents);
 
             // A1: parallel build. Each `Continent::simulate` returns a
@@ -234,19 +228,7 @@ impl FootballSimulator {
         };
         result.panicked_continents = (ContinentPanicMetrics::total() - panicks_before) as u32;
 
-        // Phase B: drain AI requests staged on each ContinentResult and
-        // batch-execute them. Lock-free — every request travelled up the
-        // result chain owned by exactly one worker. The tick waits for
-        // the batch to finish — no timeout, no dropped responses.
-        let all_requests = world_matchday.drain_ai_requests();
-        if !all_requests.is_empty() {
-            perf.record_ai_batch_active();
-            let _g = perf.scope(PerfPhase::AiBatch);
-            let completed = AiBatchProcessor::execute(all_requests).await;
-            apply_ai_responses(completed, data);
-        }
-
-        // Phase C: drain Phase-A's deferred ops against post-AI data.
+        // Phase C: drain Phase-A's deferred ops.
         // World snapshots were built before Phase A so the parallel pass
         // could read them; we expose the same view here via the
         // `daily_*` caches so any legacy callers (test harnesses,

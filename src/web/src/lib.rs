@@ -1,4 +1,3 @@
-pub mod ai;
 mod champions_league;
 mod common;
 mod conference_league;
@@ -34,7 +33,6 @@ pub use worker::{
     DistributedDispatcher, WorkerRegistry, WorkerServer, WorkerSnapshot, WorkerStatus,
 };
 
-use crate::ai::registry::AiProviderRegistry;
 use crate::routes::ServerRoutes;
 use axum::response::IntoResponse;
 use core::SimulatorData;
@@ -95,7 +93,6 @@ pub struct GameAppData {
     pub process_lock: Arc<Mutex<()>>,
     pub cancel_flag: Arc<AtomicBool>,
     pub i18n: Arc<I18nManager>,
-    pub ai_registry: Arc<AiProviderRegistry>,
     /// Live registry of distributed match workers. Always present;
     /// starts empty and is populated at runtime from the /workers page.
     pub workers: WorkerRegistry,
@@ -109,7 +106,6 @@ impl Clone for GameAppData {
             process_lock: Arc::clone(&self.process_lock),
             cancel_flag: Arc::clone(&self.cancel_flag),
             i18n: Arc::clone(&self.i18n),
-            ai_registry: Arc::clone(&self.ai_registry),
             workers: self.workers.clone(),
         }
     }

@@ -10,7 +10,6 @@ pub enum PerfPhase {
     WorldCallups,
     WorldNationalMatches,
     ParallelContinents,
-    AiBatch,
     ResultProcessing,
     ManagerMarket,
     GlobalCompetitions,
@@ -29,8 +28,6 @@ pub struct PerfCounters {
     cur_callups_ns: AtomicU64,
     cur_world_matches_ns: AtomicU64,
     cur_continents_ns: AtomicU64,
-    cur_ai_batch_ns: AtomicU64,
-    cur_ai_active: AtomicBool,
     cur_result_proc_ns: AtomicU64,
     cur_manager_market_ns: AtomicU64,
     cur_global_comp_ns: AtomicU64,
@@ -53,8 +50,6 @@ pub struct PerfCounters {
     last_callups_ns: AtomicU64,
     last_world_matches_ns: AtomicU64,
     last_continents_ns: AtomicU64,
-    last_ai_batch_ns: AtomicU64,
-    last_ai_active: AtomicBool,
     last_result_proc_ns: AtomicU64,
     last_manager_market_ns: AtomicU64,
     last_global_comp_ns: AtomicU64,
@@ -96,8 +91,6 @@ impl PerfCounters {
             cur_callups_ns: AtomicU64::new(0),
             cur_world_matches_ns: AtomicU64::new(0),
             cur_continents_ns: AtomicU64::new(0),
-            cur_ai_batch_ns: AtomicU64::new(0),
-            cur_ai_active: AtomicBool::new(false),
             cur_result_proc_ns: AtomicU64::new(0),
             cur_manager_market_ns: AtomicU64::new(0),
             cur_global_comp_ns: AtomicU64::new(0),
@@ -117,8 +110,6 @@ impl PerfCounters {
             last_callups_ns: AtomicU64::new(0),
             last_world_matches_ns: AtomicU64::new(0),
             last_continents_ns: AtomicU64::new(0),
-            last_ai_batch_ns: AtomicU64::new(0),
-            last_ai_active: AtomicBool::new(false),
             last_result_proc_ns: AtomicU64::new(0),
             last_manager_market_ns: AtomicU64::new(0),
             last_global_comp_ns: AtomicU64::new(0),
@@ -156,8 +147,6 @@ impl PerfCounters {
         self.cur_callups_ns.store(0, Ordering::Relaxed);
         self.cur_world_matches_ns.store(0, Ordering::Relaxed);
         self.cur_continents_ns.store(0, Ordering::Relaxed);
-        self.cur_ai_batch_ns.store(0, Ordering::Relaxed);
-        self.cur_ai_active.store(false, Ordering::Relaxed);
         self.cur_result_proc_ns.store(0, Ordering::Relaxed);
         self.cur_manager_market_ns.store(0, Ordering::Relaxed);
         self.cur_global_comp_ns.store(0, Ordering::Relaxed);
@@ -212,14 +201,6 @@ impl PerfCounters {
         );
         self.last_continents_ns.store(
             self.cur_continents_ns.load(Ordering::Relaxed),
-            Ordering::Relaxed,
-        );
-        self.last_ai_batch_ns.store(
-            self.cur_ai_batch_ns.load(Ordering::Relaxed),
-            Ordering::Relaxed,
-        );
-        self.last_ai_active.store(
-            self.cur_ai_active.load(Ordering::Relaxed),
             Ordering::Relaxed,
         );
         self.last_result_proc_ns.store(
@@ -290,7 +271,6 @@ impl PerfCounters {
             PerfPhase::WorldCallups => &self.cur_callups_ns,
             PerfPhase::WorldNationalMatches => &self.cur_world_matches_ns,
             PerfPhase::ParallelContinents => &self.cur_continents_ns,
-            PerfPhase::AiBatch => &self.cur_ai_batch_ns,
             PerfPhase::ResultProcessing => &self.cur_result_proc_ns,
             PerfPhase::ManagerMarket => &self.cur_manager_market_ns,
             PerfPhase::GlobalCompetitions => &self.cur_global_comp_ns,
@@ -298,10 +278,6 @@ impl PerfCounters {
             PerfPhase::Awards => &self.cur_awards_ns,
         };
         slot.fetch_add(ns, Ordering::Relaxed);
-    }
-
-    pub fn record_ai_batch_active(&self) {
-        self.cur_ai_active.store(true, Ordering::Relaxed);
     }
 
     /// Whole `FootballEngine::play` wall time, recorded once per
@@ -361,8 +337,6 @@ impl PerfCounters {
             callups_ns: self.last_callups_ns.load(Ordering::Relaxed),
             world_matches_ns: self.last_world_matches_ns.load(Ordering::Relaxed),
             continents_ns: self.last_continents_ns.load(Ordering::Relaxed),
-            ai_batch_ns: self.last_ai_batch_ns.load(Ordering::Relaxed),
-            ai_active: self.last_ai_active.load(Ordering::Relaxed),
             result_proc_ns: self.last_result_proc_ns.load(Ordering::Relaxed),
             manager_market_ns: self.last_manager_market_ns.load(Ordering::Relaxed),
             global_comp_ns: self.last_global_comp_ns.load(Ordering::Relaxed),
@@ -420,8 +394,6 @@ pub struct PerfSnapshot {
     pub callups_ns: u64,
     pub world_matches_ns: u64,
     pub continents_ns: u64,
-    pub ai_batch_ns: u64,
-    pub ai_active: bool,
     pub result_proc_ns: u64,
     pub manager_market_ns: u64,
     pub global_comp_ns: u64,

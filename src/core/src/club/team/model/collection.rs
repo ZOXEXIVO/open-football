@@ -1,8 +1,5 @@
-use crate::ai::PendingAiRequest;
 use crate::club::staff::perception::{CoachDecisionState, date_to_week};
-use crate::club::team::squad::{
-    ContractRenewalManager, SquadComposition, SquadManager, TransferListManager,
-};
+use crate::club::team::squad::{ContractRenewalManager, SquadManager};
 use crate::context::GlobalContext;
 use crate::utils::Logging;
 use crate::{HappinessEventType, Team, TeamResult, TeamType};
@@ -228,92 +225,6 @@ impl TeamCollection {
         state.emotional_heat *= 0.80;
 
         self.coach_state = Some(state);
-    }
-
-    /// Build pending AI requests for all squad management operations.
-    /// Called during simulate() phase; actual AI calls happen in batch later.
-    /// Each request carries its own handler closure — adding new request types
-    /// only requires changes here.
-    ///
-    /// `wage_budget_headroom` is the club-level remaining wage capacity used
-    /// to surface `contract_stalemate.pending_ask.affordable` in the
-    /// transfer-list AI payload. `None` when the board hasn't set season
-    /// targets; the prompt then treats affordability as unknown.
-    pub fn prepare_ai_requests(
-        &self,
-        date: NaiveDate,
-        club_id: u32,
-        wage_budget_headroom: Option<u32>,
-    ) -> Vec<PendingAiRequest> {
-        if self.teams.len() < 2 {
-            return Vec::new();
-        }
-
-        let main_idx = match self.main_index() {
-            Some(idx) => idx,
-            None => return Vec::new(),
-        };
-
-        let reserve_idx = self.find_reserve_team_index();
-        let youth_idx = self.find_youth_team_index();
-
-        let mut requests = Vec::new();
-
-        // Squad composition (priority 0 — handles promotions, demotions, and swaps)
-        {
-            let (query, format) = SquadComposition::prepare_request(
-                &self.teams,
-                main_idx,
-                reserve_idx,
-                youth_idx,
-                date,
-            );
-            requests.push(PendingAiRequest {
-                club_id,
-                priority: 0,
-                query,
-                format,
-                handler: Box::new(move |response, data| {
-                    let club = data.club_mut(club_id).unwrap();
-                    SquadComposition::execute_response(
-                        response,
-                        &mut club.teams.teams,
-                        &mut club.teams.coach_state,
-                        main_idx,
-                        reserve_idx,
-                        youth_idx,
-                        date,
-                    );
-                }),
-            });
-        }
-
-        // Transfer listing (priority 1)
-        {
-            let (query, format) = TransferListManager::prepare_request(
-                &self.teams,
-                main_idx,
-                date,
-                wage_budget_headroom,
-            );
-            requests.push(PendingAiRequest {
-                club_id,
-                priority: 1,
-                query,
-                format,
-                handler: Box::new(move |response, data| {
-                    let club = data.club_mut(club_id).unwrap();
-                    TransferListManager::execute_response(
-                        response,
-                        &mut club.teams.teams,
-                        main_idx,
-                        date,
-                    );
-                }),
-            });
-        }
-
-        requests
     }
 
     /// Proactively offer contract renewals to valuable players whose

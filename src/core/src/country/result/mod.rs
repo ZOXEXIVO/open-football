@@ -5,7 +5,6 @@ mod reputation;
 mod statistics;
 pub mod transfers;
 
-use crate::ai::PendingAiRequest;
 use crate::club::board::manager_market::ManagerMarketTick;
 use crate::country::result::transfers::DeferredTransferOps;
 use crate::league::LeagueResult;
@@ -18,10 +17,6 @@ pub struct CountryResult {
     pub country_id: u32,
     pub leagues: Vec<LeagueResult>,
     pub clubs: Vec<ClubResult>,
-    /// Batched AI requests collected from every club in this country
-    /// during the parallel tick. Drained by the simulator before
-    /// Phase B (`AiBatchProcessor::execute`).
-    pub pending_ai_requests: Vec<PendingAiRequest>,
     /// MatchResults already fanned through `LeagueResult::process_local`
     /// during Phase A. Phase C just pushes them into the world
     /// `SimulationResult.match_results` — no further per-match work
@@ -40,18 +35,11 @@ pub struct CountryResult {
 }
 
 impl CountryResult {
-    pub fn new(country_id: u32, leagues: Vec<LeagueResult>, mut clubs: Vec<ClubResult>) -> Self {
-        let mut pending_ai_requests: Vec<PendingAiRequest> = Vec::new();
-        for club in &mut clubs {
-            if !club.pending_ai_requests.is_empty() {
-                pending_ai_requests.append(&mut club.pending_ai_requests);
-            }
-        }
+    pub fn new(country_id: u32, leagues: Vec<LeagueResult>, clubs: Vec<ClubResult>) -> Self {
         CountryResult {
             country_id,
             leagues,
             clubs,
-            pending_ai_requests,
             processed_match_results: Vec::new(),
             deferred_global_ops: DeferredGlobalOps::new(),
             deferred_transfer_ops: None,

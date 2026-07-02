@@ -157,20 +157,6 @@ fn search_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
     }])
 }
 
-pub fn ai_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
-    let ai_url = format!("/{}/ai", lang);
-    vec![
-        home_section(i18n, lang),
-        search_section(i18n, lang, current_path),
-        MenuSection::plain(vec![MenuItem {
-            active: current_path == ai_url,
-            title: i18n.t("ai_management").to_string(),
-            url: ai_url,
-            icon: "fa-robot".to_string(),
-        }]),
-    ]
-}
-
 pub fn watchlist_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
     vec![
         home_section(i18n, lang),

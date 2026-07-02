@@ -5,8 +5,6 @@ pub mod player;
 pub mod result;
 pub mod utils;
 
-mod display;
-
 pub use builder::*;
 pub use collection::*;
 pub use context::*;

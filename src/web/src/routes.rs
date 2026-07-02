@@ -1,5 +1,4 @@
 use crate::GameAppData;
-use crate::ai::ai_routes;
 use crate::champions_league::champions_league_routes;
 use crate::common::default_handler::default_handler;
 use crate::conference_league::conference_league_routes;
@@ -138,7 +137,6 @@ impl ServerRoutes {
             .merge(face_routes())
             .merge(watchlist_routes())
             .merge(search_routes())
-            .merge(ai_routes())
             .merge(workers_routes())
             .fallback(default_handler)
             .layer(axum::middleware::from_fn(redirect_on_error))

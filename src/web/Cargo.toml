@@ -27,7 +27,6 @@ itertools = "0.15.0"
 askama = "0.16.0"
 askama_web = { version = "0.16.0", features = ["axum-0.8"] }
 async-compression = { version = "0.4.42", features = ["gzip", "tokio"] }
-ollama-rs = "0.3.5"
 rust-embed = "8.11"
 mime_guess = "2.0.5"
 hostname = "0.4.2"

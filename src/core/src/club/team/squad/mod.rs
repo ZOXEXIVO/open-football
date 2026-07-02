@@ -1,18 +1,14 @@
 mod asset_protection;
-mod composition;
 mod contract_renewal;
 mod match_squad;
 mod move_guard;
 mod satisfaction;
-mod transfer_listing;
 
 pub use asset_protection::{
     SquadAssetClass, SquadAssetContext, SquadAssetProtection, SquadEvidenceContext,
 };
-pub use composition::SquadComposition;
 pub use contract_renewal::{ContractRenewalManager, WageStructureSnapshot};
 pub use satisfaction::compute_squad_satisfaction;
-pub use transfer_listing::TransferListManager;
 
 pub(crate) use move_guard::MainSquadMoveGuard;
 
@@ -762,107 +758,4 @@ mod execute_moves_tests {
         );
     }
 
-    #[test]
-    fn monthly_composition_cannot_demote_listed_regular() {
-        // The LLM cannot bypass the want-away invariant: a demote move for a
-        // listed first-team regular with no cover is vetoed in code.
-        let date = d(2026, 6, 15);
-        let mut players = Vec::new();
-        let mut star =
-            make_contracted(1, PlayerPositionType::Striker, PlayerSquadStatus::FirstTeamRegular);
-        list_for_transfer(&mut star, date);
-        players.push(star);
-        // 25 midfielders — squad above the minimum, but none cover a striker.
-        for id in 2..=26u32 {
-            players.push(make_contracted(
-                id,
-                PlayerPositionType::MidfielderCenter,
-                PlayerSquadStatus::FirstTeamSquadRotation,
-            ));
-        }
-        let mut teams = vec![
-            make_team(10, "Main", "main", TeamType::Main, players),
-            make_team(11, "Reserves", "reserves", TeamType::Second, vec![]),
-        ];
-
-        let response = r#"{"moves":[{"player_id":1,"from_team_index":0,"to_team_index":1,"reason":"sell the listed striker"}]}"#;
-        let mut coach_state = None;
-        SquadComposition::execute_response(response, &mut teams, &mut coach_state, 0, Some(1), None, date);
-
-        assert!(
-            teams[0].players.contains(1),
-            "the guard must veto an LLM demote of a listed regular without cover"
-        );
-        assert!(!teams[1].players.contains(1));
-    }
-
-    #[test]
-    fn monthly_composition_demotes_listed_notneeded_with_cover() {
-        let date = d(2026, 6, 15);
-        let mut players = Vec::new();
-        let mut surplus = make_contracted(
-            1,
-            PlayerPositionType::MidfielderCenter,
-            PlayerSquadStatus::NotNeeded,
-        );
-        list_for_transfer(&mut surplus, date);
-        players.push(surplus);
-        for id in 2..=26u32 {
-            players.push(make_contracted(
-                id,
-                PlayerPositionType::MidfielderCenter,
-                PlayerSquadStatus::FirstTeamRegular,
-            ));
-        }
-        let mut teams = vec![
-            make_team(10, "Main", "main", TeamType::Main, players),
-            make_team(11, "Reserves", "reserves", TeamType::Second, vec![]),
-        ];
-
-        let response = r#"{"moves":[{"player_id":1,"from_team_index":0,"to_team_index":1,"reason":"surplus to requirements"}]}"#;
-        let mut coach_state = None;
-        SquadComposition::execute_response(response, &mut teams, &mut coach_state, 0, Some(1), None, date);
-
-        assert!(
-            !teams[0].players.contains(1),
-            "a listed NotNeeded player with credible cover can be demoted by composition"
-        );
-        assert!(teams[1].players.contains(1));
-    }
-
-    #[test]
-    fn transfer_list_entry_delistable_after_main_to_reserve_move() {
-        // A player listed while moved to the reserves stays visible to the
-        // delisting logic — the entry migrated with him and is found club-wide.
-        let date = d(2026, 6, 15);
-        let mut listed = make_contracted(
-            1,
-            PlayerPositionType::MidfielderCenter,
-            PlayerSquadStatus::NotNeeded,
-        );
-        list_for_transfer(&mut listed, date);
-        let mut teams = vec![
-            make_team(10, "Main", "main", TeamType::Main, vec![listed]),
-            make_team(11, "Reserves", "reserves", TeamType::Second, vec![]),
-        ];
-        teams[0]
-            .transfer_list
-            .add(TransferItem::new(1, CurrencyValue::new(1_000_000.0, Currency::Usd)));
-        execute_moves(&mut teams, 0, 1, &[1], date);
-        assert!(teams[1].transfer_list.contains(1), "entry migrated to reserve");
-
-        let response = r#"{"transfer_list":[],"loan_list":[],"delist":[{"player_id":1,"reason":"taken off the market"}]}"#;
-        TransferListManager::execute_response(response, &mut teams, 0, date);
-
-        assert!(!teams[0].transfer_list.contains(1));
-        assert!(
-            !teams[1].transfer_list.contains(1),
-            "delisting must clear the entry wherever in the club it lives"
-        );
-        let player = teams[1].players.find(1).unwrap();
-        assert!(
-            !player.statuses.get().contains(&PlayerStatusType::Lst),
-            "the Lst status must be cleared on delist"
-        );
-    }
 }

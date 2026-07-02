@@ -1,4 +1,3 @@
-use crate::ai::PendingAiRequest;
 use crate::club::academy::result::ClubAcademyResult;
 use crate::club::player::calculators::{
     AutomaticReleaseEligibility, ContractValuation, FreeAgentReleaseReason,
@@ -76,10 +75,6 @@ pub struct ClubResult {
     /// drain routes them into the global `data.free_agents` pool so
     /// they remain discoverable players instead of vanishing.
     pub academy_released_players: Vec<Player>,
-    /// AI batch requests this club emitted during its tick. Drained by
-    /// the simulator after the parallel continent phase joins, so the
-    /// club never writes into a shared collector.
-    pub pending_ai_requests: Vec<PendingAiRequest>,
 }
 
 impl ClubResult {
@@ -98,7 +93,6 @@ impl ClubResult {
             academy,
             academy_transfers: Vec::new(),
             academy_released_players: Vec::new(),
-            pending_ai_requests: Vec::new(),
         }
     }
 

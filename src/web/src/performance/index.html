@@ -80,13 +80,6 @@
                 <span class="fm-perf-pill fm-perf-pill-{{ view.continents_pill }}">{{ view.continents_pill }}</span>
             </div>
             <div class="fm-perf-row">
-                <div class="fm-perf-row-icon"><i class="fa fa-robot"></i></div>
-                <div class="fm-perf-row-label">AI batch <span class="fm-perf-row-hint">{% if view.ai_batch_active %}active{% else %}idle{% endif %}</span></div>
-                <div class="fm-perf-row-bar"><div class="fm-perf-bar-fill" style="width:{{ view.ai_batch_pct }}%"></div></div>
-                <div class="fm-perf-row-value">{{ view.ai_batch_ms }} <span class="fm-perf-unit">ms</span></div>
-                <span class="fm-perf-pill fm-perf-pill-{{ view.ai_batch_pill }}">{{ view.ai_batch_pill }}</span>
-            </div>
-            <div class="fm-perf-row">
                 <div class="fm-perf-row-icon"><i class="fa fa-list-check"></i></div>
                 <div class="fm-perf-row-label">Result processing</div>
                 <div class="fm-perf-row-bar"><div class="fm-perf-bar-fill" style="width:{{ view.result_proc_pct }}%"></div></div>

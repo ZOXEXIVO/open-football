@@ -43,10 +43,10 @@ impl ContractRenewalManager {
     /// Walk the main team, deliver renewal proposals to valuable players
     /// whose contracts are approaching expiry. Deterministic — no AI call.
     ///
-    /// Runs before the monthly TransferListManager so valuable players have
-    /// already been offered a renewal by the time the listing AI evaluates
-    /// them. This prevents the listing AI from inventing "contract expiring"
-    /// as a reason to sell a player the club actually wants to keep.
+    /// Runs monthly so valuable players are offered a renewal before the
+    /// stalemate/listing pipeline can act on an expiring contract — the
+    /// club shouldn't sell a player it actually wants to keep just because
+    /// his deal is winding down.
     pub fn run(teams: &mut [Team], main_idx: usize, date: NaiveDate) {
         Self::run_with_budget(teams, main_idx, date, None, 5_000)
     }

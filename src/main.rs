@@ -9,7 +9,6 @@ use simulator_core::r#match::MatchDispatcherRegistry;
 use simulator_core::utils::TimeEstimation;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use web::ai::registry::{AiProviderRegistry, RegistryAiService};
 use web::{
     DistributedDispatcher, FootballSimulatorServer, GameAppData, I18nManager, Settings,
     WorkerRegistry, WorkerServer,
@@ -33,18 +32,6 @@ async fn main() {
         WorkerServer::new(settings.worker_port).run().await;
         return;
     }
-
-    let ai_registry = Arc::new(AiProviderRegistry::new());
-
-    // ai_registry.add(
-    //     "Local Ollama",
-    //     Box::new(OllamaRequest::new("http://localhost", 11434, "qwen3.6:35b")),
-    // ).await;
-
-    // Register service so core can use it via trait — no tokio in core
-    simulator_core::ai::AiServiceRegistry::set(Box::new(RegistryAiService {
-        registry: Arc::clone(&ai_registry),
-    }));
 
     // Start with an empty worker registry — remote workers are added at
     // runtime from the /workers page. While the registry is empty the
@@ -81,7 +68,6 @@ async fn main() {
         process_lock: Arc::new(Mutex::new(())),
         cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         i18n,
-        ai_registry,
         workers,
     };
 
