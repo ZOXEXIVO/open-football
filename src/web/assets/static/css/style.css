@@ -4835,16 +4835,18 @@ a:active {
     .fm-info-tile-machine {
         grid-column: 1 / -1;
     }
-    /* Three stat tiles in a row; the square holiday card centres on its
-       own row beneath them. */
+    /* Pair the tiles 2×2 so the holiday action rides alongside the Players
+       tile instead of wrapping to a lonely centred row of its own. Machine
+       keeps its own full-width row above (its long CPU string is never
+       clipped); Countries/Clubs and Players/Holiday pair up below. */
     .fm-info-grid-home {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
-    .fm-info-grid-home .fm-holiday-btn {
-        grid-column: 1 / -1;
-        justify-self: center;
-        width: 48px;
-        height: 48px;
+    /* The holiday card now spans a full half-width cell (it was a small
+       square before), so enlarge its icon to give the action presence
+       beside the content-filled Players tile. */
+    .fm-info-grid-home .fm-holiday-ic {
+        font-size: 24px;
     }
     .fm-info-tile {
         gap: 8px;
