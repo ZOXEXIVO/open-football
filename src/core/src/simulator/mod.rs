@@ -9,9 +9,8 @@ mod seeding;
 pub use country_info::CountryInfo;
 pub use data::{FreeAgentFlowCounters, SimulatorData};
 pub use matchday::WorldMatchdayResult;
-pub use result::{SimulationResult, WorldWorkloadCounts};
+pub use result::SimulationResult;
 
-use crate::MatchRuntime;
 use crate::club::board::manager_market;
 use crate::competitions::simulation::GlobalCompetitionSimulator;
 use crate::config::SimulatorConfig;
@@ -24,7 +23,6 @@ use crate::country::CountryResult;
 use crate::country::result::transfers::free_agent_audit::FreeAgentMarketAuditor;
 use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use crate::league::result::WorldSnapshot;
-use crate::performance::{PerfCounters, PerfPhase, TickEndContext};
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use crate::utils::DateUtils;
 use awards::{
@@ -84,9 +82,6 @@ impl FootballSimulator {
         data: &mut SimulatorData,
         config: &SimulatorConfig,
     ) -> SimulationResult {
-        let perf = PerfCounters::instance();
-        perf.begin_tick();
-
         let mut result = SimulationResult::new();
 
         let current_date = data.date;
@@ -97,23 +92,17 @@ impl FootballSimulator {
         // nationality and their club's continent can differ. Must
         // happen BEFORE the world-level national-competition phase —
         // those matches need a populated squad with world visibility.
-        {
-            let _g = perf.scope(PerfPhase::WorldCallups);
-            data.process_world_national_team_callups();
-        }
+        data.process_world_national_team_callups();
 
         // National-team competition matches simulate at the world level
         // so squads can include foreign-based players and post-match
         // stats updates fan out across every continent. Lifted out of
         // the parallel continent phase because squad construction needs
         // read access to clubs in *every* continent.
-        let national_match_results = {
-            let _g = perf.scope(PerfPhase::WorldNationalMatches);
-            national_world::simulate_world_national_competitions(
-                &mut data.continents,
-                current_date.date(),
-            )
-        };
+        let national_match_results = national_world::simulate_world_national_competitions(
+            &mut data.continents,
+            current_date.date(),
+        );
         for match_result in &national_match_results {
             data.match_store
                 .push(match_result.clone(), current_date.date());
@@ -184,8 +173,6 @@ impl FootballSimulator {
             global_free_agents: &global_fa_snapshot,
         };
         let world_matchday: WorldMatchdayResult<'_> = {
-            let _g = perf.scope(PerfPhase::ParallelContinents);
-
             // A1: parallel build. Each `Continent::simulate` returns a
             // `ContinentBuildOutput` carrying its `Match::make`
             // objects and a resume token. A panic substitutes `None`
@@ -237,8 +224,6 @@ impl FootballSimulator {
         data.daily_world_player_pool = Some(world_pool);
         data.daily_global_free_agents = Some(global_fa_snapshot);
         {
-            let _g = perf.scope(PerfPhase::ResultProcessing);
-
             // Continent-local periodic sub-passes — monthly rankings,
             // quarterly economic zone, yearly regulations, year-end
             // awards rank + cup-finals. Each closure mutates only its
@@ -334,10 +319,7 @@ impl FootballSimulator {
         // Phase D: world-level manager market. Order is load-bearing —
         // see `ManagerMarketTick::run` for the dependency rationale.
         let today = data.date.date();
-        {
-            let _g = perf.scope(PerfPhase::ManagerMarket);
-            manager_market::ManagerMarketTick::run(data, today);
-        }
+        manager_market::ManagerMarketTick::run(data, today);
 
         // Phase D2: parent-side loan wage settlement. Per-club monthly
         // finance runs inside Phase A and bills the borrower for the
@@ -368,17 +350,12 @@ impl FootballSimulator {
         }
 
         // Global competitions (Champions League, World Cup, etc.)
-        {
-            let _g = perf.scope(PerfPhase::GlobalCompetitions);
-            GlobalCompetitionSimulator::simulate(data);
-        }
+        GlobalCompetitionSimulator::simulate(data);
 
         // Release Int statuses AFTER all matches (continent + global) —
         // a tournament final on the release date should be played
         // before the squad's flags are cleared.
-        let dirty_before_rebuild;
         {
-            let _g = perf.scope(PerfPhase::Cleanup);
             data.process_world_national_team_release();
 
             // Move any player whose contract was cleared this tick (positional
@@ -397,11 +374,7 @@ impl FootballSimulator {
 
             // Refresh player indexes only if a transfer actually moved a player
             // between clubs today. Walking the world every day is wasteful.
-            dirty_before_rebuild = data.dirty_player_index;
             data.rebuild_indexes_if_dirty();
-            if dirty_before_rebuild {
-                perf.mark_dirty_index_rebuild();
-            }
 
             // Seed history for any players created today that haven't been seeded
             // (youth intake, regens, new clubs) — catches them within one tick.
@@ -427,7 +400,6 @@ impl FootballSimulator {
         // each tick re-aggregate the same week's matches independently.
         let today = data.date.date();
         {
-            let _g = perf.scope(PerfPhase::Awards);
             if today.weekday() == Weekday::Mon {
                 let week_end = today;
                 let week_start = today - Duration::days(7);
@@ -459,17 +431,6 @@ impl FootballSimulator {
         }
 
         data.next_date();
-
-        let workload = data.workload_counts();
-        perf.end_tick(TickEndContext {
-            countries: workload.countries,
-            leagues: workload.leagues,
-            clubs: workload.clubs,
-            players: workload.players,
-            match_results_written: result.match_results.len() as u64,
-            panicked_continents: result.panicked_continents,
-            recording_mode: MatchRuntime::recordings_mode(),
-        });
 
         result
     }

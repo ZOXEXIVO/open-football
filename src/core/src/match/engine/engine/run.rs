@@ -70,8 +70,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
 
         PhaseProf::init_from_env();
-        let perf = PerfCounters::instance();
-        let match_start = Instant::now();
         let score = Score::new(left_squad.team_id, right_squad.team_id);
 
         // Snapshot starting tactics by team-id BEFORE the squads move
@@ -172,10 +170,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             StateManager::handle_state_finish(&mut context, &mut field, play_state_result);
         }
 
-        let result_start = Instant::now();
         let result = Self::build_result(field, context, match_position_data);
-        perf.record_match_result_processing(result_start.elapsed());
-        perf.record_match_total(match_start.elapsed());
         if PhaseProf::enabled() {
             PhaseProf::report_and_reset("match");
         }
@@ -702,8 +697,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         match_data: &mut ResultMatchPositionData,
     ) -> PlayMatchStateResult {
         let result = PlayMatchStateResult::default();
-        let inner_start = Instant::now();
-        let mut tick_count: u64 = 0;
         let prof_on = PhaseProf::enabled();
 
         let mut next_sub_time_ms: u64 = 0;
@@ -749,8 +742,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let track_positions = match_data.is_tracking_positions();
 
         while context.increment_time() {
-            tick_count += 1;
-
             // Post-goal dead time: only the match clock advances while
             // the players celebrate / walk back / wait for the restart
             // whistle. No ball physics, no AI, no events, no coach
@@ -964,7 +955,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         }
 
-        PerfCounters::instance().record_play_inner(tick_count, inner_start.elapsed());
         result
     }
 }

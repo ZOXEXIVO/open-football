@@ -7,7 +7,6 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use core::FootballSimulator;
 use core::MatchRuntime;
-use core::PerfCounters;
 use core::SimulationResult;
 use core::SimulatorData;
 use log::{debug, error};
@@ -174,7 +173,6 @@ impl ProcessingRun {
         tasks.join_all().await;
 
         let elapsed = now.elapsed();
-        PerfCounters::instance().record_match_storage(elapsed);
         debug!("match results stored in {} ms", elapsed.as_millis());
     }
 }

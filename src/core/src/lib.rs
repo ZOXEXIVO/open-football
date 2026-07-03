@@ -6,7 +6,6 @@ pub mod continent;
 pub mod country;
 pub mod league;
 pub mod r#match;
-pub mod performance;
 pub mod shared;
 pub mod simulator;
 pub mod transfers;
@@ -38,7 +37,6 @@ pub use country::{
     PeopleNameGeneratorData, SkinColorDistribution, SquadPick, StoryType,
 };
 pub use nalgebra::*;
-pub use performance::{PerfCounters, PerfPhase, PerfSnapshot, PhaseScope, TickEndContext};
 pub use simulator::*;
 pub use utils::*;
 

@@ -1,5 +1,4 @@
 use super::country_info::CountryInfo;
-use super::result::WorldWorkloadCounts;
 use super::seeding::{
     ClubSeedingContext, build_league_lookup, club_has_players_needing_seed,
     team_has_players_needing_seed, team_ids_for_league,
@@ -730,31 +729,6 @@ impl SimulatorData {
 
     pub fn next_date(&mut self) {
         self.date += Duration::days(1);
-    }
-
-    /// Walk the world once to count countries, leagues, clubs and
-    /// players. Used by the perf dashboard at end-of-tick — single
-    /// linear pass, no allocation.
-    pub fn workload_counts(&self) -> WorldWorkloadCounts {
-        let mut counts = WorldWorkloadCounts {
-            countries: 0,
-            leagues: 0,
-            clubs: 0,
-            players: 0,
-        };
-        for continent in &self.continents {
-            for country in &continent.countries {
-                counts.countries += 1;
-                counts.leagues += country.leagues.leagues.len() as u64;
-                counts.clubs += country.clubs.len() as u64;
-                for club in &country.clubs {
-                    for team in &club.teams.teams {
-                        counts.players += team.players.players.len() as u64;
-                    }
-                }
-            }
-        }
-        counts
     }
 
     /// World-level national-team call-ups. Runs at the start of each

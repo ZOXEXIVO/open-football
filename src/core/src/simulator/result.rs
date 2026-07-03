@@ -1,13 +1,5 @@
 use crate::r#match::MatchResult;
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct WorldWorkloadCounts {
-    pub countries: u64,
-    pub leagues: u64,
-    pub clubs: u64,
-    pub players: u64,
-}
-
 pub struct SimulationResult {
     pub match_results: Vec<MatchResult>,
     /// Number of continents whose `simulate` call panicked during this
