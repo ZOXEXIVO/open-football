@@ -463,8 +463,13 @@ impl Player {
         // workload spike, last body part, congestion, in-recovery). For
         // adolescent players in senior competitive matches we add a
         // maturity-driven base bump on top — adult-intensity football on
-        // not-yet-adult ligaments / growth plates.
+        // not-yet-adult ligaments / growth plates. Friendlies run at
+        // reduced intensity and carry a materially lower base rate —
+        // this is the whole diet of youth sides, whose league is the
+        // friendly league.
+        let friendly_factor = if is_friendly { 0.6 } else { 1.0 };
         let base_rate = (0.005 + YouthMatchExertion::injury_bonus(age, is_friendly))
+            * friendly_factor
             * (minutes / 90.0).max(0.05);
 
         let intensity = (match_load / 90.0).clamp(0.4, 2.0);
@@ -485,7 +490,7 @@ impl Player {
                 natural_fitness,
                 injury_proneness,
             );
-            self.player_attributes.set_injury(injury);
+            self.player_attributes.set_injury(injury, age);
             self.statuses.add(now, PlayerStatusType::Inj);
         }
     }

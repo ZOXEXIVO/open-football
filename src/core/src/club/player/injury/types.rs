@@ -80,6 +80,95 @@ pub enum InjuryType {
     PCLTear,
 }
 
+/// Continuous shift applied to the severity roll, centered on a median
+/// professional (age 26, NF 12, proneness 10, normally-tired legs) so
+/// the base band percentages hold for the typical case. Adolescents
+/// shift toward knocks and strains — structural ruptures (ACL,
+/// Achilles) are predominantly adult injuries; veterans shift toward
+/// them. Every term is a clamped linear curve; the shift moves the
+/// band boundaries directly (+0.01 shift ≈ +1pp critical share).
+pub struct InjurySeverityShift;
+
+impl InjurySeverityShift {
+    fn age_term(age: u8) -> f32 {
+        ((age as f32 - 26.0) * 0.007).clamp(-0.055, 0.065)
+    }
+
+    fn natural_fitness_term(natural_fitness: f32) -> f32 {
+        ((12.0 - natural_fitness) * 0.004).clamp(-0.032, 0.04)
+    }
+
+    /// Reads the condition at the moment the injury fires — for match
+    /// injuries that is the *post-match drained* value, so the neutral
+    /// point sits at 50%: a normal full-shift finish adds nothing,
+    /// only genuinely gassed legs push severity up.
+    fn condition_term(condition_pct: u32) -> f32 {
+        (50.0 - condition_pct as f32).max(0.0) * 0.0012
+    }
+
+    fn proneness_term(injury_proneness: u8) -> f32 {
+        ((injury_proneness as f32 - 10.0) * 0.004).clamp(-0.032, 0.04)
+    }
+
+    pub fn for_match(
+        minutes: f32,
+        age: u8,
+        condition_pct: u32,
+        natural_fitness: f32,
+        injury_proneness: u8,
+    ) -> f32 {
+        (Self::age_term(age)
+            + Self::natural_fitness_term(natural_fitness)
+            + Self::condition_term(condition_pct)
+            + Self::proneness_term(injury_proneness)
+            + (minutes / 90.0 - 0.5).max(0.0) * 0.02)
+            .clamp(-0.12, 0.12)
+    }
+
+    pub fn for_training(
+        age: u8,
+        condition_pct: u32,
+        natural_fitness: f32,
+        injury_proneness: u8,
+    ) -> f32 {
+        (Self::age_term(age)
+            + Self::natural_fitness_term(natural_fitness)
+            + Self::condition_term(condition_pct)
+            + Self::proneness_term(injury_proneness))
+        .clamp(-0.12, 0.12)
+    }
+
+    pub fn for_spontaneous(age: u8, injury_proneness: u8) -> f32 {
+        (Self::age_term(age) + Self::proneness_term(injury_proneness)).clamp(-0.12, 0.12)
+    }
+}
+
+/// Healing-speed multiplier applied to the rolled injury duration and
+/// the post-injury recovery phase. Young tissue heals faster: ~0.78×
+/// at 16, reaching 1.0 by 26; veterans heal slower, up to 1.2× by 40.
+/// Continuous and clamped — the same injury type keeps the same range,
+/// only the calendar cost scales with age.
+pub struct InjuryRecoverySpeed;
+
+impl InjuryRecoverySpeed {
+    pub fn duration_multiplier(age: u8) -> f32 {
+        let age = age as f32;
+        if age <= 26.0 {
+            (1.0 - (26.0 - age) * 0.022).max(0.75)
+        } else if age >= 30.0 {
+            (1.0 + (age - 30.0) * 0.02).min(1.2)
+        } else {
+            1.0
+        }
+    }
+
+    /// Apply the age curve to a rolled day count. Never returns 0 —
+    /// even the mildest knock costs a day.
+    pub fn scale_days(days: u16, age: u8) -> u16 {
+        ((days as f32 * Self::duration_multiplier(age)).round() as u16).max(1)
+    }
+}
+
 impl InjuryType {
     /// Returns (min_days, max_days) for this injury type
     pub fn duration_range(&self) -> (u16, u16) {
@@ -199,12 +288,15 @@ impl InjuryType {
     ) -> InjuryType {
         let roll: f32 = rand::random::<f32>();
 
-        // Older players, low fitness, low condition, high proneness → more severe
-        let severity_modifier = (age as f32 - 25.0).max(0.0) * 0.008
-            + (100.0 - condition_pct as f32) * 0.001
-            + (20.0 - natural_fitness).max(0.0) * 0.005
-            + (injury_proneness as f32 - 10.0).max(0.0) * 0.005
-            + (minutes_played / 90.0 - 0.5).max(0.0) * 0.02;
+        // Zero-centered continuous shift: veterans / gassed / low-NF /
+        // glass-boned players skew severe, adolescents skew minor.
+        let severity_modifier = InjurySeverityShift::for_match(
+            minutes_played,
+            age,
+            condition_pct,
+            natural_fitness,
+            injury_proneness,
+        );
 
         let adjusted_roll = roll + severity_modifier;
 
@@ -258,10 +350,12 @@ impl InjuryType {
     ) -> InjuryType {
         let roll: f32 = rand::random::<f32>();
 
-        let severity_modifier = (age as f32 - 25.0).max(0.0) * 0.01
-            + (100.0 - condition_pct as f32) * 0.001
-            + (20.0 - natural_fitness).max(0.0) * 0.005
-            + (injury_proneness as f32 - 10.0).max(0.0) * 0.005;
+        let severity_modifier = InjurySeverityShift::for_training(
+            age,
+            condition_pct,
+            natural_fitness,
+            injury_proneness,
+        );
 
         let adjusted_roll = roll + severity_modifier;
 
@@ -307,10 +401,10 @@ impl InjuryType {
     }
 
     /// Pick a random daily spontaneous injury
-    pub fn random_spontaneous_injury(injury_proneness: u8) -> InjuryType {
+    pub fn random_spontaneous_injury(age: u8, injury_proneness: u8) -> InjuryType {
         let roll: f32 = rand::random::<f32>();
 
-        let severity_modifier = (injury_proneness as f32 - 10.0).max(0.0) * 0.005;
+        let severity_modifier = InjurySeverityShift::for_spontaneous(age, injury_proneness);
         let adjusted_roll = roll + severity_modifier;
 
         if adjusted_roll < 0.65 {
@@ -498,6 +592,86 @@ mod tests {
             let (min, max) = injury.duration_range();
             assert!(min >= 2);
             assert!(max <= 150);
+        }
+    }
+
+    #[test]
+    fn severity_shift_favors_youth_over_veterans() {
+        // A 16yo low-NF starter must shift toward knocks/strains
+        // (negative), a 33yo on drained legs toward structural damage
+        // (positive) — the shift is zero-centered on a median pro.
+        let youth = InjurySeverityShift::for_match(90.0, 16, 60, 7.0, 11);
+        let veteran = InjurySeverityShift::for_match(90.0, 33, 42, 10.0, 12);
+        let median = InjurySeverityShift::for_match(90.0, 26, 55, 12.0, 10);
+        assert!(youth < 0.0, "youth shift {youth} should be negative");
+        assert!(veteran > 0.03, "veteran shift {veteran} should be positive");
+        assert!(
+            median.abs() < 0.02,
+            "median-pro shift {median} should be near zero"
+        );
+    }
+
+    #[test]
+    fn young_starters_rarely_roll_critical_match_injuries() {
+        // Before the recentering a 16yo starter's post-match roll landed
+        // ~15% critical (90-150 day) injuries; the zero-centered shift
+        // keeps it below the 4% base band. Generous bound for RNG.
+        const N: usize = 20_000;
+        let mut critical = 0;
+        for _ in 0..N {
+            let injury = InjuryType::random_match_injury(90.0, 16, 55, 7.0, 11);
+            if injury.severity() == InjurySeverity::Critical {
+                critical += 1;
+            }
+        }
+        let rate = critical as f32 / N as f32;
+        assert!(
+            rate < 0.045,
+            "16yo critical injury share {rate} — youth severity shift not biting"
+        );
+    }
+
+    #[test]
+    fn veteran_critical_rate_exceeds_youth_critical_rate() {
+        const N: usize = 20_000;
+        let count_critical = |age: u8, condition: u32, nf: f32| -> usize {
+            (0..N)
+                .filter(|_| {
+                    InjuryType::random_match_injury(90.0, age, condition, nf, 11).severity()
+                        == InjurySeverity::Critical
+                })
+                .count()
+        };
+        let youth = count_critical(17, 55, 8.0);
+        let veteran = count_critical(33, 45, 10.0);
+        assert!(
+            veteran > youth * 2,
+            "veteran criticals ({veteran}) should far exceed youth ({youth})"
+        );
+    }
+
+    #[test]
+    fn spontaneous_injury_signature_accepts_age() {
+        for _ in 0..100 {
+            let injury = InjuryType::random_spontaneous_injury(16, 10);
+            let (min, _) = injury.duration_range();
+            assert!(min >= 2);
+        }
+    }
+
+    #[test]
+    fn recovery_speed_curve_is_monotonic_and_clamped() {
+        assert!((InjuryRecoverySpeed::duration_multiplier(16) - 0.78).abs() < 1e-6);
+        assert!((InjuryRecoverySpeed::duration_multiplier(26) - 1.0).abs() < 1e-6);
+        assert!((InjuryRecoverySpeed::duration_multiplier(28) - 1.0).abs() < 1e-6);
+        assert!((InjuryRecoverySpeed::duration_multiplier(36) - 1.12).abs() < 1e-6);
+        assert!((InjuryRecoverySpeed::duration_multiplier(45) - 1.2).abs() < 1e-6);
+        let mut prev = 0.0_f32;
+        for age in 10..=45u8 {
+            let m = InjuryRecoverySpeed::duration_multiplier(age);
+            assert!(m >= prev, "healing multiplier must not decrease with age");
+            assert!((0.75..=1.2).contains(&m));
+            prev = m;
         }
     }
 

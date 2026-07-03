@@ -1,4 +1,4 @@
-use crate::club::player::injury::InjuryType;
+use crate::club::player::injury::{InjuryRecoverySpeed, InjurySeverity, InjuryType};
 use serde::{Deserialize, Serialize};
 
 pub const CONDITION_MAX_VALUE: i16 = 10000;
@@ -81,16 +81,20 @@ impl PlayerAttributes {
     }
 
     /// Set an injury on this player, calculating a random duration within the injury's range.
+    /// The rolled duration and the post-injury recovery phase are both scaled
+    /// by the age-based healing curve (`InjuryRecoverySpeed`) — young tissue
+    /// heals faster, veterans slower.
     /// Severe and critical injuries leave a lasting mark — `injury_proneness`
     /// is nudged upward so a player with a torn ACL carries elevated career
     /// injury risk long after the current injury heals ("glass bones").
-    pub fn set_injury(&mut self, injury_type: InjuryType) {
-        use crate::club::player::injury::InjurySeverity;
+    pub fn set_injury(&mut self, injury_type: InjuryType, age: u8) {
         self.is_injured = true;
         self.injury_type = Some(injury_type);
-        self.injury_days_remaining = injury_type.random_duration();
+        self.injury_days_remaining =
+            InjuryRecoverySpeed::scale_days(injury_type.random_duration(), age);
         self.last_injury_body_part = injury_type.body_part().to_u8();
-        self.recovery_days_remaining = injury_type.recovery_days();
+        self.recovery_days_remaining =
+            InjuryRecoverySpeed::scale_days(injury_type.recovery_days(), age);
         self.injury_count = self.injury_count.saturating_add(1);
 
         let bump = match injury_type.severity() {
@@ -156,7 +160,6 @@ impl PlayerAttributes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::club::player::injury::InjuryType;
 
     fn default_attrs() -> PlayerAttributes {
         PlayerAttributes {
@@ -223,7 +226,7 @@ mod tests {
     #[test]
     fn test_set_injury() {
         let mut attrs = default_attrs();
-        attrs.set_injury(InjuryType::Bruise);
+        attrs.set_injury(InjuryType::Bruise, 26);
         assert!(attrs.is_injured);
         assert_eq!(attrs.injury_type, Some(InjuryType::Bruise));
         assert!(attrs.injury_days_remaining >= 2 && attrs.injury_days_remaining <= 5);
@@ -235,12 +238,12 @@ mod tests {
     #[test]
     fn test_set_injury_increments_count() {
         let mut attrs = default_attrs();
-        attrs.set_injury(InjuryType::Bruise);
+        attrs.set_injury(InjuryType::Bruise, 26);
         assert_eq!(attrs.injury_count, 1);
         attrs.is_injured = false;
         attrs.injury_days_remaining = 0;
         attrs.recovery_days_remaining = 0;
-        attrs.set_injury(InjuryType::Cramp);
+        attrs.set_injury(InjuryType::Cramp, 26);
         assert_eq!(attrs.injury_count, 2);
     }
 
@@ -248,7 +251,7 @@ mod tests {
     fn minor_injuries_do_not_bump_proneness() {
         let mut attrs = default_attrs();
         let before = attrs.injury_proneness;
-        attrs.set_injury(InjuryType::Bruise);
+        attrs.set_injury(InjuryType::Bruise, 26);
         assert_eq!(attrs.injury_proneness, before);
     }
 
@@ -256,7 +259,7 @@ mod tests {
     fn severe_injury_bumps_proneness_once() {
         let mut attrs = default_attrs();
         attrs.injury_proneness = 5;
-        attrs.set_injury(InjuryType::TornMeniscus);
+        attrs.set_injury(InjuryType::TornMeniscus, 26);
         assert_eq!(attrs.injury_proneness, 6);
     }
 
@@ -264,7 +267,7 @@ mod tests {
     fn critical_injury_bumps_proneness_more() {
         let mut attrs = default_attrs();
         attrs.injury_proneness = 5;
-        attrs.set_injury(InjuryType::ACLTear);
+        attrs.set_injury(InjuryType::ACLTear, 26);
         assert_eq!(attrs.injury_proneness, 7);
     }
 
@@ -272,14 +275,51 @@ mod tests {
     fn injury_proneness_caps_at_twenty() {
         let mut attrs = default_attrs();
         attrs.injury_proneness = 19;
-        attrs.set_injury(InjuryType::ACLTear);
+        attrs.set_injury(InjuryType::ACLTear, 26);
         assert_eq!(attrs.injury_proneness, 20);
+    }
+
+    #[test]
+    fn young_players_heal_critical_injuries_faster() {
+        // A 16-year-old's ACL heals at ~0.78× the adult calendar cost:
+        // the 90-150 base range lands in 70-117 days, so an adolescent
+        // never opens a 120+-day injury spell.
+        for _ in 0..200 {
+            let mut attrs = default_attrs();
+            attrs.set_injury(InjuryType::ACLTear, 16);
+            assert!(
+                attrs.injury_days_remaining < 120,
+                "16yo ACL rolled {} days — youth healing curve not applied",
+                attrs.injury_days_remaining
+            );
+            assert!(attrs.injury_days_remaining >= 68);
+        }
+    }
+
+    #[test]
+    fn veteran_players_heal_slower_than_prime_age() {
+        // Age 36 → 1.12× multiplier; the ACL range stretches to 101-168.
+        for _ in 0..200 {
+            let mut attrs = default_attrs();
+            attrs.set_injury(InjuryType::ACLTear, 36);
+            assert!(attrs.injury_days_remaining >= 100);
+            assert!(attrs.injury_days_remaining <= 168);
+        }
+    }
+
+    #[test]
+    fn prime_age_duration_range_is_unscaled() {
+        for _ in 0..200 {
+            let mut attrs = default_attrs();
+            attrs.set_injury(InjuryType::ACLTear, 26);
+            assert!(attrs.injury_days_remaining >= 90 && attrs.injury_days_remaining <= 150);
+        }
     }
 
     #[test]
     fn test_recover_injury_day_transitions_to_recovery() {
         let mut attrs = default_attrs();
-        attrs.set_injury(InjuryType::Cramp);
+        attrs.set_injury(InjuryType::Cramp, 26);
         let saved_recovery = attrs.recovery_days_remaining;
 
         // Burn through injury days

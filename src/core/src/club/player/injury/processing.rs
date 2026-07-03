@@ -3,6 +3,7 @@ use crate::club::player::condition::InjuryRiskInputs;
 use crate::club::player::injury::{BodyPart, InjuryType};
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
+use crate::utils::DateUtils;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
     InjuryRecoveryEventContext, InjuryRecoveryEvidence, InjuryRecoveryStage,
@@ -142,8 +143,9 @@ impl Player {
                     BodyPart::from_u8(self.player_attributes.last_injury_body_part)
                 {
                     let injury = Self::injury_for_body_part(body_part);
-                    let new_recovery_days = injury.recovery_days();
-                    self.player_attributes.set_injury(injury);
+                    let age = DateUtils::age(self.birth_date, now);
+                    self.player_attributes.set_injury(injury, age);
+                    let new_recovery_days = self.player_attributes.recovery_days_remaining;
                     self.statuses.remove(PlayerStatusType::Lmp);
                     self.statuses.add(now, PlayerStatusType::Inj);
                     result.injury_occurred = Some(injury);
@@ -187,8 +189,9 @@ impl Player {
             });
 
             if rand::random::<f32>() < injury_chance {
-                let injury = InjuryType::random_spontaneous_injury(injury_proneness);
-                self.player_attributes.set_injury(injury);
+                let age = DateUtils::age(self.birth_date, now);
+                let injury = InjuryType::random_spontaneous_injury(age, injury_proneness);
+                self.player_attributes.set_injury(injury, age);
                 self.statuses.add(now, PlayerStatusType::Inj);
                 result.injury_occurred = Some(injury);
             }

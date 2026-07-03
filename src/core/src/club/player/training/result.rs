@@ -474,7 +474,7 @@ impl PlayerTrainingResult {
                     natural_fitness,
                     injury_proneness,
                 );
-                player.player_attributes.set_injury(injury);
+                player.player_attributes.set_injury(injury, age);
                 player.statuses.add(current_date, PlayerStatusType::Inj);
             }
 

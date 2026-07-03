@@ -25,11 +25,25 @@
 //!     reduces, weak medical raises).
 //!
 //! Final risk is capped at 8% per call so no roll deterministically
-//! injures a player.
+//! injures a player. `InjuryRateCalibration::SCALE` trims every path
+//! uniformly — it is the single frequency-calibration knob.
 
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
 use chrono::NaiveDate;
+
+/// Frequency calibration for the injury system. Every injury path
+/// (match, training, spontaneous, recovery-setback) funnels through
+/// `compute_injury_risk`, so the scale here is the single knob that
+/// moves overall injury incidence without distorting the balance
+/// between paths.
+pub struct InjuryRateCalibration;
+
+impl InjuryRateCalibration {
+    /// July 2026: 0.75 — squads read as too injury-crowded, so the
+    /// whole envelope is trimmed ~25% rather than any single path.
+    pub const SCALE: f32 = 0.75;
+}
 
 /// Path-specific inputs. Other modifiers are read off the player.
 pub struct InjuryRiskInputs {
@@ -135,6 +149,7 @@ impl Player {
         let medical_mult = inputs.medical_multiplier.clamp(0.4, 1.3);
 
         let chance = inputs.base_rate
+            * InjuryRateCalibration::SCALE
             * proneness_mult
             * age_mult
             * nf_mult
