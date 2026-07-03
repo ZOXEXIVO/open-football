@@ -329,6 +329,15 @@ impl ClubFinances {
         }
     }
 
+    /// Number of completed-month snapshots inside the trailing 365 days.
+    /// Gates wealth policies that need a full year of revenue evidence
+    /// (e.g. `ExcessCashDeployment`) so a freshly generated world doesn't
+    /// sweep DB-seeded balances before the club has earned anything.
+    pub fn monthly_history_depth(&self, today: NaiveDate) -> usize {
+        let cutoff = today - Duration::days(365);
+        self.history.iter().filter(|(date, _)| *date >= cutoff).count()
+    }
+
     /// Trailing twelve months of total income across the history snapshots.
     /// Used by the board to size next season's transfer/wage budgets from
     /// projected revenue rather than current cash.
@@ -905,6 +914,18 @@ mod finance_tests {
         // > 365 days old, must be ignored.
         f.history.add(d(2024, 1), snap_old);
         assert_eq!(f.trailing_annual_income(d(2026, 1)), 5_000_000);
+    }
+
+    #[test]
+    fn monthly_history_depth_counts_only_trailing_window() {
+        let mut f = ClubFinances::new(0, vec![]);
+        assert_eq!(f.monthly_history_depth(d(2026, 1)), 0);
+        for month in 1..=12u32 {
+            f.history.add(d(2025, month), ClubFinancialBalance::new(0));
+        }
+        // Stale snapshot outside the window must not count.
+        f.history.add(d(2023, 6), ClubFinancialBalance::new(0));
+        assert_eq!(f.monthly_history_depth(d(2026, 1)), 12);
     }
 }
 

@@ -1750,13 +1750,36 @@ fn build_statistics_history(
 
 /// Look up a club by id and return (team_name, team_slug, team_reputation,
 /// league_name, league_slug). Prefers the club's main team; falls back to the
-/// first team. Missing clubs return empty strings so the page still renders
-/// the stats row with no links.
+/// first team. The id may also be a sub-team id: satellite clubs (e.g.
+/// "Spartak Moscow 2") are folded into their parent by the compiler, so a
+/// history spell at one is referenced by an id that only exists in some
+/// club's teams[] — those resolve to that specific team rather than the
+/// parent's main squad. Missing ids return empty strings so the page still
+/// renders the stats row with no links.
 fn resolve_club_display(
     club_id: u32,
     data: &DatabaseEntity,
 ) -> (String, String, u16, String, String) {
     let Some(club) = data.clubs.iter().find(|c| c.id == club_id) else {
+        if let Some(team) = data
+            .clubs
+            .iter()
+            .flat_map(|c| c.teams.iter())
+            .find(|t| t.id == club_id)
+        {
+            let (league_name, league_slug) = team
+                .league_id
+                .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
+                .map(|l| (l.name.clone(), l.slug.clone()))
+                .unwrap_or_default();
+            return (
+                team.name.clone(),
+                team.slug.clone(),
+                team.reputation.world,
+                league_name,
+                league_slug,
+            );
+        }
         return (
             String::new(),
             String::new(),

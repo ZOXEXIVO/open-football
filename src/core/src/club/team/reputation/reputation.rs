@@ -169,28 +169,43 @@ impl TeamReputation {
         // No decay if momentum is high (team is performing well)
     }
 
-    /// Calculate reputation factor from match results
+    /// Calculate reputation factor from match results.
+    ///
+    /// Both reputations are compared on the same 0..1 scale. The old code
+    /// divided the opponent's 0..10000 reputation by `overall_score()`
+    /// (0..1, so the `.max(100.0)` floor always won): wins and draws paid
+    /// 20-90× the intended factor while losses cost ~nothing, so every
+    /// club's reputation ratcheted up to Elite within a couple of seasons
+    /// — and with it every `reputation.level()`-keyed income base (TV,
+    /// merchandising, overheads), inflating club balances world-wide.
     fn calculate_match_factor(&self, results: &[MatchResultInfo]) -> f32 {
         if results.is_empty() {
             return 0.0;
         }
 
+        // Floors keep the ratio sane for reputation-less amateur sides;
+        // the clamp stops one giant-killing from rewriting a season.
+        let self_score = self.overall_score().max(0.05);
+
         let mut factor = 0.0;
 
         for result in results {
+            let opponent_score = (result.opponent_reputation as f32 / 10_000.0).max(0.05);
             let result_value = match result.outcome {
                 MatchOutcome::Win => {
-                    let opponent_factor =
-                        result.opponent_reputation as f32 / self.overall_score().max(100.0);
+                    // Beating a stronger side pays more.
+                    let opponent_factor = (opponent_score / self_score).clamp(0.25, 4.0);
                     0.03 * opponent_factor
                 }
                 MatchOutcome::Draw => {
-                    let opponent_factor =
-                        result.opponent_reputation as f32 / self.overall_score().max(100.0);
+                    // Draw vs a stronger side: slight gain; vs a weaker
+                    // side: slight loss.
+                    let opponent_factor = (opponent_score / self_score).clamp(0.25, 4.0);
                     0.01 * opponent_factor - 0.005
                 }
                 MatchOutcome::Loss => {
-                    let opponent_factor = self.overall_score() / result.opponent_reputation as f32;
+                    // Losing to a weaker side costs more.
+                    let opponent_factor = (self_score / opponent_score).clamp(0.25, 4.0);
                     -0.02 * opponent_factor
                 }
             };
@@ -628,6 +643,103 @@ mod tests {
         );
 
         assert!(rep.momentum.current > 0.0);
+    }
+
+    #[test]
+    fn losses_actually_cost_reputation() {
+        // Regression: the old match factor divided a 0..10000 opponent
+        // reputation by the 0..1 overall score (always floored to 100), so
+        // losses cost ~nothing and every club ratcheted up to Elite.
+        let mut rep = TeamReputation::new(5000, 5000, 5000);
+        let start = rep.national;
+
+        for week in 1..=10u32 {
+            let results = vec![MatchResultInfo {
+                outcome: MatchOutcome::Loss,
+                opponent_reputation: 3000,
+                competition_type: CompetitionType::League,
+            }];
+            rep.process_weekly_update(
+                &results,
+                18,
+                20,
+                NaiveDate::from_ymd_opt(2024, 1, 1)
+                    .unwrap()
+                    .checked_add_signed(chrono::Duration::days(week as i64 * 7))
+                    .unwrap(),
+            );
+        }
+
+        assert!(
+            rep.national < start,
+            "10 straight losses near the bottom must lower reputation: {} -> {}",
+            start,
+            rep.national
+        );
+    }
+
+    #[test]
+    fn mid_table_draws_do_not_inflate_reputation() {
+        // A full season of mid-table draws against equal opposition must
+        // leave reputation roughly where it started — not +50 per week.
+        let mut rep = TeamReputation::new(5000, 5000, 5000);
+        let start = rep.home;
+
+        for week in 1..=38u32 {
+            let results = vec![MatchResultInfo {
+                outcome: MatchOutcome::Draw,
+                opponent_reputation: 5000,
+                competition_type: CompetitionType::League,
+            }];
+            rep.process_weekly_update(
+                &results,
+                10,
+                20,
+                NaiveDate::from_ymd_opt(2024, 8, 1)
+                    .unwrap()
+                    .checked_add_signed(chrono::Duration::days(week as i64 * 7))
+                    .unwrap(),
+            );
+        }
+
+        let drift = (rep.home as i32 - start as i32).abs();
+        assert!(
+            drift < 400,
+            "a season of neutral results drifted reputation by {drift} (from {start} to {})",
+            rep.home
+        );
+    }
+
+    #[test]
+    fn beating_stronger_side_pays_more_than_beating_weaker() {
+        let base = TeamReputation::new(5000, 5000, 5000);
+        let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+
+        let mut vs_stronger = base.clone();
+        vs_stronger.process_weekly_update(
+            &[MatchResultInfo {
+                outcome: MatchOutcome::Win,
+                opponent_reputation: 9000,
+                competition_type: CompetitionType::League,
+            }],
+            10,
+            20,
+            date,
+        );
+
+        let mut vs_weaker = base.clone();
+        vs_weaker.process_weekly_update(
+            &[MatchResultInfo {
+                outcome: MatchOutcome::Win,
+                opponent_reputation: 1500,
+                competition_type: CompetitionType::League,
+            }],
+            10,
+            20,
+            date,
+        );
+
+        assert!(vs_stronger.home > vs_weaker.home);
     }
 
     #[test]

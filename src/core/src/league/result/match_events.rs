@@ -2101,13 +2101,11 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
     // pulled early in a big match, or repeatedly hooked across recent
     // weeks. Critical-injury and youth-protection passes are filtered
     // out via the `reason` field stamped on the SubstitutionInfo.
-    if !is_friendly {
+    // `player_stats` is only empty for stubbed results (match-stub feature),
+    // which also record no substitutions — skip instead of panicking.
+    if !is_friendly && let Some(any_player_stats) = details.player_stats.values().next() {
         let big_match_kind = MatchOutcome {
-            stats: details
-                .player_stats
-                .values()
-                .next()
-                .expect("at least one player featured"),
+            stats: any_player_stats,
             effective_rating: 0.0,
             participation: MatchParticipation::Starter,
             is_friendly,
