@@ -15,7 +15,7 @@ use crate::shared::fullname::FullName;
 use crate::{
     AwardReputationInput, AwardReputationKind, HappinessEventType, PersonAttributes,
     PlayerAttributes, PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType,
-    PlayerPositions, PlayerSkills,
+    PlayerPositions, PlayerSkills, PlayerStatusType,
 };
 use chrono::NaiveDate;
 
@@ -1431,6 +1431,32 @@ fn transfer_bid_rejected_cooldown_blocks_repeat() {
         .filter(|e| e.event_type == HappinessEventType::TransferBidRejected)
         .count();
     assert_eq!(count, 1);
+}
+
+#[test]
+fn requested_player_bid_rejection_becomes_move_veto() {
+    // A lateral bid — silent for an ordinary player, but a vetoed exit
+    // for one who formally asked out.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.attributes.ambition = 12.0;
+    p.statuses.add(d(2026, 6, 1), PlayerStatusType::Req);
+    p.on_transfer_bid_rejected(0.50, 0.48, false);
+    assert_eq!(count_events(&p, &HappinessEventType::MoveVetoedByClub), 1);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::TransferBidRejected),
+        0,
+        "the veto replaces the neutral rejection note"
+    );
+}
+
+#[test]
+fn move_veto_silent_for_clear_step_down_bid() {
+    // The rejected bid was a big step down — the club did him a favour.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.attributes.ambition = 12.0;
+    p.statuses.add(d(2026, 6, 1), PlayerStatusType::Req);
+    p.on_transfer_bid_rejected(0.20, 0.60, false);
+    assert_eq!(count_events(&p, &HappinessEventType::MoveVetoedByClub), 0);
 }
 
 #[test]

@@ -2,8 +2,9 @@ use crate::club::StaffPosition;
 use crate::club::board::manager_market;
 use crate::club::board::{BoardDecision, BoardFacility, BoardMoodState};
 use crate::club::facilities::FacilityLevel;
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::league::result::LeagueProcessAccess;
-use crate::{Club, Staff, StaffEventType, TeamType};
+use crate::{Club, HappinessEventType, Staff, StaffEventType, TeamType};
 use chrono::Datelike;
 use log::{debug, info};
 
@@ -30,6 +31,10 @@ pub struct BoardResult {
     pub underperforming: bool,
     /// Board has lost confidence — terminate manager contract this tick.
     pub manager_sacked: bool,
+    /// The board's first crisis meeting put the manager on a public
+    /// final warning THIS tick — the squad reacts once, forked by each
+    /// player's own bond with the head coach.
+    pub manager_ultimatum_announced: bool,
     /// Search period (≥30 days) has elapsed — promote the sitting
     /// caretaker to a permanent manager contract.
     pub confirm_new_manager: bool,
@@ -65,6 +70,7 @@ impl BoardResult {
             squad_under_limit: false,
             underperforming: false,
             manager_sacked: false,
+            manager_ultimatum_announced: false,
             confirm_new_manager: false,
             manager_satisfaction_delta: 0.0,
             offer_manager_renewal: false,
@@ -172,6 +178,39 @@ impl BoardResult {
                                     mgr.id, club.name
                                 );
                             }
+                        }
+                    }
+                }
+            }
+
+            // Ultimatum made public this tick: the squad reads the
+            // situation through each player's own bond with the head
+            // coach — loyalists rally to save his job, the rest sense a
+            // change coming (and hold their pens on new deals via the
+            // mood's morale drag). Skipped when a total confidence
+            // collapse sacks the manager the same tick.
+            if self.manager_ultimatum_announced && !self.manager_sacked {
+                if let Some(main_team) = club.teams.main_mut() {
+                    let coach_id = main_team.staffs.head_coach().id;
+                    let cfg = HappinessConfig::default();
+                    for player in main_team.players.players.iter_mut() {
+                        let bond = player
+                            .relations
+                            .get_staff(coach_id)
+                            .map(|r| r.personal_bond + r.trust_in_abilities + r.loyalty * 0.5)
+                            .unwrap_or(0.0);
+                        if bond >= 100.0 {
+                            player.happiness.add_event_with_cooldown(
+                                HappinessEventType::RalliesBehindManager,
+                                cfg.catalog.rallies_behind_manager,
+                                45,
+                            );
+                        } else {
+                            player.happiness.add_event_with_cooldown(
+                                HappinessEventType::SensesManagerChange,
+                                cfg.catalog.senses_manager_change,
+                                45,
+                            );
                         }
                     }
                 }

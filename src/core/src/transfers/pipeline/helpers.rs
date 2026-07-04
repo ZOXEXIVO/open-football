@@ -1018,7 +1018,7 @@ mod tier_helper_tests {
 mod group_need_tests {
     use crate::club::team::squad::SquadAssetClass;
     use crate::transfers::pipeline::evaluation::{
-        GroupNeed, NeedKind, compute_group_needs, group_depth_requirement,
+        GroupNeed, NeedKind, SuccessionAudit, compute_group_needs, group_depth_requirement,
     };
     use crate::transfers::pipeline::processor::SquadPlayerInfo;
     use crate::{MatchTacticType, PlayerFieldPositionGroup, PlayerPositionType, TACTICS_POSITIONS};
@@ -1086,6 +1086,70 @@ mod group_need_tests {
         crate::transfers::pipeline::PipelineProcessor::tier_quality_tolerance_score(
             continental_score(),
         )
+    }
+
+    fn aged_player(
+        id: u32,
+        primary: PlayerPositionType,
+        ca: u8,
+        age: u8,
+        potential: u8,
+    ) -> SquadPlayerInfo {
+        let mut p = squad_player(id, primary, ca);
+        p.age = age;
+        p.estimated_potential = potential;
+        p
+    }
+
+    // ── Succession audit ────────────────────────────────────────
+
+    #[test]
+    fn succession_trigger_age_is_position_aware() {
+        assert_eq!(
+            SuccessionAudit::trigger_age(PlayerFieldPositionGroup::Goalkeeper),
+            33,
+            "keeper careers run longer — the heir search starts later"
+        );
+        assert!(
+            SuccessionAudit::trigger_age(PlayerFieldPositionGroup::Forward)
+                < SuccessionAudit::trigger_age(PlayerFieldPositionGroup::Goalkeeper)
+        );
+    }
+
+    fn aging_incumbent() -> SquadPlayerInfo {
+        aged_player(1, PlayerPositionType::DefenderCenterLeft, 140, 32, 140)
+    }
+
+    #[test]
+    fn heir_already_at_level_blocks_succession_shopping() {
+        let squad = vec![
+            aging_incumbent(),
+            // A 24-year-old already within touching distance of the level.
+            aged_player(2, PlayerPositionType::DefenderCenterRight, 130, 24, 138),
+        ];
+        assert!(SuccessionAudit::heir_in_place(&squad, &aging_incumbent()));
+    }
+
+    #[test]
+    fn heir_by_assessed_potential_counts() {
+        let squad = vec![
+            aging_incumbent(),
+            // Raw today, but the scouts assess him as growing into it.
+            aged_player(2, PlayerPositionType::DefenderCenterRight, 118, 22, 145),
+        ];
+        assert!(SuccessionAudit::heir_in_place(&squad, &aging_incumbent()));
+    }
+
+    #[test]
+    fn no_heir_when_cover_is_old_or_below_level() {
+        let squad = vec![
+            aging_incumbent(),
+            // Same age band — a peer, not a successor.
+            aged_player(2, PlayerPositionType::DefenderCenterRight, 138, 30, 138),
+            // Young but nowhere near the level, and not assessed to reach it.
+            aged_player(3, PlayerPositionType::DefenderCenterLeft, 100, 21, 120),
+        ];
+        assert!(!SuccessionAudit::heir_in_place(&squad, &aging_incumbent()));
     }
 
     #[test]

@@ -22,7 +22,7 @@ use crate::context::GlobalContext;
 use crate::utils::DateUtils;
 use crate::{
     HappinessEventType, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus,
-    PlayerStatusType, Staff, StaffCollection,
+    PlayerStatusType, Staff, StaffCollection, TeamType,
 };
 use chrono::NaiveDate;
 use log::debug;
@@ -364,14 +364,15 @@ impl TeamBehaviour {
 
         let current_date = ctx.simulation.date.date();
 
-        // Squad-tier context — the stuck-in-reserves escalation only
-        // applies when this behaviour pass runs for a senior reserve
-        // squad (B / Reserve / Second).
-        let reserve_team = ctx
-            .team
-            .as_ref()
-            .and_then(|t| t.team_type)
-            .map(|t| t.is_senior_reserve())
+        // Squad-tier context — the stuck-career escalation runs for
+        // senior reserve squads (B / Reserve / Second, where the
+        // grievance is the level) and for the main squad itself (the
+        // perennial backup / serial loanee the monthly audit set
+        // dreaming).
+        let team_type = ctx.team.as_ref().and_then(|t| t.team_type);
+        let reserve_team = team_type.map(|t| t.is_senior_reserve()).unwrap_or(false);
+        let main_team = team_type
+            .map(|t| matches!(t, TeamType::Main))
             .unwrap_or(false);
 
         // Collect complaint candidates with priority score for sorting
@@ -430,17 +431,21 @@ impl TeamBehaviour {
                 .and_then(|c| c.loan_min_appearances);
             let gate = opp.can_judge(squad_status, &cfg, loan_min);
 
-            // ── Check 0: Senior stuck in a reserve squad ──
-            // He may be starting every reserve fixture, so the minutes
-            // model below sees no deficit — the grievance is the level,
-            // not the minutes. Once the monthly reserve-ambition audit
-            // has him dreaming of first-team football, ambition / age
-            // pressure decides when he takes it to the coach: younger
-            // players push for a development loan, older ones ask for
-            // the move itself (a failed talk becomes a transfer
-            // request). The interaction-log cooldown keeps a successful
-            // "be patient" chat from being re-litigated weekly.
-            if reserve_team && age >= 20 {
+            // ── Check 0: Senior stuck outside first-team football ──
+            // Two cases the minutes model below cannot see: a reserve-
+            // squad senior starting every reserve fixture (the grievance
+            // is the level, not the minutes), and a main-squad perennial
+            // backup whose weekly bench spot banks enough involvement
+            // credit to never cross the complaint threshold. Once the
+            // monthly ambition audits have him dreaming of first-team
+            // football, ambition / age pressure decides when he takes it
+            // to the coach: younger players push for a development loan,
+            // older ones ask for the move itself (a failed talk becomes
+            // a transfer request). The interaction-log cooldown keeps a
+            // successful "be patient" chat from being re-litigated
+            // weekly. Main-squad dreamers are 24+ by construction — the
+            // perennial-backup audit does not emit below that age.
+            if (reserve_team && age >= 20) || (main_team && age >= 24) {
                 let settled = opp.days_since_join >= 365;
                 let dreaming = player
                     .happiness
@@ -1471,11 +1476,12 @@ mod coach_termination_tests {
 
 #[cfg(test)]
 mod reserve_escalation_tests {
-    //! The stuck-in-reserves escalation (Check 0 of
+    //! The stuck-career escalation (Check 0 of
     //! `process_playing_time_complaints`): a settled senior in a
-    //! B / Reserve / Second squad who has been dreaming of first-team
-    //! football takes it to the coach — a development loan when young,
-    //! the move itself (a failed talk → transfer request) when older.
+    //! B / Reserve / Second squad — or a main-squad perennial backup the
+    //! monthly audit set dreaming — takes it to the coach: a development
+    //! loan when young, the move itself (a failed talk → transfer
+    //! request) when older.
     use super::*;
     use crate::club::StaffStub;
     use crate::club::player::core::builder::PlayerBuilder;
@@ -1606,12 +1612,32 @@ mod reserve_escalation_tests {
     }
 
     #[test]
-    fn main_team_context_never_escalates_reserve_grievance() {
-        let players = PlayerCollection::new(vec![Fx::reserve_player(25, 14.0, true)]);
+    fn main_squad_dreaming_backup_asks_for_the_move() {
+        // 28-year-old main-squad backup the perennial-backup audit set
+        // dreaming — he asks for the move itself, never a loan.
+        let players = PlayerCollection::new(vec![Fx::reserve_player(28, 14.0, true)]);
+        let result = Fx::run(&players, TeamType::Main);
+        assert_eq!(
+            result.manager_talks.len(),
+            1,
+            "a dreaming main-squad perennial backup must raise the move"
+        );
+        assert_eq!(
+            result.manager_talks[0].talk_type,
+            ManagerTalkType::PlayingTimeRequest,
+            "a main-squad backup asks for the move, not a loan"
+        );
+    }
+
+    #[test]
+    fn young_main_squad_dreamer_stays_on_the_prospect_pathway() {
+        // Under 24 in the main squad the development-loan machinery owns
+        // the story — Check 0 must not escalate.
+        let players = PlayerCollection::new(vec![Fx::reserve_player(22, 14.0, true)]);
         let result = Fx::run(&players, TeamType::Main);
         assert!(
             result.manager_talks.is_empty(),
-            "the stuck-in-reserves escalation only runs for senior reserve squads"
+            "main-squad escalation starts at 24 — younger players go the loan pathway"
         );
     }
 

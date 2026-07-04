@@ -341,6 +341,12 @@ pub struct ClubBoard {
     pub season_targets: Option<SeasonTargets>,
     /// Consecutive months the board has been in Poor mood
     pub poor_mood_months: u8,
+    /// The board has publicly put the manager on final warning (the
+    /// crisis-meeting ultimatum). A sack — barring a total confidence
+    /// collapse — requires this to have been set in an EARLIER month,
+    /// so the ultimatum is a real stage the squad gets to react to,
+    /// not a same-tick formality. Cleared on recovery and on sacking.
+    pub manager_on_final_warning: bool,
     /// Long-term vision — the "contract" the board expects the manager
     /// to honour across multiple seasons.
     pub vision: ClubVision,
@@ -411,6 +417,7 @@ impl ClubBoard {
             sport_director: None,
             season_targets: None,
             poor_mood_months: 0,
+            manager_on_final_warning: false,
             vision: ClubVision::default(),
             vision_start_year: None,
             vision_goal_achieved: false,
@@ -1195,9 +1202,20 @@ impl ClubBoard {
         let relationship_breakdown =
             self.relationship.relationship_breakdown() && phase.can_judge_table();
 
+        // The ladder needs LAST month's warning state: a sack only
+        // follows an ultimatum the squad has already lived with — never
+        // the same meeting that issued it.
+        let already_on_final_warning = self.manager_on_final_warning;
+        let crisis =
+            sustained_poor_with_underperformance || sustained_poor_absolute || relationship_breakdown;
+        // Confidence collapses faster than the mood counters — a board
+        // sliding toward zero goes public BEFORE it reaches the axe, so
+        // the critical band is what triggers the ultimatum.
+        let confidence_critical = self.confidence.level <= 20;
+        let ultimatum_danger = crisis || confidence_critical;
+
         // Meetings + matching decisions.
-        if sustained_poor_with_underperformance || sustained_poor_absolute || relationship_breakdown
-        {
+        if crisis {
             result.manager_meeting = Some(BoardManagerMeeting::Crisis);
             result.decisions.push(BoardDecision::HoldCrisisMeeting);
         } else if result.underperforming
@@ -1211,11 +1229,30 @@ impl ClubBoard {
             result.decisions.push(BoardDecision::IssueManagerBacking);
         }
 
-        if enough_data
-            && (zero_confidence
-                || sustained_poor_with_underperformance
-                || sustained_poor_absolute
-                || relationship_breakdown)
+        // First month in the danger zone = the public ultimatum. The
+        // result carries the announcement so the squad reacts once.
+        // Respects the early-season grace like the sack itself.
+        if ultimatum_danger && enough_data && !self.manager_on_final_warning {
+            self.manager_on_final_warning = true;
+            result.manager_ultimatum_announced = true;
+        }
+
+        // Results picked up while on the final warning save the job —
+        // the ultimatum lapses quietly (the backing IS the survival).
+        // Keyed to the TABLE, not the board's mood: the mood trails
+        // results by months, and an ultimatum answered with wins must
+        // not become a sack while the boardroom is still sulking. If
+        // form slides again, a NEW ultimatum is announced and the
+        // squad reacts afresh.
+        let form_recovering = !result.underperforming;
+        if form_recovering {
+            self.manager_on_final_warning = false;
+        }
+
+        // The axe: only for a manager already living on the final
+        // warning whose situation stayed terminal — total confidence
+        // collapse or the full crisis picture, with no visible upturn.
+        if enough_data && already_on_final_warning && (zero_confidence || crisis) && !form_recovering
         {
             result.manager_sacked = true;
             result.decisions.push(BoardDecision::SackManager);
@@ -1223,6 +1260,7 @@ impl ClubBoard {
             self.confidence.level = 50;
             self.poor_mood_months = 0;
             self.relationship.reset();
+            self.manager_on_final_warning = false;
         }
     }
 
@@ -2375,6 +2413,71 @@ mod board_behaviour_tests {
             }
         }
         assert!(sacked, "sustained run-in collapse should cost the job");
+    }
+
+    #[test]
+    fn sack_requires_a_lived_ultimatum_month() {
+        // The FIRST evaluation that reaches crisis issues the public
+        // ultimatum; the sack may only follow on a LATER evaluation —
+        // the squad gets a real month to react.
+        let mut board = ClubBoard::new();
+        board.season_targets = Some(targets(5, 8));
+        let ctx = poor_ctx(32, 38, 19, 20); // RunIn phase
+        let mut announced_at: Option<usize> = None;
+        let mut sacked_at: Option<usize> = None;
+        for month in 0..12 {
+            let mut r = BoardResult::new();
+            board.evaluate_performance(&ctx, &mut r);
+            if r.manager_ultimatum_announced && announced_at.is_none() {
+                announced_at = Some(month);
+            }
+            if r.manager_sacked {
+                sacked_at = Some(month);
+                break;
+            }
+        }
+        let announced = announced_at.expect("a collapse must produce a public ultimatum");
+        let sacked = sacked_at.expect("a sustained collapse still costs the job");
+        assert!(
+            sacked > announced,
+            "the ultimatum (month {}) must precede the sack (month {})",
+            announced,
+            sacked
+        );
+    }
+
+    #[test]
+    fn results_on_final_warning_save_the_job() {
+        let mut board = ClubBoard::new();
+        board.season_targets = Some(targets(5, 8));
+        let poor = poor_ctx(32, 38, 19, 20);
+        let mut announced = false;
+        for _ in 0..12 {
+            let mut r = BoardResult::new();
+            board.evaluate_performance(&poor, &mut r);
+            if r.manager_sacked {
+                panic!("must not sack before the ultimatum has been lived with");
+            }
+            if r.manager_ultimatum_announced {
+                announced = true;
+                break;
+            }
+        }
+        assert!(announced, "the collapse must reach the ultimatum stage");
+
+        // Form turns — the warning lapses instead of becoming a sack.
+        let strong = strong_ctx(3, 20);
+        let mut sacked = false;
+        for _ in 0..4 {
+            let mut r = BoardResult::new();
+            board.evaluate_performance(&strong, &mut r);
+            sacked |= r.manager_sacked;
+        }
+        assert!(!sacked, "recovered form on the final warning must save the job");
+        assert!(
+            !board.manager_on_final_warning,
+            "the warning lapses once results recover"
+        );
     }
 
     #[test]

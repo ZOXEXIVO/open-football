@@ -9,7 +9,7 @@ use crate::{
     CareerDesireEventContext, CareerDesireEvidence, CareerDesireKind, HappinessEventCause,
     HappinessEventContext, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
     HappinessEventType, LifeSimulationDesireContext, LifeSimulationDesireKind,
-    LifeSimulationSeverity, LifeSimulationTrigger,
+    LifeSimulationSeverity, LifeSimulationTrigger, PlayerSquadStatus,
 };
 use chrono::NaiveTime;
 use chrono::{NaiveDate, NaiveDateTime};
@@ -590,6 +590,10 @@ impl Player {
             };
             self.process_chronic_adaptation_failure(now, &ctx.country_code, &signals);
             self.detect_career_desire_priority(now, ctx);
+            // Post-relegation exodus — independent of the continental
+            // priority resolution; keyed off the `Relegated` team event
+            // already sitting on the player, so no league plumbing.
+            self.detect_relegation_escape_desire(now, ctx);
             // Item 8: broader life-simulation moods. Each detector is
             // cooldowned and gated — they fire ambient mood events
             // separately from the transfer-request escalation path.
@@ -693,6 +697,9 @@ impl Player {
         }
         if !recently_transferred && self.libertadores_request_pressure(now) {
             active_reasons.push(TransferRequestReason::CopaLibertadoresAmbition);
+        }
+        if !recently_transferred && self.relegation_escape_pressure(now) {
+            active_reasons.push(TransferRequestReason::RelegationEscape);
         }
 
         // Honeymoon overrides everything except poor behaviour. A
@@ -960,6 +967,129 @@ impl Player {
     /// True when persistent return-home pressure justifies escalating
     /// to a transfer request. Reads recent `WantsReturnHome` events
     /// plus the player's adaptation signals.
+    /// Emit the `WantsToLeaveAfterRelegation` mood — the post-relegation
+    /// exodus. Fires for a recognised first-teamer good enough for the
+    /// division the club just lost, in the months right after the drop.
+    /// Keyed off the `Relegated` team-season event already sitting on
+    /// the player, so the desire pass needs no league plumbing. The
+    /// request-pressure twin escalates once the mood has lingered.
+    fn detect_relegation_escape_desire(
+        &mut self,
+        now: NaiveDate,
+        _ctx: &TransferDesireContext,
+    ) -> bool {
+        // The relegation must be fresh — the exodus happens in the
+        // window(s) right after the drop, not a year later.
+        if !self
+            .happiness
+            .has_recent_event(&HappinessEventType::Relegated, 150)
+        {
+            return false;
+        }
+        // Cooldown.
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::WantsToLeaveAfterRelegation, 60)
+        {
+            return false;
+        }
+        // Joined at (or after) the drop → he signed up for this level
+        // knowingly; no exodus story.
+        if self
+            .days_since_transfer(now)
+            .map(|d| d < 120)
+            .unwrap_or(false)
+        {
+            return false;
+        }
+        // Only recognised first-teamers lead the exodus — squad players
+        // are at their level either way, and the fringe is the listing
+        // machinery's business.
+        let is_first_teamer = self
+            .contract
+            .as_ref()
+            .map(|c| {
+                matches!(
+                    c.squad_status,
+                    PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+                )
+            })
+            .unwrap_or(false);
+        if !is_first_teamer {
+            return false;
+        }
+        let age = DateUtils::age(self.birth_date, now);
+        if !(21..=31).contains(&age) {
+            return false;
+        }
+        let ambition = self.attributes.ambition;
+        if ambition < 11.0 {
+            return false;
+        }
+        // Good enough that clubs at the old level would actually want him.
+        let ca = self.player_attributes.current_ability;
+        let world_rep = self.player_attributes.world_reputation;
+        if ca < 105 && world_rep < 3000 {
+            return false;
+        }
+        // A loyal servant stays and fights for promotion.
+        let loyalty = self.attributes.loyalty.clamp(0.0, 20.0);
+        if loyalty >= 16.0 && ambition < 16.0 {
+            return false;
+        }
+
+        let cfg = HappinessConfig::default();
+        let mag = cfg.catalog.wants_to_leave_after_relegation;
+
+        let mut desire_ctx =
+            CareerDesireEventContext::new(CareerDesireKind::PostRelegationAmbition)
+                .with_player_ability(ca)
+                .with_evidence(CareerDesireEvidence::RelegatedWithClub);
+        if ambition >= 14.0 {
+            desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::HighAmbition);
+        }
+        if (24..=31).contains(&age) {
+            desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::PrimeCareerWindow);
+        }
+        if world_rep >= 4500 {
+            desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::PlayerAboveClubLevel);
+        }
+
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationAdmiration,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Personal,
+        )
+        .with_career_desire_context(desire_ctx)
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+
+        self.happiness.add_event_with_context(
+            HappinessEventType::WantsToLeaveAfterRelegation,
+            mag,
+            None,
+            happiness_ctx,
+        );
+        true
+    }
+
+    /// True when the post-relegation exodus mood has lingered long
+    /// enough to escalate to a formal transfer request. No `Unh`
+    /// requirement — a perfectly settled professional still leaves to
+    /// stay at the level (mirrors `OutgrownClub`, not the continental
+    /// pressures, which gate on unhappiness).
+    fn relegation_escape_pressure(&self, _now: NaiveDate) -> bool {
+        let mood_count = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                e.event_type == HappinessEventType::WantsToLeaveAfterRelegation
+                    && e.days_ago <= 120
+            })
+            .count();
+        mood_count >= 2
+    }
+
     fn return_home_request_pressure(&self, now: NaiveDate, _ctx: &TransferDesireContext) -> bool {
         // Need a fair window (60-120 days post-transfer baseline).
         let days = match self.days_since_transfer(now) {
@@ -1349,8 +1479,8 @@ mod career_desire_tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills,
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills,
     };
     use chrono::NaiveDate;
 
@@ -1428,6 +1558,99 @@ mod career_desire_tests {
             .iter()
             .filter(|e| e.event_type == kind)
             .count()
+    }
+
+    fn with_status(mut p: Player, status: PlayerSquadStatus) -> Player {
+        let mut c =
+            PlayerClubContract::new(500_000, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
+        c.squad_status = status;
+        p.contract = Some(c);
+        p
+    }
+
+    // ── Post-relegation exodus ──────────────────────────────────
+
+    #[test]
+    fn relegated_first_teamer_wants_out() {
+        let today = d(2026, 6, 1);
+        let mut p = with_status(
+            build(26, 14.0, 12.0, 10.0, 12.0, 1, 125, 4000, 800, today),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        p.happiness.add_event(HappinessEventType::Relegated, -5.0);
+        p.detect_relegation_escape_desire(today, &TransferDesireContext::default());
+        assert_eq!(
+            count_event(&p, HappinessEventType::WantsToLeaveAfterRelegation),
+            1,
+            "a quality first-teamer at a just-relegated club should want to stay at the level"
+        );
+    }
+
+    #[test]
+    fn no_relegation_means_no_exodus_mood() {
+        let today = d(2026, 6, 1);
+        let mut p = with_status(
+            build(26, 14.0, 12.0, 10.0, 12.0, 1, 125, 4000, 800, today),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        p.detect_relegation_escape_desire(today, &TransferDesireContext::default());
+        assert_eq!(
+            count_event(&p, HappinessEventType::WantsToLeaveAfterRelegation),
+            0
+        );
+    }
+
+    #[test]
+    fn loyal_servant_stays_after_relegation() {
+        let today = d(2026, 6, 1);
+        let mut p = with_status(
+            build(26, 12.0, 12.0, 17.0, 12.0, 1, 125, 4000, 800, today),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        p.happiness.add_event(HappinessEventType::Relegated, -5.0);
+        p.detect_relegation_escape_desire(today, &TransferDesireContext::default());
+        assert_eq!(
+            count_event(&p, HappinessEventType::WantsToLeaveAfterRelegation),
+            0,
+            "a loyal servant stays and fights for promotion"
+        );
+    }
+
+    #[test]
+    fn squad_player_is_not_part_of_the_exodus() {
+        let today = d(2026, 6, 1);
+        let mut p = with_status(
+            build(26, 14.0, 12.0, 10.0, 12.0, 1, 125, 4000, 800, today),
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        p.happiness.add_event(HappinessEventType::Relegated, -5.0);
+        p.detect_relegation_escape_desire(today, &TransferDesireContext::default());
+        assert_eq!(
+            count_event(&p, HappinessEventType::WantsToLeaveAfterRelegation),
+            0,
+            "squad players are at their level either way"
+        );
+    }
+
+    #[test]
+    fn relegation_pressure_needs_a_lingering_mood() {
+        let today = d(2026, 6, 1);
+        let mut p = with_status(
+            build(26, 14.0, 12.0, 10.0, 12.0, 1, 125, 4000, 800, today),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        p.happiness
+            .add_event(HappinessEventType::WantsToLeaveAfterRelegation, -4.0);
+        assert!(
+            !p.relegation_escape_pressure(today),
+            "one mood note is not yet a formal request"
+        );
+        p.happiness
+            .add_event(HappinessEventType::WantsToLeaveAfterRelegation, -4.0);
+        assert!(
+            p.relegation_escape_pressure(today),
+            "a lingering exodus mood escalates to a transfer request"
+        );
     }
 
     #[test]

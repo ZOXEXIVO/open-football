@@ -23,6 +23,18 @@ pub struct TeamBehaviourResult {
     /// Head-coach-approved mutual contract terminations pending finance
     /// and player-state commit. Applied in `process()`.
     pub contract_terminations: Vec<ContractTermination>,
+    /// Club disciplinary fines decided this pass — a slice of the
+    /// offender's wages credited back to the club. Applied in
+    /// `process()`.
+    pub fines: Vec<PlayerFine>,
+}
+
+/// One club disciplinary fine: the amount is withheld from the
+/// player's wages and lands on the club's books.
+#[derive(Debug, Clone)]
+pub struct PlayerFine {
+    pub player_id: u32,
+    pub amount: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +59,7 @@ impl TeamBehaviourResult {
             players: PlayerBehaviourResult::new(),
             manager_talks: Vec::new(),
             contract_terminations: Vec::new(),
+            fines: Vec::new(),
         }
     }
 
@@ -54,6 +67,28 @@ impl TeamBehaviourResult {
         self.players.process(data);
         self.process_manager_talks(data);
         self.process_contract_terminations(data);
+        self.process_fines(data);
+    }
+
+    fn process_fines<D: LeagueProcessAccess>(&self, data: &mut D) {
+        for fine in &self.fines {
+            let club_id = match data
+                .indexes()
+                .and_then(|i| i.get_player_location(fine.player_id))
+            {
+                Some((_, _, club_id, _)) => club_id,
+                None => continue,
+            };
+            if let Some(club) = data.club_mut(club_id) {
+                club.finance.adjust_cash(fine.amount as f64);
+            }
+            log::debug!(
+                "Disciplinary fine: player {} fined {} by club {}",
+                fine.player_id,
+                fine.amount,
+                club_id
+            );
+        }
     }
 
     fn process_contract_terminations<D: LeagueProcessAccess>(&self, data: &mut D) {

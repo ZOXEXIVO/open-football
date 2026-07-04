@@ -433,6 +433,13 @@ pub enum HappinessEventType {
     /// that escalates into loan / transfer requests via the weekly
     /// playing-time complaint pass.
     WantsFirstTeamFootball,
+    /// The club has just been relegated and this player is clearly
+    /// above the new division — he wants to keep playing at the level
+    /// he just lost. The classic post-relegation exodus: quality
+    /// players leave, often at a discount. Chronic mood that escalates
+    /// into a formal transfer request when it lingers. Carries a
+    /// `CareerDesireEventContext`.
+    WantsToLeaveAfterRelegation,
 
     // ── Loan management pressure ─────────────────────────────────
     /// A young player's loan is failing to develop him — benched, wrong
@@ -446,6 +453,17 @@ pub enum HappinessEventType {
     /// the minutes-concern note, less severe than a permanent transfer
     /// request — the request / pressure layer above the recall window.
     LoanRecallRequested,
+    /// A loanee who is thriving at the borrowing club — starting
+    /// regularly, performing — wants the move made permanent instead of
+    /// returning to the parent's bench or the loan carousel. Longing,
+    /// not a grievance; carries a `CareerDesireEventContext`.
+    WantsLoanMadePermanent,
+    /// The player has come back from a loan where he was first-choice
+    /// and walked straight into a fringe role at the parent club — the
+    /// return he didn't choose. Emitted at loan-return time, after the
+    /// clean-slate reset, so the unsettled mood carries into the new
+    /// parent spell and feeds the stuck-career machinery.
+    UnsettledAfterLoanReturn,
 
     // ── Contract negotiation tension ─────────────────────────────
     /// Player / agent explicitly demands a release clause in the next
@@ -465,6 +483,26 @@ pub enum HappinessEventType {
     /// release clause / ambition). Bigger than `ContractTalksStalled`
     /// because the decision has been made — the deal is dead, not paused.
     RejectedContractOffer,
+    /// Player has entered the final year of his deal and the club has
+    /// not opened renewal talks — no offer, no stalled negotiation,
+    /// just silence. Anxiety for the loyal, leverage for the ambitious.
+    /// Distinct from `ContractTalksStalled` (talks happened and broke
+    /// down). Monthly, cooldowned.
+    ContractExpiryAnxiety,
+    /// Positive twin of `ContractExpiryAnxiety` — a final-year player
+    /// in real form treats the run-in as a shop window: extra
+    /// motivation while his future is unsigned.
+    PlayingForNewContract,
+    /// The transfer window closed with the player still on the transfer
+    /// list, unsold — stuck at a club that wants him gone until the
+    /// next window. Visible beat between listing and the availability
+    /// broadcast / free-exit machinery.
+    UnsoldWindowClosed,
+    /// The club rejected a concrete bid for a player who had formally
+    /// asked to leave — the move he wanted was vetoed. Much sharper
+    /// than the neutral `TransferBidRejected`, which also covers bids
+    /// the player never cared about.
+    MoveVetoedByClub,
 
     // ── Manager-relationship arc & match-trust ───────────────────
     /// Player formally asked the manager for a private conversation
@@ -530,4 +568,49 @@ pub enum HappinessEventType {
     /// aggregate so repeated `MatchDropped` rows don't each fire their
     /// own. Cooldowned.
     ManagerTrustEroding,
+    /// A new head coach has just taken charge — the squad-wide bounce of
+    /// fresh expectation. Players the old regime had frozen out (low
+    /// morale, unhappy, club-listed) hope hardest: the new coach's
+    /// selection memory starts empty, so the clean slate is real.
+    /// Counterpart of `ManagerDeparture`, which carries the loyalists'
+    /// grief for the outgoing coach.
+    NewManagerBounce,
+
+    // ── Manager pressure, club discipline & collective reaction ──
+    /// The board has publicly put the manager on notice and this player
+    /// is with him — extra motivation to save the coach's job. The
+    /// loyalist fork of the pressure story.
+    RalliesBehindManager,
+    /// The board has the manager on notice and this player senses a
+    /// change coming — unsettling if he depends on the current coach's
+    /// trust, quietly liberating if he doesn't. Doubter fork; also used
+    /// by the renewal machinery as a "wait and see" signal.
+    SensesManagerChange,
+    /// Formal club warning for misconduct — the first rung of the
+    /// disciplinary ladder. Stings less for professionals who take it
+    /// on the chin.
+    FormalWarningIssued,
+    /// Club fine (a chunk of wages) for repeated or serious misconduct —
+    /// the second rung. Professionals accept and straighten out;
+    /// hot-headed players resent it.
+    FinedByClub,
+    /// The manager held an inquest after a humiliating result — a
+    /// heavy defeat or a collapse against far weaker opposition. Squad-
+    /// wide sting; the fair response to a bad day, not a persecution.
+    DressingRoomInquest,
+    /// The manager publicly praised the squad's response after bouncing
+    /// back from a bad run — the collective positive mirror of the
+    /// inquest.
+    ResiliencePraised,
+    /// The club formally told the player he is not in the manager's
+    /// plans and can find a new club — emitted when a club-decision
+    /// transfer listing first appears for a player who had not asked
+    /// out. The honest conversation that used to happen silently.
+    ToldNotInPlans,
+    /// The coaching staff set a personal development plan — position
+    /// retraining toward a thin spot, a fitness block for the injury-
+    /// prone, or focused skill work. Positive for players who feel the
+    /// club investing in them; emitted negative when a role change is
+    /// resented.
+    PersonalTrainingPlanSet,
 }

@@ -159,6 +159,42 @@ pub(in crate::transfers::pipeline) fn compute_group_needs(
     needs
 }
 
+/// Succession-planning calculus for one aging incumbent. Pure helpers —
+/// side-effect free so the heir logic can be unit-tested in isolation.
+pub(in crate::transfers::pipeline) struct SuccessionAudit;
+
+impl SuccessionAudit {
+    /// Position-aware age from which a first-choice player's club starts
+    /// lining up an heir. Goalkeeper careers run years longer, so the
+    /// search starts later; centre-halves age slower than runners.
+    pub(in crate::transfers::pipeline) fn trigger_age(group: PlayerFieldPositionGroup) -> u8 {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 33,
+            PlayerFieldPositionGroup::Defender => 31,
+            PlayerFieldPositionGroup::Midfielder => 30,
+            PlayerFieldPositionGroup::Forward => 30,
+        }
+    }
+
+    /// True when the heir is already in the building: a clearly younger
+    /// squad member of the same position group who is at — or is
+    /// assessed as growing into — the incumbent's level. Reads the
+    /// scouts' ASSESSED potential, never the hidden raw PA.
+    pub(in crate::transfers::pipeline) fn heir_in_place(
+        squad: &[SquadPlayerInfo],
+        incumbent: &SquadPlayerInfo,
+    ) -> bool {
+        let group = incumbent.primary_position.position_group();
+        squad.iter().any(|p| {
+            p.player_id != incumbent.player_id
+                && p.primary_position.position_group() == group
+                && p.age + 4 <= incumbent.age
+                && (p.current_ability + 12 >= incumbent.current_ability
+                    || p.estimated_potential >= incumbent.current_ability)
+        })
+    }
+}
+
 /// One realistic outcome of the career-pathway ladder for an underused
 /// but development-relevant player. Pure data — [`ProspectPathway::decide`]
 /// is side-effect free so the ladder can be unit-tested in isolation.
@@ -854,32 +890,55 @@ impl PipelineProcessor {
         );
         if does_succession {
             for player_info in &squad {
-                if player_info.age >= 30
-                    && player_info.current_ability >= avg_ability
-                    && budget_used < available_budget
+                if budget_used >= available_budget {
+                    break;
+                }
+                let group = player_info.primary_position.position_group();
+                // Position-aware trigger: a 30-year-old keeper is in his
+                // prime; his heir search starts years later.
+                if player_info.age < SuccessionAudit::trigger_age(group)
+                    || player_info.current_ability < avg_ability
                 {
-                    let alloc = (budget_per_need * 0.4).min(available_budget - budget_used);
-                    if alloc <= 0.0 {
-                        break;
-                    }
+                    continue;
+                }
+                // Only genuine first-choice players need an heir lined
+                // up — an aging backup is depth churn, not succession.
+                let best_in_group = squad
+                    .iter()
+                    .filter(|p| p.primary_position.position_group() == group)
+                    .map(|p| p.current_ability)
+                    .max()
+                    .unwrap_or(0);
+                if player_info.current_ability + 4 < best_in_group {
+                    continue;
+                }
+                // The heir may already be in the building — don't shop
+                // for what the academy or an earlier window delivered.
+                if SuccessionAudit::heir_in_place(&squad, player_info) {
+                    continue;
+                }
 
-                    // Only if we don't already have a request for this position
-                    if !requests
-                        .iter()
-                        .any(|r| r.position == player_info.primary_position)
-                    {
-                        requests.push(TransferRequest::new(
-                            next_id,
-                            player_info.primary_position,
-                            TransferNeedPriority::Optional,
-                            TransferNeedReason::SuccessionPlanning,
-                            avg_ability.saturating_sub(10),
-                            avg_ability,
-                            alloc,
-                        ));
-                        next_id += 1;
-                        budget_used += alloc;
-                    }
+                let alloc = (budget_per_need * 0.4).min(available_budget - budget_used);
+                if alloc <= 0.0 {
+                    break;
+                }
+
+                // Only if we don't already have a request for this position
+                if !requests
+                    .iter()
+                    .any(|r| r.position == player_info.primary_position)
+                {
+                    requests.push(TransferRequest::new(
+                        next_id,
+                        player_info.primary_position,
+                        TransferNeedPriority::Optional,
+                        TransferNeedReason::SuccessionPlanning,
+                        avg_ability.saturating_sub(10),
+                        avg_ability,
+                        alloc,
+                    ));
+                    next_id += 1;
+                    budget_used += alloc;
                 }
             }
         }

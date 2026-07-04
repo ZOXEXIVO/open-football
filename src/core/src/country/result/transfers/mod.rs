@@ -161,9 +161,18 @@ impl CountryResult {
         ops.window_open = window_open;
         ops.completed_before = completed_before;
 
-        // Sync market's window flag. On open→closed transitions this cancels
-        // any stranded listings and expires pending negotiations.
+        // Detect the open→closed transition BEFORE syncing the flag —
+        // the market's stored flag still holds yesterday's state.
+        let window_just_closed = country.transfer_market.transfer_window_open && !window_open;
+
+        // Sync market's window flag. Listings and negotiations survive
+        // the close (the listing rows are the durable "still for sale"
+        // clock); the just-closed beat below tells unsold listed
+        // players their limbo is real until the next window.
         country.transfer_market.check_transfer_window(window_open);
+        if window_just_closed {
+            Self::emit_window_close_limbo(country, current_date);
+        }
 
         // Resolve pending negotiations — club-to-club moves for the
         // deferred execution queue, plus free-agent negotiation

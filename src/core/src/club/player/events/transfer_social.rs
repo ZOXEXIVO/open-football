@@ -197,6 +197,22 @@ impl Player {
             || self.statuses.get().contains(&PlayerStatusType::Unh)
             || self.statuses.get().contains(&PlayerStatusType::Trn);
 
+        // A formally-requested exit being blocked is a different wound
+        // entirely: the club vetoed the move he had asked for. It fires
+        // regardless of the flattery gates below — a player who wants
+        // OUT doesn't need the buyer to be bigger — and replaces the
+        // neutral bid-rejection note. Only a clear step DOWN stays
+        // silent (that rejection did him a favour).
+        if self.statuses.get().contains(&PlayerStatusType::Req) && rep_diff > -0.25 {
+            let cfg = HappinessConfig::default();
+            let mag = cfg.catalog.move_vetoed_by_club
+                * scaling::ambition_amplifier(ambition)
+                * scaling::criticism_dampener(self.attributes.professionalism);
+            self.happiness
+                .add_event_with_cooldown(HappinessEventType::MoveVetoedByClub, mag, 45);
+            return;
+        }
+
         // Favorite-club bid: any meaningful approach (rep_diff > -0.05,
         // i.e. roughly peer-level or up) being rejected hurts even an
         // average-ambition player. Otherwise the existing gates apply.

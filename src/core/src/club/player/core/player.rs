@@ -27,9 +27,9 @@ use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
 use crate::{
-    CompetitionStatistics, Person, PersonAttributes, PlayerDecisionHistory, PlayerHappiness,
-    PlayerPositionType, PlayerPositions, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
-    PlayerTrainingHistory, PlayerValueCalculator, Relations,
+    CompetitionStatistics, IndividualTrainingPlan, Person, PersonAttributes,
+    PlayerDecisionHistory, PlayerHappiness, PlayerPositionType, PlayerPositions, PlayerStatistics,
+    PlayerStatisticsHistory, PlayerStatus, PlayerTrainingHistory, PlayerValueCalculator, Relations,
 };
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
@@ -129,6 +129,12 @@ pub struct Player {
     pub cup_statistics_by_competition: Vec<CompetitionStatistics>,
     pub statistics_history: PlayerStatisticsHistory,
     pub decision_history: PlayerDecisionHistory,
+
+    /// Personal development plan set by the coaching staff — position
+    /// retraining toward a thin squad spot, a fitness block for the
+    /// injury-prone. `None` for the overwhelming majority; assigned and
+    /// progressed by the monthly training-direction pass.
+    pub individual_training: Option<IndividualTrainingPlan>,
 
     /// Languages the player speaks, with proficiency levels.
     pub languages: Vec<PlayerLanguage>,
@@ -308,6 +314,9 @@ pub enum TransferRequestReason {
     EuropeanAmbition,
     /// Copa Libertadores ambition mood lingered past the request horizon.
     CopaLibertadoresAmbition,
+    /// Post-relegation exodus mood lingered — a quality player wants to
+    /// keep playing at the level the club just lost.
+    RelegationEscape,
 }
 
 /// What the manager committed to. Each variant carries everything the

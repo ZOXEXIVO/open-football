@@ -15,7 +15,7 @@ use crate::shared::{Currency, CurrencyValue, Location};
 use crate::transfers::pipeline::ClubTransferPlan;
 use crate::utils::DateUtils;
 use crate::{ReputationLevel, TeamCollection, TeamType};
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClubPhilosophy {
@@ -322,7 +322,13 @@ impl Club {
         );
 
         if ctx.simulation.is_week_beginning() {
-            self.teams.ensure_coach_state(date);
+            if self.teams.ensure_coach_state(date) {
+                // A just-appointed head coach reviews the whole squad
+                // before honouring the old regime's exit decisions —
+                // pause club-driven listings while he takes his first
+                // look at everyone.
+                self.transfer_plan.manager_review_until = Some(date + Duration::days(45));
+            }
             self.teams.update_all_impressions(date);
 
             // Weekly: move loan returnees from main to reserve
@@ -339,7 +345,9 @@ impl Club {
         }
 
         if ctx.simulation.is_month_beginning() {
-            self.teams.ensure_coach_state(date);
+            if self.teams.ensure_coach_state(date) {
+                self.transfer_plan.manager_review_until = Some(date + Duration::days(45));
+            }
             // Offer proactive contract renewals. Pass the chairman's wage
             // cap and league prestige so the renewal pass sizes its offers
             // correctly.

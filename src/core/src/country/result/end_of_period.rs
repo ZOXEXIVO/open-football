@@ -5,11 +5,14 @@ use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::simulator::SimulatorData;
 use crate::utils::{DateUtils, FormattingUtils, IntegerUtils};
+use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::events::TransferCompletion;
 use crate::{
-    AwardReputationInput, AwardReputationKind, ClubResult, Country, HappinessEventType, Person,
-    Player, PlayerFieldPositionGroup, PlayerHappiness, PlayerMessage, PlayerMessageType,
-    PlayerStatusType, SeasonOutcomeContext, SeasonOutcomeKind, StaffPosition, Team, TeamInfo,
-    TeamType, TrophyEventContext, TrophyKind,
+    AwardReputationInput, AwardReputationKind, Club, ClubResult, Country, HappinessEventType,
+    Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerHappiness, PlayerMessage,
+    PlayerMessageType, PlayerSquadStatus, PlayerStatCompetitionKind, PlayerStatusType,
+    SeasonOutcomeContext, SeasonOutcomeKind, StaffPosition, Team, TeamInfo, TeamType,
+    TrophyEventContext, TrophyKind,
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
@@ -21,6 +24,10 @@ struct LoanReturnEvent {
     borrowing_club_id: u32,
     parent_club_id: u32,
     borrowing_info: TeamInfo,
+    /// `Some((fee, is_obligation))` when the borrower exercises its
+    /// negotiated option / obligation to buy as the loan expires — the
+    /// player stays put and ownership transfers instead of returning.
+    buyout: Option<(u32, bool)>,
 }
 
 /// Per-team view of which loaned-in players a borrower is warehousing.
@@ -843,9 +850,16 @@ impl CountryResult {
         // Phase 1: Scan — collect expired loans as lightweight events
         let events = Self::scan_expired_loans(data, country_id, date);
 
-        // Phase 2: Execute — move players by club ID (country-agnostic)
+        // Phase 2: Execute — a stored option/obligation to buy converts
+        // the loan into a permanent transfer in place; everything else
+        // moves the player home (country-agnostic, by club ID).
         for event in events {
-            Self::execute_loan_return(data, event, date);
+            match event.buyout {
+                Some((fee, obligation)) => {
+                    Self::execute_loan_buyout(data, event, fee, obligation, date)
+                }
+                None => Self::execute_loan_return(data, event, date),
+            }
         }
     }
 
@@ -934,6 +948,14 @@ impl CountryResult {
                     if !(expiring || warehoused.is_surplus(player, date)) {
                         continue;
                     }
+                    // Option / obligation-to-buy — only a naturally
+                    // expiring loan can carry one (the warehouse drain
+                    // never touches option loans).
+                    let buyout = if expiring {
+                        Self::decide_loan_buyout(player, loan_contract)
+                    } else {
+                        None
+                    };
                     events.push(LoanReturnEvent {
                         player_id: player.id,
                         borrowing_club_id: club.id,
@@ -945,12 +967,187 @@ impl CountryResult {
                             league_name: main_league_name.clone(),
                             league_slug: main_league_slug.clone(),
                         },
+                        buyout,
                     });
                 }
             }
         }
 
         events
+    }
+
+    /// Borrower's decision on a stored option / obligation to buy as
+    /// the loan expires. Obligations are binding. An option is
+    /// exercised when the loan actually worked — a real body of
+    /// appearances at a decent level, read from the live season stats
+    /// or from the just-frozen loan ledger row when the season-end
+    /// snapshot has already reset them. The player's own wish to stay
+    /// (`WantsLoanMadePermanent`) nudges the bar down: signing a keen,
+    /// integrated player is the easy call.
+    fn decide_loan_buyout(player: &Player, loan: &PlayerClubContract) -> Option<(u32, bool)> {
+        let fee = loan.loan_future_fee?;
+        if loan.loan_future_fee_obligation {
+            return Some((fee, true));
+        }
+        let live_apps = player.statistics.played + player.statistics.played_subs;
+        let (apps, rating) = if live_apps >= 5 {
+            (live_apps, player.statistics.average_rating_raw())
+        } else {
+            player
+                .statistics_history
+                .season_ledger
+                .iter()
+                .filter(|e| {
+                    e.is_loan && matches!(e.competition_kind, PlayerStatCompetitionKind::League)
+                })
+                .max_by_key(|e| (e.season_start_year, e.seq_id))
+                .map(|e| {
+                    (
+                        e.statistics.played + e.statistics.played_subs,
+                        e.statistics.average_rating,
+                    )
+                })
+                .unwrap_or((0, 0.0))
+        };
+        let wants_to_stay = player
+            .happiness
+            .has_recent_event(&HappinessEventType::WantsLoanMadePermanent, 120);
+        let rating_bar = if wants_to_stay { 6.45 } else { 6.6 };
+        (apps >= 10 && rating >= rating_bar).then_some((fee, false))
+    }
+
+    /// Execute an option / obligation-to-buy at loan end: the borrower
+    /// pays the agreed future fee and the player simply stays — no
+    /// roster move; ownership, contract and career history flip to the
+    /// borrowing club via the standard `complete_transfer` path. The
+    /// staged arrival shock is suppressed afterwards — he has been in
+    /// this dressing room the whole spell. An *option* lapses into a
+    /// normal return when the borrower can no longer afford the fee; an
+    /// *obligation* always pays.
+    fn execute_loan_buyout(
+        data: &mut SimulatorData,
+        event: LoanReturnEvent,
+        fee: u32,
+        obligation: bool,
+        date: NaiveDate,
+    ) {
+        let Some((bci, bcoi, bcli, bti)) = data.find_club_main_team(event.borrowing_club_id)
+        else {
+            Self::execute_loan_return(data, event, date);
+            return;
+        };
+        let Some((pci, pcoi, pcli, pti)) = data.find_club_main_team(event.parent_club_id) else {
+            Self::execute_loan_return(data, event, date);
+            return;
+        };
+
+        let affordable = data.continents[bci].countries[bcoi].clubs[bcli]
+            .finance
+            .can_afford_transfer(fee as f64);
+        if !obligation && !affordable {
+            debug!(
+                "Loan option lapsed: club {} cannot afford {} for player {}",
+                event.borrowing_club_id, fee, event.player_id
+            );
+            Self::execute_loan_return(data, event, date);
+            return;
+        }
+
+        // Parent-side TeamInfo + both league reputations for the
+        // history row and the contract-valuation context.
+        let (parent_info, selling_league_reputation) = {
+            let country = &data.continents[pci].countries[pcoi];
+            let team = &country.clubs[pcli].teams.teams[pti];
+            let league = team
+                .league_id
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid));
+            (
+                TeamInfo {
+                    name: team.name.clone(),
+                    slug: team.slug.clone(),
+                    reputation: team.reputation.world,
+                    league_name: league.map(|l| l.name.clone()).unwrap_or_default(),
+                    league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
+                },
+                league.map(|l| l.reputation).unwrap_or(0),
+            )
+        };
+        let buying_league_reputation = {
+            let country = &data.continents[bci].countries[bcoi];
+            country.clubs[bcli].teams.teams[bti]
+                .league_id
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| l.reputation)
+                .unwrap_or(0)
+        };
+
+        // Fee booking: buyer amortizes the purchase, seller banks it.
+        data.continents[bci].countries[bcoi].clubs[bcli]
+            .finance
+            .register_transfer_purchase(fee as f64, 4);
+        data.continents[pci].countries[pcoi].clubs[pcli]
+            .finance
+            .add_transfer_income(fee as f64);
+
+        // Mutate the player in place — he stays in the borrower roster.
+        let Some((ci, coi, cli, ti)) = data.find_player_position(event.player_id) else {
+            return;
+        };
+        let obligations = {
+            let Some(player) = data.continents[ci].countries[coi].clubs[cli].teams.teams[ti]
+                .players
+                .players
+                .iter_mut()
+                .find(|p| p.id == event.player_id)
+            else {
+                return;
+            };
+            let obligations = player.drain_sell_on_obligations();
+            player.complete_transfer(TransferCompletion {
+                from: &parent_info,
+                to: &event.borrowing_info,
+                fee: fee as f64,
+                date,
+                selling_club_id: event.parent_club_id,
+                buying_club_id: event.borrowing_club_id,
+                agreed_wage: None,
+                buying_league_reputation,
+                selling_league_reputation,
+                record_sell_on: None,
+                personal_terms: None,
+            });
+            // No new-club arrival shock: he never changed dressing rooms.
+            player.pending_signing = None;
+            player.decision_history.add(
+                date,
+                FormattingUtils::format_money(fee as f64),
+                "dec_loan_buyout".to_string(),
+                String::new(),
+            );
+            debug!(
+                "Loan buyout: club {} signs player {} permanently from club {} for {}",
+                event.borrowing_club_id, event.player_id, event.parent_club_id, fee
+            );
+            obligations
+        };
+
+        // Route prior sell-on obligations out of the parent's proceeds.
+        for obligation in &obligations {
+            let payout = fee as f64 * obligation.percentage as f64;
+            if payout <= 0.0 {
+                continue;
+            }
+            if let Some((qci, qcoi, qcli, _)) =
+                data.find_club_main_team(obligation.beneficiary_club_id)
+            {
+                data.continents[qci].countries[qcoi].clubs[qcli]
+                    .finance
+                    .adjust_cash(payout);
+                data.continents[pci].countries[pcoi].clubs[pcli]
+                    .finance
+                    .adjust_cash(-payout);
+            }
+        }
     }
 
     /// Execute a single loan return: take player from borrowing club, place at parent club.
@@ -1002,10 +1199,39 @@ impl CountryResult {
             None => return,
         };
 
+        // Capture the loan-spell record before `on_loan_return` freezes
+        // and resets the borrower-season statistics.
+        let loan_starts = player.statistics.played;
+        let loan_rating = player
+            .statistics
+            .average_rating_realistic(player.position().position_group());
+
         player.on_loan_return(&event.borrowing_info, &parent_info, date);
         player.contract_loan = None;
         player.happiness = PlayerHappiness::new();
         player.statuses.statuses.clear();
+
+        // A senior who was first-choice on loan and comes home to a
+        // fringe role doesn't get a fully clean slate — the return he
+        // didn't choose is the first mood of the new parent spell, and
+        // it feeds the stuck-career machinery from day one.
+        let fringe_at_parent = player
+            .contract
+            .as_ref()
+            .map(|c| {
+                matches!(
+                    c.squad_status,
+                    PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::NotNeeded
+                )
+            })
+            .unwrap_or(false);
+        let age = DateUtils::age(player.birth_date, date);
+        if fringe_at_parent && age >= 21 && loan_starts >= 12 && loan_rating >= 6.6 {
+            let magnitude = HappinessConfig::default().catalog.unsettled_after_loan_return;
+            player
+                .happiness
+                .add_event(HappinessEventType::UnsettledAfterLoanReturn, magnitude);
+        }
 
         // Place at parent club
         debug!(
@@ -1015,6 +1241,164 @@ impl CountryResult {
         data.continents[pci].countries[pcoi].clubs[pcli].teams.teams[pti]
             .players
             .add(player);
+    }
+
+    /// Borrowing-side `TeamInfo` for a loan-return event, aliased to the
+    /// club's main team for non-Main squads exactly like
+    /// `scan_expired_loans` does — career history only owns senior slugs.
+    fn loan_team_info(country: &Country, club: &Club, team: &Team) -> TeamInfo {
+        let main_team = club.teams.main();
+        let (name, slug, reputation) = if team.team_type == TeamType::Main || main_team.is_none() {
+            (team.name.clone(), team.slug.clone(), team.reputation.world)
+        } else {
+            let m = main_team.unwrap();
+            (m.name.clone(), m.slug.clone(), m.reputation.world)
+        };
+        let (league_name, league_slug) = main_team
+            .and_then(|t| t.league_id)
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| (l.name.clone(), l.slug.clone()))
+            .unwrap_or_default();
+        TeamInfo {
+            name,
+            slug,
+            reputation,
+            league_name,
+            league_slug,
+        }
+    }
+
+    /// Monthly mid-loan recall pass. Two real-football triggers, both
+    /// gated on the loan's negotiated recall window
+    /// (`loan_recall_available_after` — set at signing and by the loan
+    /// audits, previously never consumed):
+    ///
+    ///   * **Depth emergency at the parent** — injuries have stripped a
+    ///     position group below half its ideal depth while a fit loanee
+    ///     of that group is out on a recallable loan. The January-style
+    ///     emergency recall.
+    ///   * **Failing loan** — the monthly loan audit has been pushing
+    ///     for a recall (`LoanRecallRequested`); the parent finally acts
+    ///     instead of letting the mood ring forever.
+    ///
+    /// Scans the borrower rosters of this country (mirroring
+    /// `scan_expired_loans`), resolving each parent club globally so
+    /// foreign parents recall from here too. Execution reuses
+    /// `execute_loan_return` — a recalled thriving senior walking into a
+    /// fringe role picks up `UnsettledAfterLoanReturn` there.
+    pub(super) fn process_loan_recalls(data: &mut SimulatorData, country_id: u32, date: NaiveDate) {
+        if date.day() != 1 {
+            return;
+        }
+        // An imminent natural return needs no recall.
+        const MIN_DAYS_LEFT: i64 = 30;
+        // Give the spell a month before yanking the player back.
+        const SETTLE_DAYS: i64 = 30;
+        // How fresh the failing-loan pressure mood must be.
+        const FAILING_MOOD_DAYS: u16 = 45;
+
+        let Some(country) = data.country(country_id) else {
+            return;
+        };
+
+        let mut events: Vec<LoanReturnEvent> = Vec::new();
+        // One emergency recall per (parent, position group) per pass.
+        let mut emergency_taken: HashSet<(u32, PlayerFieldPositionGroup)> = HashSet::new();
+
+        for club in &country.clubs {
+            for team in club.teams.iter() {
+                for player in team.players.iter() {
+                    let Some(ref loan) = player.contract_loan else {
+                        continue;
+                    };
+                    let Some(parent_club_id) = loan.loan_from_club_id else {
+                        continue;
+                    };
+                    // Recall must be contractually available and worth it.
+                    let window_open = loan
+                        .loan_recall_available_after
+                        .map(|d| d <= date)
+                        .unwrap_or(false);
+                    if !window_open {
+                        continue;
+                    }
+                    if (loan.expiration - date).num_days() < MIN_DAYS_LEFT {
+                        continue;
+                    }
+                    if loan
+                        .started
+                        .map(|s| (date - s).num_days() < SETTLE_DAYS)
+                        .unwrap_or(true)
+                    {
+                        continue;
+                    }
+
+                    let failing = player.happiness.has_recent_event(
+                        &HappinessEventType::LoanRecallRequested,
+                        FAILING_MOOD_DAYS,
+                    );
+
+                    let group = player.position().position_group();
+                    let mut emergency = false;
+                    if !failing && !player.player_attributes.is_injured {
+                        // Depth emergency at the parent: fit senior cover
+                        // in this group below half the ideal depth.
+                        if let Some((ci, coi, cli, ti)) = data.find_club_main_team(parent_club_id)
+                        {
+                            let parent_team =
+                                &data.continents[ci].countries[coi].clubs[cli].teams.teams[ti];
+                            let fit = parent_team
+                                .players
+                                .iter()
+                                .filter(|p| p.position().position_group() == group)
+                                .filter(|p| {
+                                    !p.player_attributes.is_injured && p.contract.is_some()
+                                })
+                                .count();
+                            let floor = group.ideal_squad_depth().div_ceil(2);
+                            emergency = fit < floor
+                                && !emergency_taken.contains(&(parent_club_id, group));
+                        }
+                    }
+                    if !failing && !emergency {
+                        continue;
+                    }
+                    if emergency {
+                        emergency_taken.insert((parent_club_id, group));
+                    }
+                    events.push(LoanReturnEvent {
+                        player_id: player.id,
+                        borrowing_club_id: club.id,
+                        parent_club_id,
+                        borrowing_info: Self::loan_team_info(country, club, team),
+                        buyout: None,
+                    });
+                }
+            }
+        }
+
+        for event in events {
+            let player_id = event.player_id;
+            Self::execute_loan_return(data, event, date);
+            // Stamp the recall on the player's decision history so the
+            // early return reads as a club decision, not a mystery.
+            if let Some((ci, coi, cli, ti)) = data.find_player_position(player_id) {
+                if let Some(player) = data.continents[ci].countries[coi].clubs[cli].teams.teams
+                    [ti]
+                    .players
+                    .players
+                    .iter_mut()
+                    .find(|p| p.id == player_id)
+                {
+                    player.decision_history.add(
+                        date,
+                        String::new(),
+                        "dec_loan_recalled".to_string(),
+                        String::new(),
+                    );
+                }
+            }
+        }
     }
 
     /// Monthly check: retire players who are clearly past max retirement age
@@ -1663,6 +2047,8 @@ mod tests {
     use super::*;
     use crate::academy::ClubAcademy;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::continent::Continent;
     use crate::league::{
         DayMonthPeriod, DomesticCup, League, LeagueCollection, LeagueSettings, LeagueTableRow,
         ScheduleItem, ScheduleTour,
@@ -1791,6 +2177,131 @@ mod tests {
             .iter()
             .filter(|e| e.event_type == *kind)
             .count()
+    }
+
+    // ── Loan buyout (option / obligation to buy) ────────────────
+
+    fn loan_deal(fee: Option<u32>, obligation: bool) -> PlayerClubContract {
+        let mut c = PlayerClubContract::new(20_000, d(2026, 6, 30));
+        c.loan_from_club_id = Some(100);
+        c.loan_future_fee = fee;
+        c.loan_future_fee_obligation = obligation;
+        c
+    }
+
+    #[test]
+    fn loan_obligation_always_converts() {
+        // No appearances at all — an obligation is binding regardless.
+        let mut p = make_player(1);
+        p.statistics.played = 0;
+        assert_eq!(
+            CountryResult::decide_loan_buyout(&p, &loan_deal(Some(2_000_000), true)),
+            Some((2_000_000, true))
+        );
+    }
+
+    #[test]
+    fn thriving_loanee_option_is_exercised() {
+        let mut p = make_player(1);
+        p.statistics.played = 22;
+        p.statistics.rating_points = 6.9 * 22.0;
+        p.statistics.rating_weight = 22.0;
+        assert_eq!(
+            CountryResult::decide_loan_buyout(&p, &loan_deal(Some(2_000_000), false)),
+            Some((2_000_000, false)),
+            "a loan that worked gets its option exercised"
+        );
+    }
+
+    #[test]
+    fn failed_loan_option_lapses() {
+        let mut p = make_player(1);
+        p.statistics.played = 6;
+        p.statistics.rating_points = 6.2 * 6.0;
+        p.statistics.rating_weight = 6.0;
+        assert_eq!(
+            CountryResult::decide_loan_buyout(&p, &loan_deal(Some(2_000_000), false)),
+            None,
+            "a barely-used loanee's option is left to lapse"
+        );
+    }
+
+    #[test]
+    fn plain_loan_has_no_buyout() {
+        let p = make_player(1);
+        assert_eq!(
+            CountryResult::decide_loan_buyout(&p, &loan_deal(None, false)),
+            None
+        );
+    }
+
+    // ── Mid-loan recall ─────────────────────────────────────────
+
+    fn recall_world(recall_window: Option<NaiveDate>) -> SimulatorData {
+        // Parent club 100: a single fit midfielder — a depth emergency
+        // in the Midfielder group.
+        let parent_team = make_team(10, 100, 1, vec![make_player_with_position(11)]);
+        let parent_club = make_club(100, vec![parent_team]);
+
+        // Borrower club 200 hosts midfielder 55 on loan from 100.
+        let mut loanee = make_player_with_position(55);
+        loanee.contract = Some(PlayerClubContract::new(30_000, d(2028, 6, 30)));
+        let mut loan = PlayerClubContract::new(30_000, d(2027, 6, 30));
+        loan.loan_from_club_id = Some(100);
+        loan.started = Some(d(2026, 3, 1));
+        loan.loan_recall_available_after = recall_window;
+        loanee.contract_loan = Some(loan);
+        let borrower_team = make_team(20, 200, 1, vec![loanee]);
+        let borrower_club = make_club(200, vec![borrower_team]);
+
+        let league = make_league_with_table(1, 5000, vec![]);
+        let country = build_country(vec![parent_club, borrower_club], vec![league]);
+        let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+        SimulatorData::new(
+            d(2026, 6, 1).and_hms_opt(12, 0, 0).unwrap(),
+            vec![continent],
+            GlobalCompetitions::new(Vec::new()),
+        )
+    }
+
+    #[test]
+    fn depth_emergency_recalls_fit_loanee() {
+        let mut data = recall_world(Some(d(2026, 4, 1)));
+        CountryResult::process_loan_recalls(&mut data, 1, d(2026, 6, 1));
+
+        let country = data.country(1).unwrap();
+        let parent = country.clubs.iter().find(|c| c.id == 100).unwrap();
+        let recalled = parent.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 55);
+        assert!(
+            recalled.is_some(),
+            "the loanee must be recalled to the parent's main squad"
+        );
+        assert!(
+            recalled.unwrap().contract_loan.is_none(),
+            "the recall ends the loan"
+        );
+    }
+
+    #[test]
+    fn recall_requires_the_contract_window() {
+        // Same emergency, but the loan carries no recall clause.
+        let mut data = recall_world(None);
+        CountryResult::process_loan_recalls(&mut data, 1, d(2026, 6, 1));
+
+        let country = data.country(1).unwrap();
+        let borrower = country.clubs.iter().find(|c| c.id == 200).unwrap();
+        assert!(
+            borrower.teams.teams[0]
+                .players
+                .players
+                .iter()
+                .any(|p| p.id == 55),
+            "without a recall clause the parent cannot act"
+        );
     }
 
     #[test]

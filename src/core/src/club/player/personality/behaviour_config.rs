@@ -483,10 +483,19 @@ pub struct MoraleEventCatalog {
     /// Senior reserve-squad player dreaming of genuine first-team
     /// football. Chronic drag while he stays stuck below the first team.
     pub wants_first_team_football: f32,
+    /// Quality player wants out after the club's relegation — the
+    /// post-relegation exodus. Sharp drag while he stays down a level.
+    pub wants_to_leave_after_relegation: f32,
 
     // ── Loan management pressure ─────────────────────────────────
     pub loan_development_concern: f32,
     pub loan_recall_requested: f32,
+    /// Thriving loanee wants the borrower to sign him permanently —
+    /// mild longing, not a grievance.
+    pub wants_loan_made_permanent: f32,
+    /// Back from a loan where he was first-choice, straight into a
+    /// fringe role at the parent club.
+    pub unsettled_after_loan_return: f32,
 
     // ── Contract negotiation tension ─────────────────────────────
     pub release_clause_demanded: f32,
@@ -494,11 +503,19 @@ pub struct MoraleEventCatalog {
     /// Player formally rejected the offered contract. Bigger sting than
     /// `contract_talks_stalled` because the deal is dead, not paused.
     pub rejected_contract_offer: f32,
+    /// Final contract year with no renewal talks opened — silence.
+    pub contract_expiry_anxiety: f32,
+    /// Final-year player in form treats the run-in as a shop window.
+    pub playing_for_new_contract: f32,
 
     // ── Manager-relationship arc & match-trust ───────────────────
     pub asked_for_private_talk: f32,
     /// Listed-but-unsold player asks the club to find him a new team.
     pub asked_club_to_arrange_transfer: f32,
+    /// Window closed with the listed player still unsold — limbo.
+    pub unsold_window_closed: f32,
+    /// The club vetoed a concrete move the player had asked for.
+    pub move_vetoed_by_club: f32,
     pub concerned_by_club_direction: f32,
     pub encouraged_by_squad_investment: f32,
     pub unhappy_with_tactical_role: f32,
@@ -509,6 +526,26 @@ pub struct MoraleEventCatalog {
     pub threatened_by_new_signing: f32,
     pub manager_trust_growing: f32,
     pub manager_trust_eroding: f32,
+    /// Squad-wide lift when a new head coach takes charge; frozen-out
+    /// players scale it up at the emit site (clean-slate hope).
+    pub new_manager_bounce: f32,
+    /// Loyalist fork of the manager-pressure story — fired up to save
+    /// the coach's job.
+    pub rallies_behind_manager: f32,
+    /// Doubter fork — senses a managerial change coming.
+    pub senses_manager_change: f32,
+    /// First rung of the club disciplinary ladder.
+    pub formal_warning_issued: f32,
+    /// Second rung — a wage fine for repeated / serious misconduct.
+    pub fined_by_club: f32,
+    /// Squad-wide inquest after a humiliating result.
+    pub dressing_room_inquest: f32,
+    /// Squad-wide praise after bouncing back from a bad run.
+    pub resilience_praised: f32,
+    /// Told he is not in the manager's plans (club-decision listing).
+    pub told_not_in_plans: f32,
+    /// Personal development plan set by the coaching staff.
+    pub personal_training_plan_set: f32,
 }
 
 impl Default for MoraleEventCatalog {
@@ -719,10 +756,18 @@ impl Default for MoraleEventCatalog {
             // A career visibly stalling in the reserves gnaws like the
             // squad-ambition moods — chronic, not acute.
             wants_first_team_football: -3.0,
+            // Post-relegation exodus mood — as deep as the title itch:
+            // the level he plays at just dropped underneath him.
+            wants_to_leave_after_relegation: -4.0,
             // Loan pressure — development concern and recall request both
             // sit above the routine minutes-concern note.
             loan_development_concern: -2.5,
             loan_recall_requested: -3.0,
+            // Longing, not a grievance — he's playing and happy where he
+            // is; he just doesn't want it to end.
+            wants_loan_made_permanent: -1.0,
+            // Back from real football to a bench he didn't choose.
+            unsettled_after_loan_return: -3.5,
             // Contract tension.
             release_clause_demanded: -2.0,
             contract_talks_stalled: -3.0,
@@ -730,6 +775,10 @@ impl Default for MoraleEventCatalog {
             // is dead, not paused. Magnitude scales further at the emit
             // site (wage gap / status / loyalty).
             rejected_contract_offer: -4.5,
+            // Silence in the final year is quieter than a broken-down
+            // negotiation, but it compounds monthly while nothing moves.
+            contract_expiry_anxiety: -2.5,
+            playing_for_new_contract: 2.0,
             // Manager-relationship arc & match-trust band.
             // `asked_for_private_talk` is a request, not a verdict — the
             // morale hit is light; the renderer makes it feel weighty.
@@ -737,6 +786,12 @@ impl Default for MoraleEventCatalog {
             // The ask itself is a mild frustration note — the unsold
             // listing behind it is the real grievance.
             asked_club_to_arrange_transfer: -1.5,
+            // The window shutting on an unsold listing is the moment the
+            // limbo becomes real — until January, nothing can change.
+            unsold_window_closed: -2.5,
+            // The club killed the exit he formally asked for — one of
+            // the sharpest boardroom wounds short of a broken promise.
+            move_vetoed_by_club: -5.0,
             concerned_by_club_direction: -4.0,
             encouraged_by_squad_investment: 3.5,
             // Tactical-role frustration is chronic; sits a notch below
@@ -752,6 +807,15 @@ impl Default for MoraleEventCatalog {
             threatened_by_new_signing: -3.0,
             manager_trust_growing: 3.5,
             manager_trust_eroding: -4.0,
+            new_manager_bounce: 2.5,
+            rallies_behind_manager: 3.0,
+            senses_manager_change: -2.0,
+            formal_warning_issued: -1.5,
+            fined_by_club: -3.0,
+            dressing_room_inquest: -2.5,
+            resilience_praised: 2.5,
+            told_not_in_plans: -4.5,
+            personal_training_plan_set: 1.5,
         }
     }
 }
@@ -907,13 +971,20 @@ impl MoraleEventCatalog {
             WantsStrongerSquad => self.wants_stronger_squad,
             WantsTitleChallenge => self.wants_title_challenge,
             WantsFirstTeamFootball => self.wants_first_team_football,
+            WantsToLeaveAfterRelegation => self.wants_to_leave_after_relegation,
             LoanDevelopmentConcern => self.loan_development_concern,
             LoanRecallRequested => self.loan_recall_requested,
+            WantsLoanMadePermanent => self.wants_loan_made_permanent,
+            UnsettledAfterLoanReturn => self.unsettled_after_loan_return,
             ReleaseClauseDemanded => self.release_clause_demanded,
             ContractTalksStalled => self.contract_talks_stalled,
             RejectedContractOffer => self.rejected_contract_offer,
+            ContractExpiryAnxiety => self.contract_expiry_anxiety,
+            PlayingForNewContract => self.playing_for_new_contract,
             AskedForPrivateTalk => self.asked_for_private_talk,
             AskedClubToArrangeTransfer => self.asked_club_to_arrange_transfer,
+            UnsoldWindowClosed => self.unsold_window_closed,
+            MoveVetoedByClub => self.move_vetoed_by_club,
             ConcernedByClubDirection => self.concerned_by_club_direction,
             EncouragedBySquadInvestment => self.encouraged_by_squad_investment,
             UnhappyWithTacticalRole => self.unhappy_with_tactical_role,
@@ -924,6 +995,15 @@ impl MoraleEventCatalog {
             ThreatenedByNewSigning => self.threatened_by_new_signing,
             ManagerTrustGrowing => self.manager_trust_growing,
             ManagerTrustEroding => self.manager_trust_eroding,
+            NewManagerBounce => self.new_manager_bounce,
+            RalliesBehindManager => self.rallies_behind_manager,
+            SensesManagerChange => self.senses_manager_change,
+            FormalWarningIssued => self.formal_warning_issued,
+            FinedByClub => self.fined_by_club,
+            DressingRoomInquest => self.dressing_room_inquest,
+            ResiliencePraised => self.resilience_praised,
+            ToldNotInPlans => self.told_not_in_plans,
+            PersonalTrainingPlanSet => self.personal_training_plan_set,
         }
     }
 }

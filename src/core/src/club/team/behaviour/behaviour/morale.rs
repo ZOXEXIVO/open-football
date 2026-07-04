@@ -19,10 +19,10 @@ use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
     HappinessEventScope, HappinessEventSeverity, HappinessEventType, LoanConcernReason,
     LoanDevelopmentConcernReason, LoanEventContext, LoanEventKind, Player, PlayerClubContract,
-    PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus, TeammateConflictContext,
-    TeammateConflictReason,
+    PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatCompetitionKind,
+    PlayerStatusType, TeamType, TeammateConflictContext, TeammateConflictReason,
 };
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -1227,6 +1227,249 @@ impl TeamBehaviour {
         }
     }
 
+    /// Monthly perennial-backup audit for the MAIN squad. The
+    /// minutes-deficit model cannot see this player: a backup who makes
+    /// the bench every week banks enough involvement credit that his
+    /// playing-time factor never crosses the complaint threshold, no
+    /// matter how many seasons pass. This audit reads the career ledger
+    /// instead — season after season without real starts at the club,
+    /// where a year out on loan also counts as a year without a
+    /// first-team place — and weighs the push of ambition and a closing
+    /// career window against the realities that keep real players on a
+    /// big bench: a wage above their own fair value, the size of the
+    /// club, loyalty. When the push wins, the player starts dreaming of
+    /// being a regular somewhere else — possibly at a weaker club — and
+    /// the weekly complaint pass escalates the lingering mood into a
+    /// transfer request. Runs on day 1 only, main squad only; reserve
+    /// squads have their own level-based audit above.
+    pub(super) fn process_perennial_backup_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let is_main_team = ctx
+            .team
+            .as_ref()
+            .and_then(|t| t.team_type)
+            .map(|t| matches!(t, TeamType::Main))
+            .unwrap_or(false);
+        if !is_main_team {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            let Some(anxiety) = BackupCareerAnxiety::evaluate(player, today, ctx) else {
+                continue;
+            };
+
+            let days_at_club = player
+                .days_since_transfer(today)
+                .map(|d| d.clamp(0, u32::MAX as i64) as u32)
+                .unwrap_or(0);
+
+            let mut desire =
+                CareerDesireEventContext::new(CareerDesireKind::FirstTeamBreakthroughAmbition)
+                    .with_player_ability(player.player_attributes.current_ability)
+                    .with_evidence(CareerDesireEvidence::PerennialBackupRole);
+            if anxiety.serial_loanee {
+                desire = desire.with_evidence(CareerDesireEvidence::SerialLoanSpells);
+            }
+            if days_at_club > 0 {
+                desire = desire.with_days_at_club(days_at_club);
+            }
+            if player.attributes.ambition >= 14.0 {
+                desire = desire.with_evidence(CareerDesireEvidence::HighAmbition);
+            }
+            if anxiety.in_prime_window {
+                desire = desire.with_evidence(CareerDesireEvidence::PrimeCareerWindow);
+            }
+
+            let magnitude = HappinessConfig::default().catalog.wants_first_team_football;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::ReputationAdmiration,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Personal,
+            )
+            .with_career_desire_context(desire)
+            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::WantsFirstTeamFootball,
+                magnitude,
+                None,
+                happiness_ctx,
+                60,
+            );
+        }
+    }
+
+    /// Monthly loanee-permanence audit. A loanee who is thriving at the
+    /// borrowing club — starting regularly, performing — starts wanting
+    /// the move made permanent rather than returning to the parent's
+    /// fringe or the next loan of the carousel. Longing, not a
+    /// grievance; the visible beat that precedes the summer "sign him
+    /// permanently" saga. Runs on day 1 for whatever squad the loanee
+    /// is rostered in.
+    pub(super) fn process_loanee_permanence_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        for player in players.players.iter_mut() {
+            if !player.is_on_loan() {
+                continue;
+            }
+            let age = player.age(today);
+            // Teenage development loans end with a return by design —
+            // the longing to stay is a senior's story.
+            if age < 20 {
+                continue;
+            }
+            // Settled into the spell — at least ~3 months in.
+            let settled = player
+                .contract_loan
+                .as_ref()
+                .and_then(|l| l.started)
+                .map(|s| (today - s).num_days() >= 90)
+                .unwrap_or(false);
+            if !settled {
+                continue;
+            }
+            // Thriving: a real run of starts, performing.
+            let starts = player.statistics.played;
+            if starts < 8 {
+                continue;
+            }
+            let rating = player
+                .statistics
+                .average_rating_realistic(player.position().position_group());
+            if rating < 6.8 {
+                continue;
+            }
+
+            let mut desire =
+                CareerDesireEventContext::new(CareerDesireKind::LoanToPermanentAmbition)
+                    .with_player_ability(player.player_attributes.current_ability)
+                    .with_evidence(CareerDesireEvidence::ThrivingOnLoan);
+            if player.attributes.ambition >= 14.0 {
+                desire = desire.with_evidence(CareerDesireEvidence::HighAmbition);
+            }
+            if (24..=31).contains(&age) {
+                desire = desire.with_evidence(CareerDesireEvidence::PrimeCareerWindow);
+            }
+
+            let magnitude = HappinessConfig::default().catalog.wants_loan_made_permanent;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Personal,
+            )
+            .with_career_desire_context(desire);
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::WantsLoanMadePermanent,
+                magnitude,
+                None,
+                happiness_ctx,
+                75,
+            );
+        }
+    }
+
+    /// Monthly contract-horizon audit. A senior inside the final year
+    /// of his deal with NO renewal activity on record — no offer, no
+    /// stalled negotiation, just silence — reads the situation two
+    /// ways: a player in real form treats the run-in as a shop window
+    /// (`PlayingForNewContract`), everyone else starts to worry
+    /// (`ContractExpiryAnxiety`). Distinct from `ContractTalksStalled`,
+    /// where talks happened and broke down. Runs on day 1.
+    pub(super) fn process_contract_horizon_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        for player in players.players.iter_mut() {
+            if player.is_on_loan() {
+                continue;
+            }
+            let age = player.age(today);
+            // Youth renewals are the academy pipeline's routine; past
+            // the late-career line the horizon question is retirement,
+            // not renewal — the veteran audit owns it.
+            if age < 21 {
+                continue;
+            }
+            let late_line = if player.position().is_goalkeeper() {
+                37
+            } else {
+                34
+            };
+            if age >= late_line {
+                continue;
+            }
+            let Some((days_left, listed, not_needed)) = player.contract.as_ref().map(|c| {
+                (
+                    (c.expiration - today).num_days(),
+                    c.is_transfer_listed,
+                    matches!(c.squad_status, PlayerSquadStatus::NotNeeded),
+                )
+            }) else {
+                continue;
+            };
+            // Final year, but not the final month of chaos — the
+            // expiry-day machinery owns the endgame.
+            if !(30..=365).contains(&days_left) {
+                continue;
+            }
+            // Listed / written-off / asking-out players know exactly
+            // why nobody has called about a new deal.
+            let statuses = player.statuses.get();
+            if listed
+                || not_needed
+                || statuses.contains(&PlayerStatusType::Req)
+                || statuses.contains(&PlayerStatusType::Loa)
+            {
+                continue;
+            }
+            // "Silence" = no renewal activity on record in months.
+            let h = &player.happiness;
+            if h.has_recent_event(&HappinessEventType::ContractOffer, 90)
+                || h.has_recent_event(&HappinessEventType::ContractRenewal, 180)
+                || h.has_recent_event(&HappinessEventType::ContractTalksStalled, 90)
+                || h.has_recent_event(&HappinessEventType::RejectedContractOffer, 120)
+            {
+                continue;
+            }
+
+            // In-form seniors flip the anxiety into shop-window drive.
+            let apps = player.statistics.played + player.statistics.played_subs;
+            let rating = player
+                .statistics
+                .average_rating_realistic(player.position().position_group());
+            let cfg = HappinessConfig::default();
+            if apps >= 6 && rating >= 7.05 {
+                player.happiness.add_event_with_cooldown(
+                    HappinessEventType::PlayingForNewContract,
+                    cfg.catalog.playing_for_new_contract,
+                    90,
+                );
+            } else {
+                player.happiness.add_event_with_cooldown(
+                    HappinessEventType::ContractExpiryAnxiety,
+                    cfg.catalog.contract_expiry_anxiety,
+                    60,
+                );
+            }
+        }
+    }
+
     /// Monthly late-career audit for contracted players. Older players
     /// whose role has faded begin to weigh up retirement; veteran leaders
     /// with the right temperament signal interest in coaching. Both gates
@@ -1247,6 +1490,256 @@ impl TeamBehaviour {
             CareerStageDetector::maybe_consider_retirement(player, today);
             CareerStageDetector::maybe_show_coaching_interest(player, today);
         }
+    }
+}
+
+/// Career-anxiety verdict for a settled main-squad player who is not
+/// getting first-team football — the perennial backup and the serial
+/// loanee. The push (ambition, the closing career window, seasons
+/// already lost, the loan carousel) is weighed against the comforts
+/// that keep real players on a big bench: a wage above their own fair
+/// value, the prestige of a big club, loyalty. Built by
+/// [`TeamBehaviour::process_perennial_backup_audit`]; `None` means the
+/// player accepts his role — which for a well-paid, unambitious #2 at a
+/// big club is a perfectly real career.
+struct BackupCareerAnxiety {
+    /// Two or more of the last four season-years were spent out on loan
+    /// — the player keeps being circulated instead of played.
+    serial_loanee: bool,
+    /// Inside the position-adjusted prime window at emit time.
+    in_prime_window: bool,
+}
+
+impl BackupCareerAnxiety {
+    /// A player must clear this desire score before the dream fires.
+    const EMIT_THRESHOLD: f32 = 0.52;
+    /// A season with at most this many league starts at the parent club…
+    const STUCK_SEASON_MAX_STARTS: u16 = 8;
+    /// …and at most this many total league appearances counts as a
+    /// season without first-team football.
+    const STUCK_SEASON_MAX_APPS: u16 = 15;
+    /// How many season-years back the stuck-season scan may walk.
+    const MAX_LOOKBACK_YEARS: u16 = 6;
+    /// Post-transfer settling window before a stuck-career story exists.
+    const SETTLED_DAYS: i64 = 540;
+
+    fn evaluate(
+        player: &Player,
+        today: NaiveDate,
+        ctx: &GlobalContext<'_>,
+    ) -> Option<BackupCareerAnxiety> {
+        // Loanees belong to their parent club; a manager-pinned player
+        // IS first-team by definition.
+        if player.is_on_loan() || player.is_force_match_selection {
+            return None;
+        }
+        let contract = player.contract.as_ref()?;
+        // Already written off or already on the way out — the listing /
+        // release systems own those stories.
+        if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded)
+            || contract.is_transfer_listed
+        {
+            return None;
+        }
+        let statuses = player.statuses.get();
+        if statuses.contains(&PlayerStatusType::Req) || statuses.contains(&PlayerStatusType::Loa) {
+            return None;
+        }
+
+        let age = player.age(today);
+        let is_goalkeeper = player.position().is_goalkeeper();
+        // Under-24s belong to the prospect / development-loan pathway;
+        // past the late-career line the veteran audit owns the story — a
+        // 36-year-old #2 keeper seeing out his career is real life.
+        let late_career_age = if is_goalkeeper { 37 } else { 34 };
+        if age < 24 || age >= late_career_age {
+            return None;
+        }
+
+        // Still settling in after a move — no stuck story yet. Homegrown
+        // players (never transferred) pass.
+        if player
+            .days_since_transfer(today)
+            .map(|d| d < Self::SETTLED_DAYS)
+            .unwrap_or(false)
+        {
+            return None;
+        }
+
+        // Loyal servants of a favourite club accept the squad role.
+        if let Some(club) = ctx.club.as_ref() {
+            if player.attributes.loyalty >= 17.0 && player.favorite_clubs.contains(&club.id) {
+                return None;
+            }
+        }
+
+        let (stuck_years, serial_loanee) = Self::scan_ledger(player, today)?;
+        if stuck_years < 2 {
+            return None;
+        }
+
+        // Breaking through right now? A backup who has claimed the shirt
+        // this season is not stuck any more.
+        if let Some(club) = ctx.club.as_ref() {
+            if club.league_matches_played >= 8 {
+                let share = player.statistics.played as f32 / club.league_matches_played as f32;
+                if share >= 0.40 {
+                    return None;
+                }
+            }
+        }
+
+        // Eligibility: the perennial backup by squad status, or anyone
+        // the club keeps shipping out on loan instead of playing. Real
+        // rotation players with actual starts never get this far — the
+        // stuck-season scan already broke their chain.
+        let is_backup = matches!(contract.squad_status, PlayerSquadStatus::MainBackupPlayer);
+        if !is_backup && !serial_loanee {
+            return None;
+        }
+
+        // ── The push ──
+        let ambition01 = (player.attributes.ambition / 20.0).clamp(0.0, 1.0);
+        let determination01 = (player.skills.mental.determination / 20.0).clamp(0.0, 1.0);
+        let loyalty01 = (player.attributes.loyalty / 20.0).clamp(0.0, 1.0);
+
+        // Age urgency: ramps in from 24, saturates through the prime
+        // ("the years are slipping away"), then eases toward the
+        // late-career line as the veteran makes peace with the role.
+        // Goalkeeper careers run ~3 years later.
+        let (prime_start, prime_end, fade_end) = if is_goalkeeper {
+            (27.0_f32, 33.0_f32, 37.0_f32)
+        } else {
+            (26.0_f32, 31.0_f32, 34.0_f32)
+        };
+        let a = age as f32;
+        let age_urgency = if a < prime_start {
+            0.35 + 0.65 * ((a - 23.0) / (prime_start - 23.0)).clamp(0.0, 1.0)
+        } else if a <= prime_end {
+            1.0
+        } else {
+            1.0 - 0.5 * ((a - prime_end) / (fade_end - prime_end)).clamp(0.0, 1.0)
+        };
+
+        let stuck_pressure = stuck_years.min(4) as f32 / 4.0;
+        let serial_bonus = if serial_loanee { 0.15 } else { 0.0 };
+
+        // ── The comforts ──
+        // Being #2 at a genuinely big club is a career in itself —
+        // unless the player's ambition erodes the prestige.
+        let club_rep = ctx
+            .club
+            .as_ref()
+            .map(|c| {
+                if c.main_team_reputation > 0 {
+                    c.main_team_reputation
+                } else {
+                    5_000
+                }
+            })
+            .unwrap_or(5_000) as f32;
+        let rep01 = ((club_rep - 4_000.0) / 4_000.0).clamp(0.0, 1.0);
+        let big_club_comfort = rep01 * 0.22 * (1.0 - 0.6 * ambition01);
+
+        // A wage clearly above his own fair valuation is exactly why
+        // real backups sign the next extension and stay put.
+        let fair_ratio = WageFairness::assess(player, contract, today, ctx).fair_ratio;
+        let wage_comfort =
+            ((fair_ratio - 1.0) / 0.5).clamp(0.0, 1.0) * 0.15 * (1.0 - 0.5 * ambition01);
+
+        let loyalty_brake = loyalty01 * 0.10;
+
+        let desire = 0.40 * ambition01
+            + 0.28 * age_urgency
+            + 0.17 * stuck_pressure
+            + 0.08 * determination01
+            + serial_bonus
+            - big_club_comfort
+            - wage_comfort
+            - loyalty_brake;
+
+        if desire < Self::EMIT_THRESHOLD {
+            return None;
+        }
+
+        Some(BackupCareerAnxiety {
+            serial_loanee,
+            in_prime_window: a >= prime_start - 2.0 && a <= prime_end,
+        })
+    }
+
+    /// Walk the canonical season ledger backwards from the most recent
+    /// league season the player was at this club for. A season is
+    /// "without first-team football" when his parent-club league starts
+    /// and appearances stay under the bars — a year spent entirely out
+    /// on loan therefore counts (zero parent starts), while a real run
+    /// of starts breaks the chain. Returns `(consecutive stuck seasons,
+    /// serial-loanee flag)`, or `None` when there is no usable history.
+    fn scan_ledger(player: &Player, today: NaiveDate) -> Option<(u16, bool)> {
+        let ledger = &player.statistics_history.season_ledger;
+        // Seasons before the player joined this club say nothing about
+        // his standing here. Homegrown players have no floor.
+        let join_year_floor = player
+            .days_since_transfer(today)
+            .map(|d| (today - Duration::days(d)).year() as u16);
+        let at_club = |year: u16| join_year_floor.map_or(true, |floor| year >= floor);
+
+        let anchor = ledger
+            .iter()
+            .filter(|e| matches!(e.competition_kind, PlayerStatCompetitionKind::League))
+            .filter(|e| at_club(e.season_start_year))
+            .map(|e| e.season_start_year)
+            .max()?;
+
+        let mut stuck_years: u16 = 0;
+        for back in 0..Self::MAX_LOOKBACK_YEARS {
+            let Some(year) = anchor.checked_sub(back) else {
+                break;
+            };
+            if !at_club(year) {
+                break;
+            }
+            // Sum parent-club (non-loan) league starts / apps for the
+            // year; a year with no parent rows at all was a year the
+            // club gave him nothing.
+            let (starts, apps) = ledger
+                .iter()
+                .filter(|e| {
+                    e.season_start_year == year
+                        && !e.is_loan
+                        && matches!(e.competition_kind, PlayerStatCompetitionKind::League)
+                })
+                .fold((0u16, 0u16), |(s, a), e| {
+                    (
+                        s.saturating_add(e.statistics.played),
+                        a.saturating_add(e.statistics.played)
+                            .saturating_add(e.statistics.played_subs),
+                    )
+                });
+            if starts <= Self::STUCK_SEASON_MAX_STARTS && apps <= Self::STUCK_SEASON_MAX_APPS {
+                stuck_years += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Serial loanee: two or more distinct season-years of the last
+        // four spent out on loan from this club.
+        let loan_floor = anchor.saturating_sub(3);
+        let mut loan_years: Vec<u16> = ledger
+            .iter()
+            .filter(|e| {
+                e.is_loan
+                    && matches!(e.competition_kind, PlayerStatCompetitionKind::League)
+                    && e.season_start_year >= loan_floor
+                    && at_club(e.season_start_year)
+            })
+            .map(|e| e.season_start_year)
+            .collect();
+        loan_years.sort_unstable();
+        loan_years.dedup();
+
+        Some((stuck_years, loan_years.len() >= 2))
     }
 }
 
@@ -1491,7 +1984,8 @@ mod tests {
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, Player, PlayerAttributes, PlayerClubContract, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills, TeamContext, TeamType,
+        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatLedgerEntry,
+        PlayerStatistics, TeamContext, TeamType,
     };
     use chrono::NaiveDate;
 
@@ -1854,7 +2348,7 @@ mod tests {
         let today = first_of_month(2026, 6);
         let mut p = stuck_reserve_player();
         // Arrived 60 days ago — still settling in.
-        p.last_transfer_date = Some(today - chrono::Duration::days(60));
+        p.last_transfer_date = Some(today - Duration::days(60));
         let mut players = PlayerCollection::new(vec![p]);
         TeamBehaviour::process_reserve_ambition_audit(
             &mut players,
@@ -1878,6 +2372,400 @@ mod tests {
             count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
             1,
             "monthly re-run inside the 60-day cooldown must not double-fire"
+        );
+    }
+
+    // ── Perennial main-squad backup (WantsFirstTeamFootball) ────
+
+    fn ledger_row(year: u16, starts: u16, is_loan: bool) -> PlayerStatLedgerEntry {
+        PlayerStatLedgerEntry {
+            seq_id: 0,
+            season_start_year: year,
+            team_slug: "t".into(),
+            team_name: "T".into(),
+            team_reputation: 4_000,
+            league_slug: "l".into(),
+            league_name: "L".into(),
+            competition_kind: PlayerStatCompetitionKind::League,
+            competition_slug: "l".into(),
+            is_loan,
+            transfer_fee: None,
+            statistics: PlayerStatistics {
+                played: starts,
+                ..Default::default()
+            },
+        }
+    }
+
+    /// A 28-year-old homegrown main-squad backup: seasons of 2-3 league
+    /// starts on record, real determination — the career #2.
+    fn perennial_backup(ambition: f32) -> Player {
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1998, 3, 1).unwrap(),
+                90,
+                500,
+                ambition,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        p.skills.mental.determination = 12.0;
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2024, 3, false));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 2, false));
+        p
+    }
+
+    #[test]
+    fn perennial_main_backup_dreams_of_first_team() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![perennial_backup(12.0)]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            1,
+            "a settled main-squad backup with seasons of bench duty should dream of a starting role"
+        );
+    }
+
+    #[test]
+    fn recent_breakthrough_clears_the_backup_dream() {
+        let today = first_of_month(2026, 6);
+        let mut p = perennial_backup(12.0);
+        // Most recent completed season: he claimed the shirt.
+        p.statistics_history.season_ledger.pop();
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 20, false));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            0,
+            "a real run of starts last season breaks the stuck-career story"
+        );
+    }
+
+    #[test]
+    fn content_low_ambition_backup_stays_put() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![perennial_backup(4.0)]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            0,
+            "an unambitious journeyman #2 accepts the role — that's a real career"
+        );
+    }
+
+    /// Big-club comfort + a wage far above his own fair value: the
+    /// average-ambition backup signs the next extension and stays.
+    #[test]
+    fn big_club_fat_contract_keeps_average_backup_content() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut p = perennial_backup(10.0);
+        p.contract.as_mut().unwrap().salary = 5_000_000;
+        let mut ctx = reserve_ctx(today, TeamType::Main);
+        ctx.club = Some(ClubContext::new(1, &name).with_reputations(8_500, 8_500, 6_000, 6_000));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_perennial_backup_audit(&mut players, &ctx);
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            0,
+            "a well-paid bench at a big club is fine for an average-ambition player"
+        );
+    }
+
+    /// …but genuine ambition erodes both comforts — he wants to play,
+    /// even if it means a smaller club.
+    #[test]
+    fn ambitious_backup_leaves_even_a_big_club() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut p = perennial_backup(17.0);
+        p.contract.as_mut().unwrap().salary = 5_000_000;
+        let mut ctx = reserve_ctx(today, TeamType::Main);
+        ctx.club = Some(ClubContext::new(1, &name).with_reputations(8_500, 8_500, 6_000, 6_000));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_perennial_backup_audit(&mut players, &ctx);
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            1,
+            "high ambition outweighs the big-club bench and the fat wage"
+        );
+    }
+
+    #[test]
+    fn serial_loanee_wants_a_permanent_home() {
+        let today = first_of_month(2026, 6);
+        // 25-year-old rotation-status player who has spent three straight
+        // seasons out on loan — never a first-team place at the parent.
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(2001, 3, 1).unwrap(),
+                90,
+                500,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamSquadRotation,
+        );
+        p.skills.mental.determination = 12.0;
+        for (year, starts) in [(2023u16, 28u16), (2024, 30), (2025, 26)] {
+            p.statistics_history
+                .season_ledger
+                .push(ledger_row(year, starts, true));
+        }
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            1,
+            "the loan carousel counts as years without a first-team place at the parent club"
+        );
+    }
+
+    #[test]
+    fn keeper_at_35_still_dreams_of_a_number_one_shirt() {
+        let today = first_of_month(2026, 6);
+        // Goalkeeper careers run later — 35 is still inside the window.
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1991, 3, 1).unwrap(),
+                90,
+                500,
+                12.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        p.positions = PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: PlayerPositionType::Goalkeeper,
+                level: 20,
+            }],
+        };
+        p.skills.mental.determination = 12.0;
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2024, 2, false));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 3, false));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            1,
+            "a 35-year-old career #2 keeper still wants one last number-one shirt"
+        );
+    }
+
+    #[test]
+    fn keeper_past_the_late_career_line_settles() {
+        let today = first_of_month(2026, 6);
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1988, 3, 1).unwrap(),
+                90,
+                500,
+                12.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        p.positions = PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: PlayerPositionType::Goalkeeper,
+                level: 20,
+            }],
+        };
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2024, 2, false));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 3, false));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            0,
+            "a 38-year-old keeper is seeing out his career — the veteran audit owns him"
+        );
+    }
+
+    #[test]
+    fn perennial_backup_audit_skips_reserve_squads() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![perennial_backup(12.0)]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Second),
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            0,
+            "the perennial-backup audit only runs for the main squad"
+        );
+    }
+
+    // ── WantsLoanMadePermanent ──────────────────────────────────
+
+    /// A 25-year-old loanee, four months into the spell, starting and
+    /// performing at the borrowing club.
+    fn thriving_loanee(today: NaiveDate) -> Player {
+        let mut p = build_player(1, NaiveDate::from_ymd_opt(2001, 2, 1).unwrap(), 95, 500, 12.0);
+        let mut loan =
+            PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2026, 12, 31).unwrap());
+        loan.started = Some(today - Duration::days(120));
+        loan.loan_from_club_id = Some(99);
+        p.contract_loan = Some(loan);
+        p.statistics.played = 15;
+        p.statistics.rating_points = 7.5 * 15.0;
+        p.statistics.rating_weight = 15.0;
+        p
+    }
+
+    #[test]
+    fn thriving_loanee_wants_the_move_made_permanent() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![thriving_loanee(today)]);
+        TeamBehaviour::process_loanee_permanence_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsLoanMadePermanent),
+            1,
+            "a loanee starting and performing should want the move made permanent"
+        );
+    }
+
+    #[test]
+    fn benched_loanee_does_not_ask_to_stay() {
+        let today = first_of_month(2026, 6);
+        let mut p = thriving_loanee(today);
+        p.statistics.played = 3;
+        p.statistics.rating_points = 7.5 * 3.0;
+        p.statistics.rating_weight = 3.0;
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_loanee_permanence_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsLoanMadePermanent),
+            0,
+            "a loanee who isn't playing has nothing to make permanent"
+        );
+    }
+
+    #[test]
+    fn fresh_loanee_waits_before_asking() {
+        let today = first_of_month(2026, 6);
+        let mut p = thriving_loanee(today);
+        p.contract_loan.as_mut().unwrap().started = Some(today - Duration::days(30));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_loanee_permanence_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsLoanMadePermanent),
+            0,
+            "a month into the loan is too early for a permanence ask"
+        );
+    }
+
+    // ── Contract-horizon (expiry anxiety / shop window) ─────────
+
+    /// A 27-year-old first-team regular with ~200 days left on his deal
+    /// and no renewal activity on record.
+    fn final_year_player() -> Player {
+        let mut p = with_contract(
+            build_player(1, NaiveDate::from_ymd_opt(1999, 1, 1).unwrap(), 100, 500, 12.0),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        p.contract.as_mut().unwrap().expiration = NaiveDate::from_ymd_opt(2026, 12, 15).unwrap();
+        p
+    }
+
+    #[test]
+    fn final_year_silence_breeds_anxiety() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![final_year_player()]);
+        TeamBehaviour::process_contract_horizon_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::ContractExpiryAnxiety),
+            1,
+            "final contract year with no talks opened should worry the player"
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::PlayingForNewContract),
+            0
+        );
+    }
+
+    #[test]
+    fn in_form_final_year_becomes_a_shop_window() {
+        let today = first_of_month(2026, 6);
+        let mut p = final_year_player();
+        p.statistics.played = 12;
+        p.statistics.rating_points = 7.8 * 12.0;
+        p.statistics.rating_weight = 12.0;
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_contract_horizon_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::PlayingForNewContract),
+            1,
+            "an in-form final-year player plays for the new deal instead of worrying"
+        );
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::ContractExpiryAnxiety),
+            0
+        );
+    }
+
+    #[test]
+    fn recent_offer_means_no_expiry_anxiety() {
+        let today = first_of_month(2026, 6);
+        let mut p = final_year_player();
+        p.happiness.add_event(HappinessEventType::ContractOffer, 2.0);
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_contract_horizon_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::ContractExpiryAnxiety),
+            0,
+            "the club HAS been talking — no silence, no anxiety"
+        );
+    }
+
+    #[test]
+    fn listed_final_year_player_knows_why_nobody_called() {
+        let today = first_of_month(2026, 6);
+        let mut p = final_year_player();
+        p.contract.as_mut().unwrap().is_transfer_listed = true;
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_contract_horizon_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::ContractExpiryAnxiety),
+            0,
+            "a listed player's silence is explained — the anxiety event stays out"
         );
     }
 

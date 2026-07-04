@@ -23,6 +23,14 @@ pub enum CareerDesireKind {
     /// first-team football — a breakthrough at his own club or a move to
     /// one where he'd start. Drives `WantsFirstTeamFootball`.
     FirstTeamBreakthroughAmbition,
+    /// Quality player wants out after the club's relegation — he intends
+    /// to keep playing at the level the club just lost. Drives
+    /// `WantsToLeaveAfterRelegation`.
+    PostRelegationAmbition,
+    /// Thriving loanee wants the borrowing club to sign him permanently
+    /// instead of sending him back to the parent's fringe. Drives
+    /// `WantsLoanMadePermanent`.
+    LoanToPermanentAmbition,
 }
 
 impl CareerDesireKind {
@@ -39,6 +47,8 @@ impl CareerDesireKind {
             CareerDesireKind::FirstTeamBreakthroughAmbition => {
                 "career_desire_kind_first_team_football"
             }
+            CareerDesireKind::PostRelegationAmbition => "career_desire_kind_post_relegation",
+            CareerDesireKind::LoanToPermanentAmbition => "career_desire_kind_loan_permanent",
         }
     }
 }
@@ -93,6 +103,18 @@ pub enum CareerDesireEvidence {
     /// Player has spent a long stretch in a reserve / B / second squad
     /// without breaking into the first team.
     StuckInReserveSquad,
+    /// Player is in the main squad but has been a perennial backup for
+    /// seasons — on the bench every week, almost never starting. The
+    /// classic case is the career #2 goalkeeper.
+    PerennialBackupRole,
+    /// Player keeps being sent out on loan season after season and never
+    /// gets a first-team chance at the parent club — he wants a permanent
+    /// home where he actually belongs, even a step down.
+    SerialLoanSpells,
+    /// The club has just been relegated a division.
+    RelegatedWithClub,
+    /// Player is starting regularly and performing on his current loan.
+    ThrivingOnLoan,
 }
 
 impl CareerDesireEvidence {
@@ -139,6 +161,14 @@ impl CareerDesireEvidence {
             CareerDesireEvidence::StuckInReserveSquad => {
                 "career_desire_evidence_stuck_in_reserves"
             }
+            CareerDesireEvidence::PerennialBackupRole => {
+                "career_desire_evidence_perennial_backup"
+            }
+            CareerDesireEvidence::SerialLoanSpells => "career_desire_evidence_serial_loans",
+            CareerDesireEvidence::RelegatedWithClub => {
+                "career_desire_evidence_relegated_with_club"
+            }
+            CareerDesireEvidence::ThrivingOnLoan => "career_desire_evidence_thriving_on_loan",
         }
     }
 }

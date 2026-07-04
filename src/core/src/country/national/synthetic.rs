@@ -262,6 +262,7 @@ impl NationalTeam {
             cup_statistics_by_competition: Vec::new(),
             statistics_history: PlayerStatisticsHistory::new(),
             decision_history: PlayerDecisionHistory::new(),
+            individual_training: None,
             languages: Vec::new(),
             last_transfer_date: None,
             plan: None,

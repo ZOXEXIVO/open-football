@@ -1,8 +1,9 @@
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::staff::perception::{CoachDecisionState, date_to_week};
 use crate::club::team::squad::{ContractRenewalManager, SquadManager};
 use crate::context::GlobalContext;
 use crate::utils::Logging;
-use crate::{HappinessEventType, Team, TeamResult, TeamType};
+use crate::{HappinessEventType, PlayerStatusType, Team, TeamResult, TeamType};
 use chrono::NaiveDate;
 use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
@@ -149,10 +150,14 @@ impl TeamCollection {
 
     // ─── Coach state management ──────────────────────────────────────
 
-    pub fn ensure_coach_state(&mut self, date: NaiveDate) {
+    /// Returns `true` when a genuine manager CHANGE was detected this
+    /// call (a previous coach existed and the head-coach id moved) — the
+    /// club-level caller uses that to open the new manager's squad
+    /// review window on the transfer plan.
+    pub fn ensure_coach_state(&mut self, date: NaiveDate) -> bool {
         let main_team = match self.main() {
             Some(t) => t,
-            None => return,
+            None => return false,
         };
 
         let head_coach = main_team.staffs.head_coach();
@@ -161,6 +166,7 @@ impl TeamCollection {
         let previous_coach_id = self.coach_state.as_ref().map(|state| state.coach_id);
         let needs_rebuild = previous_coach_id.map(|pid| pid != coach_id).unwrap_or(true);
 
+        let mut manager_changed = false;
         if needs_rebuild {
             self.coach_state = Some(CoachDecisionState::new(head_coach, date));
 
@@ -168,14 +174,18 @@ impl TeamCollection {
             // previous coach (not on first-ever initialization). Players
             // who had a strong bond with the outgoing coach take a hit;
             // those whose relationship had soured get a fresh-start bump.
+            // Then the whole squad feels the new-manager bounce.
             if let Some(prev_id) = previous_coach_id {
                 Self::fire_manager_departure_events(&mut self.teams, prev_id);
+                Self::fire_new_manager_bounce_events(&mut self.teams);
+                manager_changed = true;
             }
         }
 
         if let Some(ref mut state) = self.coach_state {
             state.current_week = date_to_week(date);
         }
+        manager_changed
     }
 
     fn fire_manager_departure_events(teams: &mut [Team], outgoing_coach_id: u32) {
@@ -204,6 +214,34 @@ impl TeamCollection {
                 player
                     .happiness
                     .add_event(HappinessEventType::ManagerDeparture, magnitude);
+            }
+        }
+    }
+
+    /// The other half of a manager change: the squad-wide new-manager
+    /// bounce. Everyone gets a small lift of fresh expectation; players
+    /// the old regime had frozen out — low morale, formally unhappy, or
+    /// club-listed — hope hardest, because the clean slate is real: the
+    /// new coach's selection memory starts empty.
+    fn fire_new_manager_bounce_events(teams: &mut [Team]) {
+        let base = HappinessConfig::default().catalog.new_manager_bounce;
+        for team in teams.iter_mut() {
+            if !matches!(team.team_type, TeamType::Main) {
+                continue;
+            }
+            for player in team.players.players.iter_mut() {
+                let statuses = player.statuses.get();
+                let frozen_out = player.happiness.morale < 40.0
+                    || statuses.contains(&PlayerStatusType::Unh)
+                    || player
+                        .contract
+                        .as_ref()
+                        .map(|c| c.is_transfer_listed)
+                        .unwrap_or(false);
+                let magnitude = if frozen_out { base * 1.8 } else { base };
+                player
+                    .happiness
+                    .add_event(HappinessEventType::NewManagerBounce, magnitude);
             }
         }
     }
@@ -313,5 +351,113 @@ impl TeamCollection {
             .iter()
             .position(|t| t.team_type == TeamType::U18)
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U19))
+    }
+}
+
+#[cfg(test)]
+mod coach_change_tests {
+    //! The manager-change arc: swapping the head coach fires the
+    //! loyalists' `ManagerDeparture` AND the squad-wide
+    //! `NewManagerBounce`, and reports the change to the club level so
+    //! the transfer plan can open the new manager's review window.
+    use super::*;
+    use crate::club::StaffStub;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, Player, PlayerAttributes, PlayerCollection, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection, Team, TeamBuilder,
+        TeamReputation, TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    fn coach(id: u32) -> crate::Staff {
+        let mut staff = StaffStub::default();
+        staff.id = id;
+        staff.contract = Some(StaffClubContract::new(
+            50_000,
+            NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+            StaffPosition::Manager,
+            StaffStatus::Active,
+        ));
+        staff
+    }
+
+    fn squad_player(id: u32) -> Player {
+        PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("T".into(), id.to_string()))
+            .birth_date(NaiveDate::from_ymd_opt(1998, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Striker,
+                    level: 20,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap()
+    }
+
+    fn main_team(head: crate::Staff, players: Vec<Player>) -> Team {
+        TeamBuilder::new()
+            .id(1)
+            .league_id(Some(1))
+            .club_id(1)
+            .name("Main".to_string())
+            .slug("main".to_string())
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(vec![head]))
+            .reputation(TeamReputation::new(100, 100, 200))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap()
+    }
+
+    fn count(player: &Player, kind: HappinessEventType) -> usize {
+        player
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == kind)
+            .count()
+    }
+
+    #[test]
+    fn manager_change_fires_departure_and_bounce() {
+        let mut collection = TeamCollection::new(vec![main_team(coach(1), vec![squad_player(7)])]);
+        let first = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        assert!(
+            !collection.ensure_coach_state(first),
+            "first-ever initialization is not a manager change"
+        );
+
+        // The board replaces the head coach between ticks.
+        collection.teams[0].staffs = StaffCollection::new(vec![coach(2)]);
+        let next = NaiveDate::from_ymd_opt(2026, 6, 8).unwrap();
+        assert!(
+            collection.ensure_coach_state(next),
+            "a head-coach id change must be reported to the club level"
+        );
+
+        let p = &collection.teams[0].players.players[0];
+        assert_eq!(
+            count(p, HappinessEventType::ManagerDeparture),
+            1,
+            "the outgoing coach's departure lands on the squad"
+        );
+        assert_eq!(
+            count(p, HappinessEventType::NewManagerBounce),
+            1,
+            "the new-manager bounce lands on the squad"
+        );
     }
 }

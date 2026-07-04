@@ -1457,6 +1457,10 @@ pub struct IndividualTrainingPlan {
     pub focus_areas: Vec<TrainingFocus>,
     pub intensity_modifier: f32, // 0.5 to 1.5
     pub special_instructions: Vec<SpecialInstruction>,
+    /// When the coaching staff set the plan. Drives the monthly
+    /// progress tick and the natural expiry of a plan that has run
+    /// its course.
+    pub started: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone)]

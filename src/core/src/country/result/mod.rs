@@ -132,6 +132,10 @@ impl CountryResult {
         // Regular loan return check for non-season-end days
         if !any_new_season {
             Self::process_loan_returns(data, country_id, current_date);
+            // Monthly mid-loan recall pass: depth emergencies at the
+            // parent and failing loans convert the (previously unused)
+            // recall window into an actual early return.
+            Self::process_loan_recalls(data, country_id, current_date);
         }
 
         // Pre-season, international competitions, economic factors all

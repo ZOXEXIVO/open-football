@@ -925,6 +925,14 @@ pub struct ClubTransferPlan {
     /// listing is a wage problem for any club.
     pub transfer_broadcasts: HashMap<u32, AvailabilityBroadcast>,
 
+    /// End of the squad-review window a just-appointed head coach gets
+    /// before the club honours the old regime's exit decisions. While
+    /// today is inside the window, the country listing pass creates no
+    /// NEW club-driven listings — player-initiated exits (a formal
+    /// request, long unhappiness) keep their course. Stamped by
+    /// `Club::simulate` when the head-coach id changes.
+    pub manager_review_until: Option<NaiveDate>,
+
     /// COMPLETED permanent prospect purchases (DevelopmentSigning buys)
     /// this window. Together with [`Self::prospect_pursuits_active`] this
     /// is the hoarding control — capped per window by club tier so elite
@@ -1003,6 +1011,7 @@ impl ClubTransferPlan {
             loan_out_candidates: Vec::new(),
             loan_broadcasts: HashMap::new(),
             transfer_broadcasts: HashMap::new(),
+            manager_review_until: None,
             prospect_buys_this_window: 0,
             prospect_pursuits_active: 0,
             staff_recommendations: Vec::new(),

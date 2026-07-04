@@ -1,8 +1,10 @@
 use super::LeagueResult;
 use super::data_access::LeagueProcessAccess;
+use crate::HappinessEventType;
 use crate::PlayerFieldPositionGroup;
 use crate::PlayerPositionType;
 use crate::club::StaffPosition;
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::contract::ContractBonusType;
 use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
 use crate::club::player::events::{MatchOutcome, MatchParticipation, MatchTeamRef};
@@ -163,7 +165,7 @@ impl LeagueResult {
             Self::process_contract_bonuses(result, details, data);
         }
 
-        Self::apply_full_time_team_talks(result, details, data);
+        Self::apply_full_time_team_talks(result, details, data, is_friendly);
         Self::apply_post_match_physical_effects(details, data, is_friendly);
         Self::apply_post_match_reputation(result, data, is_friendly, is_cup);
 
@@ -623,6 +625,7 @@ impl LeagueResult {
         result: &MatchResult,
         details: &MatchResultRaw,
         data: &mut D,
+        is_friendly: bool,
     ) {
         let score = &result.score;
         let home_goals = score.home_team.get() as i8;
@@ -648,17 +651,31 @@ impl LeagueResult {
             }
         };
 
-        // Collect each side's player ids + club id once.
+        // Collect each side's player ids + club id once. `rep_edge` is
+        // this side's reputation edge over the opponent (0-centred) —
+        // it decides whether the result reads as a humiliation or an
+        // upset on top of the raw scoreline.
         struct SideTalk {
             club_id: u32,
             player_ids: Vec<u32>,
             delta: i8,
+            rep_edge: f32,
         }
 
+        let left_slot_team_id = details.left_team_players.team_id;
+        let right_slot_team_id = details.right_team_players.team_id;
+        let rep_of = |data: &D, team_id: u32| -> f32 {
+            data.team(team_id)
+                .map(|t| t.reputation.overall_score())
+                .unwrap_or(0.5)
+        };
+        let left_rep = rep_of(data, left_slot_team_id);
+        let right_rep = rep_of(data, right_slot_team_id);
+
         let mut sides: Vec<SideTalk> = Vec::with_capacity(2);
-        for (slot, delta) in [
-            (&details.left_team_players, left_delta),
-            (&details.right_team_players, right_delta),
+        for (slot, delta, rep_edge) in [
+            (&details.left_team_players, left_delta, left_rep - right_rep),
+            (&details.right_team_players, right_delta, right_rep - left_rep),
         ] {
             let mut pids: Vec<u32> = Vec::new();
             pids.extend(slot.main.iter().copied());
@@ -676,6 +693,7 @@ impl LeagueResult {
                 club_id,
                 player_ids: pids,
                 delta,
+                rep_edge,
             });
         }
 
@@ -713,6 +731,39 @@ impl LeagueResult {
                         ctx,
                         Some(now),
                     );
+                }
+            }
+
+            // Expectation-aware extremes on top of the routine talk
+            // tones: a humiliation — a three-goal collapse or any
+            // defeat as a clear favourite — triggers a dressing-room
+            // inquest; an upset win over clearly stronger opposition
+            // gets the response publicly praised. Competitive matches
+            // only; a friendly humbles nobody.
+            if !is_friendly {
+                let humiliation =
+                    side.delta <= -3 || (side.delta < 0 && side.rep_edge >= 0.15);
+                let upset_win = side.delta > 0 && side.rep_edge <= -0.15;
+                if humiliation || upset_win {
+                    let cfg = HappinessConfig::default();
+                    let (event, magnitude) = if humiliation {
+                        (
+                            HappinessEventType::DressingRoomInquest,
+                            cfg.catalog.dressing_room_inquest,
+                        )
+                    } else {
+                        (
+                            HappinessEventType::ResiliencePraised,
+                            cfg.catalog.resilience_praised,
+                        )
+                    };
+                    for pid in &side.player_ids {
+                        if let Some(player) = data.player_mut(*pid) {
+                            player
+                                .happiness
+                                .add_event_with_cooldown(event.clone(), magnitude, 10);
+                        }
+                    }
                 }
             }
         }

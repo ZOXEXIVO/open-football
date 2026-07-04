@@ -219,6 +219,7 @@ impl PlayerBuilder {
             skills,
             contract: self.contract.unwrap_or(None),
             contract_loan: self.contract_loan.unwrap_or(None),
+            individual_training: None,
             positions,
             preferred_foot,
             foots,

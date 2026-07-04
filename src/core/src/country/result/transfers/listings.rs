@@ -12,9 +12,10 @@ use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::{
     TransferListing, TransferListingOrigin, TransferListingStatus, TransferListingType,
 };
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::{
-    Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus,
-    PlayerStatusType, ReputationLevel,
+    Club, Country, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
+    PlayerPositionType, PlayerSquadStatus, PlayerStatusType, ReputationLevel,
 };
 use chrono::{Datelike, NaiveDate, Weekday};
 use log::debug;
@@ -299,6 +300,27 @@ impl CountryResult {
                                 listing_data.decided_by.clone(),
                             );
                         }
+                        // A CLUB-decision transfer listing for a player who
+                        // never asked out is the "you're not in my plans"
+                        // conversation — say it to his face instead of
+                        // letting him find out from the transfer page.
+                        // Player-initiated listings (his own request, his
+                        // own hardened unhappiness) need no telling.
+                        let player_initiated = listing_data.reason
+                            == "dec_reason_player_requested"
+                            || listing_data.reason == "dec_reason_player_unhappy";
+                        if status_type == PlayerStatusType::Lst
+                            && !player_initiated
+                            && !is_under16_release
+                        {
+                            let magnitude =
+                                HappinessConfig::default().catalog.told_not_in_plans;
+                            player.happiness.add_event_with_cooldown(
+                                HappinessEventType::ToldNotInPlans,
+                                magnitude,
+                                180,
+                            );
+                        }
                     }
                 }
             }
@@ -318,6 +340,50 @@ impl CountryResult {
     /// naturally instead — the renewal gate guarantees no new offer, so
     /// expiry is the cheaper exit and needs no severance. Weekly cadence;
     /// window-independent (tearing up a contract is legal year-round).
+    /// The transfer window has just closed with these players still on
+    /// the market — the moment the limbo becomes real: nothing can
+    /// change until the next window. One mood note per genuinely
+    /// listed, unsold player. The availability broadcast and the
+    /// free-exit valve stay the machinery that resolves the listing;
+    /// this is the player feeling the door shut.
+    pub(crate) fn emit_window_close_limbo(country: &mut Country, date: NaiveDate) {
+        let _ = date;
+        // Pass 1 (read): genuine, still-open seller listings. Synthetic
+        // rows and expiring contracts aren't a player waiting on a move.
+        let listed_ids: HashSet<u32> = country
+            .transfer_market
+            .listings
+            .iter()
+            .filter(|l| {
+                l.listing_type == TransferListingType::Transfer
+                    && l.origin == TransferListingOrigin::SellerListed
+                    && l.status == TransferListingStatus::Available
+            })
+            .map(|l| l.player_id)
+            .collect();
+        if listed_ids.is_empty() {
+            return;
+        }
+        // Pass 2 (mutate): land the mood on every listed player still
+        // rostered in this country. Cooldown 100d — long enough to fire
+        // once per window close, never twice inside the same window.
+        let magnitude = HappinessConfig::default().catalog.unsold_window_closed;
+        for club in country.clubs.iter_mut() {
+            for team in club.teams.teams.iter_mut() {
+                for player in team.players.players.iter_mut() {
+                    if !listed_ids.contains(&player.id) || player.is_on_loan() {
+                        continue;
+                    }
+                    player.happiness.add_event_with_cooldown(
+                        HappinessEventType::UnsoldWindowClosed,
+                        magnitude,
+                        100,
+                    );
+                }
+            }
+        }
+    }
+
     pub(crate) fn release_unsold_listed_players(country: &mut Country, date: NaiveDate) {
         if date.weekday() != Weekday::Mon {
             return;
@@ -797,6 +863,20 @@ impl CountryResult {
                     reason: "dec_reason_player_unhappy".to_string(),
                 },
             };
+        }
+
+        // A just-appointed head coach reviews the squad before honouring
+        // the old regime's exit decisions — no NEW club-driven listings
+        // during the review window. The player-initiated paths above
+        // (formal request, long unhappiness) keep their course: the new
+        // manager can't make a player un-ask to leave.
+        if club
+            .transfer_plan
+            .manager_review_until
+            .map(|until| date < until)
+            .unwrap_or(false)
+        {
+            return ListingDecision::Keep;
         }
 
         // Club decisions persisted on the contract.
@@ -1327,6 +1407,130 @@ mod tests {
     }
 
     #[test]
+    fn new_manager_review_pauses_club_driven_listings() {
+        let today = Fixture::date(2026, 6, 12);
+        let mut player = Fixture::player(101);
+        player.contract.as_mut().unwrap().is_transfer_listed = true;
+        let mut club = Fixture::club(vec![Fixture::team(
+            10,
+            "main",
+            TeamType::Main,
+            vec![player],
+        )]);
+        club.transfer_plan.manager_review_until = Some(Fixture::date(2026, 7, 15));
+        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let player_ref = &club.teams.teams[0].players.players[0];
+        let decision =
+            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        assert!(
+            matches!(decision, ListingDecision::Keep),
+            "the old regime's listing flag waits for the new manager's review — saw {:?}",
+            decision
+        );
+    }
+
+    #[test]
+    fn review_window_does_not_silence_player_requests() {
+        // A formal transfer request stays on course even mid-review —
+        // the new manager can't make a player un-ask to leave.
+        let today = Fixture::date(2026, 6, 12);
+        let mut player = Fixture::player(101);
+        player.statuses.add(today, PlayerStatusType::Req);
+        let mut club = Fixture::club(vec![Fixture::team(
+            10,
+            "main",
+            TeamType::Main,
+            vec![player],
+        )]);
+        club.transfer_plan.manager_review_until = Some(Fixture::date(2026, 7, 15));
+        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let player_ref = &club.teams.teams[0].players.players[0];
+        let decision =
+            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        assert!(
+            matches!(decision, ListingDecision::Transfer { .. }),
+            "a formal request is listed even during the review window — saw {:?}",
+            decision
+        );
+    }
+
+    #[test]
+    fn club_decision_listing_tells_the_player_to_his_face() {
+        let today = Fixture::date(2026, 6, 12);
+        let mut player = Fixture::player(101);
+        player.contract.as_mut().unwrap().is_transfer_listed = true;
+        // Enough same-group depth that the position floor doesn't veto
+        // the club's listing decision.
+        let club = Fixture::club(vec![Fixture::team(
+            10,
+            "main",
+            TeamType::Main,
+            vec![
+                player,
+                Fixture::player(102),
+                Fixture::player(103),
+                Fixture::player(104),
+                Fixture::player(105),
+                Fixture::player(106),
+                Fixture::player(107),
+            ],
+        )]);
+        let mut country = Fixture::country(club);
+        let mut summary = TransferActivitySummary::new();
+        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        assert_eq!(
+            country
+                .transfer_market
+                .listings
+                .iter()
+                .filter(|l| l.player_id == 101)
+                .count(),
+            1,
+            "the club-listed flag must materialize as a market listing"
+        );
+        let p = country.clubs[0].teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 101)
+            .unwrap();
+        let told = p
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::ToldNotInPlans)
+            .count();
+        assert_eq!(
+            told, 1,
+            "a club-decision listing must come with the conversation"
+        );
+    }
+
+    #[test]
+    fn player_requested_listing_needs_no_telling() {
+        let today = Fixture::date(2026, 6, 12);
+        let mut player = Fixture::player(101);
+        player.statuses.add(today, PlayerStatusType::Req);
+        let club = Fixture::club(vec![Fixture::team(
+            10,
+            "main",
+            TeamType::Main,
+            vec![player],
+        )]);
+        let mut country = Fixture::country(club);
+        let mut summary = TransferActivitySummary::new();
+        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        let p = &country.clubs[0].teams.teams[0].players.players[0];
+        let told = p
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::ToldNotInPlans)
+            .count();
+        assert_eq!(told, 0, "he asked to leave — there is nothing to break to him");
+    }
+
+    #[test]
     fn flagged_reserve_player_reaches_market_with_own_team_id() {
         // A player flagged `is_transfer_listed` on a non-main squad must
         // still reach the country market — historically the listing pass
@@ -1513,6 +1717,36 @@ mod tests {
         assert!(
             ValveFx::player(&country).contract.is_some(),
             "a listing months old is still a sale in progress"
+        );
+    }
+
+    #[test]
+    fn window_close_lands_limbo_on_listed_players() {
+        let mut country = ValveFx::listed_country(Fixture::date(2026, 5, 1));
+        CountryResult::emit_window_close_limbo(&mut country, ValveFx::monday());
+        let unsold = ValveFx::player(&country)
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::UnsoldWindowClosed)
+            .count();
+        assert_eq!(unsold, 1, "a listed, unsold player must feel the window shut");
+    }
+
+    #[test]
+    fn window_close_ignores_synthetic_listings() {
+        let mut country = ValveFx::listed_country(Fixture::date(2026, 5, 1));
+        country.transfer_market.listings[0].origin = TransferListingOrigin::SyntheticUnsolicited;
+        CountryResult::emit_window_close_limbo(&mut country, ValveFx::monday());
+        let unsold = ValveFx::player(&country)
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::UnsoldWindowClosed)
+            .count();
+        assert_eq!(
+            unsold, 0,
+            "a synthetic anchor row is not a player waiting on a move"
         );
     }
 

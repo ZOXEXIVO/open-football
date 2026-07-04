@@ -532,15 +532,22 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::WantsStrongerSquad => "event_wants_stronger_squad",
         HappinessEventType::WantsTitleChallenge => "event_wants_title_challenge",
         HappinessEventType::WantsFirstTeamFootball => "event_wants_first_team_football",
+        HappinessEventType::WantsToLeaveAfterRelegation => "event_wants_to_leave_after_relegation",
         HappinessEventType::LoanDevelopmentConcern => "event_loan_development_concern",
         HappinessEventType::LoanRecallRequested => "event_loan_recall_requested",
+        HappinessEventType::WantsLoanMadePermanent => "event_wants_loan_made_permanent",
+        HappinessEventType::UnsettledAfterLoanReturn => "event_unsettled_after_loan_return",
         HappinessEventType::ReleaseClauseDemanded => "event_release_clause_demanded",
         HappinessEventType::ContractTalksStalled => "event_contract_talks_stalled",
         HappinessEventType::RejectedContractOffer => "event_rejected_contract_offer",
+        HappinessEventType::ContractExpiryAnxiety => "event_contract_expiry_anxiety",
+        HappinessEventType::PlayingForNewContract => "event_playing_for_new_contract",
         HappinessEventType::AskedForPrivateTalk => "event_asked_for_private_talk",
         HappinessEventType::AskedClubToArrangeTransfer => {
             "event_asked_club_to_arrange_transfer"
         }
+        HappinessEventType::UnsoldWindowClosed => "event_unsold_window_closed",
+        HappinessEventType::MoveVetoedByClub => "event_move_vetoed_by_club",
         HappinessEventType::ConcernedByClubDirection => "event_concerned_by_club_direction",
         HappinessEventType::EncouragedBySquadInvestment => "event_encouraged_by_squad_investment",
         HappinessEventType::UnhappyWithTacticalRole => "event_unhappy_with_tactical_role",
@@ -551,6 +558,15 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::ThreatenedByNewSigning => "event_threatened_by_new_signing",
         HappinessEventType::ManagerTrustGrowing => "event_manager_trust_growing",
         HappinessEventType::ManagerTrustEroding => "event_manager_trust_eroding",
+        HappinessEventType::NewManagerBounce => "event_new_manager_bounce",
+        HappinessEventType::RalliesBehindManager => "event_rallies_behind_manager",
+        HappinessEventType::SensesManagerChange => "event_senses_manager_change",
+        HappinessEventType::FormalWarningIssued => "event_formal_warning_issued",
+        HappinessEventType::FinedByClub => "event_fined_by_club",
+        HappinessEventType::DressingRoomInquest => "event_dressing_room_inquest",
+        HappinessEventType::ResiliencePraised => "event_resilience_praised",
+        HappinessEventType::ToldNotInPlans => "event_told_not_in_plans",
+        HappinessEventType::PersonalTrainingPlanSet => "event_personal_training_plan_set",
     }
 }
 
@@ -2291,6 +2307,8 @@ impl CareerDesireRender {
                 | HappinessEventType::WantsStrongerSquad
                 | HappinessEventType::WantsTitleChallenge
                 | HappinessEventType::WantsFirstTeamFootball
+                | HappinessEventType::WantsToLeaveAfterRelegation
+                | HappinessEventType::WantsLoanMadePermanent
         )
     }
 
@@ -2353,6 +2371,8 @@ impl CareerDesireRender {
             K::TitleChallengeAmbition => "title_challenge",
             K::FavoriteClubHomecoming => "favorite_club_homecoming",
             K::FirstTeamBreakthroughAmbition => "first_team_football",
+            K::PostRelegationAmbition => "post_relegation",
+            K::LoanToPermanentAmbition => "loan_permanent",
         }
     }
 }

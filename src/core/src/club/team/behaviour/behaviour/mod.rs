@@ -24,6 +24,7 @@ use log::debug;
 
 mod calculations;
 pub(crate) mod conflict_escalation;
+mod discipline;
 mod dynamics;
 mod hierarchy;
 mod interactions;
@@ -33,6 +34,7 @@ mod manager_talks;
 mod morale;
 mod partnerships;
 mod relationships;
+mod training_direction;
 
 #[derive(Debug, Clone)]
 pub struct TeamBehaviour {
@@ -203,6 +205,32 @@ impl TeamBehaviour {
         // The weekly complaint pass below escalates the lingering mood
         // into a loan / transfer request.
         Self::process_reserve_ambition_audit(players, &ctx);
+
+        // Monthly perennial-backup audit: the main squad's mirror case —
+        // a settled career backup (or serial loanee) whose ambition and
+        // closing career window outweigh the comforts of the bench dreams
+        // of being a regular somewhere else, possibly a weaker club.
+        Self::process_perennial_backup_audit(players, &ctx);
+
+        // Monthly loanee-permanence audit: a loanee thriving at the
+        // borrowing club wants the move made permanent instead of a
+        // return to the parent's fringe.
+        Self::process_loanee_permanence_audit(players, &ctx);
+
+        // Monthly contract-horizon audit: final-year seniors with no
+        // renewal talks on record — anxiety for most, a shop-window
+        // drive for the in-form.
+        Self::process_contract_horizon_audit(players, &ctx);
+
+        // Weekly disciplinary pass: fresh misconduct draws the formal
+        // club response — warning first, wage fines for repeat
+        // offenders — instead of ending at the mood event.
+        Self::process_disciplinary_actions(players, staffs, &mut result, &ctx);
+
+        // Monthly training-direction pass: the coach progresses and
+        // assigns personal development plans — retraining toward thin
+        // groups, fitness blocks for the injury-prone.
+        Self::process_training_direction(players, staffs, &ctx);
 
         // Monthly veteran career-stage audit: older players whose role has
         // faded weigh up retirement; veteran leaders signal coaching
