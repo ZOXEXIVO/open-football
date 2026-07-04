@@ -325,52 +325,52 @@ pub async fn player_history_action(
     // metadata, not part of the grouping. Keeping this in sync with the
     // projection's grouping is what makes the breakdown lookup robust.
     type BreakdownKey = (u16, String, String);
-    let breakdown_index: std::collections::HashMap<BreakdownKey, Vec<PlayerHistoryCompetitionStats>> =
-        breakdowns
-            .into_iter()
-            .map(|b| {
-                let key: BreakdownKey =
-                    (b.season_start_year, b.team_slug, b.league_slug.clone());
-                let row_league_slug = b.league_slug.clone();
-                let comps = b
-                    .competitions
-                    .into_iter()
-                    .map(|c| {
-                        // Slug-matches-row defaults to the generic kind
-                        // label for non-League kinds. Three patterns
-                        // land here and all want "Cup" / "Continental
-                        // Cup" / "Friendly" rather than the senior
-                        // league name:
-                        //   1. Legacy aggregated cup entries (written
-                        //      before per-cup recording) — slug was set
-                        //      to the team's league_slug.
-                        //   2. Senior pre-season Friendly — no
-                        //      specific source league; the recorder
-                        //      defaults to the team's league_slug.
-                        //   3. New cup entries that wound up with the
-                        //      team's league slug for any reason.
-                        // For a youth-aliased Friendly the slug is the
-                        // YOUTH team's league_slug, which differs from
-                        // the row's main league_slug; that path
-                        // resolves to the youth league name.
-                        let use_generic_label = !matches!(
-                            c.competition_kind,
-                            PlayerStatCompetitionKind::League
-                        ) && c.competition_slug == row_league_slug;
-                        let label = if use_generic_label {
-                            resolve_label("", c.competition_kind)
-                        } else {
-                            resolve_label(&c.competition_slug, c.competition_kind)
-                        };
-                        PlayerHistoryCompetitionStats {
-                            label,
-                            stats: to_history_stats(&c.statistics),
-                        }
-                    })
-                    .collect();
-                (key, comps)
-            })
-            .collect();
+    let breakdown_index: std::collections::HashMap<
+        BreakdownKey,
+        Vec<PlayerHistoryCompetitionStats>,
+    > = breakdowns
+        .into_iter()
+        .map(|b| {
+            let key: BreakdownKey = (b.season_start_year, b.team_slug, b.league_slug.clone());
+            let row_league_slug = b.league_slug.clone();
+            let comps = b
+                .competitions
+                .into_iter()
+                .map(|c| {
+                    // Slug-matches-row defaults to the generic kind
+                    // label for non-League kinds. Three patterns
+                    // land here and all want "Cup" / "Continental
+                    // Cup" / "Friendly" rather than the senior
+                    // league name:
+                    //   1. Legacy aggregated cup entries (written
+                    //      before per-cup recording) — slug was set
+                    //      to the team's league_slug.
+                    //   2. Senior pre-season Friendly — no
+                    //      specific source league; the recorder
+                    //      defaults to the team's league_slug.
+                    //   3. New cup entries that wound up with the
+                    //      team's league slug for any reason.
+                    // For a youth-aliased Friendly the slug is the
+                    // YOUTH team's league_slug, which differs from
+                    // the row's main league_slug; that path
+                    // resolves to the youth league name.
+                    let use_generic_label =
+                        !matches!(c.competition_kind, PlayerStatCompetitionKind::League)
+                            && c.competition_slug == row_league_slug;
+                    let label = if use_generic_label {
+                        resolve_label("", c.competition_kind)
+                    } else {
+                        resolve_label(&c.competition_slug, c.competition_kind)
+                    };
+                    PlayerHistoryCompetitionStats {
+                        label,
+                        stats: to_history_stats(&c.statistics),
+                    }
+                })
+                .collect();
+            (key, comps)
+        })
+        .collect();
 
     let items: Vec<PlayerHistorySeasonItem> = view
         .into_iter()

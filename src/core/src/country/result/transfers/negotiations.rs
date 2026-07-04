@@ -1374,8 +1374,7 @@ impl CountryResult {
                     .map(|c| c.finance.reserve_transfer_budget(neg_data.offer_amount))
                     .unwrap_or(true);
                 if !reserved {
-                    if let Some(negotiation) =
-                        country.transfer_market.negotiations.get_mut(&neg_id)
+                    if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
                     {
                         negotiation
                             .reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);

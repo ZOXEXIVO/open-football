@@ -96,8 +96,7 @@ impl SquadManager {
             .iter()
             .filter(|player| {
                 // Proactive daily trigger: only a clearly-surplus listed player.
-                player.statuses.get().contains(&PlayerStatusType::Lst)
-                    && guard.is_surplus(player)
+                player.statuses.get().contains(&PlayerStatusType::Lst) && guard.is_surplus(player)
             })
             .filter(|player| {
                 guard.allow_demote_from_main(player, "administrative surplus clear-out")
@@ -267,7 +266,13 @@ mod execute_moves_tests {
             .unwrap()
     }
 
-    fn make_team(id: u32, name: &str, slug: &str, tt: TeamType, players: Vec<crate::Player>) -> Team {
+    fn make_team(
+        id: u32,
+        name: &str,
+        slug: &str,
+        tt: TeamType,
+        players: Vec<crate::Player>,
+    ) -> Team {
         Team::builder()
             .id(id)
             .league_id(Some(1))
@@ -307,8 +312,20 @@ mod execute_moves_tests {
             .seed_initial_team(&main_info, d(2025, 8, 1), false);
 
         let mut teams = vec![
-            make_team(10, "Spartak Moscow", "spartak-moscow", TeamType::Main, vec![player]),
-            make_team(11, "Spartak Moscow 2", "spartak-moscow-2", TeamType::Second, vec![]),
+            make_team(
+                10,
+                "Spartak Moscow",
+                "spartak-moscow",
+                TeamType::Main,
+                vec![player],
+            ),
+            make_team(
+                11,
+                "Spartak Moscow 2",
+                "spartak-moscow-2",
+                TeamType::Second,
+                vec![],
+            ),
         ];
 
         execute_moves(&mut teams, 0, 1, &[1], d(2025, 9, 15));
@@ -323,7 +340,10 @@ mod execute_moves_tests {
         // Active spell is now the Second team. The Main spell had 0 games,
         // so it's a pass-through stop and is dropped entirely rather than
         // left as a phantom 0-game row.
-        let active: Vec<&_> = current.iter().filter(|e| e.departed_date.is_none()).collect();
+        let active: Vec<&_> = current
+            .iter()
+            .filter(|e| e.departed_date.is_none())
+            .collect();
         assert_eq!(active.len(), 1, "exactly one active spell expected");
         assert_eq!(
             active[0].team_slug, "spartak-moscow-2",
@@ -363,8 +383,8 @@ mod execute_moves_tests {
         // Pre-load a prior season so this is NOT the player's first record.
         let mut prior = PlayerStatistics::default();
         prior.played = 30;
-        player.statistics_history = crate::PlayerStatisticsHistory::from_items(vec![
-            PlayerStatisticsHistoryItem {
+        player.statistics_history =
+            crate::PlayerStatisticsHistory::from_items(vec![PlayerStatisticsHistoryItem {
                 season: Season::new(2024),
                 team_name: "Spartak Moscow".to_string(),
                 team_slug: "spartak-moscow".to_string(),
@@ -375,8 +395,7 @@ mod execute_moves_tests {
                 transfer_fee: None,
                 statistics: prior,
                 seq_id: 0,
-            },
-        ]);
+            }]);
         let main_info = crate::TeamInfo {
             name: "Spartak Moscow".to_string(),
             slug: "spartak-moscow".to_string(),
@@ -389,8 +408,20 @@ mod execute_moves_tests {
             .seed_initial_team(&main_info, d(2025, 8, 1), false);
 
         let mut teams = vec![
-            make_team(10, "Spartak Moscow", "spartak-moscow", TeamType::Main, vec![player]),
-            make_team(11, "Spartak Moscow 2", "spartak-moscow-2", TeamType::Second, vec![]),
+            make_team(
+                10,
+                "Spartak Moscow",
+                "spartak-moscow",
+                TeamType::Main,
+                vec![player],
+            ),
+            make_team(
+                11,
+                "Spartak Moscow 2",
+                "spartak-moscow-2",
+                TeamType::Second,
+                vec![],
+            ),
         ];
 
         // 0 games for Main, then demoted to the Second team.
@@ -531,8 +562,11 @@ mod execute_moves_tests {
         // No replacement in the position group → keep him even if surplus, so a
         // listing never strips the senior squad of its last specialist.
         let date = d(2026, 6, 15);
-        let mut surplus =
-            make_contracted(1, PlayerPositionType::Goalkeeper, PlayerSquadStatus::NotNeeded);
+        let mut surplus = make_contracted(
+            1,
+            PlayerPositionType::Goalkeeper,
+            PlayerSquadStatus::NotNeeded,
+        );
         list_for_transfer(&mut surplus, date);
         let mid = make_contracted(
             2,
@@ -591,7 +625,13 @@ mod execute_moves_tests {
             PlayerSquadStatus::FirstTeamRegular,
         );
         injured_cover.player_attributes.is_injured = true;
-        let team = make_team(10, "Main", "main", TeamType::Main, vec![surplus, injured_cover]);
+        let team = make_team(
+            10,
+            "Main",
+            "main",
+            TeamType::Main,
+            vec![surplus, injured_cover],
+        );
 
         let guard = MainSquadMoveGuard::new(&team, date);
         assert!(
@@ -666,9 +706,10 @@ mod execute_moves_tests {
             make_team(10, "Main", "main", TeamType::Main, vec![listed]),
             make_team(11, "Reserves", "reserves", TeamType::Second, vec![]),
         ];
-        teams[0]
-            .transfer_list
-            .add(TransferItem::new(1, CurrencyValue::new(1_000_000.0, Currency::Usd)));
+        teams[0].transfer_list.add(TransferItem::new(
+            1,
+            CurrencyValue::new(1_000_000.0, Currency::Usd),
+        ));
 
         execute_moves(&mut teams, 0, 1, &[1], date);
 
@@ -693,22 +734,37 @@ mod execute_moves_tests {
         // injured / banned / on international duty / far weaker has no usable,
         // credible cover, so the guard keeps him on Main.
         let date = d(2026, 6, 15);
-        let mut star =
-            make_contracted(1, PlayerPositionType::Striker, PlayerSquadStatus::FirstTeamRegular);
+        let mut star = make_contracted(
+            1,
+            PlayerPositionType::Striker,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
         star.player_attributes.current_ability = 150;
         list_for_transfer(&mut star, date);
 
-        let mut injured =
-            make_contracted(2, PlayerPositionType::Striker, PlayerSquadStatus::FirstTeamRegular);
+        let mut injured = make_contracted(
+            2,
+            PlayerPositionType::Striker,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
         injured.player_attributes.is_injured = true;
-        let mut banned =
-            make_contracted(3, PlayerPositionType::Striker, PlayerSquadStatus::FirstTeamRegular);
+        let mut banned = make_contracted(
+            3,
+            PlayerPositionType::Striker,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
         banned.player_attributes.is_banned = true;
-        let mut on_duty =
-            make_contracted(4, PlayerPositionType::Striker, PlayerSquadStatus::FirstTeamRegular);
+        let mut on_duty = make_contracted(
+            4,
+            PlayerPositionType::Striker,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
         on_duty.statuses.add(date, PlayerStatusType::Int);
-        let mut weak =
-            make_contracted(5, PlayerPositionType::Striker, PlayerSquadStatus::MainBackupPlayer);
+        let mut weak = make_contracted(
+            5,
+            PlayerPositionType::Striker,
+            PlayerSquadStatus::MainBackupPlayer,
+        );
         weak.player_attributes.current_ability = 100; // > 25 CA below the star
 
         let team = make_team(
@@ -730,11 +786,17 @@ mod execute_moves_tests {
         let date = d(2026, 6, 15);
 
         // One backup → demoting the listed keeper leaves a single keeper: blocked.
-        let mut keeper =
-            make_contracted(1, PlayerPositionType::Goalkeeper, PlayerSquadStatus::FirstTeamRegular);
+        let mut keeper = make_contracted(
+            1,
+            PlayerPositionType::Goalkeeper,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
         list_for_transfer(&mut keeper, date);
-        let backup =
-            make_contracted(2, PlayerPositionType::Goalkeeper, PlayerSquadStatus::MainBackupPlayer);
+        let backup = make_contracted(
+            2,
+            PlayerPositionType::Goalkeeper,
+            PlayerSquadStatus::MainBackupPlayer,
+        );
         let team_one = make_team(10, "Main", "main", TeamType::Main, vec![keeper, backup]);
         let guard_one = MainSquadMoveGuard::new(&team_one, date);
         assert!(
@@ -743,13 +805,22 @@ mod execute_moves_tests {
         );
 
         // Two backups → enough cover, demotion permitted.
-        let mut keeper2 =
-            make_contracted(1, PlayerPositionType::Goalkeeper, PlayerSquadStatus::FirstTeamRegular);
+        let mut keeper2 = make_contracted(
+            1,
+            PlayerPositionType::Goalkeeper,
+            PlayerSquadStatus::FirstTeamRegular,
+        );
         list_for_transfer(&mut keeper2, date);
-        let b1 =
-            make_contracted(2, PlayerPositionType::Goalkeeper, PlayerSquadStatus::MainBackupPlayer);
-        let b2 =
-            make_contracted(3, PlayerPositionType::Goalkeeper, PlayerSquadStatus::MainBackupPlayer);
+        let b1 = make_contracted(
+            2,
+            PlayerPositionType::Goalkeeper,
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        let b2 = make_contracted(
+            3,
+            PlayerPositionType::Goalkeeper,
+            PlayerSquadStatus::MainBackupPlayer,
+        );
         let team_two = make_team(11, "Main", "main", TeamType::Main, vec![keeper2, b1, b2]);
         let guard_two = MainSquadMoveGuard::new(&team_two, date);
         assert!(
@@ -757,5 +828,4 @@ mod execute_moves_tests {
             "a listed keeper with two usable backups can be demoted"
         );
     }
-
 }

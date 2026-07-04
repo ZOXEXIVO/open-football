@@ -8,9 +8,8 @@ use core::utils::{FloatUtils, IntegerUtils};
 use core::{
     ContractType, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
     PlayerAttributes, PlayerClubContract, PlayerFoots, PlayerPosition, PlayerPositionType,
-    PlayerPositions, PlayerPreferredFoot, PlayerSkills, PlayerStatistics,
-    PlayerStatisticsHistory, PlayerStatisticsHistoryItem, PositionWeights, TeamType, Technical,
-    WageCalculator,
+    PlayerPositions, PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
+    PlayerStatisticsHistoryItem, PositionWeights, TeamType, Technical, WageCalculator,
 };
 
 // ── Skill index constants (flat array order) ────────────────────────────

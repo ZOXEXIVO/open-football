@@ -229,7 +229,13 @@ impl MidfielderGuardingState {
             let has_nearby_cover = ctx
                 .tick_context
                 .grid
-                .teammates_full(opponent.id, ctx.player.team_id, opponent.position, 0.0, 15.0)
+                .teammates_full(
+                    opponent.id,
+                    ctx.player.team_id,
+                    opponent.position,
+                    0.0,
+                    15.0,
+                )
                 .any(|(gp, _)| gp.id != ctx.player.id);
 
             if !has_nearby_cover {

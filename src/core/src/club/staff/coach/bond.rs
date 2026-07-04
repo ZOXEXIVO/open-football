@@ -370,11 +370,7 @@ impl BondInputs {
         let ability_trust = Axis::ability_trust(r.trust_in_abilities);
         let bond = Axis::personal_bond(r.personal_bond);
         let loyalty = Axis::loyalty(r.loyalty);
-        (level * 0.30
-            + authority * 0.25
-            + ability_trust * 0.25
-            + bond * 0.10
-            + loyalty * 0.10)
+        (level * 0.30 + authority * 0.25 + ability_trust * 0.25 + bond * 0.10 + loyalty * 0.10)
             .clamp(0.0, 1.0)
     }
 
@@ -521,8 +517,10 @@ impl SelectionTrust {
             + 0.15 * i.rapport_norm;
         // Recent talk outcomes nudge the base read; capped so a single
         // talk can't blow up the trust on its own.
-        (raw + i.recent_talk_outcomes.clamp(-SIGNAL_CONTRIBUTION_CAP, SIGNAL_CONTRIBUTION_CAP))
-            .clamp(0.0, 1.0)
+        (raw + i
+            .recent_talk_outcomes
+            .clamp(-SIGNAL_CONTRIBUTION_CAP, SIGNAL_CONTRIBUTION_CAP))
+        .clamp(0.0, 1.0)
     }
 }
 
@@ -539,7 +537,10 @@ impl TrainingReceptiveness {
             + 0.20 * i.coach_memory_training_trust
             + 0.15 * i.personal_bond
             + 0.10 * i.promise_credibility;
-        (raw + i.recent_talk_outcomes.clamp(-SIGNAL_CONTRIBUTION_CAP, SIGNAL_CONTRIBUTION_CAP) * 0.5)
+        (raw + i
+            .recent_talk_outcomes
+            .clamp(-SIGNAL_CONTRIBUTION_CAP, SIGNAL_CONTRIBUTION_CAP)
+            * 0.5)
             .clamp(0.0, 1.0)
     }
 }
@@ -591,8 +592,7 @@ impl ConflictRisk {
         // contributes 0.0.
         let low_authority = ((0.5 - i.authority_respect) * 2.0).clamp(0.0, 1.0);
         let low_rapport = ((0.5 - i.rapport_norm) * 2.0).clamp(0.0, 1.0);
-        let controversy_excess =
-            (i.controversy - Self::CONTROVERSY_BASELINE).clamp(0.0, 1.0);
+        let controversy_excess = (i.controversy - Self::CONTROVERSY_BASELINE).clamp(0.0, 1.0);
 
         // unmet_role_expectation is already computed as a "below neutral"
         // value upstream — see BondInputs::collect.
@@ -830,7 +830,9 @@ mod tests {
         // twice, the combined lift would EXCEED the sum (super-
         // addition); if they were redundant, combined would equal
         // max(A, B). Linear orthogonality lands precisely at the sum.
-        let max_alone = memory_only.selection_trust.max(relation_only.selection_trust);
+        let max_alone = memory_only
+            .selection_trust
+            .max(relation_only.selection_trust);
         let combined_lift = both.selection_trust - baseline.selection_trust;
         let sum_lifts = (memory_only.selection_trust - baseline.selection_trust)
             + (relation_only.selection_trust - baseline.selection_trust);
@@ -963,10 +965,8 @@ mod tests {
         use crate::{ContractType, PlayerSquadStatus};
         let mut player = Fixture::player(1);
         let staff = Fixture::staff(7);
-        let mut contract = PlayerClubContract::new(
-            50_000,
-            Fixture::today() + chrono::Duration::days(365),
-        );
+        let mut contract =
+            PlayerClubContract::new(50_000, Fixture::today() + chrono::Duration::days(365));
         contract.squad_status = PlayerSquadStatus::KeyPlayer;
         contract.contract_type = ContractType::FullTime;
         player.contract = Some(contract);
@@ -977,8 +977,7 @@ mod tests {
             CoachPlayerBond::build_with_breakdown(&player, &staff, Fixture::today());
 
         assert!(
-            breakdown.unmet_role_expectation >= 0.0
-                && breakdown.unmet_role_expectation <= 1.0,
+            breakdown.unmet_role_expectation >= 0.0 && breakdown.unmet_role_expectation <= 1.0,
             "unmet_role_expectation={} must stay in 0..=1 even for KeyPlayer",
             breakdown.unmet_role_expectation
         );
@@ -997,8 +996,7 @@ mod tests {
         Fixture::push_broken_promise(&mut player);
         let staff = Fixture::staff(7);
         let today = Fixture::today();
-        let (_bond, breakdown) =
-            CoachPlayerBond::build_with_breakdown(&player, &staff, today);
+        let (_bond, breakdown) = CoachPlayerBond::build_with_breakdown(&player, &staff, today);
         let inputs = BondInputs::collect(&player, &staff, today);
 
         // Every field must equal exactly — no rounding because the

@@ -43,7 +43,9 @@ impl CareerDesireKind {
             CareerDesireKind::CopaLibertadoresAmbition => "career_desire_kind_copa_libertadores",
             CareerDesireKind::StrongerSquadAmbition => "career_desire_kind_stronger_squad",
             CareerDesireKind::TitleChallengeAmbition => "career_desire_kind_title_challenge",
-            CareerDesireKind::FavoriteClubHomecoming => "career_desire_kind_favorite_club_homecoming",
+            CareerDesireKind::FavoriteClubHomecoming => {
+                "career_desire_kind_favorite_club_homecoming"
+            }
             CareerDesireKind::FirstTeamBreakthroughAmbition => {
                 "career_desire_kind_first_team_football"
             }
@@ -158,16 +160,10 @@ impl CareerDesireEvidence {
                 "career_desire_evidence_player_above_club_level"
             }
             CareerDesireEvidence::PrimeCareerWindow => "career_desire_evidence_prime_career_window",
-            CareerDesireEvidence::StuckInReserveSquad => {
-                "career_desire_evidence_stuck_in_reserves"
-            }
-            CareerDesireEvidence::PerennialBackupRole => {
-                "career_desire_evidence_perennial_backup"
-            }
+            CareerDesireEvidence::StuckInReserveSquad => "career_desire_evidence_stuck_in_reserves",
+            CareerDesireEvidence::PerennialBackupRole => "career_desire_evidence_perennial_backup",
             CareerDesireEvidence::SerialLoanSpells => "career_desire_evidence_serial_loans",
-            CareerDesireEvidence::RelegatedWithClub => {
-                "career_desire_evidence_relegated_with_club"
-            }
+            CareerDesireEvidence::RelegatedWithClub => "career_desire_evidence_relegated_with_club",
             CareerDesireEvidence::ThrivingOnLoan => "career_desire_evidence_thriving_on_loan",
         }
     }

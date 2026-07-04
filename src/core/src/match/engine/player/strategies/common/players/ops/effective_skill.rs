@@ -160,15 +160,50 @@ fn late_game_mental_extra(player: &MatchPlayer, ctx: ActionContext) -> f32 {
     1.0 - mitigated
 }
 
+/// Post-entry settling penalty for substitutes: a sub needs a few
+/// minutes to reach match tempo. Planned (discretionary) subs were
+/// warming the touchline and pay a small penalty; forced medical /
+/// emergency subs enter colder and pay roughly double. Starters are
+/// exempt — the pre-match warm-up is what readies them. Linear decay
+/// to 1.0 over the first four minutes on the pitch.
+struct EntrySettling;
+
+impl EntrySettling {
+    const WINDOW_MS: u64 = 240_000;
+    const PLANNED_AMPLITUDE: f32 = 0.03;
+    const COLD_AMPLITUDE: f32 = 0.06;
+
+    #[inline]
+    fn factor(player: &MatchPlayer, minute: u32) -> f32 {
+        if player.entry_match_time_ms == 0 {
+            return 1.0;
+        }
+        let now_ms = minute as u64 * 60_000;
+        let elapsed = now_ms.saturating_sub(player.entry_match_time_ms);
+        if elapsed >= Self::WINDOW_MS {
+            return 1.0;
+        }
+        let remaining = 1.0 - elapsed as f32 / Self::WINDOW_MS as f32;
+        let amplitude = if player.entered_cold {
+            Self::COLD_AMPLITUDE
+        } else {
+            Self::PLANNED_AMPLITUDE
+        };
+        1.0 - amplitude * remaining
+    }
+}
+
 /// Apply the full fatigue model to a base skill value (1–20 scale).
 /// Returned value stays in 1–20 space so callers can treat the result
 /// like any other skill read.
 ///
 /// Also folds in `crowd_arousal` — the home-advantage multiplier
 /// stamped at match start (±~1.5% at a default crowd, scaling with
-/// crowd intensity). Living here means home advantage shifts every
-/// skill-mediated action (duels, passing, saves, finishing) by the
-/// same small continuous factor instead of dialling one outcome.
+/// crowd intensity) — and the substitute settling factor (a sub's
+/// first minutes on the pitch run below full tempo). Living here means
+/// both shift every skill-mediated action (duels, passing, saves,
+/// finishing) by the same small continuous factor instead of dialling
+/// one outcome.
 pub fn effective_skill(player: &MatchPlayer, base: f32, ctx: ActionContext) -> f32 {
     let cond_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
     let band = band_multipliers(cond_pct, ctx.category);
@@ -179,7 +214,8 @@ pub fn effective_skill(player: &MatchPlayer, base: f32, ctx: ActionContext) -> f
     let cap = mitigation_cap(cond_pct);
     let recovered = 1.0 - (1.0 - band) * (1.0 - mitigation * cap);
     let extra = late_game_mental_extra(player, ctx);
-    (base * recovered * extra * player.crowd_arousal).clamp(1.0, 20.0)
+    let settling = EntrySettling::factor(player, ctx.minute);
+    (base * recovered * extra * player.crowd_arousal * settling).clamp(1.0, 20.0)
 }
 
 /// Convenience: read a skill from the player and apply the fatigue model.
@@ -218,6 +254,9 @@ pub struct SkillBands {
     /// other two, which the constructor folds in at `apply` time).
     extra_mental: f32,
     crowd: f32,
+    /// Substitute settling factor from [`EntrySettling`] (1.0 for
+    /// starters and settled subs).
+    settling: f32,
 }
 
 impl SkillBands {
@@ -245,6 +284,7 @@ impl SkillBands {
                 },
             ),
             crowd: player.crowd_arousal,
+            settling: EntrySettling::factor(player, minute),
         }
     }
 
@@ -260,7 +300,7 @@ impl SkillBands {
             SkillCategory::Mental => (self.recovered_mental, self.extra_mental),
             SkillCategory::Explosive => (self.recovered_explosive, 1.0),
         };
-        (base * recovered * extra * self.crowd).clamp(1.0, 20.0)
+        (base * recovered * extra * self.crowd * self.settling).clamp(1.0, 20.0)
     }
 }
 
@@ -475,9 +515,18 @@ mod tests {
             let t = effective_skill(&p, 10.0, ActionContext::technical(20)) / 10.0;
             let m = effective_skill(&p, 10.0, ActionContext::mental(20)) / 10.0;
             let e = effective_skill(&p, 10.0, ActionContext::explosive(20)) / 10.0;
-            assert!((t - exp_t).abs() < 0.04, "tech at {cond}: got {t}, want {exp_t}");
-            assert!((m - exp_m).abs() < 0.04, "mental at {cond}: got {m}, want {exp_m}");
-            assert!((e - exp_e).abs() < 0.06, "expl at {cond}: got {e}, want {exp_e}");
+            assert!(
+                (t - exp_t).abs() < 0.04,
+                "tech at {cond}: got {t}, want {exp_t}"
+            );
+            assert!(
+                (m - exp_m).abs() < 0.04,
+                "mental at {cond}: got {m}, want {exp_m}"
+            );
+            assert!(
+                (e - exp_e).abs() < 0.06,
+                "expl at {cond}: got {e}, want {exp_e}"
+            );
         }
     }
 }

@@ -158,6 +158,12 @@ impl TeamBehaviour {
         // manager-talk picker sees the updated morale distribution.
         Self::process_captain_morale_propagation(players);
 
+        // Unhappy-star contagion: a formally unhappy leader or key
+        // player drags the room (bounded, relationship-weighted).
+        // Runs alongside the captain pass for the same reason — the
+        // talk picker should see the rippled morale.
+        Self::process_unhappy_star_contagion(players);
+
         // Captain & senior leaders mediate dressing-room conflicts.
         // Where two teammates have a strongly negative relationship and
         // a high-leadership / high-professionalism captain is present,

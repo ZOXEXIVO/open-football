@@ -79,6 +79,7 @@ impl Player {
             match_importance: 0.5,
             repeated: false,
             is_friendly: false,
+            explained_by_coach: false,
         };
         self.on_match_dropped_with_context(ctx);
     }
@@ -1055,8 +1056,31 @@ fn compute_drop_magnitude(player: &Player, ctx: &MatchSelectionContext) -> f32 {
     let repeat_mul = if ctx.repeated { 1.4 } else { 1.0 };
     let friendly_mul = if ctx.is_friendly { 0.3 } else { 1.0 };
     let importance_mul = (0.5_f32 + ctx.match_importance).clamp(0.5, 1.4);
+    // A rotation call the manager took the time to explain lands very
+    // differently from a silent snub — "I'm resting you for Saturday"
+    // is man-management, not a demotion.
+    let briefed_mul = if ctx.explained_by_coach { 0.45 } else { 1.0 };
+    // New-manager review window: in the first weeks after a managerial
+    // change (the NewManagerBounce event is the squad-wide marker) a
+    // benching reads as the new man trying things, not a verdict —
+    // everyone in the room knows it.
+    let review_window_mul = if player
+        .happiness
+        .has_recent_event(&HappinessEventType::NewManagerBounce, 56)
+    {
+        0.5
+    } else {
+        1.0
+    };
 
-    base * status_mul * scope_mul * reason_mul * repeat_mul * friendly_mul * importance_mul
+    base * status_mul
+        * scope_mul
+        * reason_mul
+        * repeat_mul
+        * friendly_mul
+        * importance_mul
+        * briefed_mul
+        * review_window_mul
 }
 
 fn drop_cause(ctx: &MatchSelectionContext) -> HappinessEventCause {

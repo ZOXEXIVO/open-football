@@ -8,14 +8,13 @@ use crate::transfers::ScoutingRegion;
 use crate::transfers::market::{
     TransferListing, TransferListingOrigin, TransferListingStatus, TransferListingType,
 };
+use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
-use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
 use crate::transfers::pipeline::{AvailabilityBroadcast, LoanOutStatus, TransferRequestStatus};
-use std::collections::{HashMap, HashSet};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
@@ -23,6 +22,7 @@ use crate::{
     HappinessEventSeverity, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
     PlayerStatusType, ReputationLevel, Team,
 };
+use std::collections::{HashMap, HashSet};
 
 // Loans fund short-term development or rotation minutes. Players older
 // than this are signed cheap permanent (or as free agents) rather than
@@ -848,10 +848,14 @@ impl PipelineProcessor {
                 .max()
                 .unwrap_or(0);
             let is_development = player.age(date) <= UnsolicitedLoanTarget::DEVELOPMENT_AGE
-                || parent_club.transfer_plan.loan_out_candidates.iter().any(|cand| {
-                    cand.player_id == listing.player_id
-                        && cand.reason.expects_guaranteed_minutes()
-                });
+                || parent_club
+                    .transfer_plan
+                    .loan_out_candidates
+                    .iter()
+                    .any(|cand| {
+                        cand.player_id == listing.player_id
+                            && cand.reason.expects_guaranteed_minutes()
+                    });
             broadcastable.push(Broadcastable {
                 player_id: listing.player_id,
                 parent_club_id: listing.club_id,
@@ -2685,7 +2689,10 @@ mod unsolicited_loan_target_tests {
     #[test]
     fn first_team_contributors_are_never_cold_approached() {
         let p = Fx::player(true);
-        for class in [SquadAssetClass::CorePlayer, SquadAssetClass::FirstTeamUseful] {
+        for class in [
+            SquadAssetClass::CorePlayer,
+            SquadAssetClass::FirstTeamUseful,
+        ] {
             assert_eq!(
                 UnsolicitedLoanTarget::classify(&p, 18, Fx::MAX, class),
                 None,
@@ -2846,8 +2853,8 @@ mod scan_loan_market_tests {
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
         Player, PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerSquadStatus, StaffCollection, Team,
-        TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerSquadStatus, StaffCollection,
+        Team, TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::{Datelike, Duration, NaiveDate, NaiveTime, Weekday};
 
@@ -3006,8 +3013,13 @@ mod scan_loan_market_tests {
                 Fx::keeper(103, 115, 115, 30, false),
             ],
         );
-        let parent_reserve =
-            Fx::team(11, 1, TeamType::Reserve, 6000, vec![Fx::keeper(200, 70, 150, 18, true)]);
+        let parent_reserve = Fx::team(
+            11,
+            1,
+            TeamType::Reserve,
+            6000,
+            vec![Fx::keeper(200, 70, 150, 18, true)],
+        );
         let parent = Fx::club(1, vec![parent_main, parent_reserve], 50_000_000);
 
         // Regional borrower (world 4000) with two weak keepers and budget.
@@ -3054,8 +3066,13 @@ mod scan_loan_market_tests {
                 Fx::keeper(103, 115, 115, 30, false),
             ],
         );
-        let parent_reserve =
-            Fx::team(11, 1, TeamType::Reserve, 6000, vec![Fx::keeper(200, 70, 150, 18, true)]);
+        let parent_reserve = Fx::team(
+            11,
+            1,
+            TeamType::Reserve,
+            6000,
+            vec![Fx::keeper(200, 70, 150, 18, true)],
+        );
         let parent = Fx::club(1, vec![parent_main, parent_reserve], 50_000_000);
 
         // Negative balance → `max_loan_fee` is just 50k. A value-based fee
@@ -3114,8 +3131,13 @@ mod scan_loan_market_tests {
                 Fx::keeper(103, 115, 115, 30, false),
             ],
         );
-        let parent_reserve =
-            Fx::team(11, 1, TeamType::Reserve, 6000, vec![Fx::keeper(200, 85, 150, 19, true)]);
+        let parent_reserve = Fx::team(
+            11,
+            1,
+            TeamType::Reserve,
+            6000,
+            vec![Fx::keeper(200, 85, 150, 19, true)],
+        );
         let parent = Fx::club(1, vec![parent_main, parent_reserve], 50_000_000);
 
         // A FULL three-deep GK line — but weak enough that the prospect
@@ -3166,8 +3188,13 @@ mod scan_loan_market_tests {
                 Fx::keeper(103, 115, 115, 30, false),
             ],
         );
-        let parent_reserve =
-            Fx::team(11, 1, TeamType::Reserve, 4000, vec![Fx::keeper(200, 70, 150, 18, true)]);
+        let parent_reserve = Fx::team(
+            11,
+            1,
+            TeamType::Reserve,
+            4000,
+            vec![Fx::keeper(200, 70, 150, 18, true)],
+        );
         let parent = Fx::club(1, vec![parent_main, parent_reserve], 50_000_000);
 
         // National taker at the same tier (world 5500) with a keeper vacancy.
@@ -3219,8 +3246,13 @@ mod scan_loan_market_tests {
         );
         // A 30-year-old surplus keeper (not a development loanee), so the staged
         // high → low cascade applies rather than immediate best-taker placement.
-        let parent_reserve =
-            Fx::team(11, 1, TeamType::Reserve, 6000, vec![Fx::keeper(200, 70, 150, 30, false)]);
+        let parent_reserve = Fx::team(
+            11,
+            1,
+            TeamType::Reserve,
+            6000,
+            vec![Fx::keeper(200, 70, 150, 30, false)],
+        );
         let parent = Fx::club(1, vec![parent_main, parent_reserve], 50_000_000);
 
         let borrower_main = Fx::team(
@@ -3283,8 +3315,13 @@ mod scan_loan_market_tests {
             ],
         );
         // An 18-year-old development keeper: a prospect who needs minutes.
-        let parent_reserve =
-            Fx::team(11, 1, TeamType::Reserve, 6000, vec![Fx::keeper(200, 70, 150, 18, true)]);
+        let parent_reserve = Fx::team(
+            11,
+            1,
+            TeamType::Reserve,
+            6000,
+            vec![Fx::keeper(200, 70, 150, 18, true)],
+        );
         let parent = Fx::club(1, vec![parent_main, parent_reserve], 50_000_000);
 
         let borrower_main = Fx::team(
@@ -3328,12 +3365,22 @@ mod scan_loan_market_tests {
                 Fx::keeper(102, 88, 88, 26, false),
             ],
         );
-        let parent_reserve =
-            Fx::team(11, 1, TeamType::Reserve, 3000, vec![Fx::keeper(200, 60, 120, 18, true)]);
+        let parent_reserve = Fx::team(
+            11,
+            1,
+            TeamType::Reserve,
+            3000,
+            vec![Fx::keeper(200, 60, 120, 18, true)],
+        );
         let parent = Fx::club(1, vec![parent_main, parent_reserve], 5_000_000);
 
-        let borrower_main =
-            Fx::team(20, 2, TeamType::Main, 3500, vec![Fx::keeper(301, 40, 40, 27, false)]);
+        let borrower_main = Fx::team(
+            20,
+            2,
+            TeamType::Main,
+            3500,
+            vec![Fx::keeper(301, 40, 40, 27, false)],
+        );
         let borrower = Fx::club(2, vec![borrower_main], 1_000_000);
 
         let mut country = Fx::country(vec![parent, borrower]);
@@ -3364,9 +3411,9 @@ mod transfer_broadcast_tests {
     use crate::transfers::market::TransferListing;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes,
-        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerSquadStatus, StaffCollection,
-        TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, PlayerSquadStatus, StaffCollection, TeamBuilder,
+        TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::{Duration, NaiveTime};
 
@@ -3494,7 +3541,12 @@ mod transfer_broadcast_tests {
                 10,
                 1,
                 WORLD,
-                vec![Fx::player(400, PlayerPositionType::MidfielderCenter, ca, 26)],
+                vec![Fx::player(
+                    400,
+                    PlayerPositionType::MidfielderCenter,
+                    ca,
+                    26,
+                )],
             );
             let seller = Fx::club(1, vec![seller_main], 1_000_000.0);
 
@@ -3588,7 +3640,10 @@ mod transfer_broadcast_tests {
             "a fresh listing is not pushed"
         );
         assert!(
-            country.clubs[0].transfer_plan.transfer_broadcasts.is_empty(),
+            country.clubs[0]
+                .transfer_plan
+                .transfer_broadcasts
+                .is_empty(),
             "no broadcast state for a fresh listing"
         );
         assert!(
@@ -3615,6 +3670,11 @@ mod transfer_broadcast_tests {
             !country.transfer_market.has_active_negotiation_for(400, 2),
             "synthetic listings never enter the seller push"
         );
-        assert!(country.clubs[0].transfer_plan.transfer_broadcasts.is_empty());
+        assert!(
+            country.clubs[0]
+                .transfer_plan
+                .transfer_broadcasts
+                .is_empty()
+        );
     }
 }

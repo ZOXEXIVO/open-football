@@ -628,8 +628,7 @@ impl MidfielderAttackSupportingState {
             }
             .calculate(ctx.player)
             .velocity
-                * (drive_speed
-                    / ctx.player.max_speed_with_condition_cached())
+                * (drive_speed / ctx.player.max_speed_with_condition_cached())
         } else {
             // Space blocked - move laterally to find space
             let lateral_target = Vector3::new(

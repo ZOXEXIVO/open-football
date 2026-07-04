@@ -7,7 +7,7 @@
 //! and the current connection status. The dispatcher holds an
 //! `Arc<WorkerRegistry>` and reads the snapshot when it routes work.
 
-use crate::worker::protocol::{Request, Response, PROTOCOL_VERSION};
+use crate::worker::protocol::{PROTOCOL_VERSION, Request, Response};
 use crate::worker::transport::Frame;
 use log::{info, warn};
 use serde::Serialize;
@@ -588,7 +588,10 @@ impl WorkerRegistry {
             }
             other => Self::unreachable(
                 address,
-                format!("unexpected handshake reply: {:?}", std::mem::discriminant(&other)),
+                format!(
+                    "unexpected handshake reply: {:?}",
+                    std::mem::discriminant(&other)
+                ),
             ),
         }
     }
@@ -624,8 +627,14 @@ enum Probe {
 /// The result of running a [`Probe`], applied back into the registry by
 /// address once the whole round has finished.
 enum ProbeResult {
-    Ping { address: String, outcome: PingOutcome },
-    Redial { address: String, worker: Worker },
+    Ping {
+        address: String,
+        outcome: PingOutcome,
+    },
+    Redial {
+        address: String,
+        worker: Worker,
+    },
 }
 
 /// Outcome of a single liveness ping.

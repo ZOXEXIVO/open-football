@@ -1,5 +1,5 @@
-use super::*;
 use super::phase_prof::PhaseProf;
+use super::*;
 use crate::r#match::engine::context::MatchEngineConfig;
 use crate::r#match::engine::rating::{RatingExpectationContext, TeamRatingSummary};
 
@@ -115,7 +115,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             })
             .collect();
         let field_h = field.size.height as f32;
-        context.chemistry.seed_from_roster(&chemistry_roster, field_h);
+        context
+            .chemistry
+            .seed_from_roster(&chemistry_roster, field_h);
 
         // Home-crowd arousal — the play-quality half of home advantage.
         // Stamped once on every match player (starters AND bench, so
@@ -131,8 +133,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // split (~45/25/30, +0.35 home goals) needs roughly double
         // that, landing here. The officiating half (referee marginal
         // calls) stacks on top via `RefereeProfile::home_bias`.
-        let home_edge =
-            (context.environment.crowd_intensity * context.environment.home_advantage).clamp(0.0, 1.0);
+        let home_edge = (context.environment.crowd_intensity * context.environment.home_advantage)
+            .clamp(0.0, 1.0);
         let home_arousal = 1.0 + 0.12 * home_edge;
         let away_arousal = 1.0 - 0.07 * home_edge;
         let home_team_id = field.home_team_id;
@@ -702,6 +704,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut next_sub_time_ms: u64 = 0;
         let mut sub_times_initialized = false;
         let mut et_bonus_granted = false;
+        // Medical (forced-injury) pass scheduling — independent of the
+        // discretionary sub timer, re-armed at the start of each period.
+        let mut next_medical_time_ms: u64 = 0;
+        let mut medical_period: Option<MatchState> = None;
 
         let mut tick_ctx = GameTickContext::new(field, &context.players);
         let mut events = EventCollection::with_capacity(10);
@@ -773,10 +779,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // current type per side.
                 Self::evaluate_situational_shape(field, &mut *context);
                 if let Some(t) = prof_t {
-                    PhaseProf::add(
-                        PhaseProf::P_COACH,
-                        t.elapsed().as_nanos() as u64,
-                    );
+                    PhaseProf::add(PhaseProf::P_COACH, t.elapsed().as_nanos() as u64);
                 }
                 // Condition-trajectory sampling for the dev harness —
                 // average condition per position group per 15-min band.
@@ -786,9 +789,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 {
                     use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;
                     use std::sync::atomic::Ordering;
-                    let band = time_band_diag::band_for_minute(
-                        (context.total_match_time / 60_000) as u32,
-                    );
+                    let band =
+                        time_band_diag::band_for_minute((context.total_match_time / 60_000) as u32);
                     for p in field.players.iter().filter(|p| !p.is_sent_off) {
                         let group = match p.tactical_position.current_position.position_group() {
                             crate::PlayerFieldPositionGroup::Goalkeeper => 0,
@@ -796,8 +798,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                             crate::PlayerFieldPositionGroup::Midfielder => 2,
                             crate::PlayerFieldPositionGroup::Forward => 3,
                         };
-                        time_band_diag::COND_SUM_BY_BAND_GROUP[band][group]
-                            .fetch_add(p.player_attributes.condition.max(0) as u64, Ordering::Relaxed);
+                        time_band_diag::COND_SUM_BY_BAND_GROUP[band][group].fetch_add(
+                            p.player_attributes.condition.max(0) as u64,
+                            Ordering::Relaxed,
+                        );
                         time_band_diag::COND_N_BY_BAND_GROUP[band][group]
                             .fetch_add(1, Ordering::Relaxed);
                     }
@@ -882,10 +886,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 let prof_t = prof_on.then(Instant::now);
                 Self::refresh_tactical_states(field, context, interval);
                 if let Some(t) = prof_t {
-                    PhaseProf::add(
-                        PhaseProf::P_TACTICAL,
-                        t.elapsed().as_nanos() as u64,
-                    );
+                    PhaseProf::add(PhaseProf::P_TACTICAL, t.elapsed().as_nanos() as u64);
                 }
                 // refresh_tactical_states may have repointed
                 // ball_zone — re-snapshot to avoid spuriously
@@ -911,11 +912,33 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 next_position_record_ms += Self::POSITION_RECORD_INTERVAL_MS;
             }
 
-            // Substitutions allowed from the second half onwards, plus
-            // extra time when we reach it in a knockout tie. First-half
-            // subs in real football are reactive (injuries) — we defer
-            // that to the injury/fitness pipeline rather than speculating
-            // here. ET gets one bonus sub on entry (FIFA rule).
+            // Forced medical substitutions run in ANY playing period —
+            // real football replaces an injured player whenever it
+            // happens, first half included. The pass owns the in-match
+            // injury roll; first check lands 3-8 minutes into each
+            // period, then every 6-14 minutes.
+            let medical_enabled = matches!(
+                context.state.match_state,
+                MatchState::FirstHalf | MatchState::SecondHalf | MatchState::ExtraTime
+            );
+            if medical_enabled {
+                if medical_period != Some(context.state.match_state) {
+                    medical_period = Some(context.state.match_state);
+                    next_medical_time_ms =
+                        context.time.time + context.rng.range_u64(3, 8) * 60 * 1000;
+                }
+                if context.time.time >= next_medical_time_ms {
+                    Substitutions::process_medical(field, context);
+                    next_medical_time_ms =
+                        context.time.time + context.rng.range_u64(6, 14) * 60 * 1000;
+                }
+            }
+
+            // Discretionary substitutions allowed from the second half
+            // onwards, plus extra time when we reach it in a knockout
+            // tie. First-half subs in real football are reactive
+            // (injuries) — the medical pass above owns those. ET gets
+            // one bonus sub on entry (FIFA rule).
             let subs_enabled = matches!(
                 context.state.match_state,
                 MatchState::SecondHalf | MatchState::ExtraTime

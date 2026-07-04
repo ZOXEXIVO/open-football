@@ -33,7 +33,7 @@ pub enum DefenderState {
     Walking = 15,         // Walking around,
     TakeBall = 16,        // Take the ball,
     Shooting = 17,        // Shoting the ball,
-    Guarding = 18,        // Guarding an attacker — denying space and preventing them from getting open
+    Guarding = 18, // Guarding an attacker — denying space and preventing them from getting open
     AttackingCorner = 19, // Pushed up to attack an attacking corner (run into the box, head on goal)
 }
 

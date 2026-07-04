@@ -83,7 +83,9 @@ impl BreakoutPerformanceSignal {
     /// sits below it.
     pub(in crate::transfers::pipeline) const BREAKOUT_THRESHOLD: f32 = 45.0;
 
-    pub(in crate::transfers::pipeline) fn compute(inp: &BreakoutInputs) -> BreakoutPerformanceSignal {
+    pub(in crate::transfers::pipeline) fn compute(
+        inp: &BreakoutInputs,
+    ) -> BreakoutPerformanceSignal {
         // ── League-reputation discount ──
         // Lower-division output is real but worth less on the wider market.
         // Discount, never erase: a strong enough lower-league breakout still
@@ -259,7 +261,12 @@ impl LeaguePerformanceLookup {
                     add(&mut award_points, *id, 1.0);
                 }
             }
-            for award in awards.player_of_month.iter().rev().take(Self::RECENT_MONTHS) {
+            for award in awards
+                .player_of_month
+                .iter()
+                .rev()
+                .take(Self::RECENT_MONTHS)
+            {
                 add(&mut award_points, award.player_id, 1.0);
             }
             for award in awards
@@ -442,8 +449,9 @@ mod tests {
 
     #[test]
     fn lower_division_top_scorer_clears_breakout_bar() {
-        let signal =
-            BreakoutPerformanceSignal::compute(&BreakoutFixtures::lower_division_breakout_striker());
+        let signal = BreakoutPerformanceSignal::compute(
+            &BreakoutFixtures::lower_division_breakout_striker(),
+        );
         assert!(
             signal.is_breakout(),
             "a decorated, league-top-scoring lower-division striker must read as a breakout (score {})",
@@ -472,9 +480,10 @@ mod tests {
         bare.recent_award_points = 0.0;
 
         let bare_score = BreakoutPerformanceSignal::compute(&bare).score;
-        let decorated_score =
-            BreakoutPerformanceSignal::compute(&BreakoutFixtures::lower_division_breakout_striker())
-                .score;
+        let decorated_score = BreakoutPerformanceSignal::compute(
+            &BreakoutFixtures::lower_division_breakout_striker(),
+        )
+        .score;
         assert!(
             decorated_score > bare_score + 5.0,
             "recognition must lift the score meaningfully: decorated {} vs bare {}",

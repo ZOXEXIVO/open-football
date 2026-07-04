@@ -167,8 +167,7 @@ pub async fn team_tactics_get_action(
         team_slug: team.slug.clone(),
         active_tab: "tactics",
         show_finances_tab: team.team_type.is_own_team(),
-        show_academy_tab: team.team_type == TeamType::Main
-            || team.team_type == TeamType::U18,
+        show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
         formation_name,
         formation_players,
         recent_used_shapes,

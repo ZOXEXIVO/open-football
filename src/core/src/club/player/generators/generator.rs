@@ -1066,12 +1066,8 @@ impl PlayerGenerator {
         };
         // Natural foot is fully owned; the weak foot varies per player.
         let foots = match preferred_foot {
-            PlayerPreferredFoot::Left => {
-                PlayerFoots::new(100, IntegerUtils::random(25, 61) as u8)
-            }
-            PlayerPreferredFoot::Right => {
-                PlayerFoots::new(IntegerUtils::random(25, 61) as u8, 100)
-            }
+            PlayerPreferredFoot::Left => PlayerFoots::new(100, IntegerUtils::random(25, 61) as u8),
+            PlayerPreferredFoot::Right => PlayerFoots::new(IntegerUtils::random(25, 61) as u8, 100),
             PlayerPreferredFoot::Both => PlayerFoots::new(
                 IntegerUtils::random(85, 101) as u8,
                 IntegerUtils::random(85, 101) as u8,

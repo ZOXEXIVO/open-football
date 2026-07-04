@@ -367,14 +367,9 @@ impl Country {
             let slot = pending_iter.next().flatten();
             if let Some(p) = slot {
                 let r = by_league.remove(&league.id).unwrap_or_default();
-                let league_ctx = ctx.with_league(
-                    league.id,
-                    league.slug.clone(),
-                    &[],
-                    league.reputation,
-                );
-                let lr =
-                    league.simulate_process(r, p, &self.clubs, &league_ctx, current_date);
+                let league_ctx =
+                    ctx.with_league(league.id, league.slug.clone(), &[], league.reputation);
+                let lr = league.simulate_process(r, p, &self.clubs, &league_ctx, current_date);
                 league_results.push(lr);
             }
         }
@@ -389,8 +384,7 @@ impl Country {
                 let cup_ctx = ctx.with_league(cup_id, cup_slug, &[], cup_rep);
                 let cup = self.domestic_cup.as_mut().expect("cup checked above");
                 let r = by_league.remove(&cup_id).unwrap_or_default();
-                let cup_result =
-                    cup.simulate_process(r, p, &self.clubs, &cup_ctx, current_date);
+                let cup_result = cup.simulate_process(r, p, &self.clubs, &cup_ctx, current_date);
                 league_results.push(cup_result);
             }
         }

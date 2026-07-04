@@ -295,9 +295,7 @@ impl WorkerStatusDto {
 }
 
 /// JSON snapshot of every worker's live status, polled by the workers page.
-pub async fn workers_status_action(
-    State(state): State<GameAppData>,
-) -> impl IntoResponse {
+pub async fn workers_status_action(State(state): State<GameAppData>) -> impl IntoResponse {
     let snapshot = state.workers.snapshot().await;
     Json(WorkersStatusDto::from_snapshot(snapshot))
 }

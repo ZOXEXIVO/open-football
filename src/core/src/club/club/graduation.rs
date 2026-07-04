@@ -98,7 +98,10 @@ impl Club {
             // development loan), not waiting in the academy to be deleted at
             // 18 without ever having played senior football.
             const LOAN_READY_ACADEMY_AGE: u8 = 17;
-            graduated.extend(self.academy.graduate_age_overdue(date, LOAN_READY_ACADEMY_AGE));
+            graduated.extend(
+                self.academy
+                    .graduate_age_overdue(date, LOAN_READY_ACADEMY_AGE),
+            );
             if !graduated.is_empty() {
                 debug!(
                     "academy {}: {} players graduated (contract: {}, assigned: {:?}, was {})",

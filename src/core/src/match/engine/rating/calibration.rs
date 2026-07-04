@@ -103,11 +103,8 @@ impl<'a> RatingContext<'a> {
                 if attacking_strong {
                     return EvidenceTier::Strong;
                 }
-                let attacking_modest = sot >= 1
-                    || kp_pb >= 2
-                    || drib >= 2
-                    || s.xg >= 0.4
-                    || s.crosses_completed >= 2;
+                let attacking_modest =
+                    sot >= 1 || kp_pb >= 2 || drib >= 2 || s.xg >= 0.4 || s.crosses_completed >= 2;
                 if attacking_modest {
                     return EvidenceTier::Modest;
                 }

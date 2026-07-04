@@ -226,13 +226,11 @@ impl TransferMarket {
         let mut next_id = id;
         for i in 1..=years as i32 {
             let target_year = start_date.year() + i;
-            let scheduled_date = start_date
-                .with_year(target_year)
-                .unwrap_or_else(|| {
-                    start_date
-                        .checked_add_signed(Duration::days(365 * i as i64))
-                        .unwrap_or(start_date)
-                });
+            let scheduled_date = start_date.with_year(target_year).unwrap_or_else(|| {
+                start_date
+                    .checked_add_signed(Duration::days(365 * i as i64))
+                    .unwrap_or(start_date)
+            });
             self.pending_clauses.push(PendingTransferClause {
                 id: next_id,
                 buying_club_id,

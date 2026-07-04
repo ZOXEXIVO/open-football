@@ -3,7 +3,6 @@ use super::data_access::LeagueProcessAccess;
 use crate::HappinessEventType;
 use crate::PlayerFieldPositionGroup;
 use crate::PlayerPositionType;
-use crate::club::StaffPosition;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::contract::ContractBonusType;
 use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
@@ -15,9 +14,10 @@ use crate::club::team::reputation::{
     CompetitionType as RepCompetition, MatchOutcome as RepOutcome,
 };
 use crate::club::team::{
-    LeadershipCandidate, MatchPhase, MatchdayLeadership, TeamTalkContext, TeamTalkTone,
-    apply_team_talk_dated,
+    LeadershipCandidate, MatchPhase, MatchdayLeadership, TeamTalkContext, TeamTalkMoments,
+    TeamTalkTone, apply_team_talk_dated,
 };
+use crate::club::{Staff, StaffPosition};
 use crate::continent::competitions::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
 };
@@ -29,6 +29,7 @@ use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, MatchResult};
 use crate::transfers::pipeline::KnownPlayerMemory;
 use crate::transfers::window::PlayerValuationCalculator;
+use crate::{MatchSelectionContext, SelectionOmissionReason};
 use chrono::Datelike;
 use chrono::NaiveDate;
 use std::cmp::Ordering;
@@ -165,7 +166,13 @@ impl LeagueResult {
             Self::process_contract_bonuses(result, details, data);
         }
 
-        Self::apply_full_time_team_talks(result, details, data, is_friendly);
+        Self::apply_matchday_team_talks(
+            result,
+            details,
+            data,
+            is_friendly,
+            is_derby || is_continental_cup,
+        );
         Self::apply_post_match_physical_effects(details, data, is_friendly);
         Self::apply_post_match_reputation(result, data, is_friendly, is_cup);
 
@@ -616,16 +623,23 @@ impl LeagueResult {
         }
     }
 
-    /// Apply a post-match full-time team talk to both sides. Tone is picked
-    /// from the score outcome; the head coach's Man Management / Motivating
-    /// attributes drive effectiveness. The actual magnitude-per-player uses
-    /// personality (pressure, temperament, important_matches) via
+    /// Apply the matchday's dressing-room talk moments to both sides:
+    /// a pre-match rallying cry on big occasions (derby / continental
+    /// night), a half-time talk when the break demands one (trailing,
+    /// or a clear favourite held level), and the routine full-time talk
+    /// toned by the final score. All applied at result-processing time —
+    /// they land as dated `DressingRoomSpeech` morale events; in-match
+    /// performance effects are deliberately out of scope. The head
+    /// coach's Man Management / Motivating attributes drive
+    /// effectiveness; per-player magnitude uses personality (pressure,
+    /// temperament, important_matches) via
     /// `club::team::talks::team_talks::apply_team_talk`.
-    fn apply_full_time_team_talks<D: LeagueProcessAccess>(
+    fn apply_matchday_team_talks<D: LeagueProcessAccess>(
         result: &MatchResult,
         details: &MatchResultRaw,
         data: &mut D,
         is_friendly: bool,
+        big_match: bool,
     ) {
         let score = &result.score;
         let home_goals = score.home_team.get() as i8;
@@ -640,6 +654,48 @@ impl LeagueResult {
             away_goals - home_goals
         };
         let right_delta: i8 = -left_delta;
+
+        // Reconstruct the half-time score from the goal timeline. The
+        // details vec also carries assists (and a goal can be entered
+        // twice via the end-of-match statistics sweep), so filter to
+        // goals and de-dup on (scorer, timestamp). Own goals credit the
+        // other side.
+        let ht_cutoff_ms: u64 = 45 * 60_000;
+        let left_participants: HashSet<u32> = details
+            .left_team_players
+            .main
+            .iter()
+            .chain(details.left_team_players.substitutes_used.iter())
+            .copied()
+            .collect();
+        let right_participants: HashSet<u32> = details
+            .right_team_players
+            .main
+            .iter()
+            .chain(details.right_team_players.substitutes_used.iter())
+            .copied()
+            .collect();
+        let mut seen_goals: HashSet<(u32, u64)> = HashSet::new();
+        let (mut left_ht, mut right_ht) = (0i8, 0i8);
+        for goal in score.details.iter() {
+            if goal.stat_type != MatchStatisticType::Goal || goal.time > ht_cutoff_ms {
+                continue;
+            }
+            if !seen_goals.insert((goal.player_id, goal.time)) {
+                continue;
+            }
+            let scorer_left = left_participants.contains(&goal.player_id);
+            let scorer_right = right_participants.contains(&goal.player_id);
+            if !scorer_left && !scorer_right {
+                continue;
+            }
+            if scorer_left != goal.is_auto_goal {
+                left_ht += 1;
+            } else {
+                right_ht += 1;
+            }
+        }
+        let left_ht_delta = left_ht - right_ht;
 
         let tone_for = |delta: i8| -> TeamTalkTone {
             match delta {
@@ -659,6 +715,7 @@ impl LeagueResult {
             club_id: u32,
             player_ids: Vec<u32>,
             delta: i8,
+            ht_delta: i8,
             rep_edge: f32,
         }
 
@@ -673,9 +730,19 @@ impl LeagueResult {
         let right_rep = rep_of(data, right_slot_team_id);
 
         let mut sides: Vec<SideTalk> = Vec::with_capacity(2);
-        for (slot, delta, rep_edge) in [
-            (&details.left_team_players, left_delta, left_rep - right_rep),
-            (&details.right_team_players, right_delta, right_rep - left_rep),
+        for (slot, delta, ht_delta, rep_edge) in [
+            (
+                &details.left_team_players,
+                left_delta,
+                left_ht_delta,
+                left_rep - right_rep,
+            ),
+            (
+                &details.right_team_players,
+                right_delta,
+                -left_ht_delta,
+                right_rep - left_rep,
+            ),
         ] {
             let mut pids: Vec<u32> = Vec::new();
             pids.extend(slot.main.iter().copied());
@@ -693,6 +760,7 @@ impl LeagueResult {
                 club_id,
                 player_ids: pids,
                 delta,
+                ht_delta,
                 rep_edge,
             });
         }
@@ -710,29 +778,62 @@ impl LeagueResult {
             });
             let manager_clone = manager_ref.cloned();
 
+            // Chronological delivery: pre-match rallying cry (big
+            // occasions only), the half-time moment when the break
+            // demanded one, then the routine full-time talk. The
+            // repeated-tone dampener in `apply_team_talk_dated` keeps a
+            // manager who says the same thing three times in one day
+            // from tripling the effect.
+            if let Some(tone) = TeamTalkMoments::pre_match_tone(big_match) {
+                Self::deliver_team_talk(
+                    data,
+                    &side.player_ids,
+                    manager_clone.as_ref(),
+                    tone,
+                    TeamTalkContext {
+                        phase: MatchPhase::PreMatch,
+                        score_delta: 0,
+                        big_match,
+                    },
+                    now,
+                );
+            }
+
+            if !is_friendly {
+                if let Some(tone) = TeamTalkMoments::half_time_tone(
+                    side.ht_delta,
+                    side.rep_edge,
+                    manager_clone.as_ref(),
+                ) {
+                    Self::deliver_team_talk(
+                        data,
+                        &side.player_ids,
+                        manager_clone.as_ref(),
+                        tone,
+                        TeamTalkContext {
+                            phase: MatchPhase::HalfTime,
+                            score_delta: side.ht_delta,
+                            big_match,
+                        },
+                        now,
+                    );
+                }
+            }
+
             let tone = tone_for(side.delta);
             let ctx = TeamTalkContext {
                 phase: MatchPhase::FullTime,
                 score_delta: side.delta,
-                big_match: false, // cup/derby detection would slot in here
+                big_match,
             };
-
-            // Borrow each player mutably one at a time; apply_team_talk
-            // needs &mut Player so we route through player_mut.
-            for pid in &side.player_ids {
-                if let Some(player) = data.player_mut(*pid) {
-                    // apply_team_talk takes an iterator of &mut Player; use a
-                    // single-element array for the per-player loop.
-                    let single = std::slice::from_mut(player);
-                    apply_team_talk_dated(
-                        single.iter_mut(),
-                        manager_clone.as_ref(),
-                        tone,
-                        ctx,
-                        Some(now),
-                    );
-                }
-            }
+            Self::deliver_team_talk(
+                data,
+                &side.player_ids,
+                manager_clone.as_ref(),
+                tone,
+                ctx,
+                now,
+            );
 
             // Expectation-aware extremes on top of the routine talk
             // tones: a humiliation — a three-goal collapse or any
@@ -741,8 +842,7 @@ impl LeagueResult {
             // gets the response publicly praised. Competitive matches
             // only; a friendly humbles nobody.
             if !is_friendly {
-                let humiliation =
-                    side.delta <= -3 || (side.delta < 0 && side.rep_edge >= 0.15);
+                let humiliation = side.delta <= -3 || (side.delta < 0 && side.rep_edge >= 0.15);
                 let upset_win = side.delta > 0 && side.rep_edge <= -0.15;
                 if humiliation || upset_win {
                     let cfg = HappinessConfig::default();
@@ -765,6 +865,25 @@ impl LeagueResult {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Route one team talk to every listed player. `apply_team_talk_dated`
+    /// wants an iterator of `&mut Player`, and `LeagueProcessAccess` hands
+    /// out one mutable player at a time — so deliver per player.
+    fn deliver_team_talk<D: LeagueProcessAccess>(
+        data: &mut D,
+        player_ids: &[u32],
+        manager: Option<&Staff>,
+        tone: TeamTalkTone,
+        ctx: TeamTalkContext,
+        now: NaiveDate,
+    ) {
+        for pid in player_ids {
+            if let Some(player) = data.player_mut(*pid) {
+                let single = std::slice::from_mut(player);
+                apply_team_talk_dated(single.iter_mut(), manager, tone, ctx, Some(now));
             }
         }
     }
@@ -1776,8 +1895,7 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
             .map(|t| t.team_chemistry())
             .unwrap_or(50.0);
         let (consistency, big_match, temperament, pressure, professionalism, chemistry, morale) =
-            data
-                .player(*player_id)
+            data.player(*player_id)
                 .map(|p| {
                     (
                         p.attributes.consistency,
@@ -2050,25 +2168,24 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
     // immutable team / league reads don't overlap the `player_mut` borrows
     // in the loop below. Friendlies / cups carry their own buckets and
     // don't need it.
-    let played_for_team: Option<(String, String, u16, String, String)> =
-        if is_friendly || is_cup {
-            None
-        } else {
-            data.team(side.team_id).map(|t| {
-                let (league_name, league_slug) = t
-                    .league_id
-                    .and_then(|lid| data.league(lid))
-                    .map(|l| (l.name.clone(), l.slug.clone()))
-                    .unwrap_or_default();
-                (
-                    t.slug.clone(),
-                    t.name.clone(),
-                    t.reputation.world,
-                    league_slug,
-                    league_name,
-                )
-            })
-        };
+    let played_for_team: Option<(String, String, u16, String, String)> = if is_friendly || is_cup {
+        None
+    } else {
+        data.team(side.team_id).map(|t| {
+            let (league_name, league_slug) = t
+                .league_id
+                .and_then(|lid| data.league(lid))
+                .map(|l| (l.name.clone(), l.slug.clone()))
+                .unwrap_or_default();
+            (
+                t.slug.clone(),
+                t.name.clone(),
+                t.reputation.world,
+                league_slug,
+                league_name,
+            )
+        })
+    };
     let match_season_year = Season::from_date(today_date).start_year;
 
     for (pid, participation) in all_ids {
@@ -2206,6 +2323,12 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
         }
     }
 
+    // Rotation pre-brief: a manager with real man-management explains
+    // his policy omissions before the squad goes up, converting the
+    // silent-snub grievance into an understood rest. Resolved once per
+    // side; applied to every omission context consumed below.
+    let rotation_brief = RotationBriefGate::for_team(data, side.team_id);
+
     // Unused substitutes feel the snub as well, even though they didn't
     // feature in player_stats. Prefer the structured drop event when
     // the squad selector attached a `MatchSelectionContext` for this
@@ -2219,7 +2342,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
             .selection_omissions
             .iter()
             .find(|o| o.player_id == pid)
-            .map(|o| o.context.clone());
+            .map(|o| rotation_brief.applied(o.context.clone()));
         if let Some(player) = data.player_mut(pid) {
             match ctx {
                 Some(c) => player.on_match_dropped_with_context(c),
@@ -2237,8 +2360,52 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
             continue;
         }
         if let Some(player) = data.player_mut(omitted.player_id) {
-            player.on_match_dropped_with_context(omitted.context.clone());
+            player.on_match_dropped_with_context(rotation_brief.applied(omitted.context.clone()));
         }
+    }
+}
+
+/// Decides whether a policy omission was pre-briefed by the coaching
+/// staff. A manager with real man-management explains his rotation
+/// calls ("you're rested for Saturday"); the grievance model then
+/// treats the omission as understood rather than a silent snub. Only
+/// policy-flavoured reasons qualify — being dropped on form or trust
+/// is never softened by a nice conversation.
+struct RotationBriefGate {
+    briefs_players: bool,
+}
+
+impl RotationBriefGate {
+    const MAN_MANAGEMENT_TO_BRIEF: u8 = 12;
+
+    fn for_team<D: LeagueProcessAccess>(data: &D, team_id: u32) -> Self {
+        let briefs_players = data
+            .team(team_id)
+            .and_then(|t| t.staffs.social_head_coach())
+            .map(|s| s.staff_attributes.mental.man_management >= Self::MAN_MANAGEMENT_TO_BRIEF)
+            .unwrap_or(false);
+        RotationBriefGate { briefs_players }
+    }
+
+    fn applied(&self, mut ctx: MatchSelectionContext) -> MatchSelectionContext {
+        if self.briefs_players && Self::policy_reason(ctx.reason) {
+            ctx.explained_by_coach = true;
+        }
+        ctx
+    }
+
+    fn policy_reason(reason: SelectionOmissionReason) -> bool {
+        matches!(
+            reason,
+            SelectionOmissionReason::FatigueManagement
+                | SelectionOmissionReason::FitnessProtection
+                | SelectionOmissionReason::ReturningFromInjury
+                | SelectionOmissionReason::CupRotation
+                | SelectionOmissionReason::LowMatchImportanceRotation
+                | SelectionOmissionReason::YouthDevelopmentRotation
+                | SelectionOmissionReason::MedicalRecurrenceRisk
+                | SelectionOmissionReason::EligibilityRuleBlock
+        )
     }
 }
 

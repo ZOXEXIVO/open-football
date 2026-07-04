@@ -466,7 +466,10 @@ mod captaincy_tests {
             .iter()
             .find(|e| e.event_type == HappinessEventType::CaptaincyAwarded)
             .unwrap();
-        assert!(award.magnitude > 0.0, "appointment must be a positive event");
+        assert!(
+            award.magnitude > 0.0,
+            "appointment must be a positive event"
+        );
         // Nobody is stripped on a first appointment.
         for player in team.players.players.iter() {
             assert_eq!(

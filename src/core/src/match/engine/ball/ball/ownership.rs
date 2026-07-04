@@ -155,14 +155,15 @@ impl Ball {
             _ => {
                 // Miscontrol: wide deflection off the boot, ±40-110°
                 // either side of the line of travel.
-                let sign = if context.rng.unit_f32() < 0.5 { -1.0 } else { 1.0 };
+                let sign = if context.rng.unit_f32() < 0.5 {
+                    -1.0
+                } else {
+                    1.0
+                };
                 let angle = sign * (0.7 + context.rng.unit_f32() * 1.2);
                 let (sin, cos) = angle.sin_cos();
-                let rotated = Vector3::new(
-                    dir.x * cos - dir.y * sin,
-                    dir.x * sin + dir.y * cos,
-                    0.0,
-                );
+                let rotated =
+                    Vector3::new(dir.x * cos - dir.y * sin, dir.x * sin + dir.y * cos, 0.0);
                 (rotated, (arrival_speed * 0.50).clamp(1.0, 2.6))
             }
         };

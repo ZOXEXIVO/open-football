@@ -353,7 +353,10 @@ fn settled_player_has_zero_want_away_adjustment() {
     let staff = generate_test_staff();
     let engine = ScoringEngine::from_staff(&staff);
     let p = make_test_player(1, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
-    assert_eq!(engine.want_away_adjustment(&p, &staff, date, 0.5, false), 0.0);
+    assert_eq!(
+        engine.want_away_adjustment(&p, &staff, date, 0.5, false),
+        0.0
+    );
 }
 
 #[test]
@@ -504,7 +507,12 @@ fn rotation_keeps_listed_player_benches_near_transfer() {
 
     let mut players = Vec::new();
     // A real keeper so the GK slot doesn't pull an outfielder.
-    players.push(make_test_player(99, &[(PlayerPositionType::Goalkeeper, 16)], 130, date));
+    players.push(make_test_player(
+        99,
+        &[(PlayerPositionType::Goalkeeper, 16)],
+        130,
+        date,
+    ));
     // Twelve otherwise-identical midfielders for ten outfield rotation spots.
     for id in 1..=12u32 {
         players.push(make_test_player(
@@ -1496,7 +1504,11 @@ fn force_selection_overflow_no_duplicates_and_deterministic() {
         s.dedup();
         s.len()
     };
-    assert_eq!(all.len(), unique, "no id may appear twice across XI and bench");
+    assert_eq!(
+        all.len(),
+        unique,
+        "no id may appear twice across XI and bench"
+    );
 
     let xi1: Vec<u32> = r1.main_squad.iter().map(|p| p.id).collect();
     let xi2: Vec<u32> = r2.main_squad.iter().map(|p| p.id).collect();
@@ -1510,7 +1522,10 @@ fn force_selection_overflow_no_duplicates_and_deterministic() {
         .iter()
         .filter(|p| (100..113).contains(&p.id))
         .count();
-    assert_eq!(pinned_in_xi, 10, "all ten outfield places go to pinned players");
+    assert_eq!(
+        pinned_in_xi, 10,
+        "all ten outfield places go to pinned players"
+    );
     let pinned_on_bench = r1
         .substitutes
         .iter()
@@ -2837,6 +2852,7 @@ fn gk_unit_ctx<'a>(
         coach: None,
         competition: super::SelectionCompetition::League,
         game_model: None,
+        succession_heirs: &[],
     }
 }
 
@@ -3285,6 +3301,7 @@ fn prospect_bench_fit_uses_simulation_date() {
         coach: None,
         competition: super::SelectionCompetition::League,
         game_model: None,
+        succession_heirs: &[],
     };
     // 22 on the simulation date (born 2023) → the 0.65 prospect tier. Against
     // the wall clock he'd read as a small child (the 1.0 tier), so a wall-clock

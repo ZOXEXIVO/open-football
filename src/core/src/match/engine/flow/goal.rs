@@ -139,8 +139,7 @@ pub fn handle_goal_reset(field: &mut MatchField, context: &mut MatchContext) {
     // against a fully SET defense, which is the realism point: the
     // engine's freshly-reset formations were measurably easy to attack
     // and goals begat goals through that window.
-    context.dead_ball_until_ms =
-        context.total_match_time + context.rng.range_u64(45, 75) * 1000;
+    context.dead_ball_until_ms = context.total_match_time + context.rng.range_u64(45, 75) * 1000;
     // The side kicking off after a goal IS the side that just conceded.
     // Mark them so the forward shot-decision dampens willingness in the
     // ~1-minute post-concede window — breaks the equalizer cascade that

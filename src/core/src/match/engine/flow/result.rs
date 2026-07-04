@@ -37,6 +37,11 @@ pub enum SubstitutionReason {
     /// player shrugs off.
     #[default]
     Discretionary,
+    /// The side lost its goalkeeper (red card, typically) and burned a
+    /// substitution to bring the bench keeper on for an outfielder.
+    /// The sacrificed player is a victim of circumstance, not coach
+    /// doubt — never a frustration trigger.
+    GoalkeeperEmergency,
 }
 
 /// Final physical state of a player at the moment they left the pitch

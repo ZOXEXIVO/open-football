@@ -491,8 +491,7 @@ pub fn gk_distribution(player: &MatchPlayer, minute: u32) -> f32 {
     // `technique/first_touch` slot — average the two technical reads
     // since the spec leaves it explicitly as either-or.
     let touch_avg = 0.5
-        * (n(b.apply(s.technical.technique, TECH))
-            + n(b.apply(s.goalkeeping.first_touch, TECH)));
+        * (n(b.apply(s.technical.technique, TECH)) + n(b.apply(s.goalkeeping.first_touch, TECH)));
     let v = (n(b.apply(s.goalkeeping.passing, TECH)) * 0.24
         + n(b.apply(s.goalkeeping.kicking, TECH)) * 0.22
         + n(b.apply(s.goalkeeping.throwing, TECH)) * 0.18

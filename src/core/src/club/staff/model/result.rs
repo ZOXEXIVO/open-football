@@ -140,13 +140,11 @@ impl StaffResult {
                             // bond is healthy; no random conflict
                             // event lands.
                         } else {
-                            let change = RelationshipChange::negative(
-                                ChangeType::TacticalDisagreement,
-                                0.3,
-                            );
-                            player.relations.update_staff_relationship(
-                                staff_id, change, sim_date,
-                            );
+                            let change =
+                                RelationshipChange::negative(ChangeType::TacticalDisagreement, 0.3);
+                            player
+                                .relations
+                                .update_staff_relationship(staff_id, change, sim_date);
                             let mctx = ManagerInteractionEventContext::new(
                                 ManagerInteractionTopic::Tactical,
                                 ManagerInteractionTone::Stern,
@@ -260,8 +258,7 @@ impl ConflictGate {
         let Some(rel) = player.relations.get_staff(staff_id) else {
             return false;
         };
-        let healthy_relation =
-            rel.level >= 30.0 && rel.authority_respect >= 55.0;
+        let healthy_relation = rel.level >= 30.0 && rel.authority_respect >= 55.0;
         let intact_promises = player.happiness.factors.promise_trust >= 0.0;
         healthy_relation && intact_promises
     }

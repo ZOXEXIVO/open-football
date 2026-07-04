@@ -1,12 +1,12 @@
 use super::CountryResult;
 use crate::ContractBonusType;
 use crate::PlayerContractProposal;
+use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::events::TransferCompletion;
 use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::simulator::SimulatorData;
 use crate::utils::{DateUtils, FormattingUtils, IntegerUtils};
-use crate::club::player::behaviour_config::HappinessConfig;
-use crate::club::player::events::TransferCompletion;
 use crate::{
     AwardReputationInput, AwardReputationKind, Club, ClubResult, Country, HappinessEventType,
     Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerHappiness, PlayerMessage,
@@ -1031,8 +1031,7 @@ impl CountryResult {
         obligation: bool,
         date: NaiveDate,
     ) {
-        let Some((bci, bcoi, bcli, bti)) = data.find_club_main_team(event.borrowing_club_id)
-        else {
+        let Some((bci, bcoi, bcli, bti)) = data.find_club_main_team(event.borrowing_club_id) else {
             Self::execute_loan_return(data, event, date);
             return;
         };
@@ -1227,7 +1226,9 @@ impl CountryResult {
             .unwrap_or(false);
         let age = DateUtils::age(player.birth_date, date);
         if fringe_at_parent && age >= 21 && loan_starts >= 12 && loan_rating >= 6.6 {
-            let magnitude = HappinessConfig::default().catalog.unsettled_after_loan_return;
+            let magnitude = HappinessConfig::default()
+                .catalog
+                .unsettled_after_loan_return;
             player
                 .happiness
                 .add_event(HappinessEventType::UnsettledAfterLoanReturn, magnitude);
@@ -1343,21 +1344,18 @@ impl CountryResult {
                     if !failing && !player.player_attributes.is_injured {
                         // Depth emergency at the parent: fit senior cover
                         // in this group below half the ideal depth.
-                        if let Some((ci, coi, cli, ti)) = data.find_club_main_team(parent_club_id)
-                        {
+                        if let Some((ci, coi, cli, ti)) = data.find_club_main_team(parent_club_id) {
                             let parent_team =
                                 &data.continents[ci].countries[coi].clubs[cli].teams.teams[ti];
                             let fit = parent_team
                                 .players
                                 .iter()
                                 .filter(|p| p.position().position_group() == group)
-                                .filter(|p| {
-                                    !p.player_attributes.is_injured && p.contract.is_some()
-                                })
+                                .filter(|p| !p.player_attributes.is_injured && p.contract.is_some())
                                 .count();
                             let floor = group.ideal_squad_depth().div_ceil(2);
-                            emergency = fit < floor
-                                && !emergency_taken.contains(&(parent_club_id, group));
+                            emergency =
+                                fit < floor && !emergency_taken.contains(&(parent_club_id, group));
                         }
                     }
                     if !failing && !emergency {
@@ -1383,8 +1381,7 @@ impl CountryResult {
             // Stamp the recall on the player's decision history so the
             // early return reads as a club decision, not a mystery.
             if let Some((ci, coi, cli, ti)) = data.find_player_position(player_id) {
-                if let Some(player) = data.continents[ci].countries[coi].clubs[cli].teams.teams
-                    [ti]
+                if let Some(player) = data.continents[ci].countries[coi].clubs[cli].teams.teams[ti]
                     .players
                     .players
                     .iter_mut()
@@ -2914,24 +2911,15 @@ mod tests {
         let players = &team.players.players;
 
         assert!(
-            warehoused.is_surplus(
-                players.iter().find(|p| p.id == 10).unwrap(),
-                date
-            ),
+            warehoused.is_surplus(players.iter().find(|p| p.id == 10).unwrap(), date),
             "a settled, unused loaned-in keeper outside the top three is surplus"
         );
         assert!(
-            !warehoused.is_surplus(
-                players.iter().find(|p| p.id == 11).unwrap(),
-                date
-            ),
+            !warehoused.is_surplus(players.iter().find(|p| p.id == 11).unwrap(), date),
             "a loaned-in keeper who is the squad's best is kept, not returned"
         );
         assert!(
-            !warehoused.is_surplus(
-                players.iter().find(|p| p.id == 3).unwrap(),
-                date
-            ),
+            !warehoused.is_surplus(players.iter().find(|p| p.id == 3).unwrap(), date),
             "an owned keeper is never force-returned by the warehouse drain"
         );
     }
@@ -3020,8 +3008,7 @@ mod tests {
             d(season_year + 1, 5, 20),
             chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
         );
-        let mut item =
-            ScheduleItem::new(cup_id, slug.into(), winner_id, loser_id, dt, None);
+        let mut item = ScheduleItem::new(cup_id, slug.into(), winner_id, loser_id, dt, None);
         item.result = Some(Score {
             home_team: TeamScore::new_with_score(winner_id, 2),
             away_team: TeamScore::new_with_score(loser_id, 0),
@@ -3048,11 +3035,7 @@ mod tests {
         stats.average_rating = rating;
     }
 
-    fn build_country_with_cup(
-        clubs: Vec<Club>,
-        leagues: Vec<League>,
-        cup: DomesticCup,
-    ) -> Country {
+    fn build_country_with_cup(clubs: Vec<Club>, leagues: Vec<League>, cup: DomesticCup) -> Country {
         Country::builder()
             .id(1)
             .code("EN".to_string())
@@ -3098,8 +3081,7 @@ mod tests {
 
         let league = make_league_with_table(1, 5000, vec![]);
         let cup = make_resolved_cup_2team(800_000_001, "test-cup", 6500, 10, 20, 2026);
-        let mut country =
-            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+        let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
         CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
 
@@ -3151,8 +3133,7 @@ mod tests {
 
         let league = make_league_with_table(1, 5000, vec![]);
         let cup = make_resolved_cup_2team(800_000_002, "test-cup", 7000, 10, 20, 2026);
-        let mut country =
-            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+        let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
         CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
 
@@ -3180,8 +3161,7 @@ mod tests {
 
         let league = make_league_with_table(1, 5000, vec![]);
         let cup = make_resolved_cup_2team(800_000_003, "test-cup", 6500, 10, 20, 2026);
-        let mut country =
-            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+        let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
         // Two ticks: the day of the final + the day after.
         CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
@@ -3229,8 +3209,15 @@ mod tests {
             relegation_spots: 0,
             league_group: None,
         };
-        let mut league_cup =
-            League::new(800_000_004, "Cup".into(), "test-cup".into(), 1, 7000, settings, false);
+        let mut league_cup = League::new(
+            800_000_004,
+            "Cup".into(),
+            "test-cup".into(),
+            1,
+            7000,
+            settings,
+            false,
+        );
         league_cup.is_cup = true;
         let mut cup = DomesticCup::new(league_cup);
         cup.season_start_year = 2026;
@@ -3239,8 +3226,7 @@ mod tests {
             chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
         );
         // Round 1: 20 beats 30 (30 was the away side), 10 has a bye.
-        let mut r1_item =
-            ScheduleItem::new(800_000_004, "test-cup".into(), 20, 30, dt, None);
+        let mut r1_item = ScheduleItem::new(800_000_004, "test-cup".into(), 20, 30, dt, None);
         r1_item.result = Some(Score {
             home_team: TeamScore::new_with_score(20, 1),
             away_team: TeamScore::new_with_score(30, 0),
@@ -3257,8 +3243,7 @@ mod tests {
             d(2027, 5, 20),
             chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
         );
-        let mut r2_item =
-            ScheduleItem::new(800_000_004, "test-cup".into(), 10, 20, dt2, None);
+        let mut r2_item = ScheduleItem::new(800_000_004, "test-cup".into(), 10, 20, dt2, None);
         r2_item.result = Some(Score {
             home_team: TeamScore::new_with_score(10, 2),
             away_team: TeamScore::new_with_score(20, 0),
@@ -3323,12 +3308,17 @@ mod tests {
 
         let league = make_league_with_table(1, 5000, vec![]);
         let cup = make_resolved_cup_2team(800_000_005, "test-cup", 7500, 10, 20, 2026);
-        let mut country =
-            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+        let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
         CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
 
-        let starter = &country.clubs.iter().find(|c| c.id == 100).unwrap().teams.teams[0]
+        let starter = &country
+            .clubs
+            .iter()
+            .find(|c| c.id == 100)
+            .unwrap()
+            .teams
+            .teams[0]
             .players
             .players[0];
         assert_eq!(
@@ -3360,8 +3350,7 @@ mod tests {
 
         let league = make_league_with_table(1, 5000, vec![]);
         let cup = make_resolved_cup_2team(800_000_006, "test-cup", 6500, 10, 20, 2026);
-        let mut country =
-            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+        let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
         // Snapshot pre-call reputation so we can detect achievement bumps.
         let rep_before = country
@@ -3378,7 +3367,13 @@ mod tests {
         CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
         CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 21));
 
-        let team = &country.clubs.iter().find(|c| c.id == 100).unwrap().teams.teams[0];
+        let team = &country
+            .clubs
+            .iter()
+            .find(|c| c.id == 100)
+            .unwrap()
+            .teams
+            .teams[0];
         assert_eq!(
             team.reputation.home, rep_before,
             "team reputation must not move when no player qualifies"
@@ -3442,12 +3437,17 @@ mod tests {
         };
         cup.league.matches.push(mr, final_date);
 
-        let mut country =
-            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+        let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
         CountryResult::process_domestic_cup_winner_awards(&mut country, final_date);
 
-        let players = &country.clubs.iter().find(|c| c.id == 100).unwrap().teams.teams[0]
+        let players = &country
+            .clubs
+            .iter()
+            .find(|c| c.id == 100)
+            .unwrap()
+            .teams
+            .teams[0]
             .players
             .players;
         let mag_in_final = players
@@ -3495,12 +3495,17 @@ mod tests {
 
         let league = make_league_with_table(1, 5000, vec![]);
         let cup = make_resolved_cup_2team(800_000_008, "test-cup", 7000, 10, 20, 2026);
-        let mut country =
-            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+        let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
         CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
 
-        let starter = &country.clubs.iter().find(|c| c.id == 100).unwrap().teams.teams[0]
+        let starter = &country
+            .clubs
+            .iter()
+            .find(|c| c.id == 100)
+            .unwrap()
+            .teams
+            .teams[0]
             .players
             .players[0];
         let event = starter

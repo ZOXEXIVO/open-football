@@ -1,8 +1,10 @@
 use crate::club::staff::perception::CoachProfile;
-use crate::club::{ClubPhilosophy, Staff};
-use crate::{MatchTacticType, Player};
+use crate::club::{ClubPhilosophy, PlayerPositionType, Staff};
+use crate::{MatchTacticType, Player, Team, TrainingFocus};
 
+use super::helpers::PlayerAvailability;
 use super::{SelectionCompetition, SelectionContext};
+use std::cmp::Ordering;
 
 /// Football-shape view of the upcoming fixture, built once per selection
 /// pass and read by the slot / XI / bench scorers. Keeps the per-player
@@ -85,6 +87,272 @@ impl OpponentSelectionProfile {
             central_overload: 0.3,
         }
     }
+
+    /// Build the threat profile from the opponent's actual roster and
+    /// baseline tactic. Every axis is a continuous 0..1 read off real
+    /// squad quality blended with a shape prior — a quick counter-
+    /// attacking side and a towering set-piece side produce genuinely
+    /// different selection pressure on the picking coach.
+    pub fn from_opponent_team(opponent: &Team, own_reputation: u16) -> Self {
+        let roster: Vec<&Player> = opponent
+            .players
+            .players()
+            .into_iter()
+            .filter(|p| !p.player_attributes.is_injured)
+            .collect();
+        if roster.is_empty() {
+            return OpponentSelectionProfile::neutral();
+        }
+
+        let opponent_reputation = opponent.reputation.market_value_score();
+        let strength_ratio =
+            (own_reputation.max(1) as f32 / opponent_reputation.max(1) as f32).clamp(0.25, 4.0);
+        let expected_tactic = opponent.tactics.as_ref().map(|t| t.tactic_type);
+
+        let pace_threat = (Self::top_mean(
+            roster
+                .iter()
+                .filter(|p| {
+                    let pos = p.position();
+                    pos.is_forward()
+                        || matches!(
+                            pos,
+                            PlayerPositionType::AttackingMidfielderLeft
+                                | PlayerPositionType::AttackingMidfielderCenter
+                                | PlayerPositionType::AttackingMidfielderRight
+                        )
+                })
+                .map(|p| (p.skills.physical.pace + p.skills.physical.acceleration) * 0.5)
+                .collect(),
+            3,
+        ) / 20.0)
+            .clamp(0.0, 1.0);
+
+        let aerial_threat = (Self::top_mean(
+            roster
+                .iter()
+                .map(|p| (p.skills.technical.heading + p.skills.physical.jumping) * 0.5)
+                .collect(),
+            3,
+        ) / 20.0)
+            .clamp(0.0, 1.0);
+
+        // Pressing read: the running power and bite of their engine room,
+        // blended with what the shape usually implies.
+        let press_engine = Self::top_mean(
+            roster
+                .iter()
+                .filter(|p| {
+                    let pos = p.position();
+                    pos.is_midfielder() || pos.is_forward()
+                })
+                .map(|p| {
+                    (p.skills.mental.work_rate
+                        + p.skills.physical.stamina
+                        + p.skills.mental.aggression)
+                        / 3.0
+                })
+                .collect(),
+            6,
+        ) / 20.0;
+        let pressing_intensity = (press_engine * 0.55
+            + Self::tactic_pressing_prior(expected_tactic) * 0.45)
+            .clamp(0.0, 1.0);
+
+        // A clearly weaker opponent tends to sit deep; a defensive shape
+        // reinforces the read. Continuous in the strength ratio.
+        let low_block_likelihood = (0.20
+            + (strength_ratio - 1.0).clamp(-0.6, 1.8) * 0.28
+            + Self::tactic_defensiveness_prior(expected_tactic) * 0.35)
+            .clamp(0.0, 1.0);
+
+        let delivery = Self::top_mean(
+            roster
+                .iter()
+                .map(|p| {
+                    p.skills
+                        .technical
+                        .corners
+                        .max(p.skills.technical.free_kicks)
+                })
+                .collect(),
+            2,
+        ) / 20.0;
+        let set_piece_threat = (delivery * 0.55 + aerial_threat * 0.45).clamp(0.0, 1.0);
+
+        // Flank threats are mirrored: the opponent's right side attacks
+        // the selecting side's left flank, and vice versa.
+        let wide_threat_left = Self::flank_quality(&roster, false);
+        let wide_threat_right = Self::flank_quality(&roster, true);
+
+        let central_mid_quality = Self::top_mean(
+            roster
+                .iter()
+                .filter(|p| {
+                    matches!(
+                        p.position(),
+                        PlayerPositionType::DefensiveMidfielder
+                            | PlayerPositionType::MidfielderCenterLeft
+                            | PlayerPositionType::MidfielderCenter
+                            | PlayerPositionType::MidfielderCenterRight
+                            | PlayerPositionType::AttackingMidfielderCenter
+                    )
+                })
+                .map(|p| {
+                    (p.skills.technical.passing
+                        + p.skills.mental.vision
+                        + p.skills.mental.decisions)
+                        / 3.0
+                })
+                .collect(),
+            3,
+        ) / 20.0;
+        let central_overload = (central_mid_quality * 0.6
+            + Self::tactic_central_prior(expected_tactic) * 0.4)
+            .clamp(0.0, 1.0);
+
+        OpponentSelectionProfile {
+            expected_tactic,
+            strength_ratio,
+            pace_threat,
+            aerial_threat,
+            pressing_intensity,
+            low_block_likelihood,
+            set_piece_threat,
+            wide_threat_left,
+            wide_threat_right,
+            central_overload,
+        }
+    }
+
+    /// Mean of the strongest `n` values, on the raw 0..20 skill scale.
+    /// Empty inputs return a league-average 8.0 so a positionless roster
+    /// degrades to a neutral read instead of a zero threat.
+    fn top_mean(mut values: Vec<f32>, n: usize) -> f32 {
+        if values.is_empty() {
+            return 8.0;
+        }
+        values.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+        let take = values.len().min(n.max(1));
+        values[..take].iter().sum::<f32>() / take as f32
+    }
+
+    /// Best wide-attacker quality on one of the opponent's flanks
+    /// (`left` in the opponent's own orientation), 0..1.
+    fn flank_quality(roster: &[&Player], left: bool) -> f32 {
+        (Self::top_mean(
+            roster
+                .iter()
+                .filter(|p| Self::is_wide_attacker(p.position(), left))
+                .map(|p| {
+                    (p.skills.physical.pace
+                        + p.skills.technical.crossing
+                        + p.skills.technical.dribbling)
+                        / 3.0
+                })
+                .collect(),
+            2,
+        ) / 20.0)
+            .clamp(0.0, 1.0)
+    }
+
+    fn is_wide_attacker(pos: PlayerPositionType, left: bool) -> bool {
+        if left {
+            matches!(
+                pos,
+                PlayerPositionType::MidfielderLeft
+                    | PlayerPositionType::AttackingMidfielderLeft
+                    | PlayerPositionType::ForwardLeft
+                    | PlayerPositionType::WingbackLeft
+            )
+        } else {
+            matches!(
+                pos,
+                PlayerPositionType::MidfielderRight
+                    | PlayerPositionType::AttackingMidfielderRight
+                    | PlayerPositionType::ForwardRight
+                    | PlayerPositionType::WingbackRight
+            )
+        }
+    }
+
+    fn tactic_pressing_prior(tactic: Option<MatchTacticType>) -> f32 {
+        match tactic {
+            Some(
+                MatchTacticType::T433
+                | MatchTacticType::T343
+                | MatchTacticType::T4231
+                | MatchTacticType::T4222,
+            ) => 0.62,
+            Some(
+                MatchTacticType::T442
+                | MatchTacticType::T442Diamond
+                | MatchTacticType::T442DiamondWide
+                | MatchTacticType::T442Narrow
+                | MatchTacticType::T4312
+                | MatchTacticType::T352,
+            ) => 0.50,
+            Some(
+                MatchTacticType::T451
+                | MatchTacticType::T4141
+                | MatchTacticType::T4411
+                | MatchTacticType::T1333,
+            ) => 0.40,
+            None => 0.45,
+        }
+    }
+
+    fn tactic_defensiveness_prior(tactic: Option<MatchTacticType>) -> f32 {
+        match tactic {
+            Some(
+                MatchTacticType::T451
+                | MatchTacticType::T4141
+                | MatchTacticType::T1333
+                | MatchTacticType::T4411,
+            ) => 0.65,
+            Some(
+                MatchTacticType::T442
+                | MatchTacticType::T442Narrow
+                | MatchTacticType::T442Diamond
+                | MatchTacticType::T442DiamondWide
+                | MatchTacticType::T352
+                | MatchTacticType::T4312,
+            ) => 0.45,
+            Some(
+                MatchTacticType::T433
+                | MatchTacticType::T343
+                | MatchTacticType::T4231
+                | MatchTacticType::T4222,
+            ) => 0.30,
+            None => 0.45,
+        }
+    }
+
+    fn tactic_central_prior(tactic: Option<MatchTacticType>) -> f32 {
+        match tactic {
+            Some(
+                MatchTacticType::T442Diamond
+                | MatchTacticType::T442Narrow
+                | MatchTacticType::T4312
+                | MatchTacticType::T4141
+                | MatchTacticType::T451
+                | MatchTacticType::T1333,
+            ) => 0.62,
+            Some(
+                MatchTacticType::T4231
+                | MatchTacticType::T352
+                | MatchTacticType::T4411
+                | MatchTacticType::T442,
+            ) => 0.50,
+            Some(
+                MatchTacticType::T433
+                | MatchTacticType::T343
+                | MatchTacticType::T4222
+                | MatchTacticType::T442DiamondWide,
+            ) => 0.38,
+            None => 0.45,
+        }
+    }
 }
 
 /// Pitch / weather / travel context. Conservative defaults until the
@@ -156,12 +424,22 @@ impl SquadStateProfile {
     pub fn from_signals(available_len: usize, staff: &Staff) -> Self {
         let depth = ((available_len as f32 - 18.0) / 12.0).clamp(0.0, 1.0);
         let med = &staff.staff_attributes.medical;
-        let medical_quality = ((med.physiotherapy as f32 + med.sports_science as f32) / 40.0)
-            .clamp(0.0, 1.0);
+        let medical_quality =
+            ((med.physiotherapy as f32 + med.sports_science as f32) / 40.0).clamp(0.0, 1.0);
         SquadStateProfile {
             depth,
             fixture_congestion: 0.0,
             medical_quality,
+        }
+    }
+
+    /// Map the "competitive fixtures within the next few days" count the
+    /// matchday scheduler already computes onto the 0..1 congestion axis.
+    pub fn congestion_from_upcoming(upcoming: u8) -> f32 {
+        match upcoming {
+            0 => 0.0,
+            1 => 0.5,
+            _ => 1.0,
         }
     }
 }
@@ -184,18 +462,18 @@ pub struct CoachSelectionPolicy {
 
 impl CoachSelectionPolicy {
     pub fn from_profile(profile: &CoachProfile, philosophy: Option<&ClubPhilosophy>) -> Self {
-        let academy_trust = (profile.youth_preference
-            * 0.6
+        let academy_trust = (profile.youth_preference * 0.6
             + profile.potential_accuracy * 0.4
             + match philosophy {
                 Some(ClubPhilosophy::DevelopAndSell) => 0.3,
                 Some(ClubPhilosophy::SignToCompete) => -0.2,
                 _ => 0.0,
             })
-            .clamp(0.0, 1.0);
+        .clamp(0.0, 1.0);
 
         CoachSelectionPolicy {
-            rotation_discipline: (profile.conservatism * 0.5 + profile.judging_accuracy * 0.3
+            rotation_discipline: (profile.conservatism * 0.5
+                + profile.judging_accuracy * 0.3
                 + 0.2)
                 .clamp(0.0, 1.0),
             star_favoritism: (1.0 - profile.judging_accuracy * 0.6).clamp(0.0, 1.0),
@@ -230,11 +508,7 @@ impl MatchSelectionGameModel {
     /// doesn't carry the richer signal yet — callers that want richer per-
     /// fixture data fill in the relevant block on the resulting model after
     /// construction.
-    pub fn build(
-        ctx: &SelectionContext,
-        staff: &Staff,
-        available_len: usize,
-    ) -> Self {
+    pub fn build(ctx: &SelectionContext, staff: &Staff, available_len: usize) -> Self {
         let profile = CoachProfile::from_staff(staff);
         MatchSelectionGameModel {
             match_type: MatchTypeClassifier::classify(ctx),
@@ -245,6 +519,57 @@ impl MatchSelectionGameModel {
             squad_state: SquadStateProfile::from_signals(available_len, staff),
             coach_policy: CoachSelectionPolicy::from_profile(&profile, ctx.philosophy.as_ref()),
         }
+    }
+
+    /// Build the fixture-aware model for a real matchday: the opponent
+    /// block reads the opposing roster, the environment carries the
+    /// venue, and congestion comes from the club's upcoming competitive
+    /// fixtures. [`MatchSelectionGameModel::build`] remains the neutral
+    /// fallback for callers without a resolved opponent `Team`.
+    pub fn build_for_fixture(
+        ctx: &SelectionContext,
+        own_team: &Team,
+        opponent_team: &Team,
+        is_home: bool,
+        upcoming_fixtures: u8,
+        is_derby: bool,
+    ) -> Self {
+        let staff = own_team.staffs.head_coach();
+        let available_len = own_team
+            .players
+            .players()
+            .iter()
+            .filter(|p| PlayerAvailability::is_available(p, ctx.is_friendly))
+            .count();
+
+        let mut model = MatchSelectionGameModel::build(ctx, staff, available_len);
+        if is_derby
+            && matches!(
+                model.match_type,
+                MatchTypeSignal::LeagueRoutine | MatchTypeSignal::TitleRace
+            )
+        {
+            // A derby overrides the routine league read; cup and
+            // continental stage classifications keep priority — the
+            // bracket position matters more for rotation than the
+            // rivalry does.
+            model.match_type = MatchTypeSignal::Derby;
+        }
+        model.opponent_profile = OpponentSelectionProfile::from_opponent_team(
+            opponent_team,
+            own_team.reputation.market_value_score(),
+        );
+        model.environmental_profile.is_home = is_home;
+        model.squad_state.fixture_congestion =
+            SquadStateProfile::congestion_from_upcoming(upcoming_fixtures);
+        model
+    }
+
+    /// True when the coach's mental category for this fixture is a
+    /// derby. Single accessor so every strategy / context consumer
+    /// reads the same signal.
+    pub fn is_derby(&self) -> bool {
+        self.match_type == MatchTypeSignal::Derby
     }
 }
 
@@ -432,9 +757,16 @@ impl EligibilityEvaluator {
             }
         }
         if player.player_attributes.is_in_recovery() {
+            // A structured reintegration program halves the caution —
+            // the medical staff are managing his minutes deliberately.
+            let managed_return = player.individual_training.as_ref().is_some_and(|plan| {
+                plan.focus_areas
+                    .iter()
+                    .any(|f| matches!(f, TrainingFocus::InjuryRecovery))
+            });
             return EligibilityDecision::SoftLimited {
                 reason: EligibilityReason::ReturningFromInjury,
-                penalty: 2.0,
+                penalty: if managed_return { 1.0 } else { 2.0 },
             };
         }
         EligibilityDecision::Eligible

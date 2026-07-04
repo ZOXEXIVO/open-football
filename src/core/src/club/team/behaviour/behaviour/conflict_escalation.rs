@@ -159,8 +159,8 @@ impl Player {
             self.happiness.adjust_morale(-3.0);
         }
 
-        let streak_held = self.happiness.conflict_risk_streak
-            >= ConflictEscalationThresholds::STREAK_TO_ESCALATE;
+        let streak_held =
+            self.happiness.conflict_risk_streak >= ConflictEscalationThresholds::STREAK_TO_ESCALATE;
 
         // ── Unhappy roll — requires persistent elevation.
         if streak_held
@@ -391,8 +391,7 @@ mod tests {
         );
 
         let neutral_player = build_player(3, 10.0);
-        let players =
-            PlayerCollection::new(vec![captain, player, neutral_player]);
+        let players = PlayerCollection::new(vec![captain, player, neutral_player]);
 
         let med = CaptainMediation::for_captain(&players, Some(1));
         let raw = 0.80;

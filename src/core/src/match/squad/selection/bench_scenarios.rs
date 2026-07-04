@@ -1,6 +1,6 @@
+use crate::Player;
 use crate::club::PlayerPositionType;
 use crate::utils::DateUtils;
-use crate::Player;
 use chrono::NaiveDate;
 
 use super::model::{MatchTypeSignal, TacticalObjective};
@@ -124,11 +124,7 @@ impl BenchScenarioPlan {
 pub struct BenchScenarioScorer;
 
 impl BenchScenarioScorer {
-    pub fn coverage(
-        player: &Player,
-        scenario: BenchScenario,
-        date: NaiveDate,
-    ) -> f32 {
+    pub fn coverage(player: &Player, scenario: BenchScenario, date: NaiveDate) -> f32 {
         let t = &player.skills.technical;
         let m = &player.skills.mental;
         let p = &player.skills.physical;

@@ -248,10 +248,7 @@ impl StateProcessingHandler for ForwardRunningState {
             // weak striker firing a rushed snapshot still misses the
             // target more often than not. The contribution is per-shot
             // VOLUME, not per-shot quality.
-            if can_shoot
-                && ctx.in_state_time < 8
-                && distance_to_goal < 60.0
-            {
+            if can_shoot && ctx.in_state_time < 8 && distance_to_goal < 60.0 {
                 // Asymmetric snapshot gate: the forward only fires
                 // instinctively when they KNOW they can't out-touch the
                 // defender — i.e. the nearest opposing tackler's skill
@@ -281,8 +278,7 @@ impl StateProcessingHandler for ForwardRunningState {
                     .map(|(id, _)| id);
                 if let Some(threat_id) = nearest_threat {
                     let defender_tackling = ctx.player().skills(threat_id).technical.tackling;
-                    let attacker_first_touch =
-                        ctx.player.skills.technical.first_touch;
+                    let attacker_first_touch = ctx.player.skills.technical.first_touch;
                     // Buffer 1.0 → 0.5 — fires at SMALLER skill gaps
                     // too. At equal skill (both ~11) the gate still
                     // doesn't fire (11 < 10.5 is false), so calibration

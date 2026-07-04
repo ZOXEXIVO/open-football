@@ -153,13 +153,9 @@ impl ClubDirectionEvidence {
             ClubDirectionEvidence::KeyPlayerSoldUnreplaced => {
                 "club_direction_evidence_key_player_sold"
             }
-            ClubDirectionEvidence::SquadQualityWeakened => {
-                "club_direction_evidence_squad_weakened"
-            }
+            ClubDirectionEvidence::SquadQualityWeakened => "club_direction_evidence_squad_weakened",
             ClubDirectionEvidence::PoorLeagueForm => "club_direction_evidence_poor_league_form",
-            ClubDirectionEvidence::AmbitionGapWithBoard => {
-                "club_direction_evidence_ambition_gap"
-            }
+            ClubDirectionEvidence::AmbitionGapWithBoard => "club_direction_evidence_ambition_gap",
             ClubDirectionEvidence::MeaningfulSigningArrived => {
                 "club_direction_evidence_meaningful_signing"
             }

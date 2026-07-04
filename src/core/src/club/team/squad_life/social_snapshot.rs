@@ -96,14 +96,11 @@ impl CaptainMediation {
     /// 60% strength. Returns a neutral instance when neither path
     /// produces a leader.
     pub fn for_squad(players: &PlayerCollection) -> Self {
-        let formal_captain = players
-            .iter()
-            .filter(|p| !p.is_on_loan())
-            .max_by_key(|p| {
-                let leadership = p.skills.mental.leadership;
-                let prof = p.attributes.professionalism;
-                ((leadership * 2.0 + prof) * 10.0) as i64
-            });
+        let formal_captain = players.iter().filter(|p| !p.is_on_loan()).max_by_key(|p| {
+            let leadership = p.skills.mental.leadership;
+            let prof = p.attributes.professionalism;
+            ((leadership * 2.0 + prof) * 10.0) as i64
+        });
         let Some(captain) = formal_captain else {
             return Self {
                 leader_support: 0.0,
@@ -426,10 +423,7 @@ impl TeamSocialSnapshot {
         parts.compose()
     }
 
-    fn collect_manager_bond_samples(
-        team: &Team,
-        today: NaiveDate,
-    ) -> Vec<ManagerBondSample> {
+    fn collect_manager_bond_samples(team: &Team, today: NaiveDate) -> Vec<ManagerBondSample> {
         let Some(manager) = ManagerLookup::for_snapshot(team) else {
             return Vec::new();
         };
@@ -517,8 +511,7 @@ impl TeamSocialSnapshot {
             .iter()
             .filter(|p| !p.is_on_loan())
             .filter(|p| {
-                !(p.player_attributes.is_injured
-                    && p.player_attributes.injury_days_remaining > 90)
+                !(p.player_attributes.is_injured && p.player_attributes.injury_days_remaining > 90)
             })
             .collect()
     }
@@ -680,8 +673,8 @@ struct DirectionSample {
 impl DirectionSample {
     fn from_relation(rel: &crate::club::relations::PlayerRelation) -> Self {
         let level_axis = (rel.level + 100.0) / 2.0;
-        let harmony = (level_axis * 0.4 + rel.trust * 0.3 + rel.professional_respect * 0.3)
-            .clamp(0.0, 100.0);
+        let harmony =
+            (level_axis * 0.4 + rel.trust * 0.3 + rel.professional_respect * 0.3).clamp(0.0, 100.0);
 
         let mut conflict = 0.0f32;
         let is_rivalry = !rel.rivalry_with.is_empty();
@@ -1156,8 +1149,7 @@ impl TeamSocialDebug {
         let mut risk_entries: Vec<ConflictRiskDebugEntry> = active
             .iter()
             .map(|p| {
-                let (bond, breakdown) =
-                    CoachPlayerBond::build_with_breakdown(p, coach, today);
+                let (bond, breakdown) = CoachPlayerBond::build_with_breakdown(p, coach, today);
                 let effective = mediation.effective_risk(bond.conflict_risk, p);
                 ConflictRiskDebugEntry {
                     player_id: p.id,
@@ -1306,8 +1298,7 @@ mod tests {
 
         // Same team but the new signing arrived 91 days ago.
         let mut later_players = players;
-        later_players[0].last_transfer_date =
-            Some(SnapshotFixture::today() - Duration::days(91));
+        later_players[0].last_transfer_date = Some(SnapshotFixture::today() - Duration::days(91));
         let later_team = SnapshotFixture::build_team(later_players);
         let settled = TeamSocialSnapshot::build(&later_team, SnapshotFixture::today());
 
@@ -1433,22 +1424,14 @@ mod tests {
         let date = SnapshotFixture::today();
         if let Some(p) = team.players.players.iter_mut().find(|p| p.id == a_id) {
             for _ in 0..10 {
-                p.relations.update_with_type(
-                    b_id,
-                    -0.8,
-                    ChangeType::PersonalConflict,
-                    date,
-                );
+                p.relations
+                    .update_with_type(b_id, -0.8, ChangeType::PersonalConflict, date);
             }
         }
         if let Some(p) = team.players.players.iter_mut().find(|p| p.id == b_id) {
             for _ in 0..10 {
-                p.relations.update_with_type(
-                    a_id,
-                    -0.8,
-                    ChangeType::PersonalConflict,
-                    date,
-                );
+                p.relations
+                    .update_with_type(a_id, -0.8, ChangeType::PersonalConflict, date);
             }
             // Mark the rivalry symmetrically so conflict_contribution
             // picks it up.
@@ -1761,18 +1744,12 @@ mod tests {
         // mark a CompetitionRivalry so the conflict_contribution lights
         // up regardless of exact level threshold.
         for _ in 0..15 {
-            players[0].relations.update_with_type(
-                2,
-                -0.8,
-                ChangeType::PersonalConflict,
-                date,
-            );
-            players[1].relations.update_with_type(
-                1,
-                -0.8,
-                ChangeType::PersonalConflict,
-                date,
-            );
+            players[0]
+                .relations
+                .update_with_type(2, -0.8, ChangeType::PersonalConflict, date);
+            players[1]
+                .relations
+                .update_with_type(1, -0.8, ChangeType::PersonalConflict, date);
         }
         players[1].relations.update_player_relationship(
             1,
@@ -1792,10 +1769,7 @@ mod tests {
         );
 
         // Flag player 1 out on loan; pair walk should skip the pair.
-        players[0].contract_loan = Some(PlayerClubContract::new(
-            5_000,
-            date + Duration::days(180),
-        ));
+        players[0].contract_loan = Some(PlayerClubContract::new(5_000, date + Duration::days(180)));
         let loaned_team = SnapshotFixture::build_team(players);
         let snap = TeamSocialSnapshot::build(&loaned_team, date);
 
@@ -1881,4 +1855,3 @@ mod tests {
         );
     }
 }
-

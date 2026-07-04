@@ -148,8 +148,14 @@ fn env_modifier_for_pass_combines_short_and_long_deltas() {
     let m = env.modifiers();
 
     // Wind only kicks long-pass accuracy; wet pitch leaves pass_accuracy alone.
-    assert_eq!(m.pass_accuracy, 0.0, "wet+wind shouldn't touch short pass accuracy");
-    assert!(m.long_pass_accuracy < 0.0, "wind must reduce long pass accuracy");
+    assert_eq!(
+        m.pass_accuracy, 0.0,
+        "wet+wind shouldn't touch short pass accuracy"
+    );
+    assert!(
+        m.long_pass_accuracy < 0.0,
+        "wind must reduce long pass accuracy"
+    );
 
     // A 50% raw success on a short pass should remain 50% in wind/wet conditions.
     let raw = 0.50_f32;
@@ -177,7 +183,10 @@ fn heavy_rain_reduces_short_pass_accuracy_too() {
     // Mirrors the evaluator's combine for a short pass.
     let raw = 0.65_f32;
     let adjusted = (raw + m.pass_accuracy).clamp(0.1, 0.99);
-    assert!(adjusted < raw - 0.04, "heavy rain hit too small: {adjusted} vs {raw}");
+    assert!(
+        adjusted < raw - 0.04,
+        "heavy rain hit too small: {adjusted} vs {raw}"
+    );
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -208,7 +217,10 @@ fn heavy_rain_reduces_keeper_save_probability() {
         rain_save < dry_save,
         "heavy rain must reduce save probability ({rain_save} vs {dry_save})"
     );
-    assert!(dry_save - rain_save > 0.05, "rain effect too small: {dry_save} -> {rain_save}");
+    assert!(
+        dry_save - rain_save > 0.05,
+        "rain effect too small: {dry_save} -> {rain_save}"
+    );
 }
 
 // ──────────────────────────────────────────────────────────────────────

@@ -177,7 +177,8 @@ impl<'a> RatingContext<'a> {
 
         // Box entries — combine passes-into-box and carries-into-box so
         // the same delivery doesn't pay double if both fired.
-        let box_entries = RatingMath::sat(s.passes_into_box as f32 + z.carries_into_box as f32, 5.0) * 0.30;
+        let box_entries =
+            RatingMath::sat(s.passes_into_box as f32 + z.carries_into_box as f32, 5.0) * 0.30;
 
         // Cross output: completed crosses help, failed crosses drag.
         // Failed-cross penalty softened (was sat(failed, 5.0) * 0.22):
@@ -213,10 +214,7 @@ impl<'a> RatingContext<'a> {
             7.0,
         ) * 0.08;
 
-        key + box_entries + cross_credit - cross_penalty
-            + xg_chain
-            + lanes
-            + into_final_third
+        key + box_entries + cross_credit - cross_penalty + xg_chain + lanes + into_final_third
     }
 
     /// Ball progression and dribbling: progressive passes, progressive

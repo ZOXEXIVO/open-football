@@ -385,8 +385,7 @@ impl MatchCoach {
         // gate blocked EVERY second-chance strike — contradicting the
         // possession-cap design note below, and deleting one of
         // football's core goal patterns (~4-6% of real goals).
-        let shot_spaced =
-            rebound_live || current_tick.saturating_sub(self.last_shot_tick) >= 750;
+        let shot_spaced = rebound_live || current_tick.saturating_sub(self.last_shot_tick) >= 750;
         // Build-up gate: a team that just won possession can't fire
         // within ~1 second. Real football: even elite counter-attacks
         // need at least one progressive pass before a shot arrives.
@@ -546,5 +545,34 @@ impl TacticalNeed {
             return TacticalNeed::NeedingCrosses;
         }
         TacticalNeed::Fatigue
+    }
+
+    /// Same read, seeded with the mentality engine's current
+    /// instruction so the two coach brains agree: a bench told
+    /// "all-out attack" sends on an attacker and a side killing the
+    /// game sends on a defender, regardless of what the rolling
+    /// metrics alone would have inferred. Neutral instructions fall
+    /// through to the metric read.
+    pub fn from_state_with_instruction(
+        instruction: CoachInstruction,
+        score_diff: i8,
+        match_progress: f32,
+        avg_team_condition: f32,
+        metrics: RollingTeamMetrics,
+    ) -> Self {
+        match instruction {
+            CoachInstruction::AllOutAttack => return TacticalNeed::Chasing,
+            CoachInstruction::PushForward if score_diff <= 0 => {
+                return TacticalNeed::Chasing;
+            }
+            CoachInstruction::ParkTheBus | CoachInstruction::WasteTime => {
+                return TacticalNeed::ProtectingLead;
+            }
+            CoachInstruction::SlowDown if score_diff > 0 && match_progress > 0.66 => {
+                return TacticalNeed::ProtectingLead;
+            }
+            _ => {}
+        }
+        Self::from_state(score_diff, match_progress, avg_team_condition, metrics)
     }
 }

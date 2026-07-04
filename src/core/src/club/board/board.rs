@@ -1206,8 +1206,9 @@ impl ClubBoard {
         // follows an ultimatum the squad has already lived with — never
         // the same meeting that issued it.
         let already_on_final_warning = self.manager_on_final_warning;
-        let crisis =
-            sustained_poor_with_underperformance || sustained_poor_absolute || relationship_breakdown;
+        let crisis = sustained_poor_with_underperformance
+            || sustained_poor_absolute
+            || relationship_breakdown;
         // Confidence collapses faster than the mood counters — a board
         // sliding toward zero goes public BEFORE it reaches the axe, so
         // the critical band is what triggers the ultimatum.
@@ -1252,7 +1253,10 @@ impl ClubBoard {
         // The axe: only for a manager already living on the final
         // warning whose situation stayed terminal — total confidence
         // collapse or the full crisis picture, with no visible upturn.
-        if enough_data && already_on_final_warning && (zero_confidence || crisis) && !form_recovering
+        if enough_data
+            && already_on_final_warning
+            && (zero_confidence || crisis)
+            && !form_recovering
         {
             result.manager_sacked = true;
             result.decisions.push(BoardDecision::SackManager);
@@ -2473,7 +2477,10 @@ mod board_behaviour_tests {
             board.evaluate_performance(&strong, &mut r);
             sacked |= r.manager_sacked;
         }
-        assert!(!sacked, "recovered form on the final warning must save the job");
+        assert!(
+            !sacked,
+            "recovered form on the final warning must save the job"
+        );
         assert!(
             !board.manager_on_final_warning,
             "the warning lapses once results recover"

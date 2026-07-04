@@ -122,7 +122,12 @@ impl PipelineProcessor {
                         let appearances = player.friendly_statistics.total_games();
                         let average_rating =
                             player.friendly_statistics.average_rating_realistic(group);
-                        performance_lookup.breakout_for_youth(player, appearances, average_rating, age)
+                        performance_lookup.breakout_for_youth(
+                            player,
+                            appearances,
+                            average_rating,
+                            age,
+                        )
                     } else {
                         let appearances = player.statistics.total_games();
                         let average_rating = player.statistics.average_rating_realistic(group);
@@ -185,7 +190,8 @@ impl PipelineProcessor {
                 continue;
             }
             let plan = &club.transfer_plan;
-            if !plan.initialized || plan.scout_monitoring.len() >= Self::BREAKOUT_WATCH_MONITOR_CAP {
+            if !plan.initialized || plan.scout_monitoring.len() >= Self::BREAKOUT_WATCH_MONITOR_CAP
+            {
                 continue;
             }
             let Some(scan) = BuyerScan::build(country, club, date) else {

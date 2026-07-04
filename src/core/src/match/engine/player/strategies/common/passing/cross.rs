@@ -195,7 +195,8 @@ fn pick_cross_type(
 
     if near_byline && target_inside_box {
         // Pulled-back option for a runner trailing the play.
-        if target_pos.x.abs() > crosser_pos.x.abs() && ctx.context.rng.unit_f32() < p_poor_header_byline
+        if target_pos.x.abs() > crosser_pos.x.abs()
+            && ctx.context.rng.unit_f32() < p_poor_header_byline
         {
             return CrossType::Cutback;
         }

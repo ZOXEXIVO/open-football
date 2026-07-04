@@ -285,9 +285,10 @@ impl DistributedDispatcher {
                 missing.len()
             );
             let chunk: Vec<Match> = missing.iter().map(|&i| matches[i].clone()).collect();
-            let local = tokio::task::spawn_blocking(move || MatchRuntime::engine_pool().play_local(chunk))
-                .await
-                .unwrap_or_default();
+            let local =
+                tokio::task::spawn_blocking(move || MatchRuntime::engine_pool().play_local(chunk))
+                    .await
+                    .unwrap_or_default();
             for (i, r) in missing.into_iter().zip(local) {
                 results[i] = Some(r);
             }
@@ -443,7 +444,12 @@ impl DistributedDispatcher {
                     worker.address, reason
                 );
                 registry
-                    .record_batch(&worker.address, count, latency, BatchOutcome::Failed(reason))
+                    .record_batch(
+                        &worker.address,
+                        count,
+                        latency,
+                        BatchOutcome::Failed(reason),
+                    )
                     .await;
                 Err(())
             }
@@ -621,7 +627,12 @@ impl DistributedDispatcher {
                     worker.address, reason
                 );
                 registry
-                    .record_batch(&worker.address, count, latency, BatchOutcome::Failed(reason))
+                    .record_batch(
+                        &worker.address,
+                        count,
+                        latency,
+                        BatchOutcome::Failed(reason),
+                    )
                     .await;
                 Err(())
             }

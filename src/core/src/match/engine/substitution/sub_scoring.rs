@@ -192,8 +192,7 @@ impl SubScoring {
         // condition alone no longer makes those players clear the routine
         // substitution threshold, so add urgency when a long-stint player
         // has materially drained from their own kickoff tank.
-        let starting_cond =
-            (player.starting_condition as f32 / 10_000.0).clamp(cond_pct, 1.0);
+        let starting_cond = (player.starting_condition as f32 / 10_000.0).clamp(cond_pct, 1.0);
         let condition_drop = (starting_cond - cond_pct).max(0.0);
         let long_stint = ((live.minutes_played as f32 - 50.0) / 30.0).clamp(0.0, 1.0);
         s += condition_drop * long_stint * 0.85;

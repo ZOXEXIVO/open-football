@@ -1277,7 +1277,8 @@ impl PassEvaluator {
             let interception_blocked = if interception_risk >= 0.85 {
                 // 2+ opponents in the lane — almost always reject
                 if is_playmaker
-                    && ctx.context.rng.unit_f32() < SkillCurve::new(vision_raw, 16.0, 0.6).probability()
+                    && ctx.context.rng.unit_f32()
+                        < SkillCurve::new(vision_raw, 16.0, 0.6).probability()
                 {
                     false // Elite playmakers can attempt
                 } else {

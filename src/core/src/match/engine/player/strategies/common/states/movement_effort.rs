@@ -56,7 +56,28 @@ impl MovementEffort {
     /// fresh players (≥55%) are unaffected. Pairs with the corrected
     /// `is_tired` gate, which already stops an exhausted forward from
     /// even attempting a run in behind.
+    ///
+    /// Below 20% condition a separate hobbled regime takes over: that
+    /// band is only reachable by a player whose in-match injury could
+    /// not be substituted (bench spent), and a hobbled player cannot
+    /// press or burst — high tiers collapse toward a walk and even
+    /// jogging shortens, continuously down to the 15% floor. The team
+    /// effectively plays around a passenger, exactly like real
+    /// football when the subs are gone.
     fn self_pacing(intensity: ActivityIntensity, condition_pct: u32) -> f32 {
+        if condition_pct < 20 {
+            let c = condition_pct.max(15) as f32;
+            // 0 at 20% condition, 1 at the 15% floor.
+            let hobble = (20.0 - c) / 5.0;
+            return match intensity {
+                ActivityIntensity::High | ActivityIntensity::VeryHigh => {
+                    let cruise = 0.82 + 0.18 * ((c - 15.0) / 40.0);
+                    cruise * (1.0 - hobble) + 0.35 * hobble
+                }
+                ActivityIntensity::Moderate => 1.0 - 0.40 * hobble,
+                _ => 1.0,
+            };
+        }
         match intensity {
             ActivityIntensity::High | ActivityIntensity::VeryHigh if condition_pct < 55 => {
                 let c = condition_pct.max(15) as f32;

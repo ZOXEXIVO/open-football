@@ -5,7 +5,7 @@
 
 use super::TeamBehaviour;
 use crate::club::team::behaviour::{PlayerRelationshipChangeResult, TeamBehaviourResult};
-use crate::{ChangeType, Player, PlayerCollection};
+use crate::{ChangeType, Player, PlayerCollection, PlayerSquadStatus, PlayerStatusType};
 use std::cmp::Ordering;
 
 impl TeamBehaviour {
@@ -191,6 +191,75 @@ impl TeamBehaviour {
                 .map(|r| 0.9 + (r.level / 100.0).clamp(-0.6, 0.6))
                 .unwrap_or(1.0);
             player.happiness.adjust_morale(delta * relation_mult);
+        }
+    }
+
+    /// A formally unhappy influential player drags the room — one
+    /// sulking star is a problem, a sulking leader is a crisis. Weekly
+    /// leadership- and status-weighted mood ripple from every `Unh`
+    /// player with real dressing-room weight onto his teammates,
+    /// stronger on close friends. Deliberately bounded: per-source drag
+    /// is small, the per-target total is capped, and the ripple reads
+    /// the *status* (a durable grievance), not raw morale — so the
+    /// loop gain stays well below 1 and low team mood alone can never
+    /// snowball itself.
+    pub(super) fn process_unhappy_star_contagion(players: &mut PlayerCollection) {
+        struct ContagionSource {
+            id: u32,
+            influence: f32,
+        }
+
+        let sources: Vec<ContagionSource> = players
+            .players
+            .iter()
+            .filter(|p| p.statuses.get().contains(&PlayerStatusType::Unh))
+            .filter_map(|p| {
+                let is_key_player = matches!(
+                    p.contract.as_ref().map(|c| &c.squad_status),
+                    Some(PlayerSquadStatus::KeyPlayer)
+                );
+                // Fringe players sulking barely register; the ripple is
+                // about players the room actually orbits.
+                if p.skills.mental.leadership < 12.0 && !is_key_player {
+                    return None;
+                }
+                let leadership = (p.skills.mental.leadership / 20.0).clamp(0.0, 1.0);
+                let status_weight = match p.contract.as_ref().map(|c| &c.squad_status) {
+                    Some(PlayerSquadStatus::KeyPlayer) => 1.0,
+                    Some(PlayerSquadStatus::FirstTeamRegular) => 0.7,
+                    _ => 0.35,
+                };
+                Some(ContagionSource {
+                    id: p.id,
+                    influence: leadership * 0.6 + status_weight * 0.4,
+                })
+            })
+            .collect();
+
+        if sources.is_empty() {
+            return;
+        }
+
+        const DRAG_PER_SOURCE: f32 = 0.5;
+        const MAX_WEEKLY_DRAG: f32 = 1.2;
+
+        let source_ids: Vec<u32> = sources.iter().map(|s| s.id).collect();
+        for player in players.players.iter_mut() {
+            if source_ids.contains(&player.id) {
+                continue;
+            }
+            let mut drag = 0.0_f32;
+            for source in &sources {
+                // Close friends of the sulking star are dragged more;
+                // teammates who barely know him shrug most of it off.
+                let relation_mult = player
+                    .relations
+                    .get_player(source.id)
+                    .map(|r| 0.9 + (r.level / 100.0).clamp(-0.6, 0.6))
+                    .unwrap_or(0.8);
+                drag += DRAG_PER_SOURCE * source.influence * relation_mult;
+            }
+            player.happiness.adjust_morale(-drag.min(MAX_WEEKLY_DRAG));
         }
     }
 

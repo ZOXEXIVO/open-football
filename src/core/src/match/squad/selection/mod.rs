@@ -275,7 +275,8 @@ impl SquadSelector {
             if !is_main_team && rp.is_force_match_selection {
                 continue;
             }
-            if PlayerAvailability::is_available(rp, ctx.is_friendly) && available_ids.insert(rp.id) {
+            if PlayerAvailability::is_available(rp, ctx.is_friendly) && available_ids.insert(rp.id)
+            {
                 available.push(rp);
             }
         }
@@ -358,12 +359,26 @@ impl SquadSelector {
             );
         }
 
+        // Borrow the richer game model only when the caller actually
+        // populated `ctx.game_model`. Conservative default: leave it
+        // `None` so the new bounded additive terms collapse to zero —
+        // existing callers see the same scoring they always have.
+        // Match-day callers build a fixture-aware model with
+        // `MatchSelectionGameModel::build_for_fixture` and store it on
+        // the context before invoking the selector.
+        let game_model_ref: Option<&MatchSelectionGameModel> = ctx.game_model.as_ref();
+
         // Coach decision engine — built once per side, after
         // `available` so the strategy reads real squad-depth and any
         // available cup-context signals (opponent reputation /
         // strength ratio). Personality + strategy is the lens; the
-        // existing scoring engine still does the heavy lifting.
-        let strength_ratio = StrategyInputsBuilder::strength_ratio(&ctx.competition);
+        // existing scoring engine still does the heavy lifting. The
+        // fixture game model, when present, supplies the real opponent
+        // strength ratio and the derby read; the cup-bracket fallback
+        // keeps legacy callers unchanged.
+        let strength_ratio = game_model_ref
+            .map(|m| m.opponent_profile.strength_ratio)
+            .unwrap_or_else(|| StrategyInputsBuilder::strength_ratio(&ctx.competition));
         let squad_depth = StrategyInputsBuilder::squad_depth(available.len());
         let coach_strategy = StrategyDeriver::derive(&StrategyInputs {
             profile: &coach_profile,
@@ -375,23 +390,17 @@ impl SquadSelector {
                 SelectionCompetition::DomesticCup { .. } | SelectionCompetition::ContinentalCup
             ),
             is_continental: matches!(ctx.competition, SelectionCompetition::ContinentalCup),
-            // TODO derby flag: requires opponent_team_id on SelectionContext
-            // and a derby check against the club's rivals. Left as false
-            // until the selection context grows that field.
-            is_derby: false,
+            is_derby: game_model_ref.map(|m| m.is_derby()).unwrap_or(false),
             strength_ratio,
             squad_depth,
         });
         let coach_engine = CoachDecisionEngine::from_staff(staff, &coach_profile, coach_strategy);
 
-        // Borrow the richer game model only when the caller actually
-        // populated `ctx.game_model`. Conservative default: leave it
-        // `None` so the new bounded additive terms collapse to zero —
-        // existing callers see the same scoring they always have.
-        // Match-day callers that want the new layered behaviour build a
-        // model with `MatchSelectionGameModel::build` and store it on
-        // the context before invoking the selector.
-        let game_model_ref: Option<&MatchSelectionGameModel> = ctx.game_model.as_ref();
+        // Succession heirs — young players deliberately developed
+        // behind an aging incumbent in their position group. Feeds the
+        // coach engine's SuccessionPlanning read, which was previously
+        // wired but always empty.
+        let succession_heirs = SuccessionHeirs::identify(&available, ctx.date);
 
         let scx = competitive::SelectionScoringContext {
             staff,
@@ -405,6 +414,7 @@ impl SquadSelector {
             coach: Some(&coach_engine),
             competition: ctx.competition,
             game_model: game_model_ref,
+            succession_heirs: &succession_heirs,
         };
 
         let main_squad = scx.select_starting_eleven(team.id, &available);
@@ -452,6 +462,7 @@ impl SquadSelector {
             coach: Some(&coach_engine),
             competition: ctx.competition,
             game_model: game_model_ref,
+            succession_heirs: &succession_heirs,
         }
         .build();
 
@@ -514,7 +525,8 @@ impl SquadSelector {
                     if !is_main_team && rp.is_force_match_selection {
                         return false;
                     }
-                    PlayerAvailability::is_available(rp, ctx.is_friendly) && !available_ids.contains(&rp.id)
+                    PlayerAvailability::is_available(rp, ctx.is_friendly)
+                        && !available_ids.contains(&rp.id)
                 })
                 .copied()
                 .collect();
@@ -633,6 +645,7 @@ impl SquadSelector {
             coach: None,
             competition: SelectionCompetition::League,
             game_model: None,
+            succession_heirs: &[],
         }
     }
 }
@@ -689,6 +702,7 @@ impl CoachStrategyForSelection {
     /// adjustment. Exposed so omissions / tests can rebuild the same
     /// strategy without duplicating the SelectionContext → inputs map.
     pub fn derive(profile: &CoachProfile, ctx: &SelectionContext) -> CoachStrategy {
+        let model = ctx.game_model.as_ref();
         StrategyDeriver::derive(&StrategyInputs {
             profile,
             philosophy: ctx.philosophy.clone(),
@@ -699,9 +713,11 @@ impl CoachStrategyForSelection {
                 SelectionCompetition::DomesticCup { .. } | SelectionCompetition::ContinentalCup
             ),
             is_continental: matches!(ctx.competition, SelectionCompetition::ContinentalCup),
-            is_derby: false,
-            strength_ratio: 1.0,
-            squad_depth: 0.5,
+            is_derby: model.map(|m| m.is_derby()).unwrap_or(false),
+            strength_ratio: model
+                .map(|m| m.opponent_profile.strength_ratio)
+                .unwrap_or(1.0),
+            squad_depth: model.map(|m| m.squad_state.depth).unwrap_or(0.5),
         })
     }
 }

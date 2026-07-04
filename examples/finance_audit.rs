@@ -226,8 +226,22 @@ impl FinanceAudit {
     fn print_flow_header() {
         println!(
             "{:<12} {:>5} | {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>9} | {:>8} {:>8} {:>8} {:>8} {:>8} | {:>9} {:>9}",
-            "tier", "clubs", "tv", "gate", "sponsor", "merch", "prize", "loans", "OTHER-IN", "wages",
-            "staff", "facil", "amort", "loans", "netP&L/y", "dCash/y"
+            "tier",
+            "clubs",
+            "tv",
+            "gate",
+            "sponsor",
+            "merch",
+            "prize",
+            "loans",
+            "OTHER-IN",
+            "wages",
+            "staff",
+            "facil",
+            "amort",
+            "loans",
+            "netP&L/y",
+            "dCash/y"
         );
     }
 
@@ -275,7 +289,9 @@ impl FinanceAudit {
         let reports = Self::collect_reports(data, initial);
 
         println!("\n=== Average per-club ANNUAL flows by tier ($M/club/year) ===");
-        println!("(OTHER-IN = transfer sales + continental bonuses + interest + takeover injections)");
+        println!(
+            "(OTHER-IN = transfer sales + continental bonuses + interest + takeover injections)"
+        );
         Self::print_flow_header();
         let order = [
             ReputationLevel::Elite,
@@ -313,8 +329,17 @@ impl FinanceAudit {
         small.sort_by_key(|r| -r.end_balance);
         println!(
             "{:<28} {:<14} {:<10} {:>4} | {:>8} {:>8} | {:>8} {:>8} {:>8} {:>9} | {:>8}",
-            "club", "country", "tier", "div", "start$M", "end$M", "tv/y", "gate/y", "prize/y",
-            "OTHER-IN/y", "wages/y"
+            "club",
+            "country",
+            "tier",
+            "div",
+            "start$M",
+            "end$M",
+            "tv/y",
+            "gate/y",
+            "prize/y",
+            "OTHER-IN/y",
+            "wages/y"
         );
         for r in small.iter().take(15) {
             println!(

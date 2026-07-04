@@ -19,10 +19,10 @@
 //! builds pairings, and applies gentle nudges to the mentee.
 
 use crate::PlayerFieldPositionGroup;
+use crate::PlayerHappiness;
 use crate::club::person::Person;
 use crate::club::player::language::Language;
 use crate::club::player::traits::PlayerTrait;
-use crate::PlayerHappiness;
 use crate::club::{
     ChangeType, HappinessEventType, MentorshipType, Player, PlayerStatusType, RelationshipChange,
 };
@@ -338,10 +338,12 @@ impl MentorshipProcessor {
                     .with_evidence(HappinessEventEvidence::MentorInfluence)
                     .with_evidence(HappinessEventEvidence::RepeatedIncident)
                     .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk)
-                    .with_teammate_conflict_context(TeammateConflictContext::new(
-                        TeammateConflictReason::LeadershipChallenge,
-                        ConflictLocation::TrainingGround,
-                    ));
+                    .with_teammate_conflict_context(
+                        TeammateConflictContext::new(
+                            TeammateConflictReason::LeadershipChallenge,
+                            ConflictLocation::TrainingGround,
+                        ),
+                    );
                     if let Some((level, trust, friendship, prof)) = snapshot {
                         ctx = ctx
                             .with_relationship_levels(level, level)
@@ -721,7 +723,9 @@ mod tests {
         toxic.professionalism = 5.0;
         let mentor = Fixtures::build(
             mentor_id,
-            start.checked_sub_signed(chrono::Duration::days(365 * 32)).unwrap(),
+            start
+                .checked_sub_signed(chrono::Duration::days(365 * 32))
+                .unwrap(),
             toxic,
             17.0,
             15.0,

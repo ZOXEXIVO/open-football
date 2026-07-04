@@ -335,7 +335,10 @@ impl ClubFinances {
     /// sweep DB-seeded balances before the club has earned anything.
     pub fn monthly_history_depth(&self, today: NaiveDate) -> usize {
         let cutoff = today - Duration::days(365);
-        self.history.iter().filter(|(date, _)| *date >= cutoff).count()
+        self.history
+            .iter()
+            .filter(|(date, _)| *date >= cutoff)
+            .count()
     }
 
     /// Trailing twelve months of total income across the history snapshots.

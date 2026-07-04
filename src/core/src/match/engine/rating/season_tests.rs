@@ -112,7 +112,13 @@ impl LineFactory {
     }
 
     /// Scoring forward line (1-2 goals).
-    fn st_scoring(goals: u16, sot: u16, shots: u16, xg: f32, key_passes: u16) -> PlayerMatchEndStats {
+    fn st_scoring(
+        goals: u16,
+        sot: u16,
+        shots: u16,
+        xg: f32,
+        key_passes: u16,
+    ) -> PlayerMatchEndStats {
         let mut s = Self::st_base();
         s.goals = goals;
         s.shots_on_target = sot;
@@ -583,13 +589,7 @@ impl SeasonFixture {
             f.push(LineFactory::gk(saves, faced, cmd), tg, 0);
         }
         // 5 one-goal matches: the only goals all season. 1W 1D 3L.
-        let one_goal: [(u16, u16, u8); 5] = [
-            (1, 2, 0),
-            (2, 3, 0),
-            (1, 2, 0),
-            (2, 3, 1),
-            (3, 4, 2),
-        ];
+        let one_goal: [(u16, u16, u8); 5] = [(1, 2, 0), (2, 3, 0), (1, 2, 0), (2, 3, 1), (3, 4, 2)];
         for (saves, faced, tg) in one_goal {
             f.push(LineFactory::gk(saves, faced, 0), tg, 1);
         }
@@ -649,8 +649,7 @@ impl SeasonFixture {
             f.push(LineFactory::gk(saves, faced, 0), tg, 1);
         }
         // 5 two-goal matches (1W 2D 2L) + one 4-goal hammering (loss).
-        let two_goal: [(u16, u16, u8); 5] =
-            [(1, 3, 3), (1, 3, 2), (2, 4, 2), (1, 3, 1), (2, 4, 0)];
+        let two_goal: [(u16, u16, u8); 5] = [(1, 3, 3), (1, 3, 2), (2, 4, 2), (1, 3, 1), (2, 4, 0)];
         for (saves, faced, tg) in two_goal {
             f.push(LineFactory::gk(saves, faced, 0), tg, 2);
         }
@@ -737,14 +736,26 @@ impl SeasonFixture {
             f.push(LineFactory::gk(saves, faced, cmd), tg, 0);
         }
         // 6 one-goal matches (saves, faced, tg).
-        let one_goal: [(u16, u16, u8); 6] =
-            [(1, 2, 2), (2, 3, 2), (1, 2, 1), (2, 3, 2), (1, 2, 3), (2, 3, 1)];
+        let one_goal: [(u16, u16, u8); 6] = [
+            (1, 2, 2),
+            (2, 3, 2),
+            (1, 2, 1),
+            (2, 3, 2),
+            (1, 2, 3),
+            (2, 3, 1),
+        ];
         for (saves, faced, tg) in one_goal {
             f.push(LineFactory::gk(saves, faced, 0), tg, 1);
         }
         // 6 two-goal matches.
-        let two_goal: [(u16, u16, u8); 6] =
-            [(2, 4, 2), (1, 3, 1), (2, 4, 2), (1, 3, 0), (2, 4, 3), (1, 3, 1)];
+        let two_goal: [(u16, u16, u8); 6] = [
+            (2, 4, 2),
+            (1, 3, 1),
+            (2, 4, 2),
+            (1, 3, 0),
+            (2, 4, 3),
+            (1, 3, 1),
+        ];
         for (saves, faced, tg) in two_goal {
             f.push(LineFactory::gk(saves, faced, 0), tg, 2);
         }
@@ -806,8 +817,7 @@ impl SeasonFixture {
             f.push(LineFactory::gk(saves, faced, 0), tg, 1);
         }
         // 5 two-goal matches.
-        let two_goal: [(u16, u16, u8); 5] =
-            [(1, 3, 2), (2, 4, 1), (1, 3, 0), (2, 4, 2), (1, 3, 1)];
+        let two_goal: [(u16, u16, u8); 5] = [(1, 3, 2), (2, 4, 1), (1, 3, 0), (2, 4, 2), (1, 3, 1)];
         for (saves, faced, tg) in two_goal {
             f.push(LineFactory::gk(saves, faced, 0), tg, 2);
         }
@@ -1346,7 +1356,11 @@ impl SeasonFixture {
             (0, 1, 2, 2, 3, 3, 0, 1, 0.1, 0.5, 1, 1),
         ];
         for (g, a, kp, pb, pc, pp, sot, sh, xg, xgb, tg, og) in decisive {
-            f.push(LineFactory::am(g, a, kp, pb, pc, pp, sot, sh, xg, xgb), tg, og);
+            f.push(
+                LineFactory::am(g, a, kp, pb, pc, pp, sot, sh, xg, xgb),
+                tg,
+                og,
+            );
         }
         // Active creator days without a goal contribution: 8W 2D 2L.
         let active: [(u16, u16, u16, u16, u16, u16, f32, f32, u8, u8); 12] = [
@@ -1786,8 +1800,14 @@ fn dump_season_calibration_values() {
     let rows = [
         ("top GK league", SeasonFixture::top_gk_league_season()),
         ("GK continental", SeasonFixture::gk_continental_cluster()),
-        ("GK 2nd-tier 16CS", SeasonFixture::second_tier_shutout_gk_season()),
-        ("GK dominant 24CS", SeasonFixture::dominant_defense_gk_season()),
+        (
+            "GK 2nd-tier 16CS",
+            SeasonFixture::second_tier_shutout_gk_season(),
+        ),
+        (
+            "GK dominant 24CS",
+            SeasonFixture::dominant_defense_gk_season(),
+        ),
         ("GK leaky 9CS", SeasonFixture::leaky_topflight_gk_season()),
         (
             "GK Zenit 9CS/16con",
@@ -1802,7 +1822,10 @@ fn dump_season_calibration_values() {
             SeasonFixture::psg_keeper_2026_season(),
         ),
         ("ST 15 goals", SeasonFixture::striker_fifteen_goal_season()),
-        ("ST 21 goals", SeasonFixture::striker_twentyone_goal_season()),
+        (
+            "ST 21 goals",
+            SeasonFixture::striker_twentyone_goal_season(),
+        ),
         ("ST 6 goals", SeasonFixture::striker_low_output_season()),
         ("ST passenger", SeasonFixture::passenger_forward_season()),
         ("CB 14 CS", SeasonFixture::cb_clean_sheet_season()),
@@ -1811,7 +1834,10 @@ fn dump_season_calibration_values() {
         ("DM destroyer", SeasonFixture::dm_destroyer_season()),
         ("CM recycler", SeasonFixture::cm_recycler_season()),
         ("AM creator", SeasonFixture::am_creator_season()),
-        ("MID passenger", SeasonFixture::passenger_midfielder_season()),
+        (
+            "MID passenger",
+            SeasonFixture::passenger_midfielder_season(),
+        ),
     ];
     for (label, fixture) in rows {
         println!("{:<16} -> {:.3}", label, fixture.average());

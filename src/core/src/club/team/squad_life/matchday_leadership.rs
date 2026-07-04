@@ -470,7 +470,9 @@ impl MatchdayLeadership {
         let vice = match captain {
             Some(cap) => Self::valid_present(candidates, persistent_vice)
                 .filter(|v| *v != cap)
-                .or_else(|| Self::valid_present(candidates, persistent_captain).filter(|c| *c != cap))
+                .or_else(|| {
+                    Self::valid_present(candidates, persistent_captain).filter(|c| *c != cap)
+                })
                 .or_else(|| Self::best_leader(candidates, &[cap])),
             None => None,
         };
@@ -746,10 +748,7 @@ mod tests {
         // A famous but quiet 7-leadership forward shouldn't outrank a 16-
         // leadership central midfielder. The persistent-style score has to
         // weight dressing-room voice over raw fame.
-        let xi = vec![
-            Fixture::celebrity(1, 7.0),
-            Fixture::professional(2, 16.0),
-        ];
+        let xi = vec![Fixture::celebrity(1, 7.0), Fixture::professional(2, 16.0)];
         let r = MatchdayLeadership::resolve(None, None, &xi);
         assert_eq!(r.captain_id, Some(2));
     }

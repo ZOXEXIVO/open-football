@@ -636,8 +636,7 @@ impl Club {
                     if already_listed {
                         continue;
                     }
-                    let market_value =
-                        player.value(date, league_reputation_proxy, club_reputation);
+                    let market_value = player.value(date, league_reputation_proxy, club_reputation);
                     let termination_cost = player
                         .contract
                         .as_ref()
@@ -1168,7 +1167,8 @@ mod youth_contract_review_tests {
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, HappinessEventType, PersonAttributes,
         PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills, StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TrainingSchedule,
+        PlayerSkills, StaffCollection, TeamBuilder, TeamCollection, TeamReputation,
+        TrainingSchedule,
     };
     use chrono::{Datelike, NaiveDate, NaiveTime};
 
@@ -1196,12 +1196,16 @@ mod youth_contract_review_tests {
             attrs.current_ability = 90;
             attrs.potential_ability = 140;
             attrs.condition = 10_000;
-            let contract =
-                PlayerClubContract::new_youth(10_000, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
+            let contract = PlayerClubContract::new_youth(
+                10_000,
+                NaiveDate::from_ymd_opt(2029, 6, 30).unwrap(),
+            );
             let mut p = PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Y".into(), format!("P{id}")))
-                .birth_date(NaiveDate::from_ymd_opt(Self::date().year() - age as i32, 1, 1).unwrap())
+                .birth_date(
+                    NaiveDate::from_ymd_opt(Self::date().year() - age as i32, 1, 1).unwrap(),
+                )
                 .country_id(1)
                 .attributes(PersonAttributes::default())
                 .skills(PlayerSkills::default())
@@ -1291,7 +1295,11 @@ mod youth_contract_review_tests {
         );
         // Upgraded in place — not moved to the main team.
         assert!(
-            club.teams.teams[1].players.players.iter().any(|p| p.id == 1),
+            club.teams.teams[1]
+                .players
+                .players
+                .iter()
+                .any(|p| p.id == 1),
             "the upgraded player stays in his youth squad"
         );
         // The milestone fires a positive contract event.

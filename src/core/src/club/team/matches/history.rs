@@ -1,5 +1,5 @@
-use crate::PlayerPositionType;
 use crate::MatchTacticType;
+use crate::PlayerPositionType;
 use crate::r#match::TeamScore;
 use chrono::NaiveDateTime;
 use std::cmp::Ordering;
@@ -113,10 +113,7 @@ impl MatchHistoryItem {
         self
     }
 
-    pub fn with_starting_eleven(
-        mut self,
-        starting_eleven: Vec<(u32, PlayerPositionType)>,
-    ) -> Self {
+    pub fn with_starting_eleven(mut self, starting_eleven: Vec<(u32, PlayerPositionType)>) -> Self {
         self.starting_eleven = starting_eleven;
         self
     }

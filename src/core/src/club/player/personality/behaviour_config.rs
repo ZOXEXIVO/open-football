@@ -591,6 +591,11 @@ impl Default for MoraleEventCatalog {
             salary_boost: 4.0,
             joining_elite: 6.0,
             contract_terminated: -3.0,
+            // Deliberately 0: the departure's real magnitude is
+            // bond-sized per player at the emit site
+            // (`fire_manager_departure_events`) — a favourite of the
+            // outgoing manager takes -8, a frozen-out player gains.
+            // Never emit this event through the catalog default.
             manager_departure: 0.0,
             national_team_callup: 6.0,
             national_team_dropped: -4.0,

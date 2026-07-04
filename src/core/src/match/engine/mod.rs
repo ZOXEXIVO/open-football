@@ -81,6 +81,7 @@ pub use player::positions::{
     SpatialGrid, ball as position_ball, closure as position_closure, objects as position_objects,
     players as position_players,
 };
+pub use player::strategies::common_states::{ActivityIntensity, MovementEffort};
 pub use player::strategies::passing::PassEvaluator;
 pub use player::strategies::players::{
     PlayerOpponentsOperationsImpl, PlayerTeammatesOperationsImpl,
@@ -89,7 +90,6 @@ pub use player::strategies::processor::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     StateProcessingResult, StateProcessor,
 };
-pub use player::strategies::common_states::{ActivityIntensity, MovementEffort};
 // Export modules for those who want to access them
 pub use player::context as player_context;
 pub use player::positions as player_positions;

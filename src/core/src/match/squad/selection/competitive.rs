@@ -1,3 +1,4 @@
+use crate::club::player::ManagerPromiseKind;
 use crate::club::staff::{CoachDecisionEngine, CoachSelectionContext};
 use crate::club::{PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
@@ -64,6 +65,11 @@ pub(crate) struct SelectionScoringContext<'a> {
     /// eligibility rule penalty) collapse to zero so existing legacy
     /// callers behave identically to before this layer existed.
     pub game_model: Option<&'a MatchSelectionGameModel>,
+    /// Young players groomed behind an aging incumbent in their
+    /// position group (see `SuccessionHeirs`). Feeds the coach
+    /// engine's `SuccessionPlanning` selection read. Empty when the
+    /// caller didn't compute it (legacy entry points / tests).
+    pub succession_heirs: &'a [u32],
 }
 
 impl SelectionScoringContext<'_> {
@@ -370,8 +376,7 @@ impl SelectionScoringContext<'_> {
                     .collect();
 
                 let current_base = self.starting_slot_score(current, slot, available);
-                let current_cohesion =
-                    self.engine.cohesion_bonus(current, &others, slot, group);
+                let current_cohesion = self.engine.cohesion_bonus(current, &others, slot, group);
 
                 let used_set: HashSet<u32> = used_ids.iter().copied().collect();
 
@@ -397,8 +402,7 @@ impl SelectionScoringContext<'_> {
                     if base_gap > COHESION_SWAP_MAX_BASE_GAP {
                         continue;
                     }
-                    let cand_cohesion =
-                        self.engine.cohesion_bonus(cand, &others, slot, group);
+                    let cand_cohesion = self.engine.cohesion_bonus(cand, &others, slot, group);
                     let cohesion_gain = cand_cohesion - current_cohesion;
                     if cohesion_gain < COHESION_SWAP_MIN_GAIN {
                         continue;
@@ -742,7 +746,13 @@ impl SelectionScoringContext<'_> {
         // established outfielder for the best available non-established one.
         if let Some(cup) = self.cup {
             if cup.stage() == CupStage::Early {
-                self.ensure_non_established_bench_outfielders(team_id, &mut subs, &mut used_ids, remaining, 2);
+                self.ensure_non_established_bench_outfielders(
+                    team_id,
+                    &mut subs,
+                    &mut used_ids,
+                    remaining,
+                    2,
+                );
             }
         }
 
@@ -918,7 +928,9 @@ impl SelectionScoringContext<'_> {
         for _ in 0..subs.len() {
             let current = subs
                 .iter()
-                .filter(|mp| mp.tactical_position.current_position != PlayerPositionType::Goalkeeper)
+                .filter(|mp| {
+                    mp.tactical_position.current_position != PlayerPositionType::Goalkeeper
+                })
                 .filter_map(|mp| player_by_id.get(&mp.id))
                 .filter(|p| is_non_est_outfield(p))
                 .count();
@@ -947,7 +959,9 @@ impl SelectionScoringContext<'_> {
                 if mp.tactical_position.current_position == PlayerPositionType::Goalkeeper {
                     continue;
                 }
-                let Some(p) = player_by_id.get(&mp.id) else { continue };
+                let Some(p) = player_by_id.get(&mp.id) else {
+                    continue;
+                };
                 if !CupRotation::is_established(p) {
                     continue;
                 }
@@ -1158,6 +1172,45 @@ impl SelectionScoringContext<'_> {
             + self.eligibility_rule_penalty(player)
             + self.medical_caution_adjustment(player)
             + self.loan_match_fee_start(player)
+            + self.promise_pull_adjustment(player, true)
+    }
+
+    /// Active playing-time / starting-role promises pull the player
+    /// toward the XI: a conscientious coach delivers what he promised,
+    /// and the pull grows continuously as the deadline closes in.
+    /// Bounded well below a genuine quality gap so a promise shades
+    /// marginal calls without hijacking selection — this is what makes
+    /// promise-keeping emergent rather than accidental, and makes a
+    /// stubborn low-discipline manager a genuinely worse promise-keeper.
+    fn promise_pull_adjustment(&self, player: &Player, for_starting: bool) -> f32 {
+        if self.is_friendly || player.promises.is_empty() {
+            return 0.0;
+        }
+        let mental = &self.staff.staff_attributes.mental;
+        let conscientiousness = (mental.discipline as f32 + mental.man_management as f32) / 40.0;
+        let mut pull: f32 = 0.0;
+        for promise in &player.promises {
+            let weight = match promise.kind {
+                // A starting-role promise is only served by a start.
+                ManagerPromiseKind::StartingRole if for_starting => 1.0,
+                // A playing-time promise is served by minutes — a start
+                // fully, a bench slot partially (sub minutes count).
+                ManagerPromiseKind::PlayingTime => {
+                    if for_starting {
+                        0.7
+                    } else {
+                        0.9
+                    }
+                }
+                _ => continue,
+            };
+            let window = (promise.deadline - promise.made_on).num_days().max(1) as f32;
+            let remaining = (promise.deadline - self.date).num_days().max(0) as f32;
+            // Near 0 the day the promise was made, 1.0 at the deadline.
+            let pressure = (1.0 - remaining / window).clamp(0.15, 1.0);
+            pull += 0.9 * weight * pressure * (0.45 + conscientiousness * 0.75);
+        }
+        pull.min(1.2)
     }
 
     /// Opponent-matchup nudge, gated by the presence of a richer game
@@ -1220,14 +1273,8 @@ impl SelectionScoringContext<'_> {
     fn duty_for_slot(&self, slot: PlayerPositionType) -> TacticalDuty {
         use PlayerPositionType::*;
         match slot {
-            Goalkeeper
-            | Sweeper
-            | DefenderCenter
-            | DefenderCenterLeft
-            | DefenderCenterRight
-            | DefenderLeft
-            | DefenderRight
-            | DefensiveMidfielder => TacticalDuty::Defend,
+            Goalkeeper | Sweeper | DefenderCenter | DefenderCenterLeft | DefenderCenterRight
+            | DefenderLeft | DefenderRight | DefensiveMidfielder => TacticalDuty::Defend,
             WingbackLeft
             | WingbackRight
             | MidfielderCenter
@@ -1258,10 +1305,10 @@ impl SelectionScoringContext<'_> {
                 self.competition,
                 SelectionCompetition::DomesticCup { .. } | SelectionCompetition::ContinentalCup
             ),
-            is_derby: false,
+            is_derby: self.game_model.map(|m| m.is_derby()).unwrap_or(false),
             is_continental: matches!(self.competition, SelectionCompetition::ContinentalCup),
             natural_role_fit,
-            is_succession_heir: &[],
+            is_succession_heir: self.succession_heirs,
         };
         coach.score_starting_slot(player, &coach_ctx).adjustment
     }
@@ -1272,8 +1319,9 @@ impl SelectionScoringContext<'_> {
             return 0.0;
         };
         let slot = helpers::best_tactical_position(player, self.tactics);
-        let natural_role_fit =
-            (helpers::position_fit_score(player, slot, slot.position_group()) / 20.0).clamp(0.0, 1.0);
+        let natural_role_fit = (helpers::position_fit_score(player, slot, slot.position_group())
+            / 20.0)
+            .clamp(0.0, 1.0);
         let coach_ctx = CoachSelectionContext {
             date: self.date,
             match_importance: self.match_importance,
@@ -1282,10 +1330,10 @@ impl SelectionScoringContext<'_> {
                 self.competition,
                 SelectionCompetition::DomesticCup { .. } | SelectionCompetition::ContinentalCup
             ),
-            is_derby: false,
+            is_derby: self.game_model.map(|m| m.is_derby()).unwrap_or(false),
             is_continental: matches!(self.competition, SelectionCompetition::ContinentalCup),
             natural_role_fit,
-            is_succession_heir: &[],
+            is_succession_heir: self.succession_heirs,
         };
         coach.score_bench_role(player, &coach_ctx).adjustment
     }
@@ -1417,6 +1465,7 @@ impl SelectionScoringContext<'_> {
             + self.coach_bench_adjustment(player)
             + self.bench_scenario_coverage_score(player)
             + self.eligibility_rule_penalty(player)
+            + self.promise_pull_adjustment(player, false)
     }
 
     /// Per-fixture bench scenario coverage bonus. Returns 0 when no
@@ -1429,9 +1478,8 @@ impl SelectionScoringContext<'_> {
             return 0.0;
         };
         let plan = BenchScenarioPlan::build(model.match_type, model.tactical_objective);
-        let coverage = plan.cover_score(|scenario| {
-            BenchScenarioScorer::coverage(player, scenario, self.date)
-        });
+        let coverage =
+            plan.cover_score(|scenario| BenchScenarioScorer::coverage(player, scenario, self.date));
         // Headline scenario coverage carries a slightly bigger weight
         // than the fixed role fit since it's the scenario-aware
         // bench's primary signal.
@@ -1463,8 +1511,7 @@ impl SelectionScoringContext<'_> {
         if CupRotation::is_established(player) {
             return 0.0;
         }
-        let cup_apps =
-            player.cup_statistics.played + player.cup_statistics.played_subs;
+        let cup_apps = player.cup_statistics.played + player.cup_statistics.played_subs;
         if cup_apps == 0 { weight } else { 0.0 }
     }
 

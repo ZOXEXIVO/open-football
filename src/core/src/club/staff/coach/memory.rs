@@ -364,8 +364,15 @@ impl MemoryEngine {
         // softens single-match swings.
         let recency_scale: f32 = (1.0 + (profile.recency_bias - 0.5) * 0.6).clamp(0.6, 1.4);
         let acc_dampen: f32 = (1.0 - profile.judging_accuracy * 0.3).clamp(0.7, 1.0);
-        let recent_alpha = (RECENT_FORM_ALPHA * recency_scale * acc_dampen).clamp(0.20, 0.85);
-        let long_alpha = LONG_FORM_ALPHA;
+        // Review-window boost: first impressions form fast. With few
+        // observations on record (a new manager assessing his squad, or
+        // a new signing being assessed), each match moves the read
+        // harder; by the sixth observation the coach settles into his
+        // normal update rate. Continuous taper, no window cliff.
+        let early_boost: f32 = 1.0 + ((6.0 - record.matches_observed as f32) / 6.0).max(0.0) * 0.6;
+        let recent_alpha =
+            (RECENT_FORM_ALPHA * recency_scale * acc_dampen * early_boost).clamp(0.20, 0.85);
+        let long_alpha = (LONG_FORM_ALPHA * early_boost).min(0.45);
 
         // Seed or merge the EMAs. First match seeds both to the rating
         // so the baseline isn't anchored to a meaningless zero.
@@ -379,7 +386,8 @@ impl MemoryEngine {
                 record.recent_rating_ema * (1.0 - recent_alpha) + rating * recent_alpha;
             record.long_form_rating =
                 record.long_form_rating * (1.0 - long_alpha) + rating * long_alpha;
-            record.professionalism_read = record.professionalism_read * (1.0 - PROFESSIONALISM_ALPHA)
+            record.professionalism_read = record.professionalism_read
+                * (1.0 - PROFESSIONALISM_ALPHA)
                 + obs.professionalism_signal.clamp(0.0, 1.0) * PROFESSIONALISM_ALPHA;
         }
 
@@ -423,8 +431,8 @@ impl MemoryEngine {
         Self::update_training_trust(record, obs);
         if obs.is_starter {
             let role_target = obs.role_fit.clamp(0.0, 1.0);
-            record.role_fit_confidence = record.role_fit_confidence * (1.0 - ROLE_FIT_ALPHA)
-                + role_target * ROLE_FIT_ALPHA;
+            record.role_fit_confidence =
+                record.role_fit_confidence * (1.0 - ROLE_FIT_ALPHA) + role_target * ROLE_FIT_ALPHA;
         }
 
         // Flag updates.
@@ -481,8 +489,8 @@ impl MemoryEngine {
             1.0
         };
         let alpha = (TRUST_ALPHA * dampener).clamp(0.02, TRUST_ALPHA);
-        record.tactical_trust = (record.tactical_trust * (1.0 - alpha) + signal * alpha)
-            .clamp(0.0, 1.0);
+        record.tactical_trust =
+            (record.tactical_trust * (1.0 - alpha) + signal * alpha).clamp(0.0, 1.0);
     }
 
     fn update_big_match_trust(
@@ -506,8 +514,8 @@ impl MemoryEngine {
         };
         let recency_scale = (1.0 + (profile.recency_bias - 0.5) * 0.4).clamp(0.7, 1.3);
         let alpha = (TRUST_ALPHA * 1.5 * recency_scale).clamp(0.05, 0.25);
-        record.big_match_trust = (record.big_match_trust * (1.0 - alpha) + signal * alpha)
-            .clamp(0.0, 1.0);
+        record.big_match_trust =
+            (record.big_match_trust * (1.0 - alpha) + signal * alpha).clamp(0.0, 1.0);
     }
 
     fn update_training_trust(record: &mut CoachMemory, obs: &CoachMatchObservation) {
@@ -515,10 +523,9 @@ impl MemoryEngine {
         // signal — the coach's match-day read of "this player turns
         // up" cross-checks the training-tick read.
         let target = obs.professionalism_signal.clamp(0.0, 1.0);
-        record.training_trust =
-            (record.training_trust * (1.0 - PROFESSIONALISM_ALPHA * 2.0)
-                + target * PROFESSIONALISM_ALPHA * 2.0)
-                .clamp(0.0, 1.0);
+        record.training_trust = (record.training_trust * (1.0 - PROFESSIONALISM_ALPHA * 2.0)
+            + target * PROFESSIONALISM_ALPHA * 2.0)
+            .clamp(0.0, 1.0);
     }
 
     fn update_flags(record: &mut CoachMemory, obs: &CoachMatchObservation, rating: f32) {
@@ -585,10 +592,8 @@ impl MemoryEngine {
         record.recent_high_rating_count = record.high_window_mask.count_ones() as u8;
         // Pull trust EMAs toward neutral.
         let neutral_pull = (total_decay * 0.5).clamp(0.0, 0.5);
-        record.tactical_trust =
-            record.tactical_trust * (1.0 - neutral_pull) + 0.5 * neutral_pull;
-        record.big_match_trust =
-            record.big_match_trust * (1.0 - neutral_pull) + 0.5 * neutral_pull;
+        record.tactical_trust = record.tactical_trust * (1.0 - neutral_pull) + 0.5 * neutral_pull;
+        record.big_match_trust = record.big_match_trust * (1.0 - neutral_pull) + 0.5 * neutral_pull;
         // Early-hook fades out completely after a long break.
         if days > INACTIVE_DECAY_DAYS * 2 {
             record.flags.remove(CoachMemoryFlags::EARLY_HOOK_RECENT);

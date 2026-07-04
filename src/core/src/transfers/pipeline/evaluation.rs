@@ -2471,7 +2471,13 @@ mod stalled_prospect_tests {
         let date = Fx::date(2027, 1, 15);
         let need = Fx::group_min(PlayerFieldPositionGroup::Midfielder);
 
-        let mut players = vec![Fx::player(1, PlayerPositionType::MidfielderCenter, 110, 19, 0)];
+        let mut players = vec![Fx::player(
+            1,
+            PlayerPositionType::MidfielderCenter,
+            110,
+            19,
+            0,
+        )];
         let mut squad = vec![Fx::info(&players[0], date, 145, 0.6, 0)];
         for i in 1..need as u32 {
             let p = Fx::player(100 + i, PlayerPositionType::MidfielderCenter, 130, 27, 25);
@@ -2934,15 +2940,50 @@ mod goalkeeper_prospect_tests {
             ];
             // DEF: 4 senior + 2 young = 6 (== depth req 6 → no need).
             for i in 0..4u32 {
-                players.push(Self::player(10 + i, PlayerPositionType::DefenderCenter, SENIOR, 27));
+                players.push(Self::player(
+                    10 + i,
+                    PlayerPositionType::DefenderCenter,
+                    SENIOR,
+                    27,
+                ));
             }
-            players.push(Self::player(20, PlayerPositionType::DefenderCenter, YOUNG, 19));
-            players.push(Self::player(21, PlayerPositionType::DefenderCenter, YOUNG, 19));
+            players.push(Self::player(
+                20,
+                PlayerPositionType::DefenderCenter,
+                YOUNG,
+                19,
+            ));
+            players.push(Self::player(
+                21,
+                PlayerPositionType::DefenderCenter,
+                YOUNG,
+                19,
+            ));
             // MID: 2 senior + 2 young = 4 (< depth req 5 → DepthCover seed).
-            players.push(Self::player(30, PlayerPositionType::MidfielderCenter, SENIOR, 27));
-            players.push(Self::player(31, PlayerPositionType::MidfielderCenter, SENIOR, 27));
-            players.push(Self::player(32, PlayerPositionType::MidfielderCenter, YOUNG, 19));
-            players.push(Self::player(33, PlayerPositionType::MidfielderCenter, YOUNG, 19));
+            players.push(Self::player(
+                30,
+                PlayerPositionType::MidfielderCenter,
+                SENIOR,
+                27,
+            ));
+            players.push(Self::player(
+                31,
+                PlayerPositionType::MidfielderCenter,
+                SENIOR,
+                27,
+            ));
+            players.push(Self::player(
+                32,
+                PlayerPositionType::MidfielderCenter,
+                YOUNG,
+                19,
+            ));
+            players.push(Self::player(
+                33,
+                PlayerPositionType::MidfielderCenter,
+                YOUNG,
+                19,
+            ));
             // FWD: 1 senior + 2 young = 3 (== depth req 3 → no need).
             players.push(Self::player(40, PlayerPositionType::Striker, SENIOR, 27));
             players.push(Self::player(41, PlayerPositionType::Striker, YOUNG, 19));

@@ -833,8 +833,8 @@ impl TeamTacticalState {
             // minute 75) while the late_bonus keeps its existing shape.
             let lead_base = 0.22 + 0.18 * ((score_diff - 1).clamp(0, 2) as f32);
             let weaker_bonus = 0.25 * ability_gap.max(0.0);
-            let manage_ramp = (0.25 + 0.75 * ((minute - 45.0).max(0.0) / 30.0).min(1.0))
-                .clamp(0.25, 1.0);
+            let manage_ramp =
+                (0.25 + 0.75 * ((minute - 45.0).max(0.0) / 30.0).min(1.0)).clamp(0.25, 1.0);
             // Late bonus 0.48 → 0.30: at 0.48 an equal-squad 1-goal lead
             // hit 0.70 at minute 90 — deep into "protect" (the 0.55
             // prefer_possession threshold) — so leaders stopped scoring

@@ -1,8 +1,6 @@
-use crate::club::staff::{
-    CoachMatchSnapshot, CoachProfile, CoachStrategy, StrategyDeriver, StrategyInputs,
-};
+use crate::club::staff::{CoachMatchSnapshot, CoachProfile, CoachStrategy};
 use crate::club::team::MatchdayLeadership;
-use crate::r#match::squad::{PlayerSelectionResult, SelectionCompetition};
+use crate::r#match::squad::{CoachStrategyForSelection, PlayerSelectionResult};
 use crate::r#match::{MatchPlayer, MatchSquad, SelectionContext, SquadSelector};
 use crate::{Player, Staff, Tactics, TacticsSelector, Team};
 use chrono::NaiveDate;
@@ -35,6 +33,8 @@ impl Team {
         );
 
         let coach_snapshot = MatchCoachSnapshot::for_rotation(head_coach);
+        let penalty_taker_id = self.select_penalty_taker(&squad_result.main_squad);
+        let free_kick_taker_id = self.select_free_kick_taker(&squad_result.main_squad);
 
         MatchSquad {
             team_id: self.id,
@@ -44,8 +44,8 @@ impl Team {
             substitutes: squad_result.substitutes,
             captain_id,
             vice_captain_id,
-            penalty_taker_id: self.select_penalty_taker(),
-            free_kick_taker_id: self.select_free_kick_taker(),
+            penalty_taker_id,
+            free_kick_taker_id,
             selection_omissions: squad_result.omissions,
             coach_snapshot,
         }
@@ -79,6 +79,8 @@ impl Team {
         );
 
         let coach_snapshot = MatchCoachSnapshot::for_selection_context(head_coach, ctx);
+        let penalty_taker_id = self.select_penalty_taker(&squad_result.main_squad);
+        let free_kick_taker_id = self.select_free_kick_taker(&squad_result.main_squad);
 
         MatchSquad {
             team_id: self.id,
@@ -88,8 +90,8 @@ impl Team {
             substitutes: squad_result.substitutes,
             captain_id,
             vice_captain_id,
-            penalty_taker_id: self.select_penalty_taker(),
-            free_kick_taker_id: self.select_free_kick_taker(),
+            penalty_taker_id,
+            free_kick_taker_id,
             selection_omissions: squad_result.omissions,
             coach_snapshot,
         }
@@ -138,6 +140,8 @@ impl Team {
         );
 
         let coach_snapshot = MatchCoachSnapshot::for_selection_context(head_coach, ctx);
+        let penalty_taker_id = self.select_penalty_taker(&squad_result.main_squad);
+        let free_kick_taker_id = self.select_free_kick_taker(&squad_result.main_squad);
 
         MatchSquad {
             team_id: self.id,
@@ -147,8 +151,8 @@ impl Team {
             substitutes: squad_result.substitutes,
             captain_id,
             vice_captain_id,
-            penalty_taker_id: self.select_penalty_taker(),
-            free_kick_taker_id: self.select_free_kick_taker(),
+            penalty_taker_id,
+            free_kick_taker_id,
             selection_omissions: squad_result.omissions,
             coach_snapshot,
         }
@@ -203,12 +207,12 @@ impl Team {
     // persistent club hierarchy on `Team.captain_id` / `vice_captain_id`)
     // rather than scanning the whole roster. See `squad_life/matchday_leadership.rs`.
 
-    /// Select penalty taker based on penalty taking skill and composure
-    fn select_penalty_taker(&self) -> Option<MatchPlayer> {
-        self.players
-            .players()
+    /// Select penalty taker from the starting XI — the designated taker
+    /// has to actually be on the pitch at kickoff, not at home in the
+    /// stands. Ranked by penalty taking + composure.
+    fn select_penalty_taker(&self, main_squad: &[MatchPlayer]) -> Option<MatchPlayer> {
+        main_squad
             .iter()
-            .filter(|p| !p.player_attributes.is_injured && !p.player_attributes.is_banned)
             .max_by(|a, b| {
                 let penalty_skill_a = a.skills.technical.penalty_taking + a.skills.mental.composure;
                 let penalty_skill_b = b.skills.technical.penalty_taking + b.skills.mental.composure;
@@ -217,15 +221,14 @@ impl Team {
                     .partial_cmp(&penalty_skill_b)
                     .unwrap_or(Ordering::Equal)
             })
-            .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
+            .cloned()
     }
 
-    /// Select free kick taker based on free kick skill and technique
-    fn select_free_kick_taker(&self) -> Option<MatchPlayer> {
-        self.players
-            .players()
+    /// Select free-kick taker from the starting XI, ranked by free
+    /// kicks + technique.
+    fn select_free_kick_taker(&self, main_squad: &[MatchPlayer]) -> Option<MatchPlayer> {
+        main_squad
             .iter()
-            .filter(|p| !p.player_attributes.is_injured && !p.player_attributes.is_banned)
             .max_by(|a, b| {
                 let fk_skill_a = a.skills.technical.free_kicks + a.skills.technical.technique;
                 let fk_skill_b = b.skills.technical.free_kicks + b.skills.technical.technique;
@@ -234,7 +237,7 @@ impl Team {
                     .partial_cmp(&fk_skill_b)
                     .unwrap_or(Ordering::Equal)
             })
-            .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
+            .cloned()
     }
 }
 
@@ -263,9 +266,11 @@ impl MatchCoachSnapshot {
     }
 
     /// Build a snapshot for a competitive fixture. The strategy is
-    /// derived from the same inputs the selection layer reads via
-    /// [`StrategyDeriver`] so a UI showing "manager strategy" and
-    /// the match engine's in-flight reads agree on the same call.
+    /// derived through [`CoachStrategyForSelection`] — the same
+    /// context-to-inputs map the selection layer reads — so a UI
+    /// showing "manager strategy" and the match engine's in-flight
+    /// reads agree on the same call, including the fixture game
+    /// model's derby / opponent-strength / squad-depth signals.
     fn for_selection_context(
         head_coach: &Staff,
         ctx: &SelectionContext,
@@ -274,20 +279,7 @@ impl MatchCoachSnapshot {
             return None;
         }
         let profile = CoachProfile::from_staff(head_coach);
-        let strategy = StrategyDeriver::derive(&StrategyInputs {
-            profile: &profile,
-            philosophy: ctx.philosophy.clone(),
-            match_importance: ctx.match_importance,
-            is_friendly: ctx.is_friendly,
-            is_cup: matches!(
-                ctx.competition,
-                SelectionCompetition::DomesticCup { .. } | SelectionCompetition::ContinentalCup
-            ),
-            is_continental: matches!(ctx.competition, SelectionCompetition::ContinentalCup),
-            is_derby: false,
-            strength_ratio: 1.0,
-            squad_depth: 0.5,
-        });
+        let strategy = CoachStrategyForSelection::derive(&profile, ctx);
         Some(CoachMatchSnapshot::new(
             head_coach.coach_memory.clone(),
             profile,

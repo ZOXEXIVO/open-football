@@ -208,9 +208,18 @@ pub(crate) fn execute_move_on_free(sim: &mut SimulatorData, player_id: u32) -> b
     // salary and squad status are read off it; the sweep's wage-estimate
     // fallback only covers a contractless edge case.
     let club_score = (team_reputation_world as f32 / 10_000.0).clamp(0.0, 1.0);
-    let last_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or_else(|| {
-        WageCalculator::expected_annual_wage(&player, player.age(date), club_score, league_reputation)
-    });
+    let last_salary = player
+        .contract
+        .as_ref()
+        .map(|c| c.salary)
+        .unwrap_or_else(|| {
+            WageCalculator::expected_annual_wage(
+                &player,
+                player.age(date),
+                club_score,
+                league_reputation,
+            )
+        });
     let last_squad_status = player
         .contract
         .as_ref()
@@ -458,8 +467,8 @@ pub async fn transfer_action(
         // Identity of the team the player actually plays for (own slug for
         // B/Second, Main alias for Reserve/youth) — the spell that must be
         // marked departed. `None` for a free-agent signing.
-        let source_history = from_team
-            .and_then(|(ci, coi, cli, ti)| get_source_history_info(sim, ci, coi, cli, ti));
+        let source_history =
+            from_team.and_then(|(ci, coi, cli, ti)| get_source_history_info(sim, ci, coi, cli, ti));
 
         let (mut player, source_info) = if let Some((ci, coi, cli, ti)) = from_team {
             let source = match get_team_info(sim, ci, coi, cli) {

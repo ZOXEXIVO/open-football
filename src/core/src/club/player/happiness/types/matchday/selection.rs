@@ -34,6 +34,14 @@ pub struct MatchSelectionContext {
     /// True for friendlies / development matches. Renderer dampens the
     /// outlook ("a friendly snub is rarely held against the manager").
     pub is_friendly: bool,
+    /// True when the coaching staff pre-briefed the player about a
+    /// policy omission ("you're rested for Saturday's game") — a
+    /// communicated rotation call is accepted far more readily than a
+    /// silent snub. Set at result-processing time from the manager's
+    /// man-management; only policy-flavoured reasons (rest, rotation,
+    /// protection) ever qualify.
+    #[serde(default)]
+    pub explained_by_coach: bool,
 }
 
 /// Bucket the selection decision falls into. Distinct from

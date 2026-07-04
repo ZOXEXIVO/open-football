@@ -14,8 +14,8 @@
 //! buffer up-front.
 
 use bincode::config::Configuration;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;

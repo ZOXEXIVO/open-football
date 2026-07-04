@@ -764,7 +764,10 @@ mod tests {
         let low = scorer.score(&low_ca, date);
         let top = scorer.score(&elite, date);
         assert!(low > 0, "low-CA fit teen must not score zero: {}", low);
-        assert!(top > low, "elite prospect must rank above low-CA: {top} <= {low}");
+        assert!(
+            top > low,
+            "elite prospect must rank above low-CA: {top} <= {low}"
+        );
     }
 
     #[test]
@@ -776,7 +779,10 @@ mod tests {
         let scorer = AcademyReadinessScorer::new(55, &policy);
         let weak_ca = scorer.score(&academy_prospect(17, 50, 55, 9.0, 8500, date), date);
         let strong_ca = scorer.score(&academy_prospect(17, 90, 140, 9.0, 8500, date), date);
-        assert!(weak_ca >= 50, "fit, old-enough teen must rank well: {weak_ca}");
+        assert!(
+            weak_ca >= 50,
+            "fit, old-enough teen must rank well: {weak_ca}"
+        );
         assert!(strong_ca > weak_ca);
     }
 
@@ -785,11 +791,19 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
         let mut academy = ClubAcademy::new(8); // tier 4, min_grad 15
         // Low-CA but fit, age-eligible teenagers — all "ready for youth".
-        academy.players.add(academy_prospect(15, 48, 60, 9.0, 8000, date));
-        academy.players.add(academy_prospect(16, 55, 70, 8.0, 8200, date));
-        academy.players.add(academy_prospect(17, 52, 58, 7.0, 8500, date));
+        academy
+            .players
+            .add(academy_prospect(15, 48, 60, 9.0, 8000, date));
+        academy
+            .players
+            .add(academy_prospect(16, 55, 70, 8.0, 8200, date));
+        academy
+            .players
+            .add(academy_prospect(17, 52, 58, 7.0, 8500, date));
         // NOT ready: underage (even with huge CA)...
-        academy.players.add(academy_prospect(14, 95, 160, 16.0, 9000, date));
+        academy
+            .players
+            .add(academy_prospect(14, 95, 160, 16.0, 9000, date));
         // ...and an exhausted teenager over the jadedness eligibility cap.
         let mut exhausted = academy_prospect(16, 70, 110, 12.0, 9000, date);
         exhausted.player_attributes.jadedness = 8000; // > 7500 cap

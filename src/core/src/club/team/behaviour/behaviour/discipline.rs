@@ -18,7 +18,9 @@ use crate::{HappinessEventType, Player, PlayerCollection, StaffCollection};
 pub(super) enum DisciplinaryRung {
     FormalWarning,
     /// Fine of this many annual-salary 1/26ths (i.e. weeks of wages).
-    Fine { weeks: u32 },
+    Fine {
+        weeks: u32,
+    },
 }
 
 /// Pure decision calculus for one player's fresh misconduct, separated
@@ -102,8 +104,7 @@ impl TeamBehaviour {
             };
             // A professional takes the sanction on the chin; a
             // hot-headed player resents the club going formal.
-            let professionalism01 =
-                (player.attributes.professionalism / 20.0).clamp(0.0, 1.0);
+            let professionalism01 = (player.attributes.professionalism / 20.0).clamp(0.0, 1.0);
             let temperament01 = (player.attributes.temperament / 20.0).clamp(0.0, 1.0);
             let reception = (1.0 - 0.4 * professionalism01) * (1.0 + 0.5 * (1.0 - temperament01));
 

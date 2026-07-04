@@ -78,7 +78,11 @@ impl<'b> TeamOperationsImpl<'b> {
             .slot_mut(player_id, tick)
             .is_attack_ready;
         if let Some(v) = cached {
-            debug_assert_eq!(v, self.compute_is_attack_ready(), "is_attack_ready cache mismatch");
+            debug_assert_eq!(
+                v,
+                self.compute_is_attack_ready(),
+                "is_attack_ready cache mismatch"
+            );
             return v;
         }
         let v = self.compute_is_attack_ready();
@@ -195,7 +199,11 @@ impl<'b> TeamOperationsImpl<'b> {
             .slot_mut(player_id, tick)
             .counter_window;
         if let Some(v) = cached {
-            debug_assert_eq!(v, self.compute_counter_window(), "counter_window cache mismatch");
+            debug_assert_eq!(
+                v,
+                self.compute_counter_window(),
+                "counter_window cache mismatch"
+            );
             return v;
         }
         let v = self.compute_counter_window();
@@ -211,8 +219,7 @@ impl<'b> TeamOperationsImpl<'b> {
     fn compute_counter_window(&self) -> bool {
         let ctx = self.ctx;
         let current_tick = ctx.context.current_tick();
-        let ticks_since_gain =
-            current_tick.saturating_sub(self.coach().last_possession_gain_tick);
+        let ticks_since_gain = current_tick.saturating_sub(self.coach().last_possession_gain_tick);
         // 400 → 600 ticks (6 s): a real break from deep needs 6-10 s
         // to reach the opposite box; the shorter window expired while
         // the outlet ball was still in flight.
@@ -309,8 +316,8 @@ impl<'b> TeamOperationsImpl<'b> {
         let current_tick = self.ctx.context.current_tick();
         const REBOUND_WINDOW_TICKS: u64 = 300;
         let rebound_tick = self.ctx.tick_context.ball.last_rebound_tick;
-        let rebound_live = rebound_tick > 0
-            && current_tick.saturating_sub(rebound_tick) < REBOUND_WINDOW_TICKS;
+        let rebound_live =
+            rebound_tick > 0 && current_tick.saturating_sub(rebound_tick) < REBOUND_WINDOW_TICKS;
         self.coach().can_shoot(current_tick, rebound_live)
     }
 
@@ -342,7 +349,11 @@ impl<'b> TeamOperationsImpl<'b> {
             .slot_mut(player_id, tick)
             .is_control_ball;
         if let Some(v) = cached {
-            debug_assert_eq!(v, self.compute_is_control_ball(), "is_control_ball cache mismatch");
+            debug_assert_eq!(
+                v,
+                self.compute_is_control_ball(),
+                "is_control_ball cache mismatch"
+            );
             return v;
         }
         let v = self.compute_is_control_ball();
@@ -534,8 +545,7 @@ impl<'b> TeamOperationsImpl<'b> {
         let my_team = self.ctx.player.team_id;
         // Same per-element expression as before, hoisted out of the loop
         // (it doesn't depend on the candidate).
-        let my_dist_sq_scaled =
-            (ball_position - self.ctx.player.position).norm_squared() * 1.44; // 1.2^2
+        let my_dist_sq_scaled = (ball_position - self.ctx.player.position).norm_squared() * 1.44; // 1.2^2
 
         // Walk the per-tick roster join — position AND velocity are
         // pre-joined, replacing three hash probes per candidate.

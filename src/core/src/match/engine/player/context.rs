@@ -1,4 +1,3 @@
-use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -7,6 +6,7 @@ use crate::r#match::{
     MatchField, MatchObjectsPositions, MatchPlayerCollection, PassOriginRestart, PlayerSide,
     ShotTarget, Space, SpatialGrid,
 };
+use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 use nalgebra::Vector3;
 use std::cell::RefCell;
 
@@ -261,7 +261,11 @@ impl GameTickContext {
     /// ball + player positions + spatial grid in sync so the keeper's
     /// distance-to-ball and chase decisions stay correct.
     #[inline]
-    pub fn update_for_goalkeeper_shot(&mut self, field: &MatchField, players: &MatchPlayerCollection) {
+    pub fn update_for_goalkeeper_shot(
+        &mut self,
+        field: &MatchField,
+        players: &MatchPlayerCollection,
+    ) {
         self.ball.update(field);
         self.positions.update(field);
         self.grid.update(field);

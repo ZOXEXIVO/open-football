@@ -87,11 +87,10 @@ impl Player {
         }
 
         let trust = self.happiness.factors.promise_trust;
-        let repeated = self
-            .happiness
-            .recent_events
-            .iter()
-            .any(|e| e.event_type == HappinessEventType::AskedForPrivateTalk && e.days_ago <= 180);
+        let repeated =
+            self.happiness.recent_events.iter().any(|e| {
+                e.event_type == HappinessEventType::AskedForPrivateTalk && e.days_ago <= 180
+            });
 
         let private_ctx = PrivateTalkRequestContext::new(signal.reason)
             .with_trust(trust)
@@ -132,28 +131,26 @@ impl Player {
         // bad week doesn't push the player to escalate.
         let dropped = self.count_recent(&HappinessEventType::MatchDropped, 60) as f32;
         let lack_minutes = self.count_recent(&HappinessEventType::LackOfPlayingTime, 90) as f32;
-        let playing_time_signal =
-            dropped * 1.0 + lack_minutes * 2.0 + (-self.happiness.factors.playing_time * 0.4).max(0.0);
+        let playing_time_signal = dropped * 1.0
+            + lack_minutes * 2.0
+            + (-self.happiness.factors.playing_time * 0.4).max(0.0);
 
-        let contract_signals = self.count_recent(&HappinessEventType::ContractTalksStalled, 120)
-            as f32
-            * 2.0
-            + self.count_recent(&HappinessEventType::RejectedContractOffer, 120) as f32 * 1.5
-            + (-self.happiness.factors.salary_satisfaction * 0.4).max(0.0);
+        let contract_signals =
+            self.count_recent(&HappinessEventType::ContractTalksStalled, 120) as f32 * 2.0
+                + self.count_recent(&HappinessEventType::RejectedContractOffer, 120) as f32 * 1.5
+                + (-self.happiness.factors.salary_satisfaction * 0.4).max(0.0);
 
-        let transfer_signals = self.count_recent(&HappinessEventType::TransferBidRejected, 90)
-            as f32
-            * 2.0
-            + self.count_recent(&HappinessEventType::DreamMoveCollapsed, 90) as f32 * 1.5;
+        let transfer_signals =
+            self.count_recent(&HappinessEventType::TransferBidRejected, 90) as f32 * 2.0
+                + self.count_recent(&HappinessEventType::DreamMoveCollapsed, 90) as f32 * 1.5;
 
-        let captaincy_signals = self.count_recent(&HappinessEventType::CaptaincyRemoved, 120) as f32
-            * 3.0
-            + self.count_recent(&HappinessEventType::LostStartingPlace, 120) as f32 * 1.5;
+        let captaincy_signals =
+            self.count_recent(&HappinessEventType::CaptaincyRemoved, 120) as f32 * 3.0
+                + self.count_recent(&HappinessEventType::LostStartingPlace, 120) as f32 * 1.5;
 
-        let tactical_signals = self.count_recent(&HappinessEventType::UnhappyWithTacticalRole, 120)
-            as f32
-            * 2.5
-            + self.count_recent(&HappinessEventType::RoleMismatch, 120) as f32 * 2.0;
+        let tactical_signals =
+            self.count_recent(&HappinessEventType::UnhappyWithTacticalRole, 120) as f32 * 2.5
+                + self.count_recent(&HappinessEventType::RoleMismatch, 120) as f32 * 2.0;
 
         // Manager-relationship: erosion events plus broken promises plus
         // a heavily negative manager_relationship factor.
@@ -455,8 +452,8 @@ impl Player {
         .with_big_match_selection_context(ctx)
         .with_follow_up(HappinessEventFollowUp::ManagerTrustRising);
         if self.attributes.pressure >= 15.0 {
-            happiness_ctx = happiness_ctx
-                .with_evidence(crate::HappinessEventEvidence::HighPressurePersonality);
+            happiness_ctx =
+                happiness_ctx.with_evidence(crate::HappinessEventEvidence::HighPressurePersonality);
         }
         self.happiness.add_event_with_context_and_cooldown(
             HappinessEventType::TrustedInBigMatch,
@@ -539,8 +536,7 @@ impl Player {
         let big_mul = if ctx.is_big_match { 1.20 } else { 1.0 };
         let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
         let temperament_mul = 1.0 + ((20.0 - self.attributes.temperament.min(20.0)) / 20.0) * 0.25;
-        let magnitude =
-            base * kind_mul * early_hooks_mul * big_mul * prof_dampen * temperament_mul;
+        let magnitude = base * kind_mul * early_hooks_mul * big_mul * prof_dampen * temperament_mul;
 
         let happiness_ctx = HappinessEventContext::new(
             HappinessEventCause::TacticalDisagreement,
@@ -577,8 +573,7 @@ impl Player {
         debug_assert!(
             matches!(
                 stage,
-                InjuryRecoveryStage::RecoverySetback
-                    | InjuryRecoveryStage::InjuryRecurrenceConcern
+                InjuryRecoveryStage::RecoverySetback | InjuryRecoveryStage::InjuryRecurrenceConcern
             ),
             "InjurySetback requires a setback / recurrence stage"
         );
@@ -660,10 +655,7 @@ impl Player {
             .catalog
             .magnitude(HappinessEventType::ConcernedByClubDirection);
         let amb_mul = scaling::ambition_amplifier(self.attributes.ambition);
-        let influence_signal = if ctx
-            .evidence
-            .contains(&ClubDirectionEvidence::HighInfluence)
-        {
+        let influence_signal = if ctx.evidence.contains(&ClubDirectionEvidence::HighInfluence) {
             1.15
         } else {
             1.0
@@ -719,6 +711,18 @@ impl Player {
         if rating_when_off < 6.4 {
             return;
         }
+        // New-manager review window: in the first weeks after a
+        // managerial change every player expects to be tried, hooked,
+        // and shuffled — a single early hook under the new man isn't a
+        // snub yet. Repeated hooks still qualify below once they
+        // accumulate past the window.
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::NewManagerBounce, 56)
+            && rating_when_off < 7.5
+        {
+            return;
+        }
         let recent_early_hooks = self
             .happiness
             .recent_events
@@ -764,6 +768,14 @@ impl Player {
     /// are protective / routine calls, not a snub.
     pub fn maybe_emit_big_match_bench(&mut self, ctx: &MatchSelectionContext) {
         if ctx.is_friendly {
+            return;
+        }
+        // New-manager review window: the new man picking his own big-
+        // match XI is expected squad-assessment, not a demotion story.
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::NewManagerBounce, 56)
+        {
             return;
         }
         // Protective scopes / reasons are explicitly NOT a "benched for

@@ -355,10 +355,7 @@ impl EmergencySquadFillStrategy {
     /// signing even for emergency depth"; matching skips them.
     /// Returns `None` for candidates a club categorically can't
     /// realistically sign (reputation chasm, way too good).
-    pub fn score(
-        candidate: &EmergencyCandidateView,
-        buyer: &EmergencyBuyerContext,
-    ) -> Option<f32> {
+    pub fn score(candidate: &EmergencyCandidateView, buyer: &EmergencyBuyerContext) -> Option<f32> {
         // Reputation chasm gate — a CA 160+ international free agent
         // signing for Malta on a regular tick is not realistic, even
         // with career pressure. Urgent (sub-11) clubs widen but do
@@ -464,7 +461,11 @@ impl EmergencySquadFillStrategy {
             match buyer.strictness {
                 EmergencyStrictness::Strict => 26.0,
                 EmergencyStrictness::Standard => {
-                    if buyer.urgent { 22.0 } else { 18.0 }
+                    if buyer.urgent {
+                        22.0
+                    } else {
+                        18.0
+                    }
                 }
                 EmergencyStrictness::Flexible => 22.0,
             }
@@ -472,7 +473,11 @@ impl EmergencySquadFillStrategy {
             match buyer.strictness {
                 EmergencyStrictness::Strict => 4.0,
                 EmergencyStrictness::Standard => {
-                    if buyer.urgent { 11.0 } else { 8.0 }
+                    if buyer.urgent {
+                        11.0
+                    } else {
+                        8.0
+                    }
                 }
                 EmergencyStrictness::Flexible => 11.0,
             }
@@ -839,7 +844,11 @@ mod tests {
         // 4 group slots + a depth slot when group floors sum below total.
         let group_sum =
             MIN_GROUP_GOALKEEPER + MIN_GROUP_DEFENDER + MIN_GROUP_MIDFIELDER + MIN_GROUP_FORWARD;
-        let expected = if group_sum < MIN_FIRST_TEAM_SQUAD { 5 } else { 4 };
+        let expected = if group_sum < MIN_FIRST_TEAM_SQUAD {
+            5
+        } else {
+            4
+        };
         assert_eq!(plan.len(), expected);
     }
 
@@ -928,7 +937,10 @@ mod tests {
         let prime = ScoringFixtures::cand(85, 25, true, 3000, 0.4);
         let s_vet = EmergencySquadFillStrategy::score(&veteran, &b).unwrap();
         let s_prime = EmergencySquadFillStrategy::score(&prime, &b).unwrap();
-        assert!(s_vet > s_prime, "veteran {s_vet} should beat prime {s_prime}");
+        assert!(
+            s_vet > s_prime,
+            "veteran {s_vet} should beat prime {s_prime}"
+        );
     }
 
     #[test]
@@ -1001,7 +1013,10 @@ mod tests {
         let mut projected = EmergencyProjectedSquad::from_needs(&needs);
         assert!(projected.is_urgent());
         projected.apply_signing(PlayerFieldPositionGroup::Defender);
-        assert!(!projected.is_urgent(), "11 main-team players = no longer urgent");
+        assert!(
+            !projected.is_urgent(),
+            "11 main-team players = no longer urgent"
+        );
     }
 
     #[test]

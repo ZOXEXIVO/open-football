@@ -109,11 +109,7 @@ impl League {
     /// The matched second half is [`simulate_process`], which takes the
     /// played [`MatchResult`]s and `LeaguePendingState` back and runs
     /// `process_match_day_results`.
-    pub fn simulate_build(
-        &mut self,
-        clubs: &[Club],
-        ctx: &GlobalContext<'_>,
-    ) -> LeagueBuildOutput {
+    pub fn simulate_build(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) -> LeagueBuildOutput {
         let league_name = self.name.clone();
         debug!(
             "⚽ Building matchday for league: {} (Reputation: {})",

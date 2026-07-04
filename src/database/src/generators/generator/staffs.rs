@@ -322,7 +322,8 @@ mod tests {
         let generator = make_generator();
         let elite =
             DatabaseGenerator::generate_staffs(&generator, 1, 1, "EN", 8000, &TeamType::Main);
-        let small = DatabaseGenerator::generate_staffs(&generator, 1, 1, "EN", 800, &TeamType::Main);
+        let small =
+            DatabaseGenerator::generate_staffs(&generator, 1, 1, "EN", 800, &TeamType::Main);
         assert!(
             elite.len() > small.len(),
             "elite backroom ({}) should exceed small club ({})",

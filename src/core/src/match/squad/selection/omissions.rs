@@ -23,11 +23,11 @@ use chrono::NaiveDate;
 
 use super::balance::LineupBalanceScorer;
 use super::bench_scenarios::{BenchScenarioPlan, BenchScenarioScorer};
+use super::helpers;
 use super::model::{EligibilityDecision, EligibilityEvaluator, MatchSelectionGameModel};
 use super::role_duty::{OpponentMatchupScorer, RoleDutyFitScorer, TacticalDuty};
-use super::{DomesticCupContext, SelectionCompetition};
-use super::helpers;
 use super::scoring::{ScoringEngine, SlotScoreBreakdown};
+use super::{DomesticCupContext, SelectionCompetition};
 use crate::HappinessEventType;
 use std::collections::HashMap;
 
@@ -64,6 +64,10 @@ pub(crate) struct OmissionBuilder<'a> {
     /// reach the new variants instead of falling back to a generic
     /// quality / tactical mismatch line.
     pub game_model: Option<&'a MatchSelectionGameModel>,
+    /// Young players groomed behind an aging incumbent — mirrors the
+    /// scoring context so the omission explanation and the selection
+    /// itself agree on who the succession heirs are.
+    pub succession_heirs: &'a [u32],
 }
 
 impl<'a> OmissionBuilder<'a> {
@@ -103,11 +107,11 @@ impl<'a> OmissionBuilder<'a> {
                     SelectionDecisionScope::UnusedSubstitute
                 }
             } else if self.match_importance < 0.4 {
-                if DateUtils::age(player.birth_date, self.date) <= 21 {
-                    SelectionDecisionScope::Rotation
-                } else {
-                    SelectionDecisionScope::Rotation
-                }
+                // Low-importance rotation. The age nuance lives in the
+                // *reason* (`YouthDevelopmentRotation` vs
+                // `LowMatchImportanceRotation`), picked downstream by
+                // `choose_reason` — the scope is the same either way.
+                SelectionDecisionScope::Rotation
             } else if self.is_load_managed(player) {
                 SelectionDecisionScope::Rested
             } else {
@@ -126,6 +130,10 @@ impl<'a> OmissionBuilder<'a> {
                 match_importance: self.match_importance,
                 repeated: Self::omission_repeated(player),
                 is_friendly: self.is_friendly,
+                // The pre-brief decision belongs to the result
+                // processor, which knows the manager's man-management —
+                // see `RotationBriefGate` in league result processing.
+                explained_by_coach: false,
             };
 
             out.push(OmittedPlayer {
@@ -338,9 +346,8 @@ impl<'a> OmissionBuilder<'a> {
             // Lineup balance contribution — small per-player share of the
             // whole-XI band the rival's profile uplifts. Cheap proxy: a
             // single-player evaluation, normalised to a comparable scale.
-            let single_squad: Vec<MatchPlayer> = vec![MatchPlayer::from_player(
-                0, player, slot, false,
-            )];
+            let single_squad: Vec<MatchPlayer> =
+                vec![MatchPlayer::from_player(0, player, slot, false)];
             let mut singleton = HashMap::new();
             singleton.insert(player.id, player);
             let band = LineupBalanceScorer::evaluate(&single_squad, &singleton);
@@ -363,9 +370,8 @@ impl<'a> OmissionBuilder<'a> {
             // surfaced here so the comparison can also flag scenario-coverage on
             // bench-vs-bench omissions.
             let plan = BenchScenarioPlan::build(model.match_type, model.tactical_objective);
-            let cover = plan.cover_score(|scenario| {
-                BenchScenarioScorer::coverage(player, scenario, self.date)
-            });
+            let cover = plan
+                .cover_score(|scenario| BenchScenarioScorer::coverage(player, scenario, self.date));
             b.bench_scenario = (cover * 3.0).clamp(0.0, 3.0);
         }
         b
@@ -374,14 +380,8 @@ impl<'a> OmissionBuilder<'a> {
     fn duty_for_slot(&self, slot: PlayerPositionType) -> TacticalDuty {
         use PlayerPositionType::*;
         match slot {
-            Goalkeeper
-            | Sweeper
-            | DefenderCenter
-            | DefenderCenterLeft
-            | DefenderCenterRight
-            | DefenderLeft
-            | DefenderRight
-            | DefensiveMidfielder => TacticalDuty::Defend,
+            Goalkeeper | Sweeper | DefenderCenter | DefenderCenterLeft | DefenderCenterRight
+            | DefenderLeft | DefenderRight | DefensiveMidfielder => TacticalDuty::Defend,
             WingbackLeft
             | WingbackRight
             | MidfielderCenter
@@ -511,7 +511,9 @@ impl<'a> OmissionBuilder<'a> {
             return false;
         }
         let morale = player.happiness.morale;
-        let relationship = self.engine.relationship_score(player, self.staff, self.date);
+        let relationship = self
+            .engine
+            .relationship_score(player, self.staff, self.date);
         morale < 40.0 && relationship < 0.0
     }
 
@@ -521,9 +523,9 @@ impl<'a> OmissionBuilder<'a> {
     fn coach_memory_reason(&self, omitted: &Player) -> Option<SelectionOmissionReason> {
         let coach = self.coach?;
         let slot = best_natural_position(omitted, self.tactics)?;
-        let natural_role_fit =
-            (helpers::position_fit_score(omitted, slot, slot.position_group()) / 20.0)
-                .clamp(0.0, 1.0);
+        let natural_role_fit = (helpers::position_fit_score(omitted, slot, slot.position_group())
+            / 20.0)
+            .clamp(0.0, 1.0);
         let coach_ctx = CoachSelectionContext {
             date: self.date,
             match_importance: self.match_importance,
@@ -532,10 +534,10 @@ impl<'a> OmissionBuilder<'a> {
                 self.competition,
                 SelectionCompetition::DomesticCup { .. } | SelectionCompetition::ContinentalCup
             ),
-            is_derby: false,
+            is_derby: self.game_model.map(|m| m.is_derby()).unwrap_or(false),
             is_continental: matches!(self.competition, SelectionCompetition::ContinentalCup),
             natural_role_fit,
-            is_succession_heir: &[],
+            is_succession_heir: self.succession_heirs,
         };
         let assessment = coach.assess_player_for_selection(omitted, &coach_ctx);
         // Only surface a coach-memory reason when the coach's

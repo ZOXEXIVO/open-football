@@ -12,8 +12,8 @@ use super::engine::{CoachDecisionEngine, CoachLiveMatchContext, CoachSelectionCo
 use super::memory::{CoachMatchObservation, CoachMemoryFlags};
 use super::reason::CoachDecisionReason;
 use super::strategy::CoachStrategy;
-use crate::club::staff::{CoachProfile, CoachingStyle, StaffStub};
 use crate::club::player::builder::PlayerBuilder;
+use crate::club::staff::{CoachProfile, CoachingStyle, StaffStub};
 use crate::shared::fullname::FullName;
 use crate::{
     PersonAttributes, Player, PlayerAttributes, PlayerPosition, PlayerPositionType,
@@ -262,8 +262,10 @@ fn negativity_biased_coach_reacts_harder_to_repeated_poor_form() {
 
     let neg_profile = CoachProfile::from_staff(&neg_staff);
     let base_profile = CoachProfile::from_staff(&base_staff);
-    let neg_engine = CoachDecisionEngine::from_staff(&neg_staff, &neg_profile, CoachStrategy::WinNow);
-    let base_engine = CoachDecisionEngine::from_staff(&base_staff, &base_profile, CoachStrategy::WinNow);
+    let neg_engine =
+        CoachDecisionEngine::from_staff(&neg_staff, &neg_profile, CoachStrategy::WinNow);
+    let base_engine =
+        CoachDecisionEngine::from_staff(&base_staff, &base_profile, CoachStrategy::WinNow);
 
     let neg_assessment = neg_engine.assess_player_for_selection(&player, &CtxFixture::league());
     let base_assessment = base_engine.assess_player_for_selection(&player, &CtxFixture::league());
@@ -296,8 +298,10 @@ fn warm_coach_reacts_less_to_one_bad_game() {
         &base_profile,
     );
 
-    let warm_engine = CoachDecisionEngine::from_staff(&warm_staff, &warm_profile, CoachStrategy::WinNow);
-    let base_engine = CoachDecisionEngine::from_staff(&base_staff, &base_profile, CoachStrategy::WinNow);
+    let warm_engine =
+        CoachDecisionEngine::from_staff(&warm_staff, &warm_profile, CoachStrategy::WinNow);
+    let base_engine =
+        CoachDecisionEngine::from_staff(&base_staff, &base_profile, CoachStrategy::WinNow);
 
     let warm_assessment = warm_engine.assess_player_for_selection(&player, &CtxFixture::league());
     let base_assessment = base_engine.assess_player_for_selection(&player, &CtxFixture::league());

@@ -9,7 +9,9 @@ use crate::transfers::pipeline::plausibility::{
 };
 use crate::transfers::pipeline::scouting_config::{RealismTarget, ScoutingConfig};
 use crate::transfers::pipeline::{ClubTransferPlan, ScoutPlayerMonitoring};
-use crate::{Club, Person, Player, PlayerSquadStatus, PlayerStatusType, SimulatorData, Staff, Team};
+use crate::{
+    Club, Person, Player, PlayerSquadStatus, PlayerStatusType, SimulatorData, Staff, Team,
+};
 use chrono::NaiveDate;
 
 /// One row in the player-transfers UI showing who is watching a player.
@@ -905,50 +907,51 @@ impl SimulatorData {
         // real, public pursuit and is exempted below.
         let now = self.date.date();
         let scouting_cfg = ScoutingConfig::default();
-        let player_realism: Option<RealismTarget> = self.player_with_team(player_id).map(|(p, t)| {
-            let main_team = self.club(t.club_id).and_then(|c| {
-                c.teams
-                    .teams
-                    .iter()
-                    .find(|tm| matches!(tm.team_type, TeamType::Main))
-            });
-            let club_world_rep = main_team.map(|tm| tm.reputation.world as i16).unwrap_or(0);
-            let club_market_value = main_team
-                .map(|tm| tm.reputation.market_value_score())
-                .unwrap_or(0);
-            let league_rep = t
-                .league_id
-                .and_then(|lid| self.league(lid))
-                .map(|l| l.reputation)
-                .unwrap_or(0);
-            let statuses = p.statuses.get();
-            let (contract_months_remaining, salary) = p
-                .contract
-                .as_ref()
-                .map(|c| {
-                    let days = (c.expiration - now).num_days().max(0);
-                    ((days / 30).min(i16::MAX as i64) as i16, c.salary)
-                })
-                .unwrap_or((0, 0));
-            RealismTarget {
-                club_world_reputation: club_world_rep,
-                world_reputation: p.player_attributes.world_reputation,
-                current_reputation: p.player_attributes.current_reputation,
-                home_reputation: p.player_attributes.home_reputation,
-                appearances: p.statistics.total_games(),
-                age: p.age(now),
-                contract_months_remaining,
-                salary,
-                estimated_value: p.value(now, league_rep, club_market_value),
-                is_listed: statuses.contains(&PlayerStatusType::Lst),
-                is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
-                squad_status: p
+        let player_realism: Option<RealismTarget> =
+            self.player_with_team(player_id).map(|(p, t)| {
+                let main_team = self.club(t.club_id).and_then(|c| {
+                    c.teams
+                        .teams
+                        .iter()
+                        .find(|tm| matches!(tm.team_type, TeamType::Main))
+                });
+                let club_world_rep = main_team.map(|tm| tm.reputation.world as i16).unwrap_or(0);
+                let club_market_value = main_team
+                    .map(|tm| tm.reputation.market_value_score())
+                    .unwrap_or(0);
+                let league_rep = t
+                    .league_id
+                    .and_then(|lid| self.league(lid))
+                    .map(|l| l.reputation)
+                    .unwrap_or(0);
+                let statuses = p.statuses.get();
+                let (contract_months_remaining, salary) = p
                     .contract
                     .as_ref()
-                    .map(|c| c.squad_status.clone())
-                    .unwrap_or(PlayerSquadStatus::NotYetSet),
-            }
-        });
+                    .map(|c| {
+                        let days = (c.expiration - now).num_days().max(0);
+                        ((days / 30).min(i16::MAX as i64) as i16, c.salary)
+                    })
+                    .unwrap_or((0, 0));
+                RealismTarget {
+                    club_world_reputation: club_world_rep,
+                    world_reputation: p.player_attributes.world_reputation,
+                    current_reputation: p.player_attributes.current_reputation,
+                    home_reputation: p.player_attributes.home_reputation,
+                    appearances: p.statistics.total_games(),
+                    age: p.age(now),
+                    contract_months_remaining,
+                    salary,
+                    estimated_value: p.value(now, league_rep, club_market_value),
+                    is_listed: statuses.contains(&PlayerStatusType::Lst),
+                    is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
+                    squad_status: p
+                        .contract
+                        .as_ref()
+                        .map(|c| c.squad_status.clone())
+                        .unwrap_or(PlayerSquadStatus::NotYetSet),
+                }
+            });
 
         for continent in &self.continents {
             for country in &continent.countries {
@@ -1292,8 +1295,15 @@ impl SimulatorData {
                         match seller {
                             Some((sell_country, sell_club, player)) => {
                                 let inputs = TransferPlausibilityBuilder::from_global(
-                                    country, club, sell_country, sell_club, player, 0.0, false,
-                                    true, date,
+                                    country,
+                                    club,
+                                    sell_country,
+                                    sell_club,
+                                    player,
+                                    0.0,
+                                    false,
+                                    true,
+                                    date,
                                 );
                                 TransferMovePlausibility::assess(&inputs)
                                     .reaches(TransferMoveStage::CanShowPublicInterest)
@@ -2156,7 +2166,10 @@ mod interested_clubs_tests {
             contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
             PlayerBuilder::new()
                 .id(MAXIMENKO)
-                .full_name(FullName::new("Alexandr".to_string(), "Maximenko".to_string()))
+                .full_name(FullName::new(
+                    "Alexandr".to_string(),
+                    "Maximenko".to_string(),
+                ))
                 .birth_date(NaiveDate::from_ymd_opt(1998, 1, 1).unwrap())
                 .country_id(2)
                 .attributes(PersonAttributes::default())
@@ -2173,7 +2186,13 @@ mod interested_clubs_tests {
                 .unwrap()
         }
 
-        fn club(id: u32, name: &str, league_id: u32, team_world: u16, players: Vec<Player>) -> Club {
+        fn club(
+            id: u32,
+            name: &str,
+            league_id: u32,
+            team_world: u16,
+            players: Vec<Player>,
+        ) -> Club {
             let team = Team::builder()
                 .id(id * 10)
                 .league_id(Some(league_id))
@@ -2352,17 +2371,19 @@ mod interested_clubs_tests {
     #[test]
     fn bare_foreign_scouting_report_is_not_public_interest() {
         let mut samb = Fx::weak_buyer();
-        samb.transfer_plan.scouting_reports.push(DetailedScoutingReport {
-            player_id: MAXIMENKO,
-            assignment_id: 1,
-            assessed_ability: 165,
-            assessed_potential: 170,
-            confidence: 0.9,
-            estimated_value: 5_000_000.0,
-            recommendation: ScoutingRecommendation::Buy,
-            role_fit: 0.8,
-            risk_flags: Vec::new(),
-        });
+        samb.transfer_plan
+            .scouting_reports
+            .push(DetailedScoutingReport {
+                player_id: MAXIMENKO,
+                assignment_id: 1,
+                assessed_ability: 165,
+                assessed_potential: 170,
+                confidence: 0.9,
+                estimated_value: 5_000_000.0,
+                recommendation: ScoutingRecommendation::Buy,
+                role_fit: 0.8,
+                risk_flags: Vec::new(),
+            });
         let data = Fx::sim(samb);
         let interested = data.clubs_interested_in_player(MAXIMENKO);
         assert!(

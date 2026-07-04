@@ -96,8 +96,7 @@ impl TeamRatingSummary {
             s.xg += p.xg.max(0.0);
             s.passes_attempted += p.passes_attempted as u32;
             s.passes_completed += p.passes_completed as u32;
-            s.defensive_actions +=
-                (p.tackles + p.interceptions + p.blocks + p.clearances) as u32;
+            s.defensive_actions += (p.tackles + p.interceptions + p.blocks + p.clearances) as u32;
         }
         s
     }
@@ -196,8 +195,7 @@ impl RatingExpectationContext {
             Ordering::Less => -1,
             Ordering::Equal => 0,
         };
-        let team_goal_diff =
-            (team_goals as i16 - opponent_goals as i16).clamp(-99, 99) as i8;
+        let team_goal_diff = (team_goals as i16 - opponent_goals as i16).clamp(-99, 99) as i8;
 
         let (starting_condition_pct, final_energy_pct, high_intensity_load) = match snapshot {
             Some(s) => (
@@ -318,10 +316,8 @@ impl<'a> RatingContext<'a> {
                 // weighting read a 60-pass shift as barely half of the
                 // expected midfield influence.
                 let pass_vol = RatingMath::sat(s.passes_completed as f32, 50.0);
-                let progression = RatingMath::sat(
-                    (s.progressive_passes + s.progressive_carries) as f32,
-                    6.0,
-                );
+                let progression =
+                    RatingMath::sat((s.progressive_passes + s.progressive_carries) as f32, 6.0);
                 let creation = RatingMath::sat((s.key_passes + s.passes_into_box) as f32, 4.0);
                 let press = RatingMath::sat(s.successful_pressures as f32, 5.0);
                 0.30 * pass_vol + 0.30 * progression + 0.25 * creation + 0.20 * press
@@ -505,9 +501,9 @@ impl<'a> RatingContext<'a> {
     /// tightest for passengers and keepers.
     pub fn texture_band(&self) -> f32 {
         match self.evidence_tier() {
-            EvidenceTier::Passenger
-            | EvidenceTier::AnonymousStarter
-            | EvidenceTier::QuietCameo => 0.03,
+            EvidenceTier::Passenger | EvidenceTier::AnonymousStarter | EvidenceTier::QuietCameo => {
+                0.03
+            }
             EvidenceTier::Modest => 0.06,
             EvidenceTier::Strong | EvidenceTier::OneGoalLowVolume => 0.08,
             EvidenceTier::GkBusy | EvidenceTier::GkModest | EvidenceTier::GkPassenger => 0.04,

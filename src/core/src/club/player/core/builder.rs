@@ -9,8 +9,8 @@ use crate::club::{
 };
 use crate::shared::fullname::FullName;
 use crate::{
-    PersonAttributes, Player, PlayerDecisionHistory, PlayerFoots, PlayerHappiness,
-    PlayerPositions, PlayerPreferredFoot, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
+    PersonAttributes, Player, PlayerDecisionHistory, PlayerFoots, PlayerHappiness, PlayerPositions,
+    PlayerPreferredFoot, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
     PlayerTrainingHistory, Relations,
 };
 use chrono::NaiveDate;

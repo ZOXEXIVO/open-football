@@ -395,8 +395,7 @@ fn scenario_fresh_weak_can_outwork_severely_depleted_strong_in_pressing() {
     // The most depleted strong player (15% floor, no stamina) gets out
     // -pressed by a fresh weak player — confirms freshness alone can
     // flip an explosive-heavy phase when the strong side is shattered.
-    let mut depleted_strong =
-        build_player(15.0, 1500, PlayerPositionType::MidfielderCenter);
+    let mut depleted_strong = build_player(15.0, 1500, PlayerPositionType::MidfielderCenter);
     depleted_strong.skills.physical.stamina = 8.0;
     depleted_strong.skills.physical.natural_fitness = 8.0;
     let mut fresh_weak = build_player(10.0, 9500, PlayerPositionType::MidfielderCenter);
@@ -487,6 +486,10 @@ fn effective_skill_applies_to_all_three_categories() {
     ] {
         let f = effective_skill(&fresh, 15.0, cat);
         let t = effective_skill(&tired, 15.0, cat);
-        assert!(f > t, "category {:?}: fresh {f} should exceed tired {t}", cat);
+        assert!(
+            f > t,
+            "category {:?}: fresh {f} should exceed tired {t}",
+            cat
+        );
     }
 }

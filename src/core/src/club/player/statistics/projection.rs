@@ -122,9 +122,12 @@ impl PlayerStatisticsProjection {
                 if already_in_ledger {
                     continue;
                 }
-                let (seq_id, league_slug, league_name) =
-                    league_anchor_for(history, cont.season_year, &cont.team_slug)
-                        .unwrap_or((0, String::new(), String::new()));
+                let (seq_id, league_slug, league_name) = league_anchor_for(
+                    history,
+                    cont.season_year,
+                    &cont.team_slug,
+                )
+                .unwrap_or((0, String::new(), String::new()));
                 ledger.push(PlayerStatLedgerEntry {
                     seq_id,
                     season_start_year: cont.season_year,
@@ -160,9 +163,12 @@ impl PlayerStatisticsProjection {
 
             // Frozen continental rows (legacy adapter only).
             for cont in &history.continental {
-                let (seq_id, league_slug, league_name) =
-                    league_anchor_for(history, cont.season_year, &cont.team_slug)
-                        .unwrap_or((0, String::new(), String::new()));
+                let (seq_id, league_slug, league_name) = league_anchor_for(
+                    history,
+                    cont.season_year,
+                    &cont.team_slug,
+                )
+                .unwrap_or((0, String::new(), String::new()));
                 ledger.push(PlayerStatLedgerEntry {
                     seq_id,
                     season_start_year: cont.season_year,
@@ -724,9 +730,9 @@ impl PlayerStatisticsProjection {
             // player's debut season, whose owning-club record is preserved
             // as the "where the career began" marker (the message the
             // earlier "initial Spartak row collapsed" report was about).
-            let loaned_out_this_season = snapshot.iter().any(|other| {
-                other.season.start_year == row.season.start_year && other.is_loan
-            });
+            let loaned_out_this_season = snapshot
+                .iter()
+                .any(|other| other.season.start_year == row.season.start_year && other.is_loan);
             if loaned_out_this_season {
                 return Some(row.season.start_year) == debut_year;
             }
@@ -744,8 +750,7 @@ impl PlayerStatisticsProjection {
             // content-bearing variants and this row is a phantom seed.
             let is_sole_record_of_season = !snapshot.iter().any(|other| {
                 other.season.start_year == row.season.start_year
-                    && (other.team_slug != row.team_slug
-                        || other.league_slug != row.league_slug)
+                    && (other.team_slug != row.team_slug || other.league_slug != row.league_slug)
             });
             is_sole_record_of_season || row.transfer_fee.is_some()
         });
@@ -1521,7 +1526,10 @@ mod tests {
             .iter()
             .find(|r| r.competition_kind == PlayerStatCompetitionKind::League)
             .expect("league overview row missing");
-        assert_eq!(league.statistics.played, 6, "active spell must not double-count");
+        assert_eq!(
+            league.statistics.played, 6,
+            "active spell must not double-count"
+        );
         assert_eq!(league.statistics.goals, 1);
 
         let history = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2026, 10, 1));
@@ -1529,7 +1537,10 @@ mod tests {
             .iter()
             .find(|r| r.season.start_year == 2026 && r.team_slug == "juventus")
             .expect("history row missing");
-        assert_eq!(row.statistics.played, 6, "active spell must not double-count");
+        assert_eq!(
+            row.statistics.played, 6,
+            "active spell must not double-count"
+        );
         assert_eq!(row.statistics.goals, 1);
     }
 
@@ -1584,7 +1595,11 @@ mod tests {
             .iter()
             .filter(|r| r.season.start_year == 2026 && r.team_slug == "juventus")
             .collect();
-        assert_eq!(juve.len(), 1, "same-season same-club spells must group into one row");
+        assert_eq!(
+            juve.len(),
+            1,
+            "same-season same-club spells must group into one row"
+        );
         assert_eq!(juve[0].statistics.played, 10, "4 departed + 6 live");
         assert_eq!(juve[0].statistics.goals, 3);
     }
@@ -1625,7 +1640,11 @@ mod tests {
         let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2028, 3, 1));
         let spartak: Vec<_> = rows.iter().filter(|r| r.team_slug == "spartak").collect();
         // Exactly one spartak row, under today's season, with the live stats.
-        assert_eq!(spartak.len(), 1, "stale joined_date must not split the active spell");
+        assert_eq!(
+            spartak.len(),
+            1,
+            "stale joined_date must not split the active spell"
+        );
         assert_eq!(
             spartak[0].season.start_year, 2027,
             "active row must use the season containing current_date"
@@ -1869,19 +1888,19 @@ mod tests {
             friendly_source_slug: "",
         };
 
-        let breakdowns = PlayerStatisticsProjection::player_history_breakdowns(
-            &hist,
-            &live,
-            d(2026, 10, 1),
-        );
+        let breakdowns =
+            PlayerStatisticsProjection::player_history_breakdowns(&hist, &live, d(2026, 10, 1));
 
         // Two breakdowns: one per season at juventus.
         let past = breakdowns
             .iter()
             .find(|b| b.season_start_year == 2025 && b.team_slug == "juventus")
             .expect("past breakdown missing");
-        let kinds: Vec<PlayerStatCompetitionKind> =
-            past.competitions.iter().map(|c| c.competition_kind).collect();
+        let kinds: Vec<PlayerStatCompetitionKind> = past
+            .competitions
+            .iter()
+            .map(|c| c.competition_kind)
+            .collect();
         assert_eq!(
             kinds,
             vec![
@@ -1970,8 +1989,11 @@ mod tests {
                     && b.is_loan
             })
             .expect("loan-row breakdown must exist under is_loan=true");
-        let kinds: Vec<PlayerStatCompetitionKind> =
-            loan.competitions.iter().map(|c| c.competition_kind).collect();
+        let kinds: Vec<PlayerStatCompetitionKind> = loan
+            .competitions
+            .iter()
+            .map(|c| c.competition_kind)
+            .collect();
         assert!(
             kinds.contains(&PlayerStatCompetitionKind::Friendly),
             "loan-row breakdown must include the live friendly line, got: {:?}",
@@ -2102,7 +2124,10 @@ mod tests {
             .iter()
             .find(|r| r.season.start_year == 2026 && r.team_slug == "pari")
             .expect("Pari row missing");
-        assert!(pari_row.is_loan, "row label inherits is_loan from League entry");
+        assert!(
+            pari_row.is_loan,
+            "row label inherits is_loan from League entry"
+        );
         assert_eq!(pari_row.statistics.played, 10);
 
         let breakdowns =
@@ -2191,12 +2216,7 @@ mod tests {
         // Source-spell Friendly + Continental frozen mid-season via
         // record_friendly_spell / record_continental_spell with the
         // CURRENT season year (2026).
-        hist.record_friendly(
-            2026,
-            &team_a,
-            team_a.league_slug.clone(),
-            stats(3, 1),
-        );
+        hist.record_friendly(2026, &team_a, team_a.league_slug.clone(), stats(3, 1));
         hist.record_continental(
             2026,
             &team_a,
@@ -2222,12 +2242,13 @@ mod tests {
         // with the current season year.
         let source = breakdowns
             .iter()
-            .find(|b| {
-                b.season_start_year == 2026 && b.team_slug == "club-a" && !b.is_loan
-            })
+            .find(|b| b.season_start_year == 2026 && b.team_slug == "club-a" && !b.is_loan)
             .expect("source-club breakdown missing for current-year transfer");
-        let kinds: Vec<PlayerStatCompetitionKind> =
-            source.competitions.iter().map(|c| c.competition_kind).collect();
+        let kinds: Vec<PlayerStatCompetitionKind> = source
+            .competitions
+            .iter()
+            .map(|c| c.competition_kind)
+            .collect();
         assert!(
             kinds.contains(&PlayerStatCompetitionKind::Friendly),
             "source-club breakdown must include the frozen Friendly line, got: {:?}",
@@ -2281,11 +2302,9 @@ mod tests {
             })
             .expect("active Main-aliased breakdown missing for fresh-start player");
         assert!(
-            active
-                .competitions
-                .iter()
-                .any(|c| c.competition_kind == PlayerStatCompetitionKind::Friendly
-                    && c.statistics.played == 1),
+            active.competitions.iter().any(|c| c.competition_kind
+                == PlayerStatCompetitionKind::Friendly
+                && c.statistics.played == 1),
             "fresh-start youth player's breakdown must include the live friendly line"
         );
     }
@@ -2304,9 +2323,14 @@ mod tests {
         // passes the youth league slug as `friendly_source_slug` so the
         // breakdown can label the Friendly row "Russian Premier League
         // U19".
-        let mut hist = PlayerStatisticsHistory::from_items(vec![
-            frozen_in_league(2025, "krasnodar", "russian-premier-league", 0, 0, 1),
-        ]);
+        let mut hist = PlayerStatisticsHistory::from_items(vec![frozen_in_league(
+            2025,
+            "krasnodar",
+            "russian-premier-league",
+            0,
+            0,
+            1,
+        )]);
         hist.current.push(CurrentSeasonEntry {
             team_name: "Krasnodar".to_string(),
             team_slug: "krasnodar".to_string(),
@@ -2341,8 +2365,11 @@ mod tests {
                     && !b.is_loan
             })
             .expect("active Main-aliased breakdown missing");
-        let kinds: Vec<PlayerStatCompetitionKind> =
-            active.competitions.iter().map(|c| c.competition_kind).collect();
+        let kinds: Vec<PlayerStatCompetitionKind> = active
+            .competitions
+            .iter()
+            .map(|c| c.competition_kind)
+            .collect();
         assert!(
             kinds.contains(&PlayerStatCompetitionKind::Friendly),
             "youth-aliased breakdown must include the live friendly line, got: {:?}",
@@ -2723,7 +2750,10 @@ mod tests {
         let kept = rows
             .iter()
             .any(|r| r.season.start_year == 2025 && r.team_slug == "loan-club" && r.is_loan);
-        assert!(kept, "loan row must be kept when it's the only career mark of the season");
+        assert!(
+            kept,
+            "loan row must be kept when it's the only career mark of the season"
+        );
     }
 
     #[test]
@@ -2798,7 +2828,11 @@ mod tests {
             league_slug: "rpl".to_string(),
         };
         let mut hist = PlayerStatisticsHistory::new();
-        let loan_clubs = [("zenit", 2026, 0u16), ("krylya", 2027, 1), ("krylya", 2028, 29)];
+        let loan_clubs = [
+            ("zenit", 2026, 0u16),
+            ("krylya", 2027, 1),
+            ("krylya", 2028, 29),
+        ];
         for year in [2026u16, 2027, 2028] {
             // Owning-club 0-app row each season.
             hist.append_to_ledger(
@@ -2820,19 +2854,36 @@ mod tests {
                 league_name: "Premier League".to_string(),
                 league_slug: "rpl".to_string(),
             };
-            hist.append_to_ledger(year, &club, PlayerStatCompetitionKind::League, true, Some(0.0), s);
+            hist.append_to_ledger(
+                year,
+                &club,
+                PlayerStatCompetitionKind::League,
+                true,
+                Some(0.0),
+                s,
+            );
         }
 
         let empty_stats = PlayerStatistics::default();
         let live = empty_live(&empty_stats);
         let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2030, 9, 1));
         let has = |y: u16, slug: &str, loan: bool| {
-            rows.iter().any(|r| r.season.start_year == y && r.team_slug == slug && r.is_loan == loan)
+            rows.iter()
+                .any(|r| r.season.start_year == y && r.team_slug == slug && r.is_loan == loan)
         };
         // Debut owning-club row kept; later full-loan owning-club rows dropped.
-        assert!(has(2026, "spartak", false), "debut owning-club row must stay");
-        assert!(!has(2027, "spartak", false), "later full-loan owning-club row must drop");
-        assert!(!has(2028, "spartak", false), "later full-loan owning-club row must drop");
+        assert!(
+            has(2026, "spartak", false),
+            "debut owning-club row must stay"
+        );
+        assert!(
+            !has(2027, "spartak", false),
+            "later full-loan owning-club row must drop"
+        );
+        assert!(
+            !has(2028, "spartak", false),
+            "later full-loan owning-club row must drop"
+        );
         // All loan rows always present, even the 0-app one.
         assert!(has(2026, "zenit", true));
         assert!(has(2027, "krylya", true));
@@ -2894,7 +2945,12 @@ mod tests {
                 && !r.is_loan),
             "parent-club row must survive the freeze alongside the loan row; got {:?}",
             rows.iter()
-                .map(|r| format!("{}:{}{}", r.season.start_year, r.team_slug, if r.is_loan { "(loan)" } else { "" }))
+                .map(|r| format!(
+                    "{}:{}{}",
+                    r.season.start_year,
+                    r.team_slug,
+                    if r.is_loan { "(loan)" } else { "" }
+                ))
                 .collect::<Vec<_>>()
         );
         assert!(
@@ -3002,14 +3058,10 @@ mod tests {
 #[cfg(test)]
 mod projection_invariants_tests {
     use super::*;
-    use crate::club::player::statistics::history::{
-        CurrentSeasonEntry, PlayerStatisticsHistory,
-    };
+    use crate::club::player::statistics::history::{CurrentSeasonEntry, PlayerStatisticsHistory};
     use crate::club::player::statistics::ledger::LiveCupSlice;
     use crate::club::player::statistics::types::TeamInfo;
-    use crate::continent::competitions::{
-        CHAMPIONS_LEAGUE_SLUG, EUROPA_LEAGUE_SLUG,
-    };
+    use crate::continent::competitions::{CHAMPIONS_LEAGUE_SLUG, EUROPA_LEAGUE_SLUG};
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
@@ -3064,13 +3116,21 @@ mod projection_invariants_tests {
 
         let empty = PlayerStatistics::default();
         let live = empty_live(&empty);
-        let bds = PlayerStatisticsProjection::player_history_breakdowns(&hist, &live, d(2028, 9, 1));
+        let bds =
+            PlayerStatisticsProjection::player_history_breakdowns(&hist, &live, d(2028, 9, 1));
         let pari: Vec<_> = bds
             .iter()
             .filter(|b| b.season_start_year == 2026 && b.team_slug == "pari")
             .collect();
-        assert_eq!(pari.len(), 1, "non-League entries must not orphan into a second breakdown");
-        assert!(pari[0].is_loan, "loan label inherited from the League entry");
+        assert_eq!(
+            pari.len(),
+            1,
+            "non-League entries must not orphan into a second breakdown"
+        );
+        assert!(
+            pari[0].is_loan,
+            "loan label inherited from the League entry"
+        );
     }
 
     #[test]
@@ -3102,12 +3162,7 @@ mod projection_invariants_tests {
         // Non-League entries written AFTER League (newer seq) must not
         // hijack the row's metadata.
         hist.record_friendly(2026, &info, "serie-a".to_string(), stats(3, 0));
-        hist.record_continental(
-            2026,
-            &info,
-            CHAMPIONS_LEAGUE_SLUG.to_string(),
-            stats(7, 2),
-        );
+        hist.record_continental(2026, &info, CHAMPIONS_LEAGUE_SLUG.to_string(), stats(7, 2));
 
         let empty = PlayerStatistics::default();
         let live = empty_live(&empty);
@@ -3174,8 +3229,7 @@ mod projection_invariants_tests {
         assert_eq!(row.statistics.goals, 12);
 
         // Same row, projecting again: still 42 — pure, idempotent.
-        let rows_b =
-            PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2027, 9, 1));
+        let rows_b = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2027, 9, 1));
         let row_b = rows_b
             .iter()
             .find(|r| r.season.start_year == 2025 && r.team_slug == "juventus")
@@ -3323,8 +3377,7 @@ mod projection_invariants_tests {
             friendly_source_slug: "",
         };
 
-        let rows =
-            PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2028, 10, 1));
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2028, 10, 1));
         let bds =
             PlayerStatisticsProjection::player_history_breakdowns(&hist, &live, d(2028, 10, 1));
 
@@ -3336,7 +3389,13 @@ mod projection_invariants_tests {
         // breakdown.
         let bd_keys: std::collections::HashSet<(u16, String, String)> = bds
             .iter()
-            .map(|b| (b.season_start_year, b.team_slug.clone(), b.league_slug.clone()))
+            .map(|b| {
+                (
+                    b.season_start_year,
+                    b.team_slug.clone(),
+                    b.league_slug.clone(),
+                )
+            })
             .collect();
         for row in &rows {
             let key = (
@@ -3360,10 +3419,20 @@ mod projection_invariants_tests {
         // without a matching row.
         let row_keys: std::collections::HashSet<(u16, String, String)> = rows
             .iter()
-            .map(|r| (r.season.start_year, r.team_slug.clone(), r.league_slug.clone()))
+            .map(|r| {
+                (
+                    r.season.start_year,
+                    r.team_slug.clone(),
+                    r.league_slug.clone(),
+                )
+            })
             .collect();
         for bd in &bds {
-            let key = (bd.season_start_year, bd.team_slug.clone(), bd.league_slug.clone());
+            let key = (
+                bd.season_start_year,
+                bd.team_slug.clone(),
+                bd.league_slug.clone(),
+            );
             if row_keys.contains(&key) {
                 continue;
             }
@@ -3371,9 +3440,7 @@ mod projection_invariants_tests {
                 .competitions
                 .iter()
                 .filter(|c| c.competition_kind.counts_toward_career_history())
-                .map(|c| {
-                    c.statistics.played as u32 + c.statistics.played_subs as u32
-                })
+                .map(|c| c.statistics.played as u32 + c.statistics.played_subs as u32)
                 .sum();
             assert_eq!(
                 career_counting, 0,

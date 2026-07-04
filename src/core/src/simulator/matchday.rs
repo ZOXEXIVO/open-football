@@ -225,7 +225,9 @@ impl<'gc> WorldMatchdayResult<'gc> {
             .flat_map(|cr| cr.countries.iter())
             .filter_map(|country_r| country_r.deferred_transfer_ops.as_ref())
         {
-            batch.offered_ids.extend(ops.global_offered_ids.iter().copied());
+            batch
+                .offered_ids
+                .extend(ops.global_offered_ids.iter().copied());
             batch
                 .rejected_ids
                 .extend(ops.global_rejected_ids.iter().copied());

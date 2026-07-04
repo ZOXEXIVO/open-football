@@ -1388,10 +1388,7 @@ mod tests {
     /// Apply decay weekly for the given number of simulated weeks and
     /// return the slowest residual gap to the neutral baseline across
     /// the axes the caller cares about.
-    fn weeks_to_converge<T: Relationship>(
-        store: &mut RelationStore<T>,
-        weeks: u32,
-    ) {
+    fn weeks_to_converge<T: Relationship>(store: &mut RelationStore<T>, weeks: u32) {
         for _ in 0..weeks {
             store.apply_natural_decay();
         }

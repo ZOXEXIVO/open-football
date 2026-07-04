@@ -880,8 +880,7 @@ impl PipelineProcessor {
                             league_id: seller_league_id,
                             position_group_rank: seller_rank,
                             squad_status,
-                            is_transfer_requested: statuses
-                                .contains(&PlayerStatusType::Req),
+                            is_transfer_requested: statuses.contains(&PlayerStatusType::Req),
                             is_unhappy: statuses.contains(&PlayerStatusType::Unh),
                             in_debt: seller_in_debt,
                         },
@@ -1663,7 +1662,12 @@ mod scout_reach_tests {
         let small = PipelineProcessor::reputation_scout_regions(home, 0.3);
         let big = PipelineProcessor::reputation_scout_regions(home, 0.7);
         assert!(minnow.len() < small.len());
-        assert!(small.len() < big.len(), "small {} >= big {}", small.len(), big.len());
+        assert!(
+            small.len() < big.len(),
+            "small {} >= big {}",
+            small.len(),
+            big.len()
+        );
         assert!(big.len() < giant.len());
 
         // A Continental club (a second-tier giant, ~0.65) reaches MOST of the

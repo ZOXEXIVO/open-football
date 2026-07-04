@@ -5,6 +5,7 @@ use super::{
 use crate::Club;
 use crate::MatchRuntime;
 use crate::continent::ContinentalRankings;
+use crate::r#match::squad::selection::model::MatchSelectionGameModel;
 use crate::r#match::{Match, MatchResult, SelectionCompetition, SelectionContext};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
@@ -244,7 +245,7 @@ impl CopaLibertadores {
                 let home_baseline = home_team.tactics.as_ref().map(|t| t.tactic_type);
                 let away_baseline = away_team.tactics.as_ref().map(|t| t.tactic_type);
 
-                let home_ctx = SelectionContext {
+                let mut home_ctx = SelectionContext {
                     is_friendly: false,
                     date,
                     match_importance: 1.0,
@@ -253,7 +254,7 @@ impl CopaLibertadores {
                     competition: SelectionCompetition::ContinentalCup,
                     game_model: None,
                 };
-                let away_ctx = SelectionContext {
+                let mut away_ctx = SelectionContext {
                     is_friendly: false,
                     date,
                     match_importance: 1.0,
@@ -262,6 +263,17 @@ impl CopaLibertadores {
                     competition: SelectionCompetition::ContinentalCup,
                     game_model: None,
                 };
+
+                // Fixture-aware game model per side (opponent roster threat
+                // axes + venue). Continental scheduling doesn't expose an
+                // upcoming-fixture count here, so congestion stays neutral.
+                let is_derby = home_club.is_rival(away_club.id) || away_club.is_rival(home_club.id);
+                home_ctx.game_model = Some(MatchSelectionGameModel::build_for_fixture(
+                    &home_ctx, home_team, away_team, true, 0, is_derby,
+                ));
+                away_ctx.game_model = Some(MatchSelectionGameModel::build_for_fixture(
+                    &away_ctx, away_team, home_team, false, 0, is_derby,
+                ));
 
                 let home_squad = home_team.get_enhanced_match_squad(&home_force, &home_ctx);
                 let away_squad = away_team.get_enhanced_match_squad(&away_force, &away_ctx);

@@ -217,7 +217,10 @@ mod tests {
             strength_ratio: 1.0,
             squad_depth: 0.7,
         };
-        assert_eq!(StrategyDeriver::derive(&inputs), CoachStrategy::DevelopYouth);
+        assert_eq!(
+            StrategyDeriver::derive(&inputs),
+            CoachStrategy::DevelopYouth
+        );
     }
 
     #[test]

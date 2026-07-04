@@ -2,22 +2,22 @@ use crate::club::player::events::PositionLoad;
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::DefenderCondition;
+use crate::r#match::engine::engine::MATCH_HALF_TIME_MS;
 use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
 use crate::r#match::engine::tactics::TacticalPositions;
 use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::common::ForwardCondition;
+use crate::r#match::goalkeepers::states::common::GoalkeeperCondition;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::MidfielderCondition;
 use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::player::waypoints::WaypointManager;
-use crate::r#match::defenders::states::common::DefenderCondition;
-use crate::r#match::engine::engine::MATCH_HALF_TIME_MS;
-use crate::r#match::forwarders::states::common::ForwardCondition;
-use crate::r#match::goalkeepers::states::common::GoalkeeperCondition;
-use crate::r#match::midfielders::states::common::MidfielderCondition;
 use crate::r#match::{
     ActivityIntensity, ConditionContext, GameTickContext, MatchContext, StateProcessingContext,
 };
@@ -28,8 +28,8 @@ use crate::{
 };
 use chrono::NaiveDate;
 use nalgebra::Vector3;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::fmt::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(debug_assertions)]
 use log::debug;
@@ -120,6 +120,11 @@ pub struct MatchPlayer {
     /// previous behaviour where every player — even an 80th-minute sub —
     /// was credited with full match minutes.
     pub entry_match_time_ms: u64,
+    /// True when the player entered via a forced (medical / emergency)
+    /// substitution rather than a planned one. A planned sub was
+    /// warming the touchline; a forced sub walks on cold and pays a
+    /// larger post-entry settling penalty in `effective_skill`.
+    pub entered_cold: bool,
     /// Last tick at which a pressure event was credited for this
     /// player. Used as a per-player cooldown so a defender shadowing
     /// the carrier across many ticks racks up one pressure per "press
@@ -346,6 +351,7 @@ impl MatchPlayer {
             is_force_match_selection: player.is_force_match_selection,
             birth_date: player.birth_date,
             entry_match_time_ms: 0,
+            entered_cold: false,
             last_pressure_tick: 0,
             starting_condition: player.player_attributes.condition,
             starting_recovery_debt: player.load.recovery_debt,
@@ -408,6 +414,7 @@ impl MatchPlayer {
             is_force_match_selection,
             birth_date,
             entry_match_time_ms: 0,
+            entered_cold: false,
             last_pressure_tick: 0,
             starting_condition,
             starting_recovery_debt,

@@ -1,6 +1,8 @@
 use crate::r#match::MatchPlayer;
 use crate::r#match::StateProcessingContext;
-use crate::r#match::player::strategies::players::ops::effective_skill::{SkillBands, SkillCategory};
+use crate::r#match::player::strategies::players::ops::effective_skill::{
+    SkillBands, SkillCategory,
+};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 
 // ---------------------------------------------------------------------------

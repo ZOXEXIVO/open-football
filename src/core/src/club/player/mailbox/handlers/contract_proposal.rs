@@ -509,9 +509,7 @@ impl ProcessContractHandler {
             RejectionReason::LowSalary | RejectionReason::NoSweetener => {
                 ContractEventEvidence::RejectedOverWage
             }
-            RejectionReason::StatusBelowExpectation => {
-                ContractEventEvidence::RejectedOverRole
-            }
+            RejectionReason::StatusBelowExpectation => ContractEventEvidence::RejectedOverRole,
             RejectionReason::NoReleaseClause => ContractEventEvidence::RejectedOverReleaseClause,
             RejectionReason::ShortContract => ContractEventEvidence::RejectedOverLength,
             RejectionReason::AmbitionMismatch => ContractEventEvidence::RejectedOverAmbition,
@@ -608,12 +606,12 @@ impl ProcessContractHandler {
 
         // External interest in the recent window is the clearest leverage
         // signal behind the demand.
-        let used_leverage = player.happiness.has_recent_event(
-            &HappinessEventType::InterestFromBiggerClub,
-            90,
-        ) || player
+        let used_leverage = player
             .happiness
-            .has_recent_event(&HappinessEventType::WantedByBiggerClub, 90)
+            .has_recent_event(&HappinessEventType::InterestFromBiggerClub, 90)
+            || player
+                .happiness
+                .has_recent_event(&HappinessEventType::WantedByBiggerClub, 90)
             || player
                 .happiness
                 .has_recent_event(&HappinessEventType::TransferBidRejected, 90);
@@ -792,7 +790,11 @@ mod tests {
         let mut p = build(15.0, 10.0, 5_000);
         p.statuses.add(now, PlayerStatusType::Wnt);
         ProcessContractHandler::maybe_emit_release_clause_demanded(&mut p, now, Some(20_000_000));
-        assert_eq!(count_demanded(&p), 1, "leverage + ambition emits the demand");
+        assert_eq!(
+            count_demanded(&p),
+            1,
+            "leverage + ambition emits the demand"
+        );
     }
 
     #[test]

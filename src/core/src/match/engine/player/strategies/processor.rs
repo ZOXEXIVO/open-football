@@ -280,8 +280,7 @@ impl PlayerFieldPositionGroup {
         };
         let result = match tick_context.chase.best_other(my_side, player.id) {
             Some(best) => {
-                !(best.dist_sq < my_dist_sq
-                    || (best.dist_sq == my_dist_sq && best.id < player.id))
+                !(best.dist_sq < my_dist_sq || (best.dist_sq == my_dist_sq && best.id < player.id))
             }
             None => true,
         };

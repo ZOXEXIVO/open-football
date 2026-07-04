@@ -54,6 +54,7 @@ mod tests {
             match_importance: 0.5,
             repeated: false,
             is_friendly: false,
+            explained_by_coach: false,
         })
         .with_support_context(SupportEventContext::new(
             SupportSource::Manager,
@@ -80,9 +81,7 @@ mod tests {
             TeammateConflictReason::TrainingStandards,
             ConflictLocation::TrainingGround,
         ))
-        .with_contract_context(ContractEventContext::new(
-            ContractEventKind::OfferReceived,
-        ))
+        .with_contract_context(ContractEventContext::new(ContractEventKind::OfferReceived))
         .with_injury_context(InjuryRecoveryEventContext::new(
             InjuryRecoveryStage::ReturnedToFullTraining,
             30,
@@ -385,6 +384,7 @@ mod tests {
             match_importance: 0.8,
             repeated: false,
             is_friendly: false,
+            explained_by_coach: false,
         };
         let ctx = HappinessEventContext::new(
             HappinessEventCause::PositionalRivalry,

@@ -1858,7 +1858,9 @@ mod loan_match_fee_pull_tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::club::staff::StaffStub;
     use crate::shared::fullname::FullName;
-    use crate::{PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills};
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills,
+    };
     use chrono::NaiveDate;
 
     struct Fixture;

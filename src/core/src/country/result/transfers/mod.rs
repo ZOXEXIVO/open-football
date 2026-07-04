@@ -118,9 +118,7 @@ impl FreeAgentBumpBatch {
     /// True when no country recorded any free-agent market activity this
     /// tick — lets the orchestrator skip the pool pass entirely.
     pub fn is_empty(&self) -> bool {
-        self.offered_ids.is_empty()
-            && self.rejected_ids.is_empty()
-            && self.block_reasons.is_empty()
+        self.offered_ids.is_empty() && self.rejected_ids.is_empty() && self.block_reasons.is_empty()
     }
 }
 

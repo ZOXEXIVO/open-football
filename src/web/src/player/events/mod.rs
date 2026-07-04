@@ -543,9 +543,7 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::ContractExpiryAnxiety => "event_contract_expiry_anxiety",
         HappinessEventType::PlayingForNewContract => "event_playing_for_new_contract",
         HappinessEventType::AskedForPrivateTalk => "event_asked_for_private_talk",
-        HappinessEventType::AskedClubToArrangeTransfer => {
-            "event_asked_club_to_arrange_transfer"
-        }
+        HappinessEventType::AskedClubToArrangeTransfer => "event_asked_club_to_arrange_transfer",
         HappinessEventType::UnsoldWindowClosed => "event_unsold_window_closed",
         HappinessEventType::MoveVetoedByClub => "event_move_vetoed_by_club",
         HappinessEventType::ConcernedByClubDirection => "event_concerned_by_club_direction",
@@ -2690,10 +2688,7 @@ impl PrivateTalkRender {
     /// generic single-sentence form. Trust is bucketed coarsely so the
     /// rendered phrase is stable across float drift; missing trust /
     /// missing translation keys are skipped silently.
-    pub fn reason_sentence(
-        ctx: &core::PrivateTalkRequestContext,
-        i18n: &I18n,
-    ) -> Option<String> {
+    pub fn reason_sentence(ctx: &core::PrivateTalkRequestContext, i18n: &I18n) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
         if let Some(raw) = translated(i18n, ctx.reason.as_i18n_key()) {
             parts.push(raw.to_string());
@@ -2795,10 +2790,7 @@ impl BigMatchRender {
     /// captaincy / form / status amplifier. Each fragment is skipped
     /// silently if the locale doesn't carry the key — the row
     /// degrades to whatever pieces are translated.
-    pub fn reason_sentence(
-        ctx: &core::BigMatchSelectionContext,
-        i18n: &I18n,
-    ) -> Option<String> {
+    pub fn reason_sentence(ctx: &core::BigMatchSelectionContext, i18n: &I18n) -> Option<String> {
         let decision = translated(i18n, ctx.decision.as_i18n_key());
         let kind = translated(i18n, ctx.kind.as_i18n_key());
         let mut parts: Vec<String> = Vec::new();
@@ -2820,8 +2812,7 @@ impl BigMatchRender {
                 parts.push(raw.to_string());
             }
         }
-        if ctx.is_young_or_fringe
-            && matches!(ctx.decision, core::BigMatchDecision::StartedTrusted)
+        if ctx.is_young_or_fringe && matches!(ctx.decision, core::BigMatchDecision::StartedTrusted)
         {
             if let Some(raw) = translated(i18n, "big_match_amplifier_young_or_fringe") {
                 parts.push(raw.to_string());
@@ -2906,10 +2897,7 @@ impl NewSigningThreatRender {
     /// `all_reasons` list when it adds information (status overlap +
     /// younger / wage shock together makes for a better detail row
     /// than a single sentence). At most two reason sentences emitted.
-    pub fn reason_sentence(
-        ctx: &core::NewSigningThreatContext,
-        i18n: &I18n,
-    ) -> Option<String> {
+    pub fn reason_sentence(ctx: &core::NewSigningThreatContext, i18n: &I18n) -> Option<String> {
         let mut sentences: Vec<String> = Vec::new();
         if let Some(raw) = translated(i18n, ctx.primary_reason.as_i18n_key()) {
             sentences.push(raw.to_string());
@@ -4979,8 +4967,7 @@ mod tests {
             HappinessEventType::ManagerTrustGrowing,
             HappinessEventType::ManagerTrustEroding,
         ];
-        let mut keys: Vec<&'static str> =
-            new_events.iter().map(event_type_to_i18n_key).collect();
+        let mut keys: Vec<&'static str> = new_events.iter().map(event_type_to_i18n_key).collect();
         keys.sort();
         let dedup_len = {
             let mut k = keys.clone();

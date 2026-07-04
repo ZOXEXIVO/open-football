@@ -867,8 +867,7 @@ impl Ball {
         // ~0.7-1.2 u/tick lands the ball in the 1.5-3.75m drop zone the
         // direction model already aims for, where the box contest can
         // actually happen.
-        let parry_speed =
-            (ball_speed * (0.22 + 0.18 * (1.0 - scaled_handling))).clamp(0.6, 1.3);
+        let parry_speed = (ball_speed * (0.22 + 0.18 * (1.0 - scaled_handling))).clamp(0.6, 1.3);
         self.velocity.x = (dx / dist) * parry_speed;
         self.velocity.y = (dy / dist) * parry_speed;
         self.velocity.z = 0.0;

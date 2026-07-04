@@ -869,7 +869,11 @@ mod tests {
         let main: Vec<Player> = (1..=5)
             .map(|i| Fx::player(i, 130, 130, 27, PlayerSquadStatus::FirstTeamRegular, 20, 0))
             .collect();
-        let u19 = vec![Fx::gk(401, 90, 18), Fx::gk(402, 85, 18), Fx::gk(403, 80, 18)];
+        let u19 = vec![
+            Fx::gk(401, 90, 18),
+            Fx::gk(402, 85, 18),
+            Fx::gk(403, 80, 18),
+        ];
         let mut club = Club::new(
             100,
             "Club".to_string(),

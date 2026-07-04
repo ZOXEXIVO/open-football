@@ -13,6 +13,8 @@ use crate::r#match::player::strategies::players::ShotSkillProfile;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffSkillCtx, effective_skill,
 };
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -21,8 +23,6 @@ use crate::r#match::{
 };
 #[cfg(feature = "match-logs")]
 use crate::match_log_info;
-#[cfg(feature = "match-logs")]
-use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;
 use log::debug;
 use nalgebra::Vector3;
 
@@ -614,12 +614,7 @@ impl PlayerEventDispatcher {
                 } else {
                     false
                 };
-                Self::handle_pass_to_event(
-                    pass_event_model,
-                    field,
-                    context,
-                    was_cross,
-                );
+                Self::handle_pass_to_event(pass_event_model, field, context, was_cross);
                 // Tag the ball with the passer for pass-accuracy
                 // accounting. Lives for a short window (150 ticks)
                 // and is cleared on opponent touch — see ball.rs
@@ -841,9 +836,8 @@ impl PlayerEventDispatcher {
             {
                 save_accounting_stats::ON_TARGET_FROM_GOAL
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let band = time_band_diag::band_for_minute(sc::minute_from_ms(
-                    context.total_match_time,
-                ));
+                let band =
+                    time_band_diag::band_for_minute(sc::minute_from_ms(context.total_match_time));
                 time_band_diag::GOALS_BY_BAND[band]
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
@@ -2639,8 +2633,7 @@ impl PlayerEventDispatcher {
         // the GK's save probability damps appropriately — without that,
         // the deflection actively HURT weak teams (it redirected a
         // would-be-wide shot to on-target where the GK then saved it).
-        let was_offtarget =
-            actual_y_target < goal_left_post || actual_y_target > goal_right_post;
+        let was_offtarget = actual_y_target < goal_left_post || actual_y_target > goal_right_post;
         let goal_dir = (goal_center - shooter_position).normalize();
         let shot_lane_distance = (goal_center - shooter_position).magnitude();
         let mut defenders_in_lane: u32 = 0;
@@ -2692,8 +2685,7 @@ impl PlayerEventDispatcher {
             PassOriginRestart::Corner | PassOriginRestart::DirectFreeKick
         );
         let setpiece_bonus = if is_set_piece { 0.12 } else { 0.0 };
-        let deflection_chance =
-            (defenders_in_lane as f32 * 0.04 + setpiece_bonus).min(0.26);
+        let deflection_chance = (defenders_in_lane as f32 * 0.04 + setpiece_bonus).min(0.26);
         let deflected = was_offtarget && rng.random_range(0.0f32..1.0) < deflection_chance;
         // Save the pre-deflection trajectory: when a deflection fires, the
         // GK shouldn't track the new trajectory in mid-flight — real
@@ -3201,7 +3193,9 @@ impl PlayerEventDispatcher {
         // is computed only when the whistle goes — a missed call costs
         // nobody a yellow.
         let call_ctx = FoulResolver::build_call_context(fouler_id, severity, field, context);
-        let call_prob = context.referee.foul_call_prob(&context.environment, call_ctx);
+        let call_prob = context
+            .referee
+            .foul_call_prob(&context.environment, call_ctx);
         if context.rng.unit_f32() >= call_prob {
             // Missed / waved-on contact. Nothing is recorded: no foul
             // stat, no card, no restart. Play continues. This is the
@@ -3356,10 +3350,7 @@ impl PlayerEventDispatcher {
     /// check. Returns the fouled team's id (None if it can't be
     /// inferred), an attack_value in 0..1, and whether the fouled team
     /// currently retains possession.
-    fn estimate_advantage_inputs(
-        fouler_id: u32,
-        field: &MatchField,
-    ) -> (Option<u32>, f32, bool) {
+    fn estimate_advantage_inputs(fouler_id: u32, field: &MatchField) -> (Option<u32>, f32, bool) {
         let fouler = match field.players.iter().find(|p| p.id == fouler_id) {
             Some(p) => p,
             None => return (None, 0.0, false),
@@ -3454,7 +3445,9 @@ impl PlayerEventDispatcher {
         // confidence via `record_negative`. Tick taken from the
         // outer event so the per-event ordering is preserved.
         let psych_tick = context.current_tick();
-        context.psychology.apply_yellow_card(fouler_id, temperament_for_psych);
+        context
+            .psychology
+            .apply_yellow_card(fouler_id, temperament_for_psych);
         context
             .psychology
             .record_negative(fouler_id, NegativeEvent::YellowCard, psych_tick);

@@ -117,15 +117,7 @@ fn confederation_label(scope: &CompetitionScope, continent_id: Option<u32>) -> &
 /// Distinct confederations present among the displayed competitions, in a
 /// stable display order, joined for the page subtitle (e.g. "FIFA · UEFA · CAF").
 fn confederations_subtitle(competitions: &[CompetitionDto]) -> String {
-    const ORDER: [&str; 7] = [
-        "FIFA",
-        "UEFA",
-        "CONMEBOL",
-        "CAF",
-        "CONCACAF",
-        "AFC",
-        "OFC",
-    ];
+    const ORDER: [&str; 7] = ["FIFA", "UEFA", "CONMEBOL", "CAF", "CONCACAF", "AFC", "OFC"];
     let present: Vec<&str> = ORDER
         .iter()
         .copied()
@@ -265,7 +257,9 @@ fn build_competition_dto(
 /// Distinct competition configs across the global and continental
 /// trackers, deduped by id and ordered by id (World Cup first). Drives
 /// the left-menu list — present whether or not a cycle is active.
-fn menu_competition_configs(simulator_data: &core::SimulatorData) -> Vec<&NationalCompetitionConfig> {
+fn menu_competition_configs(
+    simulator_data: &core::SimulatorData,
+) -> Vec<&NationalCompetitionConfig> {
     let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut configs: Vec<&NationalCompetitionConfig> = Vec::new();
 

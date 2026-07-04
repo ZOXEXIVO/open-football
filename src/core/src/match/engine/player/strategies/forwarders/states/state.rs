@@ -17,25 +17,25 @@ use std::fmt::{Display, Formatter};
 // `player/state.rs` fails loudly if any value moves.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ForwardState {
-    Standing = 0,         // Standing still
-    Walking = 1,          // Walking at low intensity to reposition or conserve energy
-    Passing = 2,          // Passing the ball
-    Dribbling = 3,        // Dribbling the ball past opponents
-    Shooting = 4,         // Taking a shot on goal
-    Heading = 5,          // Heading the ball, often during crosses or set pieces
-    RunningInBehind = 6,  // Making a run behind the defense to receive a pass
-    Running = 7,          // Running in the direction of the ball
-    Pressing = 8,         // Pressing defenders to force a mistake or regain possession
-    Finishing = 9,        // Attempting to score from a close range
-    CreatingSpace = 10,   // Creating space for teammates by pulling defenders away
-    CrossReceiving = 11,  // Positioning to receive a cross
-    Crossing = 12,        // Delivering a cross from a wide position
-    Tackling = 13,        // Tackling the ball
-    Assisting = 14,       // Providing an assist by passing or crossing to a teammate
-    TakeBall = 15,        // Take the ball,
-    Intercepting = 16,    // Intercepting the ball,
-    Returning = 17,       // Returning the ball
-    Resting = 18,         // Recovering stamina when fatigued
+    Standing = 0,        // Standing still
+    Walking = 1,         // Walking at low intensity to reposition or conserve energy
+    Passing = 2,         // Passing the ball
+    Dribbling = 3,       // Dribbling the ball past opponents
+    Shooting = 4,        // Taking a shot on goal
+    Heading = 5,         // Heading the ball, often during crosses or set pieces
+    RunningInBehind = 6, // Making a run behind the defense to receive a pass
+    Running = 7,         // Running in the direction of the ball
+    Pressing = 8,        // Pressing defenders to force a mistake or regain possession
+    Finishing = 9,       // Attempting to score from a close range
+    CreatingSpace = 10,  // Creating space for teammates by pulling defenders away
+    CrossReceiving = 11, // Positioning to receive a cross
+    Crossing = 12,       // Delivering a cross from a wide position
+    Tackling = 13,       // Tackling the ball
+    Assisting = 14,      // Providing an assist by passing or crossing to a teammate
+    TakeBall = 15,       // Take the ball,
+    Intercepting = 16,   // Intercepting the ball,
+    Returning = 17,      // Returning the ball
+    Resting = 18,        // Recovering stamina when fatigued
 }
 
 impl ForwardState {

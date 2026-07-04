@@ -1065,8 +1065,7 @@ mod tests {
             (d(2026, 4, 1), RENEWAL_OFFERED_LABEL),
             (d(2026, 4, 25), RENEWAL_REJECTED_LABEL),
         ]);
-        let exhausted_contract =
-            make_contract(50_000, PlayerSquadStatus::KeyPlayer, d(2027, 7, 1));
+        let exhausted_contract = make_contract(50_000, PlayerSquadStatus::KeyPlayer, d(2027, 7, 1));
         let mut exhausted = make_player_with(exhausted_history, Some(exhausted_contract), None);
         let s_exh = ContractStalemate::assess(&exhausted, today, affordable());
         assert_eq!(s_exh.level, StalemateLevel::Exhausted);

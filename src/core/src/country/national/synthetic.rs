@@ -15,8 +15,8 @@ use crate::{
     Mental, PersonAttributes, PersonBehaviour, PersonBehaviourState, Physical, Player,
     PlayerAttributes, PlayerDecisionHistory, PlayerFoots, PlayerHappiness, PlayerMailbox,
     PlayerPosition, PlayerPositionType, PlayerPositions, PlayerPreferredFoot, PlayerSkills,
-    PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerTraining,
-    PlayerTrainingHistory, Relations, Technical,
+    PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerTraining, PlayerTrainingHistory,
+    Relations, Technical,
 };
 use chrono::{Datelike, NaiveDate};
 

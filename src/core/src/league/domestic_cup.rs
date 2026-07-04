@@ -312,11 +312,7 @@ impl DomesticCup {
     /// `Match` objects ready for a batched engine dispatch alongside a
     /// `LeaguePendingState` so [`simulate_process`] can resume cup-side
     /// bookkeeping once the engine returns the results.
-    pub fn simulate_build(
-        &mut self,
-        clubs: &[Club],
-        ctx: &GlobalContext<'_>,
-    ) -> LeagueBuildOutput {
+    pub fn simulate_build(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) -> LeagueBuildOutput {
         let current_date = ctx.simulation.date.date();
 
         let new_schedule = self.league.schedule.tours.is_empty()

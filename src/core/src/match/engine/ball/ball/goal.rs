@@ -74,10 +74,8 @@ impl Ball {
                     // passer. If anyone else is in `recent_passers`,
                     // somebody has taken a touch and a goal is legal.
                     if self.pass_origin_restart == PassOriginRestart::IndirectFreeKick {
-                        let any_second_touch = self
-                            .recent_passers
-                            .iter()
-                            .any(|&id| id != goalscorer);
+                        let any_second_touch =
+                            self.recent_passers.iter().any(|&id| id != goalscorer);
                         if !any_second_touch {
                             // Reject: ball stays live, but no goal.
                             return;
@@ -356,11 +354,8 @@ impl Ball {
                     edge_cutback: 0.22,
                 };
                 let is_home_attacking = taker_team == context.field_home_team_id;
-                let chosen_routine = pick_corner_routine(
-                    &scores,
-                    &context.set_piece_history,
-                    is_home_attacking,
-                );
+                let chosen_routine =
+                    pick_corner_routine(&scores, &context.set_piece_history, is_home_attacking);
                 self.pending_corner_routine = Some(chosen_routine);
                 #[cfg(feature = "match-logs")]
                 {

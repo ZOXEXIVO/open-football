@@ -39,8 +39,8 @@ use crate::club::team::Team;
 use crate::utils::DateUtils;
 use crate::{
     ContractType, HappinessEventCause, HappinessEventContext, HappinessEventScope,
-    HappinessEventSeverity, HappinessEventType, LeadershipEventContext, LeadershipEventKind, Player,
-    PlayerPositionType, PlayerSquadStatus, PlayerStatusType,
+    HappinessEventSeverity, HappinessEventType, LeadershipEventContext, LeadershipEventKind,
+    Player, PlayerPositionType, PlayerSquadStatus, PlayerStatusType,
 };
 use chrono::NaiveDate;
 use std::cmp::Ordering;
@@ -157,18 +157,19 @@ impl CaptaincyAssigner {
     /// reviews never duplicate. The first appointment on a fresh team
     /// (`captain_id` starts `None`) therefore fires a single visible award.
     ///
-    /// Vice-captaincy deliberately carries no events (there is no vice
-    /// award/strip event type), and matchday armband resolution
-    /// (`matchday_leadership`) is a separate concern that never calls here.
+    /// Vice-captaincy changes ride the same captaincy event types at
+    /// reduced magnitude ([`Self::VICE_MAGNITUDE_SCALE`]) — the deputy
+    /// role is a real status, but quieter than the armband itself.
+    /// Matchday armband resolution (`matchday_leadership`) is a
+    /// separate concern that never calls here.
     ///
     /// [`emit_handover_events`]: CaptaincyAssigner::emit_handover_events
-    pub fn set_official_captain(
-        team: &mut Team,
-        new_captain: Option<u32>,
-        new_vice: Option<u32>,
-    ) {
+    pub fn set_official_captain(team: &mut Team, new_captain: Option<u32>, new_vice: Option<u32>) {
         if team.captain_id != new_captain {
             Self::emit_handover_events(team, team.captain_id, new_captain);
+        }
+        if team.vice_captain_id != new_vice {
+            Self::emit_vice_handover_events(team, team.vice_captain_id, new_vice, new_captain);
         }
 
         team.captain_id = new_captain;
@@ -220,6 +221,70 @@ impl CaptaincyAssigner {
                     happiness_ctx,
                     CAPTAINCY_EVENT_COOLDOWN_DAYS,
                 );
+            }
+        }
+    }
+
+    /// Vice events are quieter than the full armband but real: the
+    /// deputy role is club status. Scale keeps them clearly below a
+    /// captaincy change in the morale ledger.
+    const VICE_MAGNITUDE_SCALE: f32 = 0.4;
+
+    /// Emit reduced-magnitude captaincy events for a vice-captaincy
+    /// change. Suppressed where a captain-level event already tells
+    /// the bigger story: a vice promoted to captain only gets the
+    /// award, a captain demoted to vice only gets the removal. Called
+    /// before the id fields are updated, so `team.captain_id` still
+    /// holds the outgoing captain.
+    fn emit_vice_handover_events(
+        team: &mut Team,
+        old_vice: Option<u32>,
+        new_vice: Option<u32>,
+        new_captain: Option<u32>,
+    ) {
+        let old_captain = team.captain_id;
+        if let Some(old_id) = old_vice {
+            if Some(old_id) != new_captain {
+                if let Some(p) = team.players.players.iter_mut().find(|p| p.id == old_id) {
+                    let mag = CaptaincyMagnitude::removed(p) * Self::VICE_MAGNITUDE_SCALE;
+                    let lctx = LeadershipEventContext::new(LeadershipEventKind::CaptaincyRemoved)
+                        .with_leadership_attribute(p.skills.mental.leadership);
+                    let happiness_ctx = HappinessEventContext::new(
+                        HappinessEventCause::Other,
+                        HappinessEventSeverity::from_magnitude(mag),
+                        HappinessEventScope::DressingRoom,
+                    )
+                    .with_leadership_context(lctx);
+                    p.happiness.add_event_with_context_and_cooldown(
+                        HappinessEventType::CaptaincyRemoved,
+                        mag,
+                        None,
+                        happiness_ctx,
+                        CAPTAINCY_EVENT_COOLDOWN_DAYS,
+                    );
+                }
+            }
+        }
+        if let Some(new_id) = new_vice {
+            if Some(new_id) != old_captain {
+                if let Some(p) = team.players.players.iter_mut().find(|p| p.id == new_id) {
+                    let mag = CaptaincyMagnitude::awarded(p) * Self::VICE_MAGNITUDE_SCALE;
+                    let lctx = LeadershipEventContext::new(LeadershipEventKind::CaptaincyAwarded)
+                        .with_leadership_attribute(p.skills.mental.leadership);
+                    let happiness_ctx = HappinessEventContext::new(
+                        HappinessEventCause::Other,
+                        HappinessEventSeverity::from_magnitude(mag),
+                        HappinessEventScope::DressingRoom,
+                    )
+                    .with_leadership_context(lctx);
+                    p.happiness.add_event_with_context_and_cooldown(
+                        HappinessEventType::CaptaincyAwarded,
+                        mag,
+                        None,
+                        happiness_ctx,
+                        CAPTAINCY_EVENT_COOLDOWN_DAYS,
+                    );
+                }
             }
         }
     }
@@ -394,7 +459,10 @@ impl<'a> CaptaincyModel<'a> {
     /// Transfer-listed by the contract flag *or* the `Lst` squad status —
     /// either way the club is shopping him, so he's no clean captain.
     fn is_transfer_listed(&self, p: &Player) -> bool {
-        p.contract.as_ref().map(|c| c.is_transfer_listed).unwrap_or(false)
+        p.contract
+            .as_ref()
+            .map(|c| c.is_transfer_listed)
+            .unwrap_or(false)
             || p.statuses.get().contains(&PlayerStatusType::Lst)
     }
 
@@ -520,10 +588,11 @@ impl<'a> CaptaincyModel<'a> {
         let tenure = (self.tenure_years(p) / 6.0).min(1.0);
         let status = Self::squad_status_factor(p);
         let starts = p.statistics.played as f32 / self.max_starts.max(1) as f32;
-        let apps = (p.statistics.played + p.statistics.played_subs) as f32
-            / self.max_apps.max(1) as f32;
-        let reputation =
-            (p.player_attributes.current_reputation.max(0) as f32 / 10_000.0).sqrt().clamp(0.0, 1.0);
+        let apps =
+            (p.statistics.played + p.statistics.played_subs) as f32 / self.max_apps.max(1) as f32;
+        let reputation = (p.player_attributes.current_reputation.max(0) as f32 / 10_000.0)
+            .sqrt()
+            .clamp(0.0, 1.0);
         let ca_rank = self.ca_rank_factor(p);
         let loyalty = norm(p.attributes.loyalty);
 
@@ -601,7 +670,10 @@ impl<'a> CaptaincyModel<'a> {
                 (view.same_nationality_teammates as f32 / 5.0).min(1.0),
                 (view.same_language_teammates as f32 / 5.0).min(1.0),
             ),
-            None => (self.nationality_integration(p), norm(p.attributes.adaptability)),
+            None => (
+                self.nationality_integration(p),
+                norm(p.attributes.adaptability),
+            ),
         };
         let stability = 0.40 * (1.0 - norm(p.attributes.controversy))
             + 0.30 * norm(p.attributes.loyalty)
@@ -679,7 +751,11 @@ impl<'a> CaptaincyModel<'a> {
         if self.squad_size == 0 {
             return 0.0;
         }
-        let same = self.nationality_counts.get(&p.country_id).copied().unwrap_or(1);
+        let same = self
+            .nationality_counts
+            .get(&p.country_id)
+            .copied()
+            .unwrap_or(1);
         let share = same as f32 / self.squad_size as f32;
         (share / 0.5).min(1.0)
     }
@@ -981,10 +1057,18 @@ mod tests {
         team.vice_captain_id = Some(2);
 
         CaptaincyAssigner::assign(&mut team, today());
-        assert_eq!(team.captain_id, Some(1), "a small edge must not flip the armband");
+        assert_eq!(
+            team.captain_id,
+            Some(1),
+            "a small edge must not flip the armband"
+        );
 
         CaptaincyAssigner::assign(&mut team, today());
-        assert_eq!(team.captain_id, Some(1), "captaincy must not oscillate monthly");
+        assert_eq!(
+            team.captain_id,
+            Some(1),
+            "captaincy must not oscillate monthly"
+        );
     }
 
     /// A captain who has handed in a transfer request is no longer a credible
@@ -992,7 +1076,9 @@ mod tests {
     #[test]
     fn transfer_requesting_captain_is_replaced_by_next_leader() {
         let mut wantaway = strong(1, 16.0);
-        wantaway.statuses.add(day(2025, 1, 1), PlayerStatusType::Req);
+        wantaway
+            .statuses
+            .add(day(2025, 1, 1), PlayerStatusType::Req);
         let successor = strong(2, 14.0);
 
         let mut team = team_of(vec![wantaway, successor]);

@@ -1,6 +1,6 @@
+use crate::Player;
 use crate::club::PlayerPositionType;
 use crate::r#match::player::MatchPlayer;
-use crate::Player;
 use std::collections::HashMap;
 
 use super::model::{MatchSelectionGameModel, TacticalObjective};
@@ -62,17 +62,19 @@ impl LineupBalanceWeights {
                     symmetry: 0.03,
                 }
             }
-            TacticalObjective::ChaseGame | TacticalObjective::FavoriteHome => LineupBalanceWeights {
-                security: 0.10,
-                progression: 0.18,
-                creation: 0.24,
-                pressing: 0.14,
-                aerial: 0.06,
-                set_piece: 0.10,
-                leadership: 0.05,
-                pace: 0.10,
-                symmetry: 0.03,
-            },
+            TacticalObjective::ChaseGame | TacticalObjective::FavoriteHome => {
+                LineupBalanceWeights {
+                    security: 0.10,
+                    progression: 0.18,
+                    creation: 0.24,
+                    pressing: 0.14,
+                    aerial: 0.06,
+                    set_piece: 0.10,
+                    leadership: 0.05,
+                    pace: 0.10,
+                    symmetry: 0.03,
+                }
+            }
             TacticalObjective::DevelopmentFixture => LineupBalanceWeights {
                 security: 0.12,
                 progression: 0.14,

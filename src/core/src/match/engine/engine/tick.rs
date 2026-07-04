@@ -1,5 +1,5 @@
-use super::*;
 use super::phase_prof::PhaseProf;
+use super::*;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::player::events::players::FoulResolver;
 use crate::r#match::player::state::PlayerState;
@@ -315,8 +315,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 Vector3::new(1.0, 0.0, 0.0)
             };
             let b = &mut field.ball;
-            b.position =
-                Vector3::new(winner_pos.x - dir.x * 2.0, winner_pos.y - dir.y * 2.0, 2.55);
+            b.position = Vector3::new(winner_pos.x - dir.x * 2.0, winner_pos.y - dir.y * 2.0, 2.55);
             b.velocity = Vector3::new(dir.x * 1.8, dir.y * 1.8, -0.35);
             b.current_owner = None;
             b.previous_owner = taker;

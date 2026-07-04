@@ -79,7 +79,8 @@ impl TransferWindowManager {
     /// `current_window_dates`. Drives the deferred-registration path:
     /// clubs can agree now and register later when the window opens.
     pub fn is_agreement_window_open(&self, country_id: u32, date: NaiveDate) -> bool {
-        self.current_agreement_window_dates(country_id, date).is_some()
+        self.current_agreement_window_dates(country_id, date)
+            .is_some()
     }
 
     /// Returns the (start, end) bounds of the agreement window — the
@@ -297,7 +298,10 @@ impl KnownCalendar {
             // year. Two windows cover the off-season (December/
             // January) and the mid-year break (June/July).
             KnownCalendar::SouthernHemisphereLatam => CountryTransferWindow {
-                summer_window: (mk(year, 12, 1), mk(year.saturating_add(1).min(year + 1), 1, 31)),
+                summer_window: (
+                    mk(year, 12, 1),
+                    mk(year.saturating_add(1).min(year + 1), 1, 31),
+                ),
                 winter_window: (mk(year, 6, 1), mk(year, 7, 20)),
             },
             // Calendar-year season: winter break is the primary

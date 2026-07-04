@@ -991,9 +991,8 @@ impl PipelineProcessor {
                         parent_club_score: p.parent_club_score,
                         parent_club_in_debt: p.club_in_debt,
                         days_available: p.days_available,
-                        contract_months_remaining: p
-                            .contract_months_remaining
-                            .min(i16::MAX as u32) as i16,
+                        contract_months_remaining: p.contract_months_remaining.min(i16::MAX as u32)
+                            as i16,
                         low_usage: p.appearances < 8,
                         recent_interest_count: p.recent_interest_count,
                         failed_scans: p.failed_scans,

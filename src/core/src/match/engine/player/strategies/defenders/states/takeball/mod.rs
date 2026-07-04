@@ -118,12 +118,9 @@ impl StateProcessingHandler for DefenderTakeBallState {
 
             // Limit to max speed
             let magnitude = arrive_velocity.magnitude();
-            if magnitude
-                > ctx.player.max_speed_with_condition_cached()
-            {
-                arrive_velocity = arrive_velocity
-                    * (ctx.player.max_speed_with_condition_cached()
-                        / magnitude);
+            if magnitude > ctx.player.max_speed_with_condition_cached() {
+                arrive_velocity =
+                    arrive_velocity * (ctx.player.max_speed_with_condition_cached() / magnitude);
             }
         }
 

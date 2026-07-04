@@ -172,8 +172,14 @@ impl SquadWire {
             selection_omissions,
         } = self;
 
-        let main: Vec<MatchPlayer> = main_squad.into_iter().map(PlayerWire::into_player).collect();
-        let subs: Vec<MatchPlayer> = substitutes.into_iter().map(PlayerWire::into_player).collect();
+        let main: Vec<MatchPlayer> = main_squad
+            .into_iter()
+            .map(PlayerWire::into_player)
+            .collect();
+        let subs: Vec<MatchPlayer> = substitutes
+            .into_iter()
+            .map(PlayerWire::into_player)
+            .collect();
         let lookup = |maybe_id: Option<u32>| -> Option<MatchPlayer> {
             maybe_id.and_then(|id| main.iter().find(|p| p.id == id).cloned())
         };
@@ -240,4 +246,3 @@ impl LeagueMatchWire {
         }
     }
 }
-

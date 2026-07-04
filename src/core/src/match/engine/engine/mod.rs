@@ -9,7 +9,7 @@ use crate::r#match::engine::rating::RatingContext;
 use crate::r#match::engine::set_pieces::{
     penalty_conversion_prob, score_keeper_save, score_penalty_taker,
 };
-use crate::r#match::engine::substitutions::process_substitutions;
+use crate::r#match::engine::substitutions::{Substitutions, process_substitutions};
 use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
 #[cfg(feature = "match-logs")]

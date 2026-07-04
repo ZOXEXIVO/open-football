@@ -135,9 +135,7 @@ impl CareerStageDetector {
     fn retirement_evidence(reason: RetirementReason, world_rep: u16) -> Vec<CareerStageEvidence> {
         let mut evidence = vec![CareerStageEvidence::LateCareer];
         match reason {
-            RetirementReason::LongFreeAgency => {
-                evidence.push(CareerStageEvidence::LongFreeAgency)
-            }
+            RetirementReason::LongFreeAgency => evidence.push(CareerStageEvidence::LongFreeAgency),
             RetirementReason::Injury => evidence.push(CareerStageEvidence::RepeatedInjuries),
             RetirementReason::ReducedRole => evidence.push(CareerStageEvidence::ReducedRole),
             _ => {}
@@ -152,11 +150,7 @@ impl CareerStageDetector {
     /// (who play on longer) from 37.
     fn is_in_retirement_age_window(player: &Player, age: u8) -> bool {
         let is_keeper = player.position().position_group() == PlayerFieldPositionGroup::Goalkeeper;
-        if is_keeper {
-            age >= 37
-        } else {
-            age >= 34
-        }
+        if is_keeper { age >= 37 } else { age >= 34 }
     }
 
     fn emit_considering(player: &mut Player, stage: CareerStageEventContext) {
@@ -447,7 +441,10 @@ mod tests {
         p.announce_retirement(d(2026, 5, 30), RetirementReason::LongFreeAgency);
 
         assert!(p.is_retired(), "player must be marked retired");
-        assert!(p.contract.is_none(), "contract must be cleared on retirement");
+        assert!(
+            p.contract.is_none(),
+            "contract must be cleared on retirement"
+        );
         assert_eq!(
             count_event(&p, HappinessEventType::RetirementAnnounced),
             1,
@@ -475,7 +472,9 @@ mod tests {
     #[test]
     fn planned_farewell_reads_positive_injury_reads_worse() {
         assert!(CareerStageDetector::retirement_magnitude(RetirementReason::PlannedFarewell) > 0.0);
-        assert!(CareerStageDetector::retirement_magnitude(RetirementReason::ClubLegendFarewell) > 0.0);
+        assert!(
+            CareerStageDetector::retirement_magnitude(RetirementReason::ClubLegendFarewell) > 0.0
+        );
         assert!(
             CareerStageDetector::retirement_magnitude(RetirementReason::Injury)
                 < CareerStageDetector::retirement_magnitude(RetirementReason::LongFreeAgency),
@@ -550,7 +549,10 @@ mod tests {
             !p.consider_retirement_as_free_agent(d(2026, 5, 30), 14),
             "second emit inside the 180-day cooldown is suppressed"
         );
-        assert_eq!(count_event(&p, HappinessEventType::RetirementConsidering), 1);
+        assert_eq!(
+            count_event(&p, HappinessEventType::RetirementConsidering),
+            1
+        );
     }
 
     // ── RetirementConsidering (contracted veteran) ──────────────
@@ -571,7 +573,10 @@ mod tests {
             &mut p,
             d(2026, 5, 30)
         ));
-        assert_eq!(count_event(&p, HappinessEventType::RetirementConsidering), 1);
+        assert_eq!(
+            count_event(&p, HappinessEventType::RetirementConsidering),
+            1
+        );
     }
 
     #[test]

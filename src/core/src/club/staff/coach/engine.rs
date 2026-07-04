@@ -224,10 +224,8 @@ impl<'a> CoachDecisionEngine<'a> {
         ctx: &CoachSelectionContext<'_>,
     ) -> CoachDecisionScore {
         let assessment = self.assess_player_for_selection(player, ctx);
-        let scaled = (assessment.bench_adjustment() * AssessmentMath::BENCH_SCALE).clamp(
-            -AssessmentMath::BENCH_SCALE,
-            AssessmentMath::BENCH_SCALE,
-        );
+        let scaled = (assessment.bench_adjustment() * AssessmentMath::BENCH_SCALE)
+            .clamp(-AssessmentMath::BENCH_SCALE, AssessmentMath::BENCH_SCALE);
         CoachDecisionScore {
             adjustment: scaled,
             reasons: assessment.reasons,
@@ -355,19 +353,15 @@ impl<'a> CoachDecisionEngine<'a> {
         let a = self.assess_live_substitution(player_id, live);
         // Tighten the live nudge: memory steers the close call,
         // existing scorer makes the final decision.
-        ((a.sub_off_urgency - 0.5) * 2.0 * AssessmentMath::LIVE_SCALE).clamp(
-            -AssessmentMath::LIVE_SCALE,
-            AssessmentMath::LIVE_SCALE,
-        )
+        ((a.sub_off_urgency - 0.5) * 2.0 * AssessmentMath::LIVE_SCALE)
+            .clamp(-AssessmentMath::LIVE_SCALE, AssessmentMath::LIVE_SCALE)
     }
 
     /// Compact sub-in adjustment.
     pub fn sub_in_adjustment(&self, player_id: u32, live: &CoachLiveMatchContext) -> f32 {
         let a = self.assess_live_substitution(player_id, live);
-        ((a.sub_in_preference - 0.5) * 2.0 * AssessmentMath::LIVE_SCALE).clamp(
-            -AssessmentMath::LIVE_SCALE,
-            AssessmentMath::LIVE_SCALE,
-        )
+        ((a.sub_in_preference - 0.5) * 2.0 * AssessmentMath::LIVE_SCALE)
+            .clamp(-AssessmentMath::LIVE_SCALE, AssessmentMath::LIVE_SCALE)
     }
 }
 
@@ -517,8 +511,7 @@ impl AssessmentMath {
         let pressure = m.form_pressure();
         let reaction = profile.form_reaction_weight();
         let dampener = profile.one_bad_game_dampener();
-        let net =
-            (lift * reaction - pressure * dampener * reaction).clamp(-1.0, 1.0);
+        let net = (lift * reaction - pressure * dampener * reaction).clamp(-1.0, 1.0);
         (0.5 + net * 0.5).clamp(0.0, 1.0)
     }
 
@@ -608,8 +601,7 @@ impl AssessmentMath {
         let lift = m.form_lift();
         // A "sustained" drop is poor_match_streak >= 3 OR
         // recent_low_rating_count >= 3.
-        let sustained =
-            m.poor_match_streak >= 3 || m.recent_low_rating_count >= 3;
+        let sustained = m.poor_match_streak >= 3 || m.recent_low_rating_count >= 3;
         if sustained {
             reasons.push(CoachDecisionReason::SustainedPoorForm);
         } else if pressure > 0.15 {
@@ -624,10 +616,7 @@ impl AssessmentMath {
         }
     }
 
-    fn push_trust_reasons(
-        memory: Option<&CoachMemory>,
-        reasons: &mut Vec<CoachDecisionReason>,
-    ) {
+    fn push_trust_reasons(memory: Option<&CoachMemory>, reasons: &mut Vec<CoachDecisionReason>) {
         let Some(m) = memory else { return };
         if m.tactical_trust < 0.35 {
             reasons.push(CoachDecisionReason::LowTacticalTrust);

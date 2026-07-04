@@ -1083,8 +1083,7 @@ impl Player {
             .recent_events
             .iter()
             .filter(|e| {
-                e.event_type == HappinessEventType::WantsToLeaveAfterRelegation
-                    && e.days_ago <= 120
+                e.event_type == HappinessEventType::WantsToLeaveAfterRelegation && e.days_ago <= 120
             })
             .count();
         mood_count >= 2
@@ -1479,8 +1478,8 @@ mod career_desire_tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills,
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
     };
     use chrono::NaiveDate;
 
@@ -1561,8 +1560,7 @@ mod career_desire_tests {
     }
 
     fn with_status(mut p: Player, status: PlayerSquadStatus) -> Player {
-        let mut c =
-            PlayerClubContract::new(500_000, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
+        let mut c = PlayerClubContract::new(500_000, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
         c.squad_status = status;
         p.contract = Some(c);
         p

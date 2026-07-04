@@ -126,14 +126,20 @@ impl AvailabilityStrength {
     /// True when the signal is strong enough to unlock the hard
     /// importance / domestic-step-down gate (the door is genuinely open).
     pub fn unlocks_hard_gate(self) -> bool {
-        matches!(self, AvailabilityStrength::Real | AvailabilityStrength::Forced)
+        matches!(
+            self,
+            AvailabilityStrength::Real | AvailabilityStrength::Forced
+        )
     }
 
     /// True when wages no longer hard-block the move — only a player who
     /// actively wants out (or a forced clause) waives the buyer's duty to
     /// fund a credible wage before showing public interest.
     pub fn waives_wage_floor(self) -> bool {
-        matches!(self, AvailabilityStrength::Real | AvailabilityStrength::Forced)
+        matches!(
+            self,
+            AvailabilityStrength::Real | AvailabilityStrength::Forced
+        )
     }
 }
 
@@ -636,7 +642,8 @@ impl TransferPlausibilityEvaluator {
         // Low appearances are never enough on their own: a key man by
         // status / rank / ability / renown keeps a high importance floor
         // even on a thin early-season sample.
-        raw.max(ImportanceFactors::evidence_floor(inputs)).clamp(0.0, 1.0)
+        raw.max(ImportanceFactors::evidence_floor(inputs))
+            .clamp(0.0, 1.0)
     }
 
     /// Sporting "drop" the move represents for the player. Positive when
@@ -696,12 +703,19 @@ impl TransferMovePlausibility {
         let strength = inputs.availability_strength();
         let eff_rep = inputs.effective_player_reputation();
         let reach = inputs.buyer_reputation_reach();
-        let rep_drop = (eff_rep as i32 - reach as i32)
-            .clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let rep_drop =
+            (eff_rep as i32 - reach as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
 
         let very_important = importance >= thresholds::VERY_IMPORTANT;
         let huge_drop = drop >= thresholds::HUGE_SPORTING_DROP;
-        let adjustment = Self::soft_adjustment(inputs, importance, drop, very_important, huge_drop, strength);
+        let adjustment = Self::soft_adjustment(
+            inputs,
+            importance,
+            drop,
+            very_important,
+            huge_drop,
+            strength,
+        );
 
         let max_fee = inputs.affordability_max_fee();
         let fee_to_value_ratio = if max_fee > 0.0 {
@@ -753,14 +767,15 @@ impl TransferMovePlausibility {
         }
 
         let important = importance >= thresholds::IMPORTANT;
-        let prime_age = (thresholds::PRIME_AGE_MIN..=thresholds::PRIME_AGE_MAX)
-            .contains(&inputs.player_age);
+        let prime_age =
+            (thresholds::PRIME_AGE_MIN..=thresholds::PRIME_AGE_MAX).contains(&inputs.player_age);
         let big_drop = drop >= thresholds::BIG_SPORTING_DROP;
         let same_domestic_market = inputs.same_country || inputs.same_league_or_division;
         let hard_gate_open = strength.unlocks_hard_gate();
         // A soft signal can rescue a *merely* important player on a big (not
         // huge) drop — but never a very-important player or a huge drop.
-        let soft_rescue = matches!(strength, AvailabilityStrength::Soft) && !very_important && !huge_drop;
+        let soft_rescue =
+            matches!(strength, AvailabilityStrength::Soft) && !very_important && !huge_drop;
         // Availability opens the importance gate — but only within a plausible
         // level band. A *huge* sporting drop on a permanent move stays
         // implausible for PUBLIC interest on a *passive / club-driven* Real
@@ -918,8 +933,8 @@ impl TransferMovePlausibility {
         let drop = TransferPlausibilityEvaluator::sporting_drop(inputs);
         let eff_rep = inputs.effective_player_reputation();
         let rep_drop = eff_rep as i32 - inputs.buyer_reputation_reach() as i32;
-        let prime = (thresholds::PRIME_AGE_MIN..=thresholds::PRIME_AGE_MAX)
-            .contains(&inputs.player_age);
+        let prime =
+            (thresholds::PRIME_AGE_MIN..=thresholds::PRIME_AGE_MAX).contains(&inputs.player_age);
         let domestic = inputs.same_country || inputs.same_league_or_division;
 
         // First-team / key player refuses a clear sporting step down.
@@ -1560,7 +1575,10 @@ mod tests {
 
         // Effective reputation lifts well above the buyer's reach.
         let eff = renowned.effective_player_reputation();
-        assert!(eff >= 6000, "effective rep should reflect domestic renown: {eff}");
+        assert!(
+            eff >= 6000,
+            "effective rep should reflect domestic renown: {eff}"
+        );
         let a = TransferMovePlausibility::assess(&renowned);
         assert!(
             !a.reaches(TransferMoveStage::CanShowPublicInterest),

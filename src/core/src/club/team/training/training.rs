@@ -210,7 +210,8 @@ impl TeamTraining {
             // who doesn't buy in tunes out the chalkboard; one who
             // does extracts a small extra gain.
             if is_tactical_session {
-                r.effects.scale_gains(TrainingBondGate::tactical_familiarity_multiplier(&bond));
+                r.effects
+                    .scale_gains(TrainingBondGate::tactical_familiarity_multiplier(&bond));
             }
             results.push(r);
         }
@@ -656,10 +657,12 @@ impl TeamTraining {
                     )
                     .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
                     .with_follow_up(HappinessEventFollowUp::LikelyToSettle)
-                    .with_teammate_conflict_context(TeammateConflictContext::new(
-                        TeammateConflictReason::TrainingStandards,
-                        ConflictLocation::TrainingGround,
-                    ));
+                    .with_teammate_conflict_context(
+                        TeammateConflictContext::new(
+                            TeammateConflictReason::TrainingStandards,
+                            ConflictLocation::TrainingGround,
+                        ),
+                    );
                     if let Some((level, trust, friendship, prof)) = snapshot {
                         ctx = ctx
                             .with_relationship_levels(level, level)
@@ -1727,7 +1730,11 @@ mod bond_consumer_tests {
         let neutral = TrainingBondGate::tactical_familiarity_multiplier(&bond(0.5, 0.5));
         let low = TrainingBondGate::tactical_familiarity_multiplier(&bond(0.5, 0.1));
         let high = TrainingBondGate::tactical_familiarity_multiplier(&bond(0.5, 0.9));
-        assert!((neutral - 1.0).abs() < 1e-3, "neutral should be 1.0, got {}", neutral);
+        assert!(
+            (neutral - 1.0).abs() < 1e-3,
+            "neutral should be 1.0, got {}",
+            neutral
+        );
         assert!(low < 1.0, "low buy_in should produce < 1.0 ({})", low);
         assert!(high > 1.0, "high buy_in should produce > 1.0 ({})", high);
         assert!(low < neutral && neutral < high);
@@ -1742,7 +1749,9 @@ mod bond_consumer_tests {
         assert!(TrainingBondGate::is_tactical(&TrainingType::Positioning));
         assert!(TrainingBondGate::is_tactical(&TrainingType::PressingDrills));
         assert!(TrainingBondGate::is_tactical(&TrainingType::TransitionPlay));
-        assert!(TrainingBondGate::is_tactical(&TrainingType::SetPiecesDefensive));
+        assert!(TrainingBondGate::is_tactical(
+            &TrainingType::SetPiecesDefensive
+        ));
         // And the skill-rep sessions must NOT — applying the tactical
         // multiplier to a pure shooting drill would double-dip.
         assert!(!TrainingBondGate::is_tactical(&TrainingType::Shooting));

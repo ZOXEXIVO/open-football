@@ -193,13 +193,7 @@ impl<'a> RatingContext<'a> {
             0.0
         };
 
-        saves_v
-            + save_pct_v
-            + xg_prev_v
-            + workload
-            + command
-            + dominant_defense
-            + limited_exposure
+        saves_v + save_pct_v + xg_prev_v + workload + command + dominant_defense + limited_exposure
     }
 
     /// GK-specific exceptional negatives kept at full strength: failed

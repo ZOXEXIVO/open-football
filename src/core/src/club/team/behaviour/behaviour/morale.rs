@@ -119,7 +119,9 @@ impl TeamBehaviour {
                 let late_career_fair = player
                     .contract
                     .as_ref()
-                    .map(|c| WageFairness::assess(player, c, today, ctx).late_career_wage_is_fair(player))
+                    .map(|c| {
+                        WageFairness::assess(player, c, today, ctx).late_career_wage_is_fair(player)
+                    })
                     .unwrap_or(false);
                 if late_career_fair {
                     continue;
@@ -191,10 +193,7 @@ impl TeamBehaviour {
             let opp = player.playing_time_opportunity(today);
             let cfg = PlayingTimeFrustrationConfig::default();
             let status = player.contract.as_ref().map(|c| &c.squad_status);
-            if opp
-                .can_judge(status, &cfg, Some(min_apps))
-                .is_none()
-            {
+            if opp.can_judge(status, &cfg, Some(min_apps)).is_none() {
                 continue;
             }
 
@@ -367,9 +366,7 @@ impl TeamBehaviour {
                 .happiness
                 .recent_events
                 .iter()
-                .filter(|e| {
-                    e.event_type == HappinessEventType::PoorTraining && e.days_ago <= 90
-                })
+                .filter(|e| e.event_type == HappinessEventType::PoorTraining && e.days_ago <= 90)
                 .count();
             if poor_training >= 2 {
                 score += 1;
@@ -377,7 +374,8 @@ impl TeamBehaviour {
             }
             // Poor match performances despite featuring.
             let apps = player.statistics.played + player.statistics.played_subs;
-            if apps >= 3 && player.statistics.average_rating > 0.0
+            if apps >= 3
+                && player.statistics.average_rating > 0.0
                 && player.statistics.average_rating < 6.5
             {
                 score += 1;
@@ -642,10 +640,12 @@ impl TeamBehaviour {
                     )
                     .with_evidence_iter(victim_evidence.iter().copied())
                     .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk)
-                    .with_teammate_conflict_context(TeammateConflictContext::new(
-                        TeammateConflictReason::PersonalityClash,
-                        ConflictLocation::DressingRoom,
-                    ));
+                    .with_teammate_conflict_context(
+                        TeammateConflictContext::new(
+                            TeammateConflictReason::PersonalityClash,
+                            ConflictLocation::DressingRoom,
+                        ),
+                    );
                     if let Some((level, trust, friendship, prof)) = snapshot {
                         conflict_ctx = conflict_ctx
                             .with_relationship_levels(level, level)
@@ -1032,8 +1032,7 @@ impl TeamBehaviour {
             return;
         }
         // Need enough of the season gone for the table to mean something.
-        let progress =
-            club.league_matches_played as f32 / club.total_league_matches.max(1) as f32;
+        let progress = club.league_matches_played as f32 / club.total_league_matches.max(1) as f32;
         if progress < 0.4 {
             return;
         }
@@ -1092,12 +1091,13 @@ impl TeamBehaviour {
                 continue;
             }
 
-            let mut desire = CareerDesireEventContext::new(CareerDesireKind::TitleChallengeAmbition)
-                .with_league_position(league_position)
-                .with_club_reputation(club_reputation)
-                .with_player_ability(ca)
-                .with_evidence(CareerDesireEvidence::HighAmbition)
-                .with_evidence(CareerDesireEvidence::CurrentClubNotTitleContender);
+            let mut desire =
+                CareerDesireEventContext::new(CareerDesireKind::TitleChallengeAmbition)
+                    .with_league_position(league_position)
+                    .with_club_reputation(club_reputation)
+                    .with_player_ability(ca)
+                    .with_evidence(CareerDesireEvidence::HighAmbition)
+                    .with_evidence(CareerDesireEvidence::CurrentClubNotTitleContender);
             if (24..=31).contains(&age) {
                 desire = desire.with_evidence(CareerDesireEvidence::PrimeCareerWindow);
             }
@@ -1806,7 +1806,8 @@ impl WageFairness {
             league_reputation,
             months_remaining,
         );
-        let expected_wage = ContractValuation::evaluate(player, &valuation_ctx).expected_wage as f32;
+        let expected_wage =
+            ContractValuation::evaluate(player, &valuation_ctx).expected_wage as f32;
         let effective_salary =
             expected_annual_value(&package_inputs_from_contract(contract, player)) as f32;
 
@@ -1984,8 +1985,8 @@ mod tests {
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, Player, PlayerAttributes, PlayerClubContract, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatLedgerEntry,
-        PlayerStatistics, TeamContext, TeamType,
+        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatLedgerEntry, PlayerStatistics,
+        TeamContext, TeamType,
     };
     use chrono::NaiveDate;
 
@@ -2058,7 +2059,13 @@ mod tests {
     /// A young loanee who started 90 days ago, was given the chance to
     /// feature in plenty of matches, but barely played.
     fn make_starved_loanee(today: NaiveDate) -> Player {
-        let mut p = build_player(1, NaiveDate::from_ymd_opt(2004, 1, 1).unwrap(), 120, 2_000, 12.0);
+        let mut p = build_player(
+            1,
+            NaiveDate::from_ymd_opt(2004, 1, 1).unwrap(),
+            120,
+            2_000,
+            12.0,
+        );
         p = with_contract(p, PlayerSquadStatus::FirstTeamRegular);
         let loan_start = today - chrono::Duration::days(90);
         let mut loan = PlayerClubContract::new_loan(
@@ -2145,7 +2152,10 @@ mod tests {
         let mut players = PlayerCollection::new(vec![p]);
         TeamBehaviour::process_loan_development_audit(&mut players, &month_ctx(today));
         assert_eq!(
-            count(&players.players[0], HappinessEventType::LoanDevelopmentConcern),
+            count(
+                &players.players[0],
+                HappinessEventType::LoanDevelopmentConcern
+            ),
             1,
             "a young loanee with low minutes and poor performances is a development concern"
         );
@@ -2166,7 +2176,10 @@ mod tests {
         let mut players = PlayerCollection::new(vec![p]);
         TeamBehaviour::process_loan_development_audit(&mut players, &month_ctx(today));
         assert_eq!(
-            count(&players.players[0], HappinessEventType::LoanDevelopmentConcern),
+            count(
+                &players.players[0],
+                HappinessEventType::LoanDevelopmentConcern
+            ),
             0,
             "an established senior is not a development-loan candidate"
         );
@@ -2245,7 +2258,13 @@ mod tests {
         let today = first_of_month(2026, 6);
         let name = "Club".to_string();
         let star = with_contract(
-            build_player(1, NaiveDate::from_ymd_opt(1998, 1, 1).unwrap(), 150, 7_000, 16.0),
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1998, 1, 1).unwrap(),
+                150,
+                7_000,
+                16.0,
+            ),
             PlayerSquadStatus::KeyPlayer,
         );
         let mut players = PlayerCollection::new(vec![star]);
@@ -2262,7 +2281,13 @@ mod tests {
         let today = first_of_month(2026, 6);
         let name = "Club".to_string();
         let star = with_contract(
-            build_player(1, NaiveDate::from_ymd_opt(1998, 1, 1).unwrap(), 150, 7_000, 16.0),
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1998, 1, 1).unwrap(),
+                150,
+                7_000,
+                16.0,
+            ),
             PlayerSquadStatus::KeyPlayer,
         );
         let mut players = PlayerCollection::new(vec![star]);
@@ -2288,7 +2313,13 @@ mod tests {
     /// "stuck in the reserves for seasons" case.
     fn stuck_reserve_player() -> Player {
         with_contract(
-            build_player(1, NaiveDate::from_ymd_opt(2002, 1, 1).unwrap(), 90, 500, 12.0),
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(2002, 1, 1).unwrap(),
+                90,
+                500,
+                12.0,
+            ),
             PlayerSquadStatus::MainBackupPlayer,
         )
     }
@@ -2302,7 +2333,10 @@ mod tests {
             &reserve_ctx(today, TeamType::Second),
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             1,
             "a settled senior in the second squad should dream of first-team football"
         );
@@ -2317,7 +2351,10 @@ mod tests {
             &reserve_ctx(today, TeamType::Main),
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             0,
             "the audit only applies to senior reserve squads"
         );
@@ -2328,7 +2365,13 @@ mod tests {
         let today = first_of_month(2026, 6);
         // 18-year-old in the second squad — still a development arc.
         let teen = with_contract(
-            build_player(1, NaiveDate::from_ymd_opt(2008, 2, 1).unwrap(), 90, 500, 12.0),
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(2008, 2, 1).unwrap(),
+                90,
+                500,
+                12.0,
+            ),
             PlayerSquadStatus::DecentYoungster,
         );
         let mut players = PlayerCollection::new(vec![teen]);
@@ -2337,7 +2380,10 @@ mod tests {
             &reserve_ctx(today, TeamType::Second),
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             0,
             "teenagers in a reserve squad are on the normal development pathway"
         );
@@ -2355,7 +2401,10 @@ mod tests {
             &reserve_ctx(today, TeamType::Second),
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             0,
             "a fresh arrival has no stuck-career story yet"
         );
@@ -2369,7 +2418,10 @@ mod tests {
         TeamBehaviour::process_reserve_ambition_audit(&mut players, &ctx);
         TeamBehaviour::process_reserve_ambition_audit(&mut players, &ctx);
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             1,
             "monthly re-run inside the 60-day cooldown must not double-fire"
         );
@@ -2429,7 +2481,10 @@ mod tests {
             &reserve_ctx(today, TeamType::Main),
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             1,
             "a settled main-squad backup with seasons of bench duty should dream of a starting role"
         );
@@ -2450,7 +2505,10 @@ mod tests {
             &reserve_ctx(today, TeamType::Main),
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             0,
             "a real run of starts last season breaks the stuck-career story"
         );
@@ -2465,7 +2523,10 @@ mod tests {
             &reserve_ctx(today, TeamType::Main),
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             0,
             "an unambitious journeyman #2 accepts the role — that's a real career"
         );
@@ -2484,7 +2545,10 @@ mod tests {
         let mut players = PlayerCollection::new(vec![p]);
         TeamBehaviour::process_perennial_backup_audit(&mut players, &ctx);
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             0,
             "a well-paid bench at a big club is fine for an average-ambition player"
         );
@@ -2503,7 +2567,10 @@ mod tests {
         let mut players = PlayerCollection::new(vec![p]);
         TeamBehaviour::process_perennial_backup_audit(&mut players, &ctx);
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             1,
             "high ambition outweighs the big-club bench and the fat wage"
         );
@@ -2536,7 +2603,10 @@ mod tests {
             &reserve_ctx(today, TeamType::Main),
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             1,
             "the loan carousel counts as years without a first-team place at the parent club"
         );
@@ -2575,7 +2645,10 @@ mod tests {
             &reserve_ctx(today, TeamType::Main),
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             1,
             "a 35-year-old career #2 keeper still wants one last number-one shirt"
         );
@@ -2612,7 +2685,10 @@ mod tests {
             &reserve_ctx(today, TeamType::Main),
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             0,
             "a 38-year-old keeper is seeing out his career — the veteran audit owns him"
         );
@@ -2627,7 +2703,10 @@ mod tests {
             &reserve_ctx(today, TeamType::Second),
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsFirstTeamFootball),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
             0,
             "the perennial-backup audit only runs for the main squad"
         );
@@ -2638,7 +2717,13 @@ mod tests {
     /// A 25-year-old loanee, four months into the spell, starting and
     /// performing at the borrowing club.
     fn thriving_loanee(today: NaiveDate) -> Player {
-        let mut p = build_player(1, NaiveDate::from_ymd_opt(2001, 2, 1).unwrap(), 95, 500, 12.0);
+        let mut p = build_player(
+            1,
+            NaiveDate::from_ymd_opt(2001, 2, 1).unwrap(),
+            95,
+            500,
+            12.0,
+        );
         let mut loan =
             PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2026, 12, 31).unwrap());
         loan.started = Some(today - Duration::days(120));
@@ -2656,7 +2741,10 @@ mod tests {
         let mut players = PlayerCollection::new(vec![thriving_loanee(today)]);
         TeamBehaviour::process_loanee_permanence_audit(&mut players, &month_ctx(today));
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsLoanMadePermanent),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsLoanMadePermanent
+            ),
             1,
             "a loanee starting and performing should want the move made permanent"
         );
@@ -2672,7 +2760,10 @@ mod tests {
         let mut players = PlayerCollection::new(vec![p]);
         TeamBehaviour::process_loanee_permanence_audit(&mut players, &month_ctx(today));
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsLoanMadePermanent),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsLoanMadePermanent
+            ),
             0,
             "a loanee who isn't playing has nothing to make permanent"
         );
@@ -2686,7 +2777,10 @@ mod tests {
         let mut players = PlayerCollection::new(vec![p]);
         TeamBehaviour::process_loanee_permanence_audit(&mut players, &month_ctx(today));
         assert_eq!(
-            count(&players.players[0], HappinessEventType::WantsLoanMadePermanent),
+            count(
+                &players.players[0],
+                HappinessEventType::WantsLoanMadePermanent
+            ),
             0,
             "a month into the loan is too early for a permanence ask"
         );
@@ -2698,7 +2792,13 @@ mod tests {
     /// and no renewal activity on record.
     fn final_year_player() -> Player {
         let mut p = with_contract(
-            build_player(1, NaiveDate::from_ymd_opt(1999, 1, 1).unwrap(), 100, 500, 12.0),
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1999, 1, 1).unwrap(),
+                100,
+                500,
+                12.0,
+            ),
             PlayerSquadStatus::FirstTeamRegular,
         );
         p.contract.as_mut().unwrap().expiration = NaiveDate::from_ymd_opt(2026, 12, 15).unwrap();
@@ -2711,12 +2811,18 @@ mod tests {
         let mut players = PlayerCollection::new(vec![final_year_player()]);
         TeamBehaviour::process_contract_horizon_audit(&mut players, &month_ctx(today));
         assert_eq!(
-            count(&players.players[0], HappinessEventType::ContractExpiryAnxiety),
+            count(
+                &players.players[0],
+                HappinessEventType::ContractExpiryAnxiety
+            ),
             1,
             "final contract year with no talks opened should worry the player"
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::PlayingForNewContract),
+            count(
+                &players.players[0],
+                HappinessEventType::PlayingForNewContract
+            ),
             0
         );
     }
@@ -2731,12 +2837,18 @@ mod tests {
         let mut players = PlayerCollection::new(vec![p]);
         TeamBehaviour::process_contract_horizon_audit(&mut players, &month_ctx(today));
         assert_eq!(
-            count(&players.players[0], HappinessEventType::PlayingForNewContract),
+            count(
+                &players.players[0],
+                HappinessEventType::PlayingForNewContract
+            ),
             1,
             "an in-form final-year player plays for the new deal instead of worrying"
         );
         assert_eq!(
-            count(&players.players[0], HappinessEventType::ContractExpiryAnxiety),
+            count(
+                &players.players[0],
+                HappinessEventType::ContractExpiryAnxiety
+            ),
             0
         );
     }
@@ -2745,11 +2857,15 @@ mod tests {
     fn recent_offer_means_no_expiry_anxiety() {
         let today = first_of_month(2026, 6);
         let mut p = final_year_player();
-        p.happiness.add_event(HappinessEventType::ContractOffer, 2.0);
+        p.happiness
+            .add_event(HappinessEventType::ContractOffer, 2.0);
         let mut players = PlayerCollection::new(vec![p]);
         TeamBehaviour::process_contract_horizon_audit(&mut players, &month_ctx(today));
         assert_eq!(
-            count(&players.players[0], HappinessEventType::ContractExpiryAnxiety),
+            count(
+                &players.players[0],
+                HappinessEventType::ContractExpiryAnxiety
+            ),
             0,
             "the club HAS been talking — no silence, no anxiety"
         );
@@ -2763,7 +2879,10 @@ mod tests {
         let mut players = PlayerCollection::new(vec![p]);
         TeamBehaviour::process_contract_horizon_audit(&mut players, &month_ctx(today));
         assert_eq!(
-            count(&players.players[0], HappinessEventType::ContractExpiryAnxiety),
+            count(
+                &players.players[0],
+                HappinessEventType::ContractExpiryAnxiety
+            ),
             0,
             "a listed player's silence is explained — the anxiety event stays out"
         );
@@ -2787,10 +2906,8 @@ mod tests {
         // actually exercise those gates rather than passing trivially
         // because the scoring fell short.
         let mut starter = build_player(1, birth, 130, 5_000, 16.0);
-        let mut starter_contract = PlayerClubContract::new(
-            20_000,
-            NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
-        );
+        let mut starter_contract =
+            PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
         starter_contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
         starter_contract.started = starter_contract_started;
         starter.contract = Some(starter_contract);
@@ -3072,7 +3189,10 @@ mod tests {
         .squad(today);
         TeamBehaviour::process_periodic_wage_envy(&mut winding_down, &month_ctx(today));
         assert_eq!(
-            count(&winding_down.players[0], HappinessEventType::SalaryGapNoticed),
+            count(
+                &winding_down.players[0],
+                HappinessEventType::SalaryGapNoticed
+            ),
             0,
             "a player considering retirement and no longer a regular starter is suppressed"
         );

@@ -3132,14 +3132,18 @@ mod development_pathway_tests {
         // negotiation. Run on the Monday after the Sunday fixture date.)
         {
             let country = data.country_mut(1).unwrap();
-            let monday = date.succ_opt().expect("a Monday follows the Sunday fixture date");
+            let monday = date
+                .succ_opt()
+                .expect("a Monday follows the Sunday fixture date");
             PipelineProcessor::broadcast_listed_loans(country, monday);
             let negotiation = country
                 .transfer_market
                 .negotiations
                 .values()
                 .find(|n| n.player_id == DevPathwayFixtures::PROSPECT_ID)
-                .expect("the parent broadcast must open a loan negotiation for the listed prospect");
+                .expect(
+                    "the parent broadcast must open a loan negotiation for the listed prospect",
+                );
             assert!(negotiation.is_loan, "the approach must be a loan");
             assert_eq!(
                 negotiation.buying_club_id, BORROWER_ID,

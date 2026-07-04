@@ -2122,7 +2122,10 @@ mod tests {
         assert_eq!(count_head_coaches(&data, 1), 1, "head-coach seat is unique");
         // Synthetic caretaker lives in the dedicated high-id range.
         let id = caretaker_id(&data, 1).unwrap();
-        assert!(id >= 900_000_000, "expected emergency caretaker id, got {id}");
+        assert!(
+            id >= 900_000_000,
+            "expected emergency caretaker id, got {id}"
+        );
         let club = data.club(1).unwrap();
         assert!(
             club.board.manager_search_since.is_some(),
@@ -2153,8 +2156,7 @@ mod tests {
     #[test]
     fn repair_opens_search_for_caretaker_without_manager() {
         let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
-        let caretaker =
-            coach_with_contract(50, today, StaffPosition::CaretakerManager, 80_000);
+        let caretaker = coach_with_contract(50, today, StaffPosition::CaretakerManager, 80_000);
         let club = make_club_with_main(1, vec![caretaker]);
         let mut data = make_data(today, vec![club]);
         assert!(data.club(1).unwrap().board.manager_search_since.is_none());

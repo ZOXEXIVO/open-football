@@ -227,11 +227,7 @@ impl RotationWantAway {
         let want_away = statuses.contains(&PlayerStatusType::Lst)
             || statuses.contains(&PlayerStatusType::Req)
             || statuses.contains(&PlayerStatusType::Unh);
-        if want_away {
-            Self::KEEP_SHARP
-        } else {
-            0.0
-        }
+        if want_away { Self::KEEP_SHARP } else { 0.0 }
     }
 }
 

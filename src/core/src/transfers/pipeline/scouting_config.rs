@@ -674,11 +674,7 @@ impl ScoutingConfig {
     /// Field-level core of [`Self::is_target_realistic`], shared with the
     /// match-scouting path (which reasons about a raw `Player`, not a
     /// `PlayerSummary`). Same policy documented on that method.
-    pub fn is_target_realistic_fields(
-        &self,
-        buyer_world_rep: i16,
-        target: &RealismTarget,
-    ) -> bool {
+    pub fn is_target_realistic_fields(&self, buyer_world_rep: i16, target: &RealismTarget) -> bool {
         let r = &self.realism;
 
         // Only gate scouting "up": a peer or smaller selling club places no
@@ -1163,7 +1159,7 @@ mod tests {
         // but explicitly second choice — on wages/value a mid-tier club can
         // fund. Reachable: surplus + affordable.
         let backup = Target {
-            appearances: 20, // a regular by minutes…
+            appearances: 20,                                   // a regular by minutes…
             squad_status: PlayerSquadStatus::MainBackupPlayer, // …but a backup by role
             salary: 500_000,
             estimated_value: 1_500_000.0,

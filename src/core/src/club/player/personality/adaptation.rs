@@ -8,8 +8,8 @@ use crate::{
     CareerDesireEventContext, CareerDesireEvidence, CareerDesireKind, ContractEventContext,
     ContractEventEvidence, ContractEventKind, HappinessEventCause, HappinessEventContext,
     HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
-    PersonalAdaptationEventContext, PersonalAdaptationKind, PlayerHappiness, RoleStatusEventContext,
-    RoleStatusKind,
+    PersonalAdaptationEventContext, PersonalAdaptationKind, PlayerHappiness,
+    RoleStatusEventContext, RoleStatusKind,
 };
 use chrono::NaiveDate;
 use std::cmp::Reverse;
@@ -820,12 +820,7 @@ impl Player {
                 self.emit_favourite_club_homecoming(now);
             }
         } else {
-            self.emit_dream_move_with_source(
-                club_rep_0_to_1,
-                source_aware_step_up,
-                loan_damp,
-                now,
-            );
+            self.emit_dream_move_with_source(club_rep_0_to_1, source_aware_step_up, loan_damp, now);
         }
         self.emit_joining_elite(club_rep_0_to_1, loan_damp);
 
@@ -1297,7 +1292,11 @@ impl Player {
         let base = cfg.catalog.home_return_opportunity;
         // Veterans get the same softer signal — boyhood return is
         // already a settling moment, not a fresh ambition lift.
-        let mag = if self.age(now) >= 32 { base * 0.7 } else { base };
+        let mag = if self.age(now) >= 32 {
+            base * 0.7
+        } else {
+            base
+        };
         let desire_ctx = CareerDesireEventContext::new(CareerDesireKind::FavoriteClubHomecoming)
             .with_evidence(CareerDesireEvidence::HomeOrFavouriteLink);
         let happiness_ctx = HappinessEventContext::new(
@@ -3816,7 +3815,14 @@ mod transfer_environment_tests {
         // elite-tier).
         let mut p = player_with(19, 14.0, 3500, 3500, 130, 12.0, 12.0, 10.0);
         let now = d(2026, 4, 26);
-        let pend = pending(/* dest */ 200, 1_000_000.0, /* loan */ true, 7000, 6500, Some(2));
+        let pend = pending(
+            /* dest */ 200,
+            1_000_000.0,
+            /* loan */ true,
+            7000,
+            6500,
+            Some(2),
+        );
         p.pending_signing = Some(pend);
         p.process_transfer_shock(now, 0.65, 5500, "ua", None);
         assert_eq!(count(&p, HappinessEventType::DreamMove), 0);
@@ -3873,7 +3879,14 @@ mod transfer_environment_tests {
         let mut p = player_with(20, 14.0, 3000, 3000, 130, 12.0, 12.0, 10.0);
         p.favorite_clubs.push(200);
         let now = d(2026, 4, 26);
-        let pend = pending(/* dest */ 200, 0.0, /* loan */ true, 6000, 6500, Some(2));
+        let pend = pending(
+            /* dest */ 200,
+            0.0,
+            /* loan */ true,
+            6000,
+            6500,
+            Some(2),
+        );
         p.pending_signing = Some(pend);
         // Mid-tier destination — even the loan-opportunity event
         // should stay silent (not elite).
@@ -4023,7 +4036,11 @@ mod settlement_rating_tests {
         );
 
         assert!(adj.bypass_reason.is_none(), "active settlement expected");
-        assert!(adj.multiplier < 1.0, "should dampen; got {}", adj.multiplier);
+        assert!(
+            adj.multiplier < 1.0,
+            "should dampen; got {}",
+            adj.multiplier
+        );
         assert!(
             adj.public_rating < 8.0 - 0.15,
             "public rating should be noticeably below raw 8.0; got {}",

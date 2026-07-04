@@ -193,8 +193,7 @@ impl CoachProfile {
             youth_preference: (coaching.working_with_youngsters as f32 / 20.0 + style_youth_bonus)
                 .clamp(0.0, 1.0),
             conservatism: ((1.0 - adaptability_norm) * 0.6 + discipline_norm * 0.4).clamp(0.0, 1.0),
-            man_management: (man_management_norm * 0.6
-                + mental.motivating as f32 / 20.0 * 0.4)
+            man_management: (man_management_norm * 0.6 + mental.motivating as f32 / 20.0 * 0.4)
                 .clamp(0.0, 1.0),
             coach_seed: staff.id,
             perception_lens,

@@ -304,8 +304,7 @@ impl UnhappyAssessment {
         let h = &player.happiness;
         let morale = h.morale;
         let f = &h.factors;
-        let major_trigger =
-            Self::has_major_event(player) || playing_time_factor <= -12.0;
+        let major_trigger = Self::has_major_event(player) || playing_time_factor <= -12.0;
 
         // A "serious concern" is a hard, real grievance — not the soft
         // settling factors the honeymoon already damps. Severe wage
@@ -318,8 +317,8 @@ impl UnhappyAssessment {
             || f.manager_relationship <= -8.0
             || f.promise_trust <= -6.0;
 
-        let eligible = morale < Self::CRITICAL_MORALE
-            || (morale < Self::CONCERN_MORALE && serious_concern);
+        let eligible =
+            morale < Self::CRITICAL_MORALE || (morale < Self::CONCERN_MORALE && serious_concern);
 
         let recover = morale > Self::RECOVER_MORALE
             || (morale > Self::RECOVER_WITH_MINUTES_MORALE && playing_time_factor >= 10.0);
@@ -349,10 +348,11 @@ impl UnhappyAssessment {
             HappinessEventType::SquadRegistrationOmitted,
             HappinessEventType::ControversyIncident,
         ];
-        if MAJOR
-            .iter()
-            .any(|t| player.happiness.has_recent_event(t, Self::MAJOR_EVENT_WINDOW_DAYS))
-        {
+        if MAJOR.iter().any(|t| {
+            player
+                .happiness
+                .has_recent_event(t, Self::MAJOR_EVENT_WINDOW_DAYS)
+        }) {
             return true;
         }
         Self::has_serious_conflict(player)
@@ -383,7 +383,8 @@ impl UnhappyAssessment {
                     HappinessEventSeverity::Serious | HappinessEventSeverity::Major
                 ) || c.scope == HappinessEventScope::Media
                     || c.follow_up == Some(HappinessEventFollowUp::DressingRoomDamageRisk)
-                    || c.evidence.contains(&HappinessEventEvidence::RepeatedIncident)
+                    || c.evidence
+                        .contains(&HappinessEventEvidence::RepeatedIncident)
                     || c.evidence.contains(&HappinessEventEvidence::MediaIncident)
             });
             any_serious = serious_by_magnitude || serious_by_context;
@@ -547,11 +548,9 @@ impl Player {
             season_state.league_reputation,
             &club_ctx,
         ));
-        self.happiness.factors.pressure_load = honeymoon.damp_negative(self.calculate_pressure_load(
-            team_reputation,
-            season_state.league_reputation,
-            now,
-        ));
+        self.happiness.factors.pressure_load = honeymoon.damp_negative(
+            self.calculate_pressure_load(team_reputation, season_state.league_reputation, now),
+        );
         self.happiness.factors.promise_trust = self.calculate_promise_trust(now);
 
         // Recalculate overall morale (now uses dampened salary factor + derived axes)
@@ -1363,13 +1362,20 @@ impl Player {
     /// loanees, an "out of position" hit when role mismatch lingers,
     /// and an underperformance signal when the player's form is poor
     /// at a smaller club (the loan isn't working out).
-    fn process_loan_morale(&mut self, now: NaiveDate, team_reputation: f32, league_reputation: u16) {
+    fn process_loan_morale(
+        &mut self,
+        now: NaiveDate,
+        team_reputation: f32,
+        league_reputation: u16,
+    ) {
         let gap = ReputationGap::compute(self, team_reputation, league_reputation);
         // Match-opportunity gate: a loanee at a club that hasn't given him
         // a competitive fixture yet has no playing-time grievance to voice,
         // however long he's been on the books.
-        let has_match_opportunity =
-            self.playing_time_opportunity(now).eligible_official_matches_since_join > 0;
+        let has_match_opportunity = self
+            .playing_time_opportunity(now)
+            .eligible_official_matches_since_join
+            > 0;
         let age = DateUtils::age(
             self.birth_date,
             self.last_transfer_date.unwrap_or_else(|| {
@@ -1591,10 +1597,8 @@ mod playing_time_opportunity_tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
-        let mut contract = PlayerClubContract::new(
-            50_000,
-            NaiveDate::from_ymd_opt(2029, 6, 30).unwrap(),
-        );
+        let mut contract =
+            PlayerClubContract::new(50_000, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
         contract.squad_status = status;
         player.contract = Some(contract);
         player.last_transfer_date = Some(now() - chrono::Duration::days(days_ago));
@@ -1633,7 +1637,10 @@ mod playing_time_opportunity_tests {
         let mult = opp
             .can_judge(Some(&PlayerSquadStatus::KeyPlayer), &cfg(), None)
             .expect("gate should be open past grace with a full sample");
-        assert!((mult - 1.0).abs() < f32::EPSILON, "past soft grace → full weight");
+        assert!(
+            (mult - 1.0).abs() < f32::EPSILON,
+            "past soft grace → full weight"
+        );
 
         // Morale factor strongly negative (10 eligible ≥ 5 sample).
         let factor = p.calculate_playing_time_factor(1.0, now());
@@ -1727,7 +1734,10 @@ mod playing_time_opportunity_tests {
         let p = build_player(150, PlayerSquadStatus::KeyPlayer, 5);
         let opp = p.playing_time_opportunity(now());
         assert!(opp.frustration_multiplier(&cfg()) == 0.0);
-        assert!(opp.can_judge(Some(&PlayerSquadStatus::KeyPlayer), &cfg(), None).is_none());
+        assert!(
+            opp.can_judge(Some(&PlayerSquadStatus::KeyPlayer), &cfg(), None)
+                .is_none()
+        );
     }
 }
 
@@ -2416,7 +2426,10 @@ mod morale_timeline_tests {
             "event sum out of band: {}",
             b.event_sum
         );
-        assert_eq!(b.hidden_pressure, 0.0, "no hidden form pressure expected here");
+        assert_eq!(
+            b.hidden_pressure, 0.0,
+            "no hidden form pressure expected here"
+        );
         assert!(
             (35.0..=55.0).contains(&b.morale),
             "morale out of band: {}",
@@ -2492,13 +2505,15 @@ mod morale_timeline_tests {
             if let Some(f) = follow_up {
                 ctx = ctx.with_follow_up(f);
             }
-            player.happiness.add_event_with_partner_context_and_cooldown(
-                HappinessEventType::ConflictWithTeammate,
-                magnitude,
-                partner,
-                ctx,
-                0,
-            );
+            player
+                .happiness
+                .add_event_with_partner_context_and_cooldown(
+                    HappinessEventType::ConflictWithTeammate,
+                    magnitude,
+                    partner,
+                    ctx,
+                    0,
+                );
         }
     }
 

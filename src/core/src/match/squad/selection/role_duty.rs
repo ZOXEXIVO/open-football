@@ -1,5 +1,5 @@
-use crate::club::PlayerPositionType;
 use crate::Player;
+use crate::club::PlayerPositionType;
 
 use super::model::OpponentSelectionProfile;
 
@@ -286,9 +286,7 @@ impl RoleDutyFitScorer {
                 (m.positioning + m.teamwork + m.work_rate + m.concentration) / 4.0
             }
             TacticalDuty::Support => (m.teamwork + m.work_rate + m.decisions + m.vision) / 4.0,
-            TacticalDuty::Attack => {
-                (m.flair + m.off_the_ball + m.work_rate + m.anticipation) / 4.0
-            }
+            TacticalDuty::Attack => (m.flair + m.off_the_ball + m.work_rate + m.anticipation) / 4.0,
         };
         (v / 20.0).clamp(0.0, 1.0)
     }
@@ -340,10 +338,8 @@ impl OpponentMatchupScorer {
 
         // High press — composure / first_touch / passing rewarded
         // everywhere on the pitch (it's an XI-wide test).
-        let buildup =
-            (m.composure + t.first_touch + t.passing + m.decisions) / 80.0;
-        let press_bonus =
-            ((opponent.pressing_intensity - 0.4) * buildup * 2.0).clamp(-1.2, 1.2);
+        let buildup = (m.composure + t.first_touch + t.passing + m.decisions) / 80.0;
+        let press_bonus = ((opponent.pressing_intensity - 0.4) * buildup * 2.0).clamp(-1.2, 1.2);
         sum += press_bonus;
 
         // Low block — creators thrive, journeymen don't add much.

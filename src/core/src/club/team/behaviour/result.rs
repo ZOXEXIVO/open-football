@@ -397,8 +397,7 @@ impl PlayerBehaviourResult {
                 .and_then(|p| p.contract.as_ref())
                 .map(|c| c.squad_status.clone());
 
-            let Some(player_to_modify) = data.player_mut(relationship_result.from_player_id)
-            else {
+            let Some(player_to_modify) = data.player_mut(relationship_result.from_player_id) else {
                 continue;
             };
 
@@ -557,7 +556,6 @@ impl PlayerBehaviourResult {
         }
     }
 }
-
 
 /// A pre-built visible-event candidate produced by the first pass of
 /// [`PlayerBehaviourResult::process`]. The relation update has already
@@ -1369,7 +1367,10 @@ mod severity_cap_tests {
         }
 
         fn midnight(y: i32, m: u32, day: u32) -> NaiveDateTime {
-            NaiveDateTime::new(Self::date(y, m, day), NaiveTime::from_hms_opt(0, 0, 0).unwrap())
+            NaiveDateTime::new(
+                Self::date(y, m, day),
+                NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+            )
         }
 
         fn person() -> PersonAttributes {
@@ -1449,12 +1450,14 @@ mod severity_cap_tests {
 
         let mut result = PlayerBehaviourResult::new();
         for partner in 2..=10u32 {
-            result.relationship_result.push(PlayerRelationshipChangeResult {
-                from_player_id: 1,
-                to_player_id: partner,
-                relationship_change: -0.4,
-                change_type: ChangeType::PersonalConflict,
-            });
+            result
+                .relationship_result
+                .push(PlayerRelationshipChangeResult {
+                    from_player_id: 1,
+                    to_player_id: partner,
+                    relationship_change: -0.4,
+                    change_type: ChangeType::PersonalConflict,
+                });
         }
         result.process(&mut data);
 
@@ -1479,13 +1482,21 @@ mod severity_cap_tests {
         let mut result = PlayerBehaviourResult::new();
         // Iteration-order trap: weak conflicts first, strong last.
         // The ranker must still pick the strong pair.
-        for (partner, mag) in [(2u32, -0.20), (3, -0.20), (4, -0.20), (5, -0.50), (6, -0.50)] {
-            result.relationship_result.push(PlayerRelationshipChangeResult {
-                from_player_id: 1,
-                to_player_id: partner,
-                relationship_change: mag,
-                change_type: ChangeType::PersonalConflict,
-            });
+        for (partner, mag) in [
+            (2u32, -0.20),
+            (3, -0.20),
+            (4, -0.20),
+            (5, -0.50),
+            (6, -0.50),
+        ] {
+            result
+                .relationship_result
+                .push(PlayerRelationshipChangeResult {
+                    from_player_id: 1,
+                    to_player_id: partner,
+                    relationship_change: mag,
+                    change_type: ChangeType::PersonalConflict,
+                });
         }
         result.process(&mut data);
 
@@ -1498,7 +1509,11 @@ mod severity_cap_tests {
             .filter_map(|e| e.partner_player_id)
             .collect();
         assert_eq!(visible.len(), 2);
-        assert!(visible.contains(&5) && visible.contains(&6), "got {:?}", visible);
+        assert!(
+            visible.contains(&5) && visible.contains(&6),
+            "got {:?}",
+            visible
+        );
     }
 
     #[test]
@@ -1516,12 +1531,14 @@ mod severity_cap_tests {
 
         let mut result = PlayerBehaviourResult::new();
         for partner in [4u32, 5, 6] {
-            result.relationship_result.push(PlayerRelationshipChangeResult {
-                from_player_id: 1,
-                to_player_id: partner,
-                relationship_change: -0.5,
-                change_type: ChangeType::PersonalConflict,
-            });
+            result
+                .relationship_result
+                .push(PlayerRelationshipChangeResult {
+                    from_player_id: 1,
+                    to_player_id: partner,
+                    relationship_change: -0.5,
+                    change_type: ChangeType::PersonalConflict,
+                });
         }
         result.process(&mut data);
 
@@ -1532,7 +1549,10 @@ mod severity_cap_tests {
             "behaviour pass must respect the pre-existing same-tick budget"
         );
         for partner in [4u32, 5, 6] {
-            let rel = p1.relations.get_player(partner).expect("relation must exist");
+            let rel = p1
+                .relations
+                .get_player(partner)
+                .expect("relation must exist");
             assert!(
                 rel.level < 0.0,
                 "relation drift must land even when the visible row is capped: partner {} level {}",
@@ -1550,12 +1570,14 @@ mod severity_cap_tests {
 
         let mut result = PlayerBehaviourResult::new();
         for partner in [2u32, 3] {
-            result.relationship_result.push(PlayerRelationshipChangeResult {
-                from_player_id: 1,
-                to_player_id: partner,
-                relationship_change: -0.5,
-                change_type: ChangeType::PersonalConflict,
-            });
+            result
+                .relationship_result
+                .push(PlayerRelationshipChangeResult {
+                    from_player_id: 1,
+                    to_player_id: partner,
+                    relationship_change: -0.5,
+                    change_type: ChangeType::PersonalConflict,
+                });
         }
         result.process(&mut data);
 

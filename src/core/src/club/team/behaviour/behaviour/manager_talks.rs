@@ -22,9 +22,9 @@ use crate::context::GlobalContext;
 use crate::utils::DateUtils;
 use crate::{
     HappinessEventType, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus,
-    PlayerStatusType, Staff, StaffCollection, TeamType,
+    PlayerStatusType, PrivateTalkReason, Staff, StaffCollection, TeamType,
 };
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use log::debug;
 use std::collections::HashMap;
 
@@ -67,6 +67,24 @@ impl TeamBehaviour {
                     ManagerTalkType::MoraleTalk
                 };
                 talk_candidates.push((player.id, talk_type, 90));
+            }
+
+            // Player-requested private talk: an unanswered
+            // `AskedForPrivateTalk` routes straight into this week's
+            // queue, above everything except a formal transfer request
+            // (a Req player's conversation is already the transfer
+            // discussion). Priority ≥ 90 also bypasses the topic-
+            // cooldown gate, so the knock on the door gets answered.
+            if let Some(date) = today {
+                if !statuses.contains(&PlayerStatusType::Req) {
+                    if let Some(reason) = PrivateTalkInbox::pending_reason(player, date) {
+                        talk_candidates.push((
+                            player.id,
+                            PrivateTalkInbox::talk_type_for(reason),
+                            95,
+                        ));
+                    }
+                }
             }
 
             // Proactive: coach talks to high-ability players showing early playing time
@@ -474,10 +492,9 @@ impl TeamBehaviour {
                     let determination_factor = determination / 20.0;
                     let age_pressure = ((age as f32 - 20.0) / 6.0).clamp(0.0, 1.0);
                     let loyalty_brake = player.attributes.loyalty / 20.0 * 0.15;
-                    let desire = ambition_factor * 0.45
-                        + determination_factor * 0.20
-                        + age_pressure * 0.35
-                        - loyalty_brake;
+                    let desire =
+                        ambition_factor * 0.45 + determination_factor * 0.20 + age_pressure * 0.35
+                            - loyalty_brake;
 
                     if !on_cooldown && desire > 0.50 {
                         let priority = (desire * 100.0) as u32 + age as u32 * 10;
@@ -692,7 +709,8 @@ impl TeamBehaviour {
                 annual_wage_bill,
                 asset_class: asset_ctx.classify(player, date),
             };
-            if let Some(termination) = CoachTerminationReview::evaluate(player, date, &release_ctx) {
+            if let Some(termination) = CoachTerminationReview::evaluate(player, date, &release_ctx)
+            {
                 result.contract_terminations.push(termination);
                 if let Some(count) = group_active.get_mut(&group) {
                     *count = count.saturating_sub(1);
@@ -1067,6 +1085,63 @@ mod tests {
     }
 }
 
+/// Reads a player's pending `AskedForPrivateTalk` request off the
+/// happiness event feed and routes it into the weekly talk queue. A
+/// request is "pending" while it's recent and no manager interaction
+/// has been logged since it was raised — any talk on any topic counts
+/// as the door being answered, because the conversation the request
+/// produces is itself logged and stops the routing next week.
+struct PrivateTalkInbox;
+
+impl PrivateTalkInbox {
+    /// How long a request stays actionable. Matches the event's own
+    /// 45-day re-emit cooldown so a stale request can't resurface
+    /// after the moment has passed.
+    const REQUEST_WINDOW_DAYS: u16 = 45;
+
+    /// The pending request's dominant grievance, if the player has
+    /// knocked on the door and nobody has talked to him since.
+    fn pending_reason(player: &Player, today: NaiveDate) -> Option<PrivateTalkReason> {
+        let event = player.happiness.recent_events.iter().find(|e| {
+            e.event_type == HappinessEventType::AskedForPrivateTalk
+                && e.days_ago <= Self::REQUEST_WINDOW_DAYS
+        })?;
+        let request_date = today - Duration::days(event.days_ago as i64);
+        let answered = player
+            .interactions
+            .entries
+            .iter()
+            .any(|i| i.date >= request_date);
+        if answered {
+            return None;
+        }
+        let reason = event
+            .context
+            .as_ref()
+            .and_then(|c| c.private_talk_context.as_ref())
+            .map(|p| p.reason)
+            .unwrap_or(PrivateTalkReason::ManagerRelationship);
+        Some(reason)
+    }
+
+    /// Map the grievance axis onto the talk the manager actually holds.
+    /// Playing time and transfer status have dedicated talk machinery;
+    /// the relationship-shaped axes (contract anxiety, status, tactical
+    /// role, eroded trust) all resolve through the morale-talk path,
+    /// which carries tone selection, outcome recording, and follow-up
+    /// promises.
+    fn talk_type_for(reason: PrivateTalkReason) -> ManagerTalkType {
+        match reason {
+            PrivateTalkReason::PlayingTime => ManagerTalkType::PlayingTimeTalk,
+            PrivateTalkReason::TransferStatus => ManagerTalkType::TransferDiscussion,
+            PrivateTalkReason::Contract
+            | PrivateTalkReason::CaptaincyOrStatus
+            | PrivateTalkReason::TacticalRole
+            | PrivateTalkReason::ManagerRelationship => ManagerTalkType::MoraleTalk,
+        }
+    }
+}
+
 /// Conflict-risk gated candidate generator for the weekly talk picker.
 /// Translates the spec thresholds (>0.65 private talk, >0.80 morale
 /// rescue) into the existing candidate format. Bundled under a named
@@ -1286,7 +1361,10 @@ mod coach_termination_tests {
         let termination = CoachTerminationReview::evaluate(&player, Fx::date(), &ctx)
             .expect("cheap declining true-surplus senior must be terminable");
         assert_eq!(termination.player_id, player.id);
-        assert_eq!(termination.reason, FreeAgentReleaseReason::MutualTermination);
+        assert_eq!(
+            termination.reason,
+            FreeAgentReleaseReason::MutualTermination
+        );
 
         // Committing the termination clears the contract, stamps Frt, and
         // records the explicit reason in state + decision history.
@@ -1358,8 +1436,12 @@ mod coach_termination_tests {
     // termination, even when the numbers would otherwise clear the gate.
     #[test]
     fn transfer_listed_player_is_not_terminated() {
-        let mut contract =
-            Fx::contract(15_000, ContractType::FullTime, 3, PlayerSquadStatus::NotNeeded);
+        let mut contract = Fx::contract(
+            15_000,
+            ContractType::FullTime,
+            3,
+            PlayerSquadStatus::NotNeeded,
+        );
         contract.is_transfer_listed = true;
         let player = Fx::player(60, 33, Some(contract));
         let ctx = Fx::ctx(20_000.0, SquadAssetClass::TrueSurplus);
@@ -1460,7 +1542,12 @@ mod coach_termination_tests {
         // so the evidence window has closed and the same veteran is released.
         let established = Fx::surplus_squad(20);
         let mut result = TeamBehaviourResult::new();
-        TeamBehaviour::process_coach_contract_terminations(&established, &staffs, &mut result, &ctx);
+        TeamBehaviour::process_coach_contract_terminations(
+            &established,
+            &staffs,
+            &mut result,
+            &ctx,
+        );
         assert_eq!(
             result.contract_terminations.len(),
             1,
@@ -1489,8 +1576,8 @@ mod reserve_escalation_tests {
     use crate::context::{GlobalContext, SimulationContext};
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills, TeamType,
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, TeamType,
     };
     use chrono::Datelike;
 
@@ -1577,7 +1664,11 @@ mod reserve_escalation_tests {
         // 25-year-old — past the loan window, asks for the move itself.
         let players = PlayerCollection::new(vec![Fx::reserve_player(25, 14.0, true)]);
         let result = Fx::run(&players, TeamType::Second);
-        assert_eq!(result.manager_talks.len(), 1, "the stuck senior must raise it");
+        assert_eq!(
+            result.manager_talks.len(),
+            1,
+            "the stuck senior must raise it"
+        );
         assert_eq!(result.manager_talks[0].player_id, 7);
         assert_eq!(
             result.manager_talks[0].talk_type,

@@ -1,4 +1,5 @@
 use super::types::{SquadAnalysis, TransferActivitySummary};
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::contract::{AffordabilityInput, ContractStalemate};
 use crate::club::player::transfer::processing::UNHAPPY_LISTING_MIN_DAYS;
@@ -12,7 +13,6 @@ use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::{
     TransferListing, TransferListingOrigin, TransferListingStatus, TransferListingType,
 };
-use crate::club::player::behaviour_config::HappinessConfig;
 use crate::{
     Club, Country, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
     PlayerPositionType, PlayerSquadStatus, PlayerStatusType, ReputationLevel,
@@ -306,15 +306,13 @@ impl CountryResult {
                         // letting him find out from the transfer page.
                         // Player-initiated listings (his own request, his
                         // own hardened unhappiness) need no telling.
-                        let player_initiated = listing_data.reason
-                            == "dec_reason_player_requested"
+                        let player_initiated = listing_data.reason == "dec_reason_player_requested"
                             || listing_data.reason == "dec_reason_player_unhappy";
                         if status_type == PlayerStatusType::Lst
                             && !player_initiated
                             && !is_under16_release
                         {
-                            let magnitude =
-                                HappinessConfig::default().catalog.told_not_in_plans;
+                            let magnitude = HappinessConfig::default().catalog.told_not_in_plans;
                             player.happiness.add_event_with_cooldown(
                                 HappinessEventType::ToldNotInPlans,
                                 magnitude,
@@ -459,12 +457,7 @@ impl CountryResult {
             let mut payout: u32 = 0;
             for team in &mut club.teams.teams {
                 team.transfer_list.remove(player_id);
-                if let Some(player) = team
-                    .players
-                    .players
-                    .iter_mut()
-                    .find(|p| p.id == player_id)
-                {
+                if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
                     payout = player
                         .contract
                         .as_ref()
@@ -1527,7 +1520,10 @@ mod tests {
             .iter()
             .filter(|e| e.event_type == HappinessEventType::ToldNotInPlans)
             .count();
-        assert_eq!(told, 0, "he asked to leave — there is nothing to break to him");
+        assert_eq!(
+            told, 0,
+            "he asked to leave — there is nothing to break to him"
+        );
     }
 
     #[test]
@@ -1657,8 +1653,12 @@ mod tests {
                 contract.expiration = Fixture::date(2029, 6, 30);
                 contract.is_transfer_listed = true;
             }
-            let club =
-                Fixture::club(vec![Fixture::team(10, "main", TeamType::Main, vec![player])]);
+            let club = Fixture::club(vec![Fixture::team(
+                10,
+                "main",
+                TeamType::Main,
+                vec![player],
+            )]);
             let mut country = Fixture::country(club);
             country.transfer_market.add_listing(TransferListing::new(
                 101,
@@ -1730,7 +1730,10 @@ mod tests {
             .iter()
             .filter(|e| e.event_type == HappinessEventType::UnsoldWindowClosed)
             .count();
-        assert_eq!(unsold, 1, "a listed, unsold player must feel the window shut");
+        assert_eq!(
+            unsold, 1,
+            "a listed, unsold player must feel the window shut"
+        );
     }
 
     #[test]

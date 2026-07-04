@@ -1066,8 +1066,7 @@ impl PipelineProcessor {
         // the loan lands. Domestic only: a foreign loanee isn't resolvable
         // from this country, and the in-flight depth cap already gates those.
         let loan_filled_group = if resolved_was_loan == Some(true) && accepted {
-            Self::find_player_in_country(country, player_id)
-                .map(|p| p.position().position_group())
+            Self::find_player_in_country(country, player_id).map(|p| p.position().position_group())
         } else {
             None
         };
@@ -1287,7 +1286,11 @@ impl PipelineProcessor {
     /// Batched [`cleanup_player_release_interest`] — one world walk for
     /// every player released this tick.
     pub fn cleanup_player_release_interest_batch(data: &mut SimulatorData, player_ids: &[u32]) {
-        Self::cleanup_player_interest_batch_with(data, player_ids, TransferListingStatus::Cancelled);
+        Self::cleanup_player_interest_batch_with(
+            data,
+            player_ids,
+            TransferListingStatus::Cancelled,
+        );
     }
 
     /// Batched version of [`cleanup_player_transfer_interest`]: walks

@@ -1927,7 +1927,10 @@ mod breakout_sweep_tests {
             ListedTargetVerdict::Accept(score) => {
                 assert!(score > 10.0, "expected a meaningful score, got {}", score)
             }
-            other => panic!("expected Accept for a loan-listed breakout, got {:?}", other),
+            other => panic!(
+                "expected Accept for a loan-listed breakout, got {:?}",
+                other
+            ),
         }
     }
 

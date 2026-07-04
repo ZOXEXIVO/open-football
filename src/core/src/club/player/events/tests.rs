@@ -2070,6 +2070,7 @@ fn drop_ctx(
         match_importance: importance,
         repeated: false,
         is_friendly,
+        explained_by_coach: false,
     }
 }
 
@@ -5384,7 +5385,10 @@ fn unused_substitute_does_not_contaminate_average() {
 /// `MissedAssignment` (the second arm in the `if/else if` chain that
 /// follows the red-card guard).
 fn weak_player_with_missed_assignment_profile() -> Player {
-    let mut p = build_player(PlayerPositionType::MidfielderCenter, PersonAttributes::default());
+    let mut p = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
     p.skills.mental.work_rate = 15.0; // avoid PoorPressing arm
     p.skills.mental.teamwork = 5.0; // selects MissedAssignment
     p.attributes.professionalism = 14.0;
@@ -5503,12 +5507,10 @@ mod relationship_arc {
     #[test]
     fn trusted_in_big_match_fires_with_context() {
         let mut p = make_player();
-        let ctx = BigMatchSelectionContext::new(
-            BigMatchKind::CupFinal,
-            BigMatchDecision::StartedTrusted,
-        )
-        .with_young_or_fringe(true)
-        .with_match_importance(1.0);
+        let ctx =
+            BigMatchSelectionContext::new(BigMatchKind::CupFinal, BigMatchDecision::StartedTrusted)
+                .with_young_or_fringe(true)
+                .with_match_importance(1.0);
         p.on_trusted_in_big_match(ctx);
         assert_eq!(
             count_events(&p, &HappinessEventType::TrustedInBigMatch),
@@ -5903,6 +5905,7 @@ mod relationship_arc {
             match_importance: 0.95,
             repeated: false,
             is_friendly: false,
+            explained_by_coach: false,
         };
         p.on_match_dropped_with_context(ctx);
         assert!(
@@ -5926,6 +5929,7 @@ mod relationship_arc {
             match_importance: 0.95,
             repeated: false,
             is_friendly: false,
+            explained_by_coach: false,
         };
         p.on_match_dropped_with_context(ctx);
         assert_eq!(
@@ -5948,6 +5952,7 @@ mod relationship_arc {
             match_importance: 0.5,
             repeated: false,
             is_friendly: false,
+            explained_by_coach: false,
         };
         p.on_match_dropped_with_context(ctx());
         p.on_match_dropped_with_context(ctx());
@@ -5976,6 +5981,7 @@ mod relationship_arc {
             match_importance: 0.5,
             repeated: false,
             is_friendly: false,
+            explained_by_coach: false,
         };
         for _ in 0..5 {
             p.on_match_dropped_with_context(ctx.clone());
@@ -6054,10 +6060,9 @@ mod relationship_arc {
         }
 
         // Same-position signing — should fire.
-        let same_pos =
-            NewSigningThreatContext::new(101, NewSigningThreatReason::SamePosition)
-                .with_player_status(PlayerSquadStatus::FirstTeamSquadRotation)
-                .with_rival_status(PlayerSquadStatus::FirstTeamRegular);
+        let same_pos = NewSigningThreatContext::new(101, NewSigningThreatReason::SamePosition)
+            .with_player_status(PlayerSquadStatus::FirstTeamSquadRotation)
+            .with_rival_status(PlayerSquadStatus::FirstTeamRegular);
         p.on_new_signing_threat(same_pos);
         assert!(
             count_events(&p, &HappinessEventType::ThreatenedByNewSigning) >= 1,
@@ -6159,4 +6164,3 @@ fn on_match_played_form_and_average_agree_under_effective_rating() {
         avg
     );
 }
-

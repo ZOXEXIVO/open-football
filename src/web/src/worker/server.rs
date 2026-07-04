@@ -5,7 +5,7 @@
 //! and then a stream of `PlayBatch` requests.
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND};
-use crate::worker::protocol::{MatchEnvelope, MatchOutcome, Request, Response, PROTOCOL_VERSION};
+use crate::worker::protocol::{MatchEnvelope, MatchOutcome, PROTOCOL_VERSION, Request, Response};
 use crate::worker::registry::LatencyTimer;
 use crate::worker::transport::Frame;
 use core::MatchRuntime;
@@ -152,20 +152,17 @@ impl WorkerConnection {
                     // write) for the completion log below.
                     let count = items.len();
                     let timer = LatencyTimer::start();
-                    let outcomes = match tokio::task::spawn_blocking(move || {
-                        Self::play_batch(items)
-                    })
-                    .await
-                    {
-                        Ok(o) => o,
-                        Err(e) => {
-                            let resp = Response::Error {
-                                reason: format!("worker task panicked: {}", e),
-                            };
-                            Frame::write(&mut self.stream, &resp).await?;
-                            continue;
-                        }
-                    };
+                    let outcomes =
+                        match tokio::task::spawn_blocking(move || Self::play_batch(items)).await {
+                            Ok(o) => o,
+                            Err(e) => {
+                                let resp = Response::Error {
+                                    reason: format!("worker task panicked: {}", e),
+                                };
+                                Frame::write(&mut self.stream, &resp).await?;
+                                continue;
+                            }
+                        };
                     info!(
                         "worker: processed batch matches={} in {} ms",
                         count,
@@ -241,8 +238,7 @@ impl WorkerConnection {
             // outgoing `MatchOutcome::Squad { idx }` so the
             // coordinator can find its fixture again.
             let mut keyed = Vec::with_capacity(squad.len());
-            let mut caller_idx_by_pos: HashMap<usize, usize> =
-                HashMap::with_capacity(squad.len());
+            let mut caller_idx_by_pos: HashMap<usize, usize> = HashMap::with_capacity(squad.len());
             for (pos, caller_idx, home, away, ko) in squad {
                 caller_idx_by_pos.insert(pos, caller_idx);
                 keyed.push((pos, home, away, ko));

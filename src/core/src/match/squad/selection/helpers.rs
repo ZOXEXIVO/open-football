@@ -1,8 +1,71 @@
 use crate::club::{PlayerFieldPositionGroup, PlayerPositionType};
+use crate::utils::DateUtils;
 use crate::{Player, PlayerPreferredFoot, PlayerStatusType, TacticalStyle, Tactics};
+use chrono::NaiveDate;
 
 pub const DEFAULT_SQUAD_SIZE: usize = 11;
 pub const DEFAULT_BENCH_SIZE: usize = 7;
+
+/// Succession-heir identification: for each position group whose best
+/// available player is inside the late-career window, the strongest
+/// credible young player in the same group is the heir the coach
+/// deliberately gives minutes behind the veteran. Feeds the coach
+/// engine's `SuccessionPlanning` selection read — previously the heir
+/// list was always empty at every production call site.
+pub(crate) struct SuccessionHeirs;
+
+impl SuccessionHeirs {
+    const HEIR_MAX_AGE: u8 = 23;
+    /// Credibility floor relative to the incumbent — a kid at half the
+    /// veteran's level isn't a succession plan, he's a hope.
+    const HEIR_MIN_CA_RATIO: f32 = 0.6;
+
+    /// Age from which the coach starts grooming a successor — a year
+    /// or so before the scorer's hard late-career thresholds, because
+    /// the plan starts before the cliff.
+    fn grooming_age(group: PlayerFieldPositionGroup) -> u8 {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 36,
+            PlayerFieldPositionGroup::Defender => 33,
+            PlayerFieldPositionGroup::Midfielder => 32,
+            PlayerFieldPositionGroup::Forward => 31,
+        }
+    }
+
+    /// At most one heir per position group, by current ability.
+    pub(crate) fn identify(available: &[&Player], date: NaiveDate) -> Vec<u32> {
+        let groups = [
+            PlayerFieldPositionGroup::Goalkeeper,
+            PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Forward,
+        ];
+        let mut heirs: Vec<u32> = Vec::new();
+        for group in groups {
+            let incumbent = available
+                .iter()
+                .filter(|p| p.position().position_group() == group)
+                .max_by_key(|p| p.player_attributes.current_ability);
+            let Some(incumbent) = incumbent else { continue };
+            if DateUtils::age(incumbent.birth_date, date) < Self::grooming_age(group) {
+                continue;
+            }
+            let floor =
+                incumbent.player_attributes.current_ability as f32 * Self::HEIR_MIN_CA_RATIO;
+            let heir = available
+                .iter()
+                .filter(|p| p.id != incumbent.id)
+                .filter(|p| p.position().position_group() == group)
+                .filter(|p| DateUtils::age(p.birth_date, date) <= Self::HEIR_MAX_AGE)
+                .filter(|p| p.player_attributes.current_ability as f32 >= floor)
+                .max_by_key(|p| p.player_attributes.current_ability);
+            if let Some(h) = heir {
+                heirs.push(h.id);
+            }
+        }
+        heirs
+    }
+}
 
 /// Minimum condition to be physically able to play (15%).
 pub const HARD_CONDITION_FLOOR: u32 = 15;

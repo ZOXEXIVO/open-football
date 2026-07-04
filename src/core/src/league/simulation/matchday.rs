@@ -1,6 +1,7 @@
 use crate::context::GlobalContext;
 use crate::league::{League, LeagueDynamics, LeagueMatch, LeagueMatchResultResult, LeagueTable};
 use crate::r#match::MatchSquad;
+use crate::r#match::squad::selection::model::MatchSelectionGameModel;
 use crate::r#match::{Match, MatchResult, SelectionCompetition, SelectionContext};
 use crate::{Club, ClubPhilosophy, MatchRuntime, Person, Player, Team, TeamType};
 use chrono::Duration;
@@ -163,7 +164,8 @@ impl League {
         friendly: bool,
         knockout: bool,
     ) -> Vec<MatchResult> {
-        let matches = self.build_matchday_matches(scheduled_matches, clubs, ctx, friendly, knockout);
+        let matches =
+            self.build_matchday_matches(scheduled_matches, clubs, ctx, friendly, knockout);
         let match_results = MatchRuntime::engine_pool().play(matches);
         self.apply_matchday_results(scheduled_matches, &match_results);
         match_results
@@ -307,7 +309,7 @@ impl League {
         let home_baseline = home_team.tactics.as_ref().map(|t| t.tactic_type);
         let away_baseline = away_team.tactics.as_ref().map(|t| t.tactic_type);
 
-        let home_ctx = SelectionContext {
+        let mut home_ctx = SelectionContext {
             is_friendly: friendly,
             date,
             match_importance: home_importance,
@@ -316,7 +318,7 @@ impl League {
             competition: home_competition,
             game_model: None,
         };
-        let away_ctx = SelectionContext {
+        let mut away_ctx = SelectionContext {
             is_friendly: friendly,
             date,
             match_importance: away_importance,
@@ -325,7 +327,39 @@ impl League {
             competition: away_competition,
             game_model: None,
         };
-        let selection_ctx = home_ctx;
+
+        // Fixture-aware game model per side: the opponent block reads the
+        // opposing roster (pace / aerial / pressing / flank threat), the
+        // environment carries the venue, and congestion mirrors the same
+        // upcoming-fixture count the importance dampener uses. Friendlies
+        // skip it — the rotation selector never reads the model.
+        if !friendly {
+            // Rivalry read for the derby classification — either club
+            // listing the other as a rival makes the fixture a derby.
+            let is_derby = match (
+                lookup.club(home_team.club_id),
+                lookup.club(away_team.club_id),
+            ) {
+                (Some(h), Some(a)) => h.is_rival(a.id) || a.is_rival(h.id),
+                _ => false,
+            };
+            home_ctx.game_model = Some(MatchSelectionGameModel::build_for_fixture(
+                &home_ctx,
+                home_team,
+                away_team,
+                true,
+                upcoming_fixtures.0,
+                is_derby,
+            ));
+            away_ctx.game_model = Some(MatchSelectionGameModel::build_for_fixture(
+                &away_ctx,
+                away_team,
+                home_team,
+                false,
+                upcoming_fixtures.1,
+                is_derby,
+            ));
+        }
 
         let (mut home_squad, mut away_squad) = if friendly {
             let mut home_supplements = Self::collect_supplementary_players(
@@ -359,7 +393,7 @@ impl League {
             away_supplements.extend(away_overage);
 
             (
-                home_team.get_rotation_match_squad_with_reserves(&home_supplements, &selection_ctx),
+                home_team.get_rotation_match_squad_with_reserves(&home_supplements, &home_ctx),
                 away_team.get_rotation_match_squad_with_reserves(&away_supplements, &away_ctx),
             )
         } else {
@@ -380,7 +414,7 @@ impl League {
                 away_is_main,
             );
             (
-                home_team.get_enhanced_match_squad(&home_reserves, &selection_ctx),
+                home_team.get_enhanced_match_squad(&home_reserves, &home_ctx),
                 away_team.get_enhanced_match_squad(&away_reserves, &away_ctx),
             )
         };
@@ -506,7 +540,10 @@ impl League {
                     .count()
             })
             .unwrap_or(0);
-        let reserve_keepers = reserves.iter().filter(|p| p.positions.is_goalkeeper()).count();
+        let reserve_keepers = reserves
+            .iter()
+            .filter(|p| p.positions.is_goalkeeper())
+            .count();
 
         let mut have = team_keepers + reserve_keepers;
         if have >= GK_BENCH_TARGET {
@@ -983,9 +1020,9 @@ mod tests {
     use crate::academy::ClubAcademy;
     use crate::shared::Location;
     use crate::{
-        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PeopleNameGeneratorData, Player,
-        PlayerCollection, PlayerGenerator, PlayerPositionType, StaffCollection, Team, TeamBuilder,
-        TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PeopleNameGeneratorData,
+        Player, PlayerCollection, PlayerGenerator, PlayerPositionType, StaffCollection, Team,
+        TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::{NaiveTime, Utc};
 
@@ -998,7 +1035,8 @@ mod tests {
     }
 
     fn md_player(id: u32, position: PlayerPositionType, ability: u8) -> Player {
-        let mut p = PlayerGenerator::generate(1, Utc::now().date_naive(), position, 15, &gk_names());
+        let mut p =
+            PlayerGenerator::generate(1, Utc::now().date_naive(), position, 15, &gk_names());
         p.id = id;
         p.player_attributes.current_ability = ability;
         p

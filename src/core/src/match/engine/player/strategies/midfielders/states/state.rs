@@ -34,7 +34,7 @@ pub enum MidfielderState {
     Shooting = 15,        // Shooting,
     Intercepting = 16,    // Intercepting the ball,
     CreatingSpace = 17,   // Creating space for teammates
-    Guarding = 18,        // Guarding an attacker — denying space and preventing them from getting open
+    Guarding = 18, // Guarding an attacker — denying space and preventing them from getting open
 }
 
 impl MidfielderState {

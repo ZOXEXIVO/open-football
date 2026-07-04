@@ -16,7 +16,9 @@ use crate::club::player::plan::PlayerPlan;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::PlayerTrait;
 use crate::club::player::transfer::availability_market::AvailabilityMarketState;
-use crate::club::player::transfer::free_agent_market::{FreeAgentMarketState, PreContractAgreement};
+use crate::club::player::transfer::free_agent_market::{
+    FreeAgentMarketState, PreContractAgreement,
+};
 use crate::club::player::transfer::processing::TransferDesireContext;
 use crate::club::player::utils::PlayerUtils;
 use crate::club::{
@@ -27,8 +29,8 @@ use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
 use crate::{
-    CompetitionStatistics, IndividualTrainingPlan, Person, PersonAttributes,
-    PlayerDecisionHistory, PlayerHappiness, PlayerPositionType, PlayerPositions, PlayerStatistics,
+    CompetitionStatistics, IndividualTrainingPlan, Person, PersonAttributes, PlayerDecisionHistory,
+    PlayerHappiness, PlayerPositionType, PlayerPositions, PlayerStatistics,
     PlayerStatisticsHistory, PlayerStatus, PlayerTrainingHistory, PlayerValueCalculator, Relations,
 };
 use crate::{

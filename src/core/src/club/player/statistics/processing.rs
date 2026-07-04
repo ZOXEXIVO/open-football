@@ -641,7 +641,10 @@ mod tests {
             .iter()
             .find(|r| r.team_slug == "zenit")
             .expect("Zenit (Premier League) borrowed row must appear");
-        assert_eq!(zenit2_row.statistics.goals, 9, "Zenit 2 keeps its 9 SD goals");
+        assert_eq!(
+            zenit2_row.statistics.goals, 9,
+            "Zenit 2 keeps its 9 SD goals"
+        );
         assert_eq!(zenit2_row.statistics.played, 16);
         assert_eq!(
             zenit_row.statistics.goals, 3,

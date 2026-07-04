@@ -3351,7 +3351,11 @@ fn five_goal_one_assist_eight_app_scorer_clears_six_seven() {
 
     // 4 goal-scoring matches (5 goals total, one brace).
     for (stats, tg, og) in [
-        (make_fwd(2, 0, 4, 6, 0.9, 22, 17, 1, 1, 1, 2, 1, 2, 1), 3_u8, 1_u8),
+        (
+            make_fwd(2, 0, 4, 6, 0.9, 22, 17, 1, 1, 1, 2, 1, 2, 1),
+            3_u8,
+            1_u8,
+        ),
         (make_fwd(1, 0, 3, 5, 0.6, 24, 18, 0, 1, 0, 2, 0, 2, 0), 1, 0),
         (make_fwd(1, 0, 4, 5, 0.7, 20, 15, 1, 0, 1, 2, 1, 1, 1), 2, 2),
         (make_fwd(1, 0, 3, 4, 0.5, 21, 17, 0, 1, 0, 1, 0, 2, 0), 1, 1),
@@ -3368,7 +3372,11 @@ fn five_goal_one_assist_eight_app_scorer_clears_six_seven() {
     // 3 goalless full-match starts (mix of CS/concede; the kind of
     // hard-match goalless shift that drags season averages).
     for (stats, tg, og) in [
-        (make_fwd(0, 0, 3, 5, 0.6, 23, 18, 1, 1, 0, 2, 1, 2, 1), 1_u8, 1_u8),
+        (
+            make_fwd(0, 0, 3, 5, 0.6, 23, 18, 1, 1, 0, 2, 1, 2, 1),
+            1_u8,
+            1_u8,
+        ),
         (make_fwd(0, 0, 2, 4, 0.5, 20, 16, 0, 0, 1, 2, 0, 1, 1), 0, 2),
         (make_fwd(0, 0, 2, 3, 0.4, 22, 17, 1, 0, 0, 1, 1, 2, 0), 1, 2),
     ] {

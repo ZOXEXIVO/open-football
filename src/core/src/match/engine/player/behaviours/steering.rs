@@ -195,8 +195,7 @@ impl<'a> SteeringBehavior<'a> {
                     // Far from target - use normal steering accumulation.
                     // `max_speed` above is the same pure call — reuse it.
                     let steering = desired_velocity - player.velocity;
-                    let max_acceleration =
-                        max_speed * agility_normalized * acceleration_normalized;
+                    let max_acceleration = max_speed * agility_normalized * acceleration_normalized;
                     let limited_steering = Self::limit_magnitude(steering, max_acceleration);
 
                     let move_velocity = player.velocity + limited_steering;
@@ -252,9 +251,7 @@ impl<'a> SteeringBehavior<'a> {
                 // Calculate desired velocity toward the wander target
                 let to_target = wander_target - player.position;
                 let desired_velocity = if to_target.norm() > 0.0 {
-                    to_target.normalize()
-                        * player.max_speed_with_condition_cached()
-                        * 0.3 // Reduced speed for wandering
+                    to_target.normalize() * player.max_speed_with_condition_cached() * 0.3 // Reduced speed for wandering
                 } else {
                     Vector3::zeros()
                 };
@@ -267,8 +264,7 @@ impl<'a> SteeringBehavior<'a> {
 
                 // Apply steering force to get new absolute velocity
                 let new_velocity = player.velocity + steering;
-                let wander_max_speed = player.max_speed_with_condition_cached()
-                    * 0.3; // Wandering is slower
+                let wander_max_speed = player.max_speed_with_condition_cached() * 0.3; // Wandering is slower
                 let final_velocity = Self::limit_magnitude(new_velocity, wander_max_speed);
 
                 let rotation = if final_velocity.x != 0.0 || final_velocity.y != 0.0 {

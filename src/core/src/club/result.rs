@@ -52,9 +52,7 @@ impl UnresolvedSalaryTrigger {
     /// negotiated mutual termination — keep the two distinct in history.
     fn release_reason(self) -> FreeAgentReleaseReason {
         match self {
-            UnresolvedSalaryTrigger::FailedRenewal => {
-                FreeAgentReleaseReason::FailedRenewalRelease
-            }
+            UnresolvedSalaryTrigger::FailedRenewal => FreeAgentReleaseReason::FailedRenewalRelease,
             UnresolvedSalaryTrigger::NotNeededWantsRaise => {
                 FreeAgentReleaseReason::SurplusFreeRelease
             }

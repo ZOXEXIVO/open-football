@@ -638,10 +638,9 @@ impl PlayerStatisticsHistory {
             // skip the push when an active entry for this team — matching
             // the player's current loan status — already exists
             // (defensive — the normal flow has none).
-            let has_active = self
-                .current
-                .iter()
-                .any(|e| e.team_slug == to.slug && e.is_loan == is_loan && e.departed_date.is_none());
+            let has_active = self.current.iter().any(|e| {
+                e.team_slug == to.slug && e.is_loan == is_loan && e.departed_date.is_none()
+            });
             if !has_active {
                 self.push_new_entry(to, PlayerStatistics::default(), is_loan, carried_fee, date);
             }
@@ -1076,8 +1075,7 @@ impl PlayerStatisticsHistory {
                 }
                 if !e.is_loan {
                     // Permanent move: off-season window only.
-                    return e.joined_date > season_matches_end
-                        && e.joined_date < next_season_start;
+                    return e.joined_date > season_matches_end && e.joined_date < next_season_start;
                 }
                 // Loan: joined in the last 30% of the season (or after it).
                 let days_in_season = (season_matches_end - e.joined_date).num_days().max(0);
@@ -1086,7 +1084,9 @@ impl PlayerStatisticsHistory {
             .map(|e| (e.team_slug.clone(), e.is_loan, e.transfer_fee))
             .collect();
         let is_carried_forward = |slug: &str, loan: bool| -> bool {
-            carried_forward.iter().any(|(s, l, _)| s == slug && *l == loan)
+            carried_forward
+                .iter()
+                .any(|(s, l, _)| s == slug && *l == loan)
         };
         // Fee a carried spell brings into the next season (None when the
         // (slug, loan) pair isn't a carried move), so the destination's
@@ -1662,8 +1662,7 @@ impl PlayerStatisticsHistory {
                 if live_continental.total_games() > 0 {
                     item.statistics.merge_from(live_continental);
                 }
-            } else if let Some(cont) =
-                self.continental_for(item.season.start_year, &item.team_slug)
+            } else if let Some(cont) = self.continental_for(item.season.start_year, &item.team_slug)
             {
                 item.statistics.merge_from(cont);
             }
@@ -2023,12 +2022,7 @@ mod club_career_apps_tests {
     /// club still anchors the dream-move gate.
     #[test]
     fn last_known_senior_team_reputation_prefers_current_over_items() {
-        let mut hist = PlayerStatisticsHistory::from_items(vec![frozen(
-            2024,
-            "small",
-            10,
-            0,
-        )]);
+        let mut hist = PlayerStatisticsHistory::from_items(vec![frozen(2024, "small", 10, 0)]);
         // Newest entry by seq_id, with `team_reputation` tagged to the
         // freshest club — overrides the older 5000-rep historical row.
         hist.current.push(CurrentSeasonEntry {
@@ -2336,11 +2330,14 @@ mod club_career_apps_tests {
         );
 
         assert!(
-            !hist.season_ledger.iter().any(|e| {
-                e.season_start_year == 2026 && e.team_slug == "zenit"
-            }) && !hist.items.iter().any(|i| {
-                i.season.start_year == 2026 && i.team_slug == "zenit"
-            }),
+            !hist
+                .season_ledger
+                .iter()
+                .any(|e| { e.season_start_year == 2026 && e.team_slug == "zenit" })
+                && !hist
+                    .items
+                    .iter()
+                    .any(|i| { i.season.start_year == 2026 && i.team_slug == "zenit" }),
             "summer-window transfer must not freeze a 2026/27 phantom row"
         );
         assert!(
@@ -2452,19 +2449,24 @@ mod club_career_apps_tests {
         );
 
         assert!(
-            !hist.season_ledger.iter().any(|e| {
-                e.season_start_year == 2026 && e.team_slug == "bari"
-            }) && !hist.items.iter().any(|i| {
-                i.season.start_year == 2026 && i.team_slug == "bari"
-            }),
+            !hist
+                .season_ledger
+                .iter()
+                .any(|e| { e.season_start_year == 2026 && e.team_slug == "bari" })
+                && !hist
+                    .items
+                    .iter()
+                    .any(|i| { i.season.start_year == 2026 && i.team_slug == "bari" }),
             "an end-of-season 0-app loan must not freeze a phantom prior-season row"
         );
         assert!(
-            hist.season_ledger.iter().any(|e| {
-                e.season_start_year == 2026 && e.team_slug == "juventus"
-            }) || hist.items.iter().any(|i| {
-                i.season.start_year == 2026 && i.team_slug == "juventus"
-            }),
+            hist.season_ledger
+                .iter()
+                .any(|e| { e.season_start_year == 2026 && e.team_slug == "juventus" })
+                || hist
+                    .items
+                    .iter()
+                    .any(|i| { i.season.start_year == 2026 && i.team_slug == "juventus" }),
             "the parent club's season row is unaffected"
         );
         assert!(
@@ -2516,7 +2518,15 @@ mod club_career_apps_tests {
         pre_demotion.goals = 2;
 
         // Mid-season demotion to U21 (from_senior=true, to_senior=false).
-        hist.record_intra_club_move(pre_demotion, &main, &u21, true, false, false, d(2025, 12, 15));
+        hist.record_intra_club_move(
+            pre_demotion,
+            &main,
+            &u21,
+            true,
+            false,
+            false,
+            d(2025, 12, 15),
+        );
 
         // Plays at U21 — those stats are intentionally not tracked.
         // Mid-season promotion back to Main.
@@ -3102,7 +3112,13 @@ mod club_career_apps_tests {
 
         // And it survives the season-end freeze (so it doesn't vanish after
         // a rollover).
-        hist.record_season_end(Season::new(2026), PlayerStatistics::default(), &b, false, None);
+        hist.record_season_end(
+            Season::new(2026),
+            PlayerStatistics::default(),
+            &b,
+            false,
+            None,
+        );
         assert!(
             hist.items.iter().any(|i| i.team_slug == "lokomotiv-moscow"),
             "the original club must persist into frozen history"
@@ -3170,7 +3186,13 @@ mod club_career_apps_tests {
         let second = season_team("spartak-moscow-2");
 
         // Free transfer into the main team: 0-game current entry with a fee.
-        hist.push_new_entry(&main, PlayerStatistics::default(), false, Some(0.0), d(2026, 7, 1));
+        hist.push_new_entry(
+            &main,
+            PlayerStatistics::default(),
+            false,
+            Some(0.0),
+            d(2026, 7, 1),
+        );
 
         // Moved to the "2" team without playing for the main team.
         hist.record_intra_club_move(
@@ -3194,7 +3216,10 @@ mod club_career_apps_tests {
             .iter()
             .find(|e| e.team_slug == "spartak-moscow-2")
             .expect("the 2-team spell must exist");
-        assert!(second_entry.departed_date.is_none(), "2-team spell is active");
+        assert!(
+            second_entry.departed_date.is_none(),
+            "2-team spell is active"
+        );
         assert_eq!(
             second_entry.transfer_fee,
             Some(0.0),
@@ -3355,7 +3380,12 @@ mod continental_tests {
         }
     }
 
-    fn frozen(season_start: u16, slug: &str, played: u16, goals: u16) -> PlayerStatisticsHistoryItem {
+    fn frozen(
+        season_start: u16,
+        slug: &str,
+        played: u16,
+        goals: u16,
+    ) -> PlayerStatisticsHistoryItem {
         PlayerStatisticsHistoryItem {
             season: Season::new(season_start),
             team_name: slug.to_string(),

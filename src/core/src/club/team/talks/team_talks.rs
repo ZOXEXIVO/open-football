@@ -349,6 +349,57 @@ impl DressingRoomSpeechContextBuilder {
     }
 }
 
+/// Decides which dressing-room moments a matchday actually produces.
+/// Routine talks are tactical and carry no morale weight; only the
+/// charged moments — a big-occasion rallying cry before kickoff, a
+/// half-time talk when trailing or when a clear favourite is being
+/// held — become `DressingRoomSpeech` events. Full-time tone stays
+/// with the result processor, which reads the final score directly.
+pub struct TeamTalkMoments;
+
+impl TeamTalkMoments {
+    /// Pre-match: only a big occasion (derby, continental night)
+    /// produces a morale-relevant speech.
+    pub fn pre_match_tone(big_match: bool) -> Option<TeamTalkTone> {
+        big_match.then_some(TeamTalkTone::Passionate)
+    }
+
+    /// Half-time: a trailing side always gets a real talk — the
+    /// hairdryer from a disciplinarian two goals down, the rousing
+    /// speech from a motivator. A clear favourite held level gets
+    /// demands. Everything else is a tactical chat with no morale
+    /// weight, so no event fires.
+    pub fn half_time_tone(
+        ht_delta: i8,
+        rep_edge: f32,
+        manager: Option<&Staff>,
+    ) -> Option<TeamTalkTone> {
+        let motivating = manager
+            .map(|m| m.staff_attributes.mental.motivating)
+            .unwrap_or(10);
+        let discipline = manager
+            .map(|m| m.staff_attributes.mental.discipline)
+            .unwrap_or(10);
+        if ht_delta <= -2 {
+            Some(if discipline > motivating {
+                TeamTalkTone::Criticise
+            } else {
+                TeamTalkTone::Passionate
+            })
+        } else if ht_delta == -1 {
+            Some(if motivating >= 12 {
+                TeamTalkTone::Passionate
+            } else {
+                TeamTalkTone::Encourage
+            })
+        } else if ht_delta == 0 && rep_edge >= 0.20 {
+            Some(TeamTalkTone::Criticise)
+        } else {
+            None
+        }
+    }
+}
+
 /// True if the player received a `DressingRoomSpeech` of approximately the
 /// same tone within `window_days`. We can't see the original tone in the
 /// stored event, so we approximate with magnitude sign — the +/- band is

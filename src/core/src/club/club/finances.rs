@@ -305,8 +305,11 @@ impl Club {
         // expense, so P&L, FFP maths and budget projections stay clean.
         let trailing_income = self.finance.trailing_annual_income(date);
         let funded_months = self.finance.monthly_history_depth(date);
-        let deployment =
-            ExcessCashDeployment::amount(self.finance.balance.balance, trailing_income, funded_months);
+        let deployment = ExcessCashDeployment::amount(
+            self.finance.balance.balance,
+            trailing_income,
+            funded_months,
+        );
         if deployment > 0 {
             self.finance.balance.push_cash_outflow(deployment);
             debug!(
@@ -559,7 +562,10 @@ mod excess_cash_tests {
         // a 4M balance is fully protected.
         assert_eq!(ExcessCashDeployment::amount(4_000_000, 1_000_000, 12), 0);
         // 6M balance → 1M excess over the floor → 5% deployed.
-        assert_eq!(ExcessCashDeployment::amount(6_000_000, 1_000_000, 12), 50_000);
+        assert_eq!(
+            ExcessCashDeployment::amount(6_000_000, 1_000_000, 12),
+            50_000
+        );
     }
 
     #[test]
@@ -575,7 +581,10 @@ mod excess_cash_tests {
     fn healthy_elite_war_chest_is_kept() {
         // An Elite club with 250M revenue keeps up to 375M cash — only
         // genuine excess above that unwinds.
-        assert_eq!(ExcessCashDeployment::amount(300_000_000, 250_000_000, 12), 0);
+        assert_eq!(
+            ExcessCashDeployment::amount(300_000_000, 250_000_000, 12),
+            0
+        );
         let monthly = ExcessCashDeployment::amount(500_000_000, 250_000_000, 12);
         assert_eq!(monthly, (125_000_000f64 * 0.05) as i64);
     }
