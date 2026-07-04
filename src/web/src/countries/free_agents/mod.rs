@@ -122,7 +122,7 @@ pub async fn country_free_agents_action(
                 position,
                 age: DateUtils::age(player.birth_date, now),
                 current_ability: PotentialStarsView::current(player),
-                potential_ability: PotentialStarsView::potential_absolute(player),
+                potential_ability: PotentialStarsView::potential_absolute(player, now),
                 position_sort: player.position(),
                 status_message,
             }

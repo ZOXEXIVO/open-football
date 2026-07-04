@@ -237,11 +237,11 @@ fn build_squad_dtos(
                 let (current, potential) = match club_view {
                     Some(t) => (
                         PotentialStarsView::current(player),
-                        PotentialStarsView::potential_by_staff(player, t.staffs.head_coach()),
+                        PotentialStarsView::potential_by_staff(player, t.staffs.head_coach(), now),
                     ),
                     None => (
                         PotentialStarsView::current(player),
-                        PotentialStarsView::potential_absolute(player),
+                        PotentialStarsView::potential_absolute(player, now),
                     ),
                 };
 
@@ -300,7 +300,7 @@ fn build_squad_dtos(
                     club_slug: String::new(),
                     age: DateUtils::age(player.birth_date, now),
                     current_ability: PotentialStarsView::current(player),
-                    potential_ability: PotentialStarsView::potential_absolute(player),
+                    potential_ability: PotentialStarsView::potential_absolute(player, now),
                     conditions: get_conditions(player),
                     international_apps: apps,
                     international_goals: goals,

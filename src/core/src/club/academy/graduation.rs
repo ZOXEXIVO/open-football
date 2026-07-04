@@ -1,5 +1,6 @@
 use super::ClubAcademy;
 use crate::club::player::calculators::FreeAgentReleaseReason;
+use crate::club::staff::perception::PotentialEstimator;
 use crate::{Person, Player, PlayerClubContract, PlayerStatusType};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
@@ -27,15 +28,18 @@ impl ClubAcademy {
                     p.id,
                     self.pathway_readiness_score(p, date),
                     p.age(date),
-                    p.player_attributes.potential_ability,
+                    // Assessed ceiling — the staff's belief breaks the
+                    // tie, never the hidden biological PA.
+                    PotentialEstimator::observable_ceiling(p, date),
                     p.player_attributes.current_ability,
                 )
             })
             .collect();
 
-        // Rank: readiness desc, then age desc, then PA desc, then CA desc.
-        // Elite prospects naturally sort to the top (high readiness + PA)
-        // without excluding ordinary, ready teenagers below them.
+        // Rank: readiness desc, then age desc, then assessed potential
+        // desc, then CA desc. Elite prospects naturally sort to the top
+        // (high readiness + believed ceiling) without excluding
+        // ordinary, ready teenagers below them.
         candidates.sort_by(|a, b| {
             b.1.cmp(&a.1)
                 .then(b.2.cmp(&a.2))
@@ -119,7 +123,7 @@ impl ClubAcademy {
             .iter()
             .filter(|p| {
                 self.is_graduation_eligible(p, date)
-                    && p.player_attributes.potential_ability >= elite_pa
+                    && PotentialEstimator::observable_ceiling(p, date) >= elite_pa
                     && self.pathway_readiness_score(p, date) >= threshold
             })
             .count()

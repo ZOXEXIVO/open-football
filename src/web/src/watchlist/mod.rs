@@ -98,7 +98,9 @@ pub async fn watchlist_page_action(
                 let head_coach = team.staffs.head_coach();
                 Some(WatchlistPlayerDto {
                     current_ability: PotentialStarsView::current(player),
-                    potential_ability: PotentialStarsView::potential_by_staff(player, head_coach),
+                    potential_ability: PotentialStarsView::potential_by_staff(
+                        player, head_coach, now,
+                    ),
                     team_name: team.name.clone(),
                     team_slug: team.slug.clone(),
                     league_name: league.map(|l| l.name.clone()).unwrap_or_default(),
@@ -235,7 +237,7 @@ fn base_watchlist_dto(
         country_slug,
         age: DateUtils::age(player.birth_date, now),
         current_ability: PotentialStarsView::current(player),
-        potential_ability: PotentialStarsView::potential_absolute(player),
+        potential_ability: PotentialStarsView::potential_absolute(player, now),
         conditions: get_conditions(player),
         team_name: String::new(),
         team_slug: String::new(),

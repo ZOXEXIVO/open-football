@@ -171,7 +171,7 @@ pub async fn team_get_action(
                 conditions: get_conditions(p),
                 value: FormattingUtils::format_money(p.value(now, league_rep, club_rep)),
                 current_ability: PotentialStarsView::current(p),
-                potential_ability: PotentialStarsView::potential_by_staff(p, head_coach),
+                potential_ability: PotentialStarsView::potential_by_staff(p, head_coach, now),
                 age: DateUtils::age(p.birth_date, now),
                 played: season_stats.played,
                 played_subs: season_stats.played_subs,
@@ -243,7 +243,7 @@ pub async fn team_get_action(
                             ),
                             current_ability: PotentialStarsView::current(player),
                             potential_ability: PotentialStarsView::potential_by_staff(
-                                player, head_coach,
+                                player, head_coach, now,
                             ),
                             age: DateUtils::age(player.birth_date, now),
                             played: season_stats.played,

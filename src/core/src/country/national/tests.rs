@@ -44,7 +44,7 @@ fn make_candidate(
         club_id: 1,
         team_id: 1,
         current_ability: ability,
-        potential_ability: ability + 10,
+        assessed_potential: ability + 10,
         age: 27,
         condition_pct: 95.0,
         match_readiness: 18.0,
@@ -210,7 +210,7 @@ fn incumbent_beats_marginally_better_uncapped_in_competitive_window() {
     let mut newbie = make_candidate(1000, 142, PlayerFieldPositionGroup::Forward);
     newbie.international_apps = 0;
     newbie.age = 25;
-    newbie.potential_ability = 152; // suppress any youth coach quirk
+    newbie.assessed_potential = 152; // suppress any youth coach quirk
     newbie.average_rating = 7.0;
 
     let mut incumbents = HashSet::new();
@@ -262,13 +262,13 @@ fn clearly_superior_uncapped_beats_incumbent() {
 fn friendly_mode_favors_u24_high_potential_uncapped_player() {
     let mut prospect = make_candidate(1, 130, PlayerFieldPositionGroup::Midfielder);
     prospect.age = 20;
-    prospect.potential_ability = 175;
+    prospect.assessed_potential = 175;
     prospect.international_apps = 0;
     prospect.world_reputation = 1_500;
 
     let mut veteran = make_candidate(2, 135, PlayerFieldPositionGroup::Midfielder);
     veteran.age = 31;
-    veteran.potential_ability = 135;
+    veteran.assessed_potential = 135;
     veteran.international_apps = 45;
     veteran.world_reputation = 4_000;
 
@@ -289,13 +289,13 @@ fn friendly_mode_favors_u24_high_potential_uncapped_player() {
 fn tournament_mode_favors_experienced_high_cap_player() {
     let mut prospect = make_candidate(1, 130, PlayerFieldPositionGroup::Midfielder);
     prospect.age = 19;
-    prospect.potential_ability = 175;
+    prospect.assessed_potential = 175;
     prospect.international_apps = 0;
     prospect.world_reputation = 1_500;
 
     let mut veteran = make_candidate(2, 135, PlayerFieldPositionGroup::Midfielder);
     veteran.age = 30;
-    veteran.potential_ability = 135;
+    veteran.assessed_potential = 135;
     veteran.international_apps = 60;
     veteran.international_goals = 10;
     veteran.world_reputation = 5_500;
@@ -548,7 +548,7 @@ fn derive_reasons_picks_key_player_for_high_ability_and_world_rep() {
 fn derive_reasons_picks_youth_prospect_for_high_potential_youngsters() {
     let mut c = make_candidate(1, 130, PlayerFieldPositionGroup::Forward);
     c.age = 20;
-    c.potential_ability = 175;
+    c.assessed_potential = 175;
     c.world_reputation = 1_000;
     c.average_rating = 6.5;
     c.played = 4;
@@ -573,7 +573,7 @@ fn derive_reasons_picks_friendly_experiment_in_friendly_window() {
     c.last_season_apps = 8;
     c.leadership = 8.0;
     c.league_reputation = 400;
-    c.potential_ability = 140;
+    c.assessed_potential = 140;
     c.position_levels = vec![(PlayerPositionType::MidfielderCenter, 14)];
 
     let ctx = friendly_ctx();
@@ -949,12 +949,12 @@ fn u21_scoring_prefers_high_potential_teenager_over_average_21yo() {
 
     let mut prospect = make_candidate(1, 120, PlayerFieldPositionGroup::Midfielder);
     prospect.age = 19;
-    prospect.potential_ability = 170;
+    prospect.assessed_potential = 170;
     prospect.international_apps = 0;
 
     let mut average = make_candidate(2, 132, PlayerFieldPositionGroup::Midfielder);
     average.age = 21;
-    average.potential_ability = 140;
+    average.assessed_potential = 140;
     average.international_apps = 0;
 
     let s_prospect = NationalTeam::score_candidate(&prospect, &tactics, &ctx, &HashSet::new());
@@ -995,7 +995,7 @@ fn u21_reason_is_elite_prospect_for_high_ceiling() {
     let ctx = u21_ctx();
     let mut c = make_candidate(1, 120, PlayerFieldPositionGroup::Forward);
     c.age = 18;
-    c.potential_ability = 165;
+    c.assessed_potential = 165;
     let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
     assert_eq!(primary, CallUpReason::U21EliteProspect);
 }

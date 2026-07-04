@@ -261,7 +261,7 @@ impl NationalTeam {
     ) -> Option<CallUpCandidate> {
         let ability = player.player_attributes.current_ability;
         // Single hidden-PA boundary for the entire call-up pipeline: the
-        // candidate's `potential_ability` field is the SELECTORS' belief
+        // candidate's `assessed_potential` field is the SELECTORS' belief
         // (observable ceiling), so every downstream scoring/quota read
         // stays clean of the hidden biological PA.
         let potential = PotentialEstimator::observable_ceiling(player, date);
@@ -326,7 +326,7 @@ impl NationalTeam {
             club_id,
             team_id,
             current_ability: ability,
-            potential_ability: potential,
+            assessed_potential: potential,
             age,
             condition_pct,
             match_readiness: player.skills.physical.match_readiness,
@@ -446,7 +446,7 @@ impl NationalTeam {
         let int_goals_factor = (c.international_goals.min(25) as f32) / 25.0 * 30.0;
         let international_track_record = int_apps_factor + int_goals_factor;
 
-        let ceiling = (c.potential_ability as i16 - c.current_ability as i16).max(0) as f32;
+        let ceiling = (c.assessed_potential as i16 - c.current_ability as i16).max(0) as f32;
         let youth_ceiling_bonus = if c.age <= 21 {
             ceiling * 0.45
         } else if c.age <= 24 {
@@ -721,7 +721,7 @@ impl NationalTeam {
     }
 
     fn potential_score(c: &CallUpCandidate) -> f32 {
-        (c.potential_ability as f32 / 200.0 * 100.0).clamp(0.0, 100.0)
+        (c.assessed_potential as f32 / 200.0 * 100.0).clamp(0.0, 100.0)
     }
 
     fn impact_score(c: &CallUpCandidate) -> f32 {
@@ -871,7 +871,7 @@ impl NationalTeam {
             }
             NationalCoachProfile::YouthDeveloper => {
                 let mut bias = 0.0;
-                if c.age <= 23 && c.potential_ability >= 140 {
+                if c.age <= 23 && c.assessed_potential >= 140 {
                     bias += 6.0;
                 }
                 if c.age <= 24 && c.international_apps == 0 {
@@ -992,10 +992,10 @@ impl NationalTeam {
         // Prefer high ceilings: an explicit boost for elite potential
         // plus a gap term (potential − current) that carries more weight
         // than it would in the senior model.
-        if c.potential_ability >= 150 {
+        if c.assessed_potential >= 150 {
             score += 8.0;
         }
-        let gap = (c.potential_ability as i16 - c.current_ability as i16).max(0) as f32;
+        let gap = (c.assessed_potential as i16 - c.current_ability as i16).max(0) as f32;
         score += gap * 0.10;
 
         score -= Self::u21_senior_caps_penalty(c.international_apps);
@@ -1406,7 +1406,7 @@ impl NationalTeam {
     ) -> (CallUpReason, Vec<CallUpReason>) {
         let mut applicable: Vec<CallUpReason> = Vec::new();
 
-        if c.potential_ability >= 150 {
+        if c.assessed_potential >= 150 {
             applicable.push(CallUpReason::U21EliteProspect);
         }
         if c.average_rating >= 7.2 && c.played >= 5 {
@@ -1488,7 +1488,7 @@ impl NationalTeam {
         {
             applicable.push(CallUpReason::FriendlyExperiment);
         }
-        if c.age <= 22 && c.potential_ability >= 150 {
+        if c.age <= 22 && c.assessed_potential >= 150 {
             applicable.push(CallUpReason::YouthProspect);
         }
         let best_position_level = c

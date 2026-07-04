@@ -1,6 +1,7 @@
 use crate::club::academy::result::ClubAcademyResult;
 use crate::club::academy::settings::AcademySettings;
 use crate::club::academy::tuning::{AcademyTier, AcademyTuning};
+use crate::club::staff::perception::PotentialEstimator;
 use crate::context::GlobalContext;
 use crate::{
     Person, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerPositionType, StaffCollection,
@@ -236,7 +237,10 @@ impl ClubAcademy {
                 health.ready_for_youth += 1;
             }
             let readiness = self.pathway_readiness_score(player, date);
-            if player.player_attributes.potential_ability >= elite_pa && readiness >= 60 {
+            // Staff belief, not biological PA — the academy counts the
+            // prospects it *believes* are elite, like a real club.
+            let assessed = PotentialEstimator::observable_ceiling(player, date);
+            if assessed >= elite_pa && readiness >= 60 {
                 health.elite_prospects += 1;
             }
             if player.player_attributes.jadedness > 5500
@@ -494,7 +498,10 @@ impl<'a> AcademyReadinessScorer<'a> {
         }
 
         let ca = player.player_attributes.current_ability as f32;
-        let pa = player.player_attributes.potential_ability as f32;
+        // Assessed ceiling, never the hidden biological PA — the
+        // pathway staff rank prospects on what they can actually see
+        // (visible level, age room, mentals, training trend).
+        let pa = PotentialEstimator::observable_ceiling(player, date) as f32;
 
         // Age / time-in-pathway (25). The dominant axis: an older prospect
         // has had more development and is closer to youth-team football. A

@@ -387,7 +387,7 @@ pub async fn player_get_action(
             skills: get_skills(player),
             conditions: get_conditions(player),
             current_ability: PotentialStarsView::current(player),
-            potential_ability: PotentialStarsView::potential_by_staff(player, head_coach),
+            potential_ability: PotentialStarsView::potential_by_staff(player, head_coach, now),
             value: FormattingUtils::format_money(
                 player.value(
                     now,
@@ -516,7 +516,7 @@ pub async fn player_get_action(
         skills: get_skills(player),
         conditions: get_conditions(player),
         current_ability: PotentialStarsView::current(player),
-        potential_ability: PotentialStarsView::potential_absolute(player),
+        potential_ability: PotentialStarsView::potential_absolute(player, now),
         value: String::from("-"),
         preferred_foot: player.preferred_foot_str().to_string(),
         player_attributes: get_attributes(player),

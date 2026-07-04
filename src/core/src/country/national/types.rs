@@ -395,7 +395,11 @@ pub(crate) struct CallUpCandidate {
     pub(super) club_id: u32,
     pub(super) team_id: u32,
     pub(super) current_ability: u8,
-    pub(super) potential_ability: u8,
+    /// Selectors' believed ceiling — an observable estimate populated
+    /// at the single boundary in `callup.rs` from
+    /// `PotentialEstimator::observable_ceiling`. Never the hidden
+    /// biological `player_attributes.potential_ability`.
+    pub(super) assessed_potential: u8,
     pub(super) age: i32,
     pub(super) condition_pct: f32,
     pub(super) match_readiness: f32,

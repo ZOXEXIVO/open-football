@@ -12,6 +12,7 @@ use core::SimulatorData;
 use core::club::academy::{
     AcademyDevelopmentIdentity, AcademyPlayerPhase, AcademyReadinessScorer, AcademyTier,
 };
+use core::club::staff::perception::PotentialEstimator;
 use core::utils::DateUtils;
 use serde::Deserialize;
 
@@ -76,7 +77,9 @@ pub struct AcademyPlayer {
     pub age: u8,
     pub current_ability: u8,
     pub potential_ability: u8,
-    pub potential_ability_raw: u8,
+    /// Assessed-ceiling sort key on the full 1..200 scale (finer than
+    /// the 0..5 star band above). Staff belief, never the hidden PA.
+    pub potential_sort: u8,
     pub conditions: u8,
     /// i18n key for the phase — translated by the template.
     pub phase_key: &'static str,
@@ -158,8 +161,8 @@ pub async fn team_academy_action(
                 country_name: country.name.clone(),
                 age,
                 current_ability: PotentialStarsView::current(p),
-                potential_ability: PotentialStarsView::potential_by_staff(p, head_coach),
-                potential_ability_raw: p.player_attributes.potential_ability,
+                potential_ability: PotentialStarsView::potential_by_staff(p, head_coach, now),
+                potential_sort: PotentialEstimator::observable_ceiling(p, now),
                 conditions: (100f32 * (p.player_attributes.condition as f32 / 10000.0)) as u8,
                 phase_key: phase_i18n_key(phase),
                 phase_sort: phase.index(),
@@ -176,7 +179,7 @@ pub async fn team_academy_action(
         a.phase_sort
             .cmp(&b.phase_sort)
             .then_with(|| b.readiness.cmp(&a.readiness))
-            .then_with(|| b.potential_ability_raw.cmp(&a.potential_ability_raw))
+            .then_with(|| b.potential_sort.cmp(&a.potential_sort))
     });
 
     let readiness_threshold = club.academy.pathway_policy.readiness_threshold;
