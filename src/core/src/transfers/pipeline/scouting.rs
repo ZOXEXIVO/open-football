@@ -778,6 +778,9 @@ impl PipelineProcessor {
         let price_level = country.settings.pricing.price_level;
         let country_id = country.id;
         let country_reputation = country.reputation;
+        // Constant across every player in this country — derive it once
+        // rather than per foreign-scan later.
+        let country_region = ScoutingRegion::from_country(country.continent_id, &country.code);
         let mut players = Vec::new();
 
         for club in &country.clubs {
@@ -834,6 +837,7 @@ impl PipelineProcessor {
                         club_id: club.id,
                         country_id,
                         continent_id: country.continent_id,
+                        region: country_region,
                         country_code: country.code.clone(),
                         player_name: player.full_name.to_string(),
                         club_name: club.name.clone(),
@@ -1120,10 +1124,8 @@ impl PipelineProcessor {
                     .copied()
                     .filter(|p| p.country_reputation <= country_reputation)
                     .filter(|p| {
-                        let player_region =
-                            ScoutingRegion::from_country(p.continent_id, &p.country_code);
-                        club_scout_reach.contains(&player_region)
-                            || scout_known_regions.contains(&player_region)
+                        club_scout_reach.contains(&p.region)
+                            || scout_known_regions.contains(&p.region)
                     })
                     .filter(player_filter)
                     .collect();

@@ -33,6 +33,7 @@ use std::cmp::Ordering;
 
 mod processor {
     use crate::club::team::squad::SquadAssetClass;
+    use crate::transfers::ScoutingRegion;
     use crate::{PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus};
     use std::collections::HashMap;
 
@@ -162,6 +163,11 @@ mod processor {
         /// the summary so cross-country buyers can assess a foreign target
         /// with the same rigour as a domestic one.
         pub seller_ctx: SellerPlausibilityContext,
+        /// Home scouting region, precomputed once at pool-build time. The
+        /// cross-country loan/scout filters used to re-derive this (a
+        /// country-code string match) for every foreign player on every
+        /// scanning country's pass.
+        pub region: ScoutingRegion,
     }
 }
 

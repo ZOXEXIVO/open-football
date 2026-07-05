@@ -772,6 +772,7 @@ mod tests {
     use crate::PlayerFieldPositionGroup;
     use crate::PlayerPositionType;
     use crate::PlayerSquadStatus;
+    use crate::transfers::ScoutingRegion;
     use crate::transfers::pipeline::SellerPlausibilityContext;
 
     /// Test fixture: builds a `PlayerSummary` with a baseline "anonymous
@@ -816,6 +817,7 @@ mod tests {
                 club_id: 100,
                 country_id: 1,
                 continent_id: 1,
+                region: ScoutingRegion::from_country(1, "RU"),
                 country_code: "RU".to_string(),
                 player_name: "Test".to_string(),
                 club_name: "Test Club".to_string(),

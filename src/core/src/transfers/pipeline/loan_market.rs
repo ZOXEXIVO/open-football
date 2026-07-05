@@ -1444,13 +1444,13 @@ impl PipelineProcessor {
                 ) {
                     return false;
                 }
-                let player_region = ScoutingRegion::from_country(p.continent_id, &p.country_code);
                 // Cross-region prestige step-down. A settled player won't loan
                 // down into a clearly smaller ecosystem for a bit-part role, but
                 // a development youngster drops abroad for guaranteed minutes
                 // (an Italian U18 → Romania). See `foreign_loan_region_ok`.
+                // `p.region` is precomputed at pool-build time.
                 Self::foreign_loan_region_ok(
-                    player_region.league_prestige(),
+                    p.region.league_prestige(),
                     club_region_prestige,
                     ForeignUnsolicitedLoanTarget::is_development(p.age),
                 )

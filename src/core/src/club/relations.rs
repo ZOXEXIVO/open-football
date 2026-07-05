@@ -1,8 +1,8 @@
 use chrono::Duration;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use rustc_hash::FxHashMap;
-use std::collections::{HashMap, HashSet, VecDeque};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
 
 /// Hint passed to [`Relations::recalculate_chemistry_with_context`] so the
 /// chemistry calculation can read squad-wide signals — leadership, captain,
@@ -463,7 +463,7 @@ pub struct PlayerRelation {
     pub mentorship: Option<MentorshipType>,
 
     /// Rivalry information
-    pub rivalry_with: HashSet<u32>,
+    pub rivalry_with: FxHashSet<u32>,
 
     /// Interaction frequency
     pub interaction_frequency: f32,
@@ -482,7 +482,7 @@ impl Relationship for PlayerRelation {
             professional_respect: 50.0,
             influence: 0.0,
             mentorship: None,
-            rivalry_with: HashSet::new(),
+            rivalry_with: FxHashSet::default(),
             interaction_frequency: 0.0,
             momentum: 0.0,
         }
@@ -757,16 +757,16 @@ impl Relationship for StaffRelation {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct GroupDynamics {
-    groups: HashMap<GroupId, Group>,
-    entity_groups: HashMap<u32, HashSet<GroupId>>,
+    groups: FxHashMap<GroupId, Group>,
+    entity_groups: FxHashMap<u32, FxHashSet<GroupId>>,
     next_group_id: GroupId,
 }
 
 impl GroupDynamics {
     fn new() -> Self {
         GroupDynamics {
-            groups: HashMap::new(),
-            entity_groups: HashMap::new(),
+            groups: FxHashMap::default(),
+            entity_groups: FxHashMap::default(),
             next_group_id: 0,
         }
     }
@@ -791,7 +791,7 @@ impl GroupDynamics {
             .entry(INNER_CIRCLE_GROUP)
             .or_insert_with(|| Group {
                 id: INNER_CIRCLE_GROUP,
-                members: HashSet::new(),
+                members: FxHashSet::default(),
                 leader_id: None, // subject-owned: leader = the subject, but we don't know their id here
                 cohesion: 0.0,
                 group_type: GroupType::Social,
@@ -886,7 +886,7 @@ impl GroupDynamics {
 #[derive(Debug, Clone)]
 struct Group {
     id: GroupId,
-    members: HashSet<u32>,
+    members: FxHashSet<u32>,
     leader_id: Option<u32>,
     cohesion: f32,
     group_type: GroupType,

@@ -9,6 +9,7 @@ use crate::transfers::pipeline::{
     DetailedScoutingReport, ReportRiskFlag, ScoutingRecommendation, TransferNeedReason,
     TransferRequest,
 };
+use crate::transfers::ScoutingRegion;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
@@ -230,6 +231,7 @@ impl PipelineProcessor {
                         club_id: club.id,
                         country_id: country.id,
                         continent_id: country.continent_id,
+                        region: ScoutingRegion::from_country(country.continent_id, &country.code),
                         country_code: country.code.clone(),
                         player_name: player.full_name.to_string(),
                         club_name: club.name.clone(),
