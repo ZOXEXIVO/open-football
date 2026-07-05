@@ -39,3 +39,8 @@ itertools = "0.15.0"
 serde_json = "1.0"
 nalgebra = { version = "0.35.0", features = ["serde-serialize", "rand"] }
 deunicode = "1.6"
+# Fast, deterministic hasher for internal integer-id maps. The default
+# SipHash is DoS-resistant but slow; the sim's hot ID lookups
+# (player/team resolution, per-player relations) don't need that and the
+# world is iteration-order-independent, so FxHash is a safe drop-in.
+rustc-hash = "2"

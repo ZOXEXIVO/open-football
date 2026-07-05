@@ -432,6 +432,7 @@ dependencies = [
  "nalgebra",
  "rand",
  "rayon",
+ "rustc-hash",
  "serde",
  "serde_json",
 ]

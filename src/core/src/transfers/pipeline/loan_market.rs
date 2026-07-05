@@ -1393,7 +1393,7 @@ impl PipelineProcessor {
 
     pub fn scan_foreign_loan_market(
         country: &mut Country,
-        foreign_players: &[PlayerSummary],
+        foreign_players: &[&PlayerSummary],
         date: NaiveDate,
     ) {
         if foreign_players.is_empty() {
@@ -1413,6 +1413,7 @@ impl PipelineProcessor {
         let country_rep = country.reputation;
         let foreign_loans: Vec<&PlayerSummary> = foreign_players
             .iter()
+            .copied()
             .filter(|p| {
                 // Either the parent advertised the loan, or the player is a
                 // credible cold target his club isn't building around — the

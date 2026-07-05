@@ -144,11 +144,14 @@ impl CountryResult {
         let config = TransferConfig::default();
 
         // Filter foreign players from the pre-built world snapshot.
-        let foreign_players: Vec<PlayerSummary> = if window_open {
+        // Borrow, don't clone: every country used to deep-copy the entire
+        // world pool minus its own players (three `String`s per summary),
+        // which dominated the per-country transfer pass. References into
+        // the shared snapshot cost nothing.
+        let foreign_players: Vec<&PlayerSummary> = if window_open {
             world_pool
                 .iter()
                 .filter(|s| s.country_id != country_id)
-                .cloned()
                 .collect()
         } else {
             Vec::new()
@@ -394,6 +397,12 @@ impl CountryResult {
         // own-country entries here is O(N) over the cache. Falls back
         // to a per-country rebuild when the cache is absent (test
         // harnesses, future callers outside Phase C).
+        // This serial data-level path mutates `data` further down, so it
+        // can't hold a borrow into `data.daily_world_player_pool`: it owns a
+        // filtered copy, then views it by reference for the consumers. The
+        // hot parallel path (`simulate_transfer_market_local`) has the
+        // snapshot as a plain slice param and borrows it directly with no
+        // copy — that's where the per-country clone actually mattered.
         let foreign_players: Vec<PlayerSummary> = if window_open {
             if let Some(world_pool) = data.daily_world_player_pool.as_ref() {
                 world_pool
@@ -412,6 +421,7 @@ impl CountryResult {
         } else {
             Vec::new()
         };
+        let foreign_players: Vec<&PlayerSummary> = foreign_players.iter().collect();
 
         // Snapshot the global "Move on Free" pool. Phase C in
         // `simulator.rs` builds this snapshot once per tick and stows

@@ -933,7 +933,7 @@ impl PipelineProcessor {
 
     pub fn process_scouting(
         country: &mut Country,
-        foreign_players: &[PlayerSummary],
+        foreign_players: &[&PlayerSummary],
         date: NaiveDate,
     ) {
         let country_id = country.id;
@@ -1117,6 +1117,7 @@ impl PipelineProcessor {
                 // every club; how far it reaches is what scales with reputation.
                 let foreign_matching: Vec<&PlayerSummary> = foreign_players
                     .iter()
+                    .copied()
                     .filter(|p| p.country_reputation <= country_reputation)
                     .filter(|p| {
                         let player_region =

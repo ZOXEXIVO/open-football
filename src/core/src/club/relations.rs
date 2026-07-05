@@ -1,6 +1,7 @@
 use chrono::Duration;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Hint passed to [`Relations::recalculate_chemistry_with_context`] so the
@@ -149,7 +150,7 @@ impl Relations {
     ) {
         // Store values we need before taking mutable borrows
         let is_rivalry = matches!(change.change_type, ChangeType::CompetitionRivalry);
-        let (old_level, new_level, should_recalculate) = {
+        let (old_level, new_level) = {
             // Create a scope for the mutable borrow
             let relation = self.players.get_or_create(player_id);
 
@@ -164,14 +165,8 @@ impl Relations {
                 relation.rivalry_with.insert(player_id);
             }
 
-            // Store the new level
-            let new_level = relation.level;
-
-            // Determine if we should recalculate chemistry
-            let should_recalculate = (new_level - old_level).abs() > 0.1;
-
             // Return the values we need (this ends the mutable borrow)
-            (old_level, new_level, should_recalculate)
+            (old_level, relation.level)
         }; // Mutable borrow of self.players ends here
 
         // Record the event (no borrow conflicts)
@@ -184,12 +179,14 @@ impl Relations {
             new_value: new_level,
         });
 
-        // Update chemistry if significant change (can now borrow immutably)
-        if should_recalculate {
-            self.chemistry.recalculate(&self.players, &self.staffs);
-        }
+        // Chemistry is a weekly-refreshed aggregate (see
+        // `Team::run_weekly_pass` → `recalculate_chemistry_with_context`),
+        // so we do NOT recompute it per relationship change here — the old
+        // inline recalc walked the full per-player relation set on every
+        // nudge and dominated the tick. The weekly pass produces the
+        // authoritative, context-aware value.
 
-        // Check for group formation/dissolution (uses new_level instead of relation.level)
+        // Check for group formation/dissolution
         self.groups.update_from_relationship(player_id, new_level);
     }
 
@@ -230,16 +227,18 @@ impl Relations {
         let old_level = relation.level;
         relation.apply_change(&change);
 
+        let new_level = relation.level;
         self.history.record_event(RelationshipEvent {
             date,
             subject_id: staff_id,
             subject_type: SubjectType::Staff,
             change_type: change.change_type.clone(),
             old_value: old_level,
-            new_value: relation.level,
+            new_value: new_level,
         });
 
-        self.chemistry.recalculate(&self.players, &self.staffs);
+        // Chemistry recompute deferred to the weekly pass — see
+        // `update_player_relationship`.
     }
 
     /// Get coaching receptiveness (how well player responds to coaching)
@@ -373,13 +372,13 @@ impl Relations {
 /// Store for relationships of a specific type
 #[derive(Debug, Clone)]
 struct RelationStore<T: Relationship> {
-    relations: HashMap<u32, T>,
+    relations: FxHashMap<u32, T>,
 }
 
 impl<T: Relationship> RelationStore<T> {
     fn new() -> Self {
         RelationStore {
-            relations: HashMap::new(),
+            relations: FxHashMap::default(),
         }
     }
 
@@ -1372,14 +1371,15 @@ mod tests {
         let mut relations = Relations::new();
 
         // Add some positive relationships
+        let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         for i in 1..5 {
             let change = RelationshipChange::positive(ChangeType::TeamSuccess, 0.5);
-            relations.update_player_relationship(
-                i,
-                change,
-                NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            );
+            relations.update_player_relationship(i, change, date);
         }
+
+        // Chemistry is refreshed on the weekly pass, not per relationship
+        // change — drive it explicitly here to read the aggregate.
+        relations.process_weekly_update(date);
 
         let chemistry = relations.get_team_chemistry();
         assert!(chemistry > 50.0);

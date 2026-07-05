@@ -35,6 +35,7 @@ use crate::simulator::SimulatorData;
 use crate::transfers::pipeline::PlayerSummary;
 use crate::{Club, Country, Player, Team};
 use chrono::NaiveDateTime;
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
 /// Read/mutate surface needed by `process_match_results` and friends.
@@ -174,9 +175,9 @@ impl LeagueProcessAccess for SimulatorData {
 /// indexing so a stale entry still returns `None` rather than the wrong
 /// player — keeps the index advisory.
 pub struct CountryLookupIndex {
-    pub players: HashMap<u32, (u16, u8, u16)>,
-    pub teams: HashMap<u32, (u16, u8)>,
-    pub clubs: HashMap<u32, u16>,
+    pub players: FxHashMap<u32, (u16, u8, u16)>,
+    pub teams: FxHashMap<u32, (u16, u8)>,
+    pub clubs: FxHashMap<u32, u16>,
 }
 
 impl CountryLookupIndex {
@@ -188,9 +189,10 @@ impl CountryLookupIndex {
             .map(|t| t.players.players.len())
             .sum();
         let team_cap: usize = country.clubs.iter().map(|c| c.teams.teams.len()).sum();
-        let mut players = HashMap::with_capacity(player_cap);
-        let mut teams = HashMap::with_capacity(team_cap);
-        let mut clubs = HashMap::with_capacity(country.clubs.len());
+        let mut players = FxHashMap::with_capacity_and_hasher(player_cap, Default::default());
+        let mut teams = FxHashMap::with_capacity_and_hasher(team_cap, Default::default());
+        let mut clubs =
+            FxHashMap::with_capacity_and_hasher(country.clubs.len(), Default::default());
         for (ci, club) in country.clubs.iter().enumerate() {
             let ci16 = ci.min(u16::MAX as usize) as u16;
             clubs.insert(club.id, ci16);
