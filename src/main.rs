@@ -1,6 +1,20 @@
 #[cfg(target_os = "linux")]
+use tikv_jemallocator::Jemalloc;
+#[cfg(target_os = "windows")]
+use mimalloc::MiMalloc;
+
+// A scalable, thread-caching allocator matters more than any single hot
+// path: the world sim fans out across every core and the OS heaps
+// serialise concurrent alloc/free on a global lock, which becomes the
+// dominant cost under that fan-out. jemalloc on Linux, mimalloc on
+// Windows (the Windows system heap is the worst offender).
+#[cfg(target_os = "linux")]
 #[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+static GLOBAL: Jemalloc = Jemalloc;
+
+#[cfg(target_os = "windows")]
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 use database::{DatabaseGenerator, DatabaseLoader};
 use env_logger::Env;

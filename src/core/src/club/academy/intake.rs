@@ -53,7 +53,7 @@ impl ClubAcademy {
         let country_ctx = ctx.country.as_ref();
         let country_id = country_ctx.map(|c| c.id).unwrap_or(1);
         let people_names = match country_ctx.and_then(|c| c.people_names.as_ref()) {
-            Some(names) => names,
+            Some(names) => names.as_ref(),
             None => return ProduceYouthPlayersResult::new(Vec::new()),
         };
 
@@ -230,7 +230,7 @@ impl ClubAcademy {
         let country_ctx = ctx.country.as_ref();
         let country_id = country_ctx.map(|c| c.id).unwrap_or(1);
         let people_names = match country_ctx.and_then(|c| c.people_names.as_ref()) {
-            Some(names) => names,
+            Some(names) => names.as_ref(),
             None => return,
         };
         let date = ctx.simulation.date.date();

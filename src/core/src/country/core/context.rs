@@ -1,11 +1,17 @@
 use crate::PeopleNameGeneratorData;
 use crate::country::SeasonDates;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct CountryContext {
     pub id: u32,
     pub code: String,
-    pub people_names: Option<PeopleNameGeneratorData>,
+    /// Shared read-only name pools. Held behind `Arc` because a
+    /// `GlobalContext` is cloned at every scope refinement (per club,
+    /// team, and player); a by-value `PeopleNameGeneratorData` deep-cloned
+    /// its `Vec<String>` catalogues on each of those, dominating the tick.
+    /// The `Arc` makes every refinement an O(1) refcount bump.
+    pub people_names: Option<Arc<PeopleNameGeneratorData>>,
     pub season_dates: SeasonDates,
     pub tv_revenue_multiplier: f32,
     pub sponsorship_market_strength: f32,
@@ -35,7 +41,7 @@ impl CountryContext {
         }
     }
 
-    pub fn with_people_names(id: u32, people_names: PeopleNameGeneratorData) -> Self {
+    pub fn with_people_names(id: u32, people_names: Arc<PeopleNameGeneratorData>) -> Self {
         CountryContext {
             id,
             code: String::new(),

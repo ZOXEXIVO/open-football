@@ -2,6 +2,7 @@ pub use chrono::prelude::*;
 
 use crate::PeopleNameGeneratorData;
 use crate::TeamContext;
+use std::sync::Arc;
 use crate::TeamType;
 use crate::club::{BoardContext, ClubContext, ClubFinanceContext, PlayerContext, StaffContext};
 use crate::continent::ContinentContext;
@@ -55,7 +56,7 @@ impl<'gc> GlobalContext<'gc> {
         &self,
         country_id: u32,
         country_code: String,
-        people_names: PeopleNameGeneratorData,
+        people_names: Arc<PeopleNameGeneratorData>,
         season_dates: SeasonDates,
     ) -> Self {
         let mut ctx = GlobalContext::clone(self);

@@ -25,6 +25,14 @@
 
 use core::{FootballSimulator, SimulationResult, SimulatorData};
 use database::{DatabaseGenerator, DatabaseLoader};
+use mimalloc::MiMalloc;
+
+/// Windows' system heap serialises concurrent alloc/free behind a global
+/// lock; under the world sim's 32-thread rayon fan-out that lock — not CPU
+/// or parallelism — is the dominant cost. mimalloc's per-thread heaps
+/// remove the contention so the parallel phases actually scale.
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 use env_logger::Env;
 use std::future::Future;
 use std::pin::pin;

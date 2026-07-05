@@ -17,6 +17,7 @@ core = { path = "../../src/core" }
 database = { path = "../../src/database" }
 log = "0.4"
 env_logger = "0.11"
+mimalloc = "0.1"
 
 [features]
 default = ["match-stub"]
