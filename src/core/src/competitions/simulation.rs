@@ -1,10 +1,9 @@
 use crate::competitions::global::GlobalCompetitionFixture;
 use crate::continent::Continent;
 use crate::continent::national::world as national_world;
-use crate::r#match::MatchSquad;
 use crate::r#match::Score;
 use crate::utils::FloatUtils;
-use crate::{MatchRuntime, SimulatorData};
+use crate::{MatchRuntime, NationalTeamLevel, SimulatorData};
 use chrono::NaiveDate;
 
 pub struct GlobalCompetitionSimulator;
@@ -24,23 +23,26 @@ impl GlobalCompetitionSimulator {
             return;
         }
 
-        let prepared: Vec<(usize, MatchSquad, MatchSquad, bool)> = todays_matches
+        // Global tournaments (World Cup, etc.) are senior fixtures. Build
+        // all of today's squads in one batch: emergencies resolved serially
+        // up front, then every squad built in parallel against one shared
+        // world-clubs snapshot. Output index lines up with `todays_matches`.
+        let fixtures: Vec<(u32, u32, NationalTeamLevel, bool)> = todays_matches
             .iter()
-            .enumerate()
-            .filter_map(|(idx, fixture)| {
-                let home = national_world::build_world_match_squad(
-                    &mut data.continents,
-                    fixture.home_country_id,
-                    date,
-                )?;
-                let away = national_world::build_world_match_squad(
-                    &mut data.continents,
-                    fixture.away_country_id,
-                    date,
-                )?;
-                Some((idx, home, away, fixture.phase.is_knockout()))
+            .map(|f| {
+                (
+                    f.home_country_id,
+                    f.away_country_id,
+                    NationalTeamLevel::Senior,
+                    f.phase.is_knockout(),
+                )
             })
             .collect();
+        let prepared = national_world::NationalSquadBuilder::build_fixture_squads(
+            &mut data.continents,
+            &fixtures,
+            date,
+        );
 
         let engine_results = MatchRuntime::engine_pool().play_squads_with_knockout(prepared);
 

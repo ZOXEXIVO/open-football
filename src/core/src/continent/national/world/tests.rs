@@ -316,8 +316,8 @@ fn build_world_squad_includes_foreign_based_player() {
     }
 
     let date = d(2026, 9, 6);
-    let squad =
-        build_world_match_squad(&mut continents, 1, date).expect("squad should build for Brazil");
+    let squad = NationalSquadBuilder::build(&mut continents, 1, date)
+        .expect("squad should build for Brazil");
 
     let in_main = squad.main_squad.iter().any(|p| p.id == 101);
     let in_subs = squad.substitutes.iter().any(|p| p.id == 101);
@@ -535,7 +535,7 @@ fn emergency_callup_uses_world_candidates_and_bumps_metric() {
 
     let before = EmergencyCallupMetrics::total();
     let date = d(2026, 9, 6);
-    let squad = build_world_match_squad(&mut continents, 1, date)
+    let squad = NationalSquadBuilder::build(&mut continents, 1, date)
         .expect("squad should build via emergency");
 
     assert!(
@@ -608,7 +608,7 @@ fn simulate_world_national_competitions_empty_day_is_noop() {
     let country_a = make_country(1, 1, "Brazil", Vec::new(), 8000);
     let mut continents = vec![make_continent(1, vec![country_a])];
 
-    let results = simulate_world_national_competitions(&mut continents, d(2026, 4, 1));
+    let results = WorldNationalCompetitions::simulate(&mut continents, d(2026, 4, 1));
     assert!(results.is_empty());
 }
 
@@ -692,7 +692,7 @@ fn u21_squad_excludes_senior_selected_player() {
         });
     }
 
-    let _ = build_world_match_squad_for_level(
+    let _ = NationalSquadBuilder::build_for_level(
         &mut continents,
         1,
         d(2026, 9, 6),

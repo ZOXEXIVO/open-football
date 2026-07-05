@@ -131,10 +131,14 @@ impl Continent {
         // each country's name generator (a few hundred KB on big
         // catalogues), so building it twice per tick — once per phase
         // — adds up over the world. One alloc per country per tick is
-        // unavoidable, two isn't.
+        // unavoidable, two isn't. The clones are independent per country,
+        // so fan them out: on a big continent (many countries) this
+        // serial prologue used to be the ramp that stalled the continent's
+        // worker before its inner `countries.par_iter_mut()` below could
+        // widen. `par_iter` collect preserves country order.
         let country_ctxs: Vec<GlobalContext<'gc>> = self
             .countries
-            .iter()
+            .par_iter()
             .map(|c| {
                 ctx.with_country_and_names(
                     c.id,

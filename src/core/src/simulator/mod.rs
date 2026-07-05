@@ -99,7 +99,7 @@ impl FootballSimulator {
         // stats updates fan out across every continent. Lifted out of
         // the parallel continent phase because squad construction needs
         // read access to clubs in *every* continent.
-        let national_match_results = national_world::simulate_world_national_competitions(
+        let national_match_results = national_world::WorldNationalCompetitions::simulate(
             &mut data.continents,
             current_date.date(),
         );

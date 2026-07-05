@@ -1,0 +1,43 @@
+[package]
+name = "dev_simulate"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# The whole point of this harness: profile `FootballSimulator::simulate`
+# — the *simulator graph* (transfers, awards, indexes, free agents,
+# snapshots, national/global competitions) that wraps the match engine —
+# without the web server or HTTP in the way. `match-stub` compiles the
+# engine down to a 0-0 result so the trace shows everything AROUND it
+# instead of drowning in the AI hot path. Feature unification means the
+# `core` pulled in transitively by `database` is stubbed too, so there is
+# exactly one engine in the build and it is the stub. Drop the stub with
+# `--no-default-features` to profile the graph against the real engine.
+core = { path = "../../src/core" }
+database = { path = "../../src/database" }
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+default = ["match-stub"]
+match-stub = ["core/match-stub"]
+
+# Match the optimized production profile so the trace reflects real
+# codegen. Fat LTO + a single codegen unit inline across the whole core
+# crate — same rationale as the root workspace and `.dev/match`. NB:
+# deliberately NOT `panic = "abort"`; the world sim relies on rayon's
+# per-continent catch_unwind isolation.
+[profile.release]
+lto = true
+codegen-units = 1
+
+# Optimized build that keeps full debug info + symbols so samply can
+# resolve the simulator-graph stacks. `inherits = "release"` ⇒ same
+# opt-level/LTO as production, so the trace reflects real hot paths.
+#   cargo build --profile profiling
+#   samply record --save-only -o prof.json.gz -r 4000 \
+#       ./target/profiling/dev_simulate 60
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false

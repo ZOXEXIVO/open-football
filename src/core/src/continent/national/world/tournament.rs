@@ -1,6 +1,6 @@
 //! Global-tournament post-match processor.
 //!
-//! Mirrors [`super::continental::simulate_world_national_competitions`]
+//! Mirrors [`super::continental::WorldNationalCompetitions`]
 //! but for fixtures owned by [`crate::competitions::GlobalCompetitions`]
 //! (World Cup, Confederations Cup, …). Reuses the same world-wide
 //! stats/Elo/schedule helpers so a goal at the World Cup updates
