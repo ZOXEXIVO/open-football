@@ -1643,6 +1643,88 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // A full-season loan whose contract has already EXPIRED (or been
+    // returned) by the time the DELAYED season-end snapshot fires. The
+    // snapshot then runs with is_on_loan()==false while the player still
+    // sits in the borrowing club's roster. The frozen season must still
+    // carry the "Loan" label — the recorded spell is authoritative, not
+    // the post-expiry contract flag. Regression for the Huli/Ravenna
+    // report where the first of two same-club loan seasons lost its label.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn loan_label_survives_expired_contract_at_delayed_snapshot() {
+        let mut player = make_player();
+        let juve = make_team("Juventus", "juventus");
+        let ravenna = make_team("Ravenna", "ravenna");
+
+        // 2026/27 at Juventus (parent), plays.
+        player
+            .statistics_history
+            .seed_initial_team(&juve, make_date(2026, 8, 1), false);
+        player.statistics = make_stats(20, 2);
+
+        // Summer 2027: loan to Ravenna (02.07.2027 -> from_date season 2026).
+        player.on_loan(&juve, &ravenna, 0.0, make_date(2027, 7, 2));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            200,
+            make_date(2028, 5, 31),
+            99,
+            0,
+            100,
+        ));
+        // 2026/27 season-end fires ~Aug 2027 while on loan at Ravenna.
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2026), &ravenna, make_date(2027, 8, 1));
+
+        // 2027/28: plays the full season on loan at Ravenna.
+        player.statistics = make_stats(30, 5);
+
+        // Loan contract expired 31.05.2028. The season-end snapshot is
+        // delayed to ~Aug 2028; by then the loan has been cleared but the
+        // player still sits in Ravenna's roster, so the snapshot fires with
+        // team=Ravenna and is_on_loan()==false.
+        player.contract_loan = None;
+        player.on_season_end(Season::new(2027), &ravenna, make_date(2028, 8, 1));
+
+        let empty = PlayerStatistics::default();
+        let live = crate::PlayerLiveStatsInput {
+            league: &player.statistics,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let rows = crate::PlayerStatisticsProjection::player_history_rows(
+            &player.statistics_history,
+            &live,
+            make_date(2028, 10, 1),
+        );
+
+        let r2027 = rows
+            .iter()
+            .find(|r| r.season.start_year == 2027 && r.team_slug == "ravenna")
+            .expect("2027/28 Ravenna row must exist");
+        assert_eq!(
+            r2027.statistics.played, 30,
+            "the loan season's games must be present"
+        );
+        assert!(
+            r2027.is_loan,
+            "2027/28 Ravenna row must keep its LOAN label even though the \
+             loan contract expired before the delayed season-end snapshot"
+        );
+        // The season must render as ONE Ravenna row, not split into a
+        // loan slice and a phantom non-loan slice.
+        assert_eq!(
+            rows.iter()
+                .filter(|r| r.season.start_year == 2027 && r.team_slug == "ravenna")
+                .count(),
+            1,
+            "2027/28 Ravenna must be a single row"
+        );
+    }
+
+    // ---------------------------------------------------------------
     // Transfer + immediate loan in same season (0 apps at buying club)
     // ---------------------------------------------------------------
 

@@ -1023,6 +1023,29 @@ impl PlayerStatisticsHistory {
         is_loan: bool,
         last_transfer_date: Option<NaiveDate>,
     ) {
+        // The caller derives `is_loan` from the player's LIVE contract
+        // state (`is_on_loan()`), which is stale for a delayed snapshot: a
+        // full-season loan whose contract already expired (or was returned)
+        // before this season-end fires reports `is_loan == false` even
+        // though the entire season was spent on loan. Left uncorrected, the
+        // closing-team write freezes the season under `is_loan = false`
+        // alongside the correctly-flagged carried loan entry; the History
+        // projection then takes the loan flag from the latest League row
+        // and the "Loan" label vanishes (the reported two-loans-same-club
+        // case where only the first season loses its label).
+        //
+        // The spell we actually recorded for this team is authoritative:
+        // adopt the ACTIVE current entry's loan flag for `team` when one
+        // exists so the frozen row matches the spell, not the post-expiry
+        // contract. A genuine mid-season loan→permanent buy still flips
+        // correctly — the buy opens a fresh non-loan active entry, so this
+        // resolves to `false` from that entry.
+        let is_loan = self
+            .current
+            .iter()
+            .find(|e| e.team_slug == team.slug && e.departed_date.is_none())
+            .map(|e| e.is_loan)
+            .unwrap_or(is_loan);
         // Carry-forward: a still-active market move the player joined too
         // late to feature in — ZERO official apps — is really a NEXT-season
         // spell. `Season::from_date`'s August boundary mis-stamps a late /
