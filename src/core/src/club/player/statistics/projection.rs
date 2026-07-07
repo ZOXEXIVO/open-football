@@ -22,7 +22,7 @@ use super::ledger::{
 use super::types::PlayerStatistics;
 use crate::league::Season;
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // Type definitions live in `super::ledger` so storage and projection
 // can both depend on them without a module cycle. The projection only
@@ -771,22 +771,73 @@ impl PlayerStatisticsProjection {
         // alone.
         Self::fill_career_gaps(&mut result);
 
+        // Within-season ordering of a loan spell against the owning-club
+        // (home) row hinges on whether that home spell CONTINUES. Two
+        // mirror-image real cases share the same storage shape — one loan
+        // row plus one home row in a single season — yet want opposite
+        // orders:
+        //
+        //   * Reserve bounce-back (Pichienko) — a reserve-home player is
+        //     loaned out and returns, but leaves again next season. The
+        //     home row is just his registration; the loan is the season's
+        //     real story and belongs on top. A post-return reserve
+        //     re-place (`move_loan_returns_to_reserve`) can also inflate
+        //     the home seq_id above the loan, so seq alone can't decide it.
+        //   * Mid-season recall/return that STICKS (Sokolić) — a player on
+        //     loan is recalled or returned mid-season to his parent club
+        //     and STAYS: the parent owns the next season's row too (or is
+        //     his current club). That return is the later, ongoing spell
+        //     and must sit ABOVE the loan it followed, so the reader can
+        //     trace the current club straight down the page.
+        //
+        // A home row "continues" when the SAME club has a non-loan row in
+        // the very next season. That single signal separates the cases; it
+        // is independent of seq_id, which the reserve re-place corrupts.
+        let continuing_homes: HashSet<(u16, String, String)> = {
+            let non_loan_seasons: HashSet<(u16, &str)> = result
+                .iter()
+                .filter(|r| !r.is_loan)
+                .map(|r| (r.season.start_year, r.team_slug.as_str()))
+                .collect();
+            result
+                .iter()
+                .filter(|r| {
+                    !r.is_loan
+                        && non_loan_seasons
+                            .contains(&(r.season.start_year + 1, r.team_slug.as_str()))
+                })
+                .map(|r| {
+                    (
+                        r.season.start_year,
+                        r.team_slug.clone(),
+                        r.league_slug.clone(),
+                    )
+                })
+                .collect()
+        };
+        // Higher rank renders first (on top) within a season: a continuing
+        // home outranks loans, which outrank a non-continuing home row.
+        let within_season_rank = |r: &PlayerHistoryRow| -> u8 {
+            if !r.is_loan
+                && continuing_homes.contains(&(
+                    r.season.start_year,
+                    r.team_slug.clone(),
+                    r.league_slug.clone(),
+                ))
+            {
+                2
+            } else if r.is_loan {
+                1
+            } else {
+                0
+            }
+        };
+
         result.sort_by(|a, b| {
             b.season
                 .start_year
                 .cmp(&a.season.start_year)
-                // Within a season, loan spells sort ABOVE the parent /
-                // home-club row. A home row can otherwise acquire a
-                // seq_id HIGHER than a loan that chronologically preceded
-                // it: a loan return lands the player on the Main team, and
-                // `move_loan_returns_to_reserve` then opens a *fresh*
-                // reserve spell (`record_intra_club_move`) with a new
-                // seq_id — so the season-long home floats above the loan
-                // it contained. Main-home players never get that re-place,
-                // so their home keeps its original (pre-loan) seq and the
-                // loan already sorts on top; ordering loans first makes the
-                // reserve case match, independent of the inflated seq.
-                .then(b.is_loan.cmp(&a.is_loan))
+                .then_with(|| within_season_rank(b).cmp(&within_season_rank(a)))
                 .then(b.seq_id.cmp(&a.seq_id))
         });
 
@@ -1388,6 +1439,295 @@ mod tests {
             rows.first().map(|r| r.team_slug.as_str()),
             Some("dinamo-vologda"),
             "active current-season spell stays at the top"
+        );
+    }
+
+    // ---- Loan/return within-season ordering battery -------------------
+    //
+    // These pin the intra-season order of a loan spell against the
+    // owning-club (home) row across every loan-timing shape we simulate:
+    // mid-season recall/return, a short loan inside a season-long home
+    // spell, a loan that carries into the next season, a transient return
+    // before a transfer, full-season loans, and several loans in one year.
+    //
+    // The governing rule (see `player_history_rows`): within a season a
+    // home row that CONTINUES into the next season (the player returned and
+    // STAYED) sorts ABOVE the loan it followed; otherwise the loan sorts on
+    // top (mirroring the reserve-bounce case above). `seq_id` only breaks
+    // ties inside the same rank, because a post-return reserve re-place can
+    // corrupt it.
+
+    fn ledger_league(
+        seq_id: u32,
+        year: u16,
+        slug: &str,
+        league_slug: &str,
+        is_loan: bool,
+        played: u16,
+    ) -> PlayerStatLedgerEntry {
+        PlayerStatLedgerEntry {
+            seq_id,
+            season_start_year: year,
+            team_slug: slug.to_string(),
+            team_name: slug.to_string(),
+            team_reputation: 1_000,
+            league_slug: league_slug.to_string(),
+            league_name: league_slug.to_string(),
+            competition_kind: PlayerStatCompetitionKind::League,
+            competition_slug: league_slug.to_string(),
+            is_loan,
+            transfer_fee: if is_loan { Some(0.0) } else { None },
+            statistics: stats(played, 0),
+        }
+    }
+
+    fn active_home(slug: &str, league_slug: &str, year: u16, seq_id: u32) -> CurrentSeasonEntry {
+        CurrentSeasonEntry {
+            team_name: slug.to_string(),
+            team_slug: slug.to_string(),
+            team_reputation: 1_000,
+            league_name: league_slug.to_string(),
+            league_slug: league_slug.to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics::default(),
+            joined_date: d(year as i32, 7, 1),
+            departed_date: None,
+            seq_id,
+        }
+    }
+
+    fn active_loan(slug: &str, league_slug: &str, year: u16, seq_id: u32) -> CurrentSeasonEntry {
+        let mut e = active_home(slug, league_slug, year, seq_id);
+        e.is_loan = true;
+        e.transfer_fee = Some(0.0);
+        e
+    }
+
+    // Top→bottom (team_slug, season_start_year, is_loan) of the rendered
+    // history rows — the exact order a reader sees on the page.
+    fn order_of(rows: &[PlayerHistoryRow]) -> Vec<(String, u16, bool)> {
+        rows.iter()
+            .map(|r| (r.team_slug.clone(), r.season.start_year, r.is_loan))
+            .collect()
+    }
+
+    fn expect(rows: &[(&str, u16, bool)]) -> Vec<(String, u16, bool)> {
+        rows.iter().map(|(s, y, l)| (s.to_string(), *y, *l)).collect()
+    }
+
+    #[test]
+    fn mid_season_return_that_sticks_sorts_home_above_loan() {
+        // Luciano Sokolić repro. Owned by River Plate, on loan at Toulouse
+        // across 2028/29 and into 2029/30 (20 apps), then recalled/returned
+        // MID-2029/30 to River Plate (5 apps) and STAYS — 2030/31 is River
+        // Plate too. The 2029/30 return is the later, ongoing spell, so it
+        // must sort ABOVE the Toulouse loan it followed. The Toulouse loan
+        // deliberately carries a HIGHER seq_id than the River Plate return,
+        // so the fix cannot lean on seq_id to rescue the order.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.season_ledger
+            .push(ledger_league(1, 2028, "toulouse", "ligue-1", true, 35));
+        hist.season_ledger
+            .push(ledger_league(3, 2029, "toulouse", "ligue-1", true, 20));
+        hist.season_ledger
+            .push(ledger_league(2, 2029, "river-plate", "primera", false, 5));
+        hist.current
+            .push(active_home("river-plate", "primera", 2030, 4));
+
+        let live_league = stats(19, 2);
+        let live_friendly = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &live_league,
+            friendly: &live_friendly,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2031, 3, 1));
+        assert_eq!(
+            order_of(&rows),
+            expect(&[
+                ("river-plate", 2030, false),
+                ("river-plate", 2029, false),
+                ("toulouse", 2029, true),
+                ("toulouse", 2028, true),
+            ]),
+            "return that stuck must group both River Plate rows on top, both \
+             Toulouse loans below"
+        );
+    }
+
+    #[test]
+    fn season_long_home_with_short_mid_loan_that_sticks_sorts_home_above_loan() {
+        // The player is home at River Plate essentially all season (30 apps),
+        // with a short mid-season loan to Toulouse (6 apps), then stays at
+        // River Plate into the next year. The home base owns the top slot.
+        // Home carries the LOWER seq (opened pre-loan) — the old is_loan
+        // tiebreaker would wrongly float the loan above it.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.season_ledger
+            .push(ledger_league(1, 2029, "river-plate", "primera", false, 30));
+        hist.season_ledger
+            .push(ledger_league(2, 2029, "toulouse", "ligue-1", true, 6));
+        hist.current
+            .push(active_home("river-plate", "primera", 2030, 3));
+
+        let live_league = stats(25, 4);
+        let live_friendly = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &live_league,
+            friendly: &live_friendly,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2031, 3, 1));
+        assert_eq!(
+            order_of(&rows),
+            expect(&[
+                ("river-plate", 2030, false),
+                ("river-plate", 2029, false),
+                ("toulouse", 2029, true),
+            ]),
+        );
+    }
+
+    #[test]
+    fn home_then_loan_that_continues_keeps_loan_on_top() {
+        // Home first (River Plate, 8 apps), then loaned to Toulouse mid-season
+        // (15 apps) and the loan CARRIES into the next season (still Toulouse).
+        // The loan is the later, ongoing spell, so it stays above the home row
+        // it followed — the home did not continue, so no promotion happens.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.season_ledger
+            .push(ledger_league(1, 2029, "river-plate", "primera", false, 8));
+        hist.season_ledger
+            .push(ledger_league(2, 2029, "toulouse", "ligue-1", true, 15));
+        hist.current
+            .push(active_loan("toulouse", "ligue-1", 2030, 3));
+
+        let live_league = stats(20, 3);
+        let live_friendly = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &live_league,
+            friendly: &live_friendly,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2031, 3, 1));
+        assert_eq!(
+            order_of(&rows),
+            expect(&[
+                ("toulouse", 2030, true),
+                ("toulouse", 2029, true),
+                ("river-plate", 2029, false),
+            ]),
+        );
+    }
+
+    #[test]
+    fn transient_return_before_transfer_keeps_loan_on_top() {
+        // A return that did NOT stick: back at River Plate mid-2029/30 (5 apps),
+        // then transferred to a DIFFERENT club (Boca) for 2030/31. Because the
+        // River Plate home row has no next-season continuation, it is treated
+        // like the reserve bounce-back — the Toulouse loan stays on top.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.season_ledger
+            .push(ledger_league(2, 2029, "toulouse", "ligue-1", true, 20));
+        hist.season_ledger
+            .push(ledger_league(3, 2029, "river-plate", "primera", false, 5));
+        hist.current
+            .push(active_home("boca-juniors", "primera", 2030, 4));
+
+        let live_league = stats(30, 6);
+        let live_friendly = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &live_league,
+            friendly: &live_friendly,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2031, 3, 1));
+        assert_eq!(
+            order_of(&rows),
+            expect(&[
+                ("boca-juniors", 2030, false),
+                ("toulouse", 2029, true),
+                ("river-plate", 2029, false),
+            ]),
+        );
+    }
+
+    #[test]
+    fn full_season_loans_then_sticking_return_order_by_season() {
+        // Two clean full-season loans to Toulouse (returns at each season end,
+        // so no split home row those years), then a permanent return to River
+        // Plate. This is the plain "River Plate / Toulouse / Toulouse" shape.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.season_ledger
+            .push(ledger_league(1, 2028, "toulouse", "ligue-1", true, 35));
+        hist.season_ledger
+            .push(ledger_league(2, 2029, "toulouse", "ligue-1", true, 30));
+        hist.current
+            .push(active_home("river-plate", "primera", 2030, 3));
+
+        let live_league = stats(19, 2);
+        let live_friendly = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &live_league,
+            friendly: &live_friendly,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2031, 3, 1));
+        assert_eq!(
+            order_of(&rows),
+            expect(&[
+                ("river-plate", 2030, false),
+                ("toulouse", 2029, true),
+                ("toulouse", 2028, true),
+            ]),
+        );
+    }
+
+    #[test]
+    fn multiple_mid_season_loans_then_sticking_return_order_loans_by_recency() {
+        // Three spells in one 2029/30 season: loaned to Danubio (early, 8),
+        // recalled and loaned to Toulouse (mid, 6), recalled and back home at
+        // River Plate (late, 5) where he STAYS. Home tops the season; the two
+        // loans fall below it in reverse-chronological (seq desc) order.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.season_ledger
+            .push(ledger_league(2, 2029, "danubio", "uruguay-primera", true, 8));
+        hist.season_ledger
+            .push(ledger_league(3, 2029, "toulouse", "ligue-1", true, 6));
+        hist.season_ledger
+            .push(ledger_league(4, 2029, "river-plate", "primera", false, 5));
+        hist.current
+            .push(active_home("river-plate", "primera", 2030, 5));
+
+        let live_league = stats(19, 2);
+        let live_friendly = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &live_league,
+            friendly: &live_friendly,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2031, 3, 1));
+        assert_eq!(
+            order_of(&rows),
+            expect(&[
+                ("river-plate", 2030, false),
+                ("river-plate", 2029, false),
+                ("toulouse", 2029, true),
+                ("danubio", 2029, true),
+            ]),
         );
     }
 
