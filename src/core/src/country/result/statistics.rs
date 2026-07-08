@@ -2,28 +2,12 @@ use super::CountryResult;
 use crate::Country;
 use crate::TeamInfo;
 use crate::league::Season;
-use crate::simulator::SimulatorData;
 use chrono::{Datelike, NaiveDate};
 use log::info;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
 impl CountryResult {
-    /// Snapshot every player's statistics into career history for one or
-    /// more just-ended seasons.
-    ///
-    /// Thin `&mut SimulatorData` wrapper around [`snapshot_country`] —
-    /// kept so test paths (and any one-off caller) can address a country
-    /// by id. The production tick resolves the country once and calls
-    /// [`snapshot_country`] directly inside a parallel season-start pass
-    /// across every just-ended-season country.
-    pub(super) fn snapshot_player_season_statistics(data: &mut SimulatorData, country_id: u32) {
-        let date = data.date.date();
-        if let Some(country) = data.country_mut(country_id) {
-            Self::snapshot_country(country, date);
-        }
-    }
-
     /// Country-local season snapshot. Operates on `&mut Country` only —
     /// no cross-country reads or writes — so the orchestrator can run it
     /// across every just-ended-season country in parallel (the season is
