@@ -76,7 +76,23 @@ impl ContractRenewalManager {
         // see the budget already spent. Without this the loop could blow
         // the wage budget by approving five star offers in parallel.
         let mut structure = WageStructureSnapshot::from_team(&teams[main_idx]);
-        let candidates = Self::collect_candidates(&teams[main_idx], date);
+        let mut candidates = Self::collect_candidates(&teams[main_idx], date);
+        // Fund the contracts the club can least afford to lose first, so a
+        // wage-capped pass doesn't let roster-order backups soak up the
+        // headroom while a key player runs down his deal: about-to-walk
+        // (panic / Bosman window) first, then soonest expiry, then squad
+        // importance.
+        candidates.sort_by(|a, b| {
+            let a_urgent = a.final_panic || a.bosman_pressure;
+            let b_urgent = b.final_panic || b.bosman_pressure;
+            b_urgent
+                .cmp(&a_urgent)
+                .then(a.months_remaining.cmp(&b.months_remaining))
+                .then(
+                    Self::status_priority(&b.effective_status)
+                        .cmp(&Self::status_priority(&a.effective_status)),
+                )
+        });
         let mut match_highest_used = false;
 
         for candidate in candidates {
@@ -483,13 +499,29 @@ impl ContractRenewalManager {
         })
     }
 
+    /// Squad-importance rank for renewal prioritization (higher = keep first).
+    fn status_priority(status: &PlayerSquadStatus) -> u8 {
+        match status {
+            PlayerSquadStatus::KeyPlayer => 5,
+            PlayerSquadStatus::FirstTeamRegular => 4,
+            PlayerSquadStatus::FirstTeamSquadRotation => 3,
+            PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::HotProspectForTheFuture => 2,
+            PlayerSquadStatus::DecentYoungster => 1,
+            _ => 0,
+        }
+    }
+
     /// Effective squad status used for renewal decisions. A player on a
     /// purple-patch run gets treated one tier up — real clubs rush to tie
-    /// down in-form players regardless of their formal role. Same engine
-    /// for every player; the boost just needs a strong, universal signal.
+    /// down in-form players regardless of their formal role. Same engine for
+    /// every player; the boost needs a strong, universal signal AND a
+    /// season-scale sample, so a two-game hot streak can't lock the club into
+    /// a longer, near-top-earner deal.
     fn effective_squad_status(player: &Player, base: &PlayerSquadStatus) -> PlayerSquadStatus {
+        const MIN_GAMES_FOR_FORM_BOOST: u16 = 8;
         let form = player.load.form_rating;
-        if form < 7.5 {
+        let games = player.statistics.played + player.statistics.played_subs;
+        if form < 7.5 || games < MIN_GAMES_FOR_FORM_BOOST {
             return base.clone();
         }
         match base {

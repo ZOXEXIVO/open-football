@@ -1051,6 +1051,7 @@ mod group_need_tests {
             recovery_days: 0,
             injury_days: 0,
             asset_class: SquadAssetClass::UnknownNeedsEvaluation,
+            contract_months_remaining: Some(24),
         }
     }
 
@@ -1274,6 +1275,72 @@ mod group_need_tests {
             defender_needs.len()
         );
         assert_eq!(defender_needs[0].kind, NeedKind::FormationGap);
+    }
+
+    #[test]
+    fn long_term_injury_stops_counting_toward_depth() {
+        // Six healthy defenders exactly meet the 4-4-2 defender depth
+        // requirement (4 slots + 2) → no need. Put one out long-term and the
+        // club is genuinely short right now, so a defender need must appear.
+        let formation = t442_positions();
+        let make = |injure: bool| -> Vec<GroupNeed> {
+            let mut squad = vec![
+                squad_player(1, PlayerPositionType::Goalkeeper, 138),
+                squad_player(2, PlayerPositionType::Goalkeeper, 130),
+            ];
+            let defs = [
+                PlayerPositionType::DefenderLeft,
+                PlayerPositionType::DefenderCenterLeft,
+                PlayerPositionType::DefenderCenterRight,
+                PlayerPositionType::DefenderRight,
+                PlayerPositionType::DefenderCenterLeft,
+                PlayerPositionType::DefenderCenterRight,
+            ];
+            for (i, pos) in defs.iter().enumerate() {
+                let mut p = squad_player(10 + i as u32, *pos, 138);
+                if injure && i == 0 {
+                    p.is_injured = true;
+                    p.recovery_days = 60;
+                }
+                squad.push(p);
+            }
+            let mids = [
+                PlayerPositionType::MidfielderLeft,
+                PlayerPositionType::MidfielderCenterLeft,
+                PlayerPositionType::MidfielderCenterRight,
+                PlayerPositionType::MidfielderRight,
+                PlayerPositionType::MidfielderCenterLeft,
+                PlayerPositionType::MidfielderCenterRight,
+            ];
+            for (i, pos) in mids.iter().enumerate() {
+                squad.push(squad_player(30 + i as u32, *pos, 138));
+            }
+            for (i, pos) in [
+                PlayerPositionType::ForwardLeft,
+                PlayerPositionType::ForwardRight,
+                PlayerPositionType::Striker,
+            ]
+            .iter()
+            .enumerate()
+            {
+                squad.push(squad_player(50 + i as u32, *pos, 138));
+            }
+            let coverage = coverage_from_squad(&squad, formation);
+            compute_group_needs(
+                &squad,
+                &coverage,
+                formation,
+                continental_score(),
+                continental_tolerance(),
+            )
+        };
+        let has_def_need =
+            |needs: &[GroupNeed]| needs.iter().any(|n| n.group == PlayerFieldPositionGroup::Defender);
+        assert!(!has_def_need(&make(false)), "six healthy defenders → no need");
+        assert!(
+            has_def_need(&make(true)),
+            "a long-term-injured defender drops available depth below requirement"
+        );
     }
 
     #[test]

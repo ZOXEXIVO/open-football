@@ -306,8 +306,21 @@ impl SquadAssetContext {
             PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster => {
                 return SquadAssetClass::ProspectDevelopment;
             }
-            // NotNeeded / Invalid are explicit "surplus / cleanup" decisions.
+            // NotNeeded / Invalid are explicit "surplus / cleanup" decisions —
+            // but a young player with genuine upside who is merely buried on
+            // the depth chart is a development-loan asset, not free-transfer
+            // scrapheap. Rescue that profile before honoring the surplus label
+            // (otherwise a monthly CA-rank pass that stamps NotNeeded on a
+            // deep-squad prospect makes him free-release-eligible).
             PlayerSquadStatus::NotNeeded | PlayerSquadStatus::Invalid => {
+                // Explicit surplus — but a young player who merely projects as
+                // a development prospect (buried, below his group's level, with
+                // room to grow) is a loan asset, not free-transfer scrapheap.
+                // Rescue exactly that inference; every other profile honors the
+                // surplus label.
+                if matches!(self.infer(player, date), SquadAssetClass::ProspectDevelopment) {
+                    return SquadAssetClass::ProspectDevelopment;
+                }
                 return SquadAssetClass::TrueSurplus;
             }
             // Backup and not-yet-evaluated fall through to inference: a
@@ -792,6 +805,51 @@ mod tests {
         // A prospect is loanable for development, but never free-transferred.
         assert!(!class.is_first_team_protected());
         assert!(class.is_free_transfer_protected());
+    }
+
+    #[test]
+    fn notneeded_young_prospect_is_rescued_for_development() {
+        // Explicit NotNeeded on a young player with real upside must NOT go
+        // straight to free-transfer scrapheap — the guard keeps him a
+        // development-loan asset (otherwise a CA-rank pass stamping NotNeeded
+        // on a buried prospect makes him free-release-eligible).
+        let mut prospect = Fx::prospect(71, PlayerPositionType::MidfielderCenter, 100, 19);
+        prospect.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::NotNeeded;
+        let club = Fx::club(Fx::squad_with(vec![prospect]));
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let p = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 71)
+            .unwrap();
+        let class = ctx.classify(p, Fx::date());
+        assert_eq!(class, SquadAssetClass::ProspectDevelopment);
+        assert!(class.is_free_transfer_protected());
+    }
+
+    #[test]
+    fn notneeded_ageing_player_is_still_true_surplus() {
+        // An ageing NotNeeded player with no ceiling headroom stays genuine
+        // surplus — the rescue is only for young players with upside.
+        let mut vet = Fx::player(
+            72,
+            PlayerPositionType::MidfielderCenter,
+            90,
+            33,
+            500,
+            PlayerSquadStatus::NotNeeded,
+        );
+        vet.player_attributes.potential_ability = 90;
+        let club = Fx::club(Fx::squad_with(vec![vet]));
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let v = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 72)
+            .unwrap();
+        assert_eq!(ctx.classify(v, Fx::date()), SquadAssetClass::TrueSurplus);
     }
 
     #[test]

@@ -54,6 +54,23 @@ impl PlayerTraining {
         }
     }
 
+    /// The form level a benched player's rating drifts toward while he isn't
+    /// playing (consumed by `PlayerLoad::daily_decay_with_form_target`).
+    /// Anchored at the neutral match rating and nudged by how he's actually
+    /// training: a player tearing it up in training earns a slightly higher
+    /// floor — the coach can see he's ready — while a slacker settles lower.
+    /// Kept to a modest ±0.6 so training only colours the fade, it never
+    /// fabricates match form.
+    pub fn form_recovery_baseline(&self) -> f32 {
+        const NEUTRAL_FORM: f32 = 6.5;
+        const NEUTRAL_TRAINING: f32 = 10.0;
+        const NUDGE_PER_POINT: f32 = 0.12;
+        const MAX_NUDGE: f32 = 0.6;
+        let nudge = ((self.training_performance - NEUTRAL_TRAINING) * NUDGE_PER_POINT)
+            .clamp(-MAX_NUDGE, MAX_NUDGE);
+        NEUTRAL_FORM + nudge
+    }
+
     pub fn train(
         player: &Player,
         coach: &Staff,
@@ -2188,5 +2205,22 @@ mod training_load_tests {
         );
         assert!(first);
         assert!(!second, "cooldown should suppress same-pair second event");
+    }
+
+    #[test]
+    fn form_recovery_baseline_tracks_training() {
+        let mut t = PlayerTraining::new();
+        // Neutral training → neutral form baseline.
+        assert!((t.form_recovery_baseline() - 6.5).abs() < 1e-6);
+        // Training well earns a floor above neutral; slacking sits below.
+        t.training_performance = 16.0;
+        assert!(t.form_recovery_baseline() > 6.5);
+        t.training_performance = 4.0;
+        assert!(t.form_recovery_baseline() < 6.5);
+        // Extremes stay bounded to the modest ±0.6 swing.
+        t.training_performance = 20.0;
+        assert!(t.form_recovery_baseline() <= 7.1 + 1e-6);
+        t.training_performance = 1.0;
+        assert!(t.form_recovery_baseline() >= 5.9 - 1e-6);
     }
 }

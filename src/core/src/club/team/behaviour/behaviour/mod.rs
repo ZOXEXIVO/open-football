@@ -270,6 +270,12 @@ impl TeamBehaviour {
         // the manager has given up on, provided the payout is acceptable.
         Self::process_coach_contract_terminations(players, staffs, &mut result, &ctx);
 
+        // Player-forced mutual terminations: a frozen-out player who has
+        // asked to leave and cannot be sold finally agrees to tear up his
+        // deal — the exit door the surplus-only coach path deliberately
+        // won't open for a protected or valuable player.
+        Self::process_player_forced_terminations(players, &mut result, &ctx);
+
         // Living conflict escalation: persistent high-bond friction
         // crosses from "the coach noticed" into player-driven incidents
         // — private complaints, Unhappy status, transfer-request risk,

@@ -11,6 +11,7 @@ use crate::{
 };
 use chrono::NaiveDate;
 use log::debug;
+use std::collections::HashSet;
 
 /// Days after a permanent / loan move during which a player's idle days are
 /// not yet read as underutilization — he hasn't had a fair chance to break
@@ -225,6 +226,56 @@ impl Club {
                 } else {
                     transfer_players.push((ti, player.id, "dec_reason_underutilized".to_string()));
                 }
+            }
+        }
+
+        // In-season size discipline. The board flags `squad_excess` once the
+        // total squad exceeds its ceiling by more than five, but nothing
+        // consumed it — so an over-limit squad that tripped no per-position
+        // glut just bloated all season. Give that determination a consumer:
+        // when over the ceiling, list the worst genuine surplus across ALL
+        // teams (including the main squad, which the idle sweep above skips),
+        // worst-first, until the excess is cleared.
+        const SIZE_TRIM_MARGIN: usize = 5;
+        if total_squad > max_squad + SIZE_TRIM_MARGIN {
+            let already: HashSet<u32> = loan_players
+                .iter()
+                .chain(transfer_players.iter())
+                .map(|(_, id, _)| *id)
+                .collect();
+            let excess = total_squad - max_squad;
+            // (team_idx, id, ca, age) — rank low CA first, then older first.
+            let mut surplus: Vec<(usize, u32, u8, u8)> = Vec::new();
+            for (ti, team) in self.teams.iter().enumerate() {
+                for player in team.players.iter() {
+                    if already.contains(&player.id)
+                        || player.is_on_loan()
+                        || player.is_force_match_selection
+                        || player
+                            .contract
+                            .as_ref()
+                            .map(|c| c.is_transfer_listed)
+                            .unwrap_or(true)
+                    {
+                        continue;
+                    }
+                    if !matches!(
+                        asset_ctx.classify(player, date),
+                        SquadAssetClass::TrueSurplus
+                    ) {
+                        continue;
+                    }
+                    surplus.push((
+                        ti,
+                        player.id,
+                        player.player_attributes.current_ability,
+                        player.age(date),
+                    ));
+                }
+            }
+            surplus.sort_by(|a, b| a.2.cmp(&b.2).then(b.3.cmp(&a.3)));
+            for (ti, id, _, _) in surplus.into_iter().take(excess) {
+                transfer_players.push((ti, id, "dec_reason_underutilized".to_string()));
             }
         }
 

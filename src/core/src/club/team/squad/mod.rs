@@ -8,7 +8,7 @@ pub use asset_protection::{
     SquadAssetClass, SquadAssetContext, SquadAssetProtection, SquadEvidenceContext,
 };
 pub use contract_renewal::{ContractRenewalManager, WageStructureSnapshot};
-pub use satisfaction::compute_squad_satisfaction;
+pub use satisfaction::SquadSatisfaction;
 
 pub(crate) use move_guard::MainSquadMoveGuard;
 

@@ -1,3 +1,4 @@
+use crate::PlayerFieldPositionGroup;
 use chrono::Duration;
 use chrono::NaiveDateTime;
 pub use chrono::prelude::{DateTime, Datelike, NaiveDate, Utc};
@@ -27,9 +28,27 @@ pub enum PlayerSquadStatus {
 }
 
 impl PlayerSquadStatus {
-    /// Squad status based on player CA rank within the team.
-    /// `team_cas` should be sorted descending (best first).
-    pub fn calculate(player_ca: u8, player_age: u8, team_cas: &[u8]) -> Self {
+    /// Squad status from the player's current-ability rank **within his own
+    /// position group**, made position-slot-aware so a winner-take-all
+    /// position — above all goalkeeper — is judged against how many players
+    /// actually start there, not a flat percentile of the group.
+    ///
+    /// The old percentile model was calibrated for a ~25-man outfield squad
+    /// and broke for small groups: a club carries only 2-3 keepers and
+    /// exactly one plays, so the clear number-two landed in the 0.15-0.40
+    /// "First Team Regular" band even though he never starts. Ranking
+    /// against the group's [`typical_starters`](PlayerFieldPositionGroup::typical_starters)
+    /// instead makes the second keeper a backup, while leaving the roomier
+    /// outfield groups essentially where they were.
+    ///
+    /// `team_cas` is this group's current abilities, sorted descending
+    /// (best first).
+    pub fn calculate(
+        player_ca: u8,
+        player_age: u8,
+        group: PlayerFieldPositionGroup,
+        team_cas: &[u8],
+    ) -> Self {
         let squad_size = team_cas.len();
         if squad_size == 0 {
             return PlayerSquadStatus::FirstTeamRegular;
@@ -45,23 +64,29 @@ impl PlayerSquadStatus {
             };
         }
 
-        // Find player's rank in the squad (0 = best)
+        // Find player's rank in his position group (0 = best).
         let rank = team_cas.iter().filter(|&&ca| ca > player_ca).count();
-        let percentile = rank as f32 / squad_size as f32;
 
-        // Thresholds:
-        // Top ~15% = Key Player (typically 3-4 players in a 25-man squad)
-        // Next ~25% = First Team Regular
-        // Next ~20% = Squad Rotation
-        // Next ~20% = Backup
-        // Bottom ~20% = Not Needed
-        if percentile < 0.15 {
+        // The starting XI slots at this position are "regular" territory;
+        // the best slice of them are key players. Rotation depth beyond the
+        // XI is one slot per two starters — but a keeper doesn't rotate, he
+        // is first choice or a backup, so goalkeeping gets no rotation tier
+        // and keeps two backup slots before the rest are surplus.
+        let starters = group.typical_starters();
+        let key_cutoff = ((starters + 2) / 3).max(1);
+        let is_goalkeeper = matches!(group, PlayerFieldPositionGroup::Goalkeeper);
+        let rotation_slots = if is_goalkeeper { 0 } else { (starters / 2).max(1) };
+        let regular_cutoff = starters;
+        let rotation_cutoff = regular_cutoff + rotation_slots;
+        let backup_cutoff = rotation_cutoff + if is_goalkeeper { 2 } else { starters };
+
+        if rank < key_cutoff {
             PlayerSquadStatus::KeyPlayer
-        } else if percentile < 0.40 {
+        } else if rank < regular_cutoff {
             PlayerSquadStatus::FirstTeamRegular
-        } else if percentile < 0.60 {
+        } else if rank < rotation_cutoff {
             PlayerSquadStatus::FirstTeamSquadRotation
-        } else if percentile < 0.80 {
+        } else if rank < backup_cutoff {
             PlayerSquadStatus::MainBackupPlayer
         } else {
             PlayerSquadStatus::NotNeeded
@@ -129,6 +154,14 @@ pub struct PlayerClubContract {
     /// contract is first installed; if the bonus has been paid out the
     /// flag is `Some(year)` and we don't pay again on subsequent ticks.
     pub signing_bonus_paid: bool,
+
+    /// Squad-status role promised to the player at signing/renewal, with the
+    /// date it stops binding. Held separately from `squad_status` — which the
+    /// monthly CA-rank pass overwrites — so a negotiated role ("you'll be a
+    /// first-team regular") isn't silently wiped within a month. The squad-
+    /// status updater treats an unexpired promise as a *floor* on
+    /// `squad_status`; past the expiry it's cleared and stops binding.
+    pub promised_squad_status: Option<(PlayerSquadStatus, NaiveDate)>,
 }
 
 impl PlayerClubContract {
@@ -156,6 +189,7 @@ impl PlayerClubContract {
             last_yearly_rise_year: None,
             last_loyalty_paid_year: None,
             signing_bonus_paid: false,
+            promised_squad_status: None,
         }
     }
 
@@ -183,6 +217,7 @@ impl PlayerClubContract {
             last_yearly_rise_year: None,
             last_loyalty_paid_year: None,
             signing_bonus_paid: false,
+            promised_squad_status: None,
         }
     }
 
@@ -216,6 +251,7 @@ impl PlayerClubContract {
             last_yearly_rise_year: None,
             last_loyalty_paid_year: None,
             signing_bonus_paid: false,
+            promised_squad_status: None,
         }
     }
 
@@ -718,6 +754,73 @@ impl ContractClause {
     /// any more — the brittle `* 100 + pct` encoding is gone.)
     pub fn resolved_percentage(&self, default_pct: u8) -> u8 {
         self.percentage.filter(|p| *p > 0).unwrap_or(default_pct)
+    }
+}
+
+#[cfg(test)]
+mod squad_status_calc_tests {
+    use super::*;
+
+    // `team_cas` is this group's abilities, sorted descending (best first).
+
+    #[test]
+    fn second_keeper_is_a_backup_not_a_regular() {
+        // Three keepers, only one plays. The clear number-two used to land
+        // in the "First Team Regular" band under the old flat percentile —
+        // the reported bug. He must read as a backup now, and the surplus
+        // fourth keeper as not needed.
+        let keepers = [150u8, 120, 90];
+        let gk = PlayerFieldPositionGroup::Goalkeeper;
+        assert_eq!(
+            PlayerSquadStatus::calculate(150, 27, gk, &keepers),
+            PlayerSquadStatus::KeyPlayer,
+            "the number-one keeper is the key man between the posts"
+        );
+        assert_eq!(
+            PlayerSquadStatus::calculate(120, 27, gk, &keepers),
+            PlayerSquadStatus::MainBackupPlayer,
+            "the second keeper is a backup, never a first-team regular"
+        );
+        let four = [150u8, 120, 100, 80];
+        assert_eq!(
+            PlayerSquadStatus::calculate(80, 27, gk, &four),
+            PlayerSquadStatus::NotNeeded
+        );
+    }
+
+    #[test]
+    fn outfield_group_keeps_a_sensible_ladder() {
+        // Eight midfielders: the top few are key / regular, the tail rotates
+        // and backs up — the roomy-group behaviour the percentile model got
+        // roughly right is preserved.
+        let mids = [180u8, 170, 160, 150, 140, 130, 120, 110];
+        let mid = PlayerFieldPositionGroup::Midfielder;
+        assert_eq!(
+            PlayerSquadStatus::calculate(180, 26, mid, &mids),
+            PlayerSquadStatus::KeyPlayer
+        );
+        assert_eq!(
+            PlayerSquadStatus::calculate(150, 26, mid, &mids),
+            PlayerSquadStatus::FirstTeamRegular
+        );
+        assert_eq!(
+            PlayerSquadStatus::calculate(120, 26, mid, &mids),
+            PlayerSquadStatus::MainBackupPlayer
+        );
+    }
+
+    #[test]
+    fn young_players_still_get_youth_labels() {
+        let mids = [180u8, 120, 100];
+        let mid = PlayerFieldPositionGroup::Midfielder;
+        assert_eq!(
+            PlayerSquadStatus::calculate(180, 18, mid, &mids),
+            PlayerSquadStatus::HotProspectForTheFuture
+        );
+        assert_eq!(
+            PlayerSquadStatus::calculate(100, 18, mid, &mids),
+            PlayerSquadStatus::DecentYoungster
+        );
     }
 }
 

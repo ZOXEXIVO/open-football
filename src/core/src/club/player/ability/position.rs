@@ -538,4 +538,20 @@ impl PlayerFieldPositionGroup {
             PlayerFieldPositionGroup::Forward => 6,
         }
     }
+
+    /// How many of this group start a typical match — the number of
+    /// "regular" slots the position offers. A keeper has exactly one, which
+    /// is why a keeper's number two is a backup rather than a rotation
+    /// regular; the outfield figures track a conventional 4-4-2 shape.
+    /// Used by [`crate::PlayerSquadStatus::calculate`] to judge a player's
+    /// role against the slots available at his position instead of a flat
+    /// percentile of the group.
+    pub fn typical_starters(&self) -> usize {
+        match self {
+            PlayerFieldPositionGroup::Goalkeeper => 1,
+            PlayerFieldPositionGroup::Defender => 4,
+            PlayerFieldPositionGroup::Midfielder => 4,
+            PlayerFieldPositionGroup::Forward => 2,
+        }
+    }
 }

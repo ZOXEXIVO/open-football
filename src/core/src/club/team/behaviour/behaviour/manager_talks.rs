@@ -21,12 +21,12 @@ use crate::club::team::squad::SquadAssetContext;
 use crate::context::GlobalContext;
 use crate::utils::DateUtils;
 use crate::{
-    HappinessEventType, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus,
-    PlayerStatusType, PrivateTalkReason, Staff, StaffCollection, TeamType,
+    ContractType, HappinessEventType, Player, PlayerCollection, PlayerFieldPositionGroup,
+    PlayerSquadStatus, PlayerStatusType, PrivateTalkReason, Staff, StaffCollection, TeamType,
 };
 use chrono::{Duration, NaiveDate};
 use log::debug;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl TeamBehaviour {
     /// Date-aware. The interaction-log cooldown gate needs the
@@ -720,6 +720,98 @@ impl TeamBehaviour {
         }
     }
 
+    /// Player-forced mutual terminations — the other real-world exit door.
+    /// A player who has formally asked to leave (or been ground down by a
+    /// long playing-time grievance), is frozen out of the side, and cannot
+    /// be sold — no buyer met the club's terms through a window — eventually
+    /// agrees with the club to tear up the deal and leave on a free.
+    ///
+    /// This is the mirror image of [`Self::process_coach_contract_terminations`]:
+    /// that path clears genuine *surplus* the club has given up on and is
+    /// blocked by `AutomaticReleaseEligibility` for protected or valuable
+    /// players. This path is *player-driven*, so it fires precisely for the
+    /// protected-role / still-valuable player that path refuses to touch —
+    /// when he is the one forcing the issue. Ambition and determination make
+    /// him push sooner; a valuable player the club would rather keep trying
+    /// to sell has to wait longer; a content squad player never triggers it.
+    /// The club only agrees when the severance lump is not a cash-flow shock
+    /// (tearing up a deal is by construction cheaper than paying it out), and
+    /// never when it would strip a position group below safe match-day cover.
+    pub(super) fn process_player_forced_terminations(
+        players: &PlayerCollection,
+        result: &mut TeamBehaviourResult,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let date = ctx.simulation.date.date();
+
+        // A mutual termination is a one-way door; like the coach path, wait
+        // until the season has produced evidence of who actually plays.
+        let asset_ctx = SquadAssetContext::for_squad(players);
+        if asset_ctx.is_early_season() {
+            return;
+        }
+
+        let annual_wage_bill: u32 = players
+            .players
+            .iter()
+            .filter(|p| !p.is_on_loan())
+            .filter_map(|p| p.contract.as_ref().map(|c| c.salary))
+            .sum();
+
+        let league_reputation = ctx.club_league_reputation();
+        let club_reputation = ctx.club_main_reputation();
+
+        // Per-position-group active headcount — a forced exit must never thin
+        // a group below safe cover. Decremented as exits are approved.
+        let mut group_active: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
+        for p in &players.players {
+            if p.is_on_loan() || p.contract.is_none() {
+                continue;
+            }
+            *group_active
+                .entry(p.position().position_group())
+                .or_default() += 1;
+        }
+        const MIN_GROUP_AFTER_RELEASE: usize = 2;
+        // Player-forced exits are rarer than routine deadwood clearance.
+        const MAX_TERMINATIONS_PER_WEEK: usize = 1;
+        let mut emitted = 0;
+
+        // Never double-terminate a player the coach path already picked this
+        // tick.
+        let already: HashSet<u32> = result
+            .contract_terminations
+            .iter()
+            .map(|t| t.player_id)
+            .collect();
+
+        for player in &players.players {
+            if emitted >= MAX_TERMINATIONS_PER_WEEK {
+                break;
+            }
+            if already.contains(&player.id) {
+                continue;
+            }
+            let group = player.position().position_group();
+            if group_active.get(&group).copied().unwrap_or(0) <= MIN_GROUP_AFTER_RELEASE {
+                continue;
+            }
+            let market_value = player.value(date, league_reputation, club_reputation);
+            if let Some(termination) = PlayerForcedTerminationReview::evaluate(
+                player,
+                date,
+                market_value,
+                annual_wage_bill,
+            ) {
+                result.contract_terminations.push(termination);
+                if let Some(count) = group_active.get_mut(&group) {
+                    *count = count.saturating_sub(1);
+                }
+                emitted += 1;
+            }
+        }
+    }
+
     /// Loan/playing-time talk with enhanced success logic.
     /// For LoanRequest: success depends heavily on player ambition, determination,
     /// and manager's man_management. Ambitious players are harder to convince to stay.
@@ -859,6 +951,135 @@ impl CoachTerminationReview {
         Some(ContractTermination {
             player_id: player.id,
             payout: contract.termination_cost(date),
+            reason: FreeAgentReleaseReason::MutualTermination,
+        })
+    }
+}
+
+/// Player-driven counterpart to [`CoachTerminationReview`]. Decides whether a
+/// frozen-out player who wants out and cannot be sold has forced a mutual
+/// contract termination. See
+/// [`TeamBehaviour::process_player_forced_terminations`] for the narrative.
+struct PlayerForcedTerminationReview;
+
+impl PlayerForcedTerminationReview {
+    /// Base spell a formal transfer request (or long playing-time
+    /// unhappiness) must persist before a player-forced mutual termination
+    /// is on the table — long enough that a window has come and gone without
+    /// a sale. Scaled per player below.
+    const BASE_UNSOLD_DAYS: f32 = 180.0;
+    /// Frozen out = getting less than this fraction of the matches his role
+    /// (squad status) leads him to expect — the minutes share below which a
+    /// player concludes he has no future in the side.
+    const FROZEN_OUT_MAX_RATIO: f32 = 0.40;
+    /// The club won't absorb a severance lump above this share (a twelfth) of
+    /// one year's wage bill as a one-off, however keen it is to move him on.
+    const LUMP_SUM_WAGE_BILL_DIVISOR: u32 = 12;
+    const LUMP_SUM_FLOOR: u32 = 10_000;
+
+    /// `Some(termination)` when every condition is met, else `None`.
+    fn evaluate(
+        player: &Player,
+        date: NaiveDate,
+        market_value: f64,
+        annual_wage_bill: u32,
+    ) -> Option<ContractTermination> {
+        // Loanees belong to the parent club; a pinned player is wanted.
+        if player.is_on_loan() || player.is_force_match_selection {
+            return None;
+        }
+        let contract = player.contract.as_ref()?;
+        // Only a real professional deal has something to mutually tear up;
+        // loan / amateur / non-contract severance is zero and those exits are
+        // handled elsewhere.
+        if !matches!(
+            contract.contract_type,
+            ContractType::FullTime | ContractType::PartTime | ContractType::Youth
+        ) {
+            return None;
+        }
+
+        // Must be genuinely frozen out: a large, established playing-time
+        // deficit versus what his (now honest) squad status expects. NotNeeded
+        // players "accept their fate", so `can_judge` returning None here
+        // correctly leaves them to the surplus-release path instead.
+        let cfg = PlayingTimeFrustrationConfig::default();
+        let opp = player.playing_time_opportunity(date);
+        let status = &contract.squad_status;
+        if opp
+            .can_judge(Some(status), &cfg, contract.loan_min_appearances)
+            .is_none()
+        {
+            return None;
+        }
+        // Involvement as a fraction of what his (now honest) squad status
+        // expects, off the same expected-share ladder the complaint model
+        // uses so the two systems agree on what "frozen out" means.
+        let eligible = opp.eligible_official_matches_since_join as f32;
+        let expected =
+            (eligible * PlayingTimeFrustrationConfig::expected_start_share(Some(status))).max(1.0);
+        let involvement_ratio = (opp.actual_involvement_score(&cfg) / expected).clamp(0.0, 1.0);
+        if involvement_ratio > Self::FROZEN_OUT_MAX_RATIO {
+            return None;
+        }
+
+        // Must want out: a standing transfer request (the sale route has had
+        // its chance) or a long-running unhappiness.
+        let wants_out_days = player
+            .statuses
+            .held_for_days(PlayerStatusType::Req, date)
+            .unwrap_or(0)
+            .max(
+                player
+                    .statuses
+                    .held_for_days(PlayerStatusType::Unh, date)
+                    .unwrap_or(0),
+            );
+        if wants_out_days <= 0 {
+            return None;
+        }
+
+        // How hard he pushes: ambition + determination shorten the wait; a
+        // valuable player the club would rather keep trying to sell lengthens
+        // it — it won't give a real asset away for free quickly.
+        let push = ((player.attributes.ambition + player.skills.mental.determination) / 40.0)
+            .clamp(0.0, 1.0);
+        let value_factor = (market_value / 5_000_000.0).clamp(0.0, 2.0) as f32;
+        let required_days =
+            (Self::BASE_UNSOLD_DAYS * (1.0 + value_factor) / (0.5 + push)).clamp(90.0, 900.0);
+        if (wants_out_days as f32) < required_days {
+            return None;
+        }
+
+        // The club agrees only if the severance lump isn't a cash-flow shock.
+        // The haircut settlement is by construction cheaper than paying the
+        // deal out, so tearing up always saves net wages — the binding
+        // constraint is the size of the one-off payment.
+        let severance = contract.termination_cost(date);
+        let lump_cap =
+            (annual_wage_bill / Self::LUMP_SUM_WAGE_BILL_DIVISOR).max(Self::LUMP_SUM_FLOOR);
+        if severance > lump_cap {
+            return None;
+        }
+
+        debug!(
+            "player-forced mutual termination: {} (id={}) status {:?}, involvement {:.2}, \
+             wants-out {}d >= required {:.0}d (value {:.0}, push {:.2}), severance {} <= cap {}",
+            player.full_name,
+            player.id,
+            status,
+            involvement_ratio,
+            wants_out_days,
+            required_days,
+            market_value,
+            push,
+            severance,
+            lump_cap,
+        );
+
+        Some(ContractTermination {
+            player_id: player.id,
+            payout: severance,
             reason: FreeAgentReleaseReason::MutualTermination,
         })
     }
@@ -1741,6 +1962,113 @@ mod reserve_escalation_tests {
         assert!(
             result.manager_talks.is_empty(),
             "a modest 21-year-old doesn't force the issue yet"
+        );
+    }
+}
+
+#[cfg(test)]
+mod player_forced_termination_tests {
+    //! The player-driven mutual-termination gate: a frozen-out player who
+    //! has asked to leave and cannot be sold forces his contract to be torn
+    //! up so he can leave on a free — the door the surplus-only coach path
+    //! keeps shut for a protected or valuable player.
+    use super::*;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
+    };
+
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 6, 12).unwrap()
+        }
+
+        /// A 26-year-old full-time backup keeper who has played nothing (20
+        /// eligible matches, zero involvement) and has carried a transfer
+        /// request for `req_days`. Ambition/determination make him push.
+        fn frozen_out_backup(req_days: i64) -> Player {
+            let mut attrs = PersonAttributes::default();
+            attrs.ambition = 14.0;
+            attrs.loyalty = 10.0;
+            let mut skills = PlayerSkills::default();
+            skills.mental.determination = 12.0;
+
+            let mut contract =
+                PlayerClubContract::new(30_000, NaiveDate::from_ymd_opt(2028, 6, 30).unwrap());
+            contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
+
+            let mut pa = PlayerAttributes::default();
+            pa.current_ability = 120;
+
+            let mut player = PlayerBuilder::new()
+                .id(9)
+                .full_name(FullName::new("Frozen".to_string(), "Keeper".to_string()))
+                .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(attrs)
+                .skills(skills)
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Goalkeeper,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(pa)
+                .contract(Some(contract))
+                .build()
+                .unwrap();
+
+            // Club has played plenty since he joined; he featured in none.
+            player.happiness.eligible_official_matches_since_join = 20;
+            player.happiness.starts_since_join = 0;
+            player.happiness.sub_apps_since_join = 0;
+            // A standing transfer request, held long enough that a window
+            // has been and gone.
+            player.statuses.add(
+                Self::date() - Duration::days(req_days),
+                PlayerStatusType::Req,
+            );
+            player
+        }
+    }
+
+    #[test]
+    fn frozen_out_unsold_requester_forces_a_mutual_termination() {
+        let player = Fx::frozen_out_backup(400);
+        let termination =
+            PlayerForcedTerminationReview::evaluate(&player, Fx::date(), 50_000.0, 1_200_000)
+                .expect("a frozen-out, long-requested, low-value player should force an exit");
+        assert_eq!(termination.player_id, 9);
+        assert_eq!(termination.reason, FreeAgentReleaseReason::MutualTermination);
+        assert!(termination.payout > 0, "a full-time deal carries a severance");
+    }
+
+    #[test]
+    fn a_valuable_player_has_to_wait_longer() {
+        // Same grievance and request length, but a real market value — the
+        // club would rather keep trying to sell than give an asset away for
+        // free, so the required unsold spell runs past 400 days.
+        let player = Fx::frozen_out_backup(400);
+        assert!(
+            PlayerForcedTerminationReview::evaluate(&player, Fx::date(), 20_000_000.0, 1_200_000)
+                .is_none(),
+            "a valuable player forces a free exit only after a much longer stalemate"
+        );
+    }
+
+    #[test]
+    fn a_player_getting_his_minutes_forces_nothing() {
+        let mut player = Fx::frozen_out_backup(400);
+        // He actually starts most weeks — not frozen out, no grievance.
+        player.happiness.starts_since_join = 15;
+        assert!(
+            PlayerForcedTerminationReview::evaluate(&player, Fx::date(), 50_000.0, 1_200_000)
+                .is_none(),
+            "a player getting his minutes has nothing to force an exit over"
         );
     }
 }

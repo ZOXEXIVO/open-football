@@ -1967,6 +1967,7 @@ fn build_main_contract(
         last_yearly_rise_year: None,
         last_loyalty_paid_year: None,
         signing_bonus_paid: false,
+        promised_squad_status: None,
     };
     // If currently loaned out, the main contract retains parent terms but
     // records the borrower via loan_to_club_id so the value/wage code knows.
@@ -2091,6 +2092,7 @@ fn build_loan_contract(record: &OdbPlayer, data: &DatabaseEntity) -> Option<Play
         last_yearly_rise_year: None,
         last_loyalty_paid_year: None,
         signing_bonus_paid: false,
+        promised_squad_status: None,
     })
 }
 

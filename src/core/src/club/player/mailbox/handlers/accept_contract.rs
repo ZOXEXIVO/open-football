@@ -75,6 +75,10 @@ impl AcceptContractHandler {
             last_yearly_rise_year: None,
             last_loyalty_paid_year: None,
             signing_bonus_paid: false,
+            // Role-promise floor is set on the transfer/personal-terms path;
+            // a mailbox renewal reflects the player's real standing, so it
+            // carries no separate promise here.
+            promised_squad_status: None,
         });
 
         // Accepting a proposal installs a fresh deal, so any pre-contract

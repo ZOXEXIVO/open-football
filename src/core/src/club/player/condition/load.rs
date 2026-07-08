@@ -40,6 +40,14 @@ const RECOVERY_DEBT_DAILY_DECAY: f32 = 0.79;
 /// quick enough to catch a hot streak, slow enough to smooth a one-off.
 const FORM_ALPHA: f32 = 0.33;
 
+/// Per-day pull of `form_rating` back toward its neutral baseline on days
+/// the player makes no competitive appearance (~14-day half-life). Applied
+/// only after a fortnight without a match, so a spell on the bench slowly
+/// erases a stale run rather than freezing a player's rating and stranding
+/// him: dropped for poor form, but never able to work it off because he
+/// isn't picked. An active player's form signal is left untouched.
+const FORM_FADE_DAILY: f32 = 0.9517;
+
 /// Weekly minutes at which selection starts penalising the player (≈5 × 90).
 pub const FATIGUE_LOAD_THRESHOLD: f32 = 450.0;
 /// Weekly minutes treated as dangerous overload — injury risk kicks in too.
@@ -110,6 +118,20 @@ impl PlayerLoad {
     /// Age the windows by whole days since the last call. Idempotent on
     /// the same date; catches up multi-day gaps in one call.
     pub fn daily_decay(&mut self, today: NaiveDate) {
+        self.age_windows(today, None);
+    }
+
+    /// [`Self::daily_decay`] plus a gentle pull of `form_rating` back toward
+    /// `form_target` on days the player makes no competitive appearance —
+    /// the "a bad (or hot) run fades from memory once you're out of the
+    /// side" effect. Without it a benched player's form freezes and can
+    /// strand him. The fade only kicks in once he's had no competitive
+    /// match for a fortnight, so an active player's form is left intact.
+    pub fn daily_decay_with_form_target(&mut self, today: NaiveDate, form_target: f32) {
+        self.age_windows(today, Some(form_target));
+    }
+
+    fn age_windows(&mut self, today: NaiveDate, form_target: Option<f32>) {
         let today_ordinal = today.num_days_from_ce();
 
         if self.last_decay_day_ordinal == 0 {
@@ -139,6 +161,17 @@ impl PlayerLoad {
         } else {
             self.matches_last_14_bits <<= delta_days as u32;
             self.matches_last_14_bits &= (1 << 14) - 1;
+        }
+
+        // Form fades toward its neutral baseline only once the player has
+        // gone a fortnight without a competitive match — a spell out of the
+        // side erases a stale run so a benched player becomes selectable
+        // again, while an active player (a match inside 14 days) is untouched.
+        if let Some(target) = form_target {
+            if self.form_rating > 0.0 && self.matches_last_14_bits == 0 {
+                let f = FORM_FADE_DAILY.powi(delta_days);
+                self.form_rating = target + (self.form_rating - target) * f;
+            }
         }
 
         // Floor f32 residuals so repeated decays don't leave negligible
@@ -334,6 +367,55 @@ mod tests {
         let mut l = PlayerLoad::new();
         l.update_form(7.5);
         assert!((l.form_rating - 7.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn benched_form_fades_toward_neutral() {
+        // A player carrying a bad run who then goes weeks without a match:
+        // his form should drift back up toward the neutral target instead
+        // of freezing at the low value and stranding him out of the side.
+        let mut l = PlayerLoad::new();
+        l.update_form(5.0);
+        l.daily_decay_with_form_target(d(2025, 1, 1), 6.5); // seed the clock
+        for day in 2..=31 {
+            l.daily_decay_with_form_target(d(2025, 1, day), 6.5);
+        }
+        assert!(
+            l.form_rating > 5.2 && l.form_rating < 6.5,
+            "form should drift toward neutral: {}",
+            l.form_rating
+        );
+    }
+
+    #[test]
+    fn active_player_form_is_not_faded() {
+        // A recent competitive appearance keeps the 14-day match flag set,
+        // so the fade never touches a regular's form signal.
+        let mut l = PlayerLoad::new();
+        l.update_form(5.0);
+        l.record_match_minutes(90.0, false); // played today
+        l.daily_decay_with_form_target(d(2025, 1, 1), 6.5); // seed
+        for day in 2..=10 {
+            l.daily_decay_with_form_target(d(2025, 1, day), 6.5);
+        }
+        assert!(
+            (l.form_rating - 5.0).abs() < 1e-3,
+            "an active player's form must be untouched: {}",
+            l.form_rating
+        );
+    }
+
+    #[test]
+    fn plain_daily_decay_leaves_form_untouched() {
+        // The no-target overload (used across the rest of the sim and its
+        // tests) never fades form — the recovery drift is strictly opt-in.
+        let mut l = PlayerLoad::new();
+        l.update_form(5.0);
+        l.daily_decay(d(2025, 1, 1));
+        for day in 2..=31 {
+            l.daily_decay(d(2025, 1, day));
+        }
+        assert!((l.form_rating - 5.0).abs() < 1e-6, "form={}", l.form_rating);
     }
 
     #[test]

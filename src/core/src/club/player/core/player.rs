@@ -1030,8 +1030,13 @@ impl Player {
         let mut result = PlayerResult::new(self.id);
 
         // Age the rolling workload windows before anything reads them today.
-        // Cheap and idempotent — safe to call before every other step.
-        self.load.daily_decay(now.date());
+        // Cheap and idempotent — safe to call before every other step. The
+        // form target lets a benched player's stale form fade back toward
+        // neutral (nudged by how he's training) so poor form can't strand
+        // him out of the side forever.
+        let form_target = self.training.form_recovery_baseline();
+        self.load
+            .daily_decay_with_form_target(now.date(), form_target);
 
         // Birthday
         if DateUtils::is_birthday(self.birth_date, now.date()) {

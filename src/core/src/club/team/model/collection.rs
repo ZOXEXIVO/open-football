@@ -1,5 +1,6 @@
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::staff::perception::{CoachDecisionState, date_to_week};
+use crate::club::team::squad::SquadSatisfaction;
 use crate::club::team::squad::{ContractRenewalManager, SquadManager};
 use crate::context::GlobalContext;
 use crate::utils::Logging;
@@ -185,6 +186,20 @@ impl TeamCollection {
         if let Some(ref mut state) = self.coach_state {
             state.current_week = date_to_week(date);
         }
+
+        // Refresh the coach's squad-satisfaction read (size / performance /
+        // quality spread / position coverage) — cheap, and it's the "how
+        // complete is my squad" signal recruitment urgency consumes. Split
+        // borrow: the team is read-only, the state is written.
+        if let Some(idx) = self.main_index() {
+            let sat = self
+                .coach_state
+                .as_ref()
+                .map(|state| SquadSatisfaction::compute(&self.teams[idx], state));
+            if let (Some(sat), Some(state)) = (sat, self.coach_state.as_mut()) {
+                state.squad_satisfaction = sat;
+            }
+        }
         manager_changed
     }
 
@@ -296,6 +311,22 @@ impl TeamCollection {
             wage_budget,
             league_reputation,
         );
+        // Also open early talks with the reserve / U21 squad, so a valuable
+        // prospect or depth player housed there isn't left to run his deal
+        // down to the single expiry-day panic offer (and lost on a Bosman).
+        // Runs against that squad's own wage structure and the shared club
+        // budget.
+        if let Some(reserve_idx) = self.reserve_index() {
+            if reserve_idx != main_idx {
+                ContractRenewalManager::run_with_budget(
+                    &mut self.teams,
+                    reserve_idx,
+                    date,
+                    wage_budget,
+                    league_reputation,
+                );
+            }
+        }
     }
 
     /// Daily critical squad moves: immediate demotions and ability-based swaps

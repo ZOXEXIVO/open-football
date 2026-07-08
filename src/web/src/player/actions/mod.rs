@@ -592,12 +592,17 @@ pub async fn transfer_action(
         // arrival). Compute and pin on the freshly-installed contract so
         // the UI shows a sensible value immediately.
         let player_age = core::utils::DateUtils::age(player.birth_date, date);
+        let player_group = player.position().position_group();
         let mut full_group_cas = existing_group_cas.clone();
         full_group_cas.push(player_ca);
         full_group_cas.sort_unstable_by(|a, b| b.cmp(a));
         if let Some(contract) = player.contract.as_mut() {
-            contract.squad_status =
-                core::PlayerSquadStatus::calculate(player_ca, player_age, &full_group_cas);
+            contract.squad_status = core::PlayerSquadStatus::calculate(
+                player_ca,
+                player_age,
+                player_group,
+                &full_group_cas,
+            );
         }
 
         sim.continents[dci].countries[dcoi].clubs[dcli].teams.teams[dti]

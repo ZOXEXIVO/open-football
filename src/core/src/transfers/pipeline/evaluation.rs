@@ -127,9 +127,15 @@ pub(in crate::transfers::pipeline) fn compute_group_needs(
         // actually complete.
         let baseline = PipelineProcessor::tier_starter_ca_score(rep_score, group);
         let upgrade_tolerance = quality_tolerance - (rep_score * 5.0).round() as i16;
+        // A long-term-injured player is not present quality/depth: an ageing
+        // "best in group" who's out for months shouldn't mask a genuine need,
+        // and a keeper sidelined all season shouldn't paper over GK cover.
         let best_in_group = squad
             .iter()
-            .filter(|p| p.primary_position.position_group() == group)
+            .filter(|p| {
+                p.primary_position.position_group() == group
+                    && !(p.is_injured && p.recovery_days > 30)
+            })
             .map(|p| p.current_ability)
             .max()
             .unwrap_or(0);
@@ -142,10 +148,15 @@ pub(in crate::transfers::pipeline) fn compute_group_needs(
             continue;
         }
 
-        // (3) Depth cover — group thinner than formation footprint
+        // (3) Depth cover — group thinner than formation footprint. Long-term
+        // injuries don't count toward depth: a club whose only cover is out
+        // for months is genuinely short right now.
         let group_count = squad
             .iter()
-            .filter(|p| p.primary_position.position_group() == group)
+            .filter(|p| {
+                p.primary_position.position_group() == group
+                    && !(p.is_injured && p.recovery_days > 30)
+            })
             .count();
         if group_count < group_depth_requirement(formation_positions, group) {
             needs.push(GroupNeed {
@@ -670,6 +681,10 @@ impl PipelineProcessor {
                     recovery_days: p.player_attributes.recovery_days_remaining,
                     injury_days: p.player_attributes.injury_days_remaining,
                     asset_class: asset_ctx.classify(p, date),
+                    contract_months_remaining: p
+                        .contract
+                        .as_ref()
+                        .map(|c| ((c.expiration - date).num_days() / 30) as i32),
                 }
             })
             .collect();
@@ -760,6 +775,10 @@ impl PipelineProcessor {
             let best = squad
                 .iter()
                 .filter(|p| !used_player_ids.contains(&p.player_id))
+                // A long-term-injured player can't cover a slot — leave it
+                // uncovered so it registers as a need (all tiers, not just
+                // small clubs).
+                .filter(|p| !(p.is_injured && p.recovery_days > 30))
                 .filter_map(|p| {
                     // Check if player can play this position (exact or same group)
                     let level = p.position_levels.get(&formation_pos).copied().unwrap_or(0);
@@ -826,6 +845,25 @@ impl PipelineProcessor {
             available_budget / total_needs as f64
         } else {
             0.0
+        };
+        // Sizing unit for forward-looking / discretionary buys (succession,
+        // youth, experienced head, injury cover). It must NOT collapse to zero
+        // when the XI has no formation gap (total_needs == 0 → budget_per_need
+        // == 0): a well-built squad still plans succession and farms prospects.
+        // When formation needs DO exist it equals `budget_per_need` exactly (no
+        // behaviour change); with none it falls back to a slice of the overall
+        // budget, widened when the head coach is dissatisfied with the squad
+        // (the previously-inert squad-satisfaction signal now has a consumer).
+        let squad_satisfaction = club
+            .teams
+            .coach_state
+            .as_ref()
+            .map(|s| s.squad_satisfaction)
+            .unwrap_or(0.5);
+        let discretionary_unit = if total_needs > 0 {
+            budget_per_need
+        } else {
+            available_budget * (0.20 + (1.0 - squad_satisfaction as f64) * 0.20)
         };
 
         // Generate one request per group with priority and budget
@@ -918,7 +956,7 @@ impl PipelineProcessor {
                     continue;
                 }
 
-                let alloc = (budget_per_need * 0.4).min(available_budget - budget_used);
+                let alloc = (discretionary_unit * 0.4).min(available_budget - budget_used);
                 if alloc <= 0.0 {
                     break;
                 }
@@ -941,6 +979,67 @@ impl PipelineProcessor {
                     budget_used += alloc;
                 }
             }
+        }
+
+        // ──────────────────────────────────────────────────────────
+        // STEP 4a: Pre-departure replacement for expiring key players
+        // ──────────────────────────────────────────────────────────
+        // A first-choice player in the last months of his deal is a hole
+        // opening next season even though he's full depth/quality right now.
+        // If no heir is in the building and we're not already shopping his
+        // position, line up a replacement — keyed on the contract clock, not
+        // age, so a 26-year-old running his deal down is caught where the
+        // age-gated succession pass misses him. Runs for every club, so a
+        // Balanced lower-tier side no longer loses its best player for free
+        // with nothing lined up.
+        const REPLACE_CONTRACT_MONTHS: i32 = 9;
+        for player_info in &squad {
+            if budget_used >= available_budget {
+                break;
+            }
+            let short_contract = player_info
+                .contract_months_remaining
+                .is_some_and(|m| m <= REPLACE_CONTRACT_MONTHS);
+            if !short_contract {
+                continue;
+            }
+            let group = player_info.primary_position.position_group();
+            // Only a genuine first-choice (best or near-best in his group) is
+            // worth pre-replacing — an expiring backup simply leaves.
+            let best_in_group = squad
+                .iter()
+                .filter(|p| p.primary_position.position_group() == group)
+                .map(|p| p.current_ability)
+                .max()
+                .unwrap_or(0);
+            if player_info.current_ability + 4 < best_in_group {
+                continue;
+            }
+            if SuccessionAudit::heir_in_place(&squad, player_info) {
+                continue;
+            }
+            if requests
+                .iter()
+                .any(|r| r.position.position_group() == group)
+            {
+                continue;
+            }
+            let alloc = (discretionary_unit * 0.4).min(available_budget - budget_used);
+            if alloc <= 0.0 {
+                break;
+            }
+            let baseline = Self::tier_starter_ca_score(rep_score, group);
+            requests.push(TransferRequest::new(
+                next_id,
+                player_info.primary_position,
+                TransferNeedPriority::Important,
+                TransferNeedReason::QualityUpgrade,
+                baseline.saturating_sub(8),
+                baseline.saturating_add(5),
+                alloc,
+            ));
+            next_id += 1;
+            budget_used += alloc;
         }
 
         // ──────────────────────────────────────────────────────────
@@ -1009,7 +1108,7 @@ impl PipelineProcessor {
                     2
                 };
                 if young_in_group < min_young {
-                    let alloc = (budget_per_need * 0.3).min(available_budget - budget_used);
+                    let alloc = (discretionary_unit * 0.3).min(available_budget - budget_used);
                     if alloc <= 0.0 {
                         break;
                     }
@@ -1082,7 +1181,7 @@ impl PipelineProcessor {
                 .iter()
                 .any(|r| r.position.position_group() == PlayerFieldPositionGroup::Goalkeeper);
             if young_keepers < want_young_keepers && !already_requesting_gk {
-                let alloc = (budget_per_need * 0.3).min(available_budget - budget_used);
+                let alloc = (discretionary_unit * 0.3).min(available_budget - budget_used);
                 if alloc > 0.0 {
                     requests.push(TransferRequest::new(
                         next_id,
@@ -1136,7 +1235,7 @@ impl PipelineProcessor {
                     // request with zero allocation so the FA matcher
                     // and emergency pass can both react.
                     let alloc =
-                        (budget_per_need * 0.3).min((available_budget - budget_used).max(0.0));
+                        (discretionary_unit * 0.3).min((available_budget - budget_used).max(0.0));
                     let representative_pos =
                         EmergencyGroupSlot::representative_position(slot.group);
                     requests.push(TransferRequest::new(
@@ -1161,7 +1260,7 @@ impl PipelineProcessor {
                 .iter()
                 .any(|p| p.age >= 28 && p.current_ability >= avg_ability);
             if !has_experienced && budget_used < available_budget {
-                let alloc = (budget_per_need * 0.3).min(available_budget - budget_used);
+                let alloc = (discretionary_unit * 0.3).min(available_budget - budget_used);
                 if alloc > 0.0 {
                     requests.push(TransferRequest::new(
                         next_id,
@@ -1186,7 +1285,7 @@ impl PipelineProcessor {
                 if budget_used >= available_budget {
                     break;
                 }
-                let alloc = (budget_per_need * 0.3).min(available_budget - budget_used);
+                let alloc = (discretionary_unit * 0.3).min(available_budget - budget_used);
                 if alloc <= 0.0 {
                     break;
                 }
@@ -2264,6 +2363,9 @@ mod stalled_prospect_tests {
                 // does not trigger. Tests that exercise the veto set a
                 // protected class explicitly.
                 asset_class: SquadAssetClass::UnknownNeedsEvaluation,
+                // Long runway by default — the tests here don't exercise the
+                // expiring-contract replacement need.
+                contract_months_remaining: Some(24),
             }
         }
 

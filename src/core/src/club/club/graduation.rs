@@ -58,10 +58,14 @@ impl Club {
         // academy throughput even when plenty of academy players are ready.
         self.rebalance_squads(date);
 
-        // Find the lowest youth team to graduate into (U18 → U19 → U20 → U21 → U23)
-        let youth_idx = TeamType::YOUTH_PROGRESSION
+        // Prefer the lowest youth team to graduate into (U18 → U19 → U20 →
+        // U21 → U23). A club with no youth team at all promotes its best
+        // academy players straight onto the senior/main team rather than
+        // releasing every aged-out 18-year-old for free.
+        let graduation_idx = TeamType::YOUTH_PROGRESSION
             .iter()
-            .find_map(|tt| self.teams.index_of_type(*tt));
+            .find_map(|tt| self.teams.index_of_type(*tt))
+            .or_else(|| self.teams.index_of_type(TeamType::Main));
 
         // Graduate academy players BEFORE releasing aged-out ones, so 16+
         // year olds get a chance to graduate instead of being deleted.
@@ -71,7 +75,7 @@ impl Club {
         // overshoot, always bounded by the youth soft-max of 30. The
         // academy's `recommended_graduates` / `elite_overshoot_count`
         // helpers own the actual count so there's one place to tune it.
-        if let Some(idx) = youth_idx {
+        if let Some(idx) = graduation_idx {
             let youth_count = self.teams.teams[idx].players.len();
             let eligible_count = self.academy.graduation_candidates(date).len();
             let normal = self

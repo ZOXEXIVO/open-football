@@ -75,6 +75,10 @@ mod processor {
         /// never loaned or listed automatically. See
         /// [`crate::club::team::squad::SquadAssetProtection`].
         pub asset_class: SquadAssetClass,
+        /// Whole months left on the player's contract (`None` = no contract).
+        /// Lets need-sizing treat an expiring starter as a replacement need
+        /// instead of counting him as settled depth right up to his exit.
+        pub contract_months_remaining: Option<i32>,
     }
 
     /// Seller-side context the staged plausibility model needs to assess a

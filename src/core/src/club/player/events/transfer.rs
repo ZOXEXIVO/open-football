@@ -423,7 +423,7 @@ impl Player {
             // and the next role-fit tick may downgrade them despite
             // the buyer's promise.
             if let Some(promise) = terms.squad_status_promise {
-                contract.squad_status = match promise {
+                let promised = match promise {
                     PromisedSquadStatus::KeyPlayer => PlayerSquadStatus::KeyPlayer,
                     PromisedSquadStatus::FirstTeamRegular => PlayerSquadStatus::FirstTeamRegular,
                     PromisedSquadStatus::FirstTeamSquadRotation => {
@@ -433,6 +433,14 @@ impl Player {
                         PlayerSquadStatus::HotProspectForTheFuture
                     }
                 };
+                contract.squad_status = promised.clone();
+                // Bind the promise for a season so the monthly CA-rank pass
+                // can't quietly demote below it (see
+                // PlayerClubContract::promised_squad_status). A broken promise
+                // then surfaces as real playing-time unhappiness instead of
+                // being silently absorbed by the recompute.
+                let until = date.checked_add_signed(Duration::days(365)).unwrap_or(date);
+                contract.promised_squad_status = Some((promised, until));
             }
         }
 
