@@ -204,6 +204,22 @@ impl LeagueResult {
         if let Some(details_mut) = &mut result.details {
             details_mut.player_of_the_match_id = best_player_id;
         }
+
+        // Sync the finalized record back into the league's durable match
+        // store. `process_match_day_results` pushed a pre-processing
+        // snapshot of this match earlier in the tick (PoM `None`, raw
+        // ratings) — before `compute_effective_ratings`,
+        // `CanonicalRatingMutator` and the Player of the Match pick above
+        // had run. Both the per-match web page and the weekly award
+        // aggregator read `League.matches`, so without this they'd never
+        // see the nominee for domestic league / cup games. Continental
+        // cups have no `League` row and store via the global `match_store`
+        // after `process_cup_match`, so `league_mut` finds nothing and
+        // this is a no-op for them.
+        let finalized = result.copy_without_data_positions();
+        if let Some(league) = data.league_mut(result.league_id) {
+            league.matches.replace_if_present(finalized);
+        }
     }
 
     /// Clubs learn about players who appear in their domestic football.

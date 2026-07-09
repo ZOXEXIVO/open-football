@@ -47,6 +47,29 @@ impl MatchStorage {
         self.by_date.entry(date).or_default().push(id);
     }
 
+    /// Overwrite an already-stored result in place, keyed by id, WITHOUT
+    /// touching the date index. `process_match_day_results` pushes a
+    /// *pre-processing* snapshot of each match (Player of the Match still
+    /// `None`, raw engine ratings) at match-day time; the finalized values
+    /// aren't set until `process_match_events` runs later in the tick. This
+    /// lets that later pass sync the finalized record over the snapshot so
+    /// downstream readers of `League.matches` (per-match web page, weekly
+    /// award aggregator) see the nominee and canonical ratings.
+    ///
+    /// Deliberately a no-op when the id was never stored: creating a fresh,
+    /// date-unindexed entry here would escape both `trim` and
+    /// `iter_in_range`. Because `by_date` is left alone, re-syncing can't
+    /// double-count a match in range-based aggregation. Returns whether an
+    /// entry was replaced.
+    pub fn replace_if_present(&mut self, match_result: MatchResult) -> bool {
+        if let Some(slot) = self.results.get_mut(&match_result.id) {
+            *slot = match_result;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn get<M>(&self, match_id: M) -> Option<&MatchResult>
     where
         M: AsRef<str>,
@@ -154,6 +177,35 @@ mod tests {
             Some(&match_result)
         );
         assert_eq!(match_storage.get("nonexistent_id".to_string()), None);
+    }
+
+    #[test]
+    fn replace_if_present_overwrites_in_place_without_touching_date_index() {
+        let mut s = MatchStorage::new();
+        let mut original = mk("match_1");
+        original.league_id = 1;
+        s.push(original, day(2024, 1, 1));
+
+        // Same id, different payload — mimics the finalized record synced
+        // over the match-day snapshot.
+        let mut finalized = mk("match_1");
+        finalized.league_id = 2;
+        assert!(s.replace_if_present(finalized));
+
+        // Value was overwritten (PartialEq is id-only, so check a field).
+        assert_eq!(s.get("match_1").unwrap().league_id, 2);
+        // No duplicate entry created, and the date index isn't re-appended,
+        // so range aggregation still sees the match exactly once.
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.iter_in_range(day(2024, 1, 1), day(2024, 1, 2)).count(), 1);
+    }
+
+    #[test]
+    fn replace_if_present_is_noop_when_absent() {
+        let mut s = MatchStorage::new();
+        assert!(!s.replace_if_present(mk("never_stored")));
+        assert!(s.is_empty());
+        assert!(s.get("never_stored").is_none());
     }
 
     #[test]
