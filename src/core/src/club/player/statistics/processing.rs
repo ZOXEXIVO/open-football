@@ -1077,6 +1077,467 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // Continuous multi-season loan: the middle season (even at 0 apps,
+    // even when its season-end gate dropped) must render under the
+    // BORROWING club with the Loan label — never bounce to a phantom
+    // parent-club row. Prompted by the Sebastiano Nava report, whose
+    // page showed a 0-app "Juventus" row where a "Palermo (Loan)" row
+    // belonged. This test proves the freeze + projection pipeline
+    // renders a genuine continuous 2-year Palermo loan correctly; a
+    // real page that instead shows a parent row for that season means
+    // the ledger truly has no borrowing-club entry (i.e. the two
+    // Palermo spells were SEPARATE loans with a parent gap year), not
+    // that rendering dropped it.
+    // ---------------------------------------------------------------
+    #[test]
+    fn continuous_two_year_loan_middle_season_renders_as_borrowing_loan() {
+        let juve = team_with_league("Juventus", "juventus", "Serie A", "serie-a");
+        let palermo = team_with_league("Palermo", "palermo", "Serie B", "serie-b");
+
+        // Drive the shared prefix: a 2026/27 Palermo loan (38 apps) that
+        // returns, then a fresh 2-year Palermo loan opened in 2027 that
+        // spans 2027/28 (0 apps) + 2028/29.
+        let seed = |player: &mut crate::Player| {
+            player
+                .statistics_history
+                .seed_initial_team(&juve, make_date(2026, 8, 1), false);
+            player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+                500,
+                make_date(2027, 6, 30),
+                99,
+                0,
+                100,
+            ));
+            player.on_loan(&juve, &palermo, 0.0, make_date(2026, 8, 10));
+            player.statistics = make_stats(38, 0);
+            player.contract_loan = None;
+            player.on_loan_return(&palermo, &juve, make_date(2027, 6, 30));
+            player.on_season_end(Season::new(2026), &juve, make_date(2027, 7, 5));
+            // Fresh 2-year loan (expires summer 2029).
+            player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+                500,
+                make_date(2029, 6, 30),
+                99,
+                0,
+                100,
+            ));
+            player.on_loan(&juve, &palermo, 0.0, make_date(2027, 8, 10));
+            player.statistics = make_stats(0, 0); // 2027/28 — never featured
+        };
+
+        let assert_middle_is_palermo_loan = |player: &crate::Player, render: NaiveDate| {
+            let live = crate::PlayerLiveStatsInput {
+                league: &player.statistics,
+                friendly: &player.friendly_statistics,
+                cups: &[],
+                friendly_source_slug: "",
+            };
+            let rows = crate::PlayerStatisticsProjection::player_history_rows(
+                &player.statistics_history,
+                &live,
+                render,
+            );
+            assert!(
+                rows.iter()
+                    .any(|r| r.season.start_year == 2027 && r.team_slug == "palermo" && r.is_loan),
+                "middle loan season (2027/28) must render as a Palermo loan row: {:?}",
+                rows.iter()
+                    .map(|r| (r.season.start_year, r.team_slug.clone(), r.is_loan))
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                !rows
+                    .iter()
+                    .any(|r| r.season.start_year == 2027 && r.team_slug == "juventus"),
+                "the 2027/28 parent re-seed row must be suppressed while on loan: {:?}",
+                rows.iter()
+                    .map(|r| (r.season.start_year, r.team_slug.clone(), r.is_loan))
+                    .collect::<Vec<_>>()
+            );
+        };
+
+        // Variant A — 2027/28 season-end fires normally under Palermo.
+        let mut a = make_player();
+        seed(&mut a);
+        a.on_season_end(Season::new(2027), &palermo, make_date(2028, 7, 5));
+        a.statistics = make_stats(33, 0); // 2028/29 live
+        assert_middle_is_palermo_loan(&a, make_date(2029, 3, 1));
+
+        // Variant B — 2027/28 gate dropped; the next season's catch-up
+        // freezes the missed year via on_missed_season_end, then the
+        // target 2028/29 season-end drains the live counter.
+        let mut b = make_player();
+        seed(&mut b);
+        b.on_missed_season_end(Season::new(2027), &palermo, make_date(2028, 8, 15));
+        b.statistics = make_stats(33, 0);
+        b.on_season_end(Season::new(2028), &palermo, make_date(2028, 8, 15));
+        b.statistics = make_stats(20, 0); // 2028/29 live
+        assert_middle_is_palermo_loan(&b, make_date(2029, 3, 1));
+    }
+
+    // ---------------------------------------------------------------
+    // User-reported (2-year Bari loan): a multi-season loan whose CONTRACT
+    // expires in June returns the player to his parent (Juventus) BEFORE
+    // the August season-end snapshot. The season-end then attributed the
+    // just-ended loan season to the parent, and the re-seeded continuing-
+    // loan entry — which used to carry no fee — was purged as a phantom
+    // (0 games, no fee) by record_loan_return's cleanup / the stale_loan_
+    // seed freeze filter. Result: year 2 of the loan rendered as the
+    // parent club instead of the borrowing club. The re-seed now stamps
+    // the Some(0.0) loan sentinel so the continuing spell survives.
+    // ---------------------------------------------------------------
+    #[test]
+    fn two_year_loan_second_season_survives_return_before_snapshot() {
+        let juve = team_with_league("Juventus", "juventus", "Serie A", "serie-a");
+        let bari = team_with_league("Bari", "bari", "Serie B", "serie-b");
+        let mut p = make_player();
+        p.statistics_history
+            .seed_initial_team(&juve, make_date(2026, 8, 1), false);
+        // 2-year loan to Bari (contract expires June 2028).
+        p.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500,
+            make_date(2028, 6, 30),
+            99,
+            0,
+            100,
+        ));
+        p.on_loan(&juve, &bari, 0.0, make_date(2026, 8, 1));
+        // Year 1 (2026/27), no apps — season-end while STILL on loan.
+        p.on_season_end(Season::new(2026), &bari, make_date(2027, 8, 15));
+        // Year 2 (2027/28), no apps. Loan expires June 2028 → the player
+        // returns to Juventus BEFORE the August season-end snapshot.
+        p.contract_loan = None;
+        p.on_loan_return(&bari, &juve, make_date(2028, 6, 30));
+        p.on_season_end(Season::new(2027), &juve, make_date(2028, 8, 15));
+
+        let live = crate::PlayerLiveStatsInput {
+            league: &p.statistics,
+            friendly: &p.friendly_statistics,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let rows = crate::PlayerStatisticsProjection::player_history_rows(
+            &p.statistics_history,
+            &live,
+            make_date(2028, 10, 1),
+        );
+
+        assert!(
+            rows.iter()
+                .any(|r| r.season.start_year == 2027 && r.team_slug == "bari" && r.is_loan),
+            "year 2 of the loan must render under the borrowing club with the Loan \
+             label: {:?}",
+            rows.iter()
+                .map(|r| (r.season.start_year, r.team_slug.clone(), r.is_loan))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.season.start_year == 2027 && r.team_slug == "juventus"),
+            "the just-ended loan season must not fall back to a parent-club row: {:?}",
+            rows.iter()
+                .map(|r| (r.season.start_year, r.team_slug.clone(), r.is_loan))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.season.start_year == 2026 && r.team_slug == "bari" && r.is_loan),
+            "year 1 loan row must remain present"
+        );
+    }
+
+    fn history_rows_of(p: &crate::Player, render: NaiveDate) -> Vec<(u16, String, bool, u16)> {
+        let live = crate::PlayerLiveStatsInput {
+            league: &p.statistics,
+            friendly: &p.friendly_statistics,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        crate::PlayerStatisticsProjection::player_history_rows(&p.statistics_history, &live, render)
+            .iter()
+            .map(|r| {
+                (
+                    r.season.start_year,
+                    r.team_slug.clone(),
+                    r.is_loan,
+                    r.statistics.played + r.statistics.played_subs,
+                )
+            })
+            .collect()
+    }
+
+    fn loan_contract_until(y: i32, m: u32, d: u32) -> crate::PlayerClubContract {
+        crate::PlayerClubContract::new_loan(500, make_date(y, m, d), 99, 0, 100)
+    }
+
+    // ---------------------------------------------------------------
+    // User-reported (3-year Palermo loan, seen on Aug 4): between the
+    // Aug 1 calendar season boundary and the league's actual snapshot
+    // day, the current season label has already advanced while last
+    // season is not frozen yet. The active multi-season loan spell used
+    // to render only as the relabeled current-year row, its just-ended
+    // season became a hole, and the gap-filler invented a parent-club
+    // placeholder — "2027/28 Juventus" in the middle of a continuous
+    // Palermo loan. The active spell must surface one row per season it
+    // covers, before and after the snapshot fires.
+    // ---------------------------------------------------------------
+    #[test]
+    fn active_multi_season_loan_shows_every_covered_season_in_presnapshot_window() {
+        let juve = team_with_league("Juventus", "juventus", "Serie A", "serie-a");
+        let palermo = team_with_league("Palermo", "palermo", "Serie B", "serie-b");
+        let mut p = make_player();
+        p.statistics_history
+            .seed_initial_team(&juve, make_date(2026, 8, 1), false);
+        p.contract_loan = Some(loan_contract_until(2029, 6, 30));
+        p.on_loan(&juve, &palermo, 0.0, make_date(2026, 8, 1));
+        p.on_season_end(Season::new(2026), &palermo, make_date(2027, 8, 15));
+
+        // Aug 4 2028: the calendar says 2028/29, but the league's 2027/28
+        // snapshot has not fired yet.
+        let expect = |rows: &Vec<(u16, String, bool, u16)>, label: &str| {
+            for want in [
+                (2028, "palermo", true),
+                (2027, "palermo", true),
+                (2026, "palermo", true),
+                (2026, "juventus", false),
+            ] {
+                assert!(
+                    rows.iter().any(|r| (r.0, r.1.as_str(), r.2) == want),
+                    "{label}: expected {want:?} in {rows:?}"
+                );
+            }
+            assert!(
+                !rows.iter().any(|r| r.0 == 2027 && r.1 == "juventus"),
+                "{label}: no phantom parent row mid-loan: {rows:?}"
+            );
+        };
+        expect(
+            &history_rows_of(&p, make_date(2028, 8, 4)),
+            "pre-snapshot window",
+        );
+
+        // The snapshot fires two weeks later — output must not change.
+        p.on_season_end(Season::new(2027), &palermo, make_date(2028, 8, 19));
+        expect(
+            &history_rows_of(&p, make_date(2028, 8, 20)),
+            "post-snapshot",
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // User-reported (Palermo/Juventus): a multi-season loan whose middle
+    // year's season-end never fired for THIS player (league gate slip,
+    // mid-move miss). The leftover loan re-seed used to be stamped into
+    // the ledger under the NEXT season, the missed year rendered as a
+    // hole, and the projection gap-filled it with a phantom parent-club
+    // row — "2027/28 Juventus" where "2027/28 Palermo (Loan)" belonged.
+    // The flush-first re-attribution + ledger mirror keeps the loan year
+    // under its own label.
+    // ---------------------------------------------------------------
+    #[test]
+    fn missed_snapshot_mid_loan_keeps_loan_year_and_no_parent_phantom() {
+        let juve = team_with_league("Juventus", "juventus", "Serie A", "serie-a");
+        let palermo = team_with_league("Palermo", "palermo", "Serie B", "serie-b");
+        let mut p = make_player();
+        p.statistics_history
+            .seed_initial_team(&juve, make_date(2026, 8, 1), false);
+        p.contract_loan = Some(loan_contract_until(2030, 6, 30));
+        p.on_loan(&juve, &palermo, 0.0, make_date(2026, 8, 10));
+
+        // 2026/27 on loan — played, season closes normally.
+        p.statistics = make_stats(38, 2);
+        p.on_season_end(Season::new(2026), &palermo, make_date(2027, 8, 15));
+
+        // 2027/28 on loan — 0 apps, and the player's season-end for 2027
+        // NEVER fires. 2028/29 — 30 apps; the next snapshot that reaches
+        // him closes 2028 directly.
+        p.statistics = make_stats(30, 1);
+        p.on_season_end(Season::new(2028), &palermo, make_date(2029, 8, 15));
+
+        let rows = history_rows_of(&p, make_date(2029, 10, 1));
+        assert!(
+            rows.contains(&(2027, "palermo".to_string(), true, 0)),
+            "missed middle loan year must render under the borrowing club: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|r| r.0 == 2027 && r.1 == "juventus"),
+            "no phantom parent-club row for the missed loan year: {rows:?}"
+        );
+        assert!(
+            rows.contains(&(2028, "palermo".to_string(), true, 30)),
+            "the catch-up season keeps its own games: {rows:?}"
+        );
+        assert!(
+            rows.contains(&(2026, "palermo".to_string(), true, 38)),
+            "year 1 of the loan stays intact: {rows:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Loan return processed AFTER the new season's snapshot already
+    // re-seeded the loan (an August expiry lands on the monthly return
+    // scan after the league regenerated). The days-old re-seed must not
+    // render as a phantom "on loan" season — and the parent club, where
+    // the player actually spends the year (even benched), must show.
+    // ---------------------------------------------------------------
+    #[test]
+    fn return_after_new_season_snapshot_collapses_phantom_loan_year() {
+        let juve = team_with_league("Juventus", "juventus", "Serie A", "serie-a");
+        let palermo = team_with_league("Palermo", "palermo", "Serie B", "serie-b");
+        let mut p = make_player();
+        p.statistics_history
+            .seed_initial_team(&juve, make_date(2026, 8, 1), false);
+        p.contract_loan = Some(loan_contract_until(2028, 8, 20));
+        p.on_loan(&juve, &palermo, 0.0, make_date(2026, 8, 10));
+
+        p.statistics = make_stats(12, 0);
+        p.on_season_end(Season::new(2026), &palermo, make_date(2027, 8, 15));
+        p.statistics = make_stats(25, 3);
+        // Still on loan on snapshot day (expiry Aug 20 > Aug 15) — the
+        // drain re-seeds a fresh Palermo loan entry for 2028/29.
+        p.on_season_end(Season::new(2027), &palermo, make_date(2028, 8, 15));
+
+        // The monthly return pass catches the expiry two weeks into the
+        // new season; the player spends 2028/29 benched at Juventus.
+        p.contract_loan = None;
+        p.on_loan_return(&palermo, &juve, make_date(2028, 8, 28));
+        p.statistics = make_stats(0, 0);
+        p.on_season_end(Season::new(2028), &juve, make_date(2029, 8, 15));
+
+        let rows = history_rows_of(&p, make_date(2029, 10, 1));
+        assert!(
+            !rows.iter().any(|r| r.0 == 2028 && r.1 == "palermo"),
+            "a days-long loan re-seed must not render as a loan season: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.0 == 2028 && r.1 == "juventus" && !r.2),
+            "the season belongs to the parent club the player returned to: {rows:?}"
+        );
+        assert!(
+            rows.contains(&(2027, "palermo".to_string(), true, 25)),
+            "real loan years stay: {rows:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // The user's collapse rule, both directions: a 0-app loan stint
+    // recalled after ~6 weeks (<40% of the season) folds away; the same
+    // recall in late February (>40%) keeps its row.
+    // ---------------------------------------------------------------
+    #[test]
+    fn early_recall_collapses_loan_row_late_recall_keeps_it() {
+        let juve = team_with_league("Juventus", "juventus", "Serie A", "serie-a");
+        let palermo = team_with_league("Palermo", "palermo", "Serie B", "serie-b");
+
+        let drive = |recall: NaiveDate| -> Vec<(u16, String, bool, u16)> {
+            let mut p = make_player();
+            p.statistics_history
+                .seed_initial_team(&juve, make_date(2026, 8, 1), false);
+            p.contract_loan = Some(loan_contract_until(2027, 6, 30));
+            p.on_loan(&juve, &palermo, 0.0, make_date(2026, 8, 10));
+            p.contract_loan = None;
+            p.on_loan_return(&palermo, &juve, recall);
+            p.on_season_end(Season::new(2026), &juve, make_date(2027, 8, 15));
+            history_rows_of(&p, make_date(2027, 10, 1))
+        };
+
+        let early = drive(make_date(2026, 9, 25));
+        assert!(
+            !early.iter().any(|r| r.1 == "palermo"),
+            "a six-week 0-app loan stint is display noise: {early:?}"
+        );
+        assert!(
+            early.iter().any(|r| r.0 == 2026 && r.1 == "juventus"),
+            "the debut-club row carries the season: {early:?}"
+        );
+
+        let late = drive(make_date(2027, 2, 20));
+        assert!(
+            late.contains(&(2026, "palermo".to_string(), true, 0)),
+            "a half-season loan stint is a real part of the career even at \
+             0 apps: {late:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // A long 0-app registration at the parent club before a winter loan
+    // (Aug→Jan ≈ 57% of the season) is a real stint per the 40% rule and
+    // must coexist with the loan row — sorted below it, since the loan is
+    // the season's real story.
+    // ---------------------------------------------------------------
+    #[test]
+    fn half_season_parent_stint_before_winter_loan_shows_below_loan_row() {
+        let juve = team_with_league("Juventus", "juventus", "Serie A", "serie-a");
+        let palermo = team_with_league("Palermo", "palermo", "Serie B", "serie-b");
+        let mut p = make_player();
+        p.statistics_history
+            .seed_initial_team(&juve, make_date(2025, 8, 1), false);
+        // Established 2025/26 season so 2026/27 gets no debut protection.
+        p.statistics = make_stats(20, 1);
+        p.on_season_end(Season::new(2025), &juve, make_date(2026, 8, 5));
+
+        // Benched at Juventus Aug→Jan, then loaned out for the run-in.
+        p.contract_loan = Some(loan_contract_until(2027, 6, 30));
+        p.on_loan(&juve, &palermo, 0.0, make_date(2027, 1, 20));
+        p.statistics = make_stats(12, 0);
+        p.on_season_end(Season::new(2026), &palermo, make_date(2027, 8, 15));
+
+        let rows = history_rows_of(&p, make_date(2027, 10, 1));
+        let palermo_pos = rows
+            .iter()
+            .position(|r| r.0 == 2026 && r.1 == "palermo" && r.2);
+        let juve_pos = rows.iter().position(|r| r.0 == 2026 && r.1 == "juventus");
+        assert!(
+            palermo_pos.is_some(),
+            "loan row with games must render: {rows:?}"
+        );
+        assert!(
+            juve_pos.is_some(),
+            "a 57%-of-season parent registration is a real stint and must \
+             render even at 0 apps: {rows:?}"
+        );
+        assert!(
+            palermo_pos.unwrap() < juve_pos.unwrap(),
+            "within the season the loan outranks the quiet parent stint: {rows:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // A pre-freeze flush (free-agent signing after the player sat out
+    // the snapshot unaffiliated) must mirror the recovered season into
+    // the canonical ledger — `items` alone is invisible to the
+    // projection once the ledger is populated, and the played season
+    // would vanish from the page.
+    // ---------------------------------------------------------------
+    #[test]
+    fn pre_freeze_flush_keeps_prior_season_visible() {
+        let juve = team_with_league("Juventus", "juventus", "Serie A", "serie-a");
+        let milan = team_with_league("Milan", "milan", "Serie A", "serie-a");
+        let mut p = make_player();
+        p.statistics_history
+            .seed_initial_team(&juve, make_date(2026, 8, 1), false);
+        // Released in June with 20 league games on the spell; the August
+        // snapshot passes him by (no club), and he signs elsewhere in
+        // September — record_free_agent_signing flushes the stale year.
+        p.statistics_history
+            .record_release(make_stats(20, 4), &juve, make_date(2027, 6, 15));
+        p.statistics_history.record_free_agent_signing(
+            PlayerStatistics::default(),
+            &milan,
+            make_date(2027, 9, 1),
+        );
+        p.on_season_end(Season::new(2027), &milan, make_date(2028, 8, 15));
+
+        let rows = history_rows_of(&p, make_date(2028, 10, 1));
+        assert!(
+            rows.contains(&(2026, "juventus".to_string(), false, 20)),
+            "the flushed pre-signing season must stay visible: {rows:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
     // on_season_end: snapshots and resets
     // ---------------------------------------------------------------
 

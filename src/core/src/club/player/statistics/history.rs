@@ -126,6 +126,7 @@ impl PlayerStatisticsHistory {
                 competition_slug: i.league_slug.clone(),
                 is_loan: i.is_loan,
                 transfer_fee: i.transfer_fee,
+                coverage_days: None,
                 statistics: i.statistics.clone(),
             })
             .collect();
@@ -152,6 +153,10 @@ impl PlayerStatisticsHistory {
     ///
     /// The seq_id is preserved from the first append; ties (e.g. a
     /// later transfer fee for a previously zero-fee row) merge in place.
+    ///
+    /// `coverage_days` is the entry's real time-at-club within the season
+    /// window (see [`PlayerStatLedgerEntry::coverage_days`]); pass `None`
+    /// when the span is unknown. Merges sum coverage across spells.
     pub fn append_to_ledger(
         &mut self,
         season_start_year: u16,
@@ -159,6 +164,7 @@ impl PlayerStatisticsHistory {
         competition_kind: PlayerStatCompetitionKind,
         is_loan: bool,
         transfer_fee: Option<f64>,
+        coverage_days: Option<u16>,
         statistics: PlayerStatistics,
     ) {
         let slug = team.league_slug.clone();
@@ -169,6 +175,7 @@ impl PlayerStatisticsHistory {
             slug,
             is_loan,
             transfer_fee,
+            coverage_days,
             statistics,
         );
     }
@@ -201,6 +208,7 @@ impl PlayerStatisticsHistory {
             competition_slug,
             false,
             None,
+            None,
             statistics,
         );
     }
@@ -213,6 +221,7 @@ impl PlayerStatisticsHistory {
         competition_slug: String,
         is_loan: bool,
         transfer_fee: Option<f64>,
+        coverage_days: Option<u16>,
         statistics: PlayerStatistics,
     ) {
         if let Some(existing) = self.season_ledger.iter_mut().find(|e| {
@@ -226,6 +235,14 @@ impl PlayerStatisticsHistory {
             if existing.transfer_fee.is_none() {
                 existing.transfer_fee = transfer_fee;
             }
+            // Two spells of the same (season, team, loan-flag) key sum
+            // their time at the club — a return + re-loan to the same
+            // side reads as one longer stay, exactly what the collapse
+            // rule should measure.
+            existing.coverage_days = match (existing.coverage_days, coverage_days) {
+                (Some(a), Some(b)) => Some(a.saturating_add(b)),
+                (a, b) => a.or(b),
+            };
             if existing.team_reputation == 0 && team.reputation > 0 {
                 existing.team_reputation = team.reputation;
             }
@@ -251,8 +268,26 @@ impl PlayerStatisticsHistory {
             competition_slug,
             is_loan,
             transfer_fee,
+            coverage_days,
             statistics,
         });
+    }
+
+    /// Real time-at-club for one spell within one season, in days —
+    /// join→departure clamped to the season's own window. This is the
+    /// value the projection compares against the "<40% of the season"
+    /// collapse threshold, so every ledger writer (and the projection's
+    /// live-entry adapter) must compute it the same way.
+    pub(super) fn spell_coverage_days(
+        season: &Season,
+        joined: NaiveDate,
+        departed: Option<NaiveDate>,
+    ) -> u16 {
+        let window_start = season.start_date();
+        let window_end = season.end_date();
+        let span_start = joined.max(window_start);
+        let span_end = departed.unwrap_or(window_end).min(window_end);
+        (span_end - span_start).num_days().max(0) as u16
     }
 
     pub fn is_empty(&self) -> bool {
@@ -334,6 +369,7 @@ impl PlayerStatisticsHistory {
                 &team,
                 PlayerStatCompetitionKind::League,
                 false,
+                None,
                 None,
                 slice.statistics,
             );
@@ -506,6 +542,30 @@ impl PlayerStatisticsHistory {
             let entry_year = entry_season.start_year;
             let season_end = entry_season.end_date();
 
+            // Canonical-ledger mirror under the entry's own season —
+            // a manual move's pre-freeze flush must not strand the
+            // prior season in legacy `items` where the projection can't
+            // see it. Unconditional; the projection's coverage rule
+            // collapses noise rows.
+            let entry_team = TeamInfo {
+                name: entry.team_name.clone(),
+                slug: entry.team_slug.clone(),
+                reputation: entry.team_reputation,
+                league_name: entry.league_name.clone(),
+                league_slug: entry.league_slug.clone(),
+            };
+            let covered =
+                Self::spell_coverage_days(&entry_season, entry.joined_date, entry.departed_date);
+            self.append_to_ledger(
+                entry_year,
+                &entry_team,
+                PlayerStatCompetitionKind::League,
+                entry.is_loan,
+                entry.transfer_fee,
+                Some(covered),
+                entry.statistics.clone(),
+            );
+
             let games = entry.statistics.total_games();
             let has_fee = entry.transfer_fee.is_some();
             let is_initial_record = is_first_season && first_seq == Some(entry.seq_id);
@@ -674,11 +734,23 @@ impl PlayerStatisticsHistory {
         // to the loan entry, which would show wrong stats for the loan row.
         self.mark_departed(&borrowing.slug, true, date);
 
-        // Clean up stale loan entries: after a loan return, any loan entry
-        // with 0 games and no fee is a leftover seed from season-end processing.
-        // Keeping it would create phantom history entries in the next season.
+        // Clean up phantom loan seeds. A season-end re-seed for a loan that
+        // then ENDED leaves a 0-game entry stamped for a season LATER than
+        // the one being returned from — a future phantom that must go, or it
+        // renders as a stint the player never had. A CONTINUING multi-season
+        // loan, by contrast, is returned from the very season it was re-seeded
+        // for (the return date falls inside that season), so it is a real
+        // spell and must stay. Discriminating by season — not by fee — is
+        // what lets a continuing loan keep the `Some(0.0)` sentinel it needs
+        // to survive the freeze (see `reseed_fee`) while a genuine phantom is
+        // still removed. Without this, year 2+ of a multi-season loan whose
+        // contract expired just before the season-end snapshot was purged and
+        // fell back to a parent-club row (the reported Bari case).
+        let return_season = Season::from_date(date).start_year;
         self.current.retain(|e| {
-            !(e.is_loan && e.statistics.total_games() == 0 && e.transfer_fee.is_none())
+            !(e.is_loan
+                && e.statistics.total_games() == 0
+                && Season::from_date(e.joined_date).start_year > return_season)
         });
 
         // Clear departed_date on parent entry — the player is back
@@ -713,6 +785,16 @@ impl PlayerStatisticsHistory {
 
         // Mark loan entry as departed
         self.mark_departed(&borrowing.slug, true, date);
+
+        // Purge future-season phantom loan seeds exactly like
+        // `record_loan_return`: a cancelled multi-season loan can leave a
+        // 0-game re-seed stamped for a season the spell never reached.
+        let cancel_season = Season::from_date(date).start_year;
+        self.current.retain(|e| {
+            !(e.is_loan
+                && e.statistics.total_games() == 0
+                && Season::from_date(e.joined_date).start_year > cancel_season)
+        });
 
         // Mirror record_loan_return cleanup: clear parent departed_date
         // so the parent entry correctly represents the post-return stint
@@ -827,23 +909,31 @@ impl PlayerStatisticsHistory {
         fallback_team: &TeamInfo,
         fallback_is_loan: bool,
     ) {
-        // Only consider entries that are *empty* re-seed leftovers — no
-        // games, no fee, not yet departed. Mid-season actions
-        // (`record_loan_return`, `record_intra_club_move`, etc.) can
-        // legitimately create entries whose `joined_date` falls in an
-        // earlier *calendar* season window (e.g. a loan return in June
-        // sits in the season-ending-May window per `Season::from_date`)
-        // even though their stats belong to the season we're now
-        // closing. Flushing those would lose data — exactly the
-        // regression the `lifecycle_two_consecutive_loans_no_phantom`
-        // test guards against.
+        // Only consider entries that are *stale* re-seed leftovers — no
+        // games, not yet departed, with REAL time coverage inside their
+        // own (prior) season window. The coverage test separates a
+        // genuine missed-year seed (joined on that season's start day →
+        // near-full coverage) from a mid-season action entry whose
+        // `joined_date` merely falls in the previous calendar window
+        // (a June loan return or late-June signing covers ~0 days of a
+        // season that ends in May) — those belong to the season being
+        // closed now, and flushing them would lose data (the
+        // `lifecycle_two_consecutive_loans_no_phantom` regression).
+        //
+        // The fee is deliberately NOT part of the test: a continuing
+        // multi-season loan's re-seed carries the `Some(0.0)` sentinel
+        // it needs to survive the freeze filters, and a missed loan
+        // year must still flush under its own label. Excluding
+        // fee-carrying seeds stamped year N of such a loan under year
+        // N+1, punching a hole the projection gap-filled with a phantom
+        // parent-club row (the reported Palermo/Juventus case).
         let mut stale: Vec<CurrentSeasonEntry> = Vec::new();
         self.current.retain(|e| {
-            let entry_year = Season::from_date(e.joined_date).start_year;
-            let is_empty_seed = e.statistics.total_games() == 0
-                && e.transfer_fee.is_none()
-                && e.departed_date.is_none();
-            if entry_year < target_season_start && is_empty_seed {
+            let entry_season = Season::from_date(e.joined_date);
+            let covered = Self::spell_coverage_days(&entry_season, e.joined_date, e.departed_date);
+            let is_stale_seed =
+                e.statistics.total_games() == 0 && e.departed_date.is_none() && covered > 0;
+            if entry_season.start_year < target_season_start && is_stale_seed {
                 stale.push(e.clone());
                 false
             } else {
@@ -884,6 +974,31 @@ impl PlayerStatisticsHistory {
         for entry in stale {
             let entry_season = Season::from_date(entry.joined_date);
             let entry_year = entry_season.start_year;
+
+            // Canonical-ledger mirror, under the entry's OWN season.
+            // Without it a recovered year lives only in legacy `items`,
+            // which the projection ignores once the ledger is populated:
+            // the year renders as a hole and the gap-filler invents a
+            // parent-club row for it. Written unconditionally — the
+            // projection's coverage rule collapses any noise this adds.
+            let entry_team = TeamInfo {
+                name: entry.team_name.clone(),
+                slug: entry.team_slug.clone(),
+                reputation: entry.team_reputation,
+                league_name: entry.league_name.clone(),
+                league_slug: entry.league_slug.clone(),
+            };
+            let covered =
+                Self::spell_coverage_days(&entry_season, entry.joined_date, entry.departed_date);
+            self.append_to_ledger(
+                entry_year,
+                &entry_team,
+                PlayerStatCompetitionKind::League,
+                entry.is_loan,
+                entry.transfer_fee,
+                Some(covered),
+                entry.statistics.clone(),
+            );
 
             // Already-frozen for this season? Merge stats/fee instead
             // of re-pushing — same-season duplicates are collapsed by
@@ -1009,6 +1124,20 @@ impl PlayerStatisticsHistory {
                     statistics: PlayerStatistics::default(),
                     seq_id: seq,
                 });
+                // Mirror the placeholder into the canonical ledger so the
+                // recovered year is visible to the projection too. No
+                // coverage — the span is synthetic, and unknown coverage
+                // routes the row through the sole-record heuristics
+                // instead of the collapse rule.
+                self.append_to_ledger(
+                    Season::new(year).start_year,
+                    fallback_team,
+                    PlayerStatCompetitionKind::League,
+                    fallback_is_loan,
+                    None,
+                    None,
+                    PlayerStatistics::default(),
+                );
             }
         }
     }
@@ -1046,6 +1175,19 @@ impl PlayerStatisticsHistory {
             .find(|e| e.team_slug == team.slug && e.departed_date.is_none())
             .map(|e| e.is_loan)
             .unwrap_or(is_loan);
+        // Robustness: drain any *stale* seed entries — entries whose
+        // `joined_date` falls in a season earlier than the one we're
+        // closing now — BEFORE the canonical-ledger writes below, so a
+        // leftover seed from a missed year is stamped under its OWN
+        // season in the ledger instead of leaking into this season's
+        // rows. They appear when a previous season-end snapshot was
+        // skipped for this player (league gate dropped, club without a
+        // main team, a mid-move miss). Without this flush-first order,
+        // year N of a multi-season loan whose snapshot was missed lands
+        // in the ledger as year N+1, year N renders as a hole, and the
+        // projection gap-fills it with a phantom parent-club row — the
+        // reported "2027/28 Juventus instead of Palermo (Loan)" case.
+        self.flush_prior_season_seeds(season.start_year, team, is_loan);
         // Carry-forward: a still-active market move the player joined too
         // late to feature in — ZERO official apps — is really a NEXT-season
         // spell. `Season::from_date`'s August boundary mis-stamps a late /
@@ -1121,6 +1263,20 @@ impl PlayerStatisticsHistory {
                 .find(|(s, l, _)| s == slug && *l == loan)
                 .and_then(|(_, _, fee)| *fee)
         };
+        // Fee to stamp on the season-end re-seed for the continuing spell.
+        // A LOAN that carries into the next season must keep the `Some(0.0)`
+        // sentinel that `on_loan` / `record_departure_loan` set at signing,
+        // otherwise its next 0-app season looks identical to a phantom loan
+        // seed (`is_loan && 0 games && fee.is_none()`) and gets purged — by
+        // `record_loan_return`'s cleanup when the loan expires just before
+        // the season-end snapshot, or by the `stale_loan_seed` freeze filter.
+        // That purge is what made year 2+ of a multi-season loan vanish and
+        // the season fall back to a parent-club row (the reported "2-year
+        // Bari loan shows the second year as Juventus" bug). A permanent
+        // re-seed keeps its carried fee (possibly None) unchanged.
+        let reseed_fee = |slug: &str, loan: bool| -> Option<f64> {
+            carried_fee(slug, loan).or(if loan { Some(0.0) } else { None })
+        };
 
         // Canonical ledger write — happens before the legacy filters
         // see the data so a drop in `items` cannot hide the row from
@@ -1131,8 +1287,12 @@ impl PlayerStatisticsHistory {
         // career-home club always has at least one row per the spec.
         //
         // Snapshot the entries first so the mutable `append_to_ledger`
-        // calls below don't conflict with the iteration borrow.
-        let entries_snapshot: Vec<(TeamInfo, bool, Option<f64>, PlayerStatistics)> = self
+        // calls below don't conflict with the iteration borrow. Each
+        // entry carries its real time-at-club (join→departure clamped
+        // to the closing season's window) so the projection can apply
+        // the coverage-based collapse rule instead of guessing from
+        // sibling rows.
+        let entries_snapshot: Vec<(TeamInfo, bool, Option<f64>, PlayerStatistics, u16)> = self
             .current
             .iter()
             .map(|entry| {
@@ -1147,11 +1307,12 @@ impl PlayerStatisticsHistory {
                     entry.is_loan,
                     entry.transfer_fee,
                     entry.statistics.clone(),
+                    Self::spell_coverage_days(&season, entry.joined_date, entry.departed_date),
                 )
             })
             .collect();
         let mut closing_team_recorded = false;
-        for (entry_team, entry_loan, entry_fee, entry_stats) in entries_snapshot {
+        for (entry_team, entry_loan, entry_fee, entry_stats, entry_coverage) in entries_snapshot {
             if is_carried_forward(&entry_team.slug, entry_loan) {
                 continue;
             }
@@ -1166,6 +1327,7 @@ impl PlayerStatisticsHistory {
                 PlayerStatCompetitionKind::League,
                 entry_loan,
                 entry_fee,
+                Some(entry_coverage),
                 stats,
             );
         }
@@ -1173,31 +1335,19 @@ impl PlayerStatisticsHistory {
             // No matching current entry (e.g. mid-season loan return at
             // a club we never created a current row for) — record the
             // closing team's contribution directly so the row exists.
+            // Time at the club is estimated from the last transfer date,
+            // matching the join_date fallback the items drain uses.
+            let joined = last_transfer_date.unwrap_or_else(|| season.start_date());
             self.append_to_ledger(
                 season.start_year,
                 team,
                 PlayerStatCompetitionKind::League,
                 is_loan,
                 None,
+                Some(Self::spell_coverage_days(&season, joined, None)),
                 current_stats.clone(),
             );
         }
-        // Robustness: drain any *stale* seed entries — entries whose
-        // `joined_date` falls in a season earlier than the one we're
-        // closing now. They appear when a previous season-end snapshot
-        // was skipped (e.g. a multi-league country where every league
-        // briefly fails the `new_season_started` gate, a regen failure,
-        // or simply a date computation that resolves the wrong
-        // `ended_season`). Without this flush, the next-year drain
-        // re-stamps the leftover seed under the current season label
-        // and the missed year vanishes — exactly the user-reported
-        // "missing 2026/27" pattern. For a U18/U21 player aliased to
-        // their parent club's Main team, the gap-fill below also
-        // inserts an empty Main row for each year that was skipped, so
-        // the career table always has one row per season the player
-        // existed at the club.
-        self.flush_prior_season_seeds(season.start_year, team, is_loan);
-
         // Guard: if this season was already frozen (multi-league country where
         // different leagues start new seasons on different dates, or cross-country
         // loan where both countries snapshot the same player), avoid duplicates.
@@ -1290,7 +1440,7 @@ impl PlayerStatisticsHistory {
                 team,
                 PlayerStatistics::default(),
                 is_loan,
-                carried_fee(&team.slug, is_loan),
+                reseed_fee(&team.slug, is_loan),
                 new_season_start,
             );
             return;
@@ -1414,7 +1564,7 @@ impl PlayerStatisticsHistory {
             team,
             PlayerStatistics::default(),
             is_loan,
-            carried_fee(&team.slug, is_loan),
+            reseed_fee(&team.slug, is_loan),
             new_season_start,
         );
     }

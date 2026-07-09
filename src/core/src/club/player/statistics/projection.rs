@@ -29,6 +29,11 @@ use std::collections::{HashMap, HashSet};
 // reads them — it never mutates `Player`, history, or any team/country
 // state. Calling it twice with the same input returns identical output.
 
+/// A 0-appearance spell must have covered at least this share of the
+/// season (real time-at-club from the ledger's `coverage_days`) to earn
+/// a History row; below it the stint is display noise and collapses.
+const MIN_COVERAGE_PCT_FOR_QUIET_ROW: f64 = 40.0;
+
 /// Single source of truth for how a ledger entry maps to a History row /
 /// breakdown grouping key. `player_history_rows` and
 /// `player_history_breakdowns` both build their map keys via
@@ -140,6 +145,7 @@ impl PlayerStatisticsProjection {
                     competition_slug: String::new(),
                     is_loan: false,
                     transfer_fee: None,
+                    coverage_days: None,
                     statistics: cont.statistics.clone(),
                 });
             }
@@ -157,6 +163,7 @@ impl PlayerStatisticsProjection {
                     competition_slug: item.league_slug.clone(),
                     is_loan: item.is_loan,
                     transfer_fee: item.transfer_fee,
+                    coverage_days: None,
                     statistics: item.statistics.clone(),
                 });
             }
@@ -181,6 +188,7 @@ impl PlayerStatisticsProjection {
                     competition_slug: String::new(),
                     is_loan: false,
                     transfer_fee: None,
+                    coverage_days: None,
                     statistics: cont.statistics.clone(),
                 });
             }
@@ -212,22 +220,121 @@ impl PlayerStatisticsProjection {
         // counted twice. Active rows are re-labelled to today's season —
         // the snapshot's `joined_date` season can be stale when the next
         // season-end has been delayed.
+        //
+        // Season-span backfill: an ACTIVE spell whose `joined_date`
+        // season predates the current one covers seasons the snapshot
+        // has not frozen yet. Emitting only the relabeled current-year
+        // row leaves those covered years as holes, and the gap-filler
+        // then invents a parent-club placeholder for them — the exact
+        // "2027/28 Juventus in the middle of a 3-year Palermo loan"
+        // report, visible every year between the Aug 1 calendar
+        // boundary and the league's actual snapshot day (and for as
+        // long as a snapshot misses the player). Each such HOLE year
+        // gets its own row for the SAME spell. The live counter sits on
+        // the OLDEST backfilled year — the one the pending freeze will
+        // drain it into — so the handoff to the frozen row is seamless;
+        // the current-year row is then the 0-app active registration
+        // ("where the player is now").
+        //
+        // Only true holes are filled: a year that already carries ANY
+        // career row (frozen, legacy, a departed spell, a borrowed-team
+        // slice) tells its own story, and stacking a synthetic spell row
+        // on it would double-cover the season (and hand the live counter
+        // to the wrong row).
+        let occupied_career_years: HashSet<u16> = history
+            .season_ledger
+            .iter()
+            .filter(|e| e.competition_kind.counts_toward_career_history())
+            .map(|e| e.season_start_year)
+            .chain(history.items.iter().map(|i| i.season.start_year))
+            .chain(
+                history
+                    .current_secondary
+                    .iter()
+                    .filter(|s| s.statistics.total_games() > 0)
+                    .map(|s| s.season_start_year),
+            )
+            .chain(history.current.iter().filter_map(|e| {
+                e.departed_date.map(|_| {
+                    Season::from_date(e.joined_date)
+                        .start_year
+                        .min(current_year)
+                })
+            }))
+            .collect();
         let mut live_applied = false;
         for entry in &history.current {
             let is_active = entry.departed_date.is_none();
             let use_live = is_active && !live_applied;
+            let joined_year = Season::from_date(entry.joined_date).start_year;
             let row_season_year = if is_active {
                 current_year
             } else {
-                let joined_year = Season::from_date(entry.joined_date).start_year;
                 joined_year.min(current_year)
             };
 
+            let mut live_stats_backfilled = false;
+            if use_live {
+                for year in joined_year.min(current_year)..current_year {
+                    if occupied_career_years.contains(&year) {
+                        continue;
+                    }
+                    let adopt_live_here = !live_stats_backfilled;
+                    live_stats_backfilled = true;
+                    ledger.push(PlayerStatLedgerEntry {
+                        // seq 0 keeps synthetic span rows out of the
+                        // seq-based protections and the played-subs
+                        // "latest row" role.
+                        seq_id: 0,
+                        season_start_year: year,
+                        team_slug: entry.team_slug.clone(),
+                        team_name: entry.team_name.clone(),
+                        team_reputation: entry.team_reputation,
+                        league_slug: entry.league_slug.clone(),
+                        league_name: entry.league_name.clone(),
+                        competition_kind: PlayerStatCompetitionKind::League,
+                        competition_slug: entry.league_slug.clone(),
+                        is_loan: entry.is_loan,
+                        transfer_fee: entry.transfer_fee,
+                        coverage_days: Some(PlayerStatisticsHistory::spell_coverage_days(
+                            &Season::new(year),
+                            entry.joined_date,
+                            None,
+                        )),
+                        statistics: if adopt_live_here {
+                            live.league.clone()
+                        } else {
+                            PlayerStatistics::default()
+                        },
+                    });
+                }
+            }
+
             let stats = if use_live {
                 live_applied = true;
-                live.league.clone()
+                if live_stats_backfilled {
+                    PlayerStatistics::default()
+                } else {
+                    live.league.clone()
+                }
             } else {
                 entry.statistics.clone()
+            };
+
+            // A departed in-progress-season spell carries its real
+            // time-at-club so the collapse rule can drop a days-long
+            // phantom (e.g. a loan re-seed closed by a return processed
+            // right after the season snapshot) without waiting for the
+            // freeze. The active spell stays unknown — it is protected
+            // as the "where the player is now" row regardless.
+            let coverage_days = if is_active {
+                None
+            } else {
+                Some(PlayerStatisticsHistory::spell_coverage_days(
+                    &Season::new(row_season_year),
+                    entry.joined_date,
+                    entry.departed_date,
+                ))
             };
 
             ledger.push(PlayerStatLedgerEntry {
@@ -242,6 +349,7 @@ impl PlayerStatisticsProjection {
                 competition_slug: entry.league_slug.clone(),
                 is_loan: entry.is_loan,
                 transfer_fee: entry.transfer_fee,
+                coverage_days,
                 statistics: stats,
             });
         }
@@ -273,6 +381,7 @@ impl PlayerStatisticsProjection {
                 competition_slug: slice.league_slug.clone(),
                 is_loan: false,
                 transfer_fee: None,
+                coverage_days: None,
                 statistics: slice.statistics.clone(),
             });
         }
@@ -329,6 +438,7 @@ impl PlayerStatisticsProjection {
                     competition_slug: slice.competition_slug.to_string(),
                     is_loan: false,
                     transfer_fee: None,
+                    coverage_days: None,
                     statistics: slice.statistics.clone(),
                 });
             }
@@ -348,6 +458,7 @@ impl PlayerStatisticsProjection {
                         competition_slug: dc.competition_slug.clone(),
                         is_loan: false,
                         transfer_fee: None,
+                        coverage_days: None,
                         statistics: dc.statistics.clone(),
                     });
                 }
@@ -372,6 +483,7 @@ impl PlayerStatisticsProjection {
                     competition_slug: friendly_slug,
                     is_loan: false,
                     transfer_fee: None,
+                    coverage_days: None,
                     statistics: live.friendly.clone(),
                 });
             }
@@ -557,6 +669,13 @@ impl PlayerStatisticsProjection {
         // slices carry no loan flag of their own, so they must not
         // overwrite the row's loan label with their hardcoded `false`.
         let mut latest_league_seq: HashMap<RowKey, u32> = HashMap::new();
+        // Summed time-at-club (days within the season window) across the
+        // row's League entries — `None` when no entry knows its span
+        // (legacy adapters, synthetic rows). Drives the "<40% of the
+        // season and never played → collapse" rule below. Loan and
+        // non-loan spells at the same (season, team, league) fold into
+        // one row, so their coverage sums too.
+        let mut row_coverage: HashMap<RowKey, Option<u16>> = HashMap::new();
 
         // The active current-season spell is always shown — even at
         // 0 games — so the renderer can say "this is where the player
@@ -607,6 +726,11 @@ impl PlayerStatisticsProjection {
             // latest seq_id wins so loan→permanent in the same season
             // shows the player's final contract type.
             if entry.competition_kind == PlayerStatCompetitionKind::League {
+                let acc = row_coverage.entry(key.clone()).or_insert(None);
+                *acc = match (*acc, entry.coverage_days) {
+                    (Some(a), Some(b)) => Some(a.saturating_add(b)),
+                    (a, b) => a.or(b),
+                };
                 let is_new_latest = latest_league_seq
                     .get(&key)
                     .is_none_or(|&prev| entry.seq_id >= prev);
@@ -655,7 +779,7 @@ impl PlayerStatisticsProjection {
             .filter(|r| Some(r.season.start_year) == debut_year)
             .map(|r| r.seq_id)
             .min();
-        rows.retain(|_, row| {
+        rows.retain(|key, row| {
             if protected_seqs.contains(&row.seq_id) {
                 return true;
             }
@@ -685,6 +809,25 @@ impl PlayerStatisticsProjection {
             let paid_fee = matches!(row.transfer_fee, Some(f) if f > 0.0);
             if paid_fee || (row.transfer_fee.is_some() && !row.is_loan) {
                 return true;
+            }
+            // Time-based collapse — the primary rule whenever real
+            // coverage data exists (the canonical ledger writes it; the
+            // legacy adapters don't). A 0-app spell that covered less
+            // than 40% of the season is display noise: a days-long
+            // re-seed closed by a loan return processed just after the
+            // season snapshot, an early-recalled loan, a brief
+            // registration stop before a move. One that covered 40%+ is
+            // a real part of the season and stays — including the quiet
+            // middle years of a multi-season loan and a half-season
+            // parent-club registration before a winter loan. Fee-backed
+            // rows never reach here (kept above), so this decides only
+            // fee-less and loan-sentinel rows; rows without coverage
+            // data fall through to the sibling heuristics below.
+            if let Some(days) = row_coverage.get(key).copied().flatten() {
+                let season_span = (row.season.end_date() - row.season.start_date())
+                    .num_days()
+                    .max(1) as f64;
+                return (days as f64 / season_span) * 100.0 >= MIN_COVERAGE_PCT_FOR_QUIET_ROW;
             }
             // Every loan spell is a real part of the player's career and
             // must show — even at 0 apps (injury, squad rotation, a loan
@@ -791,8 +934,17 @@ impl PlayerStatisticsProjection {
         //     trace the current club straight down the page.
         //
         // A home row "continues" when the SAME club has a non-loan row in
-        // the very next season. That single signal separates the cases; it
-        // is independent of seq_id, which the reserve re-place corrupts.
+        // the very next season AND the player actually appeared for it this
+        // season. The next-season signal is independent of seq_id (which the
+        // reserve re-place corrupts), but on its own it over-matches a
+        // perpetual loanee who is merely REGISTERED at his parent club every
+        // season while playing none of it: that 0-app parent row trivially
+        // "continues" and would wrongly outrank the loan that IS the season's
+        // real story (the reported Nava case — a Juventus player on repeated
+        // loans to Palermo, whose 0-app Juventus row floated above his
+        // Palermo loan). Requiring real appearances keeps the genuine
+        // returned-and-stayed case (Sokolić, 5+ apps) on top while dropping a
+        // registration-only parent below the loan it accompanies.
         let continuing_homes: HashSet<(u16, String, String)> = {
             let non_loan_seasons: HashSet<(u16, &str)> = result
                 .iter()
@@ -803,6 +955,7 @@ impl PlayerStatisticsProjection {
                 .iter()
                 .filter(|r| {
                     !r.is_loan
+                        && r.statistics.total_games() > 0
                         && non_loan_seasons
                             .contains(&(r.season.start_year + 1, r.team_slug.as_str()))
                 })
@@ -815,10 +968,32 @@ impl PlayerStatisticsProjection {
                 })
                 .collect()
         };
-        // Higher rank renders first (on top) within a season: a continuing
-        // home outranks loans, which outrank a non-continuing home row.
+        // The active current-season spell — "where the player is right
+        // now" — is the most recent thing in his career and must top its
+        // season, even above a loan he played earlier that same season.
+        // The classic case: a multi-season loan that just ENDED, with the
+        // player back at his parent club (0 apps). Chronologically the loan
+        // came first and the return second, so the parent-return row sits
+        // on top; the loan-outranks-home rule below is for PAST seasons and
+        // must not float that finished loan above the club he now plays for.
+        // Matched by (season, team, league) rather than seq_id, which a
+        // reserve re-place can corrupt.
+        let current_year = Self::current_season_year(history, current_date);
+        let active_row_key: Option<(u16, String, String)> = history
+            .current
+            .iter()
+            .find(|e| e.departed_date.is_none())
+            .map(|e| (current_year, e.team_slug.clone(), e.league_slug.clone()));
+
+        // Higher rank renders first (on top) within a season: the active
+        // spell outranks a continuing home, which outranks loans, which
+        // outrank a non-continuing home row.
         let within_season_rank = |r: &PlayerHistoryRow| -> u8 {
-            if !r.is_loan
+            if active_row_key.as_ref().is_some_and(|(y, t, l)| {
+                r.season.start_year == *y && &r.team_slug == t && &r.league_slug == l
+            }) {
+                3
+            } else if !r.is_loan
                 && continuing_homes.contains(&(
                     r.season.start_year,
                     r.team_slug.clone(),
@@ -1379,6 +1554,7 @@ mod tests {
             competition_slug: "second-division-a-silver".to_string(),
             is_loan: true,
             transfer_fee: Some(0.0),
+            coverage_days: None,
             statistics: PlayerStatistics::default(),
         });
         hist.season_ledger.push(PlayerStatLedgerEntry {
@@ -1394,6 +1570,7 @@ mod tests {
             competition_slug: "second-division-b2".to_string(),
             is_loan: false,
             transfer_fee: None,
+            coverage_days: None,
             statistics: PlayerStatistics::default(),
         });
         // Active 2027/28 spell on a fresh loan.
@@ -1477,6 +1654,7 @@ mod tests {
             competition_slug: league_slug.to_string(),
             is_loan,
             transfer_fee: if is_loan { Some(0.0) } else { None },
+            coverage_days: None,
             statistics: stats(played, 0),
         }
     }
@@ -1513,7 +1691,9 @@ mod tests {
     }
 
     fn expect(rows: &[(&str, u16, bool)]) -> Vec<(String, u16, bool)> {
-        rows.iter().map(|(s, y, l)| (s.to_string(), *y, *l)).collect()
+        rows.iter()
+            .map(|(s, y, l)| (s.to_string(), *y, *l))
+            .collect()
     }
 
     #[test]
@@ -1701,8 +1881,14 @@ mod tests {
         // River Plate (late, 5) where he STAYS. Home tops the season; the two
         // loans fall below it in reverse-chronological (seq desc) order.
         let mut hist = PlayerStatisticsHistory::new();
-        hist.season_ledger
-            .push(ledger_league(2, 2029, "danubio", "uruguay-primera", true, 8));
+        hist.season_ledger.push(ledger_league(
+            2,
+            2029,
+            "danubio",
+            "uruguay-primera",
+            true,
+            8,
+        ));
         hist.season_ledger
             .push(ledger_league(3, 2029, "toulouse", "ligue-1", true, 6));
         hist.season_ledger
@@ -1728,6 +1914,124 @@ mod tests {
                 ("toulouse", 2029, true),
                 ("danubio", 2029, true),
             ]),
+        );
+    }
+
+    #[test]
+    fn perpetual_loanee_zero_app_parent_sorts_below_its_loan() {
+        // Sebastiano Nava repro: a Juventus player repeatedly loaned to
+        // Palermo, who never actually appears for Juventus. In 2026/27 he is
+        // registered at Juventus (0 apps — his debut/origin row) and loaned
+        // to Palermo; 2027/28 is a quiet Juventus season with NO loan (0 apps,
+        // the sole record of that year); 2028/29 is the active Palermo loan.
+        //
+        // The 2026/27 Juventus row trivially "continues" into the 2027/28
+        // Juventus row, so the continuing-home heuristic used to promote it
+        // ABOVE the 2026/27 Palermo loan — splitting the loans and rendering
+        // `Juventus` on top of `Palermo Loan`. A 0-app parent registration is
+        // NOT a returned-and-stayed home spell: the loan is the season's real
+        // story and must stay on top.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.season_ledger
+            .push(ledger_league(1, 2026, "juventus", "serie-a", false, 0));
+        hist.season_ledger
+            .push(ledger_league(2, 2026, "palermo", "serie-b", true, 30));
+        hist.season_ledger
+            .push(ledger_league(3, 2027, "juventus", "serie-a", false, 0));
+        hist.current
+            .push(active_loan("palermo", "serie-b", 2028, 4));
+
+        let live_league = stats(20, 3);
+        let live_friendly = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &live_league,
+            friendly: &live_friendly,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2029, 3, 1));
+        assert_eq!(
+            order_of(&rows),
+            expect(&[
+                ("palermo", 2028, true),
+                ("juventus", 2027, false),
+                ("palermo", 2026, true),
+                ("juventus", 2026, false),
+            ]),
+            "a 0-app parent registration must sort below the loan it accompanies, \
+             even though a later same-club home row makes it trivially 'continue'"
+        );
+    }
+
+    #[test]
+    fn returned_from_loan_active_parent_tops_current_season() {
+        // Report-2 follow-up (same Palermo/Juventus family): after a
+        // multi-season loan the player RETURNS to his parent club, which
+        // becomes the active current-season spell (0 apps — "where he is
+        // now"). Within 2028/29 he played the season on loan at Palermo
+        // and then came back, so the parent-return row must sit ABOVE the
+        // finished loan (reverse-chronological, current club first). The
+        // loan-outranks-home rule is for PAST seasons and must not float
+        // the just-ended loan above the club he now plays for.
+        let mut hist = PlayerStatisticsHistory::new();
+        // Origin + the first two loan seasons, frozen.
+        hist.season_ledger
+            .push(ledger_league(0, 2026, "juventus", "serie-a", false, 0));
+        hist.season_ledger
+            .push(ledger_league(1, 2026, "palermo", "serie-b", true, 37));
+        hist.season_ledger
+            .push(ledger_league(2, 2027, "palermo", "serie-b", true, 33));
+        // Current season 2028/29: the loan just ended (departed, 34 apps)
+        // and the player is back at Juventus (active, 0 apps).
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "Palermo".to_string(),
+            team_slug: "palermo".to_string(),
+            team_reputation: 100,
+            league_name: "Serie B".to_string(),
+            league_slug: "serie-b".to_string(),
+            is_loan: true,
+            transfer_fee: Some(0.0),
+            statistics: stats(34, 0),
+            joined_date: d(2028, 8, 1),
+            departed_date: Some(d(2029, 5, 20)),
+            seq_id: 3,
+        });
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "Juventus".to_string(),
+            team_slug: "juventus".to_string(),
+            team_reputation: 5_000,
+            league_name: "Serie A".to_string(),
+            league_slug: "serie-a".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2029, 5, 21),
+            departed_date: None,
+            seq_id: 4,
+        });
+
+        let live_league = PlayerStatistics::default(); // active Juventus, 0 apps
+        let live_friendly = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &live_league,
+            friendly: &live_friendly,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2029, 6, 1));
+        assert_eq!(
+            order_of(&rows),
+            expect(&[
+                ("juventus", 2028, false),
+                ("palermo", 2028, true),
+                ("palermo", 2027, true),
+                ("palermo", 2026, true),
+                ("juventus", 2026, false),
+            ]),
+            "the active parent-return row must top the current season, above the \
+             loan the player just finished"
         );
     }
 
@@ -1946,11 +2250,15 @@ mod tests {
 
     #[test]
     fn active_row_season_label_follows_current_date_not_stale_joined() {
-        // Required regression #3: the active row is labelled with the
-        // season containing current_date even when its `joined_date` is
-        // stuck on an earlier season (delayed season-end snapshot). The
-        // active spell's live stats must land on today's season row and
-        // must not be attributed to the stale `joined_date` season.
+        // Required regression #3, updated for the season-span backfill:
+        // an active spell whose `joined_date` is stuck on an earlier
+        // season (delayed season-end snapshot) surfaces one row per
+        // season it covers — the stale joined season keeps its own row
+        // instead of vanishing into a relabeled current-year line (the
+        // hole used to be gap-filled with a phantom parent-club row for
+        // loanees). The live stats sit on the OLDEST unfrozen season —
+        // exactly where the pending freeze will drain them — while
+        // today's season shows the 0-app active registration.
         let mut hist = PlayerStatisticsHistory::new();
         hist.current.push(CurrentSeasonEntry {
             team_name: "spartak".to_string(),
@@ -1979,18 +2287,24 @@ mod tests {
         // Game date is well into 2027/28.
         let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2028, 3, 1));
         let spartak: Vec<_> = rows.iter().filter(|r| r.team_slug == "spartak").collect();
-        // Exactly one spartak row, under today's season, with the live stats.
+        // One row per covered season: today's active registration on top,
+        // the unfrozen joined season below it carrying the live stats.
         assert_eq!(
             spartak.len(),
-            1,
-            "stale joined_date must not split the active spell"
+            2,
+            "the active spell covers two seasons and must show both"
         );
         assert_eq!(
             spartak[0].season.start_year, 2027,
             "active row must use the season containing current_date"
         );
-        assert_eq!(spartak[0].statistics.played, 18);
-        assert_eq!(spartak[0].statistics.goals, 4);
+        assert_eq!(spartak[0].statistics.played, 0);
+        assert_eq!(
+            spartak[1].season.start_year, 2026,
+            "the stale joined season keeps its own row"
+        );
+        assert_eq!(spartak[1].statistics.played, 18);
+        assert_eq!(spartak[1].statistics.goals, 4);
     }
 
     #[test]
@@ -2013,6 +2327,7 @@ mod tests {
             competition_slug: "league-b".to_string(),
             is_loan: true,
             transfer_fee: Some(0.0),
+            coverage_days: None,
             statistics: stats(20, 5),
         });
         // Re-seeded active spell for the new season (joined Aug 2026 by the
@@ -2063,6 +2378,7 @@ mod tests {
             competition_slug: "league-b".to_string(),
             is_loan: true,
             transfer_fee: Some(0.0),
+            coverage_days: None,
             statistics: stats(18, 2),
         });
         hist.current.push(CurrentSeasonEntry {
@@ -2183,6 +2499,7 @@ mod tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             stats(30, 8),
         );
         hist.append_to_ledger(
@@ -2190,6 +2507,7 @@ mod tests {
             &team_info,
             PlayerStatCompetitionKind::ContinentalCup,
             false,
+            None,
             None,
             stats(10, 5),
         );
@@ -2199,6 +2517,7 @@ mod tests {
             PlayerStatCompetitionKind::DomesticCup,
             false,
             None,
+            None,
             stats(4, 1),
         );
         hist.append_to_ledger(
@@ -2206,6 +2525,7 @@ mod tests {
             &team_info,
             PlayerStatCompetitionKind::Friendly,
             false,
+            None,
             None,
             stats(3, 0),
         );
@@ -2370,6 +2690,7 @@ mod tests {
             &team_info,
             PlayerStatCompetitionKind::League,
             false,
+            None,
             None,
             stats(28, 6),
         );
@@ -2880,6 +3201,7 @@ mod tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             PlayerStatistics::default(),
         );
 
@@ -2922,6 +3244,7 @@ mod tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             s1,
         );
         hist.append_to_ledger(
@@ -2929,6 +3252,7 @@ mod tests {
             &team_info,
             PlayerStatCompetitionKind::League,
             false,
+            None,
             None,
             s2,
         );
@@ -2966,6 +3290,7 @@ mod tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             league,
         );
         let mut cont = PlayerStatistics::default();
@@ -2976,6 +3301,7 @@ mod tests {
             &team_info,
             PlayerStatCompetitionKind::ContinentalCup,
             false,
+            None,
             None,
             cont,
         );
@@ -3031,6 +3357,7 @@ mod tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             spartak_played,
         );
         // Phantom: 0 apps, free-loan sentinel fee, loan row stamped
@@ -3041,6 +3368,7 @@ mod tests {
             PlayerStatCompetitionKind::League,
             true,
             Some(0.0),
+            None,
             PlayerStatistics::default(),
         );
 
@@ -3081,6 +3409,7 @@ mod tests {
             PlayerStatCompetitionKind::League,
             true,
             Some(0.0),
+            None,
             PlayerStatistics::default(),
         );
 
@@ -3124,6 +3453,7 @@ mod tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             PlayerStatistics::default(),
         );
         hist.append_to_ledger(
@@ -3132,6 +3462,7 @@ mod tests {
             PlayerStatCompetitionKind::League,
             true,
             Some(0.0),
+            None,
             PlayerStatistics::default(),
         );
 
@@ -3181,6 +3512,7 @@ mod tests {
                 PlayerStatCompetitionKind::League,
                 false,
                 None,
+                None,
                 PlayerStatistics::default(),
             );
         }
@@ -3200,6 +3532,7 @@ mod tests {
                 PlayerStatCompetitionKind::League,
                 true,
                 Some(0.0),
+                None,
                 s,
             );
         }
@@ -3261,6 +3594,7 @@ mod tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             PlayerStatistics::default(),
         );
         // Loan-out spell with real games.
@@ -3273,6 +3607,7 @@ mod tests {
             PlayerStatCompetitionKind::League,
             true,
             Some(0.0),
+            None,
             zenit_played,
         );
 
@@ -3449,6 +3784,7 @@ mod projection_invariants_tests {
             PlayerStatCompetitionKind::League,
             true,
             Some(0.0),
+            None,
             stats(9, 0),
         );
         hist.record_friendly(2026, &info, "rpl-u19".to_string(), stats(2, 0));
@@ -3489,6 +3825,7 @@ mod projection_invariants_tests {
             PlayerStatCompetitionKind::League,
             true,
             Some(0.0),
+            None,
             stats(5, 0),
         );
         hist.append_to_ledger(
@@ -3497,6 +3834,7 @@ mod projection_invariants_tests {
             PlayerStatCompetitionKind::League,
             false,
             Some(5_000_000.0),
+            None,
             stats(8, 1),
         );
         // Non-League entries written AFTER League (newer seq) must not
@@ -3525,6 +3863,7 @@ mod projection_invariants_tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             stats(30, 8),
         );
         hist.record_friendly(2025, &info, "serie-a".to_string(), stats(5, 2));
@@ -3550,6 +3889,7 @@ mod projection_invariants_tests {
             &info,
             PlayerStatCompetitionKind::League,
             false,
+            None,
             None,
             stats(28, 6),
         );
@@ -3591,6 +3931,7 @@ mod projection_invariants_tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             stats(28, 6),
         );
 
@@ -3629,6 +3970,7 @@ mod projection_invariants_tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             stats(28, 6),
         );
         hist.record_continental(2025, &info, CHAMPIONS_LEAGUE_SLUG.to_string(), stats(6, 2));
@@ -3666,6 +4008,7 @@ mod projection_invariants_tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             stats(30, 8),
         );
         hist.record_continental(2024, &juve, CHAMPIONS_LEAGUE_SLUG.to_string(), stats(10, 5));
@@ -3676,6 +4019,7 @@ mod projection_invariants_tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             stats(28, 6),
         );
         // 2026 deliberately missing → gap-fill territory.
@@ -3684,6 +4028,7 @@ mod projection_invariants_tests {
             &juve,
             PlayerStatCompetitionKind::League,
             false,
+            None,
             None,
             stats(20, 4),
         );
@@ -3889,6 +4234,7 @@ mod projection_invariants_tests {
             PlayerStatCompetitionKind::League,
             false,
             None,
+            None,
             stats(20, 1),
         );
         hist.append_to_ledger(
@@ -3896,6 +4242,7 @@ mod projection_invariants_tests {
             &team("dynamo", "rpl"),
             PlayerStatCompetitionKind::League,
             false,
+            None,
             None,
             stats(0, 0),
         );

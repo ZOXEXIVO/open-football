@@ -85,6 +85,15 @@ pub struct PlayerStatLedgerEntry {
     pub competition_slug: String,
     pub is_loan: bool,
     pub transfer_fee: Option<f64>,
+    /// Days of the season window the spell(s) behind this entry actually
+    /// covered — join→departure spans clamped to the season, summed
+    /// across merged spells of the same `(season, team, kind, is_loan)`.
+    /// `None` when the span is unknown (legacy `items` adapters,
+    /// cup/friendly slices, synthetic gap rows); the projection treats
+    /// unknown as full coverage. This is what lets the History page apply
+    /// the "collapse a 0-app stint that covered <40% of the season" rule
+    /// from real time-at-club data instead of sibling heuristics.
+    pub coverage_days: Option<u16>,
     pub statistics: PlayerStatistics,
 }
 

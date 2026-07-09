@@ -2442,6 +2442,7 @@ mod tests {
             competition_slug: "l".into(),
             is_loan,
             transfer_fee: None,
+            coverage_days: None,
             statistics: PlayerStatistics {
                 played: starts,
                 ..Default::default()
