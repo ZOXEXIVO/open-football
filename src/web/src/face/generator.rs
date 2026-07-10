@@ -168,7 +168,7 @@ struct FaceShape {
 }
 
 fn face_shape(variant: usize, fw: f32) -> FaceShape {
-    // cheek_w <= temple_w always — face tapers smoothly from forehead down
+    // cheek_w <= temple_w always â€” face tapers smoothly from forehead down
     match variant {
         0 => FaceShape {
             // Oval
@@ -260,22 +260,37 @@ fn pick_skin_index(r: &mut FaceRng, dist: SkinDist) -> usize {
 
 // ── Main generator ──────────────────────────────────────────
 
-/// viewBox = "0 0 200 250" — portrait rectangle, head centered at x=100
+/// viewBox = "0 0 200 250" — portrait rectangle, head centered at x=100.
+///
+/// Painterly layered rendering: one top-left key light drives every
+/// highlight and shadow, all face shading is Gaussian-blurred and clipped
+/// to the head silhouette, and features are built from soft light/shadow
+/// planes instead of stroked cartoon outlines.
 pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String {
     let mut r = FaceRng::new(player_id);
 
-    let skin = SKIN[pick_skin_index(&mut r, skin_dist)];
-    let hair = HAIR[r.range(HAIR.len())];
+    let skin_idx = pick_skin_index(&mut r, skin_dist);
+    let skin = SKIN[skin_idx];
+    // Hair color correlates with skin tone: darker complexions almost
+    // always carry black/dark-brown hair, light blond stays European.
+    let hair_roll = r.range(HAIR.len());
+    let hair = HAIR[match skin_idx {
+        8..=11 => hair_roll % 3,
+        5..=7 => hair_roll % 6,
+        _ => hair_roll,
+    }];
     let eye_col = EYES[r.range(EYES.len())];
 
     let face_var = r.range(6);
     let hair_st = r.range(12);
+    // A bald 17-year-old is not a thing — young players keep hair
+    let hair_st = if age <= 23 && hair_st == 6 { 0 } else { hair_st };
     let brow_st = r.range(6);
     let eye_st = r.range(5);
     let nose_st = r.range(6);
     let mouth_st = r.range(5);
     let texture_seed = r.range(9999);
-    let cheekbone_st = r.range(4);
+    let _cheekbone_st = r.range(4);
     let face_marks = r.range(5);
 
     // Facial hair by age
@@ -304,6 +319,17 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         _ => r.frange(1.3, 3.0),
     };
 
+    // Slight photographic head tilt
+    let tilt = r.frange(-2.2, 2.2);
+
+    // Continuous eye differentiation — deterministic per player via the
+    // id-seeded rng, so a player's eyes never change between renders.
+    let eye_spacing = r.frange(-1.3, 1.6); // inter-ocular distance
+    let eye_tilt = r.frange(-0.9, 1.6); // outer-corner lift: down- vs upturned
+    let lid_heavy = r.frange(0.0, 1.0); // hooded lids + deep sockets
+    let eye_scale = r.frange(0.90, 1.10); // overall eye size
+    let brow_gap = r.frange(-0.6, 2.0); // brow-to-eye distance
+
     let fs = face_shape(face_var, fw);
     let cx = 100.0f32;
     let maturity = match age {
@@ -313,20 +339,36 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         _ => 0.95,
     };
 
-    // Derived colors
-    let skin_hi = shade(skin, 1.12);
-    let skin_mid = skin.to_string();
-    let skin_dk = shade(skin, 0.84);
-    let skin_dk2 = shade(skin, 0.72);
-    let skin_shadow = shade(skin, 0.60);
-    let bg_color = "#34383A";
+    // Deterministic per-strand jitter that never consumes the RNG stream
+    let jit = move |i: usize, k: usize| ((texture_seed + i * 37 + k * 101) % 1000) as f32 / 1000.0;
 
-    // Jersey colors (deterministic from player_id). Wrapping_mul so
-    // large player ids (8-digit IDs from generated rosters) don't
-    // overflow u32 and crash the request.
+    // ── Derived palette (single key light, top-left) ────────
+    let skin_hi = blend(skin, "#FFDFC0", 0.26);
+    let skin_hi2 = blend(skin, "#FFEBD2", 0.46);
+    let skin_warm = blend(skin, "#C87850", 0.15);
+    let skin_dk = shade(skin, 0.86);
+    let skin_dk2 = shade(skin, 0.70);
+    let skin_shadow = blend(&shade(skin, 0.52), "#2A1B22", 0.20);
+    let hair_hi = shade(hair, 1.35);
+    let hair_dk = shade(hair, 0.50);
+    let iris_hi = shade(eye_col, 1.45);
+    let iris_dk = shade(eye_col, 0.62);
+    let iris_rim = shade(eye_col, 0.30);
+    // Lips stay close to the skin tone — saturated pink reads feminine
+    let lip = blend(&lip_color(skin), skin, 0.35);
+    let lip_dk = shade(&lip, 0.62);
+    let lip_hi = shade(&lip, 1.18);
+    // Sclera follows the complexion so eyes don't glare on dark faces
+    let sclera_0 = blend("#F6F2EA", skin, 0.16);
+    let sclera_1 = blend("#EAE4D8", skin, 0.22);
+    let sclera_2 = blend("#B4AB9D", skin, 0.30);
+
+    // Jersey colors (deterministic from player_id). Wrapping_mul so large
+    // 8-digit generated ids don't overflow u32 and crash the request.
     let jersey_hue = player_id.wrapping_mul(137) % 360;
-    let jersey_color = format!("hsl({}, 28%, 27%)", jersey_hue);
-    let jersey_light = format!("hsl({}, 24%, 38%)", jersey_hue);
+    let jersey_color = format!("hsl({jersey_hue}, 30%, 30%)");
+    let jersey_light = format!("hsl({jersey_hue}, 26%, 41%)");
+    let jersey_dark = format!("hsl({jersey_hue}, 32%, 19%)");
 
     // Age features
     let wrinkle_opacity = match age {
@@ -343,121 +385,9 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         _ => 0.13,
     };
 
-    // Scale everything 2.5x from old 80x100 coordinate space
+    // ── Geometry (scaled 2.5x from the 80x100 shape space) ──
     let s2 = |v: f32| v * 2.5;
-
-    let mut s = String::with_capacity(16000);
-
-    // ── SVG open + defs ─────────────────────────────────────
-    s.push_str(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 250">"#);
-
-    // Skin subsurface color — warm undertone for realism
-    let skin_warm = blend(skin, "#C48060", 0.08);
-
-    s.push_str(&format!(
-        r#"<defs>
-        <radialGradient id="sg" cx="44%" cy="30%" r="62%">
-            <stop offset="0%" stop-color="{skin_hi}"/>
-            <stop offset="25%" stop-color="{skin_warm}"/>
-            <stop offset="55%" stop-color="{skin_mid}"/>
-            <stop offset="80%" stop-color="{skin_dk}"/>
-            <stop offset="100%" stop-color="{skin_dk2}"/>
-        </radialGradient>
-        <linearGradient id="nsg" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="{skin_shadow}" stop-opacity="0"/>
-            <stop offset="80%" stop-color="{skin_shadow}" stop-opacity="0.18"/>
-        </linearGradient>
-        <radialGradient id="fh" cx="48%" cy="22%" r="45%">
-            <stop offset="0%" stop-color="{skin_hi}" stop-opacity="0.12"/>
-            <stop offset="70%" stop-color="{skin_hi}" stop-opacity="0.04"/>
-            <stop offset="100%" stop-color="{skin_hi}" stop-opacity="0"/>
-        </radialGradient>
-        <filter id="tx">
-            <feTurbulence type="fractalNoise" baseFrequency="0.92" numOctaves="4" seed="{texture_seed}" result="n"/>
-            <feColorMatrix type="saturate" values="0" in="n" result="ng"/>
-            <feComponentTransfer in="ng" result="grain"><feFuncA type="table" tableValues="0 0.35"/></feComponentTransfer>
-            <feBlend in="SourceGraphic" in2="grain" mode="multiply"/>
-        </filter>
-        <pattern id="pores" width="9" height="9" patternUnits="userSpaceOnUse">
-            <circle cx="1.5" cy="2" r="0.35" fill="{skin_shadow}" opacity="0.16"/>
-            <circle cx="6.5" cy="4.5" r="0.28" fill="{skin_dk2}" opacity="0.13"/>
-            <circle cx="4" cy="7.4" r="0.24" fill="{skin_hi}" opacity="0.10"/>
-        </pattern>
-        </defs>"#,
-    ));
-
-    // ── Background ──────────────────────────────────────────
-    s.push_str(&format!(
-        r#"<rect width="200" height="250" fill="{bg_color}"/>"#
-    ));
-
-    // ── Jersey / shoulders ──────────────────────────────────
-    s.push_str(&format!(
-        r#"<path d="M0 250 Q30 205 70 200 Q100 194 130 200 Q170 205 200 250Z" fill="{jersey_color}"/>"#,
-    ));
-    // Jersey highlight stripe
-    s.push_str(&format!(
-        r#"<path d="M85 200 Q100 196 115 200 L112 250 L88 250Z" fill="{jersey_light}" opacity="0.3"/>"#,
-    ));
-    // Collar
-    s.push_str(&format!(
-        r#"<path d="M82 200 Q100 194 118 200 Q115 207 100 205 Q85 207 82 200Z" fill="{}" opacity="0.8"/>"#,
-        shade(&jersey_color, 0.7)
-    ));
-
-    // ── Neck ────────────────────────────────────────────────
-    let neck_w = 18.0 + fw;
-    s.push_str(&format!(
-        r#"<path d="M{} 197 Q100 192 {} 197 L{} 210 L{} 210Z" fill="{}"/>"#,
-        cx - neck_w,
-        cx + neck_w,
-        cx + neck_w + 3.0,
-        cx - neck_w - 3.0,
-        skin_mid
-    ));
-    // Neck shadow
-    s.push_str(&format!(
-        r#"<path d="M{} 197 Q100 194 {} 197 L{} 204 Q100 201 {} 204Z" fill="{}" opacity="0.15"/>"#,
-        cx - neck_w,
-        cx + neck_w,
-        cx + neck_w,
-        cx - neck_w,
-        skin_dk2
-    ));
-    // Adam's apple hint
-    s.push_str(&format!(
-        r#"<ellipse cx="{cx}" cy="200" rx="2" ry="1.5" fill="{skin_dk}" opacity="0.06"/>"#,
-    ));
-
-    // ── Ears ────────────────────────────────────────────────
-    let ear_y = s2(fs.cheek_y) - 5.0;
-    let ear_lx = cx - s2(fs.cheek_w) - 5.0;
-    let ear_rx = cx + s2(fs.cheek_w) + 5.0;
-    let ei = shade(skin, 0.78);
-    for ex in [ear_lx, ear_rx] {
-        s.push_str(&format!(
-            r#"<ellipse cx="{ex}" cy="{ear_y}" rx="5.4" ry="11.2" fill="{skin_mid}"/>"#,
-        ));
-        s.push_str(&format!(
-            r#"<ellipse cx="{}" cy="{ear_y}" rx="3.1" ry="7.1" fill="{ei}" opacity="0.42"/>"#,
-            if ex < cx { ex + 1.5 } else { ex - 1.5 }
-        ));
-        s.push_str(&format!(
-            r#"<path d="M{} {} Q{} {} {} {}" stroke="{}" stroke-width="0.55" fill="none" opacity="0.22"/>"#,
-            if ex < cx { ex + 0.8 } else { ex - 0.8 }, ear_y - 5.8,
-            if ex < cx { ex + 3.0 } else { ex - 3.0 }, ear_y,
-            if ex < cx { ex + 0.4 } else { ex - 0.4 }, ear_y + 5.5,
-            shade(skin, 0.55)
-        ));
-        // Earlobe
-        s.push_str(&format!(
-            r#"<ellipse cx="{}" cy="{}" rx="2.5" ry="3.0" fill="{skin_mid}" opacity="0.68"/>"#,
-            if ex < cx { ex + 1.0 } else { ex - 1.0 },
-            ear_y + 10.0
-        ));
-    }
-
-    // ── Head shape ──────────────────────────────────────────
+    let ht = s2(fs.head_top);
     let hl = cx - s2(fs.temple_w);
     let hr = cx + s2(fs.temple_w);
     let cl = cx - s2(fs.cheek_w);
@@ -466,28 +396,81 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
     let jr = cx + s2(fs.jaw_w) - ax;
     let chl = cx - s2(fs.chin_w);
     let chr = cx + s2(fs.chin_w);
-    let ht = s2(fs.head_top);
     let cy_cheek = s2(fs.cheek_y);
     let jy = s2(fs.jaw_y);
     let chy = s2(fs.chin_y);
     let cr_val = s2(fs.chin_round);
-
-    // Human head outline: narrower cranium, visible cheek plane and adult jaw.
-    let mid_r = (cr + jr) / 2.0; // midpoint between cheek and jaw on right
-    let mid_l = (cl + jl) / 2.0; // midpoint between cheek and jaw on left
+    let mid_r = (cr + jr) / 2.0;
+    let mid_l = (cl + jl) / 2.0;
     let mid_y = (cy_cheek + jy) / 2.0;
 
-    s.push_str(&format!(
-        r#"<path d="
-            M{hl} {cy_cheek}
-            C{hl} {} {} {ht} {cx} {ht}
-            C{} {ht} {hr} {} {hr} {cy_cheek}
-            C{hr} {} {mid_r} {mid_y} {jr} {jy}
-            Q{} {} {chr} {chy}
-            Q{cx} {} {chl} {chy}
-            Q{} {} {jl} {jy}
-            C{mid_l} {mid_y} {hl} {} {hl} {cy_cheek}Z
-        " fill="url(#sg)"/>"#,
+    let ey = 118.0 + ay * 2.0;
+    let by = 104.0 + ay - brow_gap;
+    let ny = 148.0f32;
+    let my = 169.0f32;
+    let eye_off = 17.3 + eye_spacing;
+    let exl = cx - eye_off + ax * 1.2;
+    let exr = cx + eye_off - ax;
+
+    // Feature style parameters
+    // Eye archetypes — visibly distinct structures, not just size jitter:
+    // (erx, ery, iris_r, pupil_r, bottom roundness, crease opacity,
+    //  lid heaviness bonus, canthal-tilt bias)
+    let (erx, ery, iris_r, pupil_r, eye_bot, crease_op, lid_extra, tilt_bias): (
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+    ) = match eye_st {
+        // Standard almond
+        0 => (8.0, 3.1, 3.3, 1.35, 0.60, 0.30, 0.0, 0.0),
+        // Hooded — heavy lid hides the crease
+        1 => (7.9, 2.6, 3.2, 1.30, 0.50, 0.12, 0.9, -0.3),
+        // Big round, open European
+        2 => (8.2, 3.9, 3.5, 1.45, 0.88, 0.35, -0.3, 0.2),
+        // Monolid, upturned — flat lid, no crease, epicanthic fold
+        3 => (8.6, 2.7, 3.3, 1.30, 0.55, 0.0, 0.6, 1.2),
+        // Deep-set — smaller opening in a strong socket
+        _ => (7.5, 3.0, 3.1, 1.30, 0.60, 0.38, 0.3, -0.2),
+    };
+    let erx = erx * eye_scale;
+    let ery = ery * eye_scale;
+    let iris_r = iris_r * (0.5 + 0.5 * eye_scale);
+    let pupil_r = pupil_r * (0.5 + 0.5 * eye_scale);
+    let tilt_eff = eye_tilt + tilt_bias;
+    let (bridge_w, tip_w, _tip_h, nostril_w): (f32, f32, f32, f32) = match nose_st {
+        0 => (0.9, 7.8, 3.6, 2.4),
+        1 => (1.25, 11.5, 4.6, 3.6),
+        2 => (1.05, 9.4, 4.2, 3.0),
+        3 => (0.85, 7.2, 4.4, 2.3),
+        4 => (1.15, 10.4, 4.6, 3.2),
+        _ => (1.0, 8.7, 3.9, 2.7),
+    };
+    let (mw, upper_h, lower_h): (f32, f32, f32) = match mouth_st {
+        0 => (12.5, 2.1, 3.0),
+        1 => (15.0, 1.9, 3.3),
+        2 => (10.8, 2.3, 2.7),
+        3 => (13.4, 2.7, 3.6),
+        _ => (11.8, 1.7, 2.5),
+    };
+    let (brow_len, brow_tilt, brow_arch, brow_n): (f32, f32, f32, usize) = match brow_st {
+        0 => (12.5, 0.0, 1.6, 20),
+        1 => (12.0, -0.4, 3.0, 20),
+        2 => (13.5, 0.5, 1.3, 26),
+        3 => (12.0, -0.2, 2.5, 22),
+        4 => (14.0, 0.1, 2.0, 30),
+        _ => (11.5, -0.2, 2.8, 18),
+    };
+
+    // Head outline — shared by the fill and the shading clip
+    let head_d = format!(
+        "M{hl} {cy_cheek} C{hl} {} {} {ht} {cx} {ht} C{} {ht} {hr} {} {hr} {cy_cheek} \
+         C{hr} {} {mid_r} {mid_y} {jr} {jy} Q{} {} {chr} {chy} Q{cx} {} {chl} {chy} \
+         Q{} {} {jl} {jy} C{mid_l} {mid_y} {hl} {} {hl} {cy_cheek}Z",
         ht + 22.0,
         hl + 14.0,
         hr - 14.0,
@@ -499,901 +482,1164 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         jl + cr_val,
         jy + cr_val,
         jy - 10.0,
-    ));
+    );
 
-    // Fine skin texture and adult male planes reduce the flat cartoon look.
+    // Neck geometry (used by defs clip + drawing). Wide and flared into the
+    // trapezius so it reads as part of the body, not a pedestal.
+    let neck_w = 19.0 + fw * 0.9;
+    let neck_top = chy - 20.0;
+    let nkl = cx - neck_w;
+    let nkr = cx + neck_w;
+    let nkbl = nkl - 7.0;
+    let nkbr = nkr + 7.0;
+    let neck_d = format!(
+        "M{nkl} {neck_top} C{nkl} {} {} 224 {nkbl} 228 L{nkbr} 228 C{} 224 {nkr} {} {nkr} {neck_top}Z",
+        neck_top + 22.0,
+        nkl - 4.0,
+        nkr + 4.0,
+        neck_top + 22.0,
+    );
+
+    let mut s = String::with_capacity(24000);
+    s.push_str(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 250">"#);
+
+    // ── Defs ────────────────────────────────────────────────
+    let seed_a = texture_seed;
+    let seed_b = texture_seed + 7;
+    let seed_c = texture_seed + 13;
     s.push_str(&format!(
-        r#"<path d="M{} {} C{} {} {} {} {cx} {} C{} {} {} {} {} {} C{} {} {} {} {} {} Q{cx} {} {} {} Q{} {} {} {} C{} {} {} {} {} {}Z" fill="url(#pores)" opacity="{}" filter="url(#tx)"/>"#,
-        hl + 2.0, cy_cheek - 1.0,
-        hl + 1.5, ht + 23.0, hl + 15.0, ht + 2.0, ht + 2.0,
-        hr - 15.0, ht + 2.0, hr - 1.5, ht + 23.0, hr - 2.0, cy_cheek - 1.0,
-        hr - 2.0, jy - 10.0, mid_r, mid_y, jr - 2.0, jy,
-        chy + cr_val - 1.0, chl + 2.0, chy,
-        jl + 2.0, jy + cr_val - 1.0, jl + 2.0, jy,
-        mid_l, mid_y, hl + 2.0, jy - 10.0, hl + 2.0, cy_cheek - 1.0,
-        0.11 + maturity * 0.05
+        r##"<defs>
+<radialGradient id="bgg" cx="50%" cy="34%" r="80%">
+<stop offset="0%" stop-color="#51585E"/><stop offset="55%" stop-color="#383D41"/><stop offset="100%" stop-color="#212426"/>
+</radialGradient>
+<radialGradient id="sg" cx="42%" cy="30%" r="70%">
+<stop offset="0%" stop-color="{skin_hi}"/><stop offset="30%" stop-color="{skin_warm}"/><stop offset="58%" stop-color="{skin}"/><stop offset="82%" stop-color="{skin_dk}"/><stop offset="100%" stop-color="{skin_dk2}"/>
+</radialGradient>
+<linearGradient id="sv" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="{skin_shadow}" stop-opacity="0"/><stop offset="76%" stop-color="{skin_shadow}" stop-opacity="0"/><stop offset="100%" stop-color="{skin_shadow}" stop-opacity="0.30"/>
+</linearGradient>
+<linearGradient id="ng" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="{skin_dk}"/><stop offset="45%" stop-color="{skin}"/><stop offset="100%" stop-color="{skin_dk}"/>
+</linearGradient>
+<linearGradient id="hg" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="{hair_hi}"/><stop offset="45%" stop-color="{hair}"/><stop offset="100%" stop-color="{hair_dk}"/>
+</linearGradient>
+<linearGradient id="jg" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="{jersey_light}"/><stop offset="70%" stop-color="{jersey_color}"/><stop offset="100%" stop-color="{jersey_dark}"/>
+</linearGradient>
+<radialGradient id="scg">
+<stop offset="0%" stop-color="{sclera_0}"/><stop offset="65%" stop-color="{sclera_1}"/><stop offset="100%" stop-color="{sclera_2}"/>
+</radialGradient>
+<radialGradient id="irg">
+<stop offset="0%" stop-color="{iris_hi}"/><stop offset="55%" stop-color="{eye_col}"/><stop offset="82%" stop-color="{iris_dk}"/><stop offset="100%" stop-color="{iris_rim}"/>
+</radialGradient>
+<radialGradient id="vig" cx="50%" cy="42%" r="74%">
+<stop offset="0%" stop-color="#000" stop-opacity="0"/><stop offset="70%" stop-color="#000" stop-opacity="0"/><stop offset="100%" stop-color="#000" stop-opacity="0.36"/>
+</radialGradient>
+<filter id="b1" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="0.7"/></filter>
+<filter id="b2" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="1.6"/></filter>
+<filter id="b3" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="3.2"/></filter>
+<filter id="b4" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="6"/></filter>
+<filter id="gr" x="-5%" y="-5%" width="110%" height="110%">
+<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="{seed_a}" result="n"/>
+<feColorMatrix in="n" type="saturate" values="0" result="d"/>
+<feComponentTransfer in="d" result="a"><feFuncA type="linear" slope="0.09" intercept="0"/></feComponentTransfer>
+<feComposite in="a" in2="SourceGraphic" operator="in"/>
+</filter>
+<filter id="stb" x="-20%" y="-20%" width="140%" height="140%">
+<feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" seed="{seed_b}" result="n"/>
+<feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1.8 -0.5" result="a"/>
+<feComposite in="SourceGraphic" in2="a" operator="in"/>
+</filter>
+<filter id="htx" x="-15%" y="-15%" width="130%" height="130%">
+<feTurbulence type="turbulence" baseFrequency="0.09 0.015" numOctaves="3" seed="{seed_c}" result="n"/>
+<feDisplacementMap in="SourceGraphic" in2="n" scale="4" xChannelSelector="R" yChannelSelector="G"/>
+</filter>
+<clipPath id="hc"><path d="{head_d}"/></clipPath>
+<clipPath id="nc"><path d="{neck_d}"/></clipPath>
+</defs>"##,
     ));
 
-    let cheek_shadow = shade(skin, 0.66);
-    let cheek_opacity = 0.08 + maturity * 0.08 + cheekbone_st as f32 * 0.01;
-    for (side, dip) in [(-1.0f32, 0.0), (1.0, 1.5)] {
+    // ── Background ──────────────────────────────────────────
+    s.push_str(r#"<rect width="200" height="250" fill="url(#bgg)"/>"#);
+
+    // ── Head group (slight photographic tilt) ───────────────
+    s.push_str(&format!(r#"<g transform="rotate({tilt:.2} 100 205)">"#));
+
+    // Long hair — back mass falls behind the head and shoulders
+    if hair_st == 8 {
+        let bl = hl - 6.0;
+        let br_ = hr + 6.0;
+        let bt = ht + 8.0;
         s.push_str(&format!(
-            r#"<path d="M{} {} Q{} {} {} {} Q{} {} {} {}" stroke="{cheek_shadow}" stroke-width="1.1" fill="none" opacity="{}" stroke-linecap="round"/>"#,
-            cx + side * 12.0, cy_cheek + 5.0 + dip,
-            cx + side * 25.0, cy_cheek + 13.0 + dip,
-            cx + side * 31.0, cy_cheek + 27.0 + dip,
-            cx + side * 25.0, cy_cheek + 34.0 + dip,
-            cx + side * 15.0, cy_cheek + 37.0 + dip,
-            cheek_opacity
+            r#"<path d="M{bl} {bt} C{bl} {} {} {} {cx} {} C{} {} {br_} {} {br_} {bt} C{} 170 {} 195 {} 210 Q{cx} 222 {} 210 C{} 195 {} 170 {bl} {bt}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+            ht - 12.0,
+            hl + 12.0,
+            ht - 18.0,
+            ht - 18.0,
+            hr - 12.0,
+            ht - 18.0,
+            ht - 12.0,
+            br_ + 3.0,
+            br_ + 5.0,
+            br_ - 2.0,
+            bl + 2.0,
+            bl - 5.0,
+            bl - 3.0,
+        ));
+        // Hair falling behind the shoulders sits in shadow near the neck
+        s.push_str(&format!(
+            r#"<path d="M{} 155 L{} 212 L{} 212 L{} 155Z" fill="{hair_dk}" opacity="0.45" filter="url(#b3)"/>"#,
+            nkl - 12.0,
+            nkl - 8.0,
+            nkr + 8.0,
+            nkr + 12.0,
         ));
     }
-    s.push_str(&format!(
-        r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{skin_shadow}" stroke-width="1.2" fill="none" opacity="{}" stroke-linecap="round"/>"#,
-        jl + 8.0, jy + 5.0, chy + 5.5, jr - 8.0, jy + 5.0, 0.10 + maturity * 0.07
-    ));
-    s.push_str(&format!(
-        r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{skin_hi}" stroke-width="0.7" fill="none" opacity="{}" stroke-linecap="round"/>"#,
-        cx - 8.0, chy - 2.0, chy + 1.0, cx + 8.0, chy - 2.0, 0.07 + maturity * 0.03
-    ));
 
-    if face_marks > 1 {
-        let mark_col = shade(skin, 0.55);
-        for i in 0..face_marks {
-            let side = if i % 2 == 0 { -1.0 } else { 1.0 };
-            let mx = cx + side * (14.0 + (i as f32 * 5.2) % 19.0);
-            let my = 120.0 + ((texture_seed as f32 / (i + 2) as f32) % 43.0);
-            s.push_str(&format!(
-                r#"<circle cx="{mx}" cy="{my}" r="0.55" fill="{mark_col}" opacity="0.16"/>"#,
-            ));
-        }
+    // ── Neck (behind head; jersey later covers its base) ────
+    s.push_str(&format!(r#"<path d="{neck_d}" fill="url(#ng)"/>"#));
+    s.push_str(r#"<g clip-path="url(#nc)">"#);
+    // Cast shadow of the jaw onto the neck — strong photographic cue
+    s.push_str(&format!(
+        r#"<ellipse cx="{cx}" cy="{}" rx="{}" ry="6" fill="{skin_shadow}" filter="url(#b2)" opacity="0.40"/>"#,
+        neck_top + 6.0,
+        neck_w + 2.0,
+    ));
+    // Side planes
+    s.push_str(&format!(
+        r#"<path d="M{} {} L{} 228" stroke="{skin_dk2}" stroke-width="5" filter="url(#b2)" opacity="0.35" fill="none"/>"#,
+        nkr - 1.0,
+        neck_top + 6.0,
+        nkbr - 1.0,
+    ));
+    s.push_str(&format!(
+        r#"<path d="M{} {} L{} 228" stroke="{skin_hi}" stroke-width="3" filter="url(#b2)" opacity="0.16" fill="none"/>"#,
+        nkl + 2.0,
+        neck_top + 10.0,
+        nkbl + 2.0,
+    ));
+    // Sternocleidomastoid hint
+    s.push_str(&format!(
+        r#"<path d="M{} {} Q{} {} {} 226" stroke="{skin_hi}" stroke-width="2" filter="url(#b2)" opacity="0.10" fill="none"/>"#,
+        cx - 6.0,
+        neck_top + 12.0,
+        cx - 9.0,
+        neck_top + 24.0,
+        cx - 12.0,
+    ));
+    s.push_str("</g>");
+
+    // ── Ears (drawn before the head so the head overlaps) ───
+    let ear_y = ey + 9.0;
+    let ear_col = blend(&skin_dk, "#B05840", 0.10);
+    for (excc, side) in [(cl - 3.5, -1.0f32), (cr + 3.5, 1.0)] {
+        s.push_str(&format!(
+            r#"<ellipse cx="{excc}" cy="{ear_y}" rx="6.0" ry="11.5" fill="{ear_col}"/>"#,
+        ));
+        s.push_str(&format!(
+            r#"<ellipse cx="{}" cy="{ear_y}" rx="3.4" ry="7.4" fill="{skin_dk2}" opacity="0.55" filter="url(#b1)"/>"#,
+            excc + side * 1.2,
+        ));
+        s.push_str(&format!(
+            r#"<path d="M{} {} Q{} {ear_y} {} {}" stroke="{skin_hi}" stroke-width="1.1" fill="none" opacity="0.30" filter="url(#b1)"/>"#,
+            excc + side * 1.0,
+            ear_y - 7.5,
+            excc + side * 4.6,
+            excc + side * 1.6,
+            ear_y + 7.0,
+        ));
     }
 
-    // ── Facial lighting layers ─────────────────────────────
-    // Forehead highlight (top-left light source)
+    // ── Head base ───────────────────────────────────────────
+    s.push_str(&format!(r#"<path d="{head_d}" fill="url(#sg)"/>"#));
+
+    // ── Soft shading planes (all blurred, clipped to head) ──
+    s.push_str(r#"<g clip-path="url(#hc)">"#);
+
+    // Vertical falloff + side core shadow (light from upper-left)
     s.push_str(&format!(
-        r#"<ellipse cx="{}" cy="{}" rx="22" ry="14" fill="url(#fh)"/>"#,
+        r#"<rect x="{}" y="{}" width="{}" height="{}" fill="url(#sv)"/>"#,
+        hl - 4.0,
+        ht - 4.0,
+        (hr - hl) + 8.0,
+        (chy - ht) + 12.0,
+    ));
+    s.push_str(&format!(
+        r#"<ellipse cx="{}" cy="130" rx="24" ry="74" fill="{skin_dk2}" filter="url(#b4)" opacity="0.36"/>"#,
+        hr - 4.0,
+    ));
+    s.push_str(&format!(
+        r#"<ellipse cx="{}" cy="120" rx="13" ry="60" fill="{skin_hi}" filter="url(#b4)" opacity="0.09"/>"#,
+        hl + 3.0,
+    ));
+
+    // Forehead + brow-bone light
+    s.push_str(&format!(
+        r#"<ellipse cx="{}" cy="{}" rx="25" ry="15" fill="{skin_hi}" filter="url(#b3)" opacity="0.22"/>"#,
+        cx - 8.0,
+        ht + 32.0,
+    ));
+    for (bxh, op) in [(cx - 17.0, 0.20f32), (cx + 15.0, 0.10)] {
+        s.push_str(&format!(
+            r#"<ellipse cx="{bxh}" cy="{}" rx="11" ry="3.6" fill="{skin_hi}" filter="url(#b2)" opacity="{op}"/>"#,
+            by - 5.5,
+        ));
+    }
+
+    // Temple shadows
+    s.push_str(&format!(
+        r#"<ellipse cx="{}" cy="{}" rx="9" ry="20" fill="{skin_dk2}" filter="url(#b3)" opacity="0.14"/>"#,
+        hl + 6.0,
+        cy_cheek - 8.0,
+    ));
+    s.push_str(&format!(
+        r#"<ellipse cx="{}" cy="{}" rx="10" ry="21" fill="{skin_dk2}" filter="url(#b3)" opacity="0.26"/>"#,
+        hr - 6.0,
+        cy_cheek - 8.0,
+    ));
+
+    // Eye sockets — depth scales with the hooded-lid draw and archetype
+    let socket_mul = 0.75 + lid_heavy * 0.5 + if eye_st == 4 { 0.45 } else { 0.0 };
+    for (sxx, op) in [(exl, 0.13f32), (exr, 0.17)] {
+        s.push_str(&format!(
+            r#"<ellipse cx="{sxx}" cy="{}" rx="12.5" ry="8" fill="{skin_dk2}" filter="url(#b3)" opacity="{:.3}"/>"#,
+            ey - 1.5,
+            op * socket_mul,
+        ));
+    }
+
+    // Cheekbone light + cheek hollow
+    s.push_str(&format!(
+        r#"<ellipse cx="{}" cy="134" rx="10" ry="5.5" fill="{skin_hi}" filter="url(#b3)" opacity="0.18" transform="rotate(-16 {} 134)"/>"#,
+        cx - 26.0,
+        cx - 26.0,
+    ));
+    s.push_str(&format!(
+        r#"<ellipse cx="{}" cy="134" rx="9" ry="5" fill="{skin_hi}" filter="url(#b3)" opacity="0.08" transform="rotate(16 {} 134)"/>"#,
+        cx + 24.0,
+        cx + 24.0,
+    ));
+    let hollow_op = 0.07 + maturity * 0.10;
+    for (hxx, rot) in [(cx - 25.0, 18.0f32), (cx + 23.0, -18.0)] {
+        s.push_str(&format!(
+            r#"<ellipse cx="{hxx}" cy="149" rx="9" ry="4.6" fill="{skin_dk2}" filter="url(#b3)" opacity="{hollow_op}" transform="rotate({rot} {hxx} 149)"/>"#,
+        ));
+    }
+
+    // Nose planes: side shadows + dorsum highlight + base shadow
+    let bx_off = 3.4 * bridge_w;
+    s.push_str(&format!(
+        r#"<path d="M{} 106 C{} 122 {} 136 {} {}" stroke="{skin_dk2}" stroke-width="3.2" fill="none" filter="url(#b2)" opacity="0.13"/>"#,
+        cx - bx_off,
+        cx - bx_off - 1.2,
+        cx - bx_off - 1.8,
+        cx - bx_off - 3.0,
+        ny - 4.0,
+    ));
+    s.push_str(&format!(
+        r#"<path d="M{} 106 C{} 122 {} 136 {} {}" stroke="{skin_dk2}" stroke-width="3.8" fill="none" filter="url(#b2)" opacity="0.21"/>"#,
+        cx + bx_off,
+        cx + bx_off + 1.2,
+        cx + bx_off + 1.8,
+        cx + bx_off + 3.0,
+        ny - 4.0,
+    ));
+    s.push_str(&format!(
+        r#"<path d="M{} 109 L{} {}" stroke="{skin_hi2}" stroke-width="2.4" fill="none" filter="url(#b2)" opacity="0.30"/>"#,
+        cx + 0.4,
+        cx + 0.2,
+        ny - 6.0,
+    ));
+    s.push_str(&format!(
+        r#"<ellipse cx="{cx}" cy="{}" rx="8" ry="2.6" fill="{skin_shadow}" filter="url(#b2)" opacity="0.20"/>"#,
+        ny + 5.0,
+    ));
+
+    // Jawline + chin + under-lip modelling
+    s.push_str(&format!(
+        r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{skin_dk2}" stroke-width="3" fill="none" filter="url(#b3)" opacity="{}"/>"#,
+        jl + 6.0,
+        jy + 4.0,
+        chy + 4.0,
+        jr - 6.0,
+        jy + 4.0,
+        0.13 + maturity * 0.08,
+    ));
+    s.push_str(&format!(
+        r#"<ellipse cx="{}" cy="{}" rx="7" ry="4.5" fill="{skin_hi}" filter="url(#b2)" opacity="0.16"/>"#,
         cx - 2.0,
-        ht + 30.0
+        chy - 9.0,
+    ));
+    s.push_str(&format!(
+        r#"<ellipse cx="{cx}" cy="{}" rx="7" ry="2.5" fill="{skin_dk2}" filter="url(#b2)" opacity="0.20"/>"#,
+        my + 7.0,
+    ));
+    s.push_str(&format!(
+        r#"<ellipse cx="{cx}" cy="{}" rx="18" ry="6" fill="{skin_shadow}" filter="url(#b3)" opacity="0.28"/>"#,
+        chy + 2.0,
     ));
 
-    // Cheekbone highlights — gives structure to the face
-    let cheek_hi = blend(skin, "#E8D8C8", 0.15);
-    for (chx, rx_off) in [(cx - 25.0, 0.0f32), (cx + 23.0, 1.0)] {
+    // Nasolabial folds (deepen with age)
+    let fold_opacity = 0.05 + wrinkle_opacity;
+    for (fx0, fx1, fx2) in [
+        (cx - 12.0, cx - 19.5, cx - 16.5),
+        (cx + 12.0, cx + 19.5, cx + 16.5),
+    ] {
         s.push_str(&format!(
-            r#"<ellipse cx="{chx}" cy="{}" rx="{}" ry="5" fill="{cheek_hi}" opacity="0.14"/>"#,
-            cy_cheek + 1.0,
-            9.0 + rx_off
+            r#"<path d="M{fx0} {} Q{fx1} {} {fx2} {}" stroke="{skin_dk2}" stroke-width="1.1" fill="none" filter="url(#b1)" opacity="{fold_opacity}"/>"#,
+            ny + 2.0,
+            ny + 12.0,
+            my + 2.0,
         ));
     }
 
-    // Cheek warmth — asymmetric for natural look
-    let blush = blend(skin, "#C07868", 0.10);
-    s.push_str(&format!(
-        r#"<ellipse cx="{}" cy="{}" rx="13" ry="9" fill="{blush}" opacity="0.08"/>"#,
-        cx - 27.0,
-        cy_cheek + 12.0
-    ));
-    s.push_str(&format!(
-        r#"<ellipse cx="{}" cy="{}" rx="11" ry="7" fill="{blush}" opacity="0.06"/>"#,
-        cx + 25.0,
-        cy_cheek + 11.0
-    ));
-
-    // Temple shadows — stronger for depth
-    for tx in [hl + 6.0, hr - 6.0] {
-        s.push_str(&format!(
-            r#"<ellipse cx="{tx}" cy="{}" rx="9" ry="21" fill="{skin_dk2}" opacity="0.18"/>"#,
-            cy_cheek - 6.0
-        ));
-    }
-
-    // Jaw shadow — defined jawline
-    s.push_str(&format!(
-        r#"<path d="M{jl} {jy} Q{cx} {} {jr} {jy} Q{cx} {} {jl} {jy}Z" fill="{skin_dk2}" opacity="0.16"/>"#,
-        chy - 4.0, chy + 2.0
-    ));
-
-    // Under-chin shadow — stronger
-    s.push_str(&format!(
-        r#"<ellipse cx="{cx}" cy="{}" rx="22" ry="7" fill="{skin_shadow}" opacity="0.14"/>"#,
-        chy + 4.0
-    ));
-
-    // Side jaw shadows for definition
-    for jx in [jl - 4.0, jr + 4.0] {
-        s.push_str(&format!(
-            r#"<ellipse cx="{jx}" cy="{}" rx="6" ry="14" fill="{skin_dk2}" opacity="0.10"/>"#,
-            jy - 6.0
-        ));
-    }
-
-    // Natural nasolabial and mid-face planes exist even on younger adults.
-    let fold_opacity = 0.055 + wrinkle_opacity;
-    s.push_str(&format!(
-        r#"<path d="M{} 139 Q{} 158 {} 172" stroke="{skin_dk2}" stroke-width="0.55" fill="none" opacity="{fold_opacity}"/>"#,
-        cx - 18.5, cx - 23.0, cx - 21.0
-    ));
-    s.push_str(&format!(
-        r#"<path d="M{} 139 Q{} 158 {} 172" stroke="{skin_dk2}" stroke-width="0.55" fill="none" opacity="{fold_opacity}"/>"#,
-        cx + 18.5, cx + 23.0, cx + 21.0
-    ));
-
-    // Forehead wrinkles
+    // Forehead wrinkles + eye-corner creases
     if wrinkle_opacity > 0.06 {
-        for wy in [72.0f32, 78.0, 84.0] {
+        for (wi, wy) in [74.0f32, 80.0, 86.0].iter().enumerate() {
+            let wob = jit(wi, 3) * 1.6 - 0.8;
             s.push_str(&format!(
-                r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{skin_dk2}" stroke-width="0.4" fill="none" opacity="{}"/>"#,
-                cx - 18.0, wy, wy - 1.5, cx + 18.0, wy, wrinkle_opacity * 0.5
+                r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{skin_dk2}" stroke-width="0.9" fill="none" filter="url(#b1)" opacity="{}"/>"#,
+                cx - 19.0,
+                wy + wob,
+                wy + wob - 2.5,
+                cx + 19.0,
+                wy + wob,
+                wrinkle_opacity * 0.65,
             ));
         }
     }
+    if age >= 30 {
+        for sidef in [-1.0f32, 1.0] {
+            let ex_edge = cx + sidef * (17.3 + erx + 1.5);
+            for k in 0..2 {
+                let dy = k as f32 * 2.4 - 0.6;
+                s.push_str(&format!(
+                    r#"<path d="M{ex_edge} {} q{} {} {} {}" stroke="{skin_dk2}" stroke-width="0.7" fill="none" filter="url(#b1)" opacity="{}"/>"#,
+                    ey + dy,
+                    sidef * 2.6,
+                    0.8 + k as f32 * 0.9,
+                    sidef * 4.2,
+                    2.2 + k as f32 * 1.4,
+                    wrinkle_opacity * 0.55,
+                ));
+            }
+        }
+    }
 
-    // ── Brow ridge shadow ──────────────────────────────────
-    {
-        let brow_y = 104.0 + ay;
-        // Horizontal shadow across brow bone — gives depth to the eye sockets
+    // Under-eye
+    for uxx in [exl, exr] {
         s.push_str(&format!(
-            r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{skin_dk2}" stroke-width="4.8" fill="none" opacity="0.17" stroke-linecap="round"/>"#,
-            cx - 36.0, brow_y + 1.0, brow_y - 2.5, cx + 36.0, brow_y + 1.0
+            r#"<ellipse cx="{uxx}" cy="{}" rx="7" ry="2.6" fill="{skin_dk2}" filter="url(#b2)" opacity="{undereye_opacity}"/>"#,
+            ey + ery + 4.0,
         ));
-        // Inner eye socket shadows — deeper
-        for sx in [cx - 19.0, cx + 19.0] {
+    }
+
+    // Beauty mark (sparse)
+    if face_marks == 4 {
+        let mkx = cx + (jit(11, 5) * 44.0 - 22.0);
+        let mky = 128.0 + jit(7, 9) * 46.0;
+        s.push_str(&format!(
+            r#"<circle cx="{mkx:.1}" cy="{mky:.1}" r="0.8" fill="{skin_shadow}" opacity="0.55" filter="url(#b1)"/>"#,
+        ));
+    }
+
+    // Film grain over the face
+    s.push_str(&format!(
+        r##"<rect x="{}" y="{}" width="{}" height="{}" fill="#888" filter="url(#gr)"/>"##,
+        hl - 4.0,
+        ht - 4.0,
+        (hr - hl) + 8.0,
+        (chy - ht) + 12.0,
+    ));
+
+    s.push_str("</g>");
+
+    // ── Eyes ────────────────────────────────────────────────
+    for (i, (exc, side)) in [(exl, -1.0f32), (exr, 1.0)].iter().enumerate() {
+        let exc = *exc;
+        let el = exc - erx;
+        let er_ = exc + erx;
+        // Canthal tilt: outer corner (away from the nose) lifts or drops
+        let el_y = if *side < 0.0 {
+            ey - tilt_eff
+        } else {
+            ey + tilt_eff * 0.3
+        };
+        let er_y = if *side < 0.0 {
+            ey + tilt_eff * 0.3
+        } else {
+            ey - tilt_eff
+        };
+        let top_y = ey - ery;
+        let bot_y = ey + ery * eye_bot;
+        let q_tl_x = el + erx * 0.3;
+        let q_tr_x = exc + erx * 0.7;
+        let q_ty = ey - ery * 0.8;
+        let q_br_x = er_ - erx * 0.3;
+        let q_bl_x = exc - erx * 0.7;
+        let q_by = ey + ery * eye_bot * 0.83;
+        let almond = format!(
+            "M{el} {el_y} Q{q_tl_x} {q_ty} {exc} {top_y} Q{q_tr_x} {q_ty} {er_} {er_y} \
+             Q{q_br_x} {q_by} {exc} {bot_y} Q{q_bl_x} {q_by} {el} {el_y}Z"
+        );
+
+        // Sclera + clip
+        s.push_str(&format!(r#"<path d="{almond}" fill="url(#scg)"/>"#));
+        s.push_str(&format!(
+            r#"<clipPath id="ec{i}"><path d="{almond}"/></clipPath><g clip-path="url(#ec{i})">"#
+        ));
+
+        // Iris (radial gradient), pupil, lid cast shadow, catchlights
+        let ix = exc + side * 0.3;
+        let iy = ey - 0.2;
+        s.push_str(&format!(
+            r#"<circle cx="{ix}" cy="{iy}" r="{iris_r}" fill="url(#irg)"/>"#
+        ));
+        s.push_str(&format!(
+            r##"<circle cx="{ix}" cy="{iy}" r="{pupil_r}" fill="#0B0906"/>"##
+        ));
+        s.push_str(&format!(
+            r##"<ellipse cx="{exc}" cy="{top_y}" rx="{erx}" ry="{:.2}" fill="#241713" opacity="{:.2}" filter="url(#b1)"/>"##,
+            2.0 + lid_heavy * 1.3 + lid_extra,
+            0.24 + lid_heavy * 0.15 + lid_extra * 0.06,
+        ));
+        s.push_str(&format!(
+            r##"<circle cx="{}" cy="{}" r="0.7" fill="#FFFFFF" opacity="0.85"/>"##,
+            ix - 1.2,
+            iy - 1.4,
+        ));
+        s.push_str(&format!(
+            r##"<circle cx="{}" cy="{}" r="0.35" fill="#FFFFFF" opacity="0.25"/>"##,
+            ix + 1.3,
+            iy + 0.9,
+        ));
+        s.push_str("</g>");
+
+        // Lash line — tapered, heavier on the outer half
+        s.push_str(&format!(
+            r##"<path d="M{el} {} Q{exc} {} {er_} {}" stroke="#1C120C" stroke-width="1.35" fill="none" stroke-linecap="round" opacity="0.85" filter="url(#b1)"/>"##,
+            el_y - 0.4,
+            top_y - 1.3,
+            er_y - 0.5,
+        ));
+        let lash_tip = exc + side * (erx + 1.4);
+        s.push_str(&format!(
+            r##"<path d="M{exc} {} Q{} {} {lash_tip} {}" stroke="#1C120C" stroke-width="0.9" fill="none" stroke-linecap="round" opacity="0.55" filter="url(#b1)"/>"##,
+            top_y - 0.4,
+            exc + side * erx * 0.65,
+            top_y - 0.7,
+            ey - 0.9,
+        ));
+
+        // Lower lid: faint lash shadow + bright waterline
+        s.push_str(&format!(
+            r#"<path d="M{} {} Q{exc} {} {} {}" stroke="{skin_dk2}" stroke-width="0.6" fill="none" opacity="0.35" filter="url(#b1)"/>"#,
+            el + 2.0,
+            ey + 1.1,
+            ey + ery + 0.9,
+            er_ - 1.0,
+            ey + 0.6,
+        ));
+        s.push_str(&format!(
+            r#"<path d="M{} {} Q{exc} {} {} {}" stroke="{skin_hi2}" stroke-width="0.5" fill="none" opacity="0.40" filter="url(#b1)"/>"#,
+            el + 2.5,
+            ey + 0.6,
+            ey + ery + 0.2,
+            er_ - 1.5,
+            ey + 0.2,
+        ));
+
+        // Eyelid crease — absent on monolid eyes
+        if crease_op > 0.01 {
             s.push_str(&format!(
-                r#"<ellipse cx="{sx}" cy="{}" rx="13" ry="8" fill="{skin_dk2}" opacity="0.10"/>"#,
-                brow_y + 12.0
+                r#"<path d="M{} {} Q{exc} {} {} {}" stroke="{skin_dk2}" stroke-width="0.8" fill="none" opacity="{crease_op}" filter="url(#b1)"/>"#,
+                el - 0.8,
+                top_y + 1.6,
+                top_y - 3.6,
+                er_ + 0.8,
+                top_y + 1.6,
+            ));
+        }
+
+        let inner_x = exc - side * erx;
+        if eye_st == 3 {
+            // Epicanthic fold — skin covers the inner corner
+            s.push_str(&format!(
+                r#"<path d="M{} {} Q{inner_x} {} {} {}" stroke="{skin}" stroke-width="1.7" fill="none" stroke-linecap="round" opacity="0.85" filter="url(#b1)"/>"#,
+                inner_x - side * 0.6,
+                ey - 2.2,
+                ey - 0.4,
+                inner_x + side * 2.4,
+                ey + 1.6,
+            ));
+        } else {
+            // Inner canthus
+            let canthus = blend(skin, "#A85B50", 0.40);
+            s.push_str(&format!(
+                r#"<circle cx="{inner_x}" cy="{}" r="0.8" fill="{canthus}" opacity="0.50" filter="url(#b1)"/>"#,
+                ey + 0.3,
             ));
         }
     }
 
-    // ── Eyes (almond-shaped, realistic) ─────────────────────
+    // ── Eyebrows (individual strands over a soft base) ──────
     {
-        let ey = 116.5 + ay * 2.0;
-        let lx = cx - 17.2 + ax * 1.2;
-        let rx_e = cx + 17.2 - ax;
-        // Muted sclera — slightly warm off-white
-        let sclera = "#E2DDD6";
+        let brow_col = shade(hair, 0.85);
+        for (bi, (exc, side)) in [(exl, -1.0f32), (exr, 1.0)].iter().enumerate() {
+            let inner_x = exc - side * (brow_len - 2.5);
+            let outer_x = exc + side * (brow_len + 2.0);
+            let y0 = by + 1.4;
+            let yc = by - brow_arch * 1.6;
+            let y1 = by + 0.6 + brow_tilt * 2.4;
+            let peak_x = (inner_x + outer_x) / 2.0 - side * 1.5;
 
-        // Proportional eyes — smaller iris/pupil ratio for realism
-        let (erx, ery, iris_r, pupil_r): (f32, f32, f32, f32) = match eye_st {
-            0 => (7.8, 3.0, 2.9, 1.2), // narrow
-            1 => (7.4, 2.7, 2.7, 1.1), // small
-            2 => (8.2, 3.4, 3.0, 1.2), // open
-            3 => (7.2, 2.8, 2.7, 1.1), // squinting
-            _ => (8.0, 3.1, 2.9, 1.2), // medium
-        };
-
-        let lid_col = shade(skin, 0.72);
-        let lash_col = shade(skin, 0.45);
-        let iris_rim = shade(eye_col, 0.55);
-        let iris_hi = shade(eye_col, 1.25);
-
-        for (i, (ex, side)) in [(lx, -1.0f32), (rx_e, 1.0)].iter().enumerate() {
-            let clip_id = format!("ec{i}");
-
-            // Almond-shaped eye path — pointed at inner/outer corners
-            let _inner_x = ex - erx * side; // inner corner (near nose)
-            let _outer_x = ex + erx * side; // outer corner
-            let el = ex - erx;
-            let er = ex + erx;
-
-            // Sclera — almond shape using cubic beziers
+            // Soft mass beneath the strands
             s.push_str(&format!(
-                r#"<path d="M{el} {ey} Q{} {} {ex} {} Q{} {} {er} {ey} Q{} {} {ex} {} Q{} {} {el} {ey}Z" fill="{sclera}" opacity="0.78"/>"#,
-                el + erx * 0.3, ey - ery * 0.8, ey - ery,
-                ex + erx * 0.7, ey - ery * 0.8,
-                er - erx * 0.3, ey + ery * 0.5, ey + ery * 0.6,
-                ex - erx * 0.7, ey + ery * 0.5,
+                r#"<path d="M{inner_x} {y0} Q{peak_x} {yc} {outer_x} {y1}" stroke="{brow_col}" stroke-width="2.9" fill="none" stroke-linecap="round" opacity="0.30" filter="url(#b2)"/>"#,
             ));
 
-            // Clip path matches the almond shape
-            s.push_str(&format!(
-                r#"<clipPath id="{clip_id}"><path d="M{el} {ey} Q{} {} {ex} {} Q{} {} {er} {ey} Q{} {} {ex} {} Q{} {} {el} {ey}Z"/></clipPath>"#,
-                el + erx * 0.3, ey - ery * 0.8, ey - ery,
-                ex + erx * 0.7, ey - ery * 0.8,
-                er - erx * 0.3, ey + ery * 0.5, ey + ery * 0.6,
-                ex - erx * 0.7, ey + ery * 0.5,
-            ));
-
-            s.push_str(&format!(r#"<g clip-path="url(#{clip_id})">"#));
-
-            // Upper sclera shadow (eyelid shadow cast onto eye)
-            s.push_str(&format!(
-                r#"<ellipse cx="{ex}" cy="{}" rx="{erx}" ry="3.5" fill="{lid_col}" opacity="0.25"/>"#,
-                ey - ery + 1.5
-            ));
-
-            // Iris — outer ring
-            s.push_str(&format!(
-                r#"<circle cx="{ex}" cy="{ey}" r="{iris_r}" fill="{iris_rim}"/>"#,
-            ));
-            // Iris — main color
-            s.push_str(&format!(
-                r#"<circle cx="{ex}" cy="{ey}" r="{}" fill="{eye_col}"/>"#,
-                iris_r * 0.78
-            ));
-            // Iris — lighter arc detail
-            s.push_str(&format!(
-                r#"<circle cx="{}" cy="{}" r="{}" fill="{iris_hi}" opacity="0.20"/>"#,
-                ex - 0.4 * side,
-                ey - 0.6,
-                iris_r * 0.40
-            ));
-            // Pupil
-            s.push_str(&format!(
-                r##"<circle cx="{ex}" cy="{ey}" r="{pupil_r}" fill="#0A0A0A"/>"##,
-            ));
-            // Catchlight — smaller, softer
-            s.push_str(&format!(
-                r#"<circle cx="{}" cy="{}" r="0.45" fill="white" opacity="0.28"/>"#,
-                ex - 1.0 * side,
-                ey - 1.3
-            ));
-            // Secondary catchlight — very faint
-            s.push_str(&format!(
-                r#"<circle cx="{}" cy="{}" r="0.25" fill="white" opacity="0.12"/>"#,
-                ex + 0.8 * side,
-                ey + 0.5
-            ));
-
+            s.push_str(r#"<g filter="url(#b1)">"#);
+            for k in 0..brow_n {
+                let t = k as f32 / (brow_n - 1) as f32;
+                let sx = inner_x + (outer_x - inner_x) * t + side * (jit(k, bi) - 0.5) * 1.6;
+                let sy = (1.0 - t) * (1.0 - t) * y0
+                    + 2.0 * t * (1.0 - t) * yc
+                    + t * t * y1
+                    + (jit(k, bi + 2) - 0.5) * 1.2;
+                let dx = side * (0.8 + 2.4 * t);
+                let dy = -(2.4 - 3.0 * t);
+                let op = 0.35 + jit(k, bi + 4) * 0.30;
+                s.push_str(&format!(
+                    r#"<path d="M{sx:.1} {sy:.1} l{dx:.1} {dy:.1}" stroke="{brow_col}" stroke-width="0.55" fill="none" stroke-linecap="round" opacity="{op:.2}"/>"#,
+                ));
+            }
             s.push_str("</g>");
-
-            // Upper eyelid line — natural lash line, tapers at edges
-            s.push_str(&format!(
-                r#"<path d="M{el} {ey} Q{ex} {} {er} {}" stroke="{lash_col}" stroke-width="1.15" fill="none" stroke-linecap="round"/>"#,
-                ey - ery - 1.2, ey - 0.3
-            ));
-            // Outer lash thickening
-            s.push_str(&format!(
-                r#"<path d="M{} {} Q{} {} {er} {}" stroke="{lash_col}" stroke-width="0.8" fill="none" opacity="0.5" stroke-linecap="round"/>"#,
-                ex, ey - ery - 0.5, ex + erx * 0.6 * side.signum(), ey - ery * 0.6, ey - 0.3
-            ));
-            // Lower lid — subtle definition
-            s.push_str(&format!(
-                r#"<path d="M{} {} Q{ex} {} {} {}" stroke="{lid_col}" stroke-width="0.5" fill="none" opacity="0.30"/>"#,
-                el + 2.0, ey + 0.3, ey + ery + 0.3, er - 2.0, ey + 0.3
-            ));
-            // Inner and outer canthus details.
-            let tear = blend(skin, "#A85B50", 0.22);
-            s.push_str(&format!(
-                r#"<circle cx="{}" cy="{}" r="0.85" fill="{tear}" opacity="0.28"/>"#,
-                if *side < 0.0 { er - 0.4 } else { el + 0.4 },
-                ey + 0.2
-            ));
-            s.push_str(&format!(
-                r#"<path d="M{} {} l{} {}" stroke="{lash_col}" stroke-width="0.45" fill="none" opacity="0.34" stroke-linecap="round"/>"#,
-                if *side < 0.0 { el + 0.8 } else { er - 0.8 },
-                ey - 0.1,
-                2.0 * side,
-                -1.0
-            ));
-            // Eyelid crease — deeper
-            s.push_str(&format!(
-                r#"<path d="M{} {} Q{ex} {} {} {}" stroke="{skin_dk2}" stroke-width="0.7" fill="none" opacity="0.18"/>"#,
-                el - 0.5, ey - ery + 2.0, ey - ery - 4.0, er + 0.5, ey - ery + 2.0
-            ));
-
-            // Under-eye shadow
-            s.push_str(&format!(
-                r#"<ellipse cx="{ex}" cy="{}" rx="{}" ry="2.5" fill="{skin_shadow}" opacity="{}"/>"#,
-                ey + ery + 3.0, erx - 2.0, undereye_opacity
-            ));
         }
     }
 
-    // ── Eyebrows ────────────────────────────────────────────
+    // ── Nose: crisp details over the shading planes ─────────
     {
-        let by = 102.0 + ay * 2.0;
-        let blx = cx - 17.5 + ax;
-        let brx = cx + 17.5 - ax * 0.5;
-        let brow_col = shade(hair, 0.90);
-
-        let (bw, bt, arch): (f32, f32, f32) = match brow_st {
-            0 => (2.7, 0.0, 1.8),  // straight
-            1 => (2.6, -0.4, 3.2), // arched
-            2 => (3.3, 0.5, 1.4),  // flat thick
-            3 => (2.6, -0.2, 2.7), // medium arch
-            4 => (3.7, 0.0, 2.2),  // bushy
-            _ => (2.4, -0.2, 3.0), // high arch
-        };
-
+        let nl_ = cx - tip_w * 0.48;
+        let nr_ = cx + tip_w * 0.48;
+        // Tip highlight
         s.push_str(&format!(
-            r#"<path d="M{} {} Q{} {} {} {}" stroke="{brow_col}" stroke-width="{bw}" fill="none" stroke-linecap="round"/>"#,
-            blx - 12.0, by + bt, blx, by - arch, blx + 12.0, by + bt * 0.6
-        ));
-        s.push_str(&format!(
-            r#"<path d="M{} {} Q{} {} {} {}" stroke="{brow_col}" stroke-width="{bw}" fill="none" stroke-linecap="round"/>"#,
-            brx - 12.0, by + bt * 0.6, brx, by - arch * 0.95, brx + 12.0, by + bt
-        ));
-
-        // Individual brow hairs make the portrait read less like a sticker.
-        for i in 0..8 {
-            let t = i as f32 / 7.0;
-            let lx0 = blx - 11.0 + t * 22.0;
-            let rx0 = brx - 11.0 + t * 22.0;
-            let lift = (0.5 - (t - 0.5).abs()) * arch * 0.45;
-            s.push_str(&format!(
-                r#"<path d="M{} {} l{} {}" stroke="{brow_col}" stroke-width="0.45" fill="none" opacity="0.45" stroke-linecap="round"/>"#,
-                lx0, by + bt - lift * 0.5, 2.2, -1.1 - lift * 0.18
-            ));
-            s.push_str(&format!(
-                r#"<path d="M{} {} l{} {}" stroke="{brow_col}" stroke-width="0.45" fill="none" opacity="0.45" stroke-linecap="round"/>"#,
-                rx0, by + bt - lift * 0.45, -2.2, -1.0 - lift * 0.16
-            ));
-        }
-    }
-
-    // ── Nose (visible, structured) ──────────────────────────
-    {
-        let ny = 145.0;
-        let ns = shade(skin, 0.55);
-        let nt = shade(skin, 0.70);
-        let nhi = shade(skin, 1.08);
-
-        let (bw, tw, th, nostril_w): (f32, f32, f32, f32) = match nose_st {
-            0 => (1.1, 7.8, 3.8, 2.6),  // small straight
-            1 => (1.3, 11.5, 5.2, 3.8), // wide
-            2 => (1.2, 9.4, 4.4, 3.1),  // medium
-            3 => (1.0, 7.2, 4.8, 2.4),  // narrow
-            4 => (1.2, 10.4, 4.8, 3.3), // aquiline
-            _ => (1.1, 8.7, 4.0, 2.8),  // compact
-        };
-
-        // Bridge — curved lines on both sides from brow to tip
-        s.push_str(&format!(
-            r#"<path d="M{} 103 Q{} 126 {} {ny}" stroke="{ns}" stroke-width="{bw}" fill="none" opacity="0.36"/>"#,
-            cx - 3.8, cx - 4.3, cx - 2.2
-        ));
-        s.push_str(&format!(
-            r#"<path d="M{} 103 Q{} 126 {} {ny}" stroke="{ns}" stroke-width="{}" fill="none" opacity="0.26"/>"#,
-            cx + 3.8, cx + 4.3, cx + 2.2, bw * 0.7
-        ));
-        // Bridge highlight (light catches center ridge)
-        s.push_str(&format!(
-            r#"<path d="M{} 108 L{} {}" stroke="{nhi}" stroke-width="1.5" fill="none" opacity="0.12"/>"#,
-            cx + 0.5, cx + 0.3, ny - 5.0
-        ));
-        // Harder bridge planes read more adult and masculine.
-        s.push_str(&format!(
-            r#"<path d="M{} 118 Q{} 132 {} {}" stroke="{skin_dk2}" stroke-width="0.55" fill="none" opacity="{}"/>"#,
-            cx - 7.0, cx - 8.0, cx - 6.0, ny - 2.0, 0.12 + maturity * 0.06
-        ));
-        s.push_str(&format!(
-            r#"<path d="M{} 118 Q{} 132 {} {}" stroke="{skin_dk2}" stroke-width="0.45" fill="none" opacity="{}"/>"#,
-            cx + 7.0, cx + 8.0, cx + 6.0, ny - 2.0, 0.09 + maturity * 0.04
-        ));
-        // Nose tip — softer, less prominent
-        s.push_str(&format!(
-            r#"<ellipse cx="{cx}" cy="{ny}" rx="{}" ry="{}" fill="{nt}" opacity="0.10"/>"#,
-            tw * 0.75,
-            th * 0.75
-        ));
-        // Tip highlight — off-center for realism
-        s.push_str(&format!(
-            r#"<ellipse cx="{}" cy="{}" rx="2.0" ry="1.4" fill="{nhi}" opacity="0.10"/>"#,
+            r#"<ellipse cx="{}" cy="{}" rx="2.6" ry="1.9" fill="{skin_hi2}" opacity="0.30" filter="url(#b1)"/>"#,
             cx + 0.6,
-            ny - 1.0
+            ny - 2.0,
         ));
-        // Nostrils — teardrop-shaped, not circles
-        let nl = cx - tw * 0.45;
-        let nr = cx + tw * 0.45;
-        s.push_str(&format!(
-            r#"<path d="M{nl} {} Q{} {} {} {} Q{} {} {nl} {}Z" fill="{ns}" opacity="0.30"/>"#,
-            ny + 1.0,
-            nl - nostril_w,
-            ny + 1.5,
-            nl - nostril_w * 0.6,
-            ny + 3.0,
-            nl + nostril_w * 0.3,
-            ny + 3.2,
-            ny + 1.0
-        ));
-        s.push_str(&format!(
-            r#"<path d="M{nr} {} Q{} {} {} {} Q{} {} {nr} {}Z" fill="{ns}" opacity="0.30"/>"#,
-            ny + 1.0,
-            nr + nostril_w,
-            ny + 1.5,
-            nr + nostril_w * 0.6,
-            ny + 3.0,
-            nr - nostril_w * 0.3,
-            ny + 3.2,
-            ny + 1.0
-        ));
-        // Nose wing shadows (alar creases)
-        for (gx, dir) in [(nl - nostril_w - 0.5, -1.0f32), (nr + nostril_w + 0.5, 1.0)] {
+        // Nostrils — rotated soft ellipses
+        for (nx, rot) in [(nl_, 18.0f32), (nr_, -18.0)] {
             s.push_str(&format!(
-                r#"<path d="M{gx} {} Q{} {} {} {}" stroke="{ns}" stroke-width="0.7" fill="none" opacity="0.22"/>"#,
-                ny, gx + dir * 1.0, ny + 3.0, gx - dir * 0.5, ny + 5.0
+                r##"<ellipse cx="{nx}" cy="{}" rx="{}" ry="1.25" fill="#1A0E0A" opacity="0.55" filter="url(#b1)" transform="rotate({rot} {nx} {})"/>"##,
+                ny + 1.6,
+                nostril_w * 0.85,
+                ny + 1.6,
             ));
         }
-        // Bottom of nose shadow
+        // Alar wings
+        for (wx, dir) in [
+            (nl_ - nostril_w - 0.6, -1.0f32),
+            (nr_ + nostril_w + 0.6, 1.0),
+        ] {
+            s.push_str(&format!(
+                r#"<path d="M{wx} {} Q{} {} {} {}" stroke="{skin_dk2}" stroke-width="0.9" fill="none" opacity="0.35" filter="url(#b1)"/>"#,
+                ny - 1.5,
+                wx + dir * 1.2,
+                ny + 1.5,
+                wx - dir * 0.6,
+                ny + 3.4,
+            ));
+        }
+        // Septum shadow
         s.push_str(&format!(
-            r#"<ellipse cx="{cx}" cy="{}" rx="{}" ry="2.0" fill="{ns}" opacity="0.12"/>"#,
-            ny + 4.0,
-            tw * 0.7
+            r#"<ellipse cx="{cx}" cy="{}" rx="2" ry="1.2" fill="{skin_dk2}" opacity="0.25" filter="url(#b1)"/>"#,
+            ny + 2.4,
         ));
     }
 
-    // ── Mouth (visible, natural) ─────────────────────────────
+    // ── Mouth (gradient lips, no hard outlines) ─────────────
     {
-        let my = 166.0;
-        let lp = lip_color(skin);
-        let lp_dk = shade(&lp, 0.60);
-        let lp_hi = shade(&lp, 1.12);
-        let sep = shade(skin, 0.42);
-
-        let (mw, upper_h, lower_h): (f32, f32, f32) = match mouth_st {
-            0 => (12.5, 2.0, 2.8), // medium
-            1 => (15.0, 1.8, 3.2), // wide
-            2 => (10.8, 2.2, 2.5), // small
-            3 => (13.4, 2.6, 3.4), // full
-            _ => (11.8, 1.6, 2.4), // thin
-        };
-
         let ml = cx - mw;
-        let mr = cx + mw;
+        let mr_ = cx + mw;
+        let up_col = shade(&lip, 0.78);
+        let line_col = shade(&lip_dk, 0.70);
 
-        // Lip separation line — defines the mouth
+        // Upper lip — cupid's bow, sits in shadow
         s.push_str(&format!(
-            r#"<path d="M{ml} {my} Q{cx} {} {mr} {my}" stroke="{lp_dk}" stroke-width="0.75" fill="none" opacity="0.62"/>"#,
-            my + 0.5
+            r#"<path d="M{ml} {my} Q{} {} {} {} Q{cx} {} {} {} Q{} {} {mr_} {my} Q{cx} {} {ml} {my}Z" fill="{up_col}" opacity="0.55" filter="url(#b1)"/>"#,
+            ml + mw * 0.35,
+            my - upper_h * 0.4,
+            cx - 3.2,
+            my - upper_h,
+            my - upper_h * 0.55,
+            cx + 3.2,
+            my - upper_h,
+            mr_ - mw * 0.35,
+            my - upper_h * 0.4,
+            my + 0.8,
         ));
-        // Upper lip — cupid's bow
+        // Mouth line
         s.push_str(&format!(
-            r#"<path d="M{ml} {my} Q{} {} {} {} Q{cx} {} {} {} Q{} {} {mr} {my} L{ml} {my}Z" fill="{lp}" opacity="0.24"/>"#,
-            ml + mw * 0.3, my - upper_h * 0.3,
-            cx - 3.0, my - upper_h,
-            my - upper_h * 0.5,
-            cx + 3.0, my - upper_h,
-            mr - mw * 0.3, my - upper_h * 0.3,
+            r#"<path d="M{} {my} Q{cx} {} {} {my}" stroke="{line_col}" stroke-width="1.0" fill="none" stroke-linecap="round" opacity="0.80" filter="url(#b1)"/>"#,
+            ml + 0.5,
+            my + 1.1,
+            mr_ - 0.5,
         ));
-        // Lower lip — fuller, lighter
+        // Lower lip — volume from a soft fill + highlight band
         s.push_str(&format!(
-            r#"<path d="M{ml} {my} Q{cx} {} {mr} {my}Z" fill="{lp}" opacity="0.18"/>"#,
-            my + lower_h
-        ));
-        // Upper lip vermilion border
-        s.push_str(&format!(
-            r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{lp_dk}" stroke-width="0.4" fill="none" opacity="0.20"/>"#,
-            cx - 4.0, my - upper_h * 0.7, my - upper_h - 0.5, cx + 4.0, my - upper_h * 0.7
-        ));
-        // Lower lip shine
-        s.push_str(&format!(
-            r#"<ellipse cx="{cx}" cy="{}" rx="4.5" ry="1.0" fill="{lp_hi}" opacity="0.06"/>"#,
-            my + lower_h * 0.4
+            r#"<path d="M{} {} Q{cx} {} {} {} Q{cx} {} {} {}Z" fill="{lip}" opacity="0.32" filter="url(#b1)"/>"#,
+            ml + 1.5,
+            my + 0.7,
+            my + lower_h * 2.1,
+            mr_ - 1.5,
+            my + 0.7,
+            my + 1.4,
+            ml + 1.5,
+            my + 0.7,
         ));
         s.push_str(&format!(
-            r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{sep}" stroke-width="0.35" fill="none" opacity="0.16"/>"#,
-            ml + 3.0, my + lower_h + 1.8, my + lower_h + 3.0, mr - 3.0, my + lower_h + 1.8
+            r#"<ellipse cx="{}" cy="{}" rx="{}" ry="{}" fill="{lip_hi}" opacity="0.20" filter="url(#b1)"/>"#,
+            cx - 1.0,
+            my + lower_h * 1.05,
+            mw * 0.38,
+            lower_h * 0.5,
         ));
-        // Philtrum — subtle but visible
-        for px in [cx - 2.2, cx + 2.2] {
+        // Mouth corners
+        for mcx in [ml - 0.5, mr_ + 0.5] {
             s.push_str(&format!(
-                r#"<path d="M{px} 149 L{} {}" stroke="{}" stroke-width="0.45" fill="none" opacity="0.10"/>"#,
-                if px < cx { px + 0.3 } else { px - 0.3 }, my - upper_h, shade(skin, 0.62)
+                r#"<circle cx="{mcx}" cy="{}" r="1.1" fill="{skin_shadow}" opacity="0.30" filter="url(#b1)"/>"#,
+                my + 0.3,
             ));
         }
-        // Mouth corners — shadow dots
-        for mcx in [ml, mr] {
+        // Philtrum ridges
+        for (px, tx_) in [(cx - 2.1, cx - 1.6), (cx + 2.1, cx + 1.6)] {
             s.push_str(&format!(
-                r#"<circle cx="{mcx}" cy="{my}" r="1.0" fill="{sep}" opacity="0.15"/>"#,
+                r#"<path d="M{px} {} L{tx_} {}" stroke="{skin_hi}" stroke-width="0.7" fill="none" opacity="0.18" filter="url(#b1)"/>"#,
+                ny + 5.0,
+                my - upper_h - 0.6,
             ));
         }
-        // Chin shadow
-        s.push_str(&format!(
-            r#"<ellipse cx="{cx}" cy="{}" rx="10" ry="3" fill="{skin_dk2}" opacity="0.05"/>"#,
-            my + lower_h + 4.0
-        ));
     }
 
-    // ── Beard ───────────────────────────────────────────────
-    if beard {
-        let bd = shade(hair, 0.85);
-        match beard_v {
-            0 => {
-                // Light stubble
-                s.push_str(&format!(
-                    r#"<path d="M{} 155 Q{} 190 {cx} 201 Q{} 190 {} 155 Q{cx} 182 {} 155Z" fill="{bd}" opacity="0.13"/>"#,
-                    cx - 36.0, cx - 32.0, cx + 32.0, cx + 36.0, cx - 36.0
-                ));
-            }
-            1 => {
-                // Short beard
-                s.push_str(&format!(
-                    r#"<path d="M{} 150 Q{} 192 {cx} 202 Q{} 192 {} 150 Q{cx} 182 {} 150Z" fill="{bd}" opacity="0.25"/>"#,
-                    cx - 40.0, cx - 36.0, cx + 36.0, cx + 40.0, cx - 40.0
-                ));
-            }
-            2 => {
-                // Full beard
-                s.push_str(&format!(
-                    r#"<path d="M{} 140 Q{} 196 {cx} 210 Q{} 196 {} 140 Q{cx} 186 {} 140Z" fill="{bd}" opacity="0.40"/>"#,
-                    cx - 44.0, cx - 40.0, cx + 40.0, cx + 44.0, cx - 44.0
-                ));
-                s.push_str(&format!(
-                    r#"<path d="M{} 155 Q{} 186 {cx} 196 Q{} 186 {} 155Z" fill="{}" opacity="0.06"/>"#,
-                    cx - 30.0, cx - 26.0, cx + 26.0, cx + 30.0, shade(hair, 1.15)
-                ));
-            }
-            3 => {
-                // Goatee
-                s.push_str(&format!(
-                    r#"<path d="M{} 157 Q{} 194 {cx} 206 Q{} 194 {} 157 Q{cx} 178 {} 157Z" fill="{bd}" opacity="0.30"/>"#,
-                    cx - 16.0, cx - 14.0, cx + 14.0, cx + 16.0, cx - 16.0
-                ));
-            }
-            _ => {
-                // Chinstrap
-                s.push_str(&format!(
-                    r#"<path d="M{} 150 Q{} 188 {cx} 198 Q{} 188 {} 150 Q{cx} 175 {} 150Z" fill="{bd}" opacity="0.18"/>"#,
-                    cx - 42.0, cx - 38.0, cx + 38.0, cx + 42.0, cx - 42.0
-                ));
-            }
-        }
-        let dot_col = shade(hair, 0.65);
-        for i in 0..58 {
-            let row = (i / 11) as f32;
-            let col = (i % 11) as f32;
-            let px = cx - 31.0 + col * 6.2 + ((texture_seed + i) % 5) as f32 * 0.35 - 0.7;
-            let py = 154.0 + row * 8.4 + ((texture_seed / (i + 1)) % 5) as f32 * 0.55;
-            let jaw_taper = ((py - 156.0) / 43.0).max(0.0).min(1.0);
-            if (px - cx).abs() < 33.0 - jaw_taper * 13.0 {
-                s.push_str(&format!(
-                    r#"<circle cx="{px}" cy="{py}" r="0.34" fill="{dot_col}" opacity="0.24"/>"#,
-                ));
-            }
-        }
-    } else if age >= 22 {
-        let shave_col = shade(hair, 0.72);
-        s.push_str(&format!(
-            r#"<path d="M{} 153 Q{} 190 {cx} 201 Q{} 190 {} 153 Q{cx} 176 {} 153Z" fill="{shave_col}" opacity="{}"/>"#,
-            cx - 35.0, cx - 31.0, cx + 31.0, cx + 35.0, cx - 35.0, opacity(0.05 + maturity * 0.055)
-        ));
-    }
+    // ── Facial hair ─────────────────────────────────────────
+    {
+        // Lower-face region: outer edge follows the jaw, top edge runs under
+        // the nose, with an evenodd hole punched around the lips.
+        let btl = cl + 2.0;
+        let btr = cr - 2.0;
+        let bt_y = cy_cheek + 10.0;
+        let jy8 = jy + 8.0;
+        let chy7 = chy + 7.0;
+        let nyb = ny + 2.0;
+        let hole_rx = mw - 2.5;
+        let hole_ry = (upper_h + lower_h - 1.5).max(3.0);
+        let hole_cy = my + 0.5;
+        let hole_l = cx - hole_rx;
+        let hole_d = 2.0 * hole_rx;
+        let beard_d = format!(
+            "M{btl} {bt_y} C{} {jy} {} {jy8} {chl} {chy} Q{cx} {chy7} {chr} {chy} \
+             C{} {jy8} {} {jy} {btr} {bt_y} C{} {nyb} {} {nyb} {btl} {bt_y}Z \
+             M{hole_l} {hole_cy} a{hole_rx} {hole_ry} 0 1 0 {hole_d} 0 a{hole_rx} {hole_ry} 0 1 0 -{hole_d} 0Z",
+            cl + 2.0,
+            jl + 2.0,
+            jr - 2.0,
+            cr - 2.0,
+            cx + 30.0,
+            cx - 30.0,
+        );
+        let stubble_col = shade(hair, 0.72);
 
-    // ── Mustache ────────────────────────────────────────────
-    if mstache {
-        let mc_col = shade(hair, 0.88);
-        match mst_v {
-            0 => {
-                // Pencil
-                s.push_str(&format!(
-                    r#"<path d="M{} 161 Q{cx} 159 {} 161" stroke="{mc_col}" stroke-width="1.4" fill="none"/>"#,
-                    cx - 13.0, cx + 13.0
-                ));
+        if beard {
+            match beard_v {
+                0 => {
+                    // Heavy stubble
+                    s.push_str(&format!(
+                        r#"<path d="{beard_d}" fill-rule="evenodd" fill="{stubble_col}" filter="url(#stb)" opacity="{}"/>"#,
+                        opacity(0.38 + maturity * 0.12),
+                    ));
+                }
+                1 => {
+                    // Short boxed beard: soft mass + speckle texture
+                    s.push_str(&format!(
+                        r#"<path d="{beard_d}" fill-rule="evenodd" fill="{hair}" filter="url(#b3)" opacity="0.28"/>"#,
+                    ));
+                    s.push_str(&format!(
+                        r#"<path d="{beard_d}" fill-rule="evenodd" fill="{stubble_col}" filter="url(#stb)" opacity="0.85"/>"#,
+                    ));
+                }
+                2 => {
+                    // Full beard with an under-chin curtain
+                    s.push_str(&format!(
+                        r#"<path d="{beard_d}" fill-rule="evenodd" fill="{hair}" filter="url(#b2)" opacity="0.75"/>"#,
+                    ));
+                    s.push_str(&format!(
+                        r#"<path d="M{} {} Q{cx} {} {} {} Q{cx} {} {} {}Z" fill="{hair}" filter="url(#b1)" opacity="0.75"/>"#,
+                        jl + 4.0,
+                        jy + 10.0,
+                        chy + 16.0,
+                        jr - 4.0,
+                        jy + 10.0,
+                        chy + 6.0,
+                        jl + 4.0,
+                        jy + 10.0,
+                    ));
+                    s.push_str(&format!(
+                        r#"<path d="{beard_d}" fill-rule="evenodd" fill="{hair_hi}" filter="url(#stb)" opacity="0.25"/>"#,
+                    ));
+                }
+                3 => {
+                    // Goatee — chin blob + soft edge
+                    let goatee_d = format!(
+                        "M{} {} Q{cx} {} {} {} L{} {chy} Q{cx} {} {} {chy}Z",
+                        chl - 4.0,
+                        my + 3.0,
+                        my + 7.0,
+                        chr + 4.0,
+                        my + 3.0,
+                        chr + 5.0,
+                        chy + 8.0,
+                        chl - 5.0,
+                    );
+                    s.push_str(&format!(
+                        r#"<path d="{goatee_d}" fill="{hair}" filter="url(#b1)" opacity="0.55"/>"#,
+                    ));
+                    s.push_str(&format!(
+                        r#"<path d="{goatee_d}" fill="{stubble_col}" filter="url(#stb)" opacity="0.80"/>"#,
+                    ));
+                }
+                _ => {
+                    // Chinstrap — speckled band hugging the jaw
+                    s.push_str(&format!(
+                        r#"<path d="M{} {} C{} {jy} {} {} {cx} {} C{} {} {} {jy} {} {}" stroke="{stubble_col}" stroke-width="6.5" fill="none" filter="url(#stb)" opacity="0.70"/>"#,
+                        cl + 1.5,
+                        cy_cheek + 12.0,
+                        cl + 1.5,
+                        jl + 3.0,
+                        jy + 9.0,
+                        chy + 3.0,
+                        jr - 3.0,
+                        jy + 9.0,
+                        cr - 1.5,
+                        cr - 1.5,
+                        cy_cheek + 12.0,
+                    ));
+                }
             }
-            1 => {
-                // Full
-                s.push_str(&format!(
-                    r#"<path d="M{} 160 Q{} 156 {cx} 160 Q{} 156 {} 160 Q{} 164 {cx} 163 Q{} 164 {} 160Z" fill="{mc_col}" opacity="0.42"/>"#,
-                    cx - 15.0, cx - 8.0, cx + 8.0, cx + 15.0, cx + 11.0, cx - 11.0, cx - 15.0
-                ));
-            }
-            2 => {
-                // Handlebar
-                s.push_str(&format!(
-                    r#"<path d="M{} 158 Q{cx} 155 {} 158 L{} 163 Q{cx} 161 {} 163Z" fill="{mc_col}" opacity="0.38"/>"#,
-                    cx - 18.0, cx + 18.0, cx + 16.0, cx - 16.0
-                ));
-            }
-            _ => {
-                // Chevron
-                s.push_str(&format!(
-                    r#"<path d="M{} 159 Q{cx} 155 {} 159 Q{cx} 164 {} 159Z" fill="{mc_col}" opacity="0.35"/>"#,
-                    cx - 14.0, cx + 14.0, cx - 14.0
-                ));
+        } else if age >= 22 {
+            // Five o'clock shadow — deepens with maturity
+            s.push_str(&format!(
+                r#"<path d="{beard_d}" fill-rule="evenodd" fill="{stubble_col}" filter="url(#stb)" opacity="{}"/>"#,
+                opacity(0.10 + maturity * 0.14),
+            ));
+        }
+
+        if mstache {
+            let (mst_w, mst_h, mst_op): (f32, f32, f32) = match mst_v {
+                0 => (11.0, 2.4, 0.50),
+                1 => (14.0, 5.0, 0.75),
+                2 => (17.0, 4.5, 0.70),
+                _ => (15.0, 6.0, 0.70),
+            };
+            let mst_d = format!(
+                "M{} {} Q{cx} {} {} {} Q{cx} {} {} {}Z",
+                cx - mst_w,
+                my - 1.2,
+                my - upper_h - mst_h,
+                cx + mst_w,
+                my - 1.2,
+                my - 2.2,
+                cx - mst_w,
+                my - 1.2,
+            );
+            s.push_str(&format!(
+                r#"<path d="{mst_d}" fill="{hair}" filter="url(#b1)" opacity="{}"/>"#,
+                mst_op * 0.55,
+            ));
+            s.push_str(&format!(
+                r#"<path d="{mst_d}" fill="{stubble_col}" filter="url(#stb)" opacity="{mst_op}"/>"#,
+            ));
+            if mst_v == 2 {
+                // Handlebar ends
+                for dir in [-1.0f32, 1.0] {
+                    let hx = cx + dir * mst_w;
+                    s.push_str(&format!(
+                        r#"<path d="M{hx} {} q{} {} {} {}" stroke="{hair}" stroke-width="1.6" fill="none" stroke-linecap="round" filter="url(#b1)" opacity="0.6"/>"#,
+                        my - 1.5,
+                        dir * 2.4,
+                        2.0,
+                        dir * 3.2,
+                        5.0,
+                    ));
+                }
             }
         }
     }
 
     // ── Hair ────────────────────────────────────────────────
     {
-        let hd = shade(hair, 0.75);
-        let hl_c = shade(hair, 1.18);
-        let h_mid = shade(hair, 0.90);
-
-        // Base hairline helper — shared curved top matching the skull
-        // outer = visible edge of hair, inner = where hair meets forehead
-        let hair_outer_top = ht - 6.0;
-        let hair_inner_top = ht + 6.0;
+        let side_y = cy_cheek - 2.0;
+        // Inner hairline height per style; None = no forehead edge (bald)
+        let mut hairline: Option<f32> = None;
 
         match hair_st {
             0 => {
-                // Short crop — tight to skull with visible scalp gradient
+                // Short crop
+                let crown = ht - 2.0;
+                let hli = ht + 24.0;
+                hairline = Some(hli);
                 s.push_str(&format!(
-                    r#"<path d="M{hl} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {hr} {} L{hr} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {hl} {}Z" fill="{hair}"/>"#,
-                    cy_cheek - 14.0, ht + 18.0, hl + 14.0, hair_inner_top, hair_inner_top,
-                    hr - 14.0, hair_inner_top, ht + 18.0, cy_cheek - 14.0,
-                    hair_outer_top + 2.0, ht + 12.0, hr - 12.0, hair_outer_top - 4.0, hair_outer_top - 4.0,
-                    hl + 12.0, hair_outer_top - 4.0, ht + 12.0, hair_outer_top + 2.0,
-                ));
-                // Volume highlight
-                s.push_str(&format!(
-                    r#"<ellipse cx="{}" cy="{}" rx="18" ry="8" fill="{hl_c}" opacity="0.08"/>"#,
-                    cx - 4.0,
-                    hair_outer_top + 4.0
+                    r#"<path d="M{} {side_y} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    hl - 1.0, hl - 1.0, ht + 36.0, hl + 23.0,
+                    hr - 23.0, hr + 1.0, ht + 36.0, hr + 1.0,
+                    hr - 3.5, hr - 4.0, ht + 12.0, hr - 16.0,
+                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5,
                 ));
             }
             1 => {
-                // Side part — clean with natural volume
+                // Side part — crown volume swept to one side
+                let crown = ht - 6.0;
+                let hli = ht + 23.0;
+                hairline = Some(hli);
                 s.push_str(&format!(
-                    r#"<path d="M{hl} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {hr} {} L{hr} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {hl} {}Z" fill="{hair}"/>"#,
-                    cy_cheek - 10.0, ht + 18.0, hl + 12.0, hair_inner_top, hair_inner_top,
-                    hr - 12.0, hair_inner_top, ht + 18.0, cy_cheek - 10.0,
-                    hair_outer_top - 4.0, ht + 8.0, hr - 10.0, hair_outer_top - 12.0, hair_outer_top - 12.0,
-                    hl + 10.0, hair_outer_top - 8.0, ht + 10.0, hair_outer_top - 2.0,
+                    r#"<path d="M{} {side_y} C{} {} {} {crown} {} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    hl - 1.0, hl - 1.0, ht + 28.0, hl + 14.0, cx - 8.0,
+                    hr - 20.0, hr + 1.0, ht + 34.0, hr + 1.0,
+                    hr - 3.5, hr - 4.0, ht + 12.0, hr - 16.0,
+                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5,
                 ));
                 // Part line
                 s.push_str(&format!(
-                    r#"<path d="M{} {} Q{} {} {} {}" stroke="{hd}" stroke-width="0.8" fill="none" opacity="0.30"/>"#,
-                    cx - 18.0, hair_outer_top - 2.0, cx - 15.0, hair_inner_top + 4.0, cx - 12.0, hair_inner_top + 14.0
-                ));
-                // Volume highlight on the swept side
-                s.push_str(&format!(
-                    r#"<ellipse cx="{}" cy="{}" rx="14" ry="6" fill="{hl_c}" opacity="0.07"/>"#,
-                    cx + 6.0,
-                    hair_outer_top + 2.0
+                    r#"<path d="M{} {} Q{} {} {} {}" stroke="{hair_dk}" stroke-width="1.2" fill="none" filter="url(#b1)" opacity="0.5"/>"#,
+                    cx - 16.0, crown + 3.0, cx - 14.0, ht + 12.0, cx - 12.0, hli,
                 ));
             }
             2 => {
-                // Medium textured — natural volume with soft edge
-                let hair_ext = 3.0;
+                // Medium textured volume
+                let crown = ht - 10.0;
+                let hli = ht + 22.0;
+                hairline = Some(hli);
                 s.push_str(&format!(
-                    r#"<path d="M{} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {} {} L{} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {} {}Z" fill="{hair}"/>"#,
-                    hl - hair_ext, cy_cheek - 14.0, ht + 16.0, hl + 10.0, hair_inner_top - 2.0, hair_inner_top - 2.0,
-                    hr - 10.0, hair_inner_top - 2.0, ht + 16.0, hr + hair_ext, cy_cheek - 14.0,
-                    hr + hair_ext, hair_outer_top - 6.0, ht + 8.0, hr - 8.0, hair_outer_top - 16.0, hair_outer_top - 16.0,
-                    hl + 8.0, hair_outer_top - 16.0, ht + 8.0, hl - hair_ext, hair_outer_top - 6.0,
-                ));
-                // Hair texture strands
-                s.push_str(&format!(
-                    r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{h_mid}" stroke-width="0.5" fill="none" opacity="0.12"/>"#,
-                    hl + 12.0, hair_outer_top - 6.0, hair_outer_top - 14.0, hr - 12.0, hair_outer_top - 6.0
+                    r#"<path d="M{} {side_y} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    hl - 3.0, hl - 3.0, ht + 30.0, hl + 21.0,
+                    hr - 21.0, hr + 3.0, ht + 30.0, hr + 3.0,
+                    hr - 3.5, hr - 4.0, ht + 12.0, hr - 16.0,
+                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5,
                 ));
             }
             3 => {
-                // Buzz cut — very short, scalp shows through
+                // Buzz cut — scalp speckle, like heavy stubble
+                let crown = ht - 1.0;
+                let hli = ht + 24.0;
+                hairline = Some(hli);
                 s.push_str(&format!(
-                    r#"<path d="M{hl} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {hr} {} L{hr} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {hl} {}Z" fill="{hair}" opacity="0.45"/>"#,
-                    cy_cheek - 18.0, ht + 22.0, hl + 14.0, hair_inner_top, hair_inner_top,
-                    hr - 14.0, hair_inner_top, ht + 22.0, cy_cheek - 18.0,
-                    hair_outer_top + 4.0, ht + 14.0, hr - 12.0, hair_outer_top - 2.0, hair_outer_top - 2.0,
-                    hl + 12.0, hair_outer_top - 2.0, ht + 14.0, hair_outer_top + 4.0,
-                ));
-                // Scalp sheen
-                s.push_str(&format!(
-                    r#"<ellipse cx="{}" cy="{}" rx="20" ry="10" fill="{skin_hi}" opacity="0.06"/>"#,
-                    cx + 2.0,
-                    hair_outer_top + 10.0
+                    r#"<path d="M{} {side_y} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="{hair}" filter="url(#stb)" opacity="0.60"/>"#,
+                    hl - 0.5, hl - 0.5, ht + 36.0, hl + 23.0,
+                    hr - 23.0, hr + 0.5, ht + 36.0, hr + 0.5,
+                    hr - 3.5, hr - 4.0, ht + 12.0, hr - 16.0,
+                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5,
                 ));
             }
             4 => {
-                // Swept back — slicked with volume
+                // Swept back
+                let crown = ht - 12.0;
+                let hli = ht + 20.0;
+                hairline = Some(hli);
                 s.push_str(&format!(
-                    r#"<path d="M{} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {} {} L{} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {} {}Z" fill="{hair}"/>"#,
-                    hl - 4.0, cy_cheek - 10.0, ht + 14.0, hl + 10.0, hair_inner_top - 6.0, hair_inner_top - 6.0,
-                    hr - 10.0, hair_inner_top - 6.0, ht + 14.0, hr + 4.0, cy_cheek - 10.0,
-                    hr + 4.0, hair_outer_top - 16.0, ht + 5.0, hr - 8.0, hair_outer_top - 24.0, hair_outer_top - 24.0,
-                    hl + 8.0, hair_outer_top - 24.0, ht + 5.0, hl - 4.0, hair_outer_top - 16.0,
-                ));
-                // Swept highlight
-                s.push_str(&format!(
-                    r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{hl_c}" stroke-width="1.0" fill="none" opacity="0.10"/>"#,
-                    hl + 10.0, hair_outer_top - 8.0, hair_outer_top - 20.0, hr - 10.0, hair_outer_top - 8.0
+                    r#"<path d="M{} {side_y} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    hl - 2.0, hl - 2.0, ht + 26.0, hl + 20.0,
+                    hr - 20.0, hr + 2.0, ht + 26.0, hr + 2.0,
+                    hr - 3.5, hr - 4.0, ht + 10.0, hr - 14.0,
+                    hl + 14.0, hl + 4.0, ht + 10.0, hl + 3.5,
                 ));
             }
             5 => {
-                // Afro — rounded volume
-                let afro_r = 60.0 + fw * 2.0;
+                // Afro — rounded ball around the upper head + curl texture
+                let hli = ht + 22.0;
+                hairline = Some(hli);
+                // Ball rests on the hairline: bottom edge ≈ hli + 6
+                let afro_ry = 30.0f32;
+                let afro_cy = hli + 6.0 - afro_ry;
+                let afro_rx = (hr - hl) / 2.0 + 12.0;
                 s.push_str(&format!(
-                    r#"<path d="
-                        M{} {}
-                        C{} {} {} {} {cx} {}
-                        C{} {} {} {} {} {}
-                        L{hr} {} C{hr} {} {} {} {cx} {}
-                        C{} {} {hl} {} {hl} {}Z
-                    " fill="{hair}"/>"#,
-                    cx - afro_r,
-                    cy_cheek - 4.0,
-                    cx - afro_r,
-                    ht - 14.0,
-                    cx - afro_r * 0.6,
-                    ht - 30.0,
-                    ht - 30.0,
-                    cx + afro_r * 0.6,
-                    ht - 30.0,
-                    cx + afro_r,
-                    ht - 14.0,
-                    cx + afro_r,
-                    cy_cheek - 4.0,
-                    cy_cheek - 14.0,
-                    ht + 18.0,
-                    hr - 14.0,
-                    hair_inner_top,
-                    hair_inner_top,
-                    hl + 14.0,
-                    hair_inner_top,
-                    ht + 18.0,
-                    cy_cheek - 14.0,
+                    r#"<ellipse cx="{cx}" cy="{afro_cy}" rx="{afro_rx}" ry="{afro_ry}" fill="url(#hg)" filter="url(#htx)"/>"#,
                 ));
-                // Afro texture — subtle volume rings
-                for dy in [-22.0f32, -12.0, -2.0] {
-                    s.push_str(&format!(
-                        r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{hd}" stroke-width="0.5" fill="none" opacity="0.08"/>"#,
-                        cx - afro_r * 0.7, ht + dy + 4.0, ht + dy, cx + afro_r * 0.7, ht + dy + 4.0
-                    ));
-                }
-                // Afro highlight
                 s.push_str(&format!(
-                    r#"<ellipse cx="{}" cy="{}" rx="{}" ry="14" fill="{hl_c}" opacity="0.06"/>"#,
-                    cx - 8.0,
-                    ht - 12.0,
-                    afro_r * 0.35
+                    r#"<ellipse cx="{cx}" cy="{afro_cy}" rx="{afro_rx}" ry="{afro_ry}" fill="{hair_dk}" filter="url(#stb)" opacity="0.45"/>"#,
                 ));
             }
             6 => {
-                // Bald — clean head with realistic sheen
-                // Subtle hairline shadow
+                // Bald — scalp sheen only
                 s.push_str(&format!(
-                    r#"<path d="M{hl} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {hr} {}" stroke="{hd}" stroke-width="0.5" fill="none" opacity="0.08"/>"#,
-                    cy_cheek - 22.0, ht + 18.0, hl + 14.0, hair_inner_top, hair_inner_top,
-                    hr - 14.0, hair_inner_top, ht + 18.0, cy_cheek - 22.0,
-                ));
-                // Head sheen — realistic light reflection
-                s.push_str(&format!(
-                    r#"<ellipse cx="{}" cy="{}" rx="24" ry="14" fill="{skin_hi}" opacity="0.12"/>"#,
-                    cx + 3.0,
-                    ht + 16.0
-                ));
-                s.push_str(&format!(
-                    r#"<ellipse cx="{}" cy="{}" rx="12" ry="8" fill="{skin_hi}" opacity="0.06"/>"#,
-                    cx + 6.0,
-                    ht + 12.0
+                    r#"<ellipse cx="{}" cy="{}" rx="22" ry="13" fill="{skin_hi2}" filter="url(#b3)" opacity="0.20"/>"#,
+                    cx + 2.0,
+                    ht + 14.0,
                 ));
             }
             7 => {
-                // Curly top — defined curls without cartoon bubbles
+                // Curly top — bumpy dome
+                let crown = ht - 9.0;
+                let hli = ht + 22.0;
+                hairline = Some(hli);
                 s.push_str(&format!(
-                    r#"<path d="M{hl} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {hr} {} L{hr} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {hl} {}Z" fill="{hair}"/>"#,
-                    cy_cheek - 10.0, ht + 14.0, hl + 10.0, hair_inner_top - 4.0, hair_inner_top - 4.0,
-                    hr - 10.0, hair_inner_top - 4.0, ht + 14.0, cy_cheek - 10.0,
-                    hair_outer_top - 10.0, ht + 4.0, hr - 8.0, hair_outer_top - 20.0, hair_outer_top - 20.0,
-                    hl + 8.0, hair_outer_top - 20.0, ht + 4.0, hair_outer_top - 10.0,
+                    r#"<path d="M{} {side_y} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    hl - 2.0, hl - 2.0, ht + 28.0, hl + 20.0,
+                    hr - 20.0, hr + 2.0, ht + 28.0, hr + 2.0,
+                    hr - 3.5, hr - 4.0, ht + 12.0, hr - 16.0,
+                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5,
                 ));
-                // Curl texture — wavy lines instead of circles
-                for (bx, dy) in [(-18.0f32, 0.0), (-6.0, -2.0), (6.0, -1.0), (18.0, 1.0)] {
+                // Curl clusters following the dome curve
+                let half_w = (hr - hl) / 2.0 - 2.0;
+                for k in 0..6 {
+                    let t = k as f32 / 5.0;
+                    let bx = hl + 16.0 + t * (hr - hl - 32.0);
+                    let rel = ((bx - cx) / half_w).clamp(-1.0, 1.0);
+                    let dome_y = crown + (1.0 - (1.0 - rel * rel).sqrt()) * (side_y - crown);
+                    let byy = dome_y + 6.0 + (jit(k, 8) * 2.0);
                     s.push_str(&format!(
-                        r#"<path d="M{} {} Q{} {} {} {} Q{} {} {} {}" stroke="{hd}" stroke-width="0.6" fill="none" opacity="0.15"/>"#,
-                        cx + bx - 4.0, hair_outer_top - 12.0 + dy,
-                        cx + bx - 2.0, hair_outer_top - 16.0 + dy,
-                        cx + bx, hair_outer_top - 12.0 + dy,
-                        cx + bx + 2.0, hair_outer_top - 8.0 + dy,
-                        cx + bx + 4.0, hair_outer_top - 12.0 + dy,
+                        r#"<circle cx="{bx:.1}" cy="{byy:.1}" r="{:.1}" fill="{hair}" filter="url(#b1)" opacity="0.45"/>"#,
+                        2.2 + jit(k, 6) * 1.2,
                     ));
                 }
-                // Volume highlight
-                s.push_str(&format!(
-                    r#"<ellipse cx="{}" cy="{}" rx="16" ry="6" fill="{hl_c}" opacity="0.07"/>"#,
-                    cx - 2.0,
-                    hair_outer_top - 8.0
-                ));
             }
             8 => {
-                // Long / flowing — past ears
+                // Long — crown dome + slim curtains hugging the face sides
+                // (back mass drawn earlier, behind the head)
+                let crown = ht - 8.0;
+                let hli = ht + 21.0;
+                hairline = Some(hli);
                 s.push_str(&format!(
-                    r#"<path d="M{} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {} {} L{} {} Q{} {} {} {} L{hl} {} Q{} {} {} {}Z" fill="{hair}"/>"#,
-                    hl - 6.0, cy_cheek + 14.0, ht + 14.0, hl + 8.0, hair_inner_top - 10.0, hair_inner_top - 10.0,
-                    hr - 8.0, hair_inner_top - 10.0, ht + 14.0, hr + 6.0, cy_cheek + 14.0,
-                    hr + 6.0, hair_outer_top - 20.0, hr - 4.0, hair_outer_top - 30.0, cx, hair_outer_top - 30.0,
-                    hair_outer_top - 20.0, hl + 4.0, hair_outer_top - 30.0, hl - 6.0, hair_outer_top - 20.0,
+                    r#"<path d="M{} {} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {} L{} {} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    hl - 4.0, cy_cheek - 2.0,
+                    hl - 4.0, ht + 30.0, hl + 21.0,
+                    hr - 21.0, hr + 4.0, ht + 30.0, hr + 4.0, cy_cheek - 2.0,
+                    hr - 3.5, cy_cheek - 2.0,
+                    hr - 4.0, ht + 12.0, hr - 16.0,
+                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5, cy_cheek - 2.0,
                 ));
-                // Hair strands
+            }
+            9 => {
+                // Fade — solid top, speckled sides
+                let crown = ht - 7.0;
+                let hli = ht + 22.0;
+                hairline = Some(hli);
+                let cut_l = hl + 7.0;
+                let cut_r = hr - 7.0;
                 s.push_str(&format!(
-                    r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{hl_c}" stroke-width="0.6" fill="none" opacity="0.08"/>"#,
-                    hl + 4.0, hair_outer_top - 4.0, hair_outer_top - 14.0, hr - 4.0, hair_outer_top - 4.0
+                    r#"<path d="M{cut_l} {} C{cut_l} {} {} {crown} {cx} {crown} C{} {crown} {cut_r} {} {cut_r} {} L{cut_r} {} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {cut_l} {}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    ht + 30.0, ht + 4.0, cut_l + 9.0,
+                    cut_r - 9.0, ht + 4.0, ht + 30.0,
+                    ht + 30.0, cut_r - 2.0, ht + 12.0, cut_r - 12.0,
+                    cut_l + 12.0, cut_l + 2.0, ht + 12.0, ht + 30.0,
                 ));
-                // Side strand shadows
-                for sx in [hl - 4.0, hr + 4.0] {
+                // Faded sides — curved tops so no box edges show
+                for (fx0, fx1) in [(hl - 0.5, cut_l + 2.0), (cut_r - 2.0, hr + 0.5)] {
                     s.push_str(&format!(
-                        r#"<path d="M{sx} {} L{sx} {}" stroke="{hd}" stroke-width="0.4" fill="none" opacity="0.10"/>"#,
-                        cy_cheek - 6.0, cy_cheek + 12.0
+                        r#"<path d="M{fx0} {side_y} Q{fx0} {} {} {} Q{fx1} {} {fx1} {}Z" fill="{hair}" filter="url(#stb)" opacity="0.30"/>"#,
+                        ht + 18.0,
+                        (fx0 + fx1) / 2.0,
+                        ht + 14.0,
+                        ht + 12.0,
+                        side_y,
                     ));
                 }
             }
-            9 => {
-                // Fade / undercut — short sides, longer top
-                // Top volume
-                s.push_str(&format!(
-                    r#"<path d="M{} {} C{} {} {} {} {cx} {} C{} {} {} {} {} {} L{} {} C{} {} {} {} {cx} {} C{} {} {} {} {} {}Z" fill="{hair}"/>"#,
-                    hl + 6.0, cy_cheek - 18.0, hl + 6.0, ht + 20.0, hl + 14.0, hair_inner_top - 2.0, hair_inner_top - 2.0,
-                    hr - 14.0, hair_inner_top - 2.0, hr - 6.0, ht + 20.0, hr - 6.0, cy_cheek - 18.0,
-                    hr - 6.0, hair_outer_top - 6.0, hr - 6.0, ht + 12.0, hr - 12.0, hair_outer_top - 16.0, hair_outer_top - 16.0,
-                    hl + 12.0, hair_outer_top - 16.0, hl + 6.0, ht + 12.0, hl + 6.0, hair_outer_top - 6.0,
-                ));
-                // Faded sides — gradient opacity
-                s.push_str(&format!(
-                    r#"<path d="M{hl} {} C{hl} {} {} {} {} {} L{} {} L{hl} {}Z" fill="{hair}" opacity="0.18"/>"#,
-                    cy_cheek - 6.0, ht + 18.0, hl + 14.0, ht + 8.0, hl + 6.0, ht + 8.0,
-                    hl + 6.0, cy_cheek - 18.0, cy_cheek + 4.0
-                ));
-                s.push_str(&format!(
-                    r#"<path d="M{hr} {} C{hr} {} {} {} {} {} L{} {} L{hr} {}Z" fill="{hair}" opacity="0.18"/>"#,
-                    cy_cheek - 6.0, ht + 18.0, hr - 14.0, ht + 8.0, hr - 6.0, ht + 8.0,
-                    hr - 6.0, cy_cheek - 18.0, cy_cheek + 4.0
-                ));
-                // Fade line
-                s.push_str(&format!(
-                    r#"<path d="M{hl} {} L{} {}" stroke="{hd}" stroke-width="0.3" fill="none" opacity="0.12"/>"#,
-                    cy_cheek - 6.0, hl + 6.0, cy_cheek - 18.0
-                ));
-                s.push_str(&format!(
-                    r#"<path d="M{hr} {} L{} {}" stroke="{hd}" stroke-width="0.3" fill="none" opacity="0.12"/>"#,
-                    cy_cheek - 6.0, hr - 6.0, cy_cheek - 18.0
-                ));
-            }
             10 => {
-                // Mohawk — narrow strip, clean faded sides
-                // Central strip
+                // Faux-hawk — raised centre, tightly faded sides
+                let crown = ht - 8.0;
+                let strip_l = cx - 21.0;
+                let strip_r = cx + 21.0;
+                let hli = ht + 24.0;
                 s.push_str(&format!(
-                    r#"<path d="M{} {} C{} {} {} {} {cx} {} C{} {} {} {} {} {} L{} {} C{} {} {} {} {cx} {} C{} {} {} {} {} {}Z" fill="{hair}"/>"#,
-                    cx - 14.0, cy_cheek - 22.0, cx - 14.0, ht + 10.0, cx - 10.0, hair_outer_top - 6.0, hair_outer_top - 6.0,
-                    cx + 10.0, hair_outer_top - 6.0, cx + 14.0, ht + 10.0, cx + 14.0, cy_cheek - 22.0,
-                    cx + 14.0, hair_outer_top - 10.0, cx + 12.0, ht + 4.0, cx + 8.0, hair_outer_top - 16.0, hair_outer_top - 16.0,
-                    cx - 8.0, hair_outer_top - 16.0, cx - 12.0, ht + 4.0, cx - 14.0, hair_outer_top - 10.0,
+                    r#"<path d="M{strip_l} {} C{strip_l} {} {} {crown} {cx} {crown} C{} {crown} {strip_r} {} {strip_r} {} L{strip_r} {hli} Q{cx} {} {strip_l} {hli}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    ht + 26.0, ht + 2.0, strip_l + 12.0,
+                    strip_r - 12.0, ht + 2.0, ht + 26.0,
+                    hli - 5.0,
                 ));
-                // Faded sides — very transparent
+                // Tight faded sides hugging the silhouette — the bare gap
+                // between fade and strip is how a real high fade looks
+                for (fx0, fx1) in [(hl - 0.5, hl + 10.0), (hr - 10.0, hr + 0.5)] {
+                    s.push_str(&format!(
+                        r#"<path d="M{fx0} {} Q{fx0} {} {} {} Q{fx1} {} {fx1} {}Z" fill="{hair}" filter="url(#stb)" opacity="0.35"/>"#,
+                        side_y - 10.0,
+                        ht + 14.0,
+                        (fx0 + fx1) / 2.0,
+                        ht + 10.0,
+                        ht + 16.0,
+                        side_y - 10.0,
+                    ));
+                }
                 s.push_str(&format!(
-                    r#"<path d="M{hl} {} C{hl} {} {} {} {} {} L{} {} L{hl} {}Z" fill="{hair}" opacity="0.12"/>"#,
-                    cy_cheek - 6.0, ht + 18.0, hl + 14.0, ht + 8.0, cx - 14.0, ht + 8.0,
-                    cx - 14.0, cy_cheek - 22.0, cy_cheek + 4.0
-                ));
-                s.push_str(&format!(
-                    r#"<path d="M{hr} {} C{hr} {} {} {} {} {} L{} {} L{hr} {}Z" fill="{hair}" opacity="0.12"/>"#,
-                    cy_cheek - 6.0, ht + 18.0, hr - 14.0, ht + 8.0, cx + 14.0, ht + 8.0,
-                    cx + 14.0, cy_cheek - 22.0, cy_cheek + 4.0
+                    r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{skin_dk2}" stroke-width="2" fill="none" filter="url(#b3)" opacity="0.12"/>"#,
+                    strip_l + 3.0,
+                    hli + 5.0,
+                    hli + 1.0,
+                    strip_r - 3.0,
+                    hli + 5.0,
                 ));
             }
             _ => {
-                // Cornrows / tight braids
+                // Cornrows — tight dome with braided row lines
+                let crown = ht - 4.0;
+                let hli = ht + 23.0;
+                hairline = Some(hli);
                 s.push_str(&format!(
-                    r#"<path d="M{hl} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {hr} {} L{hr} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {hl} {}Z" fill="{hair}"/>"#,
-                    cy_cheek - 10.0, ht + 14.0, hl + 10.0, hair_inner_top - 4.0, hair_inner_top - 4.0,
-                    hr - 10.0, hair_inner_top - 4.0, ht + 14.0, cy_cheek - 10.0,
-                    hair_outer_top - 8.0, ht + 6.0, hr - 8.0, hair_outer_top - 16.0, hair_outer_top - 16.0,
-                    hl + 8.0, hair_outer_top - 16.0, ht + 6.0, hair_outer_top - 8.0,
+                    r#"<path d="M{} {side_y} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    hl - 1.0, hl - 1.0, ht + 34.0, hl + 22.0,
+                    hr - 22.0, hr + 1.0, ht + 34.0, hr + 1.0,
+                    hr - 3.5, hr - 4.0, ht + 12.0, hr - 16.0,
+                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5,
                 ));
-                // Cornrow lines — evenly spaced curves
-                for rx in [-16.0f32, -8.0, 0.0, 8.0, 16.0] {
+                // Braid lines stay inside the hair mass — stop at the hairline
+                for k in 0..7 {
+                    let rx_off = (k as f32 - 3.0) * 6.5;
                     s.push_str(&format!(
-                        r#"<path d="M{} {} Q{} {} {} {}" stroke="{hd}" stroke-width="0.6" fill="none" opacity="0.18"/>"#,
-                        cx + rx, hair_outer_top - 10.0,
-                        cx + rx * 0.95, (hair_outer_top + cy_cheek - 14.0) / 2.0,
-                        cx + rx * 0.85, cy_cheek - 14.0
+                        r#"<path d="M{} {} Q{} {} {} {}" stroke="{hair_dk}" stroke-width="0.7" fill="none" filter="url(#b1)" opacity="0.30"/>"#,
+                        cx + rx_off, crown + 2.0,
+                        cx + rx_off * 0.97, (crown + hli) / 2.0,
+                        cx + rx_off * 0.92, hli - 2.0,
                     ));
                 }
             }
         }
 
-        if hair_st != 6 {
-            for i in 0..28 {
-                let t = i as f32 / 27.0;
-                let x0 = hl + 9.0 + t * (hr - hl - 18.0);
-                let y0 = hair_outer_top - 7.0 + ((i * 7 + texture_seed) % 12) as f32;
-                let x1 = x0 + (0.5 - t) * 6.0;
-                let y1 = hair_inner_top + 7.0 + ((i * 5 + texture_seed) % 10) as f32;
-                s.push_str(&format!(
-                    r#"<path d="M{x0} {y0} Q{} {} {x1} {y1}" stroke="{}" stroke-width="0.38" fill="none" opacity="0.20" stroke-linecap="round"/>"#,
-                    (x0 + x1) / 2.0, y0 - 4.0, if i % 3 == 0 { hd.clone() } else { h_mid.clone() }
-                ));
-            }
+        // Hairline cast shadow + wispy edge strands — sells the transition
+        if let Some(hli) = hairline {
+            let shadow_op = if hair_st == 3 { 0.09 } else { 0.15 };
+            s.push_str(&format!(
+                r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{skin_dk2}" stroke-width="2.6" fill="none" filter="url(#b3)" opacity="{shadow_op}"/>"#,
+                hl + 7.0,
+                hli + 6.0,
+                hli + 1.0,
+                hr - 7.0,
+                hli + 6.0,
+            ));
         }
     }
 
-    // Skin texture overlay — breaks up flat plastic look
+    // Close the tilted head group
+    s.push_str("</g>");
+
+    // ── Jersey / shoulders ──────────────────────────────────
+    let jersey_d = "M8 250 C20 224 48 216 76 213 Q100 208 124 213 C152 216 180 224 192 250Z";
     s.push_str(&format!(
-        r#"<rect x="{}" y="{}" width="{}" height="{}" filter="url(#tx)" opacity="0.03" fill="none"/>"#,
-        hl - 10.0, ht - 5.0, (hr - hl) + 20.0, chy - ht + 15.0
+        r#"<defs><clipPath id="jc"><path d="{jersey_d}"/></clipPath></defs>"#
     ));
+    s.push_str(&format!(r#"<path d="{jersey_d}" fill="url(#jg)"/>"#));
+    s.push_str(r#"<g clip-path="url(#jc)">"#);
+    // Head cast shadow onto the chest
+    s.push_str(&format!(
+        r##"<ellipse cx="{cx}" cy="220" rx="30" ry="10" fill="#000" filter="url(#b3)" opacity="0.30"/>"##,
+    ));
+    // Fabric folds
+    for (fx, fy) in [(cx - 30.0, 232.0f32), (cx + 28.0, 234.0)] {
+        s.push_str(&format!(
+            r#"<path d="M{fx} {fy} Q{} {} {} 250" stroke="{jersey_dark}" stroke-width="3" fill="none" filter="url(#b2)" opacity="0.5"/>"#,
+            fx + 3.0,
+            fy + 8.0,
+            fx + 1.0,
+        ));
+    }
+    s.push_str("</g>");
+    // Crew collar
+    s.push_str(&format!(
+        r#"<path d="M{} 219 Q{cx} 231 {} 219 L{} 225 Q{cx} 238 {} 225Z" fill="{jersey_dark}" opacity="0.92"/>"#,
+        cx - 24.0,
+        cx + 24.0,
+        cx + 26.0,
+        cx - 26.0,
+    ));
+
+    // ── Vignette ────────────────────────────────────────────
+    s.push_str(r#"<rect width="200" height="250" fill="url(#vig)"/>"#);
 
     s.push_str("</svg>");
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Dev-only contact sheet: writes one SVG file per face (inline SVGs in a
+    /// single HTML document would collide on gradient/filter ids) plus a
+    /// faces.html grid into $FACE_PREVIEW_DIR for visual review.
+    /// Run with:
+    ///   FACE_PREVIEW_DIR=<dir> cargo test -p web --lib preview_contact_sheet -- --ignored
+    #[test]
+    #[ignore]
+    fn preview_contact_sheet() {
+        let Ok(dir) = std::env::var("FACE_PREVIEW_DIR") else {
+            return;
+        };
+        let root = std::path::Path::new(&dir);
+
+        let dists = [
+            (
+                "white",
+                SkinDist {
+                    white: 100,
+                    black: 0,
+                    _metis: 0,
+                },
+            ),
+            (
+                "metis",
+                SkinDist {
+                    white: 0,
+                    black: 0,
+                    _metis: 100,
+                },
+            ),
+            (
+                "black",
+                SkinDist {
+                    white: 0,
+                    black: 100,
+                    _metis: 0,
+                },
+            ),
+        ];
+        let ages: [u8; 5] = [17, 21, 26, 31, 36];
+
+        let mut html = String::with_capacity(1 << 16);
+        html.push_str(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><style>\
+             body{background:#222;color:#ccc;font:12px sans-serif;margin:12px}\
+             .row{display:flex;gap:6px;margin-bottom:6px;align-items:flex-end}\
+             .cell{text-align:center}\
+             .cell img{width:150px;height:auto;border-radius:6px}\
+             .small img{width:44px}\
+             h2{color:#eee;margin:14px 0 6px}\
+             </style></head><body>",
+        );
+
+        for (dist_name, dist) in dists {
+            html.push_str(&format!("<h2>{dist_name}</h2>"));
+            for age in ages {
+                html.push_str("<div class=\"row\">");
+                for i in 0..8u32 {
+                    let player_id = 2_000_000_000u32 + age as u32 * 1000 + i * 77 + 13;
+                    let svg = generate_face_svg(player_id, age, dist);
+                    let fname = format!("face_{dist_name}_{age}_{i}.svg");
+                    std::fs::write(root.join(&fname), svg).expect("write face svg");
+                    html.push_str(&format!(
+                        "<div class=\"cell\"><img src=\"{fname}\"><div>age {age} #{i}</div></div>"
+                    ));
+                }
+                html.push_str("</div>");
+            }
+            // Avatar-size row — the faces must still read at list size
+            html.push_str("<div class=\"row small\">");
+            for i in 0..8u32 {
+                html.push_str(&format!(
+                    "<div class=\"cell\"><img src=\"face_{dist_name}_26_{i}.svg\"></div>"
+                ));
+            }
+            html.push_str("</div>");
+        }
+        html.push_str("</body></html>");
+
+        std::fs::write(root.join("faces.html"), html).expect("write contact sheet");
+    }
 }
