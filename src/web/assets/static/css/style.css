@@ -10779,14 +10779,44 @@ html:has(.fm-workers-page) {
     border-left-color: #e5442c;
 }
 
-/* --- Graph stage: transparent, sits directly on the panel --- */
+/* --- Graph stage: transparent, sits directly on the panel. Height is set
+   from JS to fit the formation rows plus their name labels, so the bottom
+   line is never clipped against the window. --- */
 .fm-rel-stage {
     position: relative;
     margin: 12px;
-    height: clamp(440px, 62vh, 680px);
+    min-height: 360px;
     border-radius: 4px;
     overflow: hidden;
     background: transparent;
+}
+
+/* --- Formation bands: hairline pitch-line per row, tag at the left edge.
+   Sit behind the edges + photos (z-index 0), so the line only shows in the
+   gaps between players — reading as a tactics-board guide, not a strike
+   through the faces. --- */
+.fm-rel-rowline {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 0;
+    border-top: 1px dashed rgba(255, 255, 255, 0.1);
+    transform: translateY(-0.5px);
+    pointer-events: none;
+    z-index: 0;
+}
+
+.fm-rel-rowtag {
+    position: absolute;
+    left: 4px;
+    transform: translateY(-50%);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    color: rgba(154, 164, 173, 0.5);
+    text-transform: uppercase;
+    pointer-events: none;
+    z-index: 0;
 }
 
 .fm-rel-edges {
@@ -10876,6 +10906,29 @@ html:has(.fm-workers-page) {
         0 3px 8px rgba(0, 0, 0, 0.5);
 }
 
+/* Ego graph subject: the player whose page this is. Larger, with a bright
+   accent ring so they clearly read as the hub the web hangs beneath. */
+.fm-rel-node.fm-rel-node-root {
+    width: 66px;
+    height: 80px;
+    z-index: 3;
+    cursor: default;
+}
+
+.fm-rel-node.fm-rel-node-root .fm-rel-photo {
+    width: 66px;
+    height: 80px;
+    border-color: #7fd4ff;
+    box-shadow:
+        0 0 16px rgba(90, 190, 255, 0.7),
+        0 3px 10px rgba(0, 0, 0, 0.55);
+}
+
+.fm-rel-node.fm-rel-node-root .fm-rel-name {
+    font-size: 13px;
+    max-width: 140px;
+}
+
 .fm-rel-node:hover .fm-rel-photo {
     transform: scale(1.08);
 }
@@ -10922,6 +10975,38 @@ html:has(.fm-workers-page) {
         0 3px 10px rgba(0, 0, 0, 0.6);
 }
 
+/* Linked teammates take the colour of the thread that joins them to the
+   hovered player, so the relation is legible straight off the photo border.
+   Higher specificity than the GK gold border, so a linked keeper recolours
+   for the duration of the hover. */
+.fm-rel-stage.fm-rel-focus .fm-rel-node.is-linked.rel-bond .fm-rel-photo {
+    border-color: #35d36a;
+    box-shadow:
+        0 0 16px rgba(53, 211, 106, 0.75),
+        0 3px 8px rgba(0, 0, 0, 0.5);
+}
+
+.fm-rel-stage.fm-rel-focus .fm-rel-node.is-linked.rel-friendly .fm-rel-photo {
+    border-color: #4ec95e;
+    box-shadow:
+        0 0 15px rgba(78, 201, 94, 0.6),
+        0 3px 8px rgba(0, 0, 0, 0.5);
+}
+
+.fm-rel-stage.fm-rel-focus .fm-rel-node.is-linked.rel-tension .fm-rel-photo {
+    border-color: #e0a23a;
+    box-shadow:
+        0 0 15px rgba(224, 162, 58, 0.7),
+        0 3px 8px rgba(0, 0, 0, 0.5);
+}
+
+.fm-rel-stage.fm-rel-focus .fm-rel-node.is-linked.rel-rivalry .fm-rel-photo {
+    border-color: #e5442c;
+    box-shadow:
+        0 0 16px rgba(229, 68, 44, 0.78),
+        0 3px 8px rgba(0, 0, 0, 0.5);
+}
+
 .fm-rel-stage.fm-rel-focus .fm-rel-edge {
     opacity: 0.1;
 }
@@ -10933,9 +11018,5 @@ html:has(.fm-workers-page) {
 @media (max-width: 640px) {
     .fm-rel-summary {
         grid-template-columns: repeat(2, 1fr);
-    }
-
-    .fm-rel-stage {
-        height: clamp(380px, 70vh, 560px);
     }
 }

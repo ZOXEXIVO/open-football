@@ -3646,6 +3646,7 @@ mod tests {
             match_importance: 0.8,
             repeated: false,
             is_friendly: false,
+            explained_by_coach: false,
         };
         assert_eq!(
             SelectionRender::headline_key_for(&ctx, true),

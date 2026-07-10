@@ -7,6 +7,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::Player;
+use core::PlayerFieldPositionGroup;
 use core::SimulatorData;
 use core::Team;
 use core::TeamType;
@@ -60,13 +61,21 @@ pub struct RelNode {
     pub last_name: String,
     pub is_generated: bool,
     pub is_goalkeeper: bool,
+    /// Formation row for the layered layout: 0 = GK, 1 = DEF, 2 = MID,
+    /// 3 = FWD. The client pins each node to its row band and lets it slide
+    /// only sideways, so the social web reads as the squad's shape.
+    pub row: u8,
+    /// True only for the subject of a player-centric (ego) graph — the
+    /// client lifts this node into its own band above the formation rows.
+    /// Always false in the whole-squad team graph.
+    pub is_root: bool,
 }
 
 /// One edge in the client payload. Kept terse (`s`/`t`/`k`/`p`/`w`) because
 /// it's inlined into the page as JSON and read straight back by the layout
 /// script — no need for verbose keys on the wire.
 #[derive(Serialize)]
-struct EdgeJson {
+pub(crate) struct EdgeJson {
     /// source node index
     s: usize,
     /// target node index
@@ -107,7 +116,12 @@ pub async fn team_relations_get_action(
 
     let league = team.league_id.and_then(|id| simulator_data.league(id));
 
-    let graph = RelationsGraph::build(team);
+    // Pool every squad that shares this team's dressing-room web, so the
+    // graph spans the whole collection (Main + Reserve, or the older-youth
+    // sides together) rather than a single registered squad.
+    let pool = RelationsGroup::collect_pool(team, simulator_data);
+
+    let graph = RelationsGraph::build(&pool);
 
     let neighborhood = TeamNeighborhood::for_club(team.club_id, simulator_data, &i18n)?;
     let neighbor_refs: Vec<(&str, &str)> = neighborhood
@@ -173,22 +187,92 @@ pub async fn team_relations_get_action(
     })
 }
 
+/// Which club teams share one dressing-room relations web.
+///
+/// The graph is drawn per *collection*, not per registered squad, so the
+/// social web spans everyone who trains together:
+/// - `Senior` — the first team plus the brand-sharing `Reserve` side.
+/// - `Youth` — the older academy squads (U19..U23) pooled into one web.
+/// - `Solo` — U18, and the senior reserve sides that carry their own brand
+///   (`B` / `Second`), each keep a self-contained collection.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RelationsGroup {
+    Senior,
+    Youth,
+    Solo(TeamType),
+}
+
+impl RelationsGroup {
+    fn of(team_type: TeamType) -> Self {
+        match team_type {
+            TeamType::Main | TeamType::Reserve => RelationsGroup::Senior,
+            TeamType::U19 | TeamType::U20 | TeamType::U21 | TeamType::U23 => RelationsGroup::Youth,
+            // U18, B, Second — one collection each.
+            other => RelationsGroup::Solo(other),
+        }
+    }
+
+    /// Pool every squad that shares `team`'s dressing-room web into one
+    /// player list, deduped by id. Shared by the whole-squad team graph and
+    /// the player-centric ego graph so both draw from the same collection
+    /// (Main + Reserve, the older-youth sides together, or a self-contained
+    /// B / Second / U18 side). Falls back to the single team when the club
+    /// can't be resolved.
+    pub(crate) fn collect_pool<'a>(team: &'a Team, data: &'a SimulatorData) -> Vec<&'a Player> {
+        let group = RelationsGroup::of(team.team_type);
+        let mut seen_ids: HashSet<u32> = HashSet::new();
+        let mut pool: Vec<&Player> = Vec::new();
+        match data.club(team.club_id) {
+            Some(club) => {
+                for sibling in &club.teams.teams {
+                    if RelationsGroup::of(sibling.team_type) != group {
+                        continue;
+                    }
+                    for player in sibling.players() {
+                        if seen_ids.insert(player.id) {
+                            pool.push(player);
+                        }
+                    }
+                }
+            }
+            None => {
+                for player in team.players() {
+                    if seen_ids.insert(player.id) {
+                        pool.push(player);
+                    }
+                }
+            }
+        }
+        pool
+    }
+}
+
 /// Squad social graph: nodes are players who take part in at least one
 /// strong (good or hostile) relationship, edges are those relationships.
 ///
 /// Relations are stored per-player and are directional — A's view of B can
 /// differ from B's view of A. For an undirected "who-likes-whom" map we fold
-/// both directions into a single edge, averaging the levels and OR-ing the
-/// rivalry flag, then bucket the result into a tier. Only relationships
+/// both directions into a single edge, averaging the levels and OR-ing each
+/// side's open-rivalry state, then bucket the result into a tier. Only relationships
 /// between two *current* squad members are considered so every node resolves
 /// to a real photo + slug.
-struct RelationsGraph {
-    nodes: Vec<RelNode>,
-    edges: Vec<EdgeJson>,
-    bond_count: usize,
-    friendly_count: usize,
-    tension_count: usize,
-    rivalry_count: usize,
+pub(crate) struct RelationsGraph {
+    pub(crate) nodes: Vec<RelNode>,
+    pub(crate) edges: Vec<EdgeJson>,
+    pub(crate) bond_count: usize,
+    pub(crate) friendly_count: usize,
+    pub(crate) tension_count: usize,
+    pub(crate) rivalry_count: usize,
+}
+
+/// A folded, tier-classified relationship between two pooled players, before
+/// it's turned into node-index edge payload.
+struct RawEdge {
+    a: u32,
+    b: u32,
+    kind: &'static str,
+    polarity: i8,
+    weight: f32,
 }
 
 /// Combined level at/above which a positive relationship is a warm friendship.
@@ -197,18 +281,61 @@ const FRIENDLY_FLOOR: f32 = 20.0;
 const BOND_FLOOR: f32 = 55.0;
 /// Combined level at/below which a negative relationship shows as tension.
 const TENSION_CEIL: f32 = -20.0;
-/// …and at/below which (or when a rivalry is flagged) it's an open rivalry.
+/// …and at/below which (or when either side's feud is declared) it's an open rivalry.
 const RIVALRY_CEIL: f32 = -55.0;
 
 impl RelationsGraph {
-    fn build(team: &Team) -> Self {
-        let players: Vec<&Player> = team.players();
-        let team_ids: HashSet<u32> = players.iter().map(|p| p.id).collect();
+    /// Whole-squad graph: every kept-tier relationship between two pooled
+    /// players, and every player touched by one becomes a node.
+    pub(crate) fn build(players: &[&Player]) -> Self {
+        let raw = Self::classify(Self::fold_pairs(players));
 
-        // Fold both directions of each relationship into one entry keyed by
-        // the ordered (low_id, high_id) pair: (level_sum, samples, rivalry).
+        // Node set = players touched by a kept edge.
+        let mut touched: HashSet<u32> = HashSet::new();
+        for e in &raw {
+            touched.insert(e.a);
+            touched.insert(e.b);
+        }
+
+        Self::assemble(players, raw, &touched, None)
+    }
+
+    /// Player-centric (ego) graph: the subject plus every teammate they share
+    /// a kept-tier relationship with. Edges among those neighbours are kept
+    /// too, so the subject's corner of the dressing room reads in full, but
+    /// nobody outside their direct circle is drawn. The subject is flagged
+    /// `is_root` so the client lifts it onto its own band above the formation.
+    pub(crate) fn build_ego(players: &[&Player], root_id: u32) -> Self {
+        let raw = Self::classify(Self::fold_pairs(players));
+
+        // Keep the root and the other endpoint of every kept edge touching it.
+        let mut keep: HashSet<u32> = HashSet::new();
+        keep.insert(root_id);
+        for e in &raw {
+            if e.a == root_id {
+                keep.insert(e.b);
+            } else if e.b == root_id {
+                keep.insert(e.a);
+            }
+        }
+
+        // Drop neighbour-to-outsider threads: keep an edge only when both
+        // ends are the root or one of its direct neighbours.
+        let raw: Vec<RawEdge> = raw
+            .into_iter()
+            .filter(|e| keep.contains(&e.a) && keep.contains(&e.b))
+            .collect();
+
+        Self::assemble(players, raw, &keep, Some(root_id))
+    }
+
+    /// Fold both directions of every relationship between two pooled players
+    /// into one entry keyed by the ordered (low_id, high_id) pair:
+    /// (level_sum, samples, any-side-open-rivalry).
+    fn fold_pairs(players: &[&Player]) -> HashMap<(u32, u32), (f32, u32, bool)> {
+        let team_ids: HashSet<u32> = players.iter().map(|p| p.id).collect();
         let mut pairs: HashMap<(u32, u32), (f32, u32, bool)> = HashMap::new();
-        for player in &players {
+        for player in players {
             let owner = player.id;
             for (target_id, rel) in player.relations().player_relations_iter() {
                 let target = *target_id;
@@ -223,37 +350,26 @@ impl RelationsGraph {
                 let entry = pairs.entry(key).or_insert((0.0, 0, false));
                 entry.0 += rel.level;
                 entry.1 += 1;
-                if !rel.rivalry_with.is_empty() {
+                if rel.is_open_rivalry() {
                     entry.2 = true;
                 }
             }
         }
+        pairs
+    }
 
-        // Classify each folded pair into a tier; drop neutral pairs.
-        struct RawEdge {
-            a: u32,
-            b: u32,
-            kind: &'static str,
-            polarity: i8,
-            weight: f32,
-        }
+    /// Bucket each folded pair into a tier, dropping neutral pairs.
+    fn classify(pairs: HashMap<(u32, u32), (f32, u32, bool)>) -> Vec<RawEdge> {
         let mut raw: Vec<RawEdge> = Vec::new();
-        let (mut bond_count, mut friendly_count, mut tension_count, mut rivalry_count) =
-            (0usize, 0usize, 0usize, 0usize);
-
         for ((a, b), (sum, count, rivalry)) in pairs {
             let combined = sum / count.max(1) as f32;
             let (kind, polarity) = if rivalry || combined <= RIVALRY_CEIL {
-                rivalry_count += 1;
                 ("rivalry", -1i8)
             } else if combined <= TENSION_CEIL {
-                tension_count += 1;
                 ("tension", -1)
             } else if combined >= BOND_FLOOR {
-                bond_count += 1;
                 ("bond", 1)
             } else if combined >= FRIENDLY_FLOOR {
-                friendly_count += 1;
                 ("friendly", 1)
             } else {
                 continue;
@@ -267,29 +383,46 @@ impl RelationsGraph {
                 weight,
             });
         }
+        raw
+    }
 
-        // Node set = players touched by a kept edge, in stable squad order so
-        // the layout is reproducible across reloads.
-        let mut degree: HashMap<u32, usize> = HashMap::new();
+    /// Turn the kept raw edges into the final node list + client edge payload.
+    /// Nodes are the pooled players whose id is in `keep`, in stable squad
+    /// order; when `root_id` is set that player is emitted first (node 0) and
+    /// flagged `is_root`. Tier counts are taken from the kept edges.
+    fn assemble(
+        players: &[&Player],
+        raw: Vec<RawEdge>,
+        keep: &HashSet<u32>,
+        root_id: Option<u32>,
+    ) -> Self {
+        let (mut bond_count, mut friendly_count, mut tension_count, mut rivalry_count) =
+            (0usize, 0usize, 0usize, 0usize);
         for e in &raw {
-            *degree.entry(e.a).or_insert(0) += 1;
-            *degree.entry(e.b).or_insert(0) += 1;
+            match e.kind {
+                "bond" => bond_count += 1,
+                "friendly" => friendly_count += 1,
+                "tension" => tension_count += 1,
+                _ => rivalry_count += 1,
+            }
         }
 
         let mut index_of: HashMap<u32, usize> = HashMap::new();
         let mut nodes: Vec<RelNode> = Vec::new();
-        for player in &players {
-            if !degree.contains_key(&player.id) {
+
+        // Root first so it lands at node 0 and the client can pin it on top.
+        if let Some(rid) = root_id {
+            if let Some(player) = players.iter().find(|p| p.id == rid) {
+                index_of.insert(rid, nodes.len());
+                nodes.push(Self::node_for(player, true));
+            }
+        }
+        for player in players {
+            if Some(player.id) == root_id || !keep.contains(&player.id) {
                 continue;
             }
             index_of.insert(player.id, nodes.len());
-            nodes.push(RelNode {
-                player_id: player.id,
-                slug: player.slug(),
-                last_name: player.full_name.display_last_name().to_string(),
-                is_generated: player.is_generated(),
-                is_goalkeeper: player.positions.is_goalkeeper(),
-            });
+            nodes.push(Self::node_for(player, false));
         }
 
         let edges: Vec<EdgeJson> = raw
@@ -312,6 +445,24 @@ impl RelationsGraph {
             friendly_count,
             tension_count,
             rivalry_count,
+        }
+    }
+
+    fn node_for(player: &Player, is_root: bool) -> RelNode {
+        let row = match player.position().position_group() {
+            PlayerFieldPositionGroup::Goalkeeper => 0u8,
+            PlayerFieldPositionGroup::Defender => 1,
+            PlayerFieldPositionGroup::Midfielder => 2,
+            PlayerFieldPositionGroup::Forward => 3,
+        };
+        RelNode {
+            player_id: player.id,
+            slug: player.slug(),
+            last_name: player.full_name.display_last_name().to_string(),
+            is_generated: player.is_generated(),
+            is_goalkeeper: player.positions.is_goalkeeper(),
+            row,
+            is_root,
         }
     }
 }

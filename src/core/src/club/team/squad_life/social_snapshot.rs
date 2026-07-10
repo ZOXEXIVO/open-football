@@ -18,6 +18,7 @@
 //! per-relation noise). Keeping the team number and the per-player
 //! number on different stores makes their meanings unambiguous.
 
+use crate::club::relations::PlayerRelation;
 use crate::club::staff::{CoachPlayerBond, CoachPlayerBondBreakdown};
 use crate::club::team::Team;
 use crate::{Player, PlayerCollection, Staff};
@@ -671,13 +672,13 @@ struct DirectionSample {
 }
 
 impl DirectionSample {
-    fn from_relation(rel: &crate::club::relations::PlayerRelation) -> Self {
+    fn from_relation(rel: &PlayerRelation) -> Self {
         let level_axis = (rel.level + 100.0) / 2.0;
         let harmony =
             (level_axis * 0.4 + rel.trust * 0.3 + rel.professional_respect * 0.3).clamp(0.0, 100.0);
 
         let mut conflict = 0.0f32;
-        let is_rivalry = !rel.rivalry_with.is_empty();
+        let is_rivalry = rel.is_open_rivalry();
         if rel.level <= -75.0 {
             conflict += 25.0;
         } else if rel.level <= -50.0 {
@@ -1417,26 +1418,24 @@ mod tests {
 
     /// Push a synthetic rivalry / hostile pair into both directions of
     /// the relation graph. The pair walk picks both sides up and the
-    /// conflict_density read shows the resulting density.
+    /// conflict_density read shows the resulting density. Sustained
+    /// competition friction — the shape the behaviour passes produce
+    /// over weeks — so the pair crosses the open-rivalry declaration
+    /// bar instead of being flag-stamped by a single event.
     fn install_rivalry(team: &mut Team, a_id: u32, b_id: u32) {
         use crate::ChangeType;
-        use crate::RelationshipChange;
         let date = SnapshotFixture::today();
         if let Some(p) = team.players.players.iter_mut().find(|p| p.id == a_id) {
-            for _ in 0..10 {
+            for _ in 0..20 {
                 p.relations
-                    .update_with_type(b_id, -0.8, ChangeType::PersonalConflict, date);
+                    .update_with_type(b_id, -1.0, ChangeType::CompetitionRivalry, date);
             }
         }
         if let Some(p) = team.players.players.iter_mut().find(|p| p.id == b_id) {
-            for _ in 0..10 {
+            for _ in 0..20 {
                 p.relations
-                    .update_with_type(a_id, -0.8, ChangeType::PersonalConflict, date);
+                    .update_with_type(a_id, -1.0, ChangeType::CompetitionRivalry, date);
             }
-            // Mark the rivalry symmetrically so conflict_contribution
-            // picks it up.
-            let change = RelationshipChange::negative(ChangeType::CompetitionRivalry, 0.9);
-            p.relations.update_player_relationship(a_id, change, date);
         }
     }
 
@@ -1731,7 +1730,6 @@ mod tests {
         // densities snap back to the peaceful baseline.
         use crate::ChangeType;
         use crate::PlayerClubContract;
-        use crate::RelationshipChange;
         let date = SnapshotFixture::today();
 
         let mut players: Vec<Player> = (1..=4)
@@ -1740,22 +1738,17 @@ mod tests {
         let baseline_team = SnapshotFixture::build_team(players.clone());
         let baseline = TeamSocialSnapshot::build(&baseline_team, date);
 
-        // Mirror `install_rivalry`: drive PersonalConflict updates AND
-        // mark a CompetitionRivalry so the conflict_contribution lights
-        // up regardless of exact level threshold.
-        for _ in 0..15 {
+        // Mirror `install_rivalry`: sustained competition friction so
+        // the pair crosses the open-rivalry declaration bar and the
+        // conflict_contribution lights up.
+        for _ in 0..20 {
             players[0]
                 .relations
-                .update_with_type(2, -0.8, ChangeType::PersonalConflict, date);
+                .update_with_type(2, -1.0, ChangeType::CompetitionRivalry, date);
             players[1]
                 .relations
-                .update_with_type(1, -0.8, ChangeType::PersonalConflict, date);
+                .update_with_type(1, -1.0, ChangeType::CompetitionRivalry, date);
         }
-        players[1].relations.update_player_relationship(
-            1,
-            RelationshipChange::negative(ChangeType::CompetitionRivalry, 0.9),
-            date,
-        );
 
         // First confirm the hostility registers when both players are
         // active — guards the test from a no-op state.

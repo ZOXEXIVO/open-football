@@ -32,6 +32,13 @@ impl TeamBehaviour {
                     let competition_factor =
                         Self::calculate_competition_factor(player_i, player_j) * 0.5;
 
+                    // Skip no-op pairs — a zero factor would still create
+                    // a relation entry and bump momentum/interaction on
+                    // players who aren't actually competing.
+                    if competition_factor <= 0.01 {
+                        continue;
+                    }
+
                     result
                         .players
                         .relationship_result

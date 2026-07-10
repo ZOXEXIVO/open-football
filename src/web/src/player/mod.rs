@@ -7,6 +7,7 @@ pub mod get;
 pub mod history;
 pub mod matches;
 pub mod personal;
+pub mod relations;
 pub mod transfers;
 
 pub use get::PlayerStatusDto;
@@ -23,6 +24,7 @@ pub fn player_routes() -> Router<GameAppData> {
         .merge(awards::routes::routes())
         .merge(matches::routes::routes())
         .merge(transfers::routes::routes())
+        .merge(relations::routes::routes())
         .merge(history::routes::routes())
         .merge(decisions::routes::routes())
         .merge(actions::routes::routes())

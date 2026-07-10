@@ -148,8 +148,6 @@ impl Relations {
         change: RelationshipChange,
         date: NaiveDate,
     ) {
-        // Store values we need before taking mutable borrows
-        let is_rivalry = matches!(change.change_type, ChangeType::CompetitionRivalry);
         let (old_level, new_level) = {
             // Create a scope for the mutable borrow
             let relation = self.players.get_or_create(player_id);
@@ -157,13 +155,11 @@ impl Relations {
             // Store the old level
             let old_level = relation.level;
 
-            // Apply the change
+            // Apply the change. Rivalry tracking lives inside
+            // `PlayerRelation::apply_change` — competition friction
+            // accumulates as `rivalry_intensity` and only becomes an open
+            // rivalry once the feud is sustained, never from one event.
             relation.apply_change(&change);
-
-            // Track rivalry with the actual target player ID
-            if is_rivalry {
-                relation.rivalry_with.insert(player_id);
-            }
 
             // Return the values we need (this ends the mutable borrow)
             (old_level, relation.level)
@@ -277,8 +273,8 @@ impl Relations {
         let mut conflicts = Vec::new();
 
         for (target_id, rel) in self.players.iter() {
-            // A relation is a conflict if it's rivalry-flagged or disliked.
-            let is_rivalry = !rel.rivalry_with.is_empty();
+            // A relation is a conflict if it's an open rivalry or disliked.
+            let is_rivalry = rel.is_open_rivalry();
             if !is_rivalry && !rel.is_disliked() {
                 continue;
             }
@@ -462,14 +458,68 @@ pub struct PlayerRelation {
     /// Mentorship relationship
     pub mentorship: Option<MentorshipType>,
 
-    /// Rivalry information
-    pub rivalry_with: FxHashSet<u32>,
+    /// Accumulated competition friction with this teammate (0..100).
+    /// Builds from CompetitionRivalry events (fighting for the same spot,
+    /// playing-time envy), erodes on reconciliation and cooperation, and
+    /// cools weekly when the pair stop feeding it.
+    pub rivalry_intensity: f32,
+
+    /// Whether the feud is currently a declared, visible rivalry. Managed
+    /// by `refresh_rivalry_state` with hysteresis; read via
+    /// [`PlayerRelation::is_open_rivalry`].
+    rivalry_active: bool,
 
     /// Interaction frequency
     pub interaction_frequency: f32,
 
     /// Relationship momentum
     momentum: f32,
+}
+
+impl PlayerRelation {
+    /// Sustained competition friction (0..100 `rivalry_intensity`) needed
+    /// before a feud is declared an open rivalry. A single behaviour-tick
+    /// nudge lands ~1..4 points, so crossing this bar takes weeks of a
+    /// genuinely contested spot, not one event.
+    const RIVALRY_DECLARE_INTENSITY: f32 = 55.0;
+    /// The pair must also genuinely dislike each other before the feud goes
+    /// public — two professionals fighting for one spot while staying on
+    /// good terms is competition, not rivalry.
+    const RIVALRY_DECLARE_LEVEL_CEIL: f32 = -15.0;
+    /// Once open, the rivalry persists until the friction cools well below
+    /// the declare bar — hysteresis so the state doesn't flap week to week…
+    const RIVALRY_SUSTAIN_INTENSITY: f32 = 30.0;
+    /// …or until the relationship itself warms into clearly friendly
+    /// territory, which ends the feud regardless of the friction history.
+    const RIVALRY_END_LEVEL: f32 = 15.0;
+    /// Intensity gained per unit of applied CompetitionRivalry magnitude.
+    const RIVALRY_BUILD_RATE: f32 = 8.0;
+
+    /// True while the accumulated feud with this teammate is a declared,
+    /// visible rivalry. Rivalries are earned over weeks of sustained
+    /// competition friction and dissolve again when the pair reconcile
+    /// or the friction cools — never a permanent flag.
+    pub fn is_open_rivalry(&self) -> bool {
+        self.rivalry_active
+    }
+
+    /// Hysteresis gate between `rivalry_intensity`/`level` and the
+    /// declared state. Called after every applied change and every
+    /// weekly decay tick so both build-up and cool-down paths keep the
+    /// state honest.
+    fn refresh_rivalry_state(&mut self) {
+        if self.rivalry_active {
+            if self.rivalry_intensity < Self::RIVALRY_SUSTAIN_INTENSITY
+                || self.level >= Self::RIVALRY_END_LEVEL
+            {
+                self.rivalry_active = false;
+            }
+        } else if self.rivalry_intensity >= Self::RIVALRY_DECLARE_INTENSITY
+            && self.level <= Self::RIVALRY_DECLARE_LEVEL_CEIL
+        {
+            self.rivalry_active = true;
+        }
+    }
 }
 
 impl Relationship for PlayerRelation {
@@ -482,7 +532,8 @@ impl Relationship for PlayerRelation {
             professional_respect: 50.0,
             influence: 0.0,
             mentorship: None,
-            rivalry_with: FxHashSet::default(),
+            rivalry_intensity: 0.0,
+            rivalry_active: false,
             interaction_frequency: 0.0,
             momentum: 0.0,
         }
@@ -506,12 +557,25 @@ impl Relationship for PlayerRelation {
         // respect, professional respect) drift slowly all the time so a
         // single old grudge isn't carried for ten years untouched.
         if self.interaction_frequency < 0.3 {
-            self.level = decay_toward(self.level, 0.0, 0.98);
-            self.friendship = decay_toward(self.friendship, 20.0, 0.975);
+            self.level = RelationDecay::toward(self.level, 0.0, 0.98);
+            self.friendship = RelationDecay::toward(self.friendship, 20.0, 0.975);
         }
-        self.trust = decay_toward(self.trust, 50.0, 0.992);
-        self.respect = decay_toward(self.respect, 50.0, 0.994);
-        self.professional_respect = decay_toward(self.professional_respect, 50.0, 0.996);
+        self.trust = RelationDecay::toward(self.trust, 50.0, 0.992);
+        self.respect = RelationDecay::toward(self.respect, 50.0, 0.994);
+        self.professional_respect = RelationDecay::toward(self.professional_respect, 50.0, 0.996);
+
+        // Rivalries cool without fresh fuel. While the pair still share a
+        // dressing room the feud fades slowly; once they stop interacting
+        // (transfer, loan, different squads) it cools markedly faster —
+        // out of sight, out of mind.
+        let rivalry_retention = if self.interaction_frequency < 0.3 {
+            0.95
+        } else {
+            0.975
+        };
+        self.rivalry_intensity =
+            RelationDecay::toward(self.rivalry_intensity, 0.0, rivalry_retention);
+        self.refresh_rivalry_state();
 
         // Reset interaction frequency
         self.interaction_frequency *= 0.9;
@@ -532,7 +596,7 @@ impl Relationship for PlayerRelation {
 
     fn conflict_contribution(&self) -> f32 {
         let mut acc = 0.0;
-        let is_rivalry = !self.rivalry_with.is_empty();
+        let is_rivalry = self.is_open_rivalry();
         let level = self.level;
         if level <= -75.0 {
             acc += 25.0; // critical conflict
@@ -558,24 +622,33 @@ impl Relationship for PlayerRelation {
                 self.level += magnitude * 2.0;
                 self.trust += magnitude * 1.5;
                 self.professional_respect += magnitude * 3.0;
+                self.rivalry_intensity -= magnitude * 3.0;
             }
             ChangeType::TrainingBonding => {
                 self.friendship += magnitude * 2.0;
                 self.level += magnitude;
+                self.rivalry_intensity -= magnitude * 2.0;
             }
             ChangeType::ConflictResolution => {
                 self.trust += magnitude * 3.0;
                 self.respect += magnitude * 2.0;
                 self.level += magnitude * 2.0;
+                // Clearing the air is the strongest feud-killer.
+                self.rivalry_intensity -= magnitude * 10.0;
             }
             ChangeType::PersonalSupport => {
                 self.friendship += magnitude * 4.0;
                 self.trust += magnitude * 3.0;
                 self.level += magnitude * 2.0;
+                self.rivalry_intensity -= magnitude * 6.0;
             }
             ChangeType::CompetitionRivalry => {
                 self.level -= magnitude * 2.0;
                 self.professional_respect -= magnitude;
+                // Competition friction is what feuds are made of — it
+                // accumulates here and only becomes an open rivalry once
+                // sustained (see `refresh_rivalry_state`).
+                self.rivalry_intensity += magnitude * Self::RIVALRY_BUILD_RATE;
             }
             ChangeType::TrainingFriction => {
                 self.level -= magnitude;
@@ -618,6 +691,9 @@ impl Relationship for PlayerRelation {
         self.respect = self.respect.clamp(0.0, 100.0);
         self.friendship = self.friendship.clamp(0.0, 100.0);
         self.professional_respect = self.professional_respect.clamp(0.0, 100.0);
+        self.rivalry_intensity = self.rivalry_intensity.clamp(0.0, 100.0);
+
+        self.refresh_rivalry_state();
     }
 }
 
@@ -683,12 +759,12 @@ impl Relationship for StaffRelation {
         // baseline level of respect from a player they barely speak to;
         // erosion below the neutral baseline should require explicit
         // negative events (broken promise, public criticism, …).
-        self.level = decay_toward(self.level, 0.0, 0.985);
-        self.authority_respect = decay_toward(self.authority_respect, 50.0, 0.993);
-        self.trust_in_abilities = decay_toward(self.trust_in_abilities, 50.0, 0.995);
-        self.personal_bond = decay_toward(self.personal_bond, 30.0, 0.980);
-        self.receptiveness = decay_toward(self.receptiveness, 50.0, 0.992);
-        self.loyalty = decay_toward(self.loyalty, 30.0, 0.990);
+        self.level = RelationDecay::toward(self.level, 0.0, 0.985);
+        self.authority_respect = RelationDecay::toward(self.authority_respect, 50.0, 0.993);
+        self.trust_in_abilities = RelationDecay::toward(self.trust_in_abilities, 50.0, 0.995);
+        self.personal_bond = RelationDecay::toward(self.personal_bond, 30.0, 0.980);
+        self.receptiveness = RelationDecay::toward(self.receptiveness, 50.0, 0.992);
+        self.loyalty = RelationDecay::toward(self.loyalty, 30.0, 0.990);
     }
 
     fn quality_score(&self) -> f32 {
@@ -943,14 +1019,14 @@ impl TeamChemistry {
         staffs: &RelationStore<S>,
     ) {
         let ctx = ChemistryContext::default();
-        let player_harmony = calculate_player_harmony(players);
-        let coach_relationship = calculate_coach_relationship(staffs);
-        let leadership_quality = calculate_leadership_quality_default(&ctx);
-        let conflict_level = calculate_conflict_level(players);
+        let player_harmony = Self::player_harmony(players);
+        let coach_relationship = Self::coach_relationship(staffs);
+        let leadership_quality = Self::leadership_quality(&ctx);
+        let conflict_level = Self::conflict_level(players);
         let group_cohesion = (ctx.inner_circle_cohesion * 100.0)
             .clamp(0.0, 100.0)
             .max(50.0);
-        let turnover = turnover_penalty_for(ctx.recent_signings_90d);
+        let turnover = Self::turnover_penalty_for(ctx.recent_signings_90d);
 
         self.factors = ChemistryFactors {
             player_harmony,
@@ -960,7 +1036,7 @@ impl TeamChemistry {
             conflict_level,
         };
         self.turnover_penalty = turnover;
-        self.overall = blend_chemistry(
+        self.overall = Self::blend(
             player_harmony,
             leadership_quality,
             coach_relationship,
@@ -979,10 +1055,10 @@ impl TeamChemistry {
         groups: &GroupDynamics,
         ctx: &ChemistryContext,
     ) {
-        let player_harmony = calculate_player_harmony(players);
-        let coach_relationship = calculate_coach_relationship(staffs);
-        let leadership_quality = calculate_leadership_quality_default(ctx);
-        let conflict_level = calculate_conflict_level(players);
+        let player_harmony = Self::player_harmony(players);
+        let coach_relationship = Self::coach_relationship(staffs);
+        let leadership_quality = Self::leadership_quality(ctx);
+        let conflict_level = Self::conflict_level(players);
 
         // Group cohesion: prefer caller-supplied inner_circle_cohesion (the
         // squad-wide aggregate); fall back to the per-store group's average.
@@ -994,7 +1070,7 @@ impl TeamChemistry {
         };
         let group_cohesion = (circle * 100.0).clamp(0.0, 100.0).max(35.0);
 
-        let turnover = turnover_penalty_for(ctx.recent_signings_90d);
+        let turnover = Self::turnover_penalty_for(ctx.recent_signings_90d);
 
         self.factors = ChemistryFactors {
             player_harmony,
@@ -1004,7 +1080,7 @@ impl TeamChemistry {
             conflict_level,
         };
         self.turnover_penalty = turnover;
-        self.overall = blend_chemistry(
+        self.overall = Self::blend(
             player_harmony,
             leadership_quality,
             coach_relationship,
@@ -1013,150 +1089,155 @@ impl TeamChemistry {
             turnover,
         );
     }
+
+    /// Player harmony — weighted average across all stored player relations of
+    /// (level, trust, professional_respect). Maps the natural -100..100 / 0..100
+    /// inputs onto a single 0..100 axis. Empty store → 50 (neutral).
+    fn player_harmony<T: Relationship>(players: &RelationStore<T>) -> f32 {
+        if players.relations.is_empty() {
+            return 50.0;
+        }
+        let mut acc = 0.0f32;
+        let mut count = 0.0f32;
+        for rel in players.relations.values() {
+            // Ask the relation for its quality summary (0..100) — defined on
+            // the Relationship trait so PlayerRelation and StaffRelation can
+            // share the harmony pipeline.
+            acc += rel.quality_score();
+            count += 1.0;
+        }
+        (acc / count).clamp(0.0, 100.0)
+    }
+
+    /// Leadership quality — average of the top 3 influence/leadership scores
+    /// (with captain ×1.5, vice ×1.2 weighting). Empty list → 50, *not* 60.
+    fn leadership_quality(ctx: &ChemistryContext) -> f32 {
+        if ctx.top_leadership_scores.is_empty() && ctx.top_influence_scores.is_empty() {
+            return 50.0;
+        }
+
+        // Combine raw 0..20 leadership and 0..100 influence into a single 0..100
+        // axis. Leadership is our primary signal; influence pulls the score
+        // toward the dressing-room reality (a quiet pro can still command
+        // respect).
+        let leadership_norm: Vec<f32> = ctx
+            .top_leadership_scores
+            .iter()
+            .take(3)
+            .map(|v| (v / 20.0 * 100.0).clamp(0.0, 100.0))
+            .collect();
+        let influence_norm: Vec<f32> = ctx
+            .top_influence_scores
+            .iter()
+            .take(3)
+            .map(|v| v.clamp(0.0, 100.0))
+            .collect();
+
+        let mut score = 0.0f32;
+        let mut weight = 0.0f32;
+        for (i, v) in leadership_norm.iter().enumerate() {
+            let w = if i == 0 {
+                1.5
+            } else if i == 1 {
+                1.2
+            } else {
+                1.0
+            };
+            score += v * w;
+            weight += w;
+        }
+        for (i, v) in influence_norm.iter().enumerate() {
+            let w = if i == 0 {
+                0.6
+            } else if i == 1 {
+                0.5
+            } else {
+                0.4
+            };
+            score += v * w;
+            weight += w;
+        }
+        if weight <= 0.0 {
+            return 50.0;
+        }
+        (score / weight).clamp(0.0, 100.0)
+    }
+
+    /// Coach relationship — weighted average across all staff relations of
+    /// (level, authority_respect, trust_in_abilities). Empty store → 50.
+    fn coach_relationship<S: Relationship>(staffs: &RelationStore<S>) -> f32 {
+        if staffs.relations.is_empty() {
+            return 50.0;
+        }
+        let mut acc = 0.0f32;
+        let mut count = 0.0f32;
+        for rel in staffs.relations.values() {
+            acc += rel.quality_score();
+            count += 1.0;
+        }
+        (acc / count).clamp(0.0, 100.0)
+    }
+
+    /// Conflict level — sum of explicit conflict signals capped at 100. Mild
+    /// dislikes contribute small amounts; rivalries and outright hostility
+    /// contribute more. Caller-provided rivalry/conflict severity flags would
+    /// further tune this; the relation store itself only sees per-pair levels.
+    fn conflict_level<T: Relationship>(players: &RelationStore<T>) -> f32 {
+        let mut total = 0.0f32;
+        for rel in players.relations.values() {
+            total += rel.conflict_contribution();
+        }
+        total.min(100.0)
+    }
+
+    /// Turnover penalty — recent signings unsettle dressing rooms. Step
+    /// function: 1 signing = mild, 7+ = severe.
+    fn turnover_penalty_for(recent_signings: u8) -> f32 {
+        match recent_signings {
+            0 => 0.0,
+            1 => 2.0,
+            2..=3 => 5.0,
+            4..=6 => 10.0,
+            _ => 18.0,
+        }
+    }
+
+    /// Final blend — clamped to 0..100. Centred at 50 with linear contributions
+    /// from each factor's deviation from neutral.
+    fn blend(
+        player_harmony: f32,
+        leadership_quality: f32,
+        coach_relationship: f32,
+        group_cohesion: f32,
+        conflict_level: f32,
+        turnover_penalty: f32,
+    ) -> f32 {
+        let raw = 50.0
+            + (player_harmony - 50.0) * 0.35
+            + (leadership_quality - 50.0) * 0.20
+            + (coach_relationship - 50.0) * 0.20
+            + (group_cohesion - 50.0) * 0.15
+            - conflict_level * 0.35
+            - turnover_penalty;
+        raw.clamp(0.0, 100.0)
+    }
 }
 
-/// Geometric drift of `value` toward `neutral` at retention `rate`. The
-/// rate is the fraction of the *distance from neutral* preserved each
-/// tick — `rate=0.99` means 99% of the gap survives, so the value
-/// converges on `neutral` instead of zero. Used by every per-axis
-/// decay so trust/respect/authority drift back to their cognitive
-/// baselines (typically 50) rather than collapsing to 0 over years
-/// of light interaction.
-#[inline]
-fn decay_toward(value: f32, neutral: f32, rate: f32) -> f32 {
-    neutral + (value - neutral) * rate
-}
+/// Shared per-axis decay math for relation stores.
+struct RelationDecay;
 
-/// Player harmony — weighted average across all stored player relations of
-/// (level, trust, professional_respect). Maps the natural -100..100 / 0..100
-/// inputs onto a single 0..100 axis. Empty store → 50 (neutral).
-fn calculate_player_harmony<T: Relationship>(players: &RelationStore<T>) -> f32 {
-    if players.relations.is_empty() {
-        return 50.0;
+impl RelationDecay {
+    /// Geometric drift of `value` toward `neutral` at retention `rate`. The
+    /// rate is the fraction of the *distance from neutral* preserved each
+    /// tick — `rate=0.99` means 99% of the gap survives, so the value
+    /// converges on `neutral` instead of zero. Used by every per-axis
+    /// decay so trust/respect/authority drift back to their cognitive
+    /// baselines (typically 50) rather than collapsing to 0 over years
+    /// of light interaction.
+    #[inline]
+    fn toward(value: f32, neutral: f32, rate: f32) -> f32 {
+        neutral + (value - neutral) * rate
     }
-    let mut acc = 0.0f32;
-    let mut count = 0.0f32;
-    for rel in players.relations.values() {
-        // Ask the relation for its quality summary (0..100) — defined on
-        // the Relationship trait so PlayerRelation and StaffRelation can
-        // share the harmony pipeline.
-        acc += rel.quality_score();
-        count += 1.0;
-    }
-    (acc / count).clamp(0.0, 100.0)
-}
-
-/// Leadership quality — average of the top 3 influence/leadership scores
-/// (with captain ×1.5, vice ×1.2 weighting). Empty list → 50, *not* 60.
-fn calculate_leadership_quality_default(ctx: &ChemistryContext) -> f32 {
-    if ctx.top_leadership_scores.is_empty() && ctx.top_influence_scores.is_empty() {
-        return 50.0;
-    }
-
-    // Combine raw 0..20 leadership and 0..100 influence into a single 0..100
-    // axis. Leadership is our primary signal; influence pulls the score
-    // toward the dressing-room reality (a quiet pro can still command
-    // respect).
-    let leadership_norm: Vec<f32> = ctx
-        .top_leadership_scores
-        .iter()
-        .take(3)
-        .map(|v| (v / 20.0 * 100.0).clamp(0.0, 100.0))
-        .collect();
-    let influence_norm: Vec<f32> = ctx
-        .top_influence_scores
-        .iter()
-        .take(3)
-        .map(|v| v.clamp(0.0, 100.0))
-        .collect();
-
-    let mut score = 0.0f32;
-    let mut weight = 0.0f32;
-    for (i, v) in leadership_norm.iter().enumerate() {
-        let w = if i == 0 {
-            1.5
-        } else if i == 1 {
-            1.2
-        } else {
-            1.0
-        };
-        score += v * w;
-        weight += w;
-    }
-    for (i, v) in influence_norm.iter().enumerate() {
-        let w = if i == 0 {
-            0.6
-        } else if i == 1 {
-            0.5
-        } else {
-            0.4
-        };
-        score += v * w;
-        weight += w;
-    }
-    if weight <= 0.0 {
-        return 50.0;
-    }
-    (score / weight).clamp(0.0, 100.0)
-}
-
-/// Coach relationship — weighted average across all staff relations of
-/// (level, authority_respect, trust_in_abilities). Empty store → 50.
-fn calculate_coach_relationship<S: Relationship>(staffs: &RelationStore<S>) -> f32 {
-    if staffs.relations.is_empty() {
-        return 50.0;
-    }
-    let mut acc = 0.0f32;
-    let mut count = 0.0f32;
-    for rel in staffs.relations.values() {
-        acc += rel.quality_score();
-        count += 1.0;
-    }
-    (acc / count).clamp(0.0, 100.0)
-}
-
-/// Conflict level — sum of explicit conflict signals capped at 100. Mild
-/// dislikes contribute small amounts; rivalries and outright hostility
-/// contribute more. Caller-provided rivalry/conflict severity flags would
-/// further tune this; the relation store itself only sees per-pair levels.
-fn calculate_conflict_level<T: Relationship>(players: &RelationStore<T>) -> f32 {
-    let mut total = 0.0f32;
-    for rel in players.relations.values() {
-        total += rel.conflict_contribution();
-    }
-    total.min(100.0)
-}
-
-/// Turnover penalty — recent signings unsettle dressing rooms. Step
-/// function: 1 signing = mild, 7+ = severe.
-fn turnover_penalty_for(recent_signings: u8) -> f32 {
-    match recent_signings {
-        0 => 0.0,
-        1 => 2.0,
-        2..=3 => 5.0,
-        4..=6 => 10.0,
-        _ => 18.0,
-    }
-}
-
-/// Final blend — clamped to 0..100. Centred at 50 with linear contributions
-/// from each factor's deviation from neutral.
-fn blend_chemistry(
-    player_harmony: f32,
-    leadership_quality: f32,
-    coach_relationship: f32,
-    group_cohesion: f32,
-    conflict_level: f32,
-    turnover_penalty: f32,
-) -> f32 {
-    let raw = 50.0
-        + (player_harmony - 50.0) * 0.35
-        + (leadership_quality - 50.0) * 0.20
-        + (coach_relationship - 50.0) * 0.20
-        + (group_cohesion - 50.0) * 0.15
-        - conflict_level * 0.35
-        - turnover_penalty;
-    raw.clamp(0.0, 100.0)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1392,6 +1473,117 @@ mod tests {
         for _ in 0..weeks {
             store.apply_natural_decay();
         }
+    }
+
+    /// Drive `count` competition-friction nudges of `magnitude` into the
+    /// subject's relation with player 2 — the shape the team-behaviour
+    /// passes produce over weeks of a contested position battle.
+    fn drive_competition_friction(relations: &mut Relations, count: u32, magnitude: f32) {
+        let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        for _ in 0..count {
+            relations.update_player_relationship(
+                2,
+                RelationshipChange::negative(ChangeType::CompetitionRivalry, magnitude),
+                date,
+            );
+        }
+    }
+
+    #[test]
+    fn single_competition_event_does_not_declare_rivalry() {
+        // Regression: the first behaviour tick after game start emits a
+        // small CompetitionRivalry nudge for every same-position pair.
+        // That used to stamp a permanent rivalry flag, so a brand-new
+        // save showed the whole squad as rivals. One event — of any
+        // size — must never read as an open rivalry.
+        let mut relations = Relations::new();
+        drive_competition_friction(&mut relations, 1, 0.9);
+
+        let rel = relations.get_player(2).expect("relation exists");
+        assert!(
+            !rel.is_open_rivalry(),
+            "a single competition event must not declare a rivalry (intensity={}, level={})",
+            rel.rivalry_intensity,
+            rel.level
+        );
+    }
+
+    #[test]
+    fn sustained_competition_friction_declares_open_rivalry() {
+        // Weeks of a genuinely contested spot — repeated friction that
+        // also sours the relationship — eventually goes public.
+        let mut relations = Relations::new();
+        drive_competition_friction(&mut relations, 20, 1.0);
+
+        let rel = relations.get_player(2).expect("relation exists");
+        assert!(
+            rel.is_open_rivalry(),
+            "sustained friction must declare a rivalry (intensity={}, level={})",
+            rel.rivalry_intensity,
+            rel.level
+        );
+        assert!(
+            rel.level <= -15.0,
+            "declared rivals must genuinely dislike each other, level={}",
+            rel.level
+        );
+    }
+
+    #[test]
+    fn rivalry_dissolves_after_reconciliation() {
+        // Clearing the air (captain mediation, manager talks) erodes the
+        // feud until it drops back below the sustain bar — rivalry is a
+        // state, not a permanent flag.
+        let mut relations = Relations::new();
+        drive_competition_friction(&mut relations, 20, 1.0);
+        assert!(relations.get_player(2).unwrap().is_open_rivalry());
+
+        let date = NaiveDate::from_ymd_opt(2024, 3, 1).unwrap();
+        for _ in 0..12 {
+            relations.update_player_relationship(
+                2,
+                RelationshipChange::positive(ChangeType::ConflictResolution, 1.0),
+                date,
+            );
+        }
+
+        let rel = relations.get_player(2).expect("relation exists");
+        assert!(
+            !rel.is_open_rivalry(),
+            "reconciliation must dissolve the rivalry (intensity={}, level={})",
+            rel.rivalry_intensity,
+            rel.level
+        );
+    }
+
+    #[test]
+    fn dormant_rivalry_cools_off_without_fuel() {
+        // Hysteresis both ways: the feud survives a couple of quiet
+        // weeks, but months with no fresh friction cool it back under
+        // the sustain bar.
+        let mut relations = Relations::new();
+        drive_competition_friction(&mut relations, 20, 1.0);
+
+        let mut date = NaiveDate::from_ymd_opt(2024, 3, 1).unwrap();
+        for _ in 0..2 {
+            relations.process_weekly_update(date);
+            date += Duration::days(7);
+        }
+        assert!(
+            relations.get_player(2).unwrap().is_open_rivalry(),
+            "a fresh rivalry must survive a couple of quiet weeks"
+        );
+
+        for _ in 0..60 {
+            relations.process_weekly_update(date);
+            date += Duration::days(7);
+        }
+        let rel = relations.get_player(2).expect("relation exists");
+        assert!(
+            !rel.is_open_rivalry(),
+            "a feud with no fuel for a year must cool off (intensity={})",
+            rel.rivalry_intensity
+        );
     }
 
     #[test]

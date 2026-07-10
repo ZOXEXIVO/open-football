@@ -1,12 +1,12 @@
-{% extends "teams/team_layout.html" %}
+{% extends "player/player_layout.html" %}
 
-{% block html_title %}{{ title }} - {{ i18n.t("relations") }} | {{ i18n.t("site_name") }}{% endblock %}
+{% block html_title %}{{ title }}{% if !sub_title_link.is_empty() %}, {{ sub_title }}{% endif %} - {{ i18n.t("relations") }} | {{ i18n.t("site_name") }}{% endblock %}
 
 {% block content %}
 <div class="fm-page">
     <section class="fm-panel fm-rel-panel">
         <div class="fm-panel-head fm-rel-head">
-            <h3>{{ i18n.t("rel_heading") }}</h3>
+            <h3>{{ i18n.t("rel_heading_player") }}</h3>
             <div class="fm-rel-legend">
                 <span class="fm-rel-legend-item"><i class="fm-rel-swatch fm-rel-swatch-bond"></i>{{ i18n.t("rel_tier_bond") }}</span>
                 <span class="fm-rel-legend-item"><i class="fm-rel-swatch fm-rel-swatch-friendly"></i>{{ i18n.t("rel_tier_friendly") }}</span>
@@ -15,8 +15,8 @@
             </div>
         </div>
 
-        {% if nodes.is_empty() %}
-        <div class="fm-empty">{{ i18n.t("rel_empty") }}</div>
+        {% if nodes.len() <= 1 %}
+        <div class="fm-empty">{{ i18n.t("rel_empty_player") }}</div>
         {% else %}
         <div class="fm-rel-summary">
             <div class="fm-rel-stat fm-rel-stat-bond">
@@ -40,8 +40,8 @@
         <div class="fm-rel-stage" id="relStage">
             <svg class="fm-rel-edges" id="relEdges" preserveAspectRatio="none"></svg>
             {% for n in nodes %}
-            <div class="fm-rel-node{% if n.is_goalkeeper %} pos-gk{% endif %}" data-idx="{{ loop.index0 }}"
-                 data-row="{{ n.row }}" title="{{ n.last_name }}">
+            <div class="fm-rel-node{% if n.is_goalkeeper %} pos-gk{% endif %}{% if n.is_root %} fm-rel-node-root{% endif %}" data-idx="{{ loop.index0 }}"
+                 data-row="{{ n.row }}" data-root="{% if n.is_root %}1{% else %}0{% endif %}" title="{{ n.last_name }}">
                 <span class="fm-rel-photo">
                     {% if n.is_generated %}
                     <img src="/api/players/{{ n.player_id }}/face.svg" alt="{{ n.last_name }}" draggable="false" loading="lazy">
@@ -72,16 +72,22 @@
 
     var edges = {{ edges_json|safe }};
 
-    // Formation rows, top → bottom. Each node is pinned to its row band and
-    // only slides sideways, so the dressing-room web reads as the squad shape.
+    // Formation rows, top → bottom. Neighbours keep their squad shape
+    // (GK/DEF/MID/FWD); the subject of the page is lifted into a virtual row
+    // ABOVE the goalkeepers (row -1) so it always reads on top.
     var ROW_TAGS = ['GK', 'DEF', 'MID', 'FWD'];
+    var ROOT_ROW = -1;
     var nodes = nodeEls.map(function (el, i) {
+        var isRoot = el.getAttribute('data-root') === '1';
         return {
-            el: el, i: i,
-            row: parseInt(el.getAttribute('data-row'), 10) || 0,
-            x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null, rowY: 0
+            el: el, i: i, isRoot: isRoot,
+            row: isRoot ? ROOT_ROW : (parseInt(el.getAttribute('data-row'), 10) || 0),
+            x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null, rowY: 0,
+            laneY: 0, seedX: 0, targetY: 0
         };
     });
+    var rootNode = null;
+    nodes.forEach(function (n) { if (n.isRoot) rootNode = n; });
 
     // Only the rows that actually hold players become bands, kept contiguous
     // top-to-bottom so there are never empty lanes in the middle.
@@ -111,22 +117,21 @@
 
     // Formation geometry — the stage grows to fit every row plus its labels,
     // so nothing is ever clipped at the bottom edge.
-    var TOP_PAD = 48;     // y of the first (top) row's centre
-    var BOTTOM_PAD = 62;  // photo lower-half + name label under the last row
-    var LEFT_PAD = 58;    // keep photos clear of the row tags on the left
-    var JIT = 14;         // vertical wobble each node may drift within its lane
+    var TOP_PAD = 48;
+    var BOTTOM_PAD = 62;
+    var LEFT_PAD = 58;
+    var JIT = 14;
     var PAD = 46;
     // Photos are 54px wide; CARD_SLOT is the horizontal footprint a card
     // claims from its neighbours in the SAME lane, so two adjacent photos
     // keep a comfortable ~34px gap instead of touching. COLLIDE is the
-    // softer "don't overlap" floor used between cards that are already
-    // separated vertically (different lane) or in different rows.
+    // softer "don't overlap" floor between cards already separated
+    // vertically (different lane) or in different rows.
     var CARD_SLOT = 88;
     var COLLIDE = 56;
     // When a single row can't give every card a full CARD_SLOT of width,
     // it splits into two vertically-staggered lanes so neighbours sit in a
-    // zigzag rather than a cramped straight line. LANE_GAP is the vertical
-    // offset between the two lanes' centres.
+    // zigzag rather than a cramped straight line.
     var LANE_GAP = 58;
     var MIN_H = 360;
 
@@ -138,22 +143,19 @@
         stage.insertBefore(line, svg);
         var tag = document.createElement('span');
         tag.className = 'fm-rel-rowtag';
-        tag.textContent = ROW_TAGS[r] || '';
+        tag.textContent = r === ROOT_ROW ? '' : (ROW_TAGS[r] || '');
         stage.insertBefore(tag, svg);
         return { r: r, line: line, tag: tag };
     });
 
-    // Members of each formation row, in stable squad order — the unit the
-    // lane assignment spreads across the width.
+    // Members of each formation row, in stable order — the unit the lane
+    // assignment spreads across the width.
     var rowMembers = {};
     nodes.forEach(function (n) { (rowMembers[n.row] = rowMembers[n.row] || []).push(n); });
 
     // Decide, for the current width, how many lanes each row needs and where
     // every card seeds. A row splits into two staggered lanes only when a
-    // single line can't give each card its full CARD_SLOT of horizontal room;
-    // the two lanes interleave in squad order so the result reads as a zigzag.
-    // Sets per-node `laneY` (vertical offset from the row centre) and `seedX`,
-    // and returns the max lane count so the caller can size the row bands.
+    // single line can't give each card its full CARD_SLOT of horizontal room.
     function assignLanes() {
         var usable = W - 2 * LEFT_PAD;
         var maxLanes = 1;
@@ -169,8 +171,6 @@
                 var bucket = buckets[L];
                 var bm = bucket.length;
                 var laneY = twoLane ? (L === 0 ? -LANE_GAP / 2 : LANE_GAP / 2) : 0;
-                // Offset lane 1 by half a slot so the two lanes interleave
-                // horizontally instead of sitting directly above each other.
                 var shift = (twoLane && L === 1) ? 0.5 / bm : 0;
                 bucket.forEach(function (n, k) {
                     n.laneY = laneY;
@@ -186,8 +186,6 @@
     function measure() {
         W = stage.clientWidth;
         maxLanes = assignLanes();
-        // Two-lane rows are taller, so widen the band spacing to keep the
-        // zigzag of one row clear of the next.
         var minGap = maxLanes >= 2 ? 176 : 118;
         rowGap = Math.max(minGap, Math.min(190, W * 0.15));
         H = Math.max(MIN_H, TOP_PAD + (R - 1) * rowGap + BOTTOM_PAD
@@ -204,12 +202,18 @@
             g.line.style.top = y + 'px';
             g.tag.style.top = y + 'px';
         });
+        // The subject is a fixed anchor: pinned centred in its top band so
+        // the whole web hangs beneath it and never drifts off to one side.
+        if (rootNode) { rootNode.fx = cx; rootNode.fy = rootNode.targetY; }
     }
     measure();
 
     // Deterministic seed: drop each node onto the row/lane column the layout
-    // assigned — identical every load.
-    nodes.forEach(function (n) { n.x = n.seedX; n.y = n.targetY; });
+    // assigned; the subject seeds dead-centre of its band.
+    nodes.forEach(function (n) {
+        n.x = n.isRoot ? cx : n.seedX;
+        n.y = n.targetY;
+    });
 
     var alpha = 1;
     var dragging = null;
@@ -239,7 +243,7 @@
                 }
             }
         }
-        // Edge forces act mostly sideways now — friends slide into the same
+        // Edge forces act mostly sideways — friends slide into the same
         // column, rivals shove apart — while the row spring owns the y axis.
         edges.forEach(function (e) {
             var a = nodes[e.s], b = nodes[e.t];
@@ -300,8 +304,6 @@
             rafId = null;
         }
     }
-    // reheat drives the interaction loop (drag / resize) in every mode; only
-    // the unsolicited load-time settle is suppressed for reduced motion.
     function reheat(a) {
         alpha = Math.max(alpha, a);
         if (!rafId) rafId = requestAnimationFrame(loop);
@@ -316,8 +318,7 @@
 
     // Hover spotlight: fade everyone but the player and their direct links,
     // and tint each linked teammate's photo with the tier of the thread that
-    // joins them — green for a bond / friendship, amber / red for tension /
-    // rivalry — so the relation reads straight off the border.
+    // joins them so the relation reads straight off the border.
     var REL_CLASSES = ['rel-bond', 'rel-friendly', 'rel-tension', 'rel-rivalry'];
     nodes.forEach(function (n) {
         n.el.addEventListener('mouseenter', function () {
@@ -340,9 +341,10 @@
     });
 
     // Press-and-drag to rearrange; a plain click falls through to the player
-    // link. Pressing down must NOT pin the node or reheat the sim — that used
-    // to yank the card under the cursor and restart the animation on every
-    // click, so the label jittered away and never navigated. Instead we only
+    // link. The subject stays pinned on top, so only the neighbours are
+    // draggable. Pressing down must NOT pin the node or reheat the sim — that
+    // used to yank the card under the cursor and restart the animation on
+    // every click, so the label jittered away and never navigated. We only
     // arm a candidate on press and promote it to a real drag once the pointer
     // clearly moves.
     var dragMoved = false, startX = 0, startY = 0, pending = null;
@@ -352,6 +354,7 @@
         return { x: t.clientX - rect.left, y: t.clientY - rect.top };
     }
     nodes.forEach(function (n) {
+        if (n.isRoot) return; // subject is a fixed anchor
         function pointerDown(ev) {
             var p = pointerPos(ev);
             pending = n; dragging = null; dragMoved = false; startX = p.x; startY = p.y;
