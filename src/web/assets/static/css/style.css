@@ -10668,3 +10668,274 @@ html:has(.fm-workers-page) {
     opacity: 0.55;
     cursor: default;
 }
+
+/* ============================================================
+   Team → Relations : dressing-room relationship graph
+   Force-directed web of good / hostile squad relationships on
+   the default pitch-green surface, reusing the tactics photo
+   language. Everything here is scoped under .fm-rel-* so it
+   can't collide with the rest of the sheet.
+   ============================================================ */
+
+.fm-rel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.fm-rel-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: center;
+}
+
+.fm-rel-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #9aa4ad;
+    letter-spacing: 0.2px;
+}
+
+.fm-rel-swatch {
+    width: 16px;
+    height: 0;
+    border-top: 3px solid transparent;
+    border-radius: 2px;
+    display: inline-block;
+}
+
+.fm-rel-swatch-bond {
+    border-top-color: #35d36a;
+}
+
+.fm-rel-swatch-friendly {
+    border-top-color: #4ec95e;
+    opacity: 0.7;
+}
+
+.fm-rel-swatch-tension {
+    border-top-color: #e0a23a;
+    border-top-style: dashed;
+}
+
+.fm-rel-swatch-rivalry {
+    border-top-color: #e5442c;
+    border-top-style: dashed;
+}
+
+/* --- Summary tiles --- */
+.fm-rel-summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    padding: 14px 12px 4px;
+}
+
+.fm-rel-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 12px;
+    background: #1c2830;
+    border: 1px solid #263340;
+    border-left-width: 3px;
+    border-radius: 4px;
+}
+
+.fm-rel-stat-num {
+    font-size: 20px;
+    font-weight: 700;
+    color: #e8edf1;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+.fm-rel-stat-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #8a939b;
+    letter-spacing: 0.2px;
+}
+
+.fm-rel-stat-bond {
+    border-left-color: #35d36a;
+}
+
+.fm-rel-stat-friendly {
+    border-left-color: #4ec95e;
+}
+
+.fm-rel-stat-tension {
+    border-left-color: #e0a23a;
+}
+
+.fm-rel-stat-rivalry {
+    border-left-color: #e5442c;
+}
+
+/* --- Graph stage: transparent, sits directly on the panel --- */
+.fm-rel-stage {
+    position: relative;
+    margin: 12px;
+    height: clamp(440px, 62vh, 680px);
+    border-radius: 4px;
+    overflow: hidden;
+    background: transparent;
+}
+
+.fm-rel-edges {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.fm-rel-edge {
+    stroke-linecap: round;
+    transition: opacity 0.18s;
+}
+
+.fm-rel-edge-bond {
+    stroke: #35d36a;
+    opacity: 0.85;
+}
+
+.fm-rel-edge-friendly {
+    stroke: #4ec95e;
+    opacity: 0.5;
+}
+
+.fm-rel-edge-tension {
+    stroke: #e0a23a;
+    opacity: 0.72;
+    stroke-dasharray: 6 5;
+}
+
+.fm-rel-edge-rivalry {
+    stroke: #e5442c;
+    opacity: 0.9;
+    stroke-dasharray: 6 5;
+}
+
+/* --- Player nodes: photo box centred on (x,y), label floats below --- */
+.fm-rel-node {
+    position: absolute;
+    width: 54px;
+    height: 66px;
+    transform: translate(-50%, -50%);
+    z-index: 2;
+    cursor: grab;
+    text-decoration: none;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    transition: opacity 0.18s;
+}
+
+.fm-rel-node:active {
+    cursor: grabbing;
+}
+
+.fm-rel-photo {
+    display: block;
+    width: 54px;
+    height: 66px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #1a2530;
+    border: 2px solid rgba(255, 255, 255, 0.75);
+    box-shadow:
+        0 0 12px rgba(74, 200, 90, 0.45),
+        0 3px 8px rgba(0, 0, 0, 0.5);
+    transition:
+        transform 0.18s,
+        box-shadow 0.18s;
+}
+
+.fm-rel-photo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 22%;
+    display: block;
+    pointer-events: none;
+}
+
+.fm-rel-node.pos-gk .fm-rel-photo {
+    border-color: rgba(255, 230, 130, 0.9);
+    box-shadow:
+        0 0 12px rgba(232, 200, 48, 0.5),
+        0 3px 8px rgba(0, 0, 0, 0.5);
+}
+
+.fm-rel-node:hover .fm-rel-photo {
+    transform: scale(1.08);
+}
+
+.fm-rel-name {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 4px;
+    max-width: 118px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 0.2px;
+    text-shadow:
+        0 1px 3px rgba(0, 0, 0, 0.9),
+        0 0 8px rgba(0, 0, 0, 0.6);
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.fm-rel-name:hover {
+    color: #f1d271;
+}
+
+/* --- Hover spotlight: fade all but the player and their direct links --- */
+.fm-rel-stage.fm-rel-focus .fm-rel-node {
+    opacity: 0.26;
+}
+
+.fm-rel-stage.fm-rel-focus .fm-rel-node.is-hot,
+.fm-rel-stage.fm-rel-focus .fm-rel-node.is-linked {
+    opacity: 1;
+}
+
+.fm-rel-stage.fm-rel-focus .fm-rel-node.is-hot .fm-rel-photo {
+    box-shadow:
+        0 0 18px rgba(74, 200, 90, 0.75),
+        0 3px 10px rgba(0, 0, 0, 0.6);
+}
+
+.fm-rel-stage.fm-rel-focus .fm-rel-edge {
+    opacity: 0.1;
+}
+
+.fm-rel-stage.fm-rel-focus .fm-rel-edge.is-linked {
+    opacity: 1;
+}
+
+@media (max-width: 640px) {
+    .fm-rel-summary {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .fm-rel-stage {
+        height: clamp(380px, 70vh, 560px);
+    }
+}

@@ -1,6 +1,7 @@
 pub mod academy;
 pub mod finances;
 pub mod get;
+pub mod relations;
 pub mod schedule;
 pub mod scouting;
 pub mod staff;
@@ -17,6 +18,7 @@ pub fn team_routes() -> Router<GameAppData> {
         .merge(staff::routes::routes())
         .merge(tactics::routes::routes())
         .merge(finances::routes::routes())
+        .merge(relations::routes::routes())
         .merge(scouting::routes::routes())
         .merge(academy::routes::routes())
         .merge(schedule::routes::routes())

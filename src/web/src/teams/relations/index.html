@@ -1,0 +1,283 @@
+{% extends "teams/team_layout.html" %}
+
+{% block html_title %}{{ title }} - {{ i18n.t("relations") }} | {{ i18n.t("site_name") }}{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel fm-rel-panel">
+        <div class="fm-panel-head fm-rel-head">
+            <h3>{{ i18n.t("rel_heading") }}</h3>
+            <div class="fm-rel-legend">
+                <span class="fm-rel-legend-item"><i class="fm-rel-swatch fm-rel-swatch-bond"></i>{{ i18n.t("rel_tier_bond") }}</span>
+                <span class="fm-rel-legend-item"><i class="fm-rel-swatch fm-rel-swatch-friendly"></i>{{ i18n.t("rel_tier_friendly") }}</span>
+                <span class="fm-rel-legend-item"><i class="fm-rel-swatch fm-rel-swatch-tension"></i>{{ i18n.t("rel_tier_tension") }}</span>
+                <span class="fm-rel-legend-item"><i class="fm-rel-swatch fm-rel-swatch-rivalry"></i>{{ i18n.t("rel_tier_rivalry") }}</span>
+            </div>
+        </div>
+
+        {% if nodes.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("rel_empty") }}</div>
+        {% else %}
+        <div class="fm-rel-summary">
+            <div class="fm-rel-stat fm-rel-stat-bond">
+                <span class="fm-rel-stat-num">{{ bond_count }}</span>
+                <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_bond") }}</span>
+            </div>
+            <div class="fm-rel-stat fm-rel-stat-friendly">
+                <span class="fm-rel-stat-num">{{ friendly_count }}</span>
+                <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_friendly") }}</span>
+            </div>
+            <div class="fm-rel-stat fm-rel-stat-tension">
+                <span class="fm-rel-stat-num">{{ tension_count }}</span>
+                <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_tension") }}</span>
+            </div>
+            <div class="fm-rel-stat fm-rel-stat-rivalry">
+                <span class="fm-rel-stat-num">{{ rivalry_count }}</span>
+                <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_rivalry") }}</span>
+            </div>
+        </div>
+
+        <div class="fm-rel-stage" id="relStage">
+            <svg class="fm-rel-edges" id="relEdges" preserveAspectRatio="none"></svg>
+            {% for n in nodes %}
+            <div class="fm-rel-node{% if n.is_goalkeeper %} pos-gk{% endif %}" data-idx="{{ loop.index0 }}"
+                 title="{{ n.last_name }}">
+                <span class="fm-rel-photo">
+                    {% if n.is_generated %}
+                    <img src="/api/players/{{ n.player_id }}/face.svg" alt="{{ n.last_name }}" draggable="false" loading="lazy">
+                    {% else %}
+                    <img src="https://open-football.org/player/{{ n.player_id }}.png"
+                         onerror="this.onerror=null;this.src='/api/players/{{ n.player_id }}/face.svg';"
+                         alt="{{ n.last_name }}" draggable="false" loading="lazy">
+                    {% endif %}
+                </span>
+                <a class="fm-rel-name" href="/{{ lang }}/players/{{ n.slug }}">{{ n.last_name }}</a>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var stage = document.getElementById('relStage');
+    if (!stage) return;
+    var svg = document.getElementById('relEdges');
+    var nodeEls = Array.prototype.slice.call(stage.querySelectorAll('.fm-rel-node'));
+    var N = nodeEls.length;
+    if (N === 0) return;
+
+    var edges = {{ edges_json|safe }};
+
+    var nodes = nodeEls.map(function (el, i) {
+        return { el: el, i: i, x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null };
+    });
+
+    // Adjacency for the hover spotlight.
+    var adj = nodes.map(function () { return []; });
+    edges.forEach(function (e, ei) {
+        adj[e.s].push({ o: e.t, ei: ei });
+        adj[e.t].push({ o: e.s, ei: ei });
+    });
+
+    // One SVG line per edge, coloured + weighted by tier.
+    var SVGNS = 'http://www.w3.org/2000/svg';
+    var lineEls = edges.map(function (e) {
+        var ln = document.createElementNS(SVGNS, 'line');
+        ln.setAttribute('class', 'fm-rel-edge fm-rel-edge-' + e.k);
+        ln.setAttribute('stroke-width', (1.4 + e.w * 3.4).toFixed(2));
+        svg.appendChild(ln);
+        return ln;
+    });
+
+    var W, H, cx, cy;
+    function measure() {
+        W = stage.clientWidth;
+        H = stage.clientHeight;
+        cx = W / 2;
+        cy = H / 2;
+        svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    }
+    measure();
+
+    // Deterministic circular seed — no RNG, so the layout is identical on
+    // every load and only reacts to the physics below.
+    var R0 = Math.min(W, H) * 0.34;
+    nodes.forEach(function (n, i) {
+        var a = (i / N) * Math.PI * 2;
+        var r = R0 * (0.82 + 0.18 * ((i % 3) / 2));
+        n.x = cx + Math.cos(a) * r;
+        n.y = cy + Math.sin(a) * r;
+    });
+
+    var PAD = 44;
+    var COLLIDE = 64;
+    var alpha = 1;
+    var dragging = null;
+
+    function tick() {
+        // Gentle pull to the centre so the web stays framed.
+        for (var g = 0; g < N; g++) {
+            var ng = nodes[g];
+            if (ng.fx !== null) continue;
+            ng.vx += (cx - ng.x) * 0.008 * alpha;
+            ng.vy += (cy - ng.y) * 0.008 * alpha;
+        }
+        // Pairwise repulsion + hard collision so photos never stack.
+        for (var i = 0; i < N; i++) {
+            for (var j = i + 1; j < N; j++) {
+                var a = nodes[i], b = nodes[j];
+                var dx = a.x - b.x, dy = a.y - b.y;
+                var d2 = dx * dx + dy * dy;
+                if (d2 < 1) { d2 = 1; dx = (i - j) || 1; dy = 1; }
+                var d = Math.sqrt(d2);
+                var ux = dx / d, uy = dy / d;
+                var rep = (5600 / d2) * alpha;
+                if (a.fx === null) { a.vx += ux * rep; a.vy += uy * rep; }
+                if (b.fx === null) { b.vx -= ux * rep; b.vy -= uy * rep; }
+                if (d < COLLIDE) {
+                    var push = (COLLIDE - d) * 0.5;
+                    if (a.fx === null) { a.x += ux * push; a.y += uy * push; }
+                    if (b.fx === null) { b.x -= ux * push; b.y -= uy * push; }
+                }
+            }
+        }
+        // Edge forces: friends pull together, rivals push apart.
+        edges.forEach(function (e) {
+            var a = nodes[e.s], b = nodes[e.t];
+            var dx = b.x - a.x, dy = b.y - a.y;
+            var d = Math.sqrt(dx * dx + dy * dy) || 1;
+            var ux = dx / d, uy = dy / d;
+            var rest, k;
+            if (e.p > 0) { rest = e.k === 'bond' ? 98 : 138; k = 0.045; }
+            else { rest = e.k === 'rivalry' ? 250 : 210; k = 0.028; }
+            var f = (d - rest) * k * alpha;
+            if (e.p < 0 && d >= rest) f = 0; // one-sided: only shove apart
+            if (a.fx === null) { a.vx += ux * f; a.vy += uy * f; }
+            if (b.fx === null) { b.vx -= ux * f; b.vy -= uy * f; }
+        });
+        // Integrate with damping, velocity clamp and bounds.
+        for (var m = 0; m < N; m++) {
+            var n = nodes[m];
+            if (n.fx !== null) { n.x = n.fx; n.y = n.fy; n.vx = 0; n.vy = 0; continue; }
+            n.vx *= 0.82; n.vy *= 0.82;
+            var sp = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
+            if (sp > 26) { n.vx = n.vx / sp * 26; n.vy = n.vy / sp * 26; }
+            n.x += n.vx; n.y += n.vy;
+            n.x = Math.max(PAD, Math.min(W - PAD, n.x));
+            n.y = Math.max(PAD, Math.min(H - PAD, n.y));
+        }
+        alpha *= 0.985;
+    }
+
+    function render() {
+        for (var m = 0; m < N; m++) {
+            nodes[m].el.style.left = nodes[m].x + 'px';
+            nodes[m].el.style.top = nodes[m].y + 'px';
+        }
+        for (var i = 0; i < edges.length; i++) {
+            var a = nodes[edges[i].s], b = nodes[edges[i].t], ln = lineEls[i];
+            ln.setAttribute('x1', a.x); ln.setAttribute('y1', a.y);
+            ln.setAttribute('x2', b.x); ln.setAttribute('y2', b.y);
+        }
+    }
+
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var rafId = null;
+    function loop() {
+        tick();
+        render();
+        if (alpha > 0.005 || dragging) {
+            rafId = requestAnimationFrame(loop);
+        } else {
+            rafId = null;
+        }
+    }
+    // reheat drives the interaction loop (drag / resize) in every mode; only
+    // the unsolicited load-time settle is suppressed for reduced motion.
+    function reheat(a) {
+        alpha = Math.max(alpha, a);
+        if (!rafId) rafId = requestAnimationFrame(loop);
+    }
+
+    if (reduce) {
+        for (var s = 0; s < 420; s++) tick();
+        render();
+    } else {
+        rafId = requestAnimationFrame(loop);
+    }
+
+    // Hover spotlight: fade everyone but the player and their direct links.
+    nodes.forEach(function (n) {
+        n.el.addEventListener('mouseenter', function () {
+            stage.classList.add('fm-rel-focus');
+            n.el.classList.add('is-hot');
+            adj[n.i].forEach(function (link) {
+                nodes[link.o].el.classList.add('is-linked');
+                lineEls[link.ei].classList.add('is-linked');
+            });
+        });
+        n.el.addEventListener('mouseleave', function () {
+            stage.classList.remove('fm-rel-focus');
+            n.el.classList.remove('is-hot');
+            for (var m = 0; m < N; m++) nodes[m].el.classList.remove('is-linked');
+            for (var i = 0; i < lineEls.length; i++) lineEls[i].classList.remove('is-linked');
+        });
+    });
+
+    // Drag to rearrange. A real drag suppresses the click-through to the
+    // player page; a plain click still navigates.
+    var dragMoved = false, startX = 0, startY = 0;
+    function pointerPos(ev) {
+        var rect = stage.getBoundingClientRect();
+        var t = ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+        return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+    }
+    nodes.forEach(function (n) {
+        function startDrag(ev) {
+            var p = pointerPos(ev);
+            dragging = n; dragMoved = false; startX = p.x; startY = p.y;
+            n.fx = p.x; n.fy = p.y;
+            reheat(0.5);
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('touchmove', onMove, { passive: false });
+            document.addEventListener('mouseup', endDrag);
+            document.addEventListener('touchend', endDrag);
+        }
+        n.el.addEventListener('mousedown', startDrag);
+        n.el.addEventListener('touchstart', startDrag, { passive: true });
+        n.el.addEventListener('click', function (ev) {
+            if (dragMoved) { ev.preventDefault(); }
+        });
+    });
+    function onMove(ev) {
+        if (!dragging) return;
+        var p = pointerPos(ev);
+        if (Math.abs(p.x - startX) > 5 || Math.abs(p.y - startY) > 5) {
+            dragMoved = true;
+            if (ev.cancelable) ev.preventDefault();
+        }
+        dragging.fx = Math.max(PAD, Math.min(W - PAD, p.x));
+        dragging.fy = Math.max(PAD, Math.min(H - PAD, p.y));
+        reheat(0.3);
+    }
+    function endDrag() {
+        if (dragging) { dragging.fx = null; dragging.fy = null; }
+        dragging = null;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('touchmove', onMove);
+        document.removeEventListener('mouseup', endDrag);
+        document.removeEventListener('touchend', endDrag);
+    }
+
+    var rt;
+    window.addEventListener('resize', function () {
+        clearTimeout(rt);
+        rt = setTimeout(function () { measure(); reheat(0.4); }, 150);
+    });
+})();
+</script>
+{% endblock %}
