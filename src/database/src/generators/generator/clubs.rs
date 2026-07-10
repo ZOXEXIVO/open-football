@@ -8,8 +8,9 @@ use core::shared::Location;
 use core::transfers::pipeline::ClubTransferPlan;
 use core::{
     Club, ClubBoard, ClubColors, ClubFacilities, ClubFinances, ClubPhilosophy, ClubStatus,
-    FacilityLevel, Player, PlayerCollection, ReputationLevel, StaffCollection, TacticsSelector,
-    Team, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    CountryEconomicFactors, FacilityLevel, Player, PlayerCollection, ReputationLevel,
+    SponsorPerformance, SponsorRenewalContext, StaffCollection, TacticsSelector, Team,
+    TeamCollection, TeamReputation, TeamType, TrainingSchedule,
 };
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -97,6 +98,107 @@ impl DatabaseGenerator {
                 let academy_quality = facilities.academy.multiplier();
                 let recruitment_quality = facilities.recruitment.multiplier();
 
+                let teams = TeamCollection::new(
+                    club.teams
+                        .iter()
+                        .map(|t| {
+                            let team_rep = t.reputation.world;
+                            let team_type = TeamType::from_str(&t.team_type).unwrap();
+
+                            // Main and the senior reserves (B, Second) carry
+                            // their full canonical name in the data
+                            // ("Spartak Moscow", "Spartak Moscow 2", "Real
+                            // Sociedad B"). Other sub-types (Reserve, U18..U23)
+                            // get their short type label appended at runtime.
+                            let team_name = match &team_type {
+                                TeamType::Main | TeamType::Second | TeamType::B => t.name.clone(),
+                                _ => format!("{} {}", t.name, team_type),
+                            };
+
+                            let players = PlayerCollection::new(build_team_players(
+                                player_generator,
+                                country_id,
+                                continent_id,
+                                country_code,
+                                team_rep,
+                                country_reputation,
+                                &team_type,
+                                t.league_id,
+                                data,
+                                academy_rating,
+                                youth_quality,
+                                academy_quality,
+                                recruitment_quality,
+                                odb_for_club.as_ref(),
+                            ));
+
+                            let staffs = StaffCollection::new(Self::generate_staffs(
+                                staff_generator,
+                                country_id,
+                                continent_id,
+                                country_code,
+                                team_rep,
+                                &team_type,
+                            ));
+
+                            let mut team = Team::builder()
+                                .id(t.id)
+                                .league_id(t.league_id)
+                                .club_id(club.id)
+                                .name(team_name)
+                                .slug(t.slug.clone())
+                                .team_type(team_type)
+                                .training_schedule(TrainingSchedule::new(
+                                    NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+                                    NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+                                ))
+                                .reputation(TeamReputation::new(
+                                    t.reputation.home,
+                                    t.reputation.national,
+                                    t.reputation.world,
+                                ))
+                                .players(players)
+                                .staffs(staffs)
+                                .build()
+                                .expect("Failed to build Team");
+
+                            // Pre-select the persistent team tactic at
+                            // load time. Without this every team starts
+                            // at `tactics: None` and the web view falls
+                            // back to a hardcoded 4-4-2 until the season
+                            // tick first runs — and once that tick fires
+                            // the legacy selector locked the league at
+                            // T442 anyway. Pre-selecting on a properly
+                            // squad-aware scorer breaks that loop and
+                            // makes the tactics screen truthful from
+                            // the first request.
+                            let tactic = TacticsSelector::select(&team, team.staffs.head_coach());
+                            team.tactics = Some(tactic);
+                            team
+                        })
+                        .collect(),
+                );
+
+                // Day-one sponsorship book. Real clubs never operate with
+                // zero commercial deals; without seeding, sponsorship
+                // income is structurally $0 for every club (the monthly
+                // renewal pass only replaces deals that expire, and an
+                // empty book has nothing to expire). Sized off the main
+                // team's reputation tier and the country's sponsorship
+                // market — the same inputs the runtime renewal uses.
+                let main_rep_level = teams
+                    .main()
+                    .map(|t| t.reputation.level())
+                    .unwrap_or(ReputationLevel::Amateur);
+                let sponsor_market = CountryEconomicFactors::from_reputation(country_reputation)
+                    .sponsorship_market_strength;
+                let sponsorship_book = SponsorRenewalContext::new(
+                    main_rep_level,
+                    sponsor_market,
+                    SponsorPerformance::MidTable,
+                )
+                .generate_initial_portfolio(Utc::now().date_naive());
+
                 Club {
                     id: club.id,
                     name: club.name.clone(),
@@ -105,7 +207,7 @@ impl DatabaseGenerator {
                     },
                     board: ClubBoard::new(),
                     status: ClubStatus::Professional,
-                    finance: ClubFinances::new(club.finance.balance as i64, Vec::new()),
+                    finance: ClubFinances::new(club.finance.balance as i64, sponsorship_book),
                     academy: ClubAcademy::new(academy_rating),
                     colors: ClubColors {
                         background: club.colors.background.clone(),
@@ -115,89 +217,7 @@ impl DatabaseGenerator {
                     philosophy,
                     facilities,
                     rivals: club.rivals.clone(),
-                    teams: TeamCollection::new(
-                        club.teams
-                            .iter()
-                            .map(|t| {
-                                let team_rep = t.reputation.world;
-                                let team_type = TeamType::from_str(&t.team_type).unwrap();
-
-                                // Main and the senior reserves (B, Second) carry
-                                // their full canonical name in the data
-                                // ("Spartak Moscow", "Spartak Moscow 2", "Real
-                                // Sociedad B"). Other sub-types (Reserve, U18..U23)
-                                // get their short type label appended at runtime.
-                                let team_name = match &team_type {
-                                    TeamType::Main | TeamType::Second | TeamType::B => {
-                                        t.name.clone()
-                                    }
-                                    _ => format!("{} {}", t.name, team_type),
-                                };
-
-                                let players = PlayerCollection::new(build_team_players(
-                                    player_generator,
-                                    country_id,
-                                    continent_id,
-                                    country_code,
-                                    team_rep,
-                                    country_reputation,
-                                    &team_type,
-                                    t.league_id,
-                                    data,
-                                    academy_rating,
-                                    youth_quality,
-                                    academy_quality,
-                                    recruitment_quality,
-                                    odb_for_club.as_ref(),
-                                ));
-
-                                let staffs = StaffCollection::new(Self::generate_staffs(
-                                    staff_generator,
-                                    country_id,
-                                    continent_id,
-                                    country_code,
-                                    team_rep,
-                                    &team_type,
-                                ));
-
-                                let mut team = Team::builder()
-                                    .id(t.id)
-                                    .league_id(t.league_id)
-                                    .club_id(club.id)
-                                    .name(team_name)
-                                    .slug(t.slug.clone())
-                                    .team_type(team_type)
-                                    .training_schedule(TrainingSchedule::new(
-                                        NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-                                        NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
-                                    ))
-                                    .reputation(TeamReputation::new(
-                                        t.reputation.home,
-                                        t.reputation.national,
-                                        t.reputation.world,
-                                    ))
-                                    .players(players)
-                                    .staffs(staffs)
-                                    .build()
-                                    .expect("Failed to build Team");
-
-                                // Pre-select the persistent team tactic at
-                                // load time. Without this every team starts
-                                // at `tactics: None` and the web view falls
-                                // back to a hardcoded 4-4-2 until the season
-                                // tick first runs — and once that tick fires
-                                // the legacy selector locked the league at
-                                // T442 anyway. Pre-selecting on a properly
-                                // squad-aware scorer breaks that loop and
-                                // makes the tactics screen truthful from
-                                // the first request.
-                                let tactic =
-                                    TacticsSelector::select(&team, team.staffs.head_coach());
-                                team.tactics = Some(tactic);
-                                team
-                            })
-                            .collect(),
-                    ),
+                    teams,
                 }
             })
             .collect()

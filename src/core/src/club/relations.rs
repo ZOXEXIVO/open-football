@@ -1,7 +1,7 @@
 use chrono::Duration;
 use chrono::NaiveDate;
-use serde::{Deserialize, Serialize};
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 /// Hint passed to [`Relations::recalculate_chemistry_with_context`] so the

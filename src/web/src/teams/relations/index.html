@@ -91,6 +91,10 @@
     var rowIndex = {};
     present.forEach(function (r, k) { rowIndex[r] = k; });
     var R = present.length;
+    // Band index per node: nodes are clamped to their row's lane, so two
+    // nodes whose bands are ≥2 apart can never come close enough for the
+    // repulsion or collision terms to matter — the tick loop skips them.
+    nodes.forEach(function (n) { n.band = rowIndex[n.row]; });
 
     // Adjacency for the hover spotlight.
     var adj = nodes.map(function () { return []; });
@@ -212,6 +216,9 @@
     nodes.forEach(function (n) { n.x = n.seedX; n.y = n.targetY; });
 
     var alpha = 1;
+    // Bigger webs cool faster: the layout settles in fewer frames, so total
+    // animation work stays roughly flat as the squad grows.
+    var DECAY = N > 40 ? 0.978 : 0.985;
     var dragging = null;
 
     function tick() {
@@ -219,6 +226,7 @@
         for (var i = 0; i < N; i++) {
             for (var j = i + 1; j < N; j++) {
                 var a = nodes[i], b = nodes[j];
+                if (Math.abs(a.band - b.band) >= 2) continue;
                 var dx = a.x - b.x, dy = a.y - b.y;
                 var d2 = dx * dx + dy * dy;
                 if (d2 < 1) { d2 = 1; dx = (i - j) || 1; dy = 1; }
@@ -274,13 +282,16 @@
             n.x = Math.max(PAD, Math.min(W - PAD, n.x));
             n.y = Math.max(n.targetY - JIT, Math.min(n.targetY + JIT, n.y));
         }
-        alpha *= 0.985;
+        alpha *= DECAY;
     }
 
     function render() {
         for (var m = 0; m < N; m++) {
-            nodes[m].el.style.left = nodes[m].x + 'px';
-            nodes[m].el.style.top = nodes[m].y + 'px';
+            // Move nodes with transform, not left/top — a transform stays on
+            // the compositor, while left/top writes force a layout pass every
+            // frame, which is what hurts on a big squad.
+            nodes[m].el.style.transform = 'translate(' + nodes[m].x + 'px,'
+                + nodes[m].y + 'px) translate(-50%, -50%)';
         }
         for (var i = 0; i < edges.length; i++) {
             var a = nodes[edges[i].s], b = nodes[edges[i].t], ln = lineEls[i];
@@ -308,7 +319,7 @@
     }
 
     if (reduce) {
-        for (var s = 0; s < 420; s++) tick();
+        for (var s = 0; s < 420 && alpha > 0.005; s++) tick();
         render();
     } else {
         rafId = requestAnimationFrame(loop);

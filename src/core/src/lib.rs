@@ -279,6 +279,8 @@ pub use club::{
     SellingPolicy,
     SkillType,
     SpecialInstruction,
+    SponsorPerformance,
+    SponsorRenewalContext,
     SquadAnalysis,
     SquadBuildingPolicy,
     SquadPhase,

@@ -318,7 +318,10 @@ impl SquadAssetContext {
                 // room to grow) is a loan asset, not free-transfer scrapheap.
                 // Rescue exactly that inference; every other profile honors the
                 // surplus label.
-                if matches!(self.infer(player, date), SquadAssetClass::ProspectDevelopment) {
+                if matches!(
+                    self.infer(player, date),
+                    SquadAssetClass::ProspectDevelopment
+                ) {
                     return SquadAssetClass::ProspectDevelopment;
                 }
                 return SquadAssetClass::TrueSurplus;

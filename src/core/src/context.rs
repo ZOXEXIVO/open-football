@@ -2,12 +2,12 @@ pub use chrono::prelude::*;
 
 use crate::PeopleNameGeneratorData;
 use crate::TeamContext;
-use std::sync::Arc;
 use crate::TeamType;
 use crate::club::{BoardContext, ClubContext, ClubFinanceContext, PlayerContext, StaffContext};
 use crate::continent::ContinentContext;
 use crate::country::{CountryContext, SeasonDates};
 use crate::league::LeagueContext;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct GlobalContext<'gc> {

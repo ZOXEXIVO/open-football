@@ -92,6 +92,10 @@ impl ClubFinances {
 
             result.expired_sponsorships =
                 self.sponsorship.remove_expired(ctx.simulation.date.date());
+            // Signal the result-stage that the sponsorship book should be
+            // reconciled this tick — it re-signs expired deals and tops
+            // the portfolio up toward the reputation-tier target.
+            result.is_month_start = true;
         }
 
         result

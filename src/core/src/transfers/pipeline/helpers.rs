@@ -1,6 +1,7 @@
 use chrono::{Datelike, NaiveDate};
 
 use crate::shared::CurrencyValue;
+use crate::transfers::ScoutingRegion;
 use crate::transfers::pipeline::breakout::{BreakoutPerformanceSignal, LeaguePerformanceLookup};
 use crate::transfers::pipeline::processor::{
     PipelineProcessor, PlayerSummary, SellerPlausibilityContext,
@@ -9,7 +10,6 @@ use crate::transfers::pipeline::{
     DetailedScoutingReport, ReportRiskFlag, ScoutingRecommendation, TransferNeedReason,
     TransferRequest,
 };
-use crate::transfers::ScoutingRegion;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
@@ -1334,9 +1334,15 @@ mod group_need_tests {
                 continental_tolerance(),
             )
         };
-        let has_def_need =
-            |needs: &[GroupNeed]| needs.iter().any(|n| n.group == PlayerFieldPositionGroup::Defender);
-        assert!(!has_def_need(&make(false)), "six healthy defenders → no need");
+        let has_def_need = |needs: &[GroupNeed]| {
+            needs
+                .iter()
+                .any(|n| n.group == PlayerFieldPositionGroup::Defender)
+        };
+        assert!(
+            !has_def_need(&make(false)),
+            "six healthy defenders → no need"
+        );
         assert!(
             has_def_need(&make(true)),
             "a long-term-injured defender drops available depth below requirement"

@@ -10858,9 +10858,14 @@ html:has(.fm-workers-page) {
 /* --- Player nodes: photo box centred on (x,y), label floats below --- */
 .fm-rel-node {
     position: absolute;
+    /* Anchored at the stage origin; the layout script positions each card
+       purely through transform, so per-frame moves never trigger layout. */
+    left: 0;
+    top: 0;
     width: 54px;
     height: 66px;
     transform: translate(-50%, -50%);
+    will-change: transform;
     z-index: 2;
     cursor: grab;
     text-decoration: none;

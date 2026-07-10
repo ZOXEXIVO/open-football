@@ -385,6 +385,26 @@ impl Country {
                 let cup = self.domestic_cup.as_mut().expect("cup checked above");
                 let r = by_league.remove(&cup_id).unwrap_or_default();
                 let cup_result = cup.simulate_process(r, p, &self.clubs, &cup_ctx, current_date);
+                // Round prize money: every tie winner banks its round's
+                // fee from the federation, scaled by the country's
+                // broadcast market. Computed from the freshly stamped
+                // bracket, then booked with the clubs list mutable again.
+                let payouts = self
+                    .domestic_cup
+                    .as_ref()
+                    .map(|c| {
+                        c.round_prize_payouts(
+                            cup_result.match_results.as_deref().unwrap_or(&[]),
+                            &self.clubs,
+                            self.economic_factors.tv_revenue_multiplier,
+                        )
+                    })
+                    .unwrap_or_default();
+                for (club_id, amount) in payouts {
+                    if let Some(club) = self.clubs.iter_mut().find(|c| c.id == club_id) {
+                        club.finance.balance.push_income_cup_prize(amount);
+                    }
+                }
                 league_results.push(cup_result);
             }
         }

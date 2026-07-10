@@ -218,12 +218,11 @@ impl NationalSquadBuilder {
             NationalTeamLevel::Under21 => NationalSelectionPolicy::under21(),
         };
 
-        let mut candidates_by_country =
-            NationalTeam::collect_all_candidates_by_country_with_policy(
-                continents.iter().flat_map(|c| c.countries.iter()),
-                date,
-                &policy,
-            );
+        let mut candidates_by_country = NationalTeam::collect_all_candidates_by_country_with_policy(
+            continents.iter().flat_map(|c| c.countries.iter()),
+            date,
+            &policy,
+        );
         let mut candidates = candidates_by_country
             .remove(&country_id)
             .unwrap_or_default();

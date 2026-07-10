@@ -1,6 +1,6 @@
 use crate::ReputationLevel;
 use crate::utils::FloatUtils;
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 
 #[derive(Debug, Clone)]
 pub struct ClubSponsorship {
@@ -11,6 +11,24 @@ impl ClubSponsorship {
     pub fn new(contracts: Vec<ClubSponsorshipContract>) -> Self {
         ClubSponsorship {
             sponsorship_contracts: contracts,
+        }
+    }
+
+    /// How many simultaneous sponsorship deals a club of this stature
+    /// sustains — kit supplier + shirt sponsor + secondary partners at the
+    /// top, a single local backer at the bottom. Commercial revenue is a
+    /// pillar of real club finance (roughly 40% of an elite club's income),
+    /// so the portfolio target is what keeps that pillar standing: the
+    /// monthly finance result signs new deals until the book reaches this
+    /// size and lets it shrink back by non-renewal when reputation falls.
+    pub fn target_portfolio_size(reputation: ReputationLevel) -> usize {
+        match reputation {
+            ReputationLevel::Elite => 3,
+            ReputationLevel::Continental => 3,
+            ReputationLevel::National => 2,
+            ReputationLevel::Regional => 2,
+            ReputationLevel::Local => 1,
+            ReputationLevel::Amateur => 1,
         }
     }
 
@@ -34,19 +52,16 @@ impl ClubSponsorship {
         &self.sponsorship_contracts
     }
 
-    /// Drop expired contracts and replace each one with a freshly negotiated
-    /// deal sized by the club's reputation, market and recent performance.
-    /// Returns `(expired_count, renewed_count)` for telemetry.
-    pub fn renew_expired(&mut self, date: NaiveDate, ctx: &SponsorRenewalContext) -> (u32, u32) {
-        let expired = self.drop_expired(date);
-        let mut renewed = 0u32;
-        for _ in 0..expired {
-            if let Some(contract) = ctx.generate(date) {
-                self.sponsorship_contracts.push(contract);
-                renewed += 1;
-            }
-        }
-        (expired, renewed)
+    /// Monthly signing policy: every deal that just expired is replaced
+    /// immediately (a club does not let its shirt run blank), and when the
+    /// book still sits below the portfolio target the commercial
+    /// department lands at most ONE additional deal — ramping a promoted
+    /// club (or a legacy save from before clubs carried a full book) up
+    /// over a few months instead of granting an instant windfall. A club
+    /// at or above target signs nothing extra, so a shrunken reputation
+    /// deflates the book by natural expiry.
+    pub fn deals_to_sign(current: usize, target: usize, expired: u32) -> usize {
+        target.saturating_sub(current).min(expired as usize + 1)
     }
 }
 
@@ -106,6 +121,24 @@ impl SponsorRenewalContext {
             ReputationLevel::Local => 120_000.0,
             ReputationLevel::Amateur => 20_000.0,
         }
+    }
+
+    /// Build a club's day-one sponsorship book: one contract per portfolio
+    /// slot for the club's stature, each with a random remaining term and
+    /// an extra 0-11 month stagger so the whole book doesn't come up for
+    /// renewal in the same month. Used by the database generator when a
+    /// world is created — the monthly renewal pass keeps the book at the
+    /// target size from then on.
+    pub fn generate_initial_portfolio(&self, date: NaiveDate) -> Vec<ClubSponsorshipContract> {
+        let slots = ClubSponsorship::target_portfolio_size(self.reputation);
+        (0..slots)
+            .filter_map(|_| {
+                let mut contract = self.generate(date)?;
+                let stagger_days = FloatUtils::random(0.0, 330.0) as i64;
+                contract.expiration += Duration::days(stagger_days);
+                Some(contract)
+            })
+            .collect()
     }
 
     pub fn generate(&self, date: NaiveDate) -> Option<ClubSponsorshipContract> {
@@ -218,40 +251,59 @@ mod tests {
     }
 
     #[test]
-    fn renew_expired_replaces_each_dropped_contract() {
-        let mut s = ClubSponsorship::new(vec![
-            ClubSponsorshipContract::new("Old A".to_string(), 100, d(2026, 1, 1)),
-            ClubSponsorshipContract::new("Old B".to_string(), 200, d(2026, 1, 1)),
-            ClubSponsorshipContract::new("Active".to_string(), 300, d(2030, 1, 1)),
-        ]);
-
-        let ctx = SponsorRenewalContext::new(
-            ReputationLevel::National,
-            1.0,
-            SponsorPerformance::MidTable,
-        );
-
-        let (expired, renewed) = s.renew_expired(d(2026, 6, 1), &ctx);
-        assert_eq!(expired, 2);
-        assert_eq!(renewed, 2);
-        assert_eq!(s.sponsorship_contracts.len(), 3);
+    fn initial_portfolio_fills_every_slot_for_the_tier() {
+        for (rep, market) in [
+            (ReputationLevel::Elite, 0.9),
+            (ReputationLevel::Continental, 0.7),
+            (ReputationLevel::National, 0.5),
+            (ReputationLevel::Regional, 0.3),
+            (ReputationLevel::Local, 0.2),
+        ] {
+            let ctx = SponsorRenewalContext::new(rep, market, SponsorPerformance::MidTable);
+            let book = ctx.generate_initial_portfolio(d(2026, 7, 1));
+            assert_eq!(
+                book.len(),
+                ClubSponsorship::target_portfolio_size(rep),
+                "tier {rep:?} must start with a full book"
+            );
+            for contract in &book {
+                assert!(contract.wage > 0, "tier {rep:?} deal must carry value");
+                assert!(
+                    !contract.is_expired(d(2026, 7, 1)),
+                    "seeded deal must be live on day one"
+                );
+            }
+        }
     }
 
     #[test]
-    fn renew_skips_when_no_expirations() {
-        let mut s = ClubSponsorship::new(vec![ClubSponsorshipContract::new(
-            "Active".to_string(),
-            500,
-            d(2030, 1, 1),
-        )]);
-        let ctx = SponsorRenewalContext::new(
-            ReputationLevel::Regional,
-            0.6,
-            SponsorPerformance::MidTable,
+    fn initial_portfolio_staggers_renewal_dates() {
+        // With 3 slots, random 1-4 year terms and a 0-330 day stagger, all
+        // three contracts landing on the identical expiry date means the
+        // stagger logic is broken (chance is negligible otherwise).
+        let ctx =
+            SponsorRenewalContext::new(ReputationLevel::Elite, 1.0, SponsorPerformance::MidTable);
+        let book = ctx.generate_initial_portfolio(d(2026, 7, 1));
+        let first = book[0].expiration();
+        assert!(
+            book.iter().any(|c| c.expiration() != first),
+            "expirations must not all coincide"
         );
-        let (expired, renewed) = s.renew_expired(d(2026, 6, 1), &ctx);
-        assert_eq!(expired, 0);
-        assert_eq!(renewed, 0);
-        assert_eq!(s.sponsorship_contracts.len(), 1);
+    }
+
+    #[test]
+    fn deals_to_sign_replaces_expired_and_ramps_toward_target() {
+        // All expired deals are replaced at once (book at target).
+        assert_eq!(ClubSponsorship::deals_to_sign(1, 3, 2), 2);
+        // Below target with no expiry: at most one business-development
+        // deal per month.
+        assert_eq!(ClubSponsorship::deals_to_sign(0, 3, 0), 1);
+        assert_eq!(ClubSponsorship::deals_to_sign(2, 3, 0), 1);
+        // At or above target: nothing new — the book shrinks by expiry.
+        assert_eq!(ClubSponsorship::deals_to_sign(3, 3, 0), 0);
+        assert_eq!(ClubSponsorship::deals_to_sign(3, 2, 1), 0);
+        // Reputation fell while a deal expired: replacement is not renewed
+        // beyond the smaller target.
+        assert_eq!(ClubSponsorship::deals_to_sign(1, 1, 2), 0);
     }
 }

@@ -1,7 +1,7 @@
-#[cfg(target_os = "linux")]
-use tikv_jemallocator::Jemalloc;
 #[cfg(target_os = "windows")]
 use mimalloc::MiMalloc;
+#[cfg(target_os = "linux")]
+use tikv_jemallocator::Jemalloc;
 
 // A scalable, thread-caching allocator matters more than any single hot
 // path: the world sim fans out across every core and the OS heaps

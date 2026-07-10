@@ -174,10 +174,7 @@ pub async fn player_relations_action(
         club_id: team_opt.map(|t| t.club_id).unwrap_or(0),
         is_on_loan: player.is_on_loan(),
         is_injured: player.player_attributes.is_injured,
-        is_unhappy: player
-            .statuses
-            .get()
-            .contains(&core::PlayerStatusType::Unh),
+        is_unhappy: player.statuses.get().contains(&core::PlayerStatusType::Unh),
         is_force_match_selection: player.is_force_match_selection,
         is_on_watchlist: simulator_data.watchlist.contains(&player.id),
         events_count: PlayerEventsCounter::count(player),

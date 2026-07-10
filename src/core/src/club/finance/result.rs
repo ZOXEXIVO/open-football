@@ -1,9 +1,8 @@
 use crate::ReputationLevel;
 use crate::club::finance::balance::DistressLevel;
-use crate::club::{ClubSponsorshipContract, SponsorPerformance, SponsorRenewalContext};
+use crate::club::{ClubSponsorship, SponsorPerformance, SponsorRenewalContext};
 use crate::league::result::LeagueProcessAccess;
 use log::debug;
-use std::marker::PhantomData;
 
 pub struct ClubFinanceResult {
     pub club_id: u32,
@@ -12,6 +11,10 @@ pub struct ClubFinanceResult {
     pub distress_level: DistressLevel,
     /// Number of sponsorship contracts that expired this month
     pub expired_sponsorships: u32,
+    /// True on the month-beginning tick — the result-stage reconciles the
+    /// sponsorship book (renewals + top-up toward the portfolio target)
+    /// only on this cadence.
+    pub is_month_start: bool,
 }
 
 impl ClubFinanceResult {
@@ -21,6 +24,7 @@ impl ClubFinanceResult {
             is_in_distress: false,
             distress_level: DistressLevel::None,
             expired_sponsorships: 0,
+            is_month_start: false,
         }
     }
 
@@ -64,9 +68,20 @@ impl ClubFinanceResult {
             }
         }
 
-        if self.expired_sponsorships > 0 {
+        if self.is_month_start {
+            // Monthly sponsorship-book reconciliation. Expired deals were
+            // already dropped in the finance simulate pass; here the
+            // commercial department signs replacements — and, when the
+            // book sits below the reputation-tier portfolio target (a
+            // freshly promoted club, or a legacy save from before clubs
+            // carried a full book), lands at most one additional deal per
+            // month so the ramp-up looks like business development, not a
+            // windfall. A club whose reputation has fallen signs nothing
+            // and the book shrinks by natural expiry toward the smaller
+            // target.
+            //
             // Read inputs first (immutable), then re-acquire the club
-            // mutably to push the renewals — keeps `country_by_club` and
+            // mutably to push the new deals — keeps `country_by_club` and
             // the mutable club borrow off each other.
             let date = data.date().date();
             let market_strength = data
@@ -83,6 +98,15 @@ impl ClubFinanceResult {
                 .main()
                 .map(|t| t.reputation.level())
                 .unwrap_or(ReputationLevel::Amateur);
+
+            let current = club.finance.sponsorship.sponsorship_contracts.len();
+            let target = ClubSponsorship::target_portfolio_size(reputation);
+            let deals_to_sign =
+                ClubSponsorship::deals_to_sign(current, target, self.expired_sponsorships);
+            if deals_to_sign == 0 {
+                return;
+            }
+
             let performance = club
                 .teams
                 .main()
@@ -105,7 +129,7 @@ impl ClubFinanceResult {
                 Some(c) => c,
                 None => return,
             };
-            for _ in 0..self.expired_sponsorships {
+            for _ in 0..deals_to_sign {
                 if let Some(contract) = renewal_ctx.generate(date) {
                     club.finance
                         .sponsorship
@@ -115,11 +139,14 @@ impl ClubFinanceResult {
             }
 
             debug!(
-                "{} sponsorship(s) expired at {}, renewed at {:?} performance",
-                self.expired_sponsorships, club.name, performance
+                "{}: signed {} sponsorship deal(s) ({} expired, book {}/{}) at {:?} performance",
+                club.name,
+                deals_to_sign,
+                self.expired_sponsorships,
+                club.finance.sponsorship.sponsorship_contracts.len(),
+                target,
+                performance
             );
         }
-        // Suppress unused-import warning if a feature path drops the type.
-        let _ = PhantomData::<ClubSponsorshipContract>;
     }
 }

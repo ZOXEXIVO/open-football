@@ -13,6 +13,7 @@ use core::Team;
 use core::TeamType;
 use serde::Deserialize;
 use serde::Serialize;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Deserialize)]
@@ -275,6 +276,35 @@ struct RawEdge {
     weight: f32,
 }
 
+/// Tier tallies for the summary chips, taken from the full kept edge set
+/// before any display pruning.
+struct TierCounts {
+    bond: usize,
+    friendly: usize,
+    tension: usize,
+    rivalry: usize,
+}
+
+impl TierCounts {
+    fn of(raw: &[RawEdge]) -> Self {
+        let mut counts = TierCounts {
+            bond: 0,
+            friendly: 0,
+            tension: 0,
+            rivalry: 0,
+        };
+        for e in raw {
+            match e.kind {
+                "bond" => counts.bond += 1,
+                "friendly" => counts.friendly += 1,
+                "tension" => counts.tension += 1,
+                _ => counts.rivalry += 1,
+            }
+        }
+        counts
+    }
+}
+
 /// Combined level at/above which a positive relationship is a warm friendship.
 const FRIENDLY_FLOOR: f32 = 20.0;
 /// …and at/above which it's a close bond.
@@ -284,11 +314,22 @@ const TENSION_CEIL: f32 = -20.0;
 /// …and at/below which (or when either side's feud is declared) it's an open rivalry.
 const RIVALRY_CEIL: f32 = -55.0;
 
+/// Cap on how many drawn edges each player keeps in the whole-squad graph.
+/// The tier chips still count every kept-tier relationship; this only bounds
+/// the inlined payload and the client force-layout work, which otherwise grow
+/// quadratically with pool size (Main + Reserve or the pooled youth sides can
+/// top 50 players whose mutual friendships form a near-complete web).
+const MAX_DRAWN_EDGES_PER_PLAYER: usize = 6;
+
 impl RelationsGraph {
     /// Whole-squad graph: every kept-tier relationship between two pooled
-    /// players, and every player touched by one becomes a node.
+    /// players, and every player touched by one becomes a node. Tier counts
+    /// reflect the full kept set; the drawn edge list is pruned to each
+    /// player's strongest threads so a big pool stays readable and cheap.
     pub(crate) fn build(players: &[&Player]) -> Self {
         let raw = Self::classify(Self::fold_pairs(players));
+        let counts = TierCounts::of(&raw);
+        let raw = Self::prune_for_display(raw);
 
         // Node set = players touched by a kept edge.
         let mut touched: HashSet<u32> = HashSet::new();
@@ -297,36 +338,26 @@ impl RelationsGraph {
             touched.insert(e.b);
         }
 
-        Self::assemble(players, raw, &touched, None)
+        Self::assemble(players, raw, &touched, None, counts)
     }
 
     /// Player-centric (ego) graph: the subject plus every teammate they share
-    /// a kept-tier relationship with. Edges among those neighbours are kept
-    /// too, so the subject's corner of the dressing room reads in full, but
-    /// nobody outside their direct circle is drawn. The subject is flagged
-    /// `is_root` so the client lifts it onto its own band above the formation.
+    /// a kept-tier relationship with — and only those direct threads. Edges
+    /// among the neighbours are not drawn: in a well-bonded pool they turn the
+    /// subject's page into the entire dressing-room web (hundreds of
+    /// third-party lines) and the tier chips stop describing the player.
     pub(crate) fn build_ego(players: &[&Player], root_id: u32) -> Self {
-        let raw = Self::classify(Self::fold_pairs(players));
+        let raw = Self::classify(Self::fold_root_pairs(players, root_id));
+        let counts = TierCounts::of(&raw);
 
-        // Keep the root and the other endpoint of every kept edge touching it.
+        // Nodes: the root and the other endpoint of each direct edge.
         let mut keep: HashSet<u32> = HashSet::new();
         keep.insert(root_id);
         for e in &raw {
-            if e.a == root_id {
-                keep.insert(e.b);
-            } else if e.b == root_id {
-                keep.insert(e.a);
-            }
+            keep.insert(if e.a == root_id { e.b } else { e.a });
         }
 
-        // Drop neighbour-to-outsider threads: keep an edge only when both
-        // ends are the root or one of its direct neighbours.
-        let raw: Vec<RawEdge> = raw
-            .into_iter()
-            .filter(|e| keep.contains(&e.a) && keep.contains(&e.b))
-            .collect();
-
-        Self::assemble(players, raw, &keep, Some(root_id))
+        Self::assemble(players, raw, &keep, Some(root_id), counts)
     }
 
     /// Fold both directions of every relationship between two pooled players
@@ -358,7 +389,51 @@ impl RelationsGraph {
         pairs
     }
 
-    /// Bucket each folded pair into a tier, dropping neutral pairs.
+    /// Fold both directions of the subject's relationships only, for the ego
+    /// graph. The subject's own store is walked once and each pooled
+    /// teammate's view back is a direct lookup, so this costs
+    /// O(pool + subject's store) instead of folding every squad pair the way
+    /// the whole-team graph must.
+    fn fold_root_pairs(players: &[&Player], root_id: u32) -> HashMap<(u32, u32), (f32, u32, bool)> {
+        let mut pairs: HashMap<(u32, u32), (f32, u32, bool)> = HashMap::new();
+        let Some(root) = players.iter().find(|p| p.id == root_id) else {
+            return pairs;
+        };
+
+        let mut fold = |a: u32, b: u32, level: f32, open_rivalry: bool| {
+            let key = if a < b { (a, b) } else { (b, a) };
+            let entry = pairs.entry(key).or_insert((0.0, 0, false));
+            entry.0 += level;
+            entry.1 += 1;
+            if open_rivalry {
+                entry.2 = true;
+            }
+        };
+
+        let team_ids: HashSet<u32> = players.iter().map(|p| p.id).collect();
+        // The subject's view of each pooled teammate…
+        for (target_id, rel) in root.relations().player_relations_iter() {
+            let target = *target_id;
+            if target == root_id || !team_ids.contains(&target) {
+                continue;
+            }
+            fold(root_id, target, rel.level, rel.is_open_rivalry());
+        }
+        // …and each teammate's view back.
+        for player in players {
+            if player.id == root_id {
+                continue;
+            }
+            if let Some(rel) = player.relations().get_player(root_id) {
+                fold(player.id, root_id, rel.level, rel.is_open_rivalry());
+            }
+        }
+        pairs
+    }
+
+    /// Bucket each folded pair into a tier, dropping neutral pairs. Kept
+    /// edges come out strongest-first (ties broken by the id pair) so the
+    /// payload is deterministic and display pruning can just walk the list.
     fn classify(pairs: HashMap<(u32, u32), (f32, u32, bool)>) -> Vec<RawEdge> {
         let mut raw: Vec<RawEdge> = Vec::new();
         for ((a, b), (sum, count, rivalry)) in pairs {
@@ -383,30 +458,49 @@ impl RelationsGraph {
                 weight,
             });
         }
+        raw.sort_by(|x, y| {
+            y.weight
+                .partial_cmp(&x.weight)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| (x.a, x.b).cmp(&(y.a, y.b)))
+        });
         raw
+    }
+
+    /// Keep each player's strongest threads for drawing. Edges are visited
+    /// strongest-first and survive while either endpoint still has budget;
+    /// open rivalries always survive (and spend budget, so a feuding player
+    /// doesn't also keep a fan of weak friendlies). A player's strongest edge
+    /// is always kept, so nobody touched by a kept-tier relationship drops
+    /// out of the graph.
+    fn prune_for_display(raw: Vec<RawEdge>) -> Vec<RawEdge> {
+        let mut degree: HashMap<u32, usize> = HashMap::new();
+        let mut kept: Vec<RawEdge> = Vec::new();
+        for e in raw {
+            let a_full = degree.get(&e.a).copied().unwrap_or(0) >= MAX_DRAWN_EDGES_PER_PLAYER;
+            let b_full = degree.get(&e.b).copied().unwrap_or(0) >= MAX_DRAWN_EDGES_PER_PLAYER;
+            if e.kind != "rivalry" && a_full && b_full {
+                continue;
+            }
+            *degree.entry(e.a).or_insert(0) += 1;
+            *degree.entry(e.b).or_insert(0) += 1;
+            kept.push(e);
+        }
+        kept
     }
 
     /// Turn the kept raw edges into the final node list + client edge payload.
     /// Nodes are the pooled players whose id is in `keep`, in stable squad
     /// order; when `root_id` is set that player is emitted first (node 0) and
-    /// flagged `is_root`. Tier counts are taken from the kept edges.
+    /// flagged `is_root`. Tier counts come in from the caller so they can
+    /// describe the full edge set even when the drawn list was pruned.
     fn assemble(
         players: &[&Player],
         raw: Vec<RawEdge>,
         keep: &HashSet<u32>,
         root_id: Option<u32>,
+        counts: TierCounts,
     ) -> Self {
-        let (mut bond_count, mut friendly_count, mut tension_count, mut rivalry_count) =
-            (0usize, 0usize, 0usize, 0usize);
-        for e in &raw {
-            match e.kind {
-                "bond" => bond_count += 1,
-                "friendly" => friendly_count += 1,
-                "tension" => tension_count += 1,
-                _ => rivalry_count += 1,
-            }
-        }
-
         let mut index_of: HashMap<u32, usize> = HashMap::new();
         let mut nodes: Vec<RelNode> = Vec::new();
 
@@ -441,10 +535,10 @@ impl RelationsGraph {
         RelationsGraph {
             nodes,
             edges,
-            bond_count,
-            friendly_count,
-            tension_count,
-            rivalry_count,
+            bond_count: counts.bond,
+            friendly_count: counts.friendly,
+            tension_count: counts.tension,
+            rivalry_count: counts.rivalry,
         }
     }
 
@@ -474,9 +568,9 @@ struct TeamNeighborhood {
 
 impl TeamNeighborhood {
     fn for_club(club_id: u32, data: &SimulatorData, i18n: &I18n) -> Result<Self, ApiError> {
-        let club = data
-            .club(club_id)
-            .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
+        let club = data.club(club_id).ok_or_else(|| {
+            ApiError::InternalError(format!("Club with ID {} not found", club_id))
+        })?;
 
         let teams = views::neighbor_teams(club, i18n);
 

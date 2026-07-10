@@ -75,7 +75,11 @@ impl PlayerSquadStatus {
         let starters = group.typical_starters();
         let key_cutoff = ((starters + 2) / 3).max(1);
         let is_goalkeeper = matches!(group, PlayerFieldPositionGroup::Goalkeeper);
-        let rotation_slots = if is_goalkeeper { 0 } else { (starters / 2).max(1) };
+        let rotation_slots = if is_goalkeeper {
+            0
+        } else {
+            (starters / 2).max(1)
+        };
         let regular_cutoff = starters;
         let rotation_cutoff = regular_cutoff + rotation_slots;
         let backup_cutoff = rotation_cutoff + if is_goalkeeper { 2 } else { starters };

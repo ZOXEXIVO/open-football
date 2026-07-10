@@ -2043,8 +2043,14 @@ mod player_forced_termination_tests {
             PlayerForcedTerminationReview::evaluate(&player, Fx::date(), 50_000.0, 1_200_000)
                 .expect("a frozen-out, long-requested, low-value player should force an exit");
         assert_eq!(termination.player_id, 9);
-        assert_eq!(termination.reason, FreeAgentReleaseReason::MutualTermination);
-        assert!(termination.payout > 0, "a full-time deal carries a severance");
+        assert_eq!(
+            termination.reason,
+            FreeAgentReleaseReason::MutualTermination
+        );
+        assert!(
+            termination.payout > 0,
+            "a full-time deal carries a severance"
+        );
     }
 
     #[test]

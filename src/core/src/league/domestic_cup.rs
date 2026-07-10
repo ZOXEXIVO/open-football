@@ -21,10 +21,10 @@ use crate::league::{
     League, LeagueBuildOutput, LeagueMatch, LeaguePendingState, LeagueResult, LeagueTableResult,
     MatchStorage, Schedule, ScheduleItem, ScheduleTour,
 };
-use crate::r#match::MatchResult;
+use crate::r#match::{MatchResult, MatchResultOutcome};
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use log::debug;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// One completed edition's result, captured at the instant the next
 /// season's bracket is drawn (while the just-finished bracket is still
@@ -40,6 +40,32 @@ pub struct CupHistoryEntry {
     /// The beaten finalist. `None` when the final's pairing couldn't be
     /// resolved (e.g. the edition was decided without a one-tie final).
     pub runner_up_team_id: Option<u32>,
+}
+
+/// Per-round prize ladder for the domestic cup. Real federations pay a
+/// tie-win fee that roughly doubles every round toward the final (the FA
+/// Cup ladder runs from a few thousand pounds in the early rounds to
+/// millions at the final), so the ladder is anchored at the final and
+/// halves per step back, scaled by the country's broadcast market.
+pub struct DomesticCupPrizes;
+
+impl DomesticCupPrizes {
+    /// Prize for winning the final in a full-strength (market 1.0) country.
+    const FINAL_TIE_WIN: f64 = 5_000_000.0;
+    /// Absolute floor so a deep bracket's first round still pays something.
+    const MIN_TIE_WIN: f64 = 2_000.0;
+
+    /// Money for winning a tie in `round` (1-based) of a bracket with
+    /// `total_rounds`, in a country whose broadcast market scales prize
+    /// funds by `market`.
+    pub fn tie_win_amount(round: u8, total_rounds: u8, market: f32) -> i64 {
+        if round == 0 || total_rounds == 0 || round > total_rounds {
+            return 0;
+        }
+        let steps_from_final = (total_rounds - round) as i32;
+        let base = Self::FINAL_TIE_WIN / 2f64.powi(steps_from_final);
+        (base * market.max(0.0) as f64).max(Self::MIN_TIE_WIN) as i64
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -392,6 +418,54 @@ impl DomesticCup {
         LeagueResult::with_match_result(self.league.id, LeagueTableResult {}, match_results)
     }
 
+    /// Club payouts owed for a batch of just-processed cup results: each
+    /// tie winner earns its round's prize money (see [`DomesticCupPrizes`]).
+    /// Returns `(club_id, amount)` pairs; the caller — who holds the
+    /// mutable club list — books them as categorised cup prize income.
+    pub fn round_prize_payouts(
+        &self,
+        match_results: &[MatchResult],
+        clubs: &[Club],
+        market: f32,
+    ) -> Vec<(u32, i64)> {
+        if match_results.is_empty() {
+            return Vec::new();
+        }
+        let total_rounds = cup::total_rounds(Self::seeded_participants(clubs).len());
+        let mut team_to_club: HashMap<u32, u32> = HashMap::new();
+        for club in clubs {
+            for team in &club.teams.teams {
+                team_to_club.insert(team.id, club.id);
+            }
+        }
+        let mut payouts: Vec<(u32, i64)> = Vec::with_capacity(match_results.len());
+        for mr in match_results {
+            let round = self
+                .league
+                .schedule
+                .tours
+                .iter()
+                .find(|tour| tour.items.iter().any(|item| item.id == mr.id))
+                .map(|tour| tour.num)
+                .unwrap_or(0);
+            let amount = DomesticCupPrizes::tie_win_amount(round, total_rounds, market);
+            if amount <= 0 {
+                continue;
+            }
+            let winner = match mr.score.outcome() {
+                MatchResultOutcome::HomeWin => mr.home_team_id,
+                MatchResultOutcome::AwayWin => mr.away_team_id,
+                // A knockout tie can't truly end level (penalties decide);
+                // mirror the deterministic guard in `cup::tie_winner`.
+                MatchResultOutcome::Draw => mr.home_team_id,
+            };
+            if let Some(&club_id) = team_to_club.get(&winner) {
+                payouts.push((club_id, amount));
+            }
+        }
+        payouts
+    }
+
     /// Backwards-compatible wrapper that runs build → engine → process
     /// in one call. Production paths go through
     /// `Country::simulate_build` so cup matches join the world's
@@ -467,7 +541,7 @@ impl DomesticCup {
 
 #[cfg(test)]
 mod tests {
-    use super::DomesticCup;
+    use super::{DomesticCup, DomesticCupPrizes};
     use crate::academy::ClubAcademy;
     use crate::context::{GlobalContext, SimulationContext};
     use crate::league::schedule::cup;
@@ -513,6 +587,23 @@ mod tests {
             TeamCollection::new(teams),
             ClubFacilities::default(),
         )
+    }
+
+    #[test]
+    fn cup_prize_ladder_anchors_at_the_final_and_halves_backward() {
+        // 5-round bracket, full-strength market: final 5M, semi 2.5M,
+        // quarter 1.25M, … round one 312.5K.
+        assert_eq!(DomesticCupPrizes::tie_win_amount(5, 5, 1.0), 5_000_000);
+        assert_eq!(DomesticCupPrizes::tie_win_amount(4, 5, 1.0), 2_500_000);
+        assert_eq!(DomesticCupPrizes::tie_win_amount(3, 5, 1.0), 1_250_000);
+        assert_eq!(DomesticCupPrizes::tie_win_amount(1, 5, 1.0), 312_500);
+        // The broadcast market scales the whole ladder.
+        assert_eq!(DomesticCupPrizes::tie_win_amount(5, 5, 0.5), 2_500_000);
+        // A weak market's deep bracket still pays the floor, never zero.
+        assert!(DomesticCupPrizes::tie_win_amount(1, 10, 0.01) >= 2_000);
+        // Degenerate inputs pay nothing.
+        assert_eq!(DomesticCupPrizes::tie_win_amount(0, 5, 1.0), 0);
+        assert_eq!(DomesticCupPrizes::tie_win_amount(6, 5, 1.0), 0);
     }
 
     #[test]

@@ -1658,11 +1658,13 @@ impl CountryResult {
                 // sides' growth and feed the broader rocket pattern.
                 let interest = ((balance as f64 * 0.005) as i64).min(500_000);
                 club.finance.balance.push_income(interest);
-            } else if balance < 0 {
-                // 5% penalty on negative balance (debt interest)
-                let penalty = (balance.abs() as f64 * 0.05) as i64;
-                club.finance.balance.push_outcome(penalty);
             }
+            // Negative balances carry NO year-end penalty: debt already
+            // pays monthly, distress-scaled interest in
+            // `process_monthly_finances` (0.6-1.5%/month ≈ 7-18%/year).
+            // The old extra 5% annual hit on top double-billed the same
+            // debt and pushed struggling clubs into a spiral no real
+            // lender's terms would produce.
         });
     }
 

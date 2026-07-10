@@ -51,7 +51,12 @@ impl SquadSatisfaction {
     fn quality_spread(players: &[Player], state: &CoachDecisionState) -> f32 {
         let (count, max_q, min_q) = players
             .iter()
-            .filter_map(|p| state.impressions.get(&p.id).map(|imp| imp.perceived_quality))
+            .filter_map(|p| {
+                state
+                    .impressions
+                    .get(&p.id)
+                    .map(|imp| imp.perceived_quality)
+            })
             .fold(
                 (0u32, f32::NEG_INFINITY, f32::INFINITY),
                 |(c, mx, mn), q| (c + 1, mx.max(q), mn.min(q)),

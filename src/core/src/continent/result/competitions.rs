@@ -566,14 +566,20 @@ impl ContinentResult {
             let won = goals_for > goals_against;
             let drawn = goals_for == goals_against;
 
-            // Update finances with match revenue
+            // Update finances with match revenue — categorised as
+            // continental prize money so the finance page and audits can
+            // attribute it (plain `push_income` showed up as "other").
             let match_revenue = self.calculate_match_revenue(match_result);
-            club.finance.balance.push_income(match_revenue as i64);
+            club.finance
+                .balance
+                .push_income_continental_prize(match_revenue as i64);
 
             // Win bonus
             if won {
                 let win_bonus = self.calculate_win_bonus(match_result);
-                club.finance.balance.push_income(win_bonus as i64);
+                club.finance
+                    .balance
+                    .push_income_continental_prize(win_bonus as i64);
             }
 
             // Update club reputation based on result
@@ -661,7 +667,9 @@ impl ContinentResult {
 
         for &club_id in participating_clubs {
             if let Some(club) = data.club_mut(club_id) {
-                club.finance.balance.push_income(participation_bonus as i64);
+                club.finance
+                    .balance
+                    .push_income_continental_prize(participation_bonus as i64);
 
                 debug!(
                     "Club {} received participation bonus: {:.2}M",
