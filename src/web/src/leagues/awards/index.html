@@ -110,9 +110,9 @@
                                 <td class="aw-portrait">
                                     <a href="/{{ lang }}/players/{{ w.player_slug }}" class="fm-aw-mini-portrait">
                                         {% if w.player_generated %}
-                                        <img src="/api/players/{{ w.player_id }}/face.svg?v=3" alt="">
+                                        <img src="/api/players/{{ w.player_id }}/face.svg?v=4" alt="">
                                         {% else %}
-                                        <img src="https://open-football.org/player/{{ w.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ w.player_id }}/face.svg?v=3';" alt="">
+                                        <img src="https://open-football.org/player/{{ w.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ w.player_id }}/face.svg?v=4';" alt="">
                                         {% endif %}
                                     </a>
                                 </td>
@@ -193,7 +193,7 @@
                                 <tr>
                                     <td class="aw-portrait">
                                         <a href="/{{ lang }}/players/{{ l.player_slug }}" class="fm-aw-mini-portrait">
-                                            {% if l.player_generated %}<img src="/api/players/{{ l.player_id }}/face.svg?v=3" alt="">{% else %}<img src="https://open-football.org/player/{{ l.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ l.player_id }}/face.svg?v=3';" alt="">{% endif %}
+                                            {% if l.player_generated %}<img src="/api/players/{{ l.player_id }}/face.svg?v=4" alt="">{% else %}<img src="https://open-football.org/player/{{ l.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ l.player_id }}/face.svg?v=4';" alt="">{% endif %}
                                         </a>
                                     </td>
                                     <td class="aw-name">
@@ -228,7 +228,7 @@
                                 <tr>
                                     <td class="aw-portrait">
                                         <a href="/{{ lang }}/players/{{ l.player_slug }}" class="fm-aw-mini-portrait">
-                                            {% if l.player_generated %}<img src="/api/players/{{ l.player_id }}/face.svg?v=3" alt="">{% else %}<img src="https://open-football.org/player/{{ l.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ l.player_id }}/face.svg?v=3';" alt="">{% endif %}
+                                            {% if l.player_generated %}<img src="/api/players/{{ l.player_id }}/face.svg?v=4" alt="">{% else %}<img src="https://open-football.org/player/{{ l.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ l.player_id }}/face.svg?v=4';" alt="">{% endif %}
                                         </a>
                                     </td>
                                     <td class="aw-name">
@@ -263,7 +263,7 @@
                                 <tr>
                                     <td class="aw-portrait">
                                         <a href="/{{ lang }}/players/{{ l.player_slug }}" class="fm-aw-mini-portrait">
-                                            {% if l.player_generated %}<img src="/api/players/{{ l.player_id }}/face.svg?v=3" alt="">{% else %}<img src="https://open-football.org/player/{{ l.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ l.player_id }}/face.svg?v=3';" alt="">{% endif %}
+                                            {% if l.player_generated %}<img src="/api/players/{{ l.player_id }}/face.svg?v=4" alt="">{% else %}<img src="https://open-football.org/player/{{ l.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ l.player_id }}/face.svg?v=4';" alt="">{% endif %}
                                         </a>
                                     </td>
                                     <td class="aw-name">
@@ -429,7 +429,7 @@
                             <td class="aw-key">{{ i18n.t("player_of_the_season") }}</td>
                             <td class="aw-portrait">
                                 <a href="/{{ lang }}/players/{{ po.player_slug }}" class="fm-aw-mini-portrait">
-                                    {% if po.player_generated %}<img src="/api/players/{{ po.player_id }}/face.svg?v=3" alt="">{% else %}<img src="https://open-football.org/player/{{ po.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ po.player_id }}/face.svg?v=3';" alt="">{% endif %}
+                                    {% if po.player_generated %}<img src="/api/players/{{ po.player_id }}/face.svg?v=4" alt="">{% else %}<img src="https://open-football.org/player/{{ po.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ po.player_id }}/face.svg?v=4';" alt="">{% endif %}
                                 </a>
                             </td>
                             <td class="aw-name">
@@ -443,7 +443,7 @@
                             <td class="aw-key">{{ i18n.t("young_player_of_the_season") }}</td>
                             <td class="aw-portrait">
                                 <a href="/{{ lang }}/players/{{ yo.player_slug }}" class="fm-aw-mini-portrait">
-                                    {% if yo.player_generated %}<img src="/api/players/{{ yo.player_id }}/face.svg?v=3" alt="">{% else %}<img src="https://open-football.org/player/{{ yo.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ yo.player_id }}/face.svg?v=3';" alt="">{% endif %}
+                                    {% if yo.player_generated %}<img src="/api/players/{{ yo.player_id }}/face.svg?v=4" alt="">{% else %}<img src="https://open-football.org/player/{{ yo.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ yo.player_id }}/face.svg?v=4';" alt="">{% endif %}
                                 </a>
                             </td>
                             <td class="aw-name">
@@ -457,7 +457,7 @@
                             <td class="aw-key">{{ i18n.t("top_scorer") }}</td>
                             <td class="aw-portrait">
                                 <a href="/{{ lang }}/players/{{ ts.player_slug }}" class="fm-aw-mini-portrait">
-                                    {% if ts.player_generated %}<img src="/api/players/{{ ts.player_id }}/face.svg?v=3" alt="">{% else %}<img src="https://open-football.org/player/{{ ts.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ ts.player_id }}/face.svg?v=3';" alt="">{% endif %}
+                                    {% if ts.player_generated %}<img src="/api/players/{{ ts.player_id }}/face.svg?v=4" alt="">{% else %}<img src="https://open-football.org/player/{{ ts.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ ts.player_id }}/face.svg?v=4';" alt="">{% endif %}
                                 </a>
                             </td>
                             <td class="aw-name">
@@ -471,7 +471,7 @@
                             <td class="aw-key">{{ i18n.t("top_assists_award") }}</td>
                             <td class="aw-portrait">
                                 <a href="/{{ lang }}/players/{{ ta.player_slug }}" class="fm-aw-mini-portrait">
-                                    {% if ta.player_generated %}<img src="/api/players/{{ ta.player_id }}/face.svg?v=3" alt="">{% else %}<img src="https://open-football.org/player/{{ ta.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ ta.player_id }}/face.svg?v=3';" alt="">{% endif %}
+                                    {% if ta.player_generated %}<img src="/api/players/{{ ta.player_id }}/face.svg?v=4" alt="">{% else %}<img src="https://open-football.org/player/{{ ta.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ ta.player_id }}/face.svg?v=4';" alt="">{% endif %}
                                 </a>
                             </td>
                             <td class="aw-name">
@@ -485,7 +485,7 @@
                             <td class="aw-key">{{ i18n.t("golden_glove") }}</td>
                             <td class="aw-portrait">
                                 <a href="/{{ lang }}/players/{{ gg.player_slug }}" class="fm-aw-mini-portrait">
-                                    {% if gg.player_generated %}<img src="/api/players/{{ gg.player_id }}/face.svg?v=3" alt="">{% else %}<img src="https://open-football.org/player/{{ gg.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ gg.player_id }}/face.svg?v=3';" alt="">{% endif %}
+                                    {% if gg.player_generated %}<img src="/api/players/{{ gg.player_id }}/face.svg?v=4" alt="">{% else %}<img src="https://open-football.org/player/{{ gg.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ gg.player_id }}/face.svg?v=4';" alt="">{% endif %}
                                 </a>
                             </td>
                             <td class="aw-name">

@@ -64,7 +64,13 @@ async fn face_action(
     let athletic_kg = 23.0 * (height_cm / 100.0) * (height_cm / 100.0);
     let heft = (weight_kg - athletic_kg) / 6.0;
 
-    let svg = generate_face_svg(path.player_id, age, skin_dist, heft);
+    // Expression: short fuse (low temperament) + dirty tackling read as a
+    // harder face; both attributes are on the 0..20 scale
+    let aggression =
+        (((20.0 - player.attributes.temperament) * 0.6 + player.attributes.dirtiness * 0.4) / 20.0)
+            .clamp(0.0, 1.0);
+
+    let svg = generate_face_svg(path.player_id, age, skin_dist, heft, aggression);
 
     (
         StatusCode::OK,

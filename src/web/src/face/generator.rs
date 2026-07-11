@@ -269,8 +269,18 @@ fn pick_skin_index(r: &mut FaceRng, dist: SkinDist) -> usize {
 ///
 /// `heft` is the player's weight-for-height deviation (≈ -2 lean .. +2.5
 /// heavy): it fills the cheeks/jaw/neck instead of random width alone.
-pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist, heft: f32) -> String {
+///
+/// `aggression` (0..1, from temperament/dirtiness) hardens the expression:
+/// brows drop and knit, lids weigh down, mouth corners tighten.
+pub fn generate_face_svg(
+    player_id: u32,
+    age: u8,
+    skin_dist: SkinDist,
+    heft: f32,
+    aggression: f32,
+) -> String {
     let heft = heft.clamp(-2.0, 2.5);
+    let aggr = aggression.clamp(0.0, 1.0);
     let mut r = FaceRng::new(player_id);
 
     let skin_idx = pick_skin_index(&mut r, skin_dist);
@@ -462,7 +472,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist, heft: f32
     let mid_y = (cy_cheek + jy) / 2.0;
 
     let ey = 118.0 + ay * 2.0;
-    let by = 104.0 + ay - brow_gap;
+    // Aggressive players carry the brow lower over the eyes
+    let by = 104.0 + ay - brow_gap + aggr * 2.2;
     let ny = 148.0f32;
     let my = 169.0f32;
     let eye_off = 17.3 + eye_spacing;
@@ -586,7 +597,7 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist, heft: f32
     s.push_str(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 250">"#);
     // Debug trace of the sampled variants (invisible; keeps visual QA cheap)
     s.push_str(&format!(
-        "<!--h{hair_st} e{eye_st} f{face_var} n{nose_st} b{} w{heft:.1}-->",
+        "<!--h{hair_st} e{eye_st} f{face_var} n{nose_st} b{} w{heft:.1} a{aggr:.1}-->",
         u8::from(beard),
     ));
 
@@ -995,8 +1006,9 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist, heft: f32
         // Lid cast shadow scales with the opening so big eyes stay open;
         // only genuinely heavy-lidded archetypes may cover most of it
         let lid_cap = if lid_extra > 0.3 { ery } else { ery * 0.62 };
-        let lid_ry = (ery * 0.36 + lid_heavy * 0.9 + lid_extra * 0.7).clamp(1.0, lid_cap);
-        let lid_op = (0.18 + lid_heavy * 0.13 + lid_extra * 0.07).clamp(0.10, 0.42);
+        let lid_ry =
+            (ery * 0.36 + lid_heavy * 0.9 + lid_extra * 0.7 + aggr * 0.35).clamp(1.0, lid_cap);
+        let lid_op = (0.18 + lid_heavy * 0.13 + lid_extra * 0.07 + aggr * 0.06).clamp(0.10, 0.45);
         s.push_str(&format!(
             r##"<ellipse cx="{exc}" cy="{top_y}" rx="{erx}" ry="{lid_ry:.2}" fill="#241713" opacity="{lid_op:.2}" filter="url(#b1)"/>"##,
         ));
@@ -1108,8 +1120,9 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist, heft: f32
         for (bi, (exc, side)) in [(exl, -1.0f32), (exr, 1.0)].iter().enumerate() {
             let inner_x = exc - side * (brow_len - 2.5);
             let outer_x = exc + side * (brow_len + 2.0);
-            let y0 = by + 1.4;
-            let yc = by - brow_arch * 1.6;
+            // Knitted angry brow: inner end pulls down, arch flattens
+            let y0 = by + 1.4 + aggr * 2.0;
+            let yc = by - brow_arch * 1.6 * (1.0 - aggr * 0.35);
             let y1 = by + 0.6 + brow_tilt * 2.4;
             let peak_x = (inner_x + outer_x) / 2.0 - side * 1.5;
 
@@ -1134,6 +1147,19 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist, heft: f32
                 ));
             }
             s.push_str("</g>");
+        }
+
+        // Glabella frown lines — only on genuinely hard faces
+        if aggr > 0.55 {
+            let gop = (aggr - 0.55) * 0.5 + maturity * 0.08;
+            for gx in [cx - 2.4, cx + 2.4] {
+                s.push_str(&format!(
+                    r#"<path d="M{gx} {} L{:.1} {}" stroke="{skin_dk2}" stroke-width="0.8" fill="none" filter="url(#b1)" opacity="{gop:.2}"/>"#,
+                    by - 3.0,
+                    gx + (cx - gx) * 0.15,
+                    by + 3.5,
+                ));
+            }
         }
     }
 
@@ -1198,9 +1224,10 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist, heft: f32
             my - upper_h * 0.4,
             my + 0.8,
         ));
-        // Mouth line
+        // Mouth line — corners drop below the centre on a hard expression
+        let m_end = my + aggr * 1.4;
         s.push_str(&format!(
-            r#"<path d="M{} {my} Q{cx} {} {} {my}" stroke="{line_col}" stroke-width="1.0" fill="none" stroke-linecap="round" opacity="0.80" filter="url(#b1)"/>"#,
+            r#"<path d="M{} {m_end} Q{cx} {} {} {m_end}" stroke="{line_col}" stroke-width="1.0" fill="none" stroke-linecap="round" opacity="0.80" filter="url(#b1)"/>"#,
             ml + 0.5,
             my + 1.1,
             mr_ - 0.5,
@@ -1832,9 +1859,11 @@ mod tests {
                 html.push_str("<div class=\"row\">");
                 for i in 0..8u32 {
                     let player_id = 2_000_000_000u32 + age as u32 * 1000 + i * 77 + 13;
-                    // Sweep the build axis across each row: lean → heavy
+                    // Sweep the build axis across each row: lean → heavy;
+                    // scrambled aggression sweep so it decorrelates from heft
                     let heft = -1.6 + i as f32 * 0.5;
-                    let svg = generate_face_svg(player_id, age, dist, heft);
+                    let aggression = (i * 3 % 8) as f32 / 7.0;
+                    let svg = generate_face_svg(player_id, age, dist, heft, aggression);
                     let fname = format!("face_{dist_name}_{age}_{i}.svg");
                     std::fs::write(root.join(&fname), svg).expect("write face svg");
                     html.push_str(&format!(
