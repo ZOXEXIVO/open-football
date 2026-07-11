@@ -17,9 +17,9 @@
         <div class="fm-pitch-player fm-aw-pitch-player {{ slot.position_class }}" title="{{ slot.player_name }} — {{ slot.club_name }}">
             <a class="fm-aw-pitch-photo" href="/{{ lang }}/players/{{ slot.player_slug }}">
                 {% if slot.player_generated %}
-                <img src="/api/players/{{ slot.player_id }}/face.svg?v=4" alt="">
+                <img src="/api/players/{{ slot.player_id }}/face.svg?v=6" alt="">
                 {% else %}
-                <img src="https://open-football.org/player/{{ slot.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ slot.player_id }}/face.svg?v=4';" alt="">
+                <img src="https://open-football.org/player/{{ slot.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ slot.player_id }}/face.svg?v=6';" alt="">
                 {% endif %}
                 <span class="fm-aw-pitch-rating">{{ slot.average_rating }}</span>
             </a>

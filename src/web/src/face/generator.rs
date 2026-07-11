@@ -586,7 +586,7 @@ pub fn generate_face_svg(
     let nkbl = nkl - 7.0;
     let nkbr = nkr + 7.0;
     let neck_d = format!(
-        "M{nkl} {neck_top} C{nkl} {} {} 224 {nkbl} 228 L{nkbr} 228 C{} 224 {nkr} {} {nkr} {neck_top}Z",
+        "M{nkl} {neck_top} C{nkl} {} {} 236 {nkbl} 240 L{nkbr} 240 C{} 236 {nkr} {} {nkr} {neck_top}Z",
         neck_top + 22.0,
         nkl - 4.0,
         nkr + 4.0,
@@ -710,13 +710,13 @@ pub fn generate_face_svg(
     ));
     // Side planes
     s.push_str(&format!(
-        r#"<path d="M{} {} L{} 228" stroke="{skin_dk2}" stroke-width="5" filter="url(#b2)" opacity="0.35" fill="none"/>"#,
+        r#"<path d="M{} {} L{} 238" stroke="{skin_dk2}" stroke-width="5" filter="url(#b2)" opacity="0.35" fill="none"/>"#,
         nkr - 1.0,
         neck_top + 6.0,
         nkbr - 1.0,
     ));
     s.push_str(&format!(
-        r#"<path d="M{} {} L{} 228" stroke="{skin_hi}" stroke-width="3" filter="url(#b2)" opacity="0.16" fill="none"/>"#,
+        r#"<path d="M{} {} L{} 238" stroke="{skin_hi}" stroke-width="3" filter="url(#b2)" opacity="0.16" fill="none"/>"#,
         nkl + 2.0,
         neck_top + 10.0,
         nkbl + 2.0,
@@ -1760,7 +1760,19 @@ pub fn generate_face_svg(
     s.push_str("</g>");
 
     // ── Jersey / shoulders ──────────────────────────────────
-    let jersey_d = "M8 250 C20 224 48 216 76 213 Q100 208 124 213 C152 216 180 224 192 250Z";
+    // Shoulders sit a fixed distance below the chin: long faces push the
+    // jersey down so a real stretch of neck always stays visible
+    let jdy = (chy + 9.0 - 210.5).max(0.0);
+    let jersey_d = format!(
+        "M8 250 C20 {} 48 {} 76 {} Q100 {} 124 {} C152 {} 180 {} 192 250Z",
+        224.0 + jdy,
+        216.0 + jdy,
+        213.0 + jdy,
+        208.0 + jdy,
+        213.0 + jdy,
+        216.0 + jdy,
+        224.0 + jdy,
+    );
     s.push_str(&format!(
         r#"<defs><clipPath id="jc"><path d="{jersey_d}"/></clipPath></defs>"#
     ));
@@ -1768,10 +1780,11 @@ pub fn generate_face_svg(
     s.push_str(r#"<g clip-path="url(#jc)">"#);
     // Head cast shadow onto the chest
     s.push_str(&format!(
-        r##"<ellipse cx="{cx}" cy="220" rx="30" ry="10" fill="#000" filter="url(#b3)" opacity="0.30"/>"##,
+        r##"<ellipse cx="{cx}" cy="{}" rx="30" ry="10" fill="#000" filter="url(#b3)" opacity="0.30"/>"##,
+        220.0 + jdy,
     ));
     // Fabric folds
-    for (fx, fy) in [(cx - 30.0, 232.0f32), (cx + 28.0, 234.0)] {
+    for (fx, fy) in [(cx - 30.0, 232.0 + jdy), (cx + 28.0, 234.0 + jdy)] {
         s.push_str(&format!(
             r#"<path d="M{fx} {fy} Q{} {} {} 250" stroke="{jersey_dark}" stroke-width="3" fill="none" filter="url(#b2)" opacity="0.5"/>"#,
             fx + 3.0,
@@ -1780,13 +1793,20 @@ pub fn generate_face_svg(
         ));
     }
     s.push_str("</g>");
-    // Crew collar
+    // Crew collar — the ribbed band IS the shirt's top edge, so it hugs the
+    // neckline silhouette where the neck enters the fabric, not the chest
     s.push_str(&format!(
-        r#"<path d="M{} 219 Q{cx} 231 {} 219 L{} 225 Q{cx} 238 {} 225Z" fill="{jersey_dark}" opacity="0.92"/>"#,
-        cx - 24.0,
-        cx + 24.0,
-        cx + 26.0,
+        r#"<path d="M{} {} Q{cx} {} {} {} L{} {} Q{cx} {} {} {}Z" fill="{jersey_dark}" opacity="0.92"/>"#,
         cx - 26.0,
+        212.5 + jdy,
+        207.5 + jdy,
+        cx + 26.0,
+        212.5 + jdy,
+        cx + 24.0,
+        218.0 + jdy,
+        214.0 + jdy,
+        cx - 24.0,
+        218.0 + jdy,
     ));
 
     // ── Vignette ────────────────────────────────────────────
