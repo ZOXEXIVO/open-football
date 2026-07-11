@@ -1,6 +1,11 @@
 mod generator;
 pub mod routes;
 
+/// Cache-busting version for /face.svg URLs. Responses are served
+/// `immutable`, so bump this whenever generator output changes — every
+/// template injects it via `{{ crate::face::FACE_VERSION }}`.
+pub const FACE_VERSION: u32 = 8;
+
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -70,7 +75,22 @@ async fn face_action(
         (((20.0 - player.attributes.temperament) * 0.6 + player.attributes.dirtiness * 0.4) / 20.0)
             .clamp(0.0, 1.0);
 
-    let svg = generate_face_svg(path.player_id, age, skin_dist, heft, aggression);
+    // Real club shirt color; free agents keep the per-player fallback hue
+    let jersey = simulator_data
+        .indexes
+        .as_ref()
+        .and_then(|idx| idx.get_player_location(path.player_id))
+        .and_then(|(_, _, club_id, _)| simulator_data.club(club_id))
+        .map(|club| club.colors.background.clone());
+
+    let svg = generate_face_svg(
+        path.player_id,
+        age,
+        skin_dist,
+        heft,
+        aggression,
+        jersey.as_deref(),
+    );
 
     (
         StatusCode::OK,

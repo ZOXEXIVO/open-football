@@ -1,9 +1,9 @@
 <div class="fm-aw-feature">
     <a class="fm-aw-feature-photo" href="/{{ lang }}/players/{{ card.player_slug }}">
         {% if card.player_generated %}
-        <img src="/api/players/{{ card.player_id }}/face.svg?v=6" alt="{{ card.player_name }}">
+        <img src="/api/players/{{ card.player_id }}/face.svg?v={{ crate::face::FACE_VERSION }}" alt="{{ card.player_name }}">
         {% else %}
-        <img src="https://open-football.org/player/{{ card.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ card.player_id }}/face.svg?v=6';" alt="{{ card.player_name }}">
+        <img src="https://open-football.org/player/{{ card.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ card.player_id }}/face.svg?v={{ crate::face::FACE_VERSION }}';" alt="{{ card.player_name }}">
         {% endif %}
     </a>
     <div class="fm-aw-feature-id">
