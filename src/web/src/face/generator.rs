@@ -386,7 +386,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist, heft: f32
     fs.cheek_y += m_length * 0.4;
     fs.jaw_y += m_length * 0.6;
     fs.chin_y = (fs.chin_y + m_length * 0.8).clamp(79.5, 84.5);
-    fs.chin_round = (fs.chin_round + m_round + heft * 0.35).clamp(1.2, 5.6);
+    // Floor 2.0: below that the jaw/chin corners render razor-sharp
+    fs.chin_round = (fs.chin_round + m_round + heft * 0.35).clamp(2.0, 5.6);
     let cx = 100.0f32;
     let maturity = match age {
         0..=21 => 0.35,
@@ -528,21 +529,39 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist, heft: f32
         _ => (11.5, -0.2, 2.8, 18),
     };
 
-    // Head outline — shared by the fill and the shading clip
+    // Head outline — shared by the fill and the shading clip.
+    // Lower face is all cubics with controls held OFF the chords: a control
+    // on the straight line renders a flat plane and the jaw reads polygonal
+    let chin_sag = (cr_val * 1.15).min(10.0);
     let head_d = format!(
         "M{hl} {cy_cheek} C{hl} {} {} {ht} {cx} {ht} C{} {ht} {hr} {} {hr} {cy_cheek} \
-         C{hr} {} {mid_r} {mid_y} {jr} {jy} Q{} {} {chr} {chy} Q{cx} {} {chl} {chy} \
-         Q{} {} {jl} {jy} C{mid_l} {mid_y} {hl} {} {hl} {cy_cheek}Z",
+         C{hr} {} {} {mid_y} {jr} {jy} C{} {} {} {} {chr} {chy} \
+         C{} {} {} {} {chl} {chy} C{} {} {} {} {jl} {jy} \
+         C{} {mid_y} {hl} {} {hl} {cy_cheek}Z",
         ht + 22.0,
         hl + 14.0,
         hr - 14.0,
         ht + 22.0,
+        // right cheek → jaw: c2 bulges outward off the chord
         jy - 10.0,
-        jr - cr_val,
-        jy + cr_val,
-        chy + cr_val,
-        jl + cr_val,
-        jy + cr_val,
+        mid_r + 2.0,
+        // right jaw → chin: widely rounded corner, lands horizontal
+        jr - cr_val * 0.2,
+        jy + cr_val * 0.9,
+        chr + 3.0,
+        chy - cr_val * 0.1,
+        // chin bottom: symmetric sag with horizontal corner tangents
+        cx + (chr - cx) * 0.55,
+        chy + chin_sag,
+        cx - (cx - chl) * 0.55,
+        chy + chin_sag,
+        // left chin → jaw (mirror)
+        chl - 3.0,
+        chy - cr_val * 0.1,
+        jl + cr_val * 0.2,
+        jy + cr_val * 0.9,
+        // left jaw → cheek
+        mid_l - 2.0,
         jy - 10.0,
     );
 
@@ -1230,7 +1249,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist, heft: f32
         let btr = cr - 2.0;
         let bt_y = cy_cheek + 10.0;
         let jy8 = jy + 8.0;
-        let chy7 = chy + 7.0;
+        // Beard bottom must clear the head's chin sag or skin peeks through
+        let chy7 = chy + chin_sag * 1.5 + 3.0;
         let nyb = ny + 2.0;
         let hole_rx = mw - 2.5;
         let hole_ry = (upper_h + lower_h - 1.5).max(3.0);
