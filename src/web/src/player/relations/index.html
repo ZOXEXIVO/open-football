@@ -44,10 +44,10 @@
                  data-row="{{ n.row }}" data-root="{% if n.is_root %}1{% else %}0{% endif %}" title="{{ n.last_name }}">
                 <span class="fm-rel-photo">
                     {% if n.is_generated %}
-                    <img src="/api/players/{{ n.player_id }}/face.svg" alt="{{ n.last_name }}" draggable="false" loading="lazy">
+                    <img src="/api/players/{{ n.player_id }}/face.svg?v=2" alt="{{ n.last_name }}" draggable="false" loading="lazy">
                     {% else %}
                     <img src="https://open-football.org/player/{{ n.player_id }}.png"
-                         onerror="this.onerror=null;this.src='/api/players/{{ n.player_id }}/face.svg';"
+                         onerror="this.onerror=null;this.src='/api/players/{{ n.player_id }}/face.svg?v=2';"
                          alt="{{ n.last_name }}" draggable="false" loading="lazy">
                     {% endif %}
                 </span>

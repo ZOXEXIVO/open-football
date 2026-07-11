@@ -266,7 +266,11 @@ fn pick_skin_index(r: &mut FaceRng, dist: SkinDist) -> usize {
 /// highlight and shadow, all face shading is Gaussian-blurred and clipped
 /// to the head silhouette, and features are built from soft light/shadow
 /// planes instead of stroked cartoon outlines.
-pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String {
+///
+/// `heft` is the player's weight-for-height deviation (≈ -2 lean .. +2.5
+/// heavy): it fills the cheeks/jaw/neck instead of random width alone.
+pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist, heft: f32) -> String {
+    let heft = heft.clamp(-2.0, 2.5);
     let mut r = FaceRng::new(player_id);
 
     let skin_idx = pick_skin_index(&mut r, skin_dist);
@@ -282,11 +286,41 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
     let eye_col = EYES[r.range(EYES.len())];
 
     let face_var = r.range(6);
-    let hair_st = r.range(12);
+    // Weighted style roll — everyday cuts dominate; statement styles
+    // (mohawk, afro, long hair) are rare accents like on a real pitch
+    let hair_st = match r.range(48) {
+        0..=7 => 0,    // short crop
+        8..=13 => 1,   // side part
+        14..=19 => 2,  // medium
+        20..=25 => 3,  // buzz
+        26..=30 => 4,  // swept back
+        31..=35 => 9,  // fade
+        36..=38 => 7,  // curly
+        39..=40 => 5,  // afro
+        41..=42 => 8,  // long
+        43..=44 => 11, // cornrows
+        45..=46 => 6,  // bald
+        _ => 10,       // faux-hawk
+    };
     // A bald 17-year-old is not a thing — young players keep hair
-    let hair_st = if age <= 23 && hair_st == 6 { 0 } else { hair_st };
+    let hair_st = if age <= 23 && hair_st == 6 {
+        0
+    } else {
+        hair_st
+    };
     let brow_st = r.range(6);
-    let eye_st = r.range(5);
+    // Weighted eye-shape roll: open/large forms are the majority so narrow
+    // forms stay distinct accents rather than the average look
+    let eye_st = match r.range(12) {
+        0..=2 => 0, // standard almond
+        3..=4 => 2, // big round
+        5..=6 => 7, // wide-open almond
+        7 => 1,     // hooded
+        8 => 3,     // monolid
+        9 => 4,     // deep-set
+        10 => 5,    // thin
+        _ => 6,     // downturned
+    };
     let nose_st = r.range(6);
     let mouth_st = r.range(5);
     let texture_seed = r.range(9999);
@@ -319,18 +353,40 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         _ => r.frange(1.3, 3.0),
     };
 
+    // Continuous skull morph — identity-driven and age-independent, so two
+    // same-age players still get visibly different heads (the 6 archetypes
+    // only set the base proportions)
+    let m_width = r.frange(-1.6, 1.6); // overall skull breadth
+    let m_jaw = r.frange(-1.8, 1.8); // jaw breadth vs the rest of the skull
+    let m_chin_w = r.frange(-1.4, 1.6); // chin breadth
+    let m_length = r.frange(-1.5, 1.8); // face length
+    let m_cheek = r.frange(-1.0, 1.2); // cheekbone prominence
+    let m_round = r.frange(-1.0, 1.4); // chin rounding
+
     // Slight photographic head tilt
     let tilt = r.frange(-2.2, 2.2);
 
     // Continuous eye differentiation — deterministic per player via the
     // id-seeded rng, so a player's eyes never change between renders.
     let eye_spacing = r.frange(-1.3, 1.6); // inter-ocular distance
-    let eye_tilt = r.frange(-0.9, 1.6); // outer-corner lift: down- vs upturned
+    let eye_tilt = r.frange(-1.2, 1.2); // outer-corner lift: down- vs upturned
     let lid_heavy = r.frange(0.0, 1.0); // hooded lids + deep sockets
     let eye_scale = r.frange(0.90, 1.10); // overall eye size
     let brow_gap = r.frange(-0.6, 2.0); // brow-to-eye distance
 
-    let fs = face_shape(face_var, fw);
+    let mut fs = face_shape(face_var, fw);
+    // Apply the morph in shape space; clamps keep the silhouette tapering
+    // (temple >= cheek >= jaw > chin) and the chin above the jersey line
+    // Body weight fills the soft tissue: cheeks, jaw, chin — not the skull
+    fs.temple_w += m_width + heft * 0.15;
+    fs.cheek_w = (fs.cheek_w + m_width * 0.9 + m_cheek + heft * 0.5).min(fs.temple_w - 0.4);
+    fs.jaw_w = (fs.jaw_w + m_width * 0.7 + m_jaw + heft * 0.8).min(fs.cheek_w - 0.2);
+    fs.chin_w = (fs.chin_w + m_chin_w + heft * 0.3).clamp(5.5, fs.jaw_w - 3.0);
+    fs.head_top -= m_length * 0.3;
+    fs.cheek_y += m_length * 0.4;
+    fs.jaw_y += m_length * 0.6;
+    fs.chin_y = (fs.chin_y + m_length * 0.8).clamp(79.5, 84.5);
+    fs.chin_round = (fs.chin_round + m_round + heft * 0.35).clamp(1.2, 5.6);
     let cx = 100.0f32;
     let maturity = match age {
         0..=21 => 0.35,
@@ -427,15 +483,21 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         f32,
     ) = match eye_st {
         // Standard almond
-        0 => (8.0, 3.1, 3.3, 1.35, 0.60, 0.30, 0.0, 0.0),
-        // Hooded — heavy lid hides the crease
-        1 => (7.9, 2.6, 3.2, 1.30, 0.50, 0.12, 0.9, -0.3),
-        // Big round, open European
-        2 => (8.2, 3.9, 3.5, 1.45, 0.88, 0.35, -0.3, 0.2),
+        0 => (8.0, 3.6, 3.7, 1.45, 0.62, 0.30, 0.0, 0.0),
+        // Hooded — skin fold droops over the outer lid, crease hidden
+        1 => (8.0, 2.8, 3.5, 1.35, 0.52, 0.0, 1.0, -0.3),
+        // Big round, wide open — iris fully visible
+        2 => (8.3, 4.8, 4.1, 1.60, 1.00, 0.35, -0.5, 0.1),
         // Monolid, upturned — flat lid, no crease, epicanthic fold
-        3 => (8.6, 2.7, 3.3, 1.30, 0.55, 0.0, 0.6, 1.2),
+        3 => (8.8, 2.4, 3.5, 1.30, 0.50, 0.0, 0.7, 1.3),
         // Deep-set — smaller opening in a strong socket
-        _ => (7.5, 3.0, 3.1, 1.30, 0.60, 0.38, 0.3, -0.2),
+        4 => (7.4, 3.2, 3.4, 1.35, 0.62, 0.42, 0.4, -0.2),
+        // Thin slit — long and very narrow, iris heavily cropped
+        5 => (9.2, 1.9, 3.4, 1.25, 0.45, 0.15, 0.6, 0.4),
+        // Downturned — outer corners drop, slightly heavy bottom
+        6 => (8.1, 3.5, 3.7, 1.45, 0.70, 0.30, 0.2, -1.6),
+        // Wide-open almond — tall but still pointed corners
+        _ => (8.6, 4.4, 4.0, 1.55, 0.80, 0.28, -0.4, 0.5),
     };
     let erx = erx * eye_scale;
     let ery = ery * eye_scale;
@@ -486,7 +548,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
 
     // Neck geometry (used by defs clip + drawing). Wide and flared into the
     // trapezius so it reads as part of the body, not a pedestal.
-    let neck_w = 19.0 + fw * 0.9;
+    // Thick neck is the strongest heavy-build cue in a portrait crop
+    let neck_w = 19.0 + fw * 0.9 + heft * 1.5;
     let neck_top = chy - 20.0;
     let nkl = cx - neck_w;
     let nkr = cx + neck_w;
@@ -502,6 +565,11 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
 
     let mut s = String::with_capacity(24000);
     s.push_str(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 250">"#);
+    // Debug trace of the sampled variants (invisible; keeps visual QA cheap)
+    s.push_str(&format!(
+        "<!--h{hair_st} e{eye_st} f{face_var} n{nose_st} b{} w{heft:.1}-->",
+        u8::from(beard),
+    ));
 
     // ── Defs ────────────────────────────────────────────────
     let seed_a = texture_seed;
@@ -554,6 +622,10 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
 <filter id="htx" x="-15%" y="-15%" width="130%" height="130%">
 <feTurbulence type="turbulence" baseFrequency="0.09 0.015" numOctaves="3" seed="{seed_c}" result="n"/>
 <feDisplacementMap in="SourceGraphic" in2="n" scale="4" xChannelSelector="R" yChannelSelector="G"/>
+</filter>
+<filter id="hfx" x="-25%" y="-25%" width="150%" height="150%">
+<feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="3" seed="{seed_c}" result="n"/>
+<feDisplacementMap in="SourceGraphic" in2="n" scale="11" xChannelSelector="R" yChannelSelector="G"/>
 </filter>
 <clipPath id="hc"><path d="{head_d}"/></clipPath>
 <clipPath id="nc"><path d="{neck_d}"/></clipPath>
@@ -720,7 +792,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         cx + 24.0,
         cx + 24.0,
     ));
-    let hollow_op = 0.07 + maturity * 0.10;
+    // Lean players get hollowed cheeks; heavy builds lose the hollow
+    let hollow_op = (0.07 + maturity * 0.10 - heft * 0.035).max(0.02);
     for (hxx, rot) in [(cx - 25.0, 18.0f32), (cx + 23.0, -18.0)] {
         s.push_str(&format!(
             r#"<ellipse cx="{hxx}" cy="149" rx="9" ry="4.6" fill="{skin_dk2}" filter="url(#b3)" opacity="{hollow_op}" transform="rotate({rot} {hxx} 149)"/>"#,
@@ -875,10 +948,11 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         let bot_y = ey + ery * eye_bot;
         let q_tl_x = el + erx * 0.3;
         let q_tr_x = exc + erx * 0.7;
-        let q_ty = ey - ery * 0.8;
+        // Control above the peak so the upper lid arches instead of squinting
+        let q_ty = ey - ery * 1.05;
         let q_br_x = er_ - erx * 0.3;
         let q_bl_x = exc - erx * 0.7;
-        let q_by = ey + ery * eye_bot * 0.83;
+        let q_by = ey + ery * eye_bot * 1.0;
         let almond = format!(
             "M{el} {el_y} Q{q_tl_x} {q_ty} {exc} {top_y} Q{q_tr_x} {q_ty} {er_} {er_y} \
              Q{q_br_x} {q_by} {exc} {bot_y} Q{q_bl_x} {q_by} {el} {el_y}Z"
@@ -899,10 +973,13 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         s.push_str(&format!(
             r##"<circle cx="{ix}" cy="{iy}" r="{pupil_r}" fill="#0B0906"/>"##
         ));
+        // Lid cast shadow scales with the opening so big eyes stay open;
+        // only genuinely heavy-lidded archetypes may cover most of it
+        let lid_cap = if lid_extra > 0.3 { ery } else { ery * 0.62 };
+        let lid_ry = (ery * 0.36 + lid_heavy * 0.9 + lid_extra * 0.7).clamp(1.0, lid_cap);
+        let lid_op = (0.18 + lid_heavy * 0.13 + lid_extra * 0.07).clamp(0.10, 0.42);
         s.push_str(&format!(
-            r##"<ellipse cx="{exc}" cy="{top_y}" rx="{erx}" ry="{:.2}" fill="#241713" opacity="{:.2}" filter="url(#b1)"/>"##,
-            2.0 + lid_heavy * 1.3 + lid_extra,
-            0.24 + lid_heavy * 0.15 + lid_extra * 0.06,
+            r##"<ellipse cx="{exc}" cy="{top_y}" rx="{erx}" ry="{lid_ry:.2}" fill="#241713" opacity="{lid_op:.2}" filter="url(#b1)"/>"##,
         ));
         s.push_str(&format!(
             r##"<circle cx="{}" cy="{}" r="0.7" fill="#FFFFFF" opacity="0.85"/>"##,
@@ -916,9 +993,10 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         ));
         s.push_str("</g>");
 
-        // Lash line — tapered, heavier on the outer half
+        // Lash line — tapered, heavier on the outer half; weight follows opening
+        let lash_w = (0.95 + ery * 0.13).min(1.6);
         s.push_str(&format!(
-            r##"<path d="M{el} {} Q{exc} {} {er_} {}" stroke="#1C120C" stroke-width="1.35" fill="none" stroke-linecap="round" opacity="0.85" filter="url(#b1)"/>"##,
+            r##"<path d="M{el} {} Q{exc} {} {er_} {}" stroke="#1C120C" stroke-width="{lash_w:.2}" fill="none" stroke-linecap="round" opacity="0.85" filter="url(#b1)"/>"##,
             el_y - 0.4,
             top_y - 1.3,
             er_y - 0.5,
@@ -931,6 +1009,28 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
             top_y - 0.7,
             ey - 0.9,
         ));
+
+        if eye_st == 1 {
+            // Hooded fold — skin sags over the outer half of the lash line
+            s.push_str(&format!(
+                r#"<path d="M{} {} Q{} {} {} {}" stroke="{skin}" stroke-width="2.6" fill="none" stroke-linecap="round" opacity="0.88" filter="url(#b1)"/>"#,
+                exc - side * 2.0,
+                top_y - 1.8,
+                exc + side * erx * 0.55,
+                top_y - 1.0,
+                exc + side * (erx + 1.2),
+                er_y + 0.3,
+            ));
+            s.push_str(&format!(
+                r#"<path d="M{} {} Q{} {} {} {}" stroke="{skin_dk2}" stroke-width="0.7" fill="none" opacity="0.30" filter="url(#b1)"/>"#,
+                exc - side * 1.0,
+                top_y - 2.4,
+                exc + side * erx * 0.6,
+                top_y - 1.8,
+                exc + side * (erx + 1.6),
+                er_y - 0.4,
+            ));
+        }
 
         // Lower lid: faint lash shadow + bright waterline
         s.push_str(&format!(
@@ -1278,9 +1378,36 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
 
     // ── Hair ────────────────────────────────────────────────
     {
-        let side_y = cy_cheek - 2.0;
+        // Sides stop at the ear-top junction: lower, the skull is wider than
+        // the temples and the hair edge would float inside the cheek
+        let side_y = cy_cheek - 7.0;
         // Inner hairline height per style; None = no forehead edge (bald)
         let mut hairline: Option<f32> = None;
+        // Temple recession control: deepens with age; teens keep a rounded
+        // hairline instead of an M-shaped one
+        let rec_y = ht
+            + match age {
+                0..=23 => 17.0,
+                24..=29 => 14.5,
+                _ => 12.0,
+            };
+        // Outer hair edge mirroring the real skull bezier from head_d
+        // (controls hl/ht+22 and hl+14/ht), pushed out by `o` and lifted to
+        // `crown` — hair must track the morphed head, not a fixed template
+        let skull_edge = |o: f32, crown: f32, peak_dx: f32| -> String {
+            format!(
+                "M{} {side_y} C{} {} {} {crown} {} {crown} C{} {crown} {} {} {} {side_y}",
+                hl - o,
+                hl - o,
+                ht + 20.0,
+                hl + 14.0 - o,
+                cx + peak_dx,
+                hr - 14.0 + o,
+                hr + o,
+                ht + 20.0,
+                hr + o,
+            )
+        };
 
         match hair_st {
             0 => {
@@ -1288,12 +1415,11 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                 let crown = ht - 2.0;
                 let hli = ht + 24.0;
                 hairline = Some(hli);
+                let outer = skull_edge(1.0, crown, 0.0);
                 s.push_str(&format!(
-                    r#"<path d="M{} {side_y} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
-                    hl - 1.0, hl - 1.0, ht + 36.0, hl + 23.0,
-                    hr - 23.0, hr + 1.0, ht + 36.0, hr + 1.0,
-                    hr - 3.5, hr - 4.0, ht + 12.0, hr - 16.0,
-                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5,
+                    r#"<path d="{outer} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    hr - 3.5, hr - 4.0, rec_y, hr - 16.0,
+                    hl + 16.0, hl + 4.0, rec_y, hl + 3.5,
                 ));
             }
             1 => {
@@ -1301,12 +1427,11 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                 let crown = ht - 6.0;
                 let hli = ht + 23.0;
                 hairline = Some(hli);
+                let outer = skull_edge(1.0, crown, -8.0);
                 s.push_str(&format!(
-                    r#"<path d="M{} {side_y} C{} {} {} {crown} {} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
-                    hl - 1.0, hl - 1.0, ht + 28.0, hl + 14.0, cx - 8.0,
-                    hr - 20.0, hr + 1.0, ht + 34.0, hr + 1.0,
-                    hr - 3.5, hr - 4.0, ht + 12.0, hr - 16.0,
-                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5,
+                    r#"<path d="{outer} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    hr - 3.5, hr - 4.0, rec_y, hr - 16.0,
+                    hl + 16.0, hl + 4.0, rec_y, hl + 3.5,
                 ));
                 // Part line
                 s.push_str(&format!(
@@ -1319,54 +1444,71 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                 let crown = ht - 10.0;
                 let hli = ht + 22.0;
                 hairline = Some(hli);
+                let outer = skull_edge(3.0, crown, 0.0);
                 s.push_str(&format!(
-                    r#"<path d="M{} {side_y} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
-                    hl - 3.0, hl - 3.0, ht + 30.0, hl + 21.0,
-                    hr - 21.0, hr + 3.0, ht + 30.0, hr + 3.0,
-                    hr - 3.5, hr - 4.0, ht + 12.0, hr - 16.0,
-                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5,
+                    r#"<path d="{outer} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    hr - 3.5, hr - 4.0, rec_y, hr - 16.0,
+                    hl + 16.0, hl + 4.0, rec_y, hl + 3.5,
                 ));
             }
             3 => {
-                // Buzz cut — scalp speckle, like heavy stubble
+                // Buzz cut — scalp speckle, like heavy stubble; clipped to the
+                // head so no speckle floats past the silhouette
                 let crown = ht - 1.0;
                 let hli = ht + 24.0;
                 hairline = Some(hli);
+                s.push_str(r#"<g clip-path="url(#hc)">"#);
+                let outer = skull_edge(0.5, crown, 0.0);
                 s.push_str(&format!(
-                    r#"<path d="M{} {side_y} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="{hair}" filter="url(#stb)" opacity="0.60"/>"#,
-                    hl - 0.5, hl - 0.5, ht + 36.0, hl + 23.0,
-                    hr - 23.0, hr + 0.5, ht + 36.0, hr + 0.5,
-                    hr - 3.5, hr - 4.0, ht + 12.0, hr - 16.0,
-                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5,
+                    r#"<path d="{outer} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="{hair}" filter="url(#stb)" opacity="0.60"/>"#,
+                    hr - 3.5, hr - 4.0, rec_y, hr - 16.0,
+                    hl + 16.0, hl + 4.0, rec_y, hl + 3.5,
                 ));
+                s.push_str("</g>");
             }
             4 => {
                 // Swept back
                 let crown = ht - 12.0;
                 let hli = ht + 20.0;
                 hairline = Some(hli);
+                let outer = skull_edge(2.0, crown, 0.0);
                 s.push_str(&format!(
-                    r#"<path d="M{} {side_y} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
-                    hl - 2.0, hl - 2.0, ht + 26.0, hl + 20.0,
-                    hr - 20.0, hr + 2.0, ht + 26.0, hr + 2.0,
-                    hr - 3.5, hr - 4.0, ht + 10.0, hr - 14.0,
-                    hl + 14.0, hl + 4.0, ht + 10.0, hl + 3.5,
+                    r#"<path d="{outer} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    hr - 3.5, hr - 4.0, rec_y - 2.0, hr - 14.0,
+                    hl + 14.0, hl + 4.0, rec_y - 2.0, hl + 3.5,
                 ));
             }
             5 => {
-                // Afro — rounded ball around the upper head + curl texture
+                // Afro — ball wrapping the skull; the bottom edge sags to the
+                // hairline curve so no skin gap opens at the temples
                 let hli = ht + 22.0;
                 hairline = Some(hli);
-                // Ball rests on the hairline: bottom edge ≈ hli + 6
-                let afro_ry = 30.0f32;
-                let afro_cy = hli + 6.0 - afro_ry;
-                let afro_rx = (hr - hl) / 2.0 + 12.0;
+                // Corners tuck in at the temples; outward control points put
+                // the widest bulge at mid-height, not the bottom edge
+                let left = hl + 1.0;
+                let right = hr - 1.0;
+                let top = ht - 34.0;
+                let bot = ht + 26.0;
+                let kw = (cx - left) * 0.72;
+                let kh = (bot - top) * 0.60;
+                let ball = format!(
+                    "M{left} {bot} C{} {} {} {top} {cx} {top} C{} {top} {} {} {right} {bot} Q{cx} {} {left} {bot}Z",
+                    left - 10.0,
+                    bot - kh,
+                    cx - kw,
+                    cx + kw,
+                    right + 10.0,
+                    bot - kh,
+                    hli + 14.0,
+                );
+                // One displaced group: ball + curl speckle share the same
+                // wobbled silhouette, so the texture never spills past the edge
+                s.push_str(r#"<g filter="url(#hfx)">"#);
+                s.push_str(&format!(r#"<path d="{ball}" fill="url(#hg)"/>"#));
                 s.push_str(&format!(
-                    r#"<ellipse cx="{cx}" cy="{afro_cy}" rx="{afro_rx}" ry="{afro_ry}" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    r#"<path d="{ball}" fill="{hair_dk}" filter="url(#stb)" opacity="0.40"/>"#,
                 ));
-                s.push_str(&format!(
-                    r#"<ellipse cx="{cx}" cy="{afro_cy}" rx="{afro_rx}" ry="{afro_ry}" fill="{hair_dk}" filter="url(#stb)" opacity="0.45"/>"#,
-                ));
+                s.push_str("</g>");
             }
             6 => {
                 // Bald — scalp sheen only
@@ -1377,30 +1519,43 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                 ));
             }
             7 => {
-                // Curly top — bumpy dome
+                // Curly top — dome with curl lobes straddling the outer edge
+                // so the silhouette itself reads bumpy
                 let crown = ht - 9.0;
                 let hli = ht + 22.0;
                 hairline = Some(hli);
+                let outer = skull_edge(2.0, crown, 0.0);
+                let dome = format!(
+                    "{outer} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z",
+                    hr - 3.5,
+                    hr - 4.0,
+                    rec_y,
+                    hr - 16.0,
+                    hl + 16.0,
+                    hl + 4.0,
+                    rec_y,
+                    hl + 3.5,
+                );
                 s.push_str(&format!(
-                    r#"<path d="M{} {side_y} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
-                    hl - 2.0, hl - 2.0, ht + 28.0, hl + 20.0,
-                    hr - 20.0, hr + 2.0, ht + 28.0, hr + 2.0,
-                    hr - 3.5, hr - 4.0, ht + 12.0, hr - 16.0,
-                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5,
+                    r#"<path d="{dome}" fill="url(#hg)" filter="url(#htx)"/>"#,
                 ));
-                // Curl clusters following the dome curve
-                let half_w = (hr - hl) / 2.0 - 2.0;
-                for k in 0..6 {
-                    let t = k as f32 / 5.0;
-                    let bx = hl + 16.0 + t * (hr - hl - 32.0);
-                    let rel = ((bx - cx) / half_w).clamp(-1.0, 1.0);
+                // rel stays within ±0.72: past that the ellipse approximation
+                // diverges from the dome path and lobes float off the head
+                let half_w = (hr - hl) / 2.0;
+                for k in 0..7 {
+                    let rel = -0.72 + 1.44 * (k as f32 / 6.0);
+                    let bx = cx + rel * (half_w - 1.0);
                     let dome_y = crown + (1.0 - (1.0 - rel * rel).sqrt()) * (side_y - crown);
-                    let byy = dome_y + 6.0 + (jit(k, 8) * 2.0);
+                    let rr = 3.6 + jit(k, 6) * 2.2;
                     s.push_str(&format!(
-                        r#"<circle cx="{bx:.1}" cy="{byy:.1}" r="{:.1}" fill="{hair}" filter="url(#b1)" opacity="0.45"/>"#,
-                        2.2 + jit(k, 6) * 1.2,
+                        r#"<circle cx="{bx:.1}" cy="{:.1}" r="{rr:.1}" fill="{hair}" filter="url(#htx)"/>"#,
+                        dome_y + jit(k, 8) * 1.2,
                     ));
                 }
+                // Curl texture inside the mass
+                s.push_str(&format!(
+                    r#"<path d="{dome}" fill="{hair_dk}" filter="url(#stb)" opacity="0.35"/>"#,
+                ));
             }
             8 => {
                 // Long — crown dome + slim curtains hugging the face sides
@@ -1411,12 +1566,36 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                 s.push_str(&format!(
                     r#"<path d="M{} {} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {} L{} {} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
                     hl - 4.0, cy_cheek - 2.0,
-                    hl - 4.0, ht + 30.0, hl + 21.0,
-                    hr - 21.0, hr + 4.0, ht + 30.0, hr + 4.0, cy_cheek - 2.0,
+                    hl - 4.0, ht + 18.0, hl + 10.0,
+                    hr - 10.0, hr + 4.0, ht + 18.0, hr + 4.0, cy_cheek - 2.0,
                     hr - 3.5, cy_cheek - 2.0,
-                    hr - 4.0, ht + 12.0, hr - 16.0,
-                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5, cy_cheek - 2.0,
+                    hr - 4.0, rec_y, hr - 16.0,
+                    hl + 16.0, hl + 4.0, rec_y, hl + 3.5, cy_cheek - 2.0,
                 ));
+                // Strand lines break the flat curtain mass
+                for (bi, sidef) in [-1.0f32, 1.0].into_iter().enumerate() {
+                    let base = if sidef < 0.0 { hl } else { hr };
+                    for k in 0..3 {
+                        let x_top = base - sidef * (2.0 + k as f32 * 3.0 + jit(k, bi) * 1.4);
+                        s.push_str(&format!(
+                            r#"<path d="M{x_top:.1} {} Q{:.1} {} {:.1} {}" stroke="{hair_dk}" stroke-width="0.9" fill="none" stroke-linecap="round" filter="url(#b1)" opacity="0.28"/>"#,
+                            ht + 15.0 + k as f32 * 1.5,
+                            x_top - sidef * 2.0,
+                            (ht + cy_cheek) / 2.0,
+                            x_top + sidef * 2.0,
+                            cy_cheek - 4.0,
+                        ));
+                    }
+                    let hi_x = base - sidef * 6.0;
+                    s.push_str(&format!(
+                        r#"<path d="M{hi_x:.1} {} Q{:.1} {} {:.1} {}" stroke="{hair_hi}" stroke-width="0.8" fill="none" stroke-linecap="round" filter="url(#b1)" opacity="0.22"/>"#,
+                        ht + 17.0,
+                        hi_x - sidef * 2.5,
+                        (ht + cy_cheek) / 2.0,
+                        hi_x + sidef * 1.5,
+                        cy_cheek - 6.0,
+                    ));
+                }
             }
             9 => {
                 // Fade — solid top, speckled sides
@@ -1429,13 +1608,15 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                     r#"<path d="M{cut_l} {} C{cut_l} {} {} {crown} {cx} {crown} C{} {crown} {cut_r} {} {cut_r} {} L{cut_r} {} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {cut_l} {}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
                     ht + 30.0, ht + 4.0, cut_l + 9.0,
                     cut_r - 9.0, ht + 4.0, ht + 30.0,
-                    ht + 30.0, cut_r - 2.0, ht + 12.0, cut_r - 12.0,
-                    cut_l + 12.0, cut_l + 2.0, ht + 12.0, ht + 30.0,
+                    ht + 30.0, cut_r - 2.0, rec_y, cut_r - 12.0,
+                    cut_l + 12.0, cut_l + 2.0, rec_y, ht + 30.0,
                 ));
-                // Faded sides — curved tops so no box edges show
+                // Faded sides — shaved hair sits ON the scalp, so clip to the
+                // head silhouette instead of floating past it
+                s.push_str(r#"<g clip-path="url(#hc)">"#);
                 for (fx0, fx1) in [(hl - 0.5, cut_l + 2.0), (cut_r - 2.0, hr + 0.5)] {
                     s.push_str(&format!(
-                        r#"<path d="M{fx0} {side_y} Q{fx0} {} {} {} Q{fx1} {} {fx1} {}Z" fill="{hair}" filter="url(#stb)" opacity="0.30"/>"#,
+                        r#"<path d="M{fx0} {side_y} Q{fx0} {} {} {} Q{fx1} {} {fx1} {}Z" fill="{hair}" filter="url(#stb)" opacity="0.45"/>"#,
                         ht + 18.0,
                         (fx0 + fx1) / 2.0,
                         ht + 14.0,
@@ -1443,6 +1624,15 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                         side_y,
                     ));
                 }
+                // Transition band melds the solid top into the shaved sides
+                for bx in [cut_l + 1.0, cut_r - 1.0] {
+                    s.push_str(&format!(
+                        r#"<path d="M{bx} {} L{bx} {}" stroke="{hair_dk}" stroke-width="3" fill="none" filter="url(#b2)" opacity="0.30"/>"#,
+                        ht + 16.0,
+                        side_y - 6.0,
+                    ));
+                }
+                s.push_str("</g>");
             }
             10 => {
                 // Faux-hawk — raised centre, tightly faded sides
@@ -1456,11 +1646,13 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                     strip_r - 12.0, ht + 2.0, ht + 26.0,
                     hli - 5.0,
                 ));
-                // Tight faded sides hugging the silhouette — the bare gap
-                // between fade and strip is how a real high fade looks
+                // Tight faded sides — shaved hair on the scalp, clipped to the
+                // head; the bare gap between fade and strip is how a real
+                // high fade looks
+                s.push_str(r#"<g clip-path="url(#hc)">"#);
                 for (fx0, fx1) in [(hl - 0.5, hl + 10.0), (hr - 10.0, hr + 0.5)] {
                     s.push_str(&format!(
-                        r#"<path d="M{fx0} {} Q{fx0} {} {} {} Q{fx1} {} {fx1} {}Z" fill="{hair}" filter="url(#stb)" opacity="0.35"/>"#,
+                        r#"<path d="M{fx0} {} Q{fx0} {} {} {} Q{fx1} {} {fx1} {}Z" fill="{hair}" filter="url(#stb)" opacity="0.48"/>"#,
                         side_y - 10.0,
                         ht + 14.0,
                         (fx0 + fx1) / 2.0,
@@ -1469,6 +1661,7 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                         side_y - 10.0,
                     ));
                 }
+                s.push_str("</g>");
                 s.push_str(&format!(
                     r#"<path d="M{} {} Q{cx} {} {} {}" stroke="{skin_dk2}" stroke-width="2" fill="none" filter="url(#b3)" opacity="0.12"/>"#,
                     strip_l + 3.0,
@@ -1483,12 +1676,11 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                 let crown = ht - 4.0;
                 let hli = ht + 23.0;
                 hairline = Some(hli);
+                let outer = skull_edge(1.0, crown, 0.0);
                 s.push_str(&format!(
-                    r#"<path d="M{} {side_y} C{} {} {} {crown} {cx} {crown} C{} {crown} {} {} {} {side_y} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
-                    hl - 1.0, hl - 1.0, ht + 34.0, hl + 22.0,
-                    hr - 22.0, hr + 1.0, ht + 34.0, hr + 1.0,
-                    hr - 3.5, hr - 4.0, ht + 12.0, hr - 16.0,
-                    hl + 16.0, hl + 4.0, ht + 12.0, hl + 3.5,
+                    r#"<path d="{outer} L{} {side_y} C{} {} {} {hli} {cx} {hli} C{} {hli} {} {} {} {side_y}Z" fill="url(#hg)" filter="url(#htx)"/>"#,
+                    hr - 3.5, hr - 4.0, rec_y, hr - 16.0,
+                    hl + 16.0, hl + 4.0, rec_y, hl + 3.5,
                 ));
                 // Braid lines stay inside the hair mass — stop at the hairline
                 for k in 0..7 {
@@ -1620,7 +1812,9 @@ mod tests {
                 html.push_str("<div class=\"row\">");
                 for i in 0..8u32 {
                     let player_id = 2_000_000_000u32 + age as u32 * 1000 + i * 77 + 13;
-                    let svg = generate_face_svg(player_id, age, dist);
+                    // Sweep the build axis across each row: lean → heavy
+                    let heft = -1.6 + i as f32 * 0.5;
+                    let svg = generate_face_svg(player_id, age, dist, heft);
                     let fname = format!("face_{dist_name}_{age}_{i}.svg");
                     std::fs::write(root.join(&fname), svg).expect("write face svg");
                     html.push_str(&format!(

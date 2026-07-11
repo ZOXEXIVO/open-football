@@ -48,7 +48,23 @@ async fn face_action(
         .unwrap_or_default();
 
     let skin_dist = generator::skin_distribution_for_country(&country_code);
-    let svg = generate_face_svg(path.player_id, age, skin_dist);
+
+    // Weight-for-height drives facial fullness; fall back to an average
+    // build when the record carries no plausible body data
+    let height_cm = if player.player_attributes.height >= 150 {
+        player.player_attributes.height as f32
+    } else {
+        180.0
+    };
+    let weight_kg = if player.player_attributes.weight >= 45 {
+        player.player_attributes.weight as f32
+    } else {
+        75.0
+    };
+    let athletic_kg = 23.0 * (height_cm / 100.0) * (height_cm / 100.0);
+    let heft = (weight_kg - athletic_kg) / 6.0;
+
+    let svg = generate_face_svg(path.player_id, age, skin_dist, heft);
 
     (
         StatusCode::OK,
