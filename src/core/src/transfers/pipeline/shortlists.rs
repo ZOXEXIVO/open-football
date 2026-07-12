@@ -7,6 +7,7 @@ use crate::club::board::{BoardDossierSummary, BoardTransferEconomics};
 use crate::club::staff::StaffEventType;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::transfers::pipeline::ScoutMonitoringStatus;
+use crate::transfers::pipeline::helpers::CountryPlayerLookup;
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
@@ -80,6 +81,11 @@ impl PipelineProcessor {
     pub fn build_shortlists(country: &mut Country, date: NaiveDate) {
         let mut results: Vec<ShortlistResult> = Vec::new();
 
+        // One country walk up front so the per-report / per-listing summary
+        // resolutions below are hash probes instead of country scans.
+        // Rosters don't change inside this pass (results apply at the end).
+        let player_lookup = CountryPlayerLookup::build(country);
+
         for club in &country.clubs {
             let plan = &club.transfer_plan;
             let buyer_ctx = BuyerPlausibilityContext::build(country, club);
@@ -129,8 +135,7 @@ impl PipelineProcessor {
                         // Plausibility veto — drop HardReject candidates
                         // before scoring so they never become shortlist
                         // entries. Soft Allow adjustments dampen score.
-                        let summary =
-                            Self::find_player_summary_in_country(country, r.player_id, date);
+                        let summary = player_lookup.find_summary(country, r.player_id, date);
                         let plausibility = summary.as_ref().and_then(|p| {
                             TransferPlausibilityBuilder::evaluate_summary(
                                 &buyer_ctx, p, false, true, date,
@@ -272,8 +277,9 @@ impl PipelineProcessor {
                     .filter(|l| l.club_id != club.id)
                     .filter(|l| l.is_seller_advertised())
                     .filter_map(|l| {
-                        Self::find_player_summary_in_country(country, l.player_id, date).and_then(
-                            |p| {
+                        player_lookup
+                            .find_summary(country, l.player_id, date)
+                            .and_then(|p| {
                                 if p.position_group == request.position.position_group()
                                     && p.skill_ability >= request.min_ability
                                     && p.estimated_value <= request.budget_allocation * 2.0
@@ -315,8 +321,7 @@ impl PipelineProcessor {
                                 } else {
                                     None
                                 }
-                            },
-                        )
+                            })
                     })
                     .collect();
 

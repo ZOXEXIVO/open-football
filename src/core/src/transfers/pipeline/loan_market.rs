@@ -1461,6 +1461,20 @@ impl PipelineProcessor {
             return;
         }
 
+        // Position-group partition for the request loop below — each
+        // request used to walk the whole filtered pool to reject the
+        // other three groups candidate by candidate. Relative order
+        // inside a group is preserved, so `max_by_key` (last max on
+        // ties) picks the same player as the flat scan. The proactive
+        // development pickup after the request loop crosses groups and
+        // keeps using the flat `foreign_loans` — chaining group slices
+        // there would reorder tie-breaks.
+        let mut foreign_loans_by_group: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] =
+            Default::default();
+        for p in &foreign_loans {
+            foreign_loans_by_group[p.position_group.index()].push(*p);
+        }
+
         struct ForeignLoanAction {
             club_id: u32,
             player: PlayerSummary,
@@ -1470,6 +1484,14 @@ impl PipelineProcessor {
 
         let mut actions: Vec<ForeignLoanAction> = Vec::new();
         let pending_loans = Self::pending_incoming_loans_by_club(country);
+
+        // Negotiations are only created AFTER the club loop (the staged
+        // `actions` apply below), so the market's active set is frozen for
+        // the whole scan — snapshot the per-club counts and (player, club)
+        // pairs once instead of linear-scanning `negotiations` per club and
+        // per candidate.
+        let active_counts = country.transfer_market.active_negotiation_counts();
+        let active_pairs = country.transfer_market.active_negotiation_pairs();
 
         for club in &country.clubs {
             if club.teams.teams.is_empty() {
@@ -1498,9 +1520,7 @@ impl PipelineProcessor {
             }
 
             // Check concurrent negotiation limits
-            let actual_active = country
-                .transfer_market
-                .active_negotiation_count_for_club(club.id);
+            let actual_active = active_counts.get(&club.id).copied().unwrap_or(0);
             if actual_active >= plan.max_concurrent_negotiations {
                 continue;
             }
@@ -1576,7 +1596,7 @@ impl PipelineProcessor {
                 // be in a scout's known region, and be a realistic move
                 // (players don't go from Serie A to the Nigerian league)
                 let team_rep = team.reputation.world;
-                if let Some(best) = foreign_loans
+                if let Some(best) = foreign_loans_by_group[pos_group.index()]
                     .iter()
                     .filter(|p| {
                         !club.is_rival(p.club_id)
@@ -1592,21 +1612,17 @@ impl PipelineProcessor {
                             // match-practice loan leans on the minutes gate.
                             && (ForeignUnsolicitedLoanTarget::is_development(p.age)
                                 || p.skill_ability >= avg_ability.saturating_sub(10))
-                            && !country
-                                .transfer_market
-                                .has_active_negotiation_for(p.player_id, club.id)
+                            && !active_pairs.contains(&(p.player_id, club.id))
                             && !actions.iter().any(|a| a.player.player_id == p.player_id)
                             // Reputation reality check: players don't drop more than
                             // ~40% in league level on loan. A rep-8000 player won't
                             // go to a rep-2000 club. This prevents Serie A → Nigeria.
                             && p.home_reputation <= (team_rep as f32 * 2.0) as i16
                             && team_rep >= (p.home_reputation.max(0) as f32 * 0.35) as u16
-                            && {
-                                let player_region = ScoutingRegion::from_country(
-                                    p.continent_id, &p.country_code,
-                                );
-                                scout_regions.contains(&player_region)
-                            }
+                            // `p.region` is stamped from the same
+                            // (continent, country-code) resolve at pool
+                            // build time — no per-candidate re-resolve.
+                            && scout_regions.contains(&p.region)
                             // Borrower-depth gate: if the borrower's
                             // squad is already full at this position
                             // group, accept only when the incoming
@@ -1659,9 +1675,7 @@ impl PipelineProcessor {
                         // Prefer culturally closer destinations: a club in
                         // the borrower's own region outranks a marginally
                         // better-rated alternative on another continent.
-                        let same_region =
-                            ScoutingRegion::from_country(p.continent_id, &p.country_code)
-                                == club_region;
+                        let same_region = p.region == club_region;
                         (same_region as u8, p.skill_ability)
                     })
                 {
@@ -1704,22 +1718,14 @@ impl PipelineProcessor {
                             && !club.is_rival(p.club_id)
                             && !scanned_position_groups.contains(&p.position_group)
                             && p.estimated_value * 0.1 <= max_loan_fee
-                            && !country
-                                .transfer_market
-                                .has_active_negotiation_for(p.player_id, club.id)
+                            && !active_pairs.contains(&(p.player_id, club.id))
                             && !actions.iter().any(|a| a.player.player_id == p.player_id)
                             // Reputation reality band — identical to the
                             // request path, so a prospect still can't drop
                             // into a far smaller ecosystem than his club's.
                             && p.home_reputation <= (team_rep as f32 * 2.0) as i16
                             && team_rep >= (p.home_reputation.max(0) as f32 * 0.35) as u16
-                            && {
-                                let player_region = ScoutingRegion::from_country(
-                                    p.continent_id,
-                                    &p.country_code,
-                                );
-                                scout_regions.contains(&player_region)
-                            }
+                            && scout_regions.contains(&p.region)
                             // Development profile throughout (gated above), so
                             // every borrower-side gate runs at its dev setting:
                             // the relaxed keeper room check (Fix A) lets him
@@ -1757,9 +1763,7 @@ impl PipelineProcessor {
                         // Same-region destinations first, then raw quality —
                         // the continent's own prospects circulate locally
                         // before a further-flung club is considered.
-                        let same_region =
-                            ScoutingRegion::from_country(p.continent_id, &p.country_code)
-                                == club_region;
+                        let same_region = p.region == club_region;
                         (same_region as u8, p.skill_ability)
                     })
                 {

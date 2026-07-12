@@ -4,6 +4,7 @@ use crate::transfers::offer::TransferOffer;
 use crate::transfers::{CompletedTransfer, TransferType};
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -698,6 +699,33 @@ impl TransferMarket {
                         || n.status == NegotiationStatus::Countered)
             })
             .count() as u32
+    }
+
+    /// One-pass snapshot of [`Self::active_negotiation_count_for_club`] for
+    /// every buying club. For scan passes that only STAGE actions (and so
+    /// see a frozen negotiation set), probing this map replaces a linear
+    /// negotiation walk per club.
+    pub fn active_negotiation_counts(&self) -> FxHashMap<u32, u32> {
+        let mut counts: FxHashMap<u32, u32> = FxHashMap::default();
+        for n in self.negotiations.values() {
+            if n.status == NegotiationStatus::Pending || n.status == NegotiationStatus::Countered {
+                *counts.entry(n.buying_club_id).or_insert(0) += 1;
+            }
+        }
+        counts
+    }
+
+    /// One-pass snapshot of the active `(player_id, buying_club_id)` pairs —
+    /// the set form of [`Self::has_active_negotiation_for`], same staged-scan
+    /// contract as [`Self::active_negotiation_counts`].
+    pub fn active_negotiation_pairs(&self) -> FxHashSet<(u32, u32)> {
+        self.negotiations
+            .values()
+            .filter(|n| {
+                n.status == NegotiationStatus::Pending || n.status == NegotiationStatus::Countered
+            })
+            .map(|n| (n.player_id, n.buying_club_id))
+            .collect()
     }
 
     pub fn check_transfer_window(&mut self, is_open: bool) {

@@ -3,6 +3,7 @@ use log::debug;
 
 use crate::transfers::ScoutingRegion;
 use crate::transfers::pipeline::breakout::LeaguePerformanceLookup;
+use crate::transfers::pipeline::helpers::ClubGroupRanks;
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferMoveStage, TransferPlausibilityBuilder,
     TransferPlausibilityVerdict,
@@ -20,8 +21,8 @@ use crate::transfers::pipeline::{
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;
 use crate::{
-    ClubPhilosophy, Country, Person, PlayerSquadStatus, PlayerStatusType, StaffEventType,
-    StaffPosition, TeamType,
+    ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType,
+    StaffEventType, StaffPosition, TeamType,
 };
 use chrono::Weekday;
 use std::cmp::Ordering;
@@ -799,6 +800,9 @@ impl PipelineProcessor {
                 .unwrap_or(0.3);
             let seller_league_id = main_team.and_then(|t| t.league_id);
             let seller_in_debt = club.finance.balance.balance < 0;
+            // One sorted-group snapshot per club replaces the per-player
+            // rank/best re-sorts (same values, O(squad·log) once).
+            let group_ranks = ClubGroupRanks::build(club);
 
             for team in &club.teams.teams {
                 for player in &team.players.players {
@@ -820,8 +824,7 @@ impl PipelineProcessor {
                             ((days / 30).min(i16::MAX as i64) as i16, c.salary)
                         })
                         .unwrap_or((0, 0));
-                    let pos_group = player.position().position_group();
-                    let seller_rank = match Self::position_group_rank(club, player.id, pos_group) {
+                    let seller_rank = match group_ranks.rank(player.id) {
                         u8::MAX => 1,
                         r => r,
                     };
@@ -869,10 +872,7 @@ impl PipelineProcessor {
                         world_reputation: player.player_attributes.world_reputation,
                         country_reputation,
                         club_world_reputation: club_world_rep,
-                        club_best_in_group: Self::best_ca_in_group(
-                            club,
-                            player.position().position_group(),
-                        ),
+                        club_best_in_group: group_ranks.best(player.position().position_group()),
                         is_injured: player.player_attributes.is_injured,
                         contract_months_remaining,
                         salary,
@@ -951,6 +951,31 @@ impl PipelineProcessor {
         // that already runs once per country to build the shared foreign
         // pool. Now it runs once.
         let all_players: Vec<PlayerSummary> = Self::collect_player_pool(&*country, date);
+
+        // Partition both candidate pools by position group ONCE per country.
+        // Every assignment scans only its own group's slice — the other
+        // three groups were rejected by `player_filter`'s position check
+        // anyway, but each assignment used to pay a full-pool walk (clubs ×
+        // assignments × world pool) to find that out. Relative order inside
+        // a group is preserved, so the filtered candidate sequences — and
+        // everything downstream (data-prefilter sort, observation picks) —
+        // are identical to the unpartitioned scan. The country-reputation
+        // step-down on the foreign pool is country-constant, so it is folded
+        // into the partition instead of being re-tested per assignment.
+        let mut domestic_by_group: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] =
+            Default::default();
+        for p in &all_players {
+            domestic_by_group[p.position_group.index()].push(p);
+        }
+        let mut foreign_by_group: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] =
+            Default::default();
+        for p in foreign_players
+            .iter()
+            .copied()
+            .filter(|p| p.country_reputation <= country_reputation)
+        {
+            foreign_by_group[p.position_group.index()].push(p);
+        }
 
         let mut observations: Vec<ScoutingObservationResult> = Vec::new();
         let mut reports: Vec<ScoutingReportResult> = Vec::new();
@@ -1106,9 +1131,14 @@ impl PipelineProcessor {
                     p.age >= age_min && p.age <= age_max && effective_ability >= effective_min
                 };
 
-                // Domestic players (always visible)
-                let mut matching: Vec<&PlayerSummary> =
-                    all_players.iter().filter(player_filter).collect();
+                // Domestic players (always visible) — this assignment's
+                // position group only; the other groups can't pass
+                // `player_filter` anyway.
+                let mut matching: Vec<&PlayerSummary> = domestic_by_group[target_group.index()]
+                    .iter()
+                    .copied()
+                    .filter(player_filter)
+                    .collect();
 
                 // Foreign players are visible if their region falls inside the
                 // club's reputation-driven network reach OR a scout personally
@@ -1117,10 +1147,11 @@ impl PipelineProcessor {
                 // a Nigerian club can't scout Serie A. `club_scout_reach` always
                 // holds at least the home region, so the foreign sweep runs for
                 // every club; how far it reaches is what scales with reputation.
-                let foreign_matching: Vec<&PlayerSummary> = foreign_players
+                // (The country-reputation step-down is pre-folded into
+                // `foreign_by_group`.)
+                let foreign_matching: Vec<&PlayerSummary> = foreign_by_group[target_group.index()]
                     .iter()
                     .copied()
-                    .filter(|p| p.country_reputation <= country_reputation)
                     .filter(|p| {
                         club_scout_reach.contains(&p.region)
                             || scout_known_regions.contains(&p.region)

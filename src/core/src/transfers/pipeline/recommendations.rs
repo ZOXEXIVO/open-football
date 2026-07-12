@@ -9,6 +9,7 @@ use crate::transfers::pipeline::exposure::{
     AvailabilityExposure, AvailabilitySignals, ExposureStage, FreeAgentBuyerContext,
     FreeAgentRecommendationSignals, OpportunisticFreeAgentScout,
 };
+use crate::transfers::pipeline::helpers::CountryPlayerLookup;
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, EffectivePlayerReputation, TransferPlausibilityBuilder,
     TransferPlausibilityVerdict,
@@ -372,6 +373,10 @@ impl PipelineProcessor {
             return;
         }
 
+        // One country walk so per-candidate plausibility re-checks below
+        // resolve summaries via hash probe instead of a country scan.
+        let player_lookup = CountryPlayerLookup::build(country);
+
         let is_january = Self::is_january_window(date);
         let price_level = country.settings.pricing.price_level;
         let window_mgr = TransferWindowManager::for_country(country, date);
@@ -603,7 +608,7 @@ impl PipelineProcessor {
             // recommendation list would push an impossible move (Maximenko-
             // class step-down) into the pipeline.
             let plausibility_rejects = |player_id: u32, is_loan: bool| -> bool {
-                let summary = match Self::find_player_summary_in_country(country, player_id, date) {
+                let summary = match player_lookup.find_summary(country, player_id, date) {
                     Some(s) => s,
                     None => return false,
                 };
@@ -1524,6 +1529,11 @@ impl PipelineProcessor {
         let mut actions: Vec<RecommendationProcessAction> = Vec::new();
         let seven_days_ago = date - Duration::days(7);
 
+        // Indexed player/summary resolution for the per-recommendation
+        // re-checks below (actions apply after the loop, so the index
+        // stays valid for the whole pass).
+        let player_lookup = CountryPlayerLookup::build(country);
+
         for club in &country.clubs {
             let plan = &club.transfer_plan;
             if !plan.initialized {
@@ -1541,7 +1551,7 @@ impl PipelineProcessor {
                 // Determine player's position group
                 let memory = plan.known_player(rec.player_id);
                 let player_pos_group =
-                    if let Some(player) = Self::find_player_in_country(country, rec.player_id) {
+                    if let Some(player) = player_lookup.find_player(country, rec.player_id) {
                         player.position().position_group()
                     } else if let Some(memory) = memory {
                         memory.position_group
@@ -1552,9 +1562,7 @@ impl PipelineProcessor {
                 // Re-check plausibility before promoting a stale
                 // recommendation. Player status and seller balance may
                 // have shifted since the recommendation was filed.
-                if let Some(summary) =
-                    Self::find_player_summary_in_country(country, rec.player_id, date)
-                {
+                if let Some(summary) = player_lookup.find_summary(country, rec.player_id, date) {
                     let plausibility = TransferPlausibilityBuilder::evaluate_summary(
                         &buyer_ctx, &summary, false, true, date,
                     );
@@ -1606,15 +1614,14 @@ impl PipelineProcessor {
                     }
                 } else if rec.confidence >= 0.6 && rec.assessed_ability >= 50 {
                     // No existing request — create a new one
-                    let player_position = if let Some(player) =
-                        Self::find_player_in_country(country, rec.player_id)
-                    {
-                        player.position()
-                    } else if let Some(memory) = memory {
-                        memory.position
-                    } else {
-                        continue;
-                    };
+                    let player_position =
+                        if let Some(player) = player_lookup.find_player(country, rec.player_id) {
+                            player.position()
+                        } else if let Some(memory) = memory {
+                            memory.position
+                        } else {
+                            continue;
+                        };
 
                     // Check we don't already have too many requests
                     let active_requests = plan

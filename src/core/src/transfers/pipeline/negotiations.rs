@@ -1,6 +1,7 @@
 use chrono::NaiveDate;
 use log::debug;
 use rayon::prelude::*;
+use rustc_hash::FxHashSet;
 use std::collections::{HashMap, HashSet};
 
 use crate::SimulatorData;
@@ -1374,7 +1375,9 @@ impl PipelineProcessor {
         if player_ids.is_empty() {
             return;
         }
-        let signed: HashSet<u32> = player_ids.iter().copied().collect();
+        // Membership-only set on a whole-world sweep — Fx hashing, the
+        // SipHash default was a measurable share of the sweep's CPU.
+        let signed: FxHashSet<u32> = player_ids.iter().copied().collect();
 
         data.continents
             .par_iter_mut()
@@ -1385,11 +1388,16 @@ impl PipelineProcessor {
                     // loan-out candidates — the development pathway
                     // stages them on the buyer in the same tick this
                     // batch sweep runs. Every other club's stale
-                    // candidates are still dropped.
-                    let owned_signed: Vec<u32> = signed
+                    // candidates are still dropped. One roster walk with
+                    // set probes — the signed-set side of the check used
+                    // to re-walk the roster once per signed id.
+                    let owned_signed: Vec<u32> = club
+                        .teams
+                        .teams
                         .iter()
-                        .copied()
-                        .filter(|id| club.teams.contains_player(*id))
+                        .flat_map(|t| t.players.players.iter())
+                        .map(|p| p.id)
+                        .filter(|id| signed.contains(id))
                         .collect();
                     let plan = &mut club.transfer_plan;
                     for assignment in &mut plan.scouting_assignments {
@@ -1453,9 +1461,9 @@ impl PipelineProcessor {
     /// invocation, collects the set of still-tracked player ids, and strips
     /// `Wnt` from anyone who is no longer on any club's radar.
     pub fn sync_wanted_status(country: &mut Country) {
-        use std::collections::HashSet;
-
-        let mut tracked: HashSet<u32> = HashSet::new();
+        // Membership-only set rebuilt from every plan row in the country —
+        // the SipHash inserts were the dominant cost of this walk.
+        let mut tracked: FxHashSet<u32> = FxHashSet::default();
         for club in &country.clubs {
             let plan = &club.transfer_plan;
             for assignment in &plan.scouting_assignments {
@@ -1487,9 +1495,7 @@ impl PipelineProcessor {
         for club in &mut country.clubs {
             for team in &mut club.teams.teams {
                 for player in team.players.players.iter_mut() {
-                    if player.statuses.has(PlayerStatusType::Wnt)
-                        && !tracked.contains(&player.id)
-                    {
+                    if player.statuses.has(PlayerStatusType::Wnt) && !tracked.contains(&player.id) {
                         player.statuses.remove(PlayerStatusType::Wnt);
                     }
                 }

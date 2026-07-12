@@ -143,11 +143,10 @@ impl PipelineProcessor {
                         continue;
                     }
 
-                    let Some(summary) =
-                        Self::find_player_summary_in_country(country, player.id, date)
-                    else {
-                        continue;
-                    };
+                    // The candidate walk already holds the (club, player)
+                    // pair — build the summary directly instead of
+                    // re-finding the player with a country-wide scan.
+                    let summary = Self::build_player_summary(country, club, player, date);
 
                     let skill_ability = Self::position_evaluation_ability(player);
                     let estimated_potential = skill_ability

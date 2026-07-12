@@ -1,4 +1,5 @@
 use chrono::{Datelike, NaiveDate};
+use rustc_hash::FxHashMap;
 
 use crate::shared::CurrencyValue;
 use crate::transfers::ScoutingRegion;
@@ -179,102 +180,109 @@ impl PipelineProcessor {
         for club in &country.clubs {
             for team in &club.teams.teams {
                 if let Some(player) = team.players.find(player_id) {
-                    let skill_ability = Self::position_evaluation_ability(player);
-                    // Blended reputation, not just `world` — keeps domestic
-                    // strength visible in valuation for clubs whose home
-                    // standing exceeds their international footprint.
-                    let (league_reputation, club_reputation) =
-                        PlayerValuationCalculator::seller_context(country, club);
-                    let estimated_value =
-                        PlayerValuationCalculator::calculate_value_with_price_level(
-                            player,
-                            date,
-                            country.settings.pricing.price_level,
-                            league_reputation,
-                            club_reputation,
-                        )
-                        .amount;
-                    let (contract_months_remaining, salary) = player
-                        .contract
-                        .as_ref()
-                        .map(|c| {
-                            let days = (c.expiration - date).num_days().max(0);
-                            ((days / 30).min(i16::MAX as i64) as i16, c.salary)
-                        })
-                        .unwrap_or((0, 0));
-                    let pos_group = player.position().position_group();
-                    let main_team = club.teams.main();
-                    let seller_ctx = SellerPlausibilityContext {
-                        club_reputation_score: main_team
-                            .map(|t| t.reputation.overall_score())
-                            .unwrap_or(0.3),
-                        league_reputation,
-                        league_id: main_team.and_then(|t| t.league_id),
-                        position_group_rank: match Self::position_group_rank(
-                            club, player.id, pos_group,
-                        ) {
-                            u8::MAX => 1,
-                            r => r,
-                        },
-                        squad_status: player
-                            .contract
-                            .as_ref()
-                            .map(|c| c.squad_status.clone())
-                            .unwrap_or(PlayerSquadStatus::NotYetSet),
-                        is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
-                        is_unhappy: player.statuses.has(PlayerStatusType::Unh),
-                        in_debt: club.finance.balance.balance < 0,
-                    };
-                    return Some(PlayerSummary {
-                        player_id: player.id,
-                        club_id: club.id,
-                        country_id: country.id,
-                        continent_id: country.continent_id,
-                        region: ScoutingRegion::from_country(country.continent_id, &country.code),
-                        country_code: country.code.clone(),
-                        player_name: player.full_name.to_string(),
-                        club_name: club.name.clone(),
-                        position: player.position(),
-                        position_group: player.position().position_group(),
-                        age: player.age(date),
-                        estimated_value,
-                        is_listed: player.statuses.has(PlayerStatusType::Lst),
-                        is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
-                        skill_ability,
-                        // Sample-size-regressed: this candidate row
-                        // feeds the same scouting recommendation tier
-                        // logic as the scouting pipeline above.
-                        average_rating: player
-                            .statistics
-                            .average_rating_realistic(player.position().position_group()),
-                        goals: player.statistics.goals,
-                        assists: player.statistics.assists,
-                        appearances: player.statistics.total_games(),
-                        determination: player.skills.mental.determination,
-                        work_rate: player.skills.mental.work_rate,
-                        composure: player.skills.mental.composure,
-                        anticipation: player.skills.mental.anticipation,
-                        technical_avg: player.skills.technical.average(),
-                        mental_avg: player.skills.mental.average(),
-                        physical_avg: player.skills.physical.average(),
-                        current_reputation: player.player_attributes.current_reputation,
-                        home_reputation: player.player_attributes.home_reputation,
-                        world_reputation: player.player_attributes.world_reputation,
-                        country_reputation: country.reputation,
-                        club_world_reputation: Self::club_world_reputation(club),
-                        club_best_in_group: Self::best_ca_in_group(
-                            club,
-                            player.position().position_group(),
-                        ),
-                        is_injured: player.player_attributes.is_injured,
-                        contract_months_remaining,
-                        salary,
-                        seller_ctx,
-                    });
+                    return Some(Self::build_player_summary(country, club, player, date));
                 }
             }
         }
         None
+    }
+
+    /// Build the market summary for a player already resolved to his club.
+    /// Shared by the country-wide scan above, the per-pass
+    /// [`CountryPlayerLookup`] fast path, and callers that walk rosters
+    /// directly (breakout watch) and therefore never need the scan.
+    pub(super) fn build_player_summary(
+        country: &Country,
+        club: &Club,
+        player: &Player,
+        date: NaiveDate,
+    ) -> PlayerSummary {
+        let skill_ability = Self::position_evaluation_ability(player);
+        // Blended reputation, not just `world` — keeps domestic
+        // strength visible in valuation for clubs whose home
+        // standing exceeds their international footprint.
+        let (league_reputation, club_reputation) =
+            PlayerValuationCalculator::seller_context(country, club);
+        let estimated_value = PlayerValuationCalculator::calculate_value_with_price_level(
+            player,
+            date,
+            country.settings.pricing.price_level,
+            league_reputation,
+            club_reputation,
+        )
+        .amount;
+        let (contract_months_remaining, salary) = player
+            .contract
+            .as_ref()
+            .map(|c| {
+                let days = (c.expiration - date).num_days().max(0);
+                ((days / 30).min(i16::MAX as i64) as i16, c.salary)
+            })
+            .unwrap_or((0, 0));
+        let pos_group = player.position().position_group();
+        let main_team = club.teams.main();
+        let seller_ctx = SellerPlausibilityContext {
+            club_reputation_score: main_team
+                .map(|t| t.reputation.overall_score())
+                .unwrap_or(0.3),
+            league_reputation,
+            league_id: main_team.and_then(|t| t.league_id),
+            position_group_rank: match Self::position_group_rank(club, player.id, pos_group) {
+                u8::MAX => 1,
+                r => r,
+            },
+            squad_status: player
+                .contract
+                .as_ref()
+                .map(|c| c.squad_status.clone())
+                .unwrap_or(PlayerSquadStatus::NotYetSet),
+            is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
+            is_unhappy: player.statuses.has(PlayerStatusType::Unh),
+            in_debt: club.finance.balance.balance < 0,
+        };
+        PlayerSummary {
+            player_id: player.id,
+            club_id: club.id,
+            country_id: country.id,
+            continent_id: country.continent_id,
+            region: ScoutingRegion::from_country(country.continent_id, &country.code),
+            country_code: country.code.clone(),
+            player_name: player.full_name.to_string(),
+            club_name: club.name.clone(),
+            position: player.position(),
+            position_group: player.position().position_group(),
+            age: player.age(date),
+            estimated_value,
+            is_listed: player.statuses.has(PlayerStatusType::Lst),
+            is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
+            skill_ability,
+            // Sample-size-regressed: this candidate row
+            // feeds the same scouting recommendation tier
+            // logic as the scouting pipeline above.
+            average_rating: player
+                .statistics
+                .average_rating_realistic(player.position().position_group()),
+            goals: player.statistics.goals,
+            assists: player.statistics.assists,
+            appearances: player.statistics.total_games(),
+            determination: player.skills.mental.determination,
+            work_rate: player.skills.mental.work_rate,
+            composure: player.skills.mental.composure,
+            anticipation: player.skills.mental.anticipation,
+            technical_avg: player.skills.technical.average(),
+            mental_avg: player.skills.mental.average(),
+            physical_avg: player.skills.physical.average(),
+            current_reputation: player.player_attributes.current_reputation,
+            home_reputation: player.player_attributes.home_reputation,
+            world_reputation: player.player_attributes.world_reputation,
+            country_reputation: country.reputation,
+            club_world_reputation: Self::club_world_reputation(club),
+            club_best_in_group: Self::best_ca_in_group(club, player.position().position_group()),
+            is_injured: player.player_attributes.is_injured,
+            contract_months_remaining,
+            salary,
+            seller_ctx,
+        }
     }
 
     /// Derive risk flags for a scouted player from their observable signals.
@@ -664,6 +672,133 @@ impl PipelineProcessor {
         let s = score.clamp(0.0, 1.0);
         let raw = 4.0 + (1.0 - s) * 11.0; // 4 at top, 15 at the bottom
         raw.round() as i16
+    }
+}
+
+/// Per-pass `player_id → club` index for
+/// [`PipelineProcessor::find_player_summary_in_country`]-style lookups.
+///
+/// The scan walks every club/team in the country PER CANDIDATE, which made
+/// it the single hottest leaf of the transfer pipeline (shortlist builds,
+/// recommendation plausibility re-checks). Passes that resolve many
+/// candidates build this once, then each lookup is a hash probe + a
+/// verified fetch. The hit is verified against the club's roster (mirrors
+/// `resolve_foreign_player_club`'s stale-index guard) and any miss falls
+/// back to the authoritative scan, so results are identical to the scan —
+/// the index is built at pass start and rosters don't move mid-pass, the
+/// fallback is a pure safety net.
+pub(super) struct CountryPlayerLookup {
+    club_idx_by_player: FxHashMap<u32, u32>,
+}
+
+impl CountryPlayerLookup {
+    pub(super) fn build(country: &Country) -> Self {
+        let mut club_idx_by_player = FxHashMap::default();
+        for (club_idx, club) in country.clubs.iter().enumerate() {
+            for team in &club.teams.teams {
+                for player in &team.players.players {
+                    club_idx_by_player.insert(player.id, club_idx as u32);
+                }
+            }
+        }
+        CountryPlayerLookup { club_idx_by_player }
+    }
+
+    pub(super) fn find_summary(
+        &self,
+        country: &Country,
+        player_id: u32,
+        date: NaiveDate,
+    ) -> Option<PlayerSummary> {
+        if let Some(&club_idx) = self.club_idx_by_player.get(&player_id) {
+            if let Some(club) = country.clubs.get(club_idx as usize) {
+                if let Some(player) = PipelineProcessor::find_player_in_club(club, player_id) {
+                    return Some(PipelineProcessor::build_player_summary(
+                        country, club, player, date,
+                    ));
+                }
+            }
+        }
+        PipelineProcessor::find_player_summary_in_country(country, player_id, date)
+    }
+
+    /// Indexed counterpart of [`PipelineProcessor::find_player_in_country`],
+    /// with the same verified-hit / scan-fallback contract as
+    /// [`Self::find_summary`].
+    pub(super) fn find_player<'a>(
+        &self,
+        country: &'a Country,
+        player_id: u32,
+    ) -> Option<&'a Player> {
+        if let Some(&club_idx) = self.club_idx_by_player.get(&player_id) {
+            if let Some(club) = country.clubs.get(club_idx as usize) {
+                if let Some(player) = PipelineProcessor::find_player_in_club(club, player_id) {
+                    return Some(player);
+                }
+            }
+        }
+        PipelineProcessor::find_player_in_country(country, player_id)
+    }
+}
+
+/// Per-club snapshot of the main team's position-group CA order —
+/// the batched counterpart of [`PipelineProcessor::position_group_rank`] and
+/// [`PipelineProcessor::best_ca_in_group`]. The pool build used to call
+/// both PER PLAYER, and each call re-collected and re-sorted the whole
+/// group (`O(squad²·log)` per club per tick). One build serves every player
+/// of the club. Same values by construction: identical comparator over the
+/// identical roster sequence (stable sort keeps roster order on CA ties),
+/// `u8::MAX` for anyone not on the main team, `0` best for a missing group
+/// or missing main team.
+pub(super) struct ClubGroupRanks {
+    rank_by_player: FxHashMap<u32, u8>,
+    best_by_group: [u8; PlayerFieldPositionGroup::COUNT],
+}
+
+impl ClubGroupRanks {
+    pub(super) fn build(club: &Club) -> Self {
+        let mut rank_by_player = FxHashMap::default();
+        let mut best_by_group = [0u8; PlayerFieldPositionGroup::COUNT];
+        let team = club
+            .teams
+            .teams
+            .iter()
+            .find(|t| matches!(t.team_type, TeamType::Main));
+        if let Some(team) = team {
+            let mut peers_by_group: [Vec<(u32, u8)>; PlayerFieldPositionGroup::COUNT] =
+                Default::default();
+            for p in &team.players.players {
+                let group = p.position().position_group();
+                peers_by_group[group.index()].push((p.id, p.player_attributes.current_ability));
+            }
+            for (group_idx, peers) in peers_by_group.iter_mut().enumerate() {
+                peers.sort_by(|a, b| b.1.cmp(&a.1));
+                best_by_group[group_idx] = peers.first().map(|(_, ca)| *ca).unwrap_or(0);
+                for (rank, (pid, _)) in peers.iter().enumerate() {
+                    rank_by_player.insert(*pid, rank.min(u8::MAX as usize - 1) as u8);
+                }
+            }
+        }
+        ClubGroupRanks {
+            rank_by_player,
+            best_by_group,
+        }
+    }
+
+    /// Rank of the player inside his main-team position group (0 = best),
+    /// `u8::MAX` when he isn't on the main team — same contract as
+    /// [`PipelineProcessor::position_group_rank`].
+    pub(super) fn rank(&self, player_id: u32) -> u8 {
+        self.rank_by_player
+            .get(&player_id)
+            .copied()
+            .unwrap_or(u8::MAX)
+    }
+
+    /// Best main-team CA in the group — same contract as
+    /// [`PipelineProcessor::best_ca_in_group`].
+    pub(super) fn best(&self, group: PlayerFieldPositionGroup) -> u8 {
+        self.best_by_group[group.index()]
     }
 }
 
