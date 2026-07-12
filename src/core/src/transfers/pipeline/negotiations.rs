@@ -1383,54 +1383,85 @@ impl PipelineProcessor {
             .par_iter_mut()
             .flat_map(|c| c.countries.par_iter_mut())
             .for_each(|country| {
-                for club in &mut country.clubs {
-                    // Signed players this club now rosters keep their
-                    // loan-out candidates — the development pathway
-                    // stages them on the buyer in the same tick this
-                    // batch sweep runs. Every other club's stale
-                    // candidates are still dropped. One roster walk with
-                    // set probes — the signed-set side of the check used
-                    // to re-walk the roster once per signed id.
-                    let owned_signed: Vec<u32> = club
-                        .teams
-                        .teams
-                        .iter()
-                        .flat_map(|t| t.players.players.iter())
-                        .map(|p| p.id)
-                        .filter(|id| signed.contains(id))
-                        .collect();
-                    let plan = &mut club.transfer_plan;
-                    for assignment in &mut plan.scouting_assignments {
-                        assignment
-                            .observations
-                            .retain(|o| !signed.contains(&o.player_id));
-                    }
-                    plan.scouting_reports
-                        .retain(|r| !signed.contains(&r.player_id));
-                    for shortlist in &mut plan.shortlists {
-                        shortlist
-                            .candidates
-                            .retain(|c| !signed.contains(&c.player_id));
-                    }
-                    plan.staff_recommendations
-                        .retain(|r| !signed.contains(&r.player_id));
-                    plan.loan_out_candidates.retain(|c| {
-                        !signed.contains(&c.player_id) || owned_signed.contains(&c.player_id)
-                    });
-                    plan.scout_monitoring
-                        .retain(|m| !signed.contains(&m.player_id));
-
-                    // Team-level selling lists mirror market listings
-                    // (stalemate fallback, AI transfer-list manager). A
-                    // player who moved or was released must drop off them
-                    // too, or the team-transfers page keeps rendering a
-                    // stale asking-price row for him.
-                    for team in &mut club.teams.teams {
-                        for id in &signed {
-                            team.transfer_list.remove(*id);
+                // Per-club sweep, parallel WITHIN the country too: every
+                // retain below touches only its own club's plan/rosters,
+                // and with one country task per country the biggest
+                // country's serial club walk was the drain phase's
+                // pacing straggler. `with_min_len` keeps small countries
+                // from shattering into per-club micro-tasks — the sweep
+                // per club is tiny and the fan-out churn would otherwise
+                // outweigh it.
+                country
+                    .clubs
+                    .par_iter_mut()
+                    .with_min_len(8)
+                    .for_each(|club| {
+                        // Signed players this club now rosters keep their
+                        // loan-out candidates — the development pathway
+                        // stages them on the buyer in the same tick this
+                        // batch sweep runs. Every other club's stale
+                        // candidates are still dropped. One roster walk with
+                        // set probes — the signed-set side of the check used
+                        // to re-walk the roster once per signed id.
+                        let owned_signed: Vec<u32> = club
+                            .teams
+                            .teams
+                            .iter()
+                            .flat_map(|t| t.players.players.iter())
+                            .map(|p| p.id)
+                            .filter(|id| signed.contains(id))
+                            .collect();
+                        let plan = &mut club.transfer_plan;
+                        for assignment in &mut plan.scouting_assignments {
+                            assignment
+                                .observations
+                                .retain(|o| !signed.contains(&o.player_id));
                         }
-                    }
-                }
+                        plan.scouting_reports
+                            .retain(|r| !signed.contains(&r.player_id));
+                        for shortlist in &mut plan.shortlists {
+                            shortlist
+                                .candidates
+                                .retain(|c| !signed.contains(&c.player_id));
+                        }
+                        plan.staff_recommendations
+                            .retain(|r| !signed.contains(&r.player_id));
+                        plan.loan_out_candidates.retain(|c| {
+                            !signed.contains(&c.player_id) || owned_signed.contains(&c.player_id)
+                        });
+                        plan.scout_monitoring
+                            .retain(|m| !signed.contains(&m.player_id));
+
+                        // Team-level selling lists mirror market listings
+                        // (stalemate fallback, AI transfer-list manager). A
+                        // player who moved or was released must drop off them
+                        // too, or the team-transfers page keeps rendering a
+                        // stale asking-price row for him.
+                        for team in &mut club.teams.teams {
+                            team.transfer_list.remove_all(&signed);
+                        }
+
+                        // Targeted Wnt reconciliation, folded into the same
+                        // club walk. The retains above only removed rows for
+                        // `signed` ids, so only THEIR tracked status can have
+                        // changed — and by construction none of them is still
+                        // tracked at any club. Stripping their Wnt directly
+                        // replaces the full per-country `sync_wanted_status`
+                        // rebuild that used to run here (the drain phase's
+                        // biggest straggler); every other kind of Wnt drift
+                        // (window resets, cleared interest) keeps being
+                        // reconciled by the daily per-country
+                        // `sync_wanted_status` call in the pipeline.
+                        for team in &mut club.teams.teams {
+                            for player in team.players.players.iter_mut() {
+                                if signed.contains(&player.id)
+                                    && player.statuses.has(PlayerStatusType::Wnt)
+                                {
+                                    player.statuses.remove(PlayerStatusType::Wnt);
+                                }
+                            }
+                        }
+                    });
 
                 for listing in country.transfer_market.listings.iter_mut() {
                     if signed.contains(&listing.player_id)
@@ -1449,8 +1480,6 @@ impl PipelineProcessor {
                         negotiation.status = NegotiationStatus::Rejected;
                     }
                 }
-
-                Self::sync_wanted_status(country);
             });
     }
 
