@@ -1,5 +1,6 @@
 use chrono::NaiveDate;
 use log::debug;
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 use crate::club::BoardTransferProposal;
@@ -79,14 +80,58 @@ impl PipelineProcessor {
     // ============================================================
 
     pub fn build_shortlists(country: &mut Country, date: NaiveDate) {
-        let mut results: Vec<ShortlistResult> = Vec::new();
-
         // One country walk up front so the per-report / per-listing summary
         // resolutions below are hash probes instead of country scans.
         // Rosters don't change inside this pass (results apply at the end).
-        let mut player_lookup = CountryPlayerLookup::build(country);
+        let player_lookup = CountryPlayerLookup::build(country);
 
-        for club in &country.clubs {
+        // Pass 1 (PARALLEL): each club's shortlist build reads only the
+        // country, the shared lookup, and its own plan — no RNG, no
+        // mutation — so the clubs fan out across the pool. Ordered
+        // collect + flatten keeps the applied sequence identical to the
+        // serial scan.
+        let country_ref: &Country = country;
+        let results: Vec<ShortlistResult> = country_ref
+            .clubs
+            .par_iter()
+            .map(|club| Self::build_club_shortlists(country_ref, club, &player_lookup, date))
+            .collect::<Vec<Vec<ShortlistResult>>>()
+            .into_iter()
+            .flatten()
+            .collect();
+
+        if !results.is_empty() {
+            debug!("Transfer pipeline: built {} shortlists", results.len());
+        }
+
+        for result in results {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == result.club_id) {
+                let plan = &mut club.transfer_plan;
+
+                if let Some(req) = plan
+                    .transfer_requests
+                    .iter_mut()
+                    .find(|r| r.id == result.request_id)
+                {
+                    req.status = TransferRequestStatus::Shortlisted;
+                }
+
+                plan.shortlists.push(result.shortlist);
+            }
+        }
+    }
+
+    /// One club's shortlist build — pass 1 of [`Self::build_shortlists`],
+    /// hoisted per club so the scan parallelizes. Strictly read-only;
+    /// the staged shortlists are applied by the caller in club order.
+    fn build_club_shortlists(
+        country: &Country,
+        club: &Club,
+        player_lookup: &CountryPlayerLookup,
+        date: NaiveDate,
+    ) -> Vec<ShortlistResult> {
+        let mut results: Vec<ShortlistResult> = Vec::new();
+        {
             let plan = &club.transfer_plan;
             let buyer_ctx = BuyerPlausibilityContext::build(country, club);
 
@@ -342,26 +387,7 @@ impl PipelineProcessor {
                 }
             }
         }
-
-        if !results.is_empty() {
-            debug!("Transfer pipeline: built {} shortlists", results.len());
-        }
-
-        for result in results {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == result.club_id) {
-                let plan = &mut club.transfer_plan;
-
-                if let Some(req) = plan
-                    .transfer_requests
-                    .iter_mut()
-                    .find(|r| r.id == result.request_id)
-                {
-                    req.status = TransferRequestStatus::Shortlisted;
-                }
-
-                plan.shortlists.push(result.shortlist);
-            }
-        }
+        results
     }
 
     /// Board-approval pass. Runs right after shortlists are built. For

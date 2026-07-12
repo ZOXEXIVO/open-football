@@ -712,31 +712,35 @@ impl PipelineProcessor {
 /// fallback is a pure safety net.
 pub(super) struct CountryPlayerLookup {
     club_idx_by_player: FxHashMap<u32, u32>,
-    /// Lazily-built per-club [`ClubGroupRanks`], keyed by club index.
-    /// Rosters and CA don't move inside a pass (same freshness contract
-    /// as `club_idx_by_player`), so one snapshot serves every summary
-    /// built for that club instead of re-sorting the group per call.
-    ranks_by_club: FxHashMap<u32, ClubGroupRanks>,
+    /// Per-club [`ClubGroupRanks`], indexed like `Country::clubs`.
+    /// Pre-built for every club (one group sort per club — trivial next
+    /// to the scans this index serves) so `find_summary` stays `&self`
+    /// and the lookup can be shared across parallel per-club scans.
+    /// Rosters and CA don't move inside a pass — same freshness
+    /// contract as `club_idx_by_player`.
+    ranks_by_club: Vec<ClubGroupRanks>,
 }
 
 impl CountryPlayerLookup {
     pub(super) fn build(country: &Country) -> Self {
         let mut club_idx_by_player = FxHashMap::default();
+        let mut ranks_by_club = Vec::with_capacity(country.clubs.len());
         for (club_idx, club) in country.clubs.iter().enumerate() {
             for team in &club.teams.teams {
                 for player in &team.players.players {
                     club_idx_by_player.insert(player.id, club_idx as u32);
                 }
             }
+            ranks_by_club.push(ClubGroupRanks::build(club));
         }
         CountryPlayerLookup {
             club_idx_by_player,
-            ranks_by_club: FxHashMap::default(),
+            ranks_by_club,
         }
     }
 
     pub(super) fn find_summary(
-        &mut self,
+        &self,
         country: &Country,
         player_id: u32,
         date: NaiveDate,
@@ -744,16 +748,12 @@ impl CountryPlayerLookup {
         if let Some(&club_idx) = self.club_idx_by_player.get(&player_id) {
             if let Some(club) = country.clubs.get(club_idx as usize) {
                 if let Some(player) = PipelineProcessor::find_player_in_club(club, player_id) {
-                    let ranks = self
-                        .ranks_by_club
-                        .entry(club_idx)
-                        .or_insert_with(|| ClubGroupRanks::build(club));
                     return Some(PipelineProcessor::build_player_summary_ranked(
                         country,
                         club,
                         player,
                         date,
-                        Some(ranks),
+                        self.ranks_by_club.get(club_idx as usize),
                     ));
                 }
             }
