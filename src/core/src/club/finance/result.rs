@@ -81,13 +81,10 @@ impl ClubFinanceResult {
             // target.
             //
             // Read inputs first (immutable), then re-acquire the club
-            // mutably to push the new deals — keeps `country_by_club` and
+            // mutably to push the new deals — keeps the country read and
             // the mutable club borrow off each other.
             let date = data.date().date();
-            let market_strength = data
-                .country_by_club(self.club_id)
-                .map(|c| c.economic_factors.sponsorship_market_strength)
-                .unwrap_or(1.0);
+            let market_strength = data.sponsorship_market_strength_for(self.club_id);
 
             let club = match data.club(self.club_id) {
                 Some(c) => c,

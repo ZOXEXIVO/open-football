@@ -5,7 +5,6 @@ use crate::club::player::interaction::{
     default_cooldown_days,
 };
 use crate::league::result::LeagueProcessAccess;
-use crate::transfers::pipeline::PipelineProcessor;
 use crate::{
     ChangeType, ConflictLocation, HappinessEventCause, HappinessEventChangeKind,
     HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope,
@@ -113,10 +112,9 @@ impl TeamBehaviourResult {
             }
             // Now a free agent — drop him from every club's shortlist,
             // scouting, and loan-out lists in this country so stale interest
-            // records don't linger.
-            if let Some(country) = data.country_mut(country_id) {
-                PipelineProcessor::clear_player_interest(country, termination.player_id);
-            }
+            // records don't linger. The parallel per-club view stages
+            // this; country-wide views apply inline.
+            data.clear_player_interest_in_country(country_id, termination.player_id);
             log::debug!(
                 "Contract terminated: player {} by club {} — payout {} ({})",
                 termination.player_id,
@@ -1265,10 +1263,11 @@ mod severity_cap_tests {
     use crate::Staff;
     use crate::club::player::builder::PlayerBuilder;
     use crate::league::League;
-    use crate::league::result::LeagueProcessAccess;
+    use crate::league::result::{DeferredContractInteraction, LeagueProcessAccess};
     use crate::shared::fullname::FullName;
     use crate::shared::indexes::SimulatorDataIndexes;
     use crate::simulator::CountryInfo;
+    use crate::transfers::TransferListing;
     use crate::{
         Club, ConflictLocation, Country, HappinessEventCause, HappinessEventSeverity,
         PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
@@ -1353,6 +1352,26 @@ mod severity_cap_tests {
         }
         fn random_player_mut(&mut self) -> Option<&mut Player> {
             unreachable!()
+        }
+        fn sponsorship_market_strength_for(&self, _club_id: u32) -> f32 {
+            unreachable!()
+        }
+        fn push_transfer_market_listing(
+            &mut self,
+            _selling_club_id: u32,
+            _listing: TransferListing,
+        ) {
+            unreachable!()
+        }
+        fn clear_player_interest_in_country(&mut self, _country_id: u32, _player_id: u32) {
+            unreachable!()
+        }
+        fn try_defer_contract_interaction(
+            &mut self,
+            _contract_club_id: u32,
+            _interaction: DeferredContractInteraction,
+        ) -> bool {
+            false
         }
     }
 

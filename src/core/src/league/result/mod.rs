@@ -5,7 +5,8 @@ mod physical;
 mod types;
 
 pub use data_access::{
-    CountryLookupIndex, CountryProcessCtx, DeferredGlobalOps, LeagueProcessAccess, WorldSnapshot,
+    ClubProcessCtx, CountryLookupIndex, CountryProcessCtx, DeferredContractInteraction,
+    DeferredGlobalOps, LeagueProcessAccess, StagedClubOps, WorldSnapshot,
 };
 
 pub use types::*;

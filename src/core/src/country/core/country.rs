@@ -8,15 +8,17 @@ use crate::country::national::NationalTeam;
 use crate::league::LeagueCollection;
 use crate::league::LeaguePendingState;
 use crate::league::result::{
-    CountryLookupIndex, CountryProcessCtx, DeferredGlobalOps, WorldSnapshot,
+    ClubProcessCtx, CountryLookupIndex, CountryProcessCtx, DeferredContractInteraction,
+    DeferredGlobalOps, StagedClubOps, WorldSnapshot,
 };
 use crate::r#match::Match;
 use crate::r#match::MatchResult;
 use crate::transfers::market::TransferMarket;
-use crate::{Club, ClubResult, Player};
+use crate::transfers::pipeline::PipelineProcessor;
+use crate::{Club, ClubResult, Player, PlayerResult};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
-use rayon::iter::ParallelIterator;
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use rayon::prelude::IntoParallelRefMutIterator;
 
 use crate::SimulationResult;
@@ -515,14 +517,17 @@ impl Country {
         // `award_emitted_*` markers, so a no-op on every non-final day.
         CountryResult::process_domestic_cup_winner_awards(self, current_date);
 
-        // Phase 1c (NEW PARALLEL PATH): drive each ClubResult's
+        // Phase 1c (PARALLEL PER CLUB): drive each ClubResult's
         // sub-processors (finance, board, teams' players/staffs/training/
-        // behaviour, academy) here, inside the parallel
-        // `countries.par_iter_mut()`. The contracts / discipline /
-        // training / morale fan-out is now country-local — global
-        // cross-cuts (sacked staff joining the global free-agent pool,
-        // pending manager appointments) are queued on
-        // `deferred_global_ops` and drained serially in Phase C.
+        // behaviour, academy) with a club-scoped view, parallel across
+        // the country's clubs. The audited fan-out only touches its own
+        // club's state; the rare escapes go through queues: global
+        // cross-cuts (sacked staff, manager appointments) on a per-worker
+        // `DeferredGlobalOps`, country-level writes (market listings,
+        // interest clears) and loan-parent contract calls on a per-worker
+        // `StagedClubOps` — all merged and applied serially in club
+        // order below, so the drained sequences match the old serial
+        // loop.
         let mut clubs_results_after: Vec<ClubResult> = Vec::with_capacity(clubs_results.len());
         // Collect academy transfers up front while we still own the
         // ClubResult slice — they're appended to the country's transfer
@@ -544,8 +549,82 @@ impl Country {
                     .extend(std::mem::take(&mut cr.academy_released_players));
             }
         }
-        for cr in clubs_results {
-            let club_id = cr.club_id;
+        for cr in &clubs_results {
+            // Placeholder ClubResult to satisfy the existing
+            // CountryResult.clubs surface — Phase C only needs the type.
+            clubs_results_after.push(ClubResult::new(
+                cr.club_id,
+                ClubFinanceResult::new(),
+                Vec::new(),
+                BoardResult::new(),
+                ClubAcademyResult::new(PlayerCollectionResult::new(Vec::new())),
+            ));
+        }
+        let staged_parts: Vec<(DeferredGlobalOps, StagedClubOps)> = {
+            // Disjoint field borrows: clubs mutable per worker, the
+            // country-level context read-only and shared.
+            let country_id = self.id;
+            let market_strength = self.economic_factors.sponsorship_market_strength;
+            let leagues_ref = &self.leagues;
+            let cup_league_ref = self.domestic_cup.as_ref().map(|c| &c.league);
+            self.clubs
+                .par_iter_mut()
+                .zip(clubs_results.into_par_iter())
+                .enumerate()
+                .map(|(club_idx, (club, cr))| {
+                    // `simulate_clubs` collected results with a
+                    // par_iter().map().collect() over this same vec, so
+                    // order is guaranteed; nothing between there and here
+                    // adds or removes clubs.
+                    assert_eq!(
+                        club.id, cr.club_id,
+                        "Phase 1c: clubs/results order diverged"
+                    );
+                    let mut worker_deferred = DeferredGlobalOps::new();
+                    let mut worker_staged = StagedClubOps::default();
+                    let mut ctx_local = ClubProcessCtx {
+                        club,
+                        club_idx: club_idx as u16,
+                        country_id,
+                        date: world.date,
+                        country_info_ref: world.country_info,
+                        indexes_ref: world.indexes,
+                        leagues_ref,
+                        cup_league_ref,
+                        sponsorship_market_strength: market_strength,
+                        lookup: &lookup,
+                        deferred: &mut worker_deferred,
+                        staged: &mut worker_staged,
+                    };
+                    cr.process(&mut ctx_local, &mut SimulationResult::new());
+                    (worker_deferred, worker_staged)
+                })
+                .collect()
+        };
+        // Serial post-pass, in club order. Listings and interest clears
+        // land on the country market / plans exactly as the serial loop
+        // wrote them mid-iteration; the relative order across clubs is
+        // preserved, and nothing between a club's process and this drain
+        // reads the affected state.
+        let mut staged_contract_interactions: Vec<DeferredContractInteraction> = Vec::new();
+        for (worker_deferred, worker_staged) in staged_parts {
+            deferred.merge(worker_deferred);
+            for listing in worker_staged.market_listings {
+                self.transfer_market.add_listing(listing);
+            }
+            for player_id in worker_staged.interest_clears {
+                PipelineProcessor::clear_player_interest(self, player_id);
+            }
+            staged_contract_interactions.extend(worker_staged.contract_interactions);
+        }
+        // Loan-parent contract interactions replay with full country
+        // access — identical inputs to what the serial loop handed the
+        // shared interaction fn, only the point in the tick moved.
+        for interaction in staged_contract_interactions {
+            let mut player_result = PlayerResult::new(interaction.player_id);
+            player_result.contract.no_contract = interaction.no_contract;
+            player_result.contract.want_improve_contract = interaction.want_improve_contract;
+            player_result.contract.want_extend_contract = interaction.want_extend_contract;
             let mut ctx_local = CountryProcessCtx {
                 country: self,
                 date: world.date,
@@ -554,23 +633,11 @@ impl Country {
                 deferred: &mut deferred,
                 lookup: Some(&lookup),
             };
-            // ClubResult::process consumes self; we don't need the
-            // returned shell after applying. Reconstruct a stripped
-            // placeholder for Phase C's iteration cost-of-bookkeeping.
-            // (Phase C no longer calls ClubResult::process — the shell
-            // is just for typing.)
-            cr.process(&mut ctx_local, &mut SimulationResult::new());
-            // Keep a placeholder ClubResult to satisfy the existing
-            // CountryResult.clubs surface. The data Phase C cares about
-            // (academy_transfers, pending_ai_requests) were already
-            // extracted upstream — we just need the type.
-            clubs_results_after.push(ClubResult::new(
-                club_id,
-                ClubFinanceResult::new(),
-                Vec::new(),
-                BoardResult::new(),
-                ClubAcademyResult::new(PlayerCollectionResult::new(Vec::new())),
-            ));
+            ClubResult::process_player_contract_interaction(
+                &player_result,
+                &mut ctx_local,
+                interaction.employing_club_id,
+            );
         }
         // Push academy transfers to country transfer history here — no
         // longer needs Phase C since we own &mut self.

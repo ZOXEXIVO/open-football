@@ -21,10 +21,11 @@ use crate::transfers::pipeline::{
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;
 use crate::{
-    ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType,
-    StaffEventType, StaffPosition, TeamType,
+    Club, ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerSquadStatus,
+    PlayerStatusType, StaffEventType, StaffPosition, TeamType,
 };
 use chrono::Weekday;
+use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
@@ -62,6 +63,19 @@ struct MatchScoutingObservationResult {
     assessed_potential: u8,
     match_rating: f32,
     is_new: bool,
+}
+
+/// Per-club staged output of the parallel scouting scan (pass 1 of
+/// `process_scouting`). Merged in club order and applied by pass 2, so
+/// the apply order and dedup semantics match the old serial scan.
+struct ClubScoutingStaged {
+    observations: Vec<ScoutingObservationResult>,
+    reports: Vec<ScoutingReportResult>,
+    staff_events: Vec<(u32, u32, StaffEventType)>,
+    familiarity_events: Vec<(u32, u32, ScoutingRegion)>,
+    rejected_events: Vec<(u32, u32)>,
+    wanted_player_ids: Vec<u32>,
+    monitoring_updates: Vec<MonitoringUpdate>,
 }
 
 /// Rich update payload for an active monitoring row. Built during the
@@ -938,7 +952,6 @@ impl PipelineProcessor {
         foreign_players: &[&PlayerSummary],
         date: NaiveDate,
     ) {
-        let country_id = country.id;
         let country_reputation = country.reputation;
         // Single source of truth for observation/error/recommendation/risk-flag tuning.
         let config = ScoutingConfig::default();
@@ -977,6 +990,32 @@ impl PipelineProcessor {
             foreign_by_group[p.position_group.index()].push(p);
         }
 
+        // Pass 1 (PARALLEL): each club's scan is read-only — over the
+        // shared pools, the country, and its own plan — and stages its
+        // results on a per-club struct, so the clubs fan out across the
+        // rayon pool instead of running head-to-tail inside the
+        // country's serial tail. Merging in club order below keeps the
+        // applied sequence identical to the old single-threaded scan;
+        // the RNG draws come from the executing worker's thread-seeded
+        // stream, the same order-of-execution dependence the world tick
+        // already has at country granularity.
+        let country_ref: &Country = country;
+        let staged_per_club: Vec<ClubScoutingStaged> = country_ref
+            .clubs
+            .par_iter()
+            .map(|club| {
+                Self::scout_club_assignments(
+                    country_ref,
+                    club,
+                    &domestic_by_group,
+                    &foreign_by_group,
+                    &performance_lookup,
+                    &config,
+                    date,
+                )
+            })
+            .collect();
+
         let mut observations: Vec<ScoutingObservationResult> = Vec::new();
         let mut reports: Vec<ScoutingReportResult> = Vec::new();
         let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new();
@@ -984,8 +1023,58 @@ impl PipelineProcessor {
         let mut rejected_events: Vec<(u32, u32)> = Vec::new(); // (club_id, player_id)
         let mut wanted_player_ids: Vec<u32> = Vec::new();
         let mut monitoring_updates: Vec<MonitoringUpdate> = Vec::new();
+        for staged in staged_per_club {
+            observations.extend(staged.observations);
+            reports.extend(staged.reports);
+            staff_events.extend(staged.staff_events);
+            familiarity_events.extend(staged.familiarity_events);
+            rejected_events.extend(staged.rejected_events);
+            // Wnt dedup used to happen across clubs mid-scan; replicate
+            // it at merge time so the applied vec stays duplicate-free.
+            for player_id in staged.wanted_player_ids {
+                if !wanted_player_ids.contains(&player_id) {
+                    wanted_player_ids.push(player_id);
+                }
+            }
+            monitoring_updates.extend(staged.monitoring_updates);
+        }
 
-        for club in &country.clubs {
+        Self::apply_scouting_results(
+            country,
+            observations,
+            reports,
+            staff_events,
+            familiarity_events,
+            rejected_events,
+            wanted_player_ids,
+            monitoring_updates,
+            &config,
+            date,
+        );
+    }
+
+    /// One club's scouting scan — pass 1 of [`Self::process_scouting`],
+    /// hoisted per club so the scan parallelizes. Strictly read-only:
+    /// every mutation is staged on the returned [`ClubScoutingStaged`].
+    #[allow(clippy::too_many_arguments)]
+    fn scout_club_assignments(
+        country: &Country,
+        club: &Club,
+        domestic_by_group: &[Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT],
+        foreign_by_group: &[Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT],
+        performance_lookup: &LeaguePerformanceLookup,
+        config: &ScoutingConfig,
+        date: NaiveDate,
+    ) -> ClubScoutingStaged {
+        let country_id = country.id;
+        let mut observations: Vec<ScoutingObservationResult> = Vec::new();
+        let mut reports: Vec<ScoutingReportResult> = Vec::new();
+        let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new();
+        let mut familiarity_events: Vec<(u32, u32, ScoutingRegion)> = Vec::new();
+        let mut rejected_events: Vec<(u32, u32)> = Vec::new();
+        let mut wanted_player_ids: Vec<u32> = Vec::new();
+        let mut monitoring_updates: Vec<MonitoringUpdate> = Vec::new();
+        {
             let plan = &club.transfer_plan;
             // Multi-factor realism gate (see `ScoutingConfig::is_target_realistic`):
             // blocks first-team regulars at much-bigger clubs from
@@ -1177,7 +1266,7 @@ impl PipelineProcessor {
                     let mut scored: Vec<(&PlayerSummary, f32)> = matching
                         .iter()
                         .map(|p| {
-                            let score = Self::player_data_score(p, &performance_lookup);
+                            let score = Self::player_data_score(p, performance_lookup);
                             let jitter = IntegerUtils::random(-noise, noise) as f32;
                             (*p, score + jitter)
                         })
@@ -1429,7 +1518,32 @@ impl PipelineProcessor {
                 }
             }
         }
+        ClubScoutingStaged {
+            observations,
+            reports,
+            staff_events,
+            familiarity_events,
+            rejected_events,
+            wanted_player_ids,
+            monitoring_updates,
+        }
+    }
 
+    /// Pass 2 of [`Self::process_scouting`] — apply the merged staged
+    /// results against the mutable country.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_scouting_results(
+        country: &mut Country,
+        observations: Vec<ScoutingObservationResult>,
+        reports: Vec<ScoutingReportResult>,
+        staff_events: Vec<(u32, u32, StaffEventType)>,
+        familiarity_events: Vec<(u32, u32, ScoutingRegion)>,
+        rejected_events: Vec<(u32, u32)>,
+        wanted_player_ids: Vec<u32>,
+        monitoring_updates: Vec<MonitoringUpdate>,
+        config: &ScoutingConfig,
+        date: NaiveDate,
+    ) {
         // Pass 2: Apply observations and reports
         for obs in observations {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == obs.club_id) {

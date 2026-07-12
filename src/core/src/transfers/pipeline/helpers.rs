@@ -197,6 +197,22 @@ impl PipelineProcessor {
         player: &Player,
         date: NaiveDate,
     ) -> PlayerSummary {
+        Self::build_player_summary_ranked(country, club, player, date, None)
+    }
+
+    /// [`Self::build_player_summary`] with an optional precomputed
+    /// [`ClubGroupRanks`] for the club. The per-call fallback re-sorts
+    /// the main team's position group TWICE per summary (rank + best);
+    /// passes that resolve many candidates per club (shortlists,
+    /// recommendation re-checks) hand the batched snapshot in instead —
+    /// same values by construction (see `ClubGroupRanks`).
+    pub(super) fn build_player_summary_ranked(
+        country: &Country,
+        club: &Club,
+        player: &Player,
+        date: NaiveDate,
+        ranks: Option<&ClubGroupRanks>,
+    ) -> PlayerSummary {
         let skill_ability = Self::position_evaluation_ability(player);
         // Blended reputation, not just `world` — keeps domestic
         // strength visible in valuation for clubs whose home
@@ -227,7 +243,10 @@ impl PipelineProcessor {
                 .unwrap_or(0.3),
             league_reputation,
             league_id: main_team.and_then(|t| t.league_id),
-            position_group_rank: match Self::position_group_rank(club, player.id, pos_group) {
+            position_group_rank: match ranks
+                .map(|r| r.rank(player.id))
+                .unwrap_or_else(|| Self::position_group_rank(club, player.id, pos_group))
+            {
                 u8::MAX => 1,
                 r => r,
             },
@@ -277,7 +296,11 @@ impl PipelineProcessor {
             world_reputation: player.player_attributes.world_reputation,
             country_reputation: country.reputation,
             club_world_reputation: Self::club_world_reputation(club),
-            club_best_in_group: Self::best_ca_in_group(club, player.position().position_group()),
+            club_best_in_group: ranks
+                .map(|r| r.best(player.position().position_group()))
+                .unwrap_or_else(|| {
+                    Self::best_ca_in_group(club, player.position().position_group())
+                }),
             is_injured: player.player_attributes.is_injured,
             contract_months_remaining,
             salary,
@@ -689,6 +712,11 @@ impl PipelineProcessor {
 /// fallback is a pure safety net.
 pub(super) struct CountryPlayerLookup {
     club_idx_by_player: FxHashMap<u32, u32>,
+    /// Lazily-built per-club [`ClubGroupRanks`], keyed by club index.
+    /// Rosters and CA don't move inside a pass (same freshness contract
+    /// as `club_idx_by_player`), so one snapshot serves every summary
+    /// built for that club instead of re-sorting the group per call.
+    ranks_by_club: FxHashMap<u32, ClubGroupRanks>,
 }
 
 impl CountryPlayerLookup {
@@ -701,11 +729,14 @@ impl CountryPlayerLookup {
                 }
             }
         }
-        CountryPlayerLookup { club_idx_by_player }
+        CountryPlayerLookup {
+            club_idx_by_player,
+            ranks_by_club: FxHashMap::default(),
+        }
     }
 
     pub(super) fn find_summary(
-        &self,
+        &mut self,
         country: &Country,
         player_id: u32,
         date: NaiveDate,
@@ -713,8 +744,16 @@ impl CountryPlayerLookup {
         if let Some(&club_idx) = self.club_idx_by_player.get(&player_id) {
             if let Some(club) = country.clubs.get(club_idx as usize) {
                 if let Some(player) = PipelineProcessor::find_player_in_club(club, player_id) {
-                    return Some(PipelineProcessor::build_player_summary(
-                        country, club, player, date,
+                    let ranks = self
+                        .ranks_by_club
+                        .entry(club_idx)
+                        .or_insert_with(|| ClubGroupRanks::build(club));
+                    return Some(PipelineProcessor::build_player_summary_ranked(
+                        country,
+                        club,
+                        player,
+                        date,
+                        Some(ranks),
                     ));
                 }
             }

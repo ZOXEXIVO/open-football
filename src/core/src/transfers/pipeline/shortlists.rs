@@ -84,7 +84,7 @@ impl PipelineProcessor {
         // One country walk up front so the per-report / per-listing summary
         // resolutions below are hash probes instead of country scans.
         // Rosters don't change inside this pass (results apply at the end).
-        let player_lookup = CountryPlayerLookup::build(country);
+        let mut player_lookup = CountryPlayerLookup::build(country);
 
         for club in &country.clubs {
             let plan = &club.transfer_plan;

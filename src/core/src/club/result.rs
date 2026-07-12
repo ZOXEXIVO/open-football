@@ -9,7 +9,7 @@ use crate::club::player::contract::{
 use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::squad::SquadAssetContext;
 use crate::club::{BoardResult, ClubFinanceResult};
-use crate::league::result::LeagueProcessAccess;
+use crate::league::result::{DeferredContractInteraction, LeagueProcessAccess};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::{CompletedTransfer, TransferListing, TransferListingType};
 use crate::utils::{DateUtils, FormattingUtils};
@@ -206,6 +206,23 @@ impl ClubResult {
             } else {
                 club_id
             };
+
+            // Parallel per-club pass: a loan parent outside this
+            // worker's club is out of write scope — queue the whole
+            // interaction for a serial replay with full country access.
+            // Country-wide views answer `false` and continue inline.
+            if data.try_defer_contract_interaction(
+                contract_club_id,
+                DeferredContractInteraction {
+                    player_id: result.player_id,
+                    employing_club_id: club_id,
+                    no_contract: result.contract.no_contract,
+                    want_improve_contract: result.contract.want_improve_contract,
+                    want_extend_contract: result.contract.want_extend_contract,
+                },
+            ) {
+                return;
+            }
 
             // Step 1: Resolve contract renewal staff, wage budget, and current wage bill
             // Uses the parent club's context for loaned players. Also pull
@@ -846,20 +863,21 @@ impl ClubResult {
         // Push the listing into the country transfer market so the
         // buying pipeline can actually discover it. Without this step
         // the country pipeline's "already listed" guard short-circuits
-        // and the listing never reaches the market.
+        // and the listing never reaches the market. Routed through the
+        // trait: the parallel per-club view stages it for the serial
+        // post-pass, the country-wide views apply inline.
         if listed_now {
-            if let Some(country_id) = data.country_by_club(club_id).map(|c| c.id) {
-                if let Some(country) = data.country_mut(country_id) {
-                    country.transfer_market.add_listing(TransferListing::new(
-                        player_id,
-                        club_id,
-                        team_id,
-                        asking_price,
-                        date,
-                        TransferListingType::Transfer,
-                    ));
-                }
-            }
+            data.push_transfer_market_listing(
+                club_id,
+                TransferListing::new(
+                    player_id,
+                    club_id,
+                    team_id,
+                    asking_price,
+                    date,
+                    TransferListingType::Transfer,
+                ),
+            );
         }
     }
 

@@ -375,7 +375,7 @@ impl PipelineProcessor {
 
         // One country walk so per-candidate plausibility re-checks below
         // resolve summaries via hash probe instead of a country scan.
-        let player_lookup = CountryPlayerLookup::build(country);
+        let mut player_lookup = CountryPlayerLookup::build(country);
 
         let is_january = Self::is_january_window(date);
         let price_level = country.settings.pricing.price_level;
@@ -607,7 +607,7 @@ impl PipelineProcessor {
             // Closure shorthand: true when adding `player_id` to the
             // recommendation list would push an impossible move (Maximenko-
             // class step-down) into the pipeline.
-            let plausibility_rejects = |player_id: u32, is_loan: bool| -> bool {
+            let mut plausibility_rejects = |player_id: u32, is_loan: bool| -> bool {
                 let summary = match player_lookup.find_summary(country, player_id, date) {
                     Some(s) => s,
                     None => return false,
@@ -1532,7 +1532,7 @@ impl PipelineProcessor {
         // Indexed player/summary resolution for the per-recommendation
         // re-checks below (actions apply after the loop, so the index
         // stays valid for the whole pass).
-        let player_lookup = CountryPlayerLookup::build(country);
+        let mut player_lookup = CountryPlayerLookup::build(country);
 
         for club in &country.clubs {
             let plan = &club.transfer_plan;
