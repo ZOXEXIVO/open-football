@@ -59,8 +59,13 @@ const HARD_INVALIDITY_LEADERSHIP: f32 = 6.0;
 /// players can still get in via [`LeadershipCandidate::young_exception`].
 const MATURITY_AGE: u8 = 23;
 
-/// Tie-break tolerance on the 0..100 score. Differences smaller than this
-/// fall through to the deterministic tie-break chain.
+/// Tie-break granularity on the 0..100 score. Scores are quantised onto
+/// this grid before comparison, so sub-grid differences (floating-point
+/// noise) fall through to the deterministic tie-break chain. Quantising —
+/// rather than an `|a - b| <= eps` window — keeps the comparator
+/// transitive: an epsilon window is not transitive, and `max_by` with a
+/// non-transitive comparator is order-sensitive, meaning the same XI
+/// listed in a different order could wear a different armband.
 const SCORE_EPSILON: f32 = 0.01;
 
 // ---------------------------------------------------------------------------
@@ -408,15 +413,18 @@ impl LeadershipCandidate {
     }
 
     /// Deterministic best-first ordering for `max_by`: `Greater` means
-    /// `a` is the better captain candidate than `b`. The score gate uses an
-    /// epsilon so rounding noise doesn't flip the armband; ties fall through
-    /// a fixed chain (leadership → mental-trio sum → reputation → position
-    /// factor → lower id). Lower id last keeps the call stable across builds.
+    /// `a` is the better captain candidate than `b`. Scores are quantised
+    /// onto the [`SCORE_EPSILON`] grid so rounding noise doesn't flip the
+    /// armband while the ordering stays transitive (and therefore
+    /// independent of candidate order — see the constant's docs); grid
+    /// ties fall through a fixed chain (leadership → mental-trio sum →
+    /// reputation → position factor → lower id). Lower id last keeps the
+    /// call stable across builds.
     fn cmp_score(a: &Self, b: &Self) -> Ordering {
-        let sa = a.score();
-        let sb = b.score();
-        if (sa - sb).abs() > SCORE_EPSILON {
-            return sa.partial_cmp(&sb).unwrap_or(Ordering::Equal);
+        let qa = (a.score() / SCORE_EPSILON).round() as i64;
+        let qb = (b.score() / SCORE_EPSILON).round() as i64;
+        if qa != qb {
+            return qa.cmp(&qb);
         }
         a.leadership
             .partial_cmp(&b.leadership)
@@ -788,6 +796,41 @@ mod tests {
         let r2 = MatchdayLeadership::resolve(None, None, &xi2);
         assert_eq!(r1.captain_id, Some(3));
         assert_eq!(r2.captain_id, Some(3));
+    }
+
+    #[test]
+    fn near_tie_armband_is_independent_of_candidate_order() {
+        // Three candidates whose scores sit a fraction of a point apart —
+        // close enough that neighbouring pairs land inside the tie-break
+        // grid while the extremes do not. A non-transitive comparator
+        // (the old |a-b| <= epsilon window) made `max_by` order-sensitive
+        // here: the same XI listed in a different order could produce a
+        // different captain. The quantised comparator must return one
+        // captain/vice pair for every permutation.
+        let mut a = Fixture::cand(1, 14.0);
+        a.condition_pct = 100.0;
+        let mut b = Fixture::cand(2, 14.0);
+        b.condition_pct = 99.9;
+        let mut c = Fixture::cand(3, 14.0);
+        c.condition_pct = 99.8;
+
+        let orders: Vec<Vec<LeadershipCandidate>> = vec![
+            vec![a, b, c],
+            vec![a, c, b],
+            vec![b, a, c],
+            vec![b, c, a],
+            vec![c, a, b],
+            vec![c, b, a],
+        ];
+        let first = MatchdayLeadership::resolve(None, None, &orders[0]);
+        for xi in &orders {
+            let r = MatchdayLeadership::resolve(None, None, xi);
+            assert_eq!(
+                (r.captain_id, r.vice_captain_id),
+                (first.captain_id, first.vice_captain_id),
+                "armband must not depend on candidate order"
+            );
+        }
     }
 
     #[test]

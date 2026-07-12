@@ -85,9 +85,15 @@ const YOUTH_EXCEPTION_CA_TOP_FRACTION: f32 = 0.15;
 /// A loan ending within this window counts as a short-term loan-in, which is
 /// excluded from the primary pool (a six-month visitor isn't a club captain).
 const SHORT_TERM_LOAN_DAYS: i64 = 182;
-/// Long-term injury threshold (days remaining) for the hard penalty / the
-/// "serious injury" incumbent-replacement trigger.
+/// Long-term injury threshold (days remaining) for the hard penalty on
+/// *new* appointments — a club doesn't hand the armband to someone on
+/// the treatment table.
 const LONG_TERM_INJURY_DAYS: u16 = 30;
+/// A sitting captain only loses the armband to injury when it is
+/// season-ending scale. Real captains keep the title through a 6-week
+/// layoff — the vice leads on the pitch (`matchday_leadership` handles
+/// that) and the armband waits for them.
+const INCUMBENT_INJURY_STRIP_DAYS: u16 = 150;
 /// Contract running down inside this window dampens authority.
 const CONTRACT_EXPIRY_SOON_DAYS: i64 = 180;
 /// Joined inside this window = not yet embedded in the dressing room.
@@ -99,7 +105,9 @@ const LOST_PLACE_MIN_SQUAD_STARTS: u16 = 5;
 // ---------------------------------------------------------------------------
 // Hard situational penalties (absolute points on the 0..100 scale). These are
 // dampeners, not bans: a marginal squad with no clean candidate can still end
-// up with a transfer-listed captain rather than none.
+// up with a transfer-listed captain rather than none. The treatment-table
+// pair (injury / suspension) is skipped for the sitting captain and vice —
+// see `CaptaincyModel::is_incumbent`.
 // ---------------------------------------------------------------------------
 const PEN_LONG_TERM_INJURY: f32 = -12.0;
 const PEN_SUSPENDED: f32 = -6.0;
@@ -401,7 +409,12 @@ impl<'a> CaptaincyModel<'a> {
             None => Some(challenger.id),
             Some(inc) => {
                 if self.must_replace_incumbent(inc.id) {
-                    return Some(challenger.id);
+                    // The replacement must be someone else — the pool is
+                    // sorted best-first, so the first non-incumbent is the
+                    // best available successor. A disqualified incumbent
+                    // who still tops the ranking must not be handed the
+                    // armband straight back.
+                    return candidates.iter().find(|c| c.id != inc.id).map(|c| c.id);
                 }
                 if challenger.score >= inc.score + hysteresis {
                     Some(challenger.id)
@@ -413,8 +426,11 @@ impl<'a> CaptaincyModel<'a> {
     }
 
     /// Hard reasons an incumbent loses the armband regardless of hysteresis:
-    /// he wants out, is being sold, is seriously hurt, his leadership has
-    /// collapsed, or he has clearly lost his starting place.
+    /// he wants out, is being sold, is out for the season, his leadership
+    /// has collapsed, or he has clearly lost his starting place. Note the
+    /// injury bar is [`INCUMBENT_INJURY_STRIP_DAYS`], not the 30-day
+    /// appointment penalty — a captain keeps the armband through a
+    /// medium-term layoff.
     fn must_replace_incumbent(&self, id: u32) -> bool {
         let Some(p) = self.team.players.iter().find(|p| p.id == id) else {
             return true;
@@ -426,7 +442,9 @@ impl<'a> CaptaincyModel<'a> {
         {
             return true;
         }
-        if self.is_long_term_injured(p) {
+        if p.player_attributes.is_injured
+            && p.player_attributes.injury_days_remaining > INCUMBENT_INJURY_STRIP_DAYS
+        {
             return true;
         }
         // Lost his place: nothing started all season while the squad is
@@ -607,7 +625,13 @@ impl<'a> CaptaincyModel<'a> {
     }
 
     /// Can he be trusted to deliver week-in week-out and stay out of trouble.
-    /// 0..100.
+    /// 0..100. Reads *durable* signals only — day-of-review condition and
+    /// jadedness are deliberately excluded: a season-long appointment must
+    /// not hinge on who happened to be tired on the 1st of the month
+    /// (that transient noise made close vice-captaincy calls flip
+    /// pseudo-randomly between reviews). Matchday fitness is the
+    /// matchday armband's concern (`matchday_leadership` readiness block
+    /// and condition/jadedness penalties).
     fn reliability(&self, p: &Player) -> f32 {
         // No meaningful sample yet (pre-season / new arrival) reads as neutral
         // rather than as a damning 0, so it doesn't distort the ranking. The
@@ -621,9 +645,6 @@ impl<'a> CaptaincyModel<'a> {
         } else {
             ((rating - 6.2) / (7.4 - 6.2)).clamp(0.0, 1.0)
         };
-        let condition = p.player_attributes.condition_percentage() as f32 / 100.0;
-        let low_jadedness =
-            (1.0 - p.player_attributes.jadedness.max(0) as f32 / 10_000.0).clamp(0.0, 1.0);
         let discipline = self.low_discipline_risk(p);
         // Three behaviour tiers (Good / Normal / Poor) → 1.0 / 0.65 / 0.15.
         let behaviour = if p.behaviour.is_good() {
@@ -634,12 +655,7 @@ impl<'a> CaptaincyModel<'a> {
             0.65
         };
 
-        100.0
-            * (rating_factor * 0.35
-                + condition.clamp(0.0, 1.0) * 0.15
-                + low_jadedness * 0.10
-                + discipline * 0.20
-                + behaviour * 0.20)
+        100.0 * (rating_factor * 0.40 + discipline * 0.30 + behaviour * 0.30)
     }
 
     /// Low discipline risk: high temperament & sportsmanship, low dirtiness,
@@ -687,13 +703,33 @@ impl<'a> CaptaincyModel<'a> {
                 + stability * 0.30)
     }
 
+    /// The sitting captain / vice at evaluation time. Treatment-table
+    /// penalties (injury, suspension) exist to stop the club *appointing*
+    /// an unavailable leader — they must not quietly push a sitting
+    /// armband holder under a challenger's hysteresis margin. Stripping
+    /// an incumbent is the job of the hard triggers in
+    /// [`must_replace_incumbent`](Self::must_replace_incumbent).
+    fn is_incumbent(&self, p: &Player) -> bool {
+        Some(p.id) == self.team.captain_id || Some(p.id) == self.team.vice_captain_id
+    }
+
+    /// The incumbent injury shield lapses once the layoff crosses the
+    /// season-ending strip threshold: the hard trigger takes the armband
+    /// anyway, and the stripped player should rank on his true
+    /// (penalised) score in the follow-up captain/vice selection rather
+    /// than immediately reclaim a deputy role from the treatment table.
+    fn injury_shielded(&self, p: &Player) -> bool {
+        self.is_incumbent(p)
+            && p.player_attributes.injury_days_remaining <= INCUMBENT_INJURY_STRIP_DAYS
+    }
+
     /// Sum of hard situational penalties (absolute points, all ≤ 0).
     fn penalties(&self, p: &Player) -> f32 {
         let mut pen = 0.0;
-        if self.is_long_term_injured(p) {
+        if self.is_long_term_injured(p) && !self.injury_shielded(p) {
             pen += PEN_LONG_TERM_INJURY;
         }
-        if p.player_attributes.is_banned {
+        if p.player_attributes.is_banned && !self.is_incumbent(p) {
             pen += PEN_SUSPENDED;
         }
         if self.is_transfer_listed(p) {
@@ -1179,6 +1215,68 @@ mod tests {
         assert!(
             model.reliability(small) < model.reliability(big),
             "a one-cap 8.2 must not out-reliability a proven 28-game 7.2"
+        );
+    }
+
+    /// A captain out for six weeks keeps the armband — the vice leads on
+    /// the pitch, the title stays. Only a season-ending injury (>150 days)
+    /// strips a sitting captain.
+    #[test]
+    fn medium_term_injured_captain_keeps_armband() {
+        let mut injured_captain = strong(1, 16.0);
+        injured_captain.player_attributes.is_injured = true;
+        injured_captain.player_attributes.injury_days_remaining = 45;
+        let challenger = strong(2, 15.0);
+
+        let mut team = team_of(vec![injured_captain, challenger]);
+        team.captain_id = Some(1);
+        team.vice_captain_id = Some(2);
+
+        CaptaincyAssigner::assign(&mut team, today());
+        assert_eq!(
+            team.captain_id,
+            Some(1),
+            "a 45-day injury must not strip a sitting captain"
+        );
+    }
+
+    /// A season-ending injury does hand the armband over.
+    #[test]
+    fn season_ending_injury_strips_incumbent_captain() {
+        let mut injured_captain = strong(1, 16.0);
+        injured_captain.player_attributes.is_injured = true;
+        injured_captain.player_attributes.injury_days_remaining = 220;
+        let successor = strong(2, 14.0);
+
+        let mut team = team_of(vec![injured_captain, successor]);
+        team.captain_id = Some(1);
+
+        CaptaincyAssigner::assign(&mut team, today());
+        assert_eq!(team.captain_id, Some(2));
+    }
+
+    /// The persistent monthly score must not read day-of-review fitness:
+    /// a captain who is tired on the 1st of the month is the same captain.
+    /// (Matchday condition/jadedness belong to the matchday armband only.)
+    #[test]
+    fn monthly_score_ignores_transient_condition_and_jadedness() {
+        let fresh = strong(1, 14.0);
+        let mut tired = strong(1, 14.0);
+        tired.player_attributes.condition = 4_000;
+        tired.player_attributes.jadedness = 6_000;
+
+        let team_fresh = team_of(vec![fresh, strong(2, 12.0)]);
+        let team_tired = team_of(vec![tired, strong(2, 12.0)]);
+
+        let model_fresh = CaptaincyModel::new(&team_fresh, today());
+        let model_tired = CaptaincyModel::new(&team_tired, today());
+
+        let p_fresh = &team_fresh.players.players[0];
+        let p_tired = &team_tired.players.players[0];
+        assert_eq!(
+            model_fresh.reliability(p_fresh),
+            model_tired.reliability(p_tired),
+            "persistent captaincy reliability must not move with matchday fitness"
         );
     }
 

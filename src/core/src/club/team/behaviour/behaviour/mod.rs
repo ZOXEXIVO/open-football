@@ -121,6 +121,14 @@ impl TeamBehaviour {
 
         Self::log_team_state(players, "BEFORE full update");
 
+        // Official club hierarchy — the captain-centric passes below act
+        // through the appointed armband holders, not an ad-hoc re-election.
+        let (official_captain, official_vice) = ctx
+            .team
+            .as_ref()
+            .map(|t| (t.captain_id, t.vice_captain_id))
+            .unwrap_or((None, None));
+
         // Core interaction types
         Self::process_position_group_dynamics(players, &mut result);
         Self::process_age_group_dynamics(players, &mut result, &ctx);
@@ -156,7 +164,7 @@ impl TeamBehaviour {
         // Captain's mood propagates: happy captain lifts the squad, a
         // demoralised captain drags it. Runs before manager talks so the
         // manager-talk picker sees the updated morale distribution.
-        Self::process_captain_morale_propagation(players);
+        Self::process_captain_morale_propagation(players, official_captain, official_vice);
 
         // Unhappy-star contagion: a formally unhappy leader or key
         // player drags the room (bounded, relationship-weighted).
@@ -169,7 +177,7 @@ impl TeamBehaviour {
         // a high-leadership / high-professionalism captain is present,
         // the friction softens. The opposite case — a controversial
         // captain — is handled by the general mood-spread already.
-        Self::process_captain_mediation(players, &mut result);
+        Self::process_captain_mediation(players, official_captain, official_vice, &mut result);
 
         // Contract jealousy — a teammate's new big deal unsettles the
         // lower-paid players around them, especially ones who weren't

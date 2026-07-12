@@ -14,6 +14,17 @@ pub struct TeamContext {
     /// about "life below the first team" without reaching back into the
     /// team object. `None` when the constructing site didn't know it.
     pub team_type: Option<TeamType>,
+    /// Official club captain as of the last monthly review
+    /// (`Team::captain_id`). Threaded in so captain-centric behaviour
+    /// passes (mediation, morale propagation) act through the appointed
+    /// armband holder instead of re-electing an ad-hoc leader that can
+    /// disagree with the one the club — and the player — sees. `None`
+    /// when the constructing site didn't know it, or the team genuinely
+    /// has no captain.
+    pub captain_id: Option<u32>,
+    /// Official vice-captain (`Team::vice_captain_id`); same contract as
+    /// [`Self::captain_id`].
+    pub vice_captain_id: Option<u32>,
 }
 
 impl TeamContext {
@@ -23,6 +34,8 @@ impl TeamContext {
             reputation: 0.0,
             formation: None,
             team_type: None,
+            captain_id: None,
+            vice_captain_id: None,
         }
     }
 
@@ -32,6 +45,8 @@ impl TeamContext {
             reputation,
             formation: None,
             team_type: None,
+            captain_id: None,
+            vice_captain_id: None,
         }
     }
 
@@ -42,6 +57,16 @@ impl TeamContext {
 
     pub fn with_type(mut self, team_type: TeamType) -> Self {
         self.team_type = Some(team_type);
+        self
+    }
+
+    pub fn with_captaincy(
+        mut self,
+        captain_id: Option<u32>,
+        vice_captain_id: Option<u32>,
+    ) -> Self {
+        self.captain_id = captain_id;
+        self.vice_captain_id = vice_captain_id;
         self
     }
 }

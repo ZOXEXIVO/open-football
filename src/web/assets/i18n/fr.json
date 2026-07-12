@@ -143,6 +143,7 @@
   "cancel_loan_confirm": "Annuler le prêt et renvoyer le joueur à son club ?",
   "caps_goals": "{caps} sél. / {goals} buts",
   "captain": "Capitaine",
+  "vice_captain": "Vice-capitaine",
   "career_desire_evidence_current_club_not_continental": "Le club n'a pas de voie réaliste vers la compétition continentale.",
   "career_desire_evidence_different_continent": "Le transfert l'a emmené sur un autre continent.",
   "career_desire_evidence_high_ambition": "Il est ouvertement ambitieux.",

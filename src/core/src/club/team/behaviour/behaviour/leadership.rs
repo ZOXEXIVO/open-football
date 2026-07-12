@@ -9,34 +9,75 @@ use crate::{ChangeType, Player, PlayerCollection, PlayerSquadStatus, PlayerStatu
 use std::cmp::Ordering;
 
 impl TeamBehaviour {
+    /// Mediation quality bar: the peacemaker needs genuine dressing-room
+    /// authority and a professional's touch, whoever wears the armband.
+    fn qualifies_as_mediator(p: &Player) -> bool {
+        p.skills.mental.leadership >= 12.0 && p.attributes.professionalism >= 13.0
+    }
+
+    /// The player who acts as "the captain" for a behaviour pass: the
+    /// official club captain when he's in the squad and clears `bar`,
+    /// then the official vice, then — only when the club hierarchy gives
+    /// no qualifying figure — the best qualifying leader by a fully
+    /// deterministic score (compound score, then lower id, so the pick
+    /// never depends on roster order).
+    fn acting_captain<'p>(
+        players: &'p PlayerCollection,
+        official_captain: Option<u32>,
+        official_vice: Option<u32>,
+        bar: fn(&Player) -> bool,
+    ) -> Option<&'p Player> {
+        let official = |id: Option<u32>| {
+            id.and_then(|id| players.players.iter().find(|p| p.id == id))
+                .filter(|p| bar(p))
+        };
+
+        official(official_captain)
+            .or_else(|| official(official_vice))
+            .or_else(|| {
+                players
+                    .players
+                    .iter()
+                    .filter(|p| bar(p))
+                    .max_by(|a, b| {
+                        let sa = a.skills.mental.leadership * 1.0
+                            + a.attributes.professionalism * 0.6
+                            + a.attributes.loyalty * 0.4;
+                        let sb = b.skills.mental.leadership * 1.0
+                            + b.attributes.professionalism * 0.6
+                            + b.attributes.loyalty * 0.4;
+                        sa.partial_cmp(&sb)
+                            .unwrap_or(Ordering::Equal)
+                            .then_with(|| b.id.cmp(&a.id))
+                    })
+            })
+    }
+
     /// A respected captain mediates dressing-room conflicts. For each
     /// pair of teammates whose relationship has crossed below a friction
     /// threshold, the captain's leadership + professionalism is converted
     /// into a small healing nudge applied to both directions of the
     /// pair. A weak / controversial captain does nothing here.
     ///
+    /// The mediator is the *official* club captain (then vice) when the
+    /// appointed leader clears the quality bar — the same player the club
+    /// page and morale events point at — with a senior-leader fallback
+    /// only when the hierarchy offers no qualifying figure.
+    ///
     /// Sits alongside the morale-spread captain pass — that one moves
     /// captain mood, this one moves teammate-to-teammate relationships.
     pub(super) fn process_captain_mediation(
         players: &PlayerCollection,
+        official_captain: Option<u32>,
+        official_vice: Option<u32>,
         result: &mut TeamBehaviourResult,
     ) {
-        // Reuse the captain identification logic — highest leadership
-        // among 10+ leadership players, weighted by reputation.
-        let captain = players
-            .players
-            .iter()
-            .filter(|p| p.skills.mental.leadership >= 12.0)
-            .filter(|p| p.attributes.professionalism >= 13.0)
-            .max_by(|a, b| {
-                let sa = a.skills.mental.leadership * 1.0
-                    + a.attributes.professionalism * 0.6
-                    + a.attributes.loyalty * 0.4;
-                let sb = b.skills.mental.leadership * 1.0
-                    + b.attributes.professionalism * 0.6
-                    + b.attributes.loyalty * 0.4;
-                sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
-            });
+        let captain = Self::acting_captain(
+            players,
+            official_captain,
+            official_vice,
+            Self::qualifies_as_mediator,
+        );
 
         let Some(captain) = captain else { return };
         let captain_id = captain.id;
@@ -129,28 +170,26 @@ impl TeamBehaviour {
         }
     }
 
-    /// Captain = highest `leadership + influence` on the squad. Their
-    /// mood leaks out to teammates: ~±2 morale points/week based on how
-    /// happy the captain is relative to neutral 50. Sits on top of the
-    /// existing `process_leadership_influence` pass (which only moves
-    /// relationship numbers, not morale).
-    pub(super) fn process_captain_morale_propagation(players: &mut PlayerCollection) {
-        // Pick the captain by compound score. Don't fall back to anyone
-        // with <10 leadership — a weak captain shouldn't propagate.
-        let captain_id_opt = players
-            .players
-            .iter()
-            .filter(|p| p.skills.mental.leadership >= 10.0)
-            .max_by(|a, b| {
-                let sa = a.skills.mental.leadership * 1.0
-                    + a.attributes.loyalty * 0.5
-                    + a.player_attributes.current_reputation as f32 / 2000.0;
-                let sb = b.skills.mental.leadership * 1.0
-                    + b.attributes.loyalty * 0.5
-                    + b.player_attributes.current_reputation as f32 / 2000.0;
-                sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
-            })
-            .map(|p| p.id);
+    /// The captain's mood leaks out to teammates: ~±2 morale points/week
+    /// based on how happy the captain is relative to neutral 50. Sits on
+    /// top of the existing `process_leadership_influence` pass (which only
+    /// moves relationship numbers, not morale).
+    ///
+    /// The propagating voice is the *official* club captain (then vice)
+    /// where one clears the leadership bar — the room orbits the armband
+    /// the club actually handed out — with the compound-score fallback
+    /// reserved for squads whose hierarchy offers no qualifying figure.
+    pub(super) fn process_captain_morale_propagation(
+        players: &mut PlayerCollection,
+        official_captain: Option<u32>,
+        official_vice: Option<u32>,
+    ) {
+        // Don't let anyone with <10 leadership propagate — a weak captain
+        // holds no sway over the room's mood either way.
+        let captain_id_opt = Self::acting_captain(players, official_captain, official_vice, |p| {
+            p.skills.mental.leadership >= 10.0
+        })
+        .map(|p| p.id);
 
         let captain_id = match captain_id_opt {
             Some(id) => id,
@@ -346,5 +385,84 @@ impl TeamBehaviour {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TeamBehaviour;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, Player, PlayerAttributes, PlayerCollection, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills,
+    };
+    use chrono::NaiveDate;
+
+    /// Test-fixture namespace: bare players with just enough identity for
+    /// the leadership passes (id, leadership, morale).
+    struct Fixture;
+
+    impl Fixture {
+        fn player(id: u32, leadership: f32, morale: f32) -> Player {
+            let mut p = PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("T".to_string(), format!("P{}", id)))
+                .birth_date(NaiveDate::from_ymd_opt(1995, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap();
+            p.skills.mental.leadership = leadership;
+            p.happiness.morale = morale;
+            p
+        }
+    }
+
+    /// The mood that spreads through the squad must be the *official*
+    /// captain's — not whichever player happens to carry the highest raw
+    /// leadership. Here the ad-hoc pick (id 1, leadership 18) is miserable
+    /// while the appointed captain (id 2, leadership 12) is beaming; the
+    /// bystander's morale must go UP.
+    #[test]
+    fn official_captain_mood_propagates_not_adhoc_leader() {
+        let sulking_leader = Fixture::player(1, 18.0, 10.0);
+        let official_captain = Fixture::player(2, 12.0, 90.0);
+        let bystander = Fixture::player(3, 5.0, 50.0);
+
+        let mut players =
+            PlayerCollection::new(vec![sulking_leader, official_captain, bystander]);
+
+        TeamBehaviour::process_captain_morale_propagation(&mut players, Some(2), None);
+
+        let bystander_after = players.find(3).unwrap().happiness.morale;
+        assert!(
+            bystander_after > 50.0,
+            "official captain's high mood should lift the room, got {}",
+            bystander_after
+        );
+    }
+
+    /// With no official hierarchy at all, the pass still works via the
+    /// deterministic fallback pick (the strongest qualifying leader).
+    #[test]
+    fn fallback_leader_propagates_when_no_official_captain() {
+        let leader = Fixture::player(1, 18.0, 90.0);
+        let bystander = Fixture::player(2, 5.0, 50.0);
+
+        let mut players = PlayerCollection::new(vec![leader, bystander]);
+
+        TeamBehaviour::process_captain_morale_propagation(&mut players, None, None);
+
+        let bystander_after = players.find(2).unwrap().happiness.morale;
+        assert!(bystander_after > 50.0);
     }
 }

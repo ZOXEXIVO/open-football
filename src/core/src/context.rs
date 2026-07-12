@@ -105,6 +105,26 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
+    /// `with_team_typed` plus the official captaincy pair, so
+    /// captain-centric behaviour passes (mediation, morale propagation)
+    /// act through the appointed armband holder rather than electing
+    /// their own.
+    pub fn with_team_behaviour(
+        &self,
+        team_id: u32,
+        team_type: TeamType,
+        captain_id: Option<u32>,
+        vice_captain_id: Option<u32>,
+    ) -> Self {
+        let mut ctx = GlobalContext::clone(self);
+        ctx.team = Some(
+            TeamContext::new(team_id)
+                .with_type(team_type)
+                .with_captaincy(captain_id, vice_captain_id),
+        );
+        ctx
+    }
+
     pub fn with_team_reputation(&self, team_id: u32, reputation: f32) -> Self {
         let mut ctx = GlobalContext::clone(self);
         ctx.team = Some(TeamContext::with_reputation(team_id, reputation));

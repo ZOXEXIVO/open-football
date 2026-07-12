@@ -52,7 +52,7 @@
                     <td class="sq-name">
                         <a href="/{{ lang }}/players/{{ player.slug }}">
                             {% if !player.first_name.is_empty() %}{{ player.first_name }}&nbsp;{% endif %}{{ player.last_name }}
-                        </a>{% if player.is_captain %}&nbsp;<span class="sq-cap-dot" title="{{ i18n.t("captain") }}"></span>{% endif %}
+                        </a>{% if player.is_captain %}&nbsp;<span class="sq-cap-dot" title="{{ i18n.t("captain") }}"></span>{% endif %}{% if player.is_vice_captain %}&nbsp;<span class="sq-vice-dot" title="{{ i18n.t("vice_captain") }}"></span>{% endif %}
                     </td>
                     <td class="sq-pos">{{ player.position }}</td>
                     <td class="sq-nat">

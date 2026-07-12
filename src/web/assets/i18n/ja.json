@@ -143,6 +143,7 @@
   "cancel_loan_confirm": "この選手のレンタルを取り消し、所属クラブに戻しますか？",
   "caps_goals": "{caps} 出場 / {goals} 得点",
   "captain": "キャプテン",
+  "vice_captain": "副キャプテン",
   "career_desire_evidence_current_club_not_continental": "クラブには大陸大会への現実的な道がない。",
   "career_desire_evidence_different_continent": "今回の移籍で別の大陸へ移った。",
   "career_desire_evidence_high_ambition": "明らかに野心的だ。",
