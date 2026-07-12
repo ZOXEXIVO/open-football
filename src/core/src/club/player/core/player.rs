@@ -1212,11 +1212,7 @@ impl Player {
 
     #[inline]
     pub fn position(&self) -> PlayerPositionType {
-        *self
-            .positions
-            .positions()
-            .first()
-            .expect("no position found")
+        self.positions.primary().expect("no position found")
     }
 
     pub fn preferred_foot_str(&self) -> &'static str {

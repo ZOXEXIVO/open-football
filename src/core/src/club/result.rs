@@ -316,12 +316,9 @@ impl ClubResult {
                 .as_ref()
                 .map(|c| ((c.expiration - data.date().date()).num_days() / 30).max(0) as i32)
                 .unwrap_or(0);
-            let has_market_interest = player.statuses.get().iter().any(|s| {
-                matches!(
-                    s,
-                    PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
-                )
-            });
+            let has_market_interest = player.statuses.has(PlayerStatusType::Wnt)
+                || player.statuses.has(PlayerStatusType::Enq)
+                || player.statuses.has(PlayerStatusType::Bid);
 
             let valuation_ctx = ValuationContext {
                 age,
@@ -534,12 +531,9 @@ impl ClubResult {
             }
 
             // Other club interest gives player leverage → pushes for longer commitment
-            let has_interest = player.statuses.get().iter().any(|s| {
-                matches!(
-                    s,
-                    PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
-                )
-            });
+            let has_interest = player.statuses.has(PlayerStatusType::Wnt)
+                || player.statuses.has(PlayerStatusType::Enq)
+                || player.statuses.has(PlayerStatusType::Bid);
             if has_interest {
                 player_years += 1.0;
             }
@@ -672,9 +666,8 @@ impl ClubResult {
             };
 
             // Already listed — don't re-process
-            let statuses = player.statuses.get();
-            if statuses.contains(&PlayerStatusType::Lst)
-                || statuses.contains(&PlayerStatusType::Frt)
+            if player.statuses.has(PlayerStatusType::Lst)
+                || player.statuses.has(PlayerStatusType::Frt)
             {
                 return;
             }
@@ -1085,7 +1078,7 @@ mod tests {
 
         let p = sim.player(101).expect("player still present");
         assert!(
-            !p.statuses.get().contains(&PlayerStatusType::Lst),
+            !p.statuses.has(PlayerStatusType::Lst),
             "first rejection must not transfer-list"
         );
         let country = sim.country(1).unwrap();
@@ -1137,7 +1130,7 @@ mod tests {
 
         let p = sim.player(101).expect("player still present");
         assert!(
-            p.statuses.get().contains(&PlayerStatusType::Lst),
+            p.statuses.has(PlayerStatusType::Lst),
             "exhausted stalemate must transfer-list"
         );
         let listing_reason = p
@@ -1198,7 +1191,7 @@ mod tests {
 
         let p = sim.player(101).unwrap();
         assert!(
-            !p.statuses.get().contains(&PlayerStatusType::Lst),
+            !p.statuses.has(PlayerStatusType::Lst),
             "affordable ask must NOT escalate FirstTeamRegular to a listing"
         );
         let country = sim.country(1).unwrap();
@@ -1239,7 +1232,7 @@ mod tests {
 
         let p = sim.player(101).unwrap();
         assert!(
-            !p.statuses.get().contains(&PlayerStatusType::Lst),
+            !p.statuses.has(PlayerStatusType::Lst),
             "force-selected player must never be auto-listed"
         );
     }
@@ -1283,7 +1276,7 @@ mod tests {
 
         let p = sim.player(101).unwrap();
         assert!(
-            !p.statuses.get().contains(&PlayerStatusType::Lst),
+            !p.statuses.has(PlayerStatusType::Lst),
             "loaned player cannot be transfer-listed by the borrowing club"
         );
         let country = sim.country(1).unwrap();
@@ -1325,7 +1318,7 @@ mod tests {
 
         let p = sim.player(101).expect("player still present");
         assert!(
-            p.statuses.get().contains(&PlayerStatusType::Frt),
+            p.statuses.has(PlayerStatusType::Frt),
             "cheap fringe player must be released on a free"
         );
         assert!(
@@ -1386,11 +1379,11 @@ mod tests {
 
         let p = sim.player(101).expect("player still present");
         assert!(
-            !p.statuses.get().contains(&PlayerStatusType::Frt),
+            !p.statuses.has(PlayerStatusType::Frt),
             "expensive contract must not be released for free"
         );
         assert!(
-            p.statuses.get().contains(&PlayerStatusType::Lst),
+            p.statuses.has(PlayerStatusType::Lst),
             "blocked release must fall back to a transfer listing"
         );
         let contract = p

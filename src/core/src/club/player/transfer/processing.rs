@@ -716,12 +716,12 @@ impl Player {
         self.transfer_request_reasons = active_reasons;
 
         if wants_transfer {
-            if !self.statuses.get().contains(&PlayerStatusType::Req) {
+            if !self.statuses.has(PlayerStatusType::Req) {
                 self.statuses.add(now, PlayerStatusType::Req);
             }
             result.wants_to_leave = true;
             result.request_transfer(self.id);
-        } else if self.statuses.get().contains(&PlayerStatusType::Req) {
+        } else if self.statuses.has(PlayerStatusType::Req) {
             // No active reason left — Req can finally clear.
             self.statuses.remove(PlayerStatusType::Req);
         }
@@ -1939,7 +1939,7 @@ mod career_desire_tests {
         ctx.player_nationality_continent_id = 1;
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
-        assert!(p.statuses.get().contains(&PlayerStatusType::Req));
+        assert!(p.statuses.has(PlayerStatusType::Req));
         assert!(
             p.transfer_request_reasons
                 .contains(&TransferRequestReason::SalaryUnresolved)
@@ -1954,7 +1954,7 @@ mod career_desire_tests {
         p.happiness.last_salary_negotiation = None;
         p.process_transfer_desire(&mut result, today, &ctx);
         assert!(
-            p.statuses.get().contains(&PlayerStatusType::Req),
+            p.statuses.has(PlayerStatusType::Req),
             "Req must persist while ambition still red"
         );
         assert!(
@@ -1986,9 +1986,9 @@ mod career_desire_tests {
                 .contains(&TransferRequestReason::OutgrownClub),
             "an ambitious player who outgrew his club should request a step up"
         );
-        assert!(p.statuses.get().contains(&PlayerStatusType::Req));
+        assert!(p.statuses.has(PlayerStatusType::Req));
         assert!(
-            !p.statuses.get().contains(&PlayerStatusType::Unh),
+            !p.statuses.has(PlayerStatusType::Unh),
             "OutgrownClub must not require the player to be unhappy first"
         );
         assert!(
@@ -2014,7 +2014,7 @@ mod career_desire_tests {
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::OutgrownClub)
         );
-        assert!(!p.statuses.get().contains(&PlayerStatusType::Req));
+        assert!(!p.statuses.has(PlayerStatusType::Req));
     }
 
     #[test]
@@ -2055,7 +2055,7 @@ mod career_desire_tests {
                 .contains(&TransferRequestReason::NewChallenge),
             "a long-serving ambitious player should want a new challenge"
         );
-        assert!(p.statuses.get().contains(&PlayerStatusType::Req));
+        assert!(p.statuses.has(PlayerStatusType::Req));
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::OutgrownClub),
@@ -2118,12 +2118,12 @@ mod career_desire_tests {
         ctx.player_nationality_continent_id = 1;
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
-        assert!(p.statuses.get().contains(&PlayerStatusType::Req));
+        assert!(p.statuses.has(PlayerStatusType::Req));
 
         // Unh status removed — no other reason active.
         p.statuses.remove(PlayerStatusType::Unh);
         p.process_transfer_desire(&mut result, today, &ctx);
-        assert!(!p.statuses.get().contains(&PlayerStatusType::Req));
+        assert!(!p.statuses.has(PlayerStatusType::Req));
         assert!(p.transfer_request_reasons.is_empty());
     }
 

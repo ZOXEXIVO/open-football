@@ -77,7 +77,7 @@ impl CountryResult {
                 if !omitted_ids.contains(&player.id) {
                     continue;
                 }
-                if !player.statuses.get().contains(&PlayerStatusType::Unr) {
+                if !player.statuses.has(PlayerStatusType::Unr) {
                     player.statuses.add(date, PlayerStatusType::Unr);
                 }
                 let ctx = RegulationEventContext::new(
@@ -236,8 +236,8 @@ mod tests {
 
         // Foreigner (id 2) must now carry Unr; domestic (id 1) does not.
         let foreigner = sim.player(2).unwrap();
-        assert!(foreigner.statuses.get().contains(&PlayerStatusType::Unr));
+        assert!(foreigner.statuses.has(PlayerStatusType::Unr));
         let domestic = sim.player(1).unwrap();
-        assert!(!domestic.statuses.get().contains(&PlayerStatusType::Unr));
+        assert!(!domestic.statuses.has(PlayerStatusType::Unr));
     }
 }

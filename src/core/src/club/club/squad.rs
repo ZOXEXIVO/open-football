@@ -121,9 +121,8 @@ impl Club {
                 let overage = max_age.map_or(false, |limit| age > limit);
 
                 // Never promote players marked for departure
-                let statuses = p.statuses.get();
-                let listed = statuses.contains(&PlayerStatusType::Lst)
-                    || statuses.contains(&PlayerStatusType::Loa);
+                let listed =
+                    p.statuses.has(PlayerStatusType::Lst) || p.statuses.has(PlayerStatusType::Loa);
 
                 let floor = promotion_threshold(p.position().position_group());
                 if ca >= floor && !listed {
@@ -236,7 +235,7 @@ impl Club {
                             "dec_decided_board".to_string(),
                         );
                     }
-                } else if !p.statuses.get().contains(&PlayerStatusType::Loa) {
+                } else if !p.statuses.has(PlayerStatusType::Loa) {
                     p.statuses.add(date, PlayerStatusType::Loa);
                 }
             }
@@ -342,8 +341,9 @@ impl Club {
                     continue;
                 }
                 for p in team.players.iter() {
-                    let st = p.statuses.get();
-                    if st.contains(&PlayerStatusType::Lst) || st.contains(&PlayerStatusType::Loa) {
+                    if p.statuses.has(PlayerStatusType::Lst)
+                        || p.statuses.has(PlayerStatusType::Loa)
+                    {
                         continue;
                     }
                     if p.is_force_match_selection {
@@ -627,7 +627,7 @@ impl Club {
                 {
                     // Already on the market from an earlier pass — the
                     // transfer pipeline owns this player now.
-                    let already_listed = player.statuses.get().contains(&PlayerStatusType::Lst)
+                    let already_listed = player.statuses.has(PlayerStatusType::Lst)
                         || player
                             .contract
                             .as_ref()
@@ -664,7 +664,7 @@ impl Club {
                                 team_name
                             );
                             player.contract = None;
-                            if !player.statuses.get().contains(&PlayerStatusType::Frt) {
+                            if !player.statuses.has(PlayerStatusType::Frt) {
                                 player.statuses.add(date, PlayerStatusType::Frt);
                             }
                             // Stamp the explicit exit so the free-agent
@@ -753,8 +753,8 @@ impl ProfessionalContractPromotion {
         }
 
         // Don't upgrade a player already earmarked to leave.
-        let statuses = player.statuses.get();
-        if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Loa) {
+        if player.statuses.has(PlayerStatusType::Lst) || player.statuses.has(PlayerStatusType::Loa)
+        {
             return false;
         }
 
@@ -993,7 +993,7 @@ mod trim_surplus_tests {
             "near-level surplus must be flagged for the transfer market"
         );
         assert!(
-            !trimmed.statuses.get().contains(&PlayerStatusType::Frt),
+            !trimmed.statuses.has(PlayerStatusType::Frt),
             "near-level surplus must not be marked released"
         );
         assert!(
@@ -1032,7 +1032,7 @@ mod trim_surplus_tests {
             "cheap fringe veteran must have the contract cleared"
         );
         assert!(
-            trimmed.statuses.get().contains(&PlayerStatusType::Frt),
+            trimmed.statuses.has(PlayerStatusType::Frt),
             "release must stamp Frt for the free-agent sweep"
         );
         assert!(
@@ -1091,7 +1091,7 @@ mod trim_surplus_tests {
                 "near-level reserve surplus must be flagged for sale"
             );
             assert!(
-                !flagged.statuses.get().contains(&PlayerStatusType::Frt),
+                !flagged.statuses.has(PlayerStatusType::Frt),
                 "blocked release candidate must not be marked released"
             );
         }
@@ -1117,7 +1117,7 @@ mod trim_surplus_tests {
             .find(|p| p.id == 5)
             .unwrap();
         assert!(
-            player.statuses.get().contains(&PlayerStatusType::Lst),
+            player.statuses.has(PlayerStatusType::Lst),
             "the listing pass must stamp Lst once the listing is live"
         );
         assert_eq!(
@@ -1153,7 +1153,7 @@ mod trim_surplus_tests {
             .as_ref()
             .expect("expensive contract must not be torn up automatically");
         assert!(contract.is_transfer_listed);
-        assert!(!trimmed.statuses.get().contains(&PlayerStatusType::Frt));
+        assert!(!trimmed.statuses.has(PlayerStatusType::Frt));
     }
 }
 

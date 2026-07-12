@@ -483,7 +483,6 @@ impl PipelineProcessor {
                             ((days / 30).min(i16::MAX as i64) as i16, c.salary)
                         })
                         .unwrap_or((0, 0));
-                    let target_statuses = player.statuses.get();
                     let realism_target = RealismTarget {
                         club_world_reputation: Self::club_world_reputation(target_club),
                         world_reputation: player.player_attributes.world_reputation,
@@ -498,8 +497,8 @@ impl PipelineProcessor {
                             seller_league_rep,
                             target_team.reputation.market_value_score(),
                         ),
-                        is_listed: target_statuses.contains(&PlayerStatusType::Lst),
-                        is_loan_listed: target_statuses.contains(&PlayerStatusType::Loa),
+                        is_listed: player.statuses.has(PlayerStatusType::Lst),
+                        is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
                         squad_status: player
                             .contract
                             .as_ref()
@@ -813,7 +812,6 @@ impl PipelineProcessor {
                         seller_league_rep,
                         seller_club_rep,
                     );
-                    let statuses = player.statuses.get();
                     let (contract_months_remaining, salary) = player
                         .contract
                         .as_ref()
@@ -845,8 +843,8 @@ impl PipelineProcessor {
                         position_group: player.position().position_group(),
                         age: player.age(date),
                         estimated_value: value.amount,
-                        is_listed: statuses.contains(&PlayerStatusType::Lst),
-                        is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
+                        is_listed: player.statuses.has(PlayerStatusType::Lst),
+                        is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
                         skill_ability: player
                             .skills
                             .calculate_ability_for_position(player.position()),
@@ -884,8 +882,8 @@ impl PipelineProcessor {
                             league_id: seller_league_id,
                             position_group_rank: seller_rank,
                             squad_status,
-                            is_transfer_requested: statuses.contains(&PlayerStatusType::Req),
-                            is_unhappy: statuses.contains(&PlayerStatusType::Unh),
+                            is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
+                            is_unhappy: player.statuses.has(PlayerStatusType::Unh),
                             in_debt: seller_in_debt,
                         },
                     });
@@ -1465,7 +1463,7 @@ impl PipelineProcessor {
                     if let Some(player) =
                         team.players.players.iter_mut().find(|p| p.id == *player_id)
                     {
-                        if !player.statuses.get().contains(&PlayerStatusType::Wnt) {
+                        if !player.statuses.has(PlayerStatusType::Wnt) {
                             player.statuses.add(date, PlayerStatusType::Wnt);
                         }
                     }

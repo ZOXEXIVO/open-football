@@ -2039,7 +2039,7 @@ impl PipelineProcessor {
 
             for team in &mut club.teams.teams {
                 if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
-                    if !player.statuses.get().contains(&PlayerStatusType::Loa) {
+                    if !player.statuses.has(PlayerStatusType::Loa) {
                         player.statuses.add(date, PlayerStatusType::Loa);
                     }
                 }
@@ -2092,10 +2092,9 @@ impl UnsolicitedLoanTarget {
         }
         // Already on a list / heading out under his own steam: those flow
         // through the normal (listed) paths, not a cold loan approach.
-        let statuses = player.statuses.get();
-        if statuses.contains(&PlayerStatusType::Lst)
-            || statuses.contains(&PlayerStatusType::Loa)
-            || statuses.contains(&PlayerStatusType::Frt)
+        if player.statuses.has(PlayerStatusType::Lst)
+            || player.statuses.has(PlayerStatusType::Loa)
+            || player.statuses.has(PlayerStatusType::Frt)
         {
             return None;
         }

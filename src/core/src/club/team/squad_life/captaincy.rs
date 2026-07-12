@@ -463,21 +463,21 @@ impl<'a> CaptaincyModel<'a> {
             .as_ref()
             .map(|c| c.is_transfer_listed)
             .unwrap_or(false)
-            || p.statuses.get().contains(&PlayerStatusType::Lst)
+            || p.statuses.has(PlayerStatusType::Lst)
     }
 
     fn has_transfer_request(&self, p: &Player) -> bool {
-        p.statuses.get().contains(&PlayerStatusType::Req)
+        p.statuses.has(PlayerStatusType::Req)
     }
 
     /// He has agreed a move to another club (`Trn`) and is gone the moment
     /// the window opens — not a credible long-term captain.
     fn has_agreed_transfer(&self, p: &Player) -> bool {
-        p.statuses.get().contains(&PlayerStatusType::Trn)
+        p.statuses.has(PlayerStatusType::Trn)
     }
 
     fn is_unhappy(&self, p: &Player) -> bool {
-        p.statuses.get().contains(&PlayerStatusType::Unh)
+        p.statuses.has(PlayerStatusType::Unh)
     }
 
     fn is_long_term_injured(&self, p: &Player) -> bool {

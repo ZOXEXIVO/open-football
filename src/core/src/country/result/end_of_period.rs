@@ -1474,7 +1474,7 @@ impl CountryResult {
     /// Players still getting games are given a +1 year grace period.
     /// Uses the same CA/position/jitter logic as should_retire for consistency.
     fn must_retire(player: &Player, date: NaiveDate) -> bool {
-        if player.statuses.get().contains(&PlayerStatusType::Ret) {
+        if player.statuses.has(PlayerStatusType::Ret) {
             return true;
         }
 
@@ -1569,7 +1569,7 @@ impl CountryResult {
         let ca = player.player_attributes.current_ability;
 
         // Already marked for retirement
-        if player.statuses.get().contains(&PlayerStatusType::Ret) {
+        if player.statuses.has(PlayerStatusType::Ret) {
             return true;
         }
 

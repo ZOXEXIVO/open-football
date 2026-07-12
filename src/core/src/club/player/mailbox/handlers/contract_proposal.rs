@@ -201,12 +201,9 @@ impl ProcessContractHandler {
                 // valuation with neutral reputation only when the offer
                 // came from a legacy code path that didn't supply context.
                 let age = DateUtils::age(player.birth_date, now);
-                let market_interest = player.statuses.get().iter().any(|s| {
-                    matches!(
-                        s,
-                        PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
-                    )
-                });
+                let market_interest = player.statuses.has(PlayerStatusType::Wnt)
+                    || player.statuses.has(PlayerStatusType::Enq)
+                    || player.statuses.has(PlayerStatusType::Bid);
                 let months_remaining =
                     ((player_contract.expiration - now).num_days() / 30).max(0) as i32;
                 let valuation = match (
@@ -443,12 +440,9 @@ impl ProcessContractHandler {
                         .unwrap_or(PlayerSquadStatus::FirstTeamRegular),
                     current_salary: 0,
                     months_remaining: 0,
-                    has_market_interest: player.statuses.get().iter().any(|s| {
-                        matches!(
-                            s,
-                            PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
-                        )
-                    }),
+                    has_market_interest: player.statuses.has(PlayerStatusType::Wnt)
+                        || player.statuses.has(PlayerStatusType::Enq)
+                        || player.statuses.has(PlayerStatusType::Bid),
                 };
                 let valuation = ContractValuation::evaluate(player, &ctx);
 
@@ -525,12 +519,9 @@ impl ProcessContractHandler {
         if player.attributes.loyalty <= 7.0 {
             cctx = cctx.with_evidence(ContractEventEvidence::LowLoyalty);
         }
-        let has_other_interest = player.statuses.get().iter().any(|s| {
-            matches!(
-                s,
-                PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
-            )
-        });
+        let has_other_interest = player.statuses.has(PlayerStatusType::Wnt)
+            || player.statuses.has(PlayerStatusType::Enq)
+            || player.statuses.has(PlayerStatusType::Bid);
         if has_other_interest {
             cctx = cctx.with_evidence(ContractEventEvidence::HasOtherInterest);
         }
@@ -582,12 +573,9 @@ impl ProcessContractHandler {
             return;
         }
 
-        let has_other_interest = player.statuses.get().iter().any(|s| {
-            matches!(
-                s,
-                PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
-            )
-        });
+        let has_other_interest = player.statuses.has(PlayerStatusType::Wnt)
+            || player.statuses.has(PlayerStatusType::Enq)
+            || player.statuses.has(PlayerStatusType::Bid);
         let loyalty = player.attributes.loyalty;
         // A loyal, uncourted player asking for a clause is private noise,
         // not a leverage event — keep it as the soft life-sim desire.
@@ -681,12 +669,9 @@ impl ProcessContractHandler {
             min_years -= 0.5;
         }
 
-        let has_interest = player.statuses.get().iter().any(|s| {
-            matches!(
-                s,
-                PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
-            )
-        });
+        let has_interest = player.statuses.has(PlayerStatusType::Wnt)
+            || player.statuses.has(PlayerStatusType::Enq)
+            || player.statuses.has(PlayerStatusType::Bid);
         if has_interest {
             min_years += 1.0;
         }

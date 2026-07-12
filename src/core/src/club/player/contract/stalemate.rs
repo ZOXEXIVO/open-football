@@ -138,16 +138,11 @@ impl ContractStalemate {
             .map(|c| c.squad_status.clone())
             .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
 
-        let statuses = player.statuses.get();
-        let has_market_interest = statuses.iter().any(|s| {
-            matches!(
-                s,
-                PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
-            )
-        });
-        let is_unrest = statuses
-            .iter()
-            .any(|s| matches!(s, PlayerStatusType::Req | PlayerStatusType::Unh));
+        let has_market_interest = player.statuses.has(PlayerStatusType::Wnt)
+            || player.statuses.has(PlayerStatusType::Enq)
+            || player.statuses.has(PlayerStatusType::Bid);
+        let is_unrest = player.statuses.has(PlayerStatusType::Req)
+            || player.statuses.has(PlayerStatusType::Unh);
 
         let pending_ask = player.pending_contract_ask.clone();
         let ask_affordable =

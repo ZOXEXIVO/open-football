@@ -245,9 +245,8 @@ impl TeamCollection {
                 continue;
             }
             for player in team.players.players.iter_mut() {
-                let statuses = player.statuses.get();
                 let frozen_out = player.happiness.morale < 40.0
-                    || statuses.contains(&PlayerStatusType::Unh)
+                    || player.statuses.has(PlayerStatusType::Unh)
                     || player
                         .contract
                         .as_ref()

@@ -180,8 +180,8 @@ impl PreContractManager {
     /// surplus to the squad plan, has just had renewal talks collapse, or
     /// is being actively chased by rival clubs while running his deal down.
     fn is_leaving(player: &Player, contract: &PlayerClubContract, date: NaiveDate) -> bool {
-        let statuses = player.statuses.get();
-        if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Frt) {
+        if player.statuses.has(PlayerStatusType::Lst) || player.statuses.has(PlayerStatusType::Frt)
+        {
             return true;
         }
         if contract.is_transfer_listed
@@ -200,12 +200,9 @@ impl PreContractManager {
             return true;
         }
         // Wanted by rivals while inside the Bosman window.
-        statuses.iter().any(|s| {
-            matches!(
-                s,
-                PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
-            )
-        })
+        player.statuses.has(PlayerStatusType::Wnt)
+            || player.statuses.has(PlayerStatusType::Enq)
+            || player.statuses.has(PlayerStatusType::Bid)
     }
 
     /// Pick the best domestic buyer for a leaving player: a club (other

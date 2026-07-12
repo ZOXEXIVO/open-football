@@ -31,8 +31,7 @@ impl PreventiveRestPass {
             if player.player_attributes.is_injured {
                 continue;
             }
-            let statuses = player.statuses.get();
-            let already_resting = statuses.contains(&PlayerStatusType::Rst);
+            let already_resting = player.statuses.has(PlayerStatusType::Rst);
 
             let needs_rest = player.player_attributes.jadedness >= jaded_gate
                 || player.player_attributes.condition_percentage() < condition_gate;

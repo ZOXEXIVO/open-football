@@ -96,7 +96,7 @@ impl SquadManager {
             .iter()
             .filter(|player| {
                 // Proactive daily trigger: only a clearly-surplus listed player.
-                player.statuses.get().contains(&PlayerStatusType::Lst) && guard.is_surplus(player)
+                player.statuses.has(PlayerStatusType::Lst) && guard.is_surplus(player)
             })
             .filter(|player| {
                 guard.allow_demote_from_main(player, "administrative surplus clear-out")
@@ -715,7 +715,7 @@ mod execute_moves_tests {
 
         let moved = &teams[1].players.players[0];
         assert!(
-            moved.statuses.get().contains(&PlayerStatusType::Lst),
+            moved.statuses.has(PlayerStatusType::Lst),
             "Lst status must travel with the player"
         );
         assert!(

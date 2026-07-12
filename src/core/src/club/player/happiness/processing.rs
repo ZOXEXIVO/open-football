@@ -593,7 +593,7 @@ impl Player {
         // hysteresis is unchanged — the status clears only once morale
         // climbs clear of the unhappy band (or above 40 with real minutes).
         let assessment = UnhappyAssessment::evaluate(self, playing_time_factor);
-        let already_unhappy = self.statuses.get().contains(&PlayerStatusType::Unh);
+        let already_unhappy = self.statuses.has(PlayerStatusType::Unh);
 
         // `formal_unhappy` is the single source of truth for the hard `Unh`
         // status after this tick. `result.unhappy` mirrors it exactly;
@@ -2057,7 +2057,7 @@ mod morale_timeline_tests {
         }
 
         fn is_unhappy(player: &Player) -> bool {
-            player.statuses.get().contains(&PlayerStatusType::Unh)
+            player.statuses.has(PlayerStatusType::Unh)
         }
 
         /// Total negative magnitude of every first-tick transfer-shock event
@@ -2190,7 +2190,7 @@ mod morale_timeline_tests {
         );
         // …but the move does not automatically become a transfer request.
         assert!(
-            !player.statuses.get().contains(&PlayerStatusType::Req),
+            !player.statuses.has(PlayerStatusType::Req),
             "a pay-cut grievance should not auto-escalate to a transfer request"
         );
     }

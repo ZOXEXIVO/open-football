@@ -45,7 +45,7 @@ impl NationalTeam {
                     for team in club.teams.iter_mut() {
                         for player in team.players.iter_mut() {
                             let is_called_up = called_up.contains(&player.id);
-                            let was_in = player.statuses.get().contains(&PlayerStatusType::Int);
+                            let was_in = player.statuses.has(PlayerStatusType::Int);
 
                             if is_called_up {
                                 player.statuses.add(date, PlayerStatusType::Int);
@@ -138,7 +138,7 @@ impl NationalTeam {
                     for team in club.teams.iter_mut() {
                         for player in team.players.iter_mut() {
                             let is_called_up = called_up.contains(&player.id);
-                            let was_in = player.statuses.get().contains(&PlayerStatusType::IntU21);
+                            let was_in = player.statuses.has(PlayerStatusType::IntU21);
                             if is_called_up && !was_in {
                                 player.statuses.add(date, PlayerStatusType::IntU21);
                             } else if !is_called_up && was_in {

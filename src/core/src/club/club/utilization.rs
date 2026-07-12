@@ -125,9 +125,8 @@ impl Club {
                 }
 
                 // Skip already listed/loaned
-                let statuses = player.statuses.get();
-                if statuses.contains(&PlayerStatusType::Lst)
-                    || statuses.contains(&PlayerStatusType::Loa)
+                if player.statuses.has(PlayerStatusType::Lst)
+                    || player.statuses.has(PlayerStatusType::Loa)
                 {
                     continue;
                 }
@@ -428,11 +427,8 @@ impl Club {
                     p.position().position_group() == group
                         && !p.is_on_loan()
                         && p.contract.is_some()
-                        && {
-                            let s = p.statuses.get();
-                            !s.contains(&PlayerStatusType::Lst)
-                                && !s.contains(&PlayerStatusType::Loa)
-                        }
+                        && !p.statuses.has(PlayerStatusType::Lst)
+                        && !p.statuses.has(PlayerStatusType::Loa)
                 })
                 .map(|p| {
                     (
@@ -496,11 +492,8 @@ impl Club {
                         && !p.is_on_loan()
                         && p.contract.is_some()
                         && !p.is_force_match_selection
-                        && {
-                            let s = p.statuses.get();
-                            !s.contains(&PlayerStatusType::Lst)
-                                && !s.contains(&PlayerStatusType::Loa)
-                        }
+                        && !p.statuses.has(PlayerStatusType::Lst)
+                        && !p.statuses.has(PlayerStatusType::Loa)
                         && !loan_players.iter().any(|(_, id, _)| *id == p.id)
                 })
                 .map(|p| (p.id, p.age(date), p.player_attributes.current_ability))
@@ -823,7 +816,7 @@ mod tests {
                 t.players
                     .players
                     .iter()
-                    .any(|p| p.id == id && p.statuses.get().contains(&s))
+                    .any(|p| p.id == id && p.statuses.has(s))
             })
         }
 

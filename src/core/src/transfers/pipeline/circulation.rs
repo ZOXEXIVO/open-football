@@ -304,7 +304,6 @@ impl PipelineProcessor {
                         seller_club_rep,
                     )
                     .amount;
-                    let statuses = player.statuses.get();
                     let contract_months = player
                         .contract
                         .as_ref()
@@ -338,10 +337,10 @@ impl PipelineProcessor {
                         age: player_age,
                         estimated_value: value,
                         position_group: group,
-                        is_listed: statuses.contains(&PlayerStatusType::Lst),
-                        is_transfer_requested: statuses.contains(&PlayerStatusType::Req),
-                        is_unhappy: statuses.contains(&PlayerStatusType::Unh),
-                        is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
+                        is_listed: player.statuses.has(PlayerStatusType::Lst),
+                        is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
+                        is_unhappy: player.statuses.has(PlayerStatusType::Unh),
+                        is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
                         breakout_score,
                         world_reputation: player.player_attributes.world_reputation,
                         current_reputation: player.player_attributes.current_reputation,

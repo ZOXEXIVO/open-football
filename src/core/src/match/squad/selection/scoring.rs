@@ -817,12 +817,11 @@ impl ScoringEngine {
         match_importance: f32,
         is_friendly: bool,
     ) -> f32 {
-        let statuses = player.statuses.get();
-        let listed = statuses.contains(&PlayerStatusType::Lst);
-        let requested = statuses.contains(&PlayerStatusType::Req);
-        let unhappy = statuses.contains(&PlayerStatusType::Unh);
-        let bid_accepted = statuses.contains(&PlayerStatusType::Bid);
-        let agreed_move = statuses.contains(&PlayerStatusType::Trn);
+        let listed = player.statuses.has(PlayerStatusType::Lst);
+        let requested = player.statuses.has(PlayerStatusType::Req);
+        let unhappy = player.statuses.has(PlayerStatusType::Unh);
+        let bid_accepted = player.statuses.has(PlayerStatusType::Bid);
+        let agreed_move = player.statuses.has(PlayerStatusType::Trn);
 
         // Settled player — nothing to adjust, and no extra reads.
         if !(listed || requested || unhappy || bid_accepted || agreed_move) {

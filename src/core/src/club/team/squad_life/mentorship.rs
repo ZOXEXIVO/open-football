@@ -203,17 +203,16 @@ impl MentorshipProcessor {
         let mut mentees: Vec<(usize, f32, PlayerFieldPositionGroup)> = Vec::new();
         for (idx, p) in players.iter().enumerate() {
             // Already paired? Let the existing pairing finish before re-pairing.
-            let statuses = p.statuses.get();
-            if statuses.contains(&PlayerStatusType::Inj) {
+            if p.statuses.has(PlayerStatusType::Inj) {
                 continue;
             }
             let group = p.position().position_group();
             let m_score = MentorshipScorer::mentor(p, date);
-            if m_score > 10.0 && !statuses.contains(&PlayerStatusType::Lrn) {
+            if m_score > 10.0 && !p.statuses.has(PlayerStatusType::Lrn) {
                 mentors.push((idx, m_score, group));
             }
             let n_score = MentorshipScorer::mentee_need(p, date);
-            if n_score > 6.0 && !statuses.contains(&PlayerStatusType::Tut) {
+            if n_score > 6.0 && !p.statuses.has(PlayerStatusType::Tut) {
                 mentees.push((idx, n_score, group));
             }
         }

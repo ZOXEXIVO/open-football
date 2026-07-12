@@ -321,7 +321,7 @@ impl Player {
         self.player_attributes.jadedness = new_jad.clamp(0, 10_000) as i16;
 
         if self.player_attributes.jadedness > 7000
-            && !self.statuses.get().contains(&PlayerStatusType::Rst)
+            && !self.statuses.has(PlayerStatusType::Rst)
         {
             self.statuses.add(now, PlayerStatusType::Rst);
         }

@@ -211,6 +211,27 @@ impl PlayerPositions {
         }
     }
 
+    /// First entry of [`Self::positions`] without building the Vec —
+    /// `Player::position()` is the single hottest accessor in the simulator
+    /// and used to allocate on every call just to take `.first()`. Same
+    /// semantics: first stored position at playable level, else the
+    /// max-level fallback (`max_by_key` keeps the LAST maximum on ties,
+    /// preserved here exactly).
+    pub fn primary(&self) -> Option<PlayerPositionType> {
+        if let Some(p) = self
+            .positions
+            .iter()
+            .find(|p| p.level >= REQUIRED_POSITION_LEVEL)
+        {
+            return Some(p.position);
+        }
+        self.positions
+            .iter()
+            .max_by_key(|p| p.level)
+            .map(|p| p.position)
+    }
+
+
     pub fn display_positions(&self) -> Vec<&str> {
         self.positions()
             .iter()
@@ -335,12 +356,31 @@ impl PlayerPositions {
         result.join(", ")
     }
 
+    /// Membership test against [`Self::positions`] without building the
+    /// Vec. Mirrors its two-branch semantics: match among playable-level
+    /// entries when any exist, else against the max-level fallback.
     pub fn has_position(&self, position: PlayerPositionType) -> bool {
-        self.positions().contains(&position)
+        let mut any_playable = false;
+        for p in &self.positions {
+            if p.level >= REQUIRED_POSITION_LEVEL {
+                any_playable = true;
+                if p.position == position {
+                    return true;
+                }
+            }
+        }
+        if any_playable {
+            return false;
+        }
+        self.positions
+            .iter()
+            .max_by_key(|p| p.level)
+            .map(|p| p.position == position)
+            .unwrap_or(false)
     }
 
     pub fn is_goalkeeper(&self) -> bool {
-        self.positions().contains(&PlayerPositionType::Goalkeeper)
+        self.has_position(PlayerPositionType::Goalkeeper)
     }
 
     pub fn get_level(&self, position: PlayerPositionType) -> u8 {
@@ -516,6 +556,22 @@ pub enum PlayerFieldPositionGroup {
 }
 
 impl PlayerFieldPositionGroup {
+    /// Total number of position groups — the length of any table indexed
+    /// by [`Self::index`].
+    pub const COUNT: usize = 4;
+
+    /// Stable 0-based index for group-keyed lookup tables (the transfer
+    /// pipeline partitions candidate pools per group so per-request scans
+    /// don't walk the other three groups).
+    pub fn index(&self) -> usize {
+        match self {
+            PlayerFieldPositionGroup::Goalkeeper => 0,
+            PlayerFieldPositionGroup::Defender => 1,
+            PlayerFieldPositionGroup::Midfielder => 2,
+            PlayerFieldPositionGroup::Forward => 3,
+        }
+    }
+
     pub fn as_i18n_key(&self) -> &'static str {
         match self {
             PlayerFieldPositionGroup::Goalkeeper => "pos_group_goalkeeper",

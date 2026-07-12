@@ -130,12 +130,11 @@ impl CountryResult {
                         let from_statuses =
                             super::types::find_player_in_country(country, n.player_id)
                                 .map(|p| {
-                                    let statuses = p.statuses.get();
                                     let listed_for_permanent =
-                                        statuses.contains(&PlayerStatusType::Lst);
-                                    let loaned_listed = statuses.contains(&PlayerStatusType::Loa);
-                                    let requested = statuses.contains(&PlayerStatusType::Req);
-                                    let unhappy = statuses.contains(&PlayerStatusType::Unh);
+                                        p.statuses.has(PlayerStatusType::Lst);
+                                    let loaned_listed = p.statuses.has(PlayerStatusType::Loa);
+                                    let requested = p.statuses.has(PlayerStatusType::Req);
+                                    let unhappy = p.statuses.has(PlayerStatusType::Unh);
                                     let not_needed = p
                                         .contract
                                         .as_ref()
@@ -1031,10 +1030,9 @@ impl CountryResult {
                     chance -= 10.0;
                 }
 
-                let statuses = player.statuses.get();
-                if statuses.contains(&PlayerStatusType::Req) {
+                if player.statuses.has(PlayerStatusType::Req) {
                     chance += 25.0; // Wants out — will accept more
-                } else if statuses.contains(&PlayerStatusType::Unh) {
+                } else if player.statuses.has(PlayerStatusType::Unh) {
                     chance += 20.0; // Unhappy — willing to move
                 }
             }
@@ -1864,10 +1862,8 @@ impl SellerFeeFloor {
     /// state (status flags, contract length, club finances, durable mood) —
     /// never decision-history strings.
     fn distress_for(player: &Player, seller: &Club, date: NaiveDate) -> SellerDistress {
-        let statuses = player.statuses.get();
-
         // ── Strong: the player should/can leave below value. ──
-        if statuses.contains(&PlayerStatusType::Req) {
+        if player.statuses.has(PlayerStatusType::Req) {
             return SellerDistress::Strong;
         }
         if let Some(contract) = player.contract.as_ref() {
@@ -1887,7 +1883,8 @@ impl SellerFeeFloor {
         }
 
         // ── Modest: market-leverage signals (available, but not forced). ──
-        if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Unh) {
+        if player.statuses.has(PlayerStatusType::Lst) || player.statuses.has(PlayerStatusType::Unh)
+        {
             return SellerDistress::Modest;
         }
 

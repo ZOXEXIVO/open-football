@@ -114,23 +114,22 @@ impl SelectionStatusCensus {
             if !is_friendly && p.player_attributes.is_banned {
                 c.banned += 1;
             }
-            let s = p.statuses.get();
-            if s.contains(&PlayerStatusType::Lst) {
+            if p.statuses.has(PlayerStatusType::Lst) {
                 c.listed += 1;
             }
-            if s.contains(&PlayerStatusType::Loa) {
+            if p.statuses.has(PlayerStatusType::Loa) {
                 c.loan_listed += 1;
             }
-            if s.contains(&PlayerStatusType::Req) {
+            if p.statuses.has(PlayerStatusType::Req) {
                 c.requested += 1;
             }
-            if s.contains(&PlayerStatusType::Unh) {
+            if p.statuses.has(PlayerStatusType::Unh) {
                 c.unhappy += 1;
             }
-            if s.contains(&PlayerStatusType::Bid) {
+            if p.statuses.has(PlayerStatusType::Bid) {
                 c.bid_accepted += 1;
             }
-            if s.contains(&PlayerStatusType::Trn) {
+            if p.statuses.has(PlayerStatusType::Trn) {
                 c.agreed_transfer += 1;
             }
         }

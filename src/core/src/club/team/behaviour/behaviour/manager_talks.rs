@@ -51,15 +51,13 @@ impl TeamBehaviour {
         let mut talk_candidates: Vec<(u32, ManagerTalkType, u8)> = Vec::new(); // (player_id, type, priority)
 
         for player in &players.players {
-            let statuses = player.statuses.get();
-
             // Highest priority: transfer request
-            if statuses.contains(&PlayerStatusType::Req) {
+            if player.statuses.has(PlayerStatusType::Req) {
                 talk_candidates.push((player.id, ManagerTalkType::TransferDiscussion, 100));
             }
 
             // High priority: unhappy players
-            if statuses.contains(&PlayerStatusType::Unh) {
+            if player.statuses.has(PlayerStatusType::Unh) {
                 // Decide between playing time talk and morale talk
                 let talk_type = if player.happiness.factors.playing_time < -5.0 {
                     ManagerTalkType::PlayingTimeTalk
@@ -76,7 +74,7 @@ impl TeamBehaviour {
             // discussion). Priority ≥ 90 also bypasses the topic-
             // cooldown gate, so the knock on the door gets answered.
             if let Some(date) = today {
-                if !statuses.contains(&PlayerStatusType::Req) {
+                if !player.statuses.has(PlayerStatusType::Req) {
                     if let Some(reason) = PrivateTalkInbox::pending_reason(player, date) {
                         talk_candidates.push((
                             player.id,
@@ -93,8 +91,8 @@ impl TeamBehaviour {
             let ability = player.player_attributes.current_ability;
             if ability >= 80
                 && player.happiness.factors.playing_time < -3.0
-                && !statuses.contains(&PlayerStatusType::Unh)
-                && !statuses.contains(&PlayerStatusType::Req)
+                && !player.statuses.has(PlayerStatusType::Unh)
+                && !player.statuses.has(PlayerStatusType::Req)
             {
                 // Higher ability = higher priority for proactive talk
                 let priority = 75 + (ability.saturating_sub(80) / 10).min(15);
@@ -103,8 +101,8 @@ impl TeamBehaviour {
 
             // Medium priority: very low morale
             if player.happiness.morale < 30.0
-                && !statuses.contains(&PlayerStatusType::Unh)
-                && !statuses.contains(&PlayerStatusType::Req)
+                && !player.statuses.has(PlayerStatusType::Unh)
+                && !player.statuses.has(PlayerStatusType::Req)
             {
                 talk_candidates.push((player.id, ManagerTalkType::Motivational, 70));
             }
@@ -414,9 +412,8 @@ impl TeamBehaviour {
             }
 
             // Already has a transfer request or loan status
-            let statuses = player.statuses.get();
-            if statuses.contains(&PlayerStatusType::Req)
-                || statuses.contains(&PlayerStatusType::Loa)
+            if player.statuses.has(PlayerStatusType::Req)
+                || player.statuses.has(PlayerStatusType::Loa)
             {
                 continue;
             }
@@ -1601,7 +1598,7 @@ mod coach_termination_tests {
         p.on_contract_terminated(Fx::date(), termination.reason);
         assert!(p.contract.is_none(), "termination must clear the contract");
         assert!(
-            p.statuses.get().contains(&PlayerStatusType::Frt),
+            p.statuses.has(PlayerStatusType::Frt),
             "termination must stamp Frt for the free-agent sweep"
         );
         assert_eq!(

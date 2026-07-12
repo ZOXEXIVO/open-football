@@ -482,7 +482,6 @@ mod tests {
             .iter()
             .find(|p| p.id == 1)
             .expect("released player should land in the global free-agent pool");
-        let statuses = released.statuses.get();
         for status in [
             PlayerStatusType::Lst,
             PlayerStatusType::Loa,
@@ -490,7 +489,7 @@ mod tests {
             PlayerStatusType::Unh,
         ] {
             assert!(
-                !statuses.contains(&status),
+                !released.statuses.has(status),
                 "pool free agent must not carry the {:?} status of his old club",
                 status
             );

@@ -192,10 +192,10 @@ impl Player {
     ) {
         let rep_diff = buyer_rep - seller_rep;
         let ambition = self.attributes.ambition;
-        let listed_or_unhappy = self.statuses.get().contains(&PlayerStatusType::Lst)
-            || self.statuses.get().contains(&PlayerStatusType::Req)
-            || self.statuses.get().contains(&PlayerStatusType::Unh)
-            || self.statuses.get().contains(&PlayerStatusType::Trn);
+        let listed_or_unhappy = self.statuses.has(PlayerStatusType::Lst)
+            || self.statuses.has(PlayerStatusType::Req)
+            || self.statuses.has(PlayerStatusType::Unh)
+            || self.statuses.has(PlayerStatusType::Trn);
 
         // A formally-requested exit being blocked is a different wound
         // entirely: the club vetoed the move he had asked for. It fires
@@ -203,7 +203,7 @@ impl Player {
         // OUT doesn't need the buyer to be bigger — and replaces the
         // neutral bid-rejection note. Only a clear step DOWN stays
         // silent (that rejection did him a favour).
-        if self.statuses.get().contains(&PlayerStatusType::Req) && rep_diff > -0.25 {
+        if self.statuses.has(PlayerStatusType::Req) && rep_diff > -0.25 {
             let cfg = HappinessConfig::default();
             let mag = cfg.catalog.move_vetoed_by_club
                 * scaling::ambition_amplifier(ambition)
@@ -790,10 +790,10 @@ impl Player {
         let professionalism = self.attributes.professionalism;
         let controversy = self.attributes.controversy;
         let fringe = self.fringe_at_current_club();
-        let listed_or_unhappy = self.statuses.get().contains(&PlayerStatusType::Lst)
-            || self.statuses.get().contains(&PlayerStatusType::Req)
-            || self.statuses.get().contains(&PlayerStatusType::Unh)
-            || self.statuses.get().contains(&PlayerStatusType::Trn);
+        let listed_or_unhappy = self.statuses.has(PlayerStatusType::Lst)
+            || self.statuses.has(PlayerStatusType::Req)
+            || self.statuses.has(PlayerStatusType::Unh)
+            || self.statuses.has(PlayerStatusType::Trn);
 
         let (reaction, fit) = match kind {
             TransferInterestKind::StepUp | TransferInterestKind::BigLeagueOpportunity => {
@@ -1069,8 +1069,8 @@ impl Player {
             // listed/unhappy state hints contract pressure.
             let _ = expiry;
         }
-        if self.statuses.get().contains(&PlayerStatusType::Unh)
-            || self.statuses.get().contains(&PlayerStatusType::Req)
+        if self.statuses.has(PlayerStatusType::Unh)
+            || self.statuses.has(PlayerStatusType::Req)
         {
             out.push(TransferInterestEvidence::CurrentClubAmbitionMismatch);
         }

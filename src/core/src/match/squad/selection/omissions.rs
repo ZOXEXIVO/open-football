@@ -495,18 +495,16 @@ impl<'a> OmissionBuilder<'a> {
     /// The player has agreed a move (`Trn`) or had a bid accepted (`Bid`) — the
     /// club protects a near-sold asset by resting him.
     fn has_agreed_or_near_transfer(player: &Player) -> bool {
-        let s = player.statuses.get();
-        s.contains(&PlayerStatusType::Trn) || s.contains(&PlayerStatusType::Bid)
+        player.statuses.has(PlayerStatusType::Trn) || player.statuses.has(PlayerStatusType::Bid)
     }
 
     /// A want-away player (listed / requested / unhappy) whose morale AND manager
     /// relationship are both poor — the same disaffection signal the selection
     /// scoring penalises, surfaced here as the omission reason.
     fn is_disaffected_want_away(&self, player: &Player) -> bool {
-        let s = player.statuses.get();
-        let want_away = s.contains(&PlayerStatusType::Lst)
-            || s.contains(&PlayerStatusType::Req)
-            || s.contains(&PlayerStatusType::Unh);
+        let want_away = player.statuses.has(PlayerStatusType::Lst)
+            || player.statuses.has(PlayerStatusType::Req)
+            || player.statuses.has(PlayerStatusType::Unh);
         if !want_away {
             return false;
         }

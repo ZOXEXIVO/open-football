@@ -1293,11 +1293,10 @@ impl TransferPlausibilityBuilder {
         let best_group_ca =
             PipelineProcessor::best_ca_in_group(selling_club, position_group).max(player_ca);
 
-        let statuses = player.statuses.get();
-        let is_listed = statuses.contains(&PlayerStatusType::Lst);
-        let is_loan_listed = statuses.contains(&PlayerStatusType::Loa);
-        let is_transfer_requested = statuses.contains(&PlayerStatusType::Req);
-        let is_unhappy = statuses.contains(&PlayerStatusType::Unh);
+        let is_listed = player.statuses.has(PlayerStatusType::Lst);
+        let is_loan_listed = player.statuses.has(PlayerStatusType::Loa);
+        let is_transfer_requested = player.statuses.has(PlayerStatusType::Req);
+        let is_unhappy = player.statuses.has(PlayerStatusType::Unh);
 
         let (squad_status, contract_months_remaining, current_salary) = player
             .contract

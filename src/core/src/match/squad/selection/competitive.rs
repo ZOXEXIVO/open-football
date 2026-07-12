@@ -1516,8 +1516,7 @@ impl SelectionScoringContext<'_> {
     }
 
     pub(crate) fn bench_role_fit(&self, player: &Player, role: BenchRole) -> f32 {
-        let positions = player.positions.positions();
-        let has = |pos: PlayerPositionType| positions.contains(&pos);
+        let has = |pos: PlayerPositionType| player.positions.has_position(pos);
         let has_any = |targets: &[PlayerPositionType]| targets.iter().any(|&p| has(p));
 
         match role {

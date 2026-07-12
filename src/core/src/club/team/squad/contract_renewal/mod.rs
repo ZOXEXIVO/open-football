@@ -291,16 +291,14 @@ impl ContractRenewalManager {
                     | Some(PlayerSquadStatus::FirstTeamRegular)
                     | Some(PlayerSquadStatus::FirstTeamSquadRotation)
             ) && played_share >= 8.0;
-            let unsettled = player.statuses.get().iter().any(|s| {
-                matches!(
-                    s,
-                    PlayerStatusType::Req | PlayerStatusType::Lst | PlayerStatusType::Frt
-                )
-            }) || player
-                .contract
-                .as_ref()
-                .map(|c| c.is_transfer_listed)
-                .unwrap_or(false);
+            let unsettled = player.statuses.has(PlayerStatusType::Req)
+                || player.statuses.has(PlayerStatusType::Lst)
+                || player.statuses.has(PlayerStatusType::Frt)
+                || player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.is_transfer_listed)
+                    .unwrap_or(false);
             let ca = player.player_attributes.current_ability;
             // Observable ceiling — the club judges decline from what it
             // can see, never the hidden biological PA.
@@ -404,20 +402,16 @@ impl ContractRenewalManager {
             return None;
         }
 
-        let statuses = player.statuses.get();
-        if statuses.contains(&PlayerStatusType::Req)
-            || statuses.contains(&PlayerStatusType::Lst)
-            || statuses.contains(&PlayerStatusType::Frt)
+        if player.statuses.has(PlayerStatusType::Req)
+            || player.statuses.has(PlayerStatusType::Lst)
+            || player.statuses.has(PlayerStatusType::Frt)
         {
             return None;
         }
 
-        let has_market_interest = statuses.iter().any(|s| {
-            matches!(
-                s,
-                PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
-            )
-        });
+        let has_market_interest = player.statuses.has(PlayerStatusType::Wnt)
+            || player.statuses.has(PlayerStatusType::Enq)
+            || player.statuses.has(PlayerStatusType::Bid);
 
         Some(RenewalCandidate {
             player_id: player.id,
@@ -458,20 +452,16 @@ impl ContractRenewalManager {
             return None;
         }
 
-        let statuses = player.statuses.get();
-        if statuses.contains(&PlayerStatusType::Req)
-            || statuses.contains(&PlayerStatusType::Lst)
-            || statuses.contains(&PlayerStatusType::Frt)
+        if player.statuses.has(PlayerStatusType::Req)
+            || player.statuses.has(PlayerStatusType::Lst)
+            || player.statuses.has(PlayerStatusType::Frt)
         {
             return None;
         }
 
-        let has_market_interest = statuses.iter().any(|s| {
-            matches!(
-                s,
-                PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
-            )
-        });
+        let has_market_interest = player.statuses.has(PlayerStatusType::Wnt)
+            || player.statuses.has(PlayerStatusType::Enq)
+            || player.statuses.has(PlayerStatusType::Bid);
 
         let effective_status = Self::effective_squad_status(player, &contract.squad_status);
         let threshold = Self::renewal_threshold_days(&effective_status);

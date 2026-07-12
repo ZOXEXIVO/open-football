@@ -481,8 +481,6 @@ impl PipelineProcessor {
                         })
                         .unwrap_or(0);
 
-                    let statuses = player.statuses.get();
-
                     let skill_ability = Self::position_evaluation_ability(player);
                     let player_age = player.age(date);
                     let estimated_potential = skill_ability
@@ -525,10 +523,10 @@ impl PipelineProcessor {
                         parent_club_reputation: rep_level.clone(),
                         parent_club_score,
                         parent_league_reputation,
-                        is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
-                        is_listed: statuses.contains(&PlayerStatusType::Lst),
-                        is_transfer_requested: statuses.contains(&PlayerStatusType::Req),
-                        is_unhappy: statuses.contains(&PlayerStatusType::Unh),
+                        is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
+                        is_listed: player.statuses.has(PlayerStatusType::Lst),
+                        is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
+                        is_unhappy: player.statuses.has(PlayerStatusType::Unh),
                         ambition: player.attributes.ambition,
                         world_reputation: player.player_attributes.world_reputation,
                         current_reputation: player.player_attributes.current_reputation,

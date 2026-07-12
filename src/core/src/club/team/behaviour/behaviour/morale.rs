@@ -1439,9 +1439,8 @@ impl TeamBehaviour {
             {
                 continue;
             }
-            let statuses = player.statuses.get();
-            if statuses.contains(&PlayerStatusType::Req)
-                || statuses.contains(&PlayerStatusType::Loa)
+            if player.statuses.has(PlayerStatusType::Req)
+                || player.statuses.has(PlayerStatusType::Loa)
                 || player.statuses.is_on_international_duty()
             {
                 continue;
@@ -1864,9 +1863,8 @@ impl TeamBehaviour {
         {
             return true;
         }
-        let statuses = player.statuses.get();
-        statuses.contains(&PlayerStatusType::Req)
-            || statuses.contains(&PlayerStatusType::Loa)
+        player.statuses.has(PlayerStatusType::Req)
+            || player.statuses.has(PlayerStatusType::Loa)
             || player.statuses.is_on_international_duty()
     }
 
@@ -2466,11 +2464,10 @@ impl TeamBehaviour {
             }
             // Listed / written-off / asking-out players know exactly
             // why nobody has called about a new deal.
-            let statuses = player.statuses.get();
             if listed
                 || not_needed
-                || statuses.contains(&PlayerStatusType::Req)
-                || statuses.contains(&PlayerStatusType::Loa)
+                || player.statuses.has(PlayerStatusType::Req)
+                || player.statuses.has(PlayerStatusType::Loa)
             {
                 continue;
             }
@@ -2577,8 +2574,8 @@ impl BackupCareerAnxiety {
         {
             return None;
         }
-        let statuses = player.statuses.get();
-        if statuses.contains(&PlayerStatusType::Req) || statuses.contains(&PlayerStatusType::Loa) {
+        if player.statuses.has(PlayerStatusType::Req) || player.statuses.has(PlayerStatusType::Loa)
+        {
             return None;
         }
 

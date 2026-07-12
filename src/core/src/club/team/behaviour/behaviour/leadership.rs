@@ -212,7 +212,7 @@ impl TeamBehaviour {
         let sources: Vec<ContagionSource> = players
             .players
             .iter()
-            .filter(|p| p.statuses.get().contains(&PlayerStatusType::Unh))
+            .filter(|p| p.statuses.has(PlayerStatusType::Unh))
             .filter_map(|p| {
                 let is_key_player = matches!(
                     p.contract.as_ref().map(|c| &c.squad_status),

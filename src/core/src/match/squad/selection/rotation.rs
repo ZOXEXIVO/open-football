@@ -220,13 +220,13 @@ impl RotationWantAway {
     const PROTECT_NEAR_TRANSFER: f32 = -12.0;
 
     fn adjustment(player: &Player) -> f32 {
-        let statuses = player.statuses.get();
-        if statuses.contains(&PlayerStatusType::Trn) || statuses.contains(&PlayerStatusType::Bid) {
+        if player.statuses.has(PlayerStatusType::Trn) || player.statuses.has(PlayerStatusType::Bid)
+        {
             return Self::PROTECT_NEAR_TRANSFER;
         }
-        let want_away = statuses.contains(&PlayerStatusType::Lst)
-            || statuses.contains(&PlayerStatusType::Req)
-            || statuses.contains(&PlayerStatusType::Unh);
+        let want_away = player.statuses.has(PlayerStatusType::Lst)
+            || player.statuses.has(PlayerStatusType::Req)
+            || player.statuses.has(PlayerStatusType::Unh);
         if want_away { Self::KEEP_SHARP } else { 0.0 }
     }
 }

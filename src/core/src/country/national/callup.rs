@@ -163,7 +163,7 @@ impl NationalTeam {
                     for player in &team.players.players {
                         if player.player_attributes.is_injured
                             || player.player_attributes.is_banned
-                            || player.statuses.get().contains(&PlayerStatusType::Loa)
+                            || player.statuses.has(PlayerStatusType::Loa)
                             || player.player_attributes.condition < min_condition
                         {
                             continue;

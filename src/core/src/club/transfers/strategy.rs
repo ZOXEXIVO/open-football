@@ -533,14 +533,14 @@ impl ClubTransferStrategy {
         }
 
         // Status hints.
-        let statuses = player.statuses.get();
-        if statuses.contains(&PlayerStatusType::Lst) {
+        if player.statuses.has(PlayerStatusType::Lst) {
             score += 0.4;
         }
-        if statuses.contains(&PlayerStatusType::Req) || statuses.contains(&PlayerStatusType::Unh) {
+        if player.statuses.has(PlayerStatusType::Req) || player.statuses.has(PlayerStatusType::Unh)
+        {
             score += 0.3;
         }
-        if statuses.contains(&PlayerStatusType::Inj) {
+        if player.statuses.has(PlayerStatusType::Inj) {
             risks.push(TransferInterestRisk::InjuryConcern);
             score -= 0.3;
         }
@@ -642,11 +642,11 @@ impl ClubTransferStrategy {
         }
 
         // Transfer-listed / unhappy player → softer anchor.
-        let statuses = player.statuses.get();
-        if statuses.contains(&PlayerStatusType::Lst) {
+        if player.statuses.has(PlayerStatusType::Lst) {
             offer_amount *= 0.9;
         }
-        if statuses.contains(&PlayerStatusType::Req) || statuses.contains(&PlayerStatusType::Unh) {
+        if player.statuses.has(PlayerStatusType::Req) || player.statuses.has(PlayerStatusType::Unh)
+        {
             offer_amount *= 0.92;
         }
 
@@ -866,17 +866,16 @@ impl ClubTransferStrategy {
     ) -> SellingDecision {
         let mut score = self.selling.willingness_baseline;
 
-        let statuses = player.statuses.get();
-        if statuses.contains(&PlayerStatusType::Lst) {
+        if player.statuses.has(PlayerStatusType::Lst) {
             score += 0.4;
         }
-        if statuses.contains(&PlayerStatusType::Req) {
+        if player.statuses.has(PlayerStatusType::Req) {
             score += 0.35;
         }
-        if statuses.contains(&PlayerStatusType::Unh) {
+        if player.statuses.has(PlayerStatusType::Unh) {
             score += 0.2;
         }
-        if statuses.contains(&PlayerStatusType::Frt) {
+        if player.statuses.has(PlayerStatusType::Frt) {
             score += 0.3;
         }
 
@@ -899,7 +898,7 @@ impl ClubTransferStrategy {
 
         score += self.selling.cash_pressure * 0.3;
 
-        if statuses.contains(&PlayerStatusType::HG) {
+        if player.statuses.has(PlayerStatusType::HG) {
             score -= self.selling.keep_homegrown_bias * 0.4;
         }
         if is_rival_buyer {

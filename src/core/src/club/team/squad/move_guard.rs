@@ -84,10 +84,9 @@ impl<'a> MainSquadMoveGuard<'a> {
     /// Loan-listing (`Loa`) is excluded — loaning a player out for development
     /// is itself a reason to move him. Exposed for the daily sweep's trigger.
     pub(crate) fn is_want_away(player: &Player) -> bool {
-        let s = player.statuses.get();
-        s.contains(&PlayerStatusType::Lst)
-            || s.contains(&PlayerStatusType::Req)
-            || s.contains(&PlayerStatusType::Unh)
+        player.statuses.has(PlayerStatusType::Lst)
+            || player.statuses.has(PlayerStatusType::Req)
+            || player.statuses.has(PlayerStatusType::Unh)
     }
 
     /// Clearly surplus: the club's own squad-status view says NotNeeded/Invalid,
@@ -150,7 +149,7 @@ impl<'a> MainSquadMoveGuard<'a> {
 
     fn has_serious_discipline_issue(player: &Player) -> bool {
         // Unauthorised absence (`Abs`) is the unambiguous disciplinary signal.
-        player.statuses.get().contains(&PlayerStatusType::Abs)
+        player.statuses.has(PlayerStatusType::Abs)
     }
 
     /// Importance-scaled cover requirement for a useful want-away player.
@@ -221,8 +220,7 @@ impl<'a> MainSquadMoveGuard<'a> {
     /// The candidate is himself on his way out (`Trn`/`Bid`) and so can't be
     /// counted on as lasting cover.
     fn is_leaving(player: &Player) -> bool {
-        let s = player.statuses.get();
-        s.contains(&PlayerStatusType::Trn) || s.contains(&PlayerStatusType::Bid)
+        player.statuses.has(PlayerStatusType::Trn) || player.statuses.has(PlayerStatusType::Bid)
     }
 
     fn is_senior(&self, player: &Player) -> bool {

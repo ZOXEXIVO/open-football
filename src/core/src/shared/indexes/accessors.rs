@@ -924,7 +924,6 @@ impl SimulatorData {
                     .and_then(|lid| self.league(lid))
                     .map(|l| l.reputation)
                     .unwrap_or(0);
-                let statuses = p.statuses.get();
                 let (contract_months_remaining, salary) = p
                     .contract
                     .as_ref()
@@ -943,8 +942,8 @@ impl SimulatorData {
                     contract_months_remaining,
                     salary,
                     estimated_value: p.value(now, league_rep, club_market_value),
-                    is_listed: statuses.contains(&PlayerStatusType::Lst),
-                    is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
+                    is_listed: p.statuses.has(PlayerStatusType::Lst),
+                    is_loan_listed: p.statuses.has(PlayerStatusType::Loa),
                     squad_status: p
                         .contract
                         .as_ref()

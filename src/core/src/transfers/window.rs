@@ -512,12 +512,12 @@ impl PlayerValuationCalculator {
         // Transfer-listed players face market discount (buyer leverage)
         let mut market_value = base_value;
 
-        if player.statuses.get().contains(&PlayerStatusType::Lst) {
+        if player.statuses.has(PlayerStatusType::Lst) {
             market_value *= 0.9;
         }
 
         // Players wanting to leave lose negotiating power
-        if player.statuses.get().contains(&PlayerStatusType::Req) {
+        if player.statuses.has(PlayerStatusType::Req) {
             market_value *= 0.85;
         }
 

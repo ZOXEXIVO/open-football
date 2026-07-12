@@ -179,8 +179,7 @@ impl Player {
     /// True if the player currently carries any market-availability
     /// status. The single predicate the circulation lifecycle keys on.
     pub fn is_market_available(&self) -> bool {
-        let statuses = self.statuses.get();
-        AVAILABILITY_STATUSES.iter().any(|s| statuses.contains(s))
+        AVAILABILITY_STATUSES.iter().any(|s| self.statuses.has(*s))
     }
 
     /// Days since the player first became available (the earliest active

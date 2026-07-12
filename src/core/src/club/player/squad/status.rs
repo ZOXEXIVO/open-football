@@ -39,6 +39,14 @@ impl PlayerStatus {
         self.statuses.iter().map(|s| s.status).collect()
     }
 
+    /// Membership check without materialising the `get()` Vec. The status
+    /// list is tiny (a handful of flags), but `get().contains(..)` allocates
+    /// on every call and sits on per-player hot loops (market pool builds,
+    /// the Wnt reconciliation walk) — this is the allocation-free path.
+    pub fn has(&self, status: PlayerStatusType) -> bool {
+        self.statuses.iter().any(|s| s.status == status)
+    }
+
     /// Number of whole days the given status has been continuously held as
     /// of `now`, or `None` when the player is not currently carrying it.
     ///

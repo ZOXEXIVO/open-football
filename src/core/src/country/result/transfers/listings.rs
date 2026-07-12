@@ -143,8 +143,6 @@ impl CountryResult {
                     if player.is_on_loan() || player.is_force_match_selection {
                         continue;
                     }
-                    let statuses = player.statuses.get();
-
                     // Board loan flag (`Loa`) on a reserve/youth player —
                     // stamped by the squad-utilization audit, the surplus
                     // demotion, or an accepted loan-request talk — must
@@ -157,7 +155,7 @@ impl CountryResult {
                     // suppresses a duplicate. Fee mirrors the main-squad
                     // board loan listing (zero — the borrower-side scan sets
                     // the actual terms), keeping the path consistent.
-                    if statuses.contains(&PlayerStatusType::Loa)
+                    if player.statuses.has(PlayerStatusType::Loa)
                         && player.contract.is_some()
                         && country
                             .transfer_market
@@ -192,9 +190,9 @@ impl CountryResult {
                     if !flagged {
                         continue;
                     }
-                    if statuses.contains(&PlayerStatusType::Lst)
-                        || statuses.contains(&PlayerStatusType::Loa)
-                        || statuses.contains(&PlayerStatusType::Frt)
+                    if player.statuses.has(PlayerStatusType::Lst)
+                        || player.statuses.has(PlayerStatusType::Loa)
+                        || player.statuses.has(PlayerStatusType::Frt)
                     {
                         continue;
                     }
@@ -274,7 +272,7 @@ impl CountryResult {
                         .iter_mut()
                         .find(|p| p.id == listing_data.player_id)
                     {
-                        if !player.statuses.get().contains(&status_type) {
+                        if !player.statuses.has(status_type) {
                             player.statuses.add(date, status_type);
                         }
                         // An end-of-contract listing is the under-16 free
@@ -597,10 +595,9 @@ impl CountryResult {
                         .iter()
                         .filter(|p| p.position().position_group() == group)
                         .filter(|p| {
-                            let s = p.statuses.get();
-                            s.contains(&PlayerStatusType::Lst)
-                                || s.contains(&PlayerStatusType::Loa)
-                                || s.contains(&PlayerStatusType::Frt)
+                            p.statuses.has(PlayerStatusType::Lst)
+                                || p.statuses.has(PlayerStatusType::Loa)
+                                || p.statuses.has(PlayerStatusType::Frt)
                         })
                         .count()
                 })
@@ -733,12 +730,10 @@ impl CountryResult {
             }
         }
 
-        let statuses = player.statuses.get();
-
         // Already listed
-        if statuses.contains(&PlayerStatusType::Lst)
-            || statuses.contains(&PlayerStatusType::Loa)
-            || statuses.contains(&PlayerStatusType::Frt)
+        if player.statuses.has(PlayerStatusType::Lst)
+            || player.statuses.has(PlayerStatusType::Loa)
+            || player.statuses.has(PlayerStatusType::Frt)
         {
             return ListingDecision::Keep;
         }
@@ -815,7 +810,7 @@ impl CountryResult {
         // minimums. The transfer-request handler also sets
         // `contract.is_transfer_listed`, so checking the flag first used to
         // mislabel these as "club listed".
-        if statuses.contains(&PlayerStatusType::Req) {
+        if player.statuses.has(PlayerStatusType::Req) {
             return ListingDecision::Transfer {
                 reason: "dec_reason_player_requested".to_string(),
             };
@@ -834,7 +829,7 @@ impl CountryResult {
         // useful seniors / rotation and not-yet-evaluated players are kept,
         // a development-profile youngster is loaned for minutes, and only a
         // genuinely surplus unhappy player is actually transfer-listed.
-        if statuses.contains(&PlayerStatusType::Unh) {
+        if player.statuses.has(PlayerStatusType::Unh) {
             let unhappy_days = player
                 .statuses
                 .held_for_days(PlayerStatusType::Unh, date)
@@ -1565,7 +1560,7 @@ mod tests {
             .iter()
             .find(|p| p.id == 201)
             .unwrap();
-        assert!(player.statuses.get().contains(&PlayerStatusType::Lst));
+        assert!(player.statuses.has(PlayerStatusType::Lst));
         assert_eq!(
             player
                 .decision_history
@@ -1620,7 +1615,7 @@ mod tests {
             .iter()
             .find(|p| p.id == 101)
             .unwrap();
-        assert!(player.statuses.get().contains(&PlayerStatusType::Lst));
+        assert!(player.statuses.has(PlayerStatusType::Lst));
         assert_eq!(
             player
                 .decision_history
@@ -1689,7 +1684,7 @@ mod tests {
         let player = ValveFx::player(&country);
         assert!(player.contract.is_none(), "the deal must be torn up");
         assert!(
-            player.statuses.get().contains(&PlayerStatusType::Frt),
+            player.statuses.has(PlayerStatusType::Frt),
             "the free-agent sweep must be able to collect him"
         );
         assert_eq!(

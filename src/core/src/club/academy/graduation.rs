@@ -435,7 +435,7 @@ mod tests {
             "released player must have no contract"
         );
         assert!(
-            p.statuses.get().contains(&PlayerStatusType::Frt),
+            p.statuses.has(PlayerStatusType::Frt),
             "released player must carry Frt status for free-agent discovery"
         );
         // The exit must be tagged as an academy age-out — never collapsed

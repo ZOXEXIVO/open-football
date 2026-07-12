@@ -146,9 +146,8 @@ impl Player {
             return;
         }
 
-        let statuses = self.statuses.get();
-        let already_unhappy = statuses.contains(&PlayerStatusType::Unh);
-        let already_requested = statuses.contains(&PlayerStatusType::Req);
+        let already_unhappy = self.statuses.has(PlayerStatusType::Unh);
+        let already_requested = self.statuses.has(PlayerStatusType::Req);
 
         // ── Private complaint roll — single-tick, lightest escalation.
         if effective_risk > ConflictEscalationThresholds::PRIVATE_TALK_CANDIDATE
@@ -205,7 +204,7 @@ impl Player {
             let controversy_factor = (self.attributes.controversy / 20.0).clamp(0.0, 1.0);
             if dice() < 0.05 * effective_risk * controversy_factor {
                 self.happiness.adjust_morale(-4.0);
-                if !self.statuses.get().contains(&PlayerStatusType::PR) {
+                if !self.statuses.has(PlayerStatusType::PR) {
                     self.statuses.add(today, PlayerStatusType::PR);
                 }
             }
@@ -299,7 +298,7 @@ mod tests {
         p.on_weekly_conflict_risk(0.85);
         assert_eq!(p.happiness.conflict_risk_streak, 2);
         p.roll_conflict_escalation(0.85, today(), || 0.0);
-        assert!(p.statuses.get().contains(&PlayerStatusType::Unh));
+        assert!(p.statuses.has(PlayerStatusType::Unh));
         assert_eq!(p.happiness.conflict_risk_streak, 0);
     }
 
@@ -309,8 +308,8 @@ mod tests {
         // dice pinned to 0.0.
         let mut p = build_player(1, 10.0);
         p.roll_conflict_escalation(0.20, today(), || 0.0);
-        assert!(!p.statuses.get().contains(&PlayerStatusType::Unh));
-        assert!(!p.statuses.get().contains(&PlayerStatusType::Req));
+        assert!(!p.statuses.has(PlayerStatusType::Unh));
+        assert!(!p.statuses.has(PlayerStatusType::Req));
     }
 
     #[test]

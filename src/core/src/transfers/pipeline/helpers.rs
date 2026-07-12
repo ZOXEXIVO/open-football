@@ -202,7 +202,6 @@ impl PipelineProcessor {
                             ((days / 30).min(i16::MAX as i64) as i16, c.salary)
                         })
                         .unwrap_or((0, 0));
-                    let statuses = player.statuses.get();
                     let pos_group = player.position().position_group();
                     let main_team = club.teams.main();
                     let seller_ctx = SellerPlausibilityContext {
@@ -222,8 +221,8 @@ impl PipelineProcessor {
                             .as_ref()
                             .map(|c| c.squad_status.clone())
                             .unwrap_or(PlayerSquadStatus::NotYetSet),
-                        is_transfer_requested: statuses.contains(&PlayerStatusType::Req),
-                        is_unhappy: statuses.contains(&PlayerStatusType::Unh),
+                        is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
+                        is_unhappy: player.statuses.has(PlayerStatusType::Unh),
                         in_debt: club.finance.balance.balance < 0,
                     };
                     return Some(PlayerSummary {
@@ -239,8 +238,8 @@ impl PipelineProcessor {
                         position_group: player.position().position_group(),
                         age: player.age(date),
                         estimated_value,
-                        is_listed: player.statuses.get().contains(&PlayerStatusType::Lst),
-                        is_loan_listed: player.statuses.get().contains(&PlayerStatusType::Loa),
+                        is_listed: player.statuses.has(PlayerStatusType::Lst),
+                        is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
                         skill_ability,
                         // Sample-size-regressed: this candidate row
                         // feeds the same scouting recommendation tier

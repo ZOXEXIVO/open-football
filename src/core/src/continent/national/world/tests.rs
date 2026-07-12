@@ -567,7 +567,7 @@ fn emergency_callup_uses_world_candidates_and_bumps_metric() {
             .flat_map(|c| c.teams.teams.iter())
             .flat_map(|t| t.players.players.iter())
             .find(|p| p.id == 101)
-            .map(|p| p.statuses.get().contains(&PlayerStatusType::Int))
+            .map(|p| p.statuses.has(PlayerStatusType::Int))
             .unwrap_or(false);
         assert!(
             foreign_player_status,

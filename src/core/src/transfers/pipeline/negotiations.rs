@@ -310,11 +310,10 @@ impl PipelineProcessor {
                 // a prospect who is listed, wants out, or barely plays.
                 let target_available = target
                     .map(|p| {
-                        let statuses = p.statuses.get();
-                        statuses.contains(&PlayerStatusType::Lst)
-                            || statuses.contains(&PlayerStatusType::Loa)
-                            || statuses.contains(&PlayerStatusType::Req)
-                            || statuses.contains(&PlayerStatusType::Unh)
+                        p.statuses.has(PlayerStatusType::Lst)
+                            || p.statuses.has(PlayerStatusType::Loa)
+                            || p.statuses.has(PlayerStatusType::Req)
+                            || p.statuses.has(PlayerStatusType::Unh)
                             || (p.statistics.played + p.statistics.played_subs) < 10
                     })
                     .unwrap_or(false);
@@ -1488,7 +1487,7 @@ impl PipelineProcessor {
         for club in &mut country.clubs {
             for team in &mut club.teams.teams {
                 for player in team.players.players.iter_mut() {
-                    if player.statuses.get().contains(&PlayerStatusType::Wnt)
+                    if player.statuses.has(PlayerStatusType::Wnt)
                         && !tracked.contains(&player.id)
                     {
                         player.statuses.remove(PlayerStatusType::Wnt);
@@ -1807,14 +1806,11 @@ impl PipelineProcessor {
                 .unwrap_or(0);
 
             // Same "gettable" / wage-room signals as the domestic path.
-            let target_available = {
-                let statuses = player.statuses.get();
-                statuses.contains(&PlayerStatusType::Lst)
-                    || statuses.contains(&PlayerStatusType::Loa)
-                    || statuses.contains(&PlayerStatusType::Req)
-                    || statuses.contains(&PlayerStatusType::Unh)
-                    || (player.statistics.played + player.statistics.played_subs) < 10
-            };
+            let target_available = player.statuses.has(PlayerStatusType::Lst)
+                || player.statuses.has(PlayerStatusType::Loa)
+                || player.statuses.has(PlayerStatusType::Req)
+                || player.statuses.has(PlayerStatusType::Unh)
+                || (player.statistics.played + player.statistics.played_subs) < 10;
             let committed_wages: f64 = buy_club
                 .teams
                 .iter()

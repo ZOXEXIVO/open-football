@@ -496,7 +496,7 @@ impl SimulatorData {
                             .filter(|p| p.contract.is_none() && !p.is_on_loan() && !p.retired)
                             .map(|p| {
                                 let was_released_early =
-                                    p.statuses.get().contains(&PlayerStatusType::Frt);
+                                    p.statuses.has(PlayerStatusType::Frt);
                                 (p.id, p.full_name.to_string(), was_released_early)
                             })
                             .collect();

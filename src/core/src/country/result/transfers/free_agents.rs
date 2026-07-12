@@ -38,6 +38,15 @@ use log::{debug, warn};
 use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex};
+
+/// Country ids already reported by the unknown-nationality fallback in
+/// `snapshot_global_free_agents`. The data hole is permanent for a given
+/// save (the id is missing from both the world and `country_info`), so
+/// warning once per id per process keeps the signal without re-emitting
+/// the same line for every affected country on every daily tick.
+static UNKNOWN_NATIONALITY_WARNED: LazyLock<Mutex<HashSet<u32>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// Lightweight snapshot of a player in the global `sim.free_agents` pool.
 /// Built before the per-country borrow so `handle_free_agents` can match
@@ -298,9 +307,8 @@ impl CountryResult {
                     // their own deferred-execution flow, not this path.
                     if days_left <= 0 {
                         // Skip if already in negotiation
-                        let statuses = player.statuses.get();
-                        if statuses.contains(&PlayerStatusType::Trn)
-                            || statuses.contains(&PlayerStatusType::Bid)
+                        if player.statuses.has(PlayerStatusType::Trn)
+                            || player.statuses.has(PlayerStatusType::Bid)
                         {
                             continue;
                         }
@@ -2895,11 +2903,19 @@ pub(crate) fn snapshot_global_free_agents(
                     // fallback can NEVER be signed, so silent data
                     // holes would read as "the market ignores him".
                     .unwrap_or_else(|| {
-                        warn!(
-                            "free-agent snapshot: unknown nationality country {cid} — \
-                             affected players are blocked from every buyer until \
-                             retirement resolves them"
-                        );
+                        let first_report = UNKNOWN_NATIONALITY_WARNED
+                            .lock()
+                            .map(|mut seen| seen.insert(cid))
+                            .unwrap_or(true);
+                        if first_report {
+                            warn!(
+                                "free-agent snapshot: unknown nationality country {cid} — \
+                                 affected players are blocked from every buyer until \
+                                 retirement resolves them"
+                            );
+                        } else {
+                            debug!("free-agent snapshot: unknown nationality country {cid}");
+                        }
                         (u16::MAX, 1, "gb".to_string())
                     });
                 (cid, resolved)

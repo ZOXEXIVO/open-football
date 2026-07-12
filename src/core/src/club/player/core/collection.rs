@@ -71,7 +71,7 @@ impl PlayerCollection {
     pub fn by_position(&self, position: &PlayerPositionType) -> Vec<&Player> {
         self.players
             .iter()
-            .filter(|p| p.positions().contains(position))
+            .filter(|p| p.positions.has_position(*position))
             .collect()
     }
 

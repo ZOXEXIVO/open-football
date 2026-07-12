@@ -182,14 +182,13 @@ impl PlayerValueCalculator {
 
     /// Player statuses that affect value
     fn determine_status_factor(player: &Player) -> f64 {
-        let statuses = player.statuses.get();
         let mut factor = 1.0f64;
 
-        if statuses.contains(&PlayerStatusType::Inj) {
+        if player.statuses.has(PlayerStatusType::Inj) {
             factor *= 0.6;
         }
 
-        if statuses.contains(&PlayerStatusType::Unh) {
+        if player.statuses.has(PlayerStatusType::Unh) {
             factor *= 0.75;
         }
 
@@ -199,7 +198,7 @@ impl PlayerValueCalculator {
         // The transfer-specific discount is applied in PlayerValuationCalculator
         // (window.rs) where it belongs.
 
-        if statuses.contains(&PlayerStatusType::Loa) {
+        if player.statuses.has(PlayerStatusType::Loa) {
             factor *= 0.9;
         }
 

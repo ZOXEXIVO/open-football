@@ -520,7 +520,7 @@ impl PipelineProcessor {
                     if let Some(main_team) = club.teams.main_mut() {
                         for player_id in eval.force_transfer_list {
                             if let Some(player) = main_team.players.find_mut(player_id) {
-                                if !player.statuses.get().contains(&PlayerStatusType::Lst) {
+                                if !player.statuses.has(PlayerStatusType::Lst) {
                                     player.statuses.add(date, PlayerStatusType::Lst);
                                 }
                             }
@@ -1458,8 +1458,7 @@ impl PipelineProcessor {
                 if surplus.asset_class.is_first_team_protected() {
                     continue;
                 }
-                let statuses = player.statuses.get();
-                let already_listed = statuses.contains(&PlayerStatusType::Lst);
+                let already_listed = player.statuses.has(PlayerStatusType::Lst);
 
                 if surplus.age >= 30 {
                     // Older surplus → transfer-list path (loan path
@@ -1547,7 +1546,7 @@ impl PipelineProcessor {
             }
             let group_avg = (peers.iter().sum::<u32>() / peers.len() as u32) as u8;
             if (info.current_ability as i16) < group_avg as i16 - 10
-                && !player.statuses.get().contains(&PlayerStatusType::Lst)
+                && !player.statuses.has(PlayerStatusType::Lst)
                 && !force_list.contains(&info.player_id)
             {
                 debug!(
@@ -1613,9 +1612,8 @@ impl PipelineProcessor {
             {
                 continue;
             }
-            let statuses = player.statuses.get();
-            if statuses.contains(&PlayerStatusType::Lst)
-                || statuses.contains(&PlayerStatusType::Loa)
+            if player.statuses.has(PlayerStatusType::Lst)
+                || player.statuses.has(PlayerStatusType::Loa)
             {
                 continue;
             }
@@ -1822,19 +1820,14 @@ impl PipelineProcessor {
         if attrs.is_injured || attrs.is_banned || attrs.is_in_recovery() {
             return true;
         }
-        player.statuses.get().iter().any(|s| {
-            matches!(
-                s,
-                PlayerStatusType::Inj
-                    | PlayerStatusType::Sus
-                    | PlayerStatusType::Int
-                    | PlayerStatusType::IntU21
-                    | PlayerStatusType::Wp
-                    | PlayerStatusType::Unr
-                    | PlayerStatusType::Lmp
-                    | PlayerStatusType::Unf
-            )
-        })
+        player.statuses.has(PlayerStatusType::Inj)
+            || player.statuses.has(PlayerStatusType::Sus)
+            || player.statuses.has(PlayerStatusType::Int)
+            || player.statuses.has(PlayerStatusType::IntU21)
+            || player.statuses.has(PlayerStatusType::Wp)
+            || player.statuses.has(PlayerStatusType::Unr)
+            || player.statuses.has(PlayerStatusType::Lmp)
+            || player.statuses.has(PlayerStatusType::Unf)
     }
 
     /// True when contract-renewal talks for this player are genuinely
