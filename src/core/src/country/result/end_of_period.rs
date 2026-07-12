@@ -1201,9 +1201,16 @@ impl CountryResult {
         // Capture the loan-spell record before `on_loan_return` freezes
         // and resets the borrower-season statistics.
         let loan_starts = player.statistics.played;
+        let loan_apps = player.statistics.played + player.statistics.played_subs;
         let loan_rating = player
             .statistics
             .average_rating_realistic(player.position().position_group());
+        let loan_spell_days = player
+            .contract_loan
+            .as_ref()
+            .and_then(|l| l.started)
+            .map(|s| (date - s).num_days())
+            .unwrap_or(0);
 
         player.on_loan_return(&event.borrowing_info, &parent_info, date);
         player.contract_loan = None;
@@ -1244,6 +1251,22 @@ impl CountryResult {
             player
                 .happiness
                 .add_event(HappinessEventType::ReturnedFromLoanProven, magnitude);
+        } else if (loan_apps >= 8 && loan_rating < 6.2)
+            || (loan_spell_days >= 120 && loan_apps <= 4)
+        {
+            // The failure branch: a real sample of matches clearly below
+            // the water line, or a real spell he barely featured in. He
+            // comes home with his confidence knocked — deeper for a
+            // player who handles pressure poorly, shrugged off faster by
+            // the thick-skinned. The mentor-support and resilience arcs
+            // are the way back; the club-side verdict on the failed bet
+            // stays with the stalled-prospect / listing pipelines.
+            let pressure01 = (player.attributes.pressure / 20.0).clamp(0.0, 1.0);
+            let magnitude = HappinessConfig::default().catalog.returned_from_loan_deflated
+                * (1.3 - 0.6 * pressure01);
+            player
+                .happiness
+                .add_event(HappinessEventType::ReturnedFromLoanDeflated, magnitude);
         }
 
         // Place at parent club

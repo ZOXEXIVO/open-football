@@ -499,6 +499,14 @@ pub struct MoraleEventCatalog {
     /// Young returnee with a season of real starts behind him — came
     /// back a footballer, not a prospect. Positive confidence beat.
     pub returned_from_loan_proven: f32,
+    /// The loan flopped and he knows it — confidence knocked on the way
+    /// home. Scaled at the emit site by pressure-handling.
+    pub returned_from_loan_deflated: f32,
+    /// The club looked at the loan record and committed to a real role.
+    pub backed_after_loan_return: f32,
+    /// A returning loanee with a starter's record is coming for this
+    /// player's shirt. Same rivalry band as `threatened_by_new_signing`.
+    pub threatened_by_returning_loanee: f32,
 
     // ── Squad standing / dressing-room aura ──────────────────────
     /// The room receives the big-club arrival like a star. Positive;
@@ -786,6 +794,15 @@ impl Default for MoraleEventCatalog {
             // Came back a footballer — quiet confidence, not euphoria;
             // the record's real weight is in the expectation machinery.
             returned_from_loan_proven: 3.0,
+            // The flop return stings like the unchosen return, a touch
+            // deeper — it's his own performance, not the club's choice.
+            returned_from_loan_deflated: -4.0,
+            // Being backed with a real role lands as strongly as the
+            // proven-return confidence — the club said it out loud.
+            backed_after_loan_return: 3.5,
+            // Same band as the new-signing threat: the shirt is the
+            // shirt, whoever comes for it.
+            threatened_by_returning_loanee: -3.0,
             // Star treatment on arrival lifts harder than a routine
             // welcome; the emit site scales it by the background gap.
             admired_for_big_club_spell: 4.0,
@@ -1001,6 +1018,9 @@ impl MoraleEventCatalog {
             WantsLoanMadePermanent => self.wants_loan_made_permanent,
             UnsettledAfterLoanReturn => self.unsettled_after_loan_return,
             ReturnedFromLoanProven => self.returned_from_loan_proven,
+            ReturnedFromLoanDeflated => self.returned_from_loan_deflated,
+            BackedAfterLoanReturn => self.backed_after_loan_return,
+            ThreatenedByReturningLoanee => self.threatened_by_returning_loanee,
             AdmiredForBigClubSpell => self.admired_for_big_club_spell,
             BigClubAuraFaded => self.big_club_aura_faded,
             ReleaseClauseDemanded => self.release_clause_demanded,

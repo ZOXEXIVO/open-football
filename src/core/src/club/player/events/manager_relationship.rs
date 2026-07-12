@@ -366,10 +366,26 @@ impl Player {
     /// scales by player's existing fragility (already fringe, older,
     /// already lacking minutes).
     pub fn on_new_signing_threat(&mut self, ctx: NewSigningThreatContext) {
+        self.on_positional_rival_threat(HappinessEventType::ThreatenedByNewSigning, ctx, 90);
+    }
+
+    /// React to a loanee coming home with a starter's record — the
+    /// homegrown version of a new signing landing in the player's lane.
+    /// Same rivalry scaling; longer cooldown because there is only one
+    /// of him and the competition builds over a season, not a window.
+    pub fn on_returning_rival_threat(&mut self, ctx: NewSigningThreatContext) {
+        self.on_positional_rival_threat(HappinessEventType::ThreatenedByReturningLoanee, ctx, 180);
+    }
+
+    /// Shared positional-rivalry reaction behind both threat events.
+    fn on_positional_rival_threat(
+        &mut self,
+        event_type: HappinessEventType,
+        ctx: NewSigningThreatContext,
+        cooldown_days: u16,
+    ) {
         let rival_id = ctx.rival_player_id;
-        let base = HappinessConfig::default()
-            .catalog
-            .magnitude(HappinessEventType::ThreatenedByNewSigning);
+        let base = HappinessConfig::default().catalog.magnitude(event_type.clone());
         let age_mul = match ctx.player_age {
             Some(a) if a >= 32 => 1.35,
             Some(a) if a >= 28 => 1.15,
@@ -405,14 +421,14 @@ impl Player {
         )
         .with_new_signing_threat_context(ctx)
         .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
-        // Per-rival cooldown so two different signings each surface their
+        // Per-rival cooldown so two different rivals each surface their
         // own row, while a single rival doesn't refire weekly.
         self.happiness.add_event_with_partner_context_and_cooldown(
-            HappinessEventType::ThreatenedByNewSigning,
+            event_type,
             magnitude,
             rival_id,
             happiness_ctx,
-            90,
+            cooldown_days,
         );
     }
 

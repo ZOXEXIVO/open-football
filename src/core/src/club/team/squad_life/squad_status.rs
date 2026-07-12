@@ -17,11 +17,15 @@
 //! coach has the man-management to deliver the news in a conversation
 //! rather than via the team-sheet.
 
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::happiness::PlayingTimeFrustrationConfig;
 use crate::club::team::Team;
 use crate::utils::DateUtils;
-use crate::{HappinessEventType, Player, PlayerFieldPositionGroup, PlayerSquadStatus};
-use chrono::NaiveDate;
+use crate::{
+    HappinessEventType, MatchExperienceBackground, Player, PlayerFieldPositionGroup,
+    PlayerSquadStatus,
+};
+use chrono::{Duration, NaiveDate};
 use std::collections::HashMap;
 
 pub struct SquadStatusUpdater;
@@ -58,6 +62,7 @@ impl SquadStatusUpdater {
             .social_head_coach()
             .map(|s| s.staff_attributes.mental.man_management >= Self::MAN_MANAGEMENT_TO_EXPLAIN)
             .unwrap_or(false);
+        let team_reputation = team.reputation.world;
 
         for player in team.players.iter_mut() {
             let group = player.position().position_group();
@@ -67,8 +72,12 @@ impl SquadStatusUpdater {
             // Honesty ceiling from actual involvement, computed before the
             // mutable contract borrow (it reads the whole player).
             let involvement_ceiling = Self::involvement_status_ceiling(player, date);
+            // The returnee verdict: a fresh returnee whose loan record
+            // holds up at this club's level gets his label graduated.
+            let record_floor = Self::returnee_record_floor(player, team_reputation, date);
 
             let mut transition: Option<(u8, u8)> = None;
+            let mut backed_after_loan = false;
             if let Some(ref mut contract) = player.contract {
                 let group_cas = by_group.get(&group).map(|v| v.as_slice()).unwrap_or(&[]);
                 let old_rank = Self::senior_rank(&contract.squad_status);
@@ -102,6 +111,33 @@ impl SquadStatusUpdater {
                         };
                     }
                 }
+                // The returnee verdict: the loan record is admissible
+                // evidence. A young returnee otherwise stays a "prospect"
+                // by age and a fringe senior stays a backup by CA rank —
+                // while every club-side system (selection, depth, renewal,
+                // asset class) reads the stale label. The record floor
+                // graduates the label, and the commitment is bound as a
+                // role promise so next month's CA-rank recompute can't
+                // silently walk the plan back while he settles in; from
+                // there the ordinary promise/breach machinery owns it.
+                if let Some(floor) = record_floor.as_ref() {
+                    let floor_rank = Self::senior_rank(floor).unwrap_or(0);
+                    if Self::senior_rank(&new_status).unwrap_or(0) < floor_rank {
+                        new_status = floor.clone();
+                        backed_after_loan = true;
+                        let commit_until = date + Duration::days(150);
+                        let keep_existing = contract
+                            .promised_squad_status
+                            .as_ref()
+                            .map(|(promised, _)| {
+                                Self::senior_rank(promised).unwrap_or(0) >= floor_rank
+                            })
+                            .unwrap_or(false);
+                        if !keep_existing {
+                            contract.promised_squad_status = Some((floor.clone(), commit_until));
+                        }
+                    }
+                }
                 // Honor an unexpired role promise as a floor: the club
                 // committed to it at signing, so never recompute below it —
                 // otherwise the promise the buyer paid for is wiped within a
@@ -127,6 +163,18 @@ impl SquadStatusUpdater {
                 }
             }
 
+            if backed_after_loan {
+                // The verdict said out loud — the specific beat replaces
+                // the generic status-change note (a prospect→senior move
+                // has no senior-ladder transition anyway).
+                let magnitude = HappinessConfig::default().catalog.backed_after_loan_return;
+                player.happiness.add_event_with_cooldown(
+                    HappinessEventType::BackedAfterLoanReturn,
+                    magnitude,
+                    300,
+                );
+                continue;
+            }
             if let Some((old, new)) = transition {
                 let steps = new as f32 - old as f32;
                 let mut magnitude = Self::MAGNITUDE_PER_STEP * steps;
@@ -175,6 +223,46 @@ impl SquadStatusUpdater {
         }
     }
 
+    /// The returnee verdict's record floor: for a player freshly back
+    /// from a loan he genuinely played through, the senior status his
+    /// record justifies at THIS club's level — or `None` when there is
+    /// no fresh return, no real loan record, or the record doesn't
+    /// clear the rotation bar once level-adjusted. Derived from the
+    /// same [`MatchExperienceBackground`] expectation floor the player
+    /// himself reasons with, so the club's verdict and the player's
+    /// own bar can never disagree about what the record was worth.
+    fn returnee_record_floor(
+        player: &Player,
+        team_reputation: u16,
+        date: NaiveDate,
+    ) -> Option<PlayerSquadStatus> {
+        /// The verdict belongs to the arrival window — one look at the
+        /// record, not a rolling entitlement.
+        const VERDICT_WINDOW_DAYS: i64 = 45;
+        /// A real run of loan starts before the record speaks.
+        const MIN_RECORD_LOAN_STARTS: u16 = 12;
+
+        let fresh = player
+            .days_since_transfer(date)
+            .map(|d| (0..=VERDICT_WINDOW_DAYS).contains(&d))
+            .unwrap_or(false);
+        if !fresh {
+            return None;
+        }
+        let background = MatchExperienceBackground::from_player(player);
+        if background.recent_loan_starts < MIN_RECORD_LOAN_STARTS {
+            return None;
+        }
+        let floor_share = background.expected_start_share_floor(team_reputation);
+        if floor_share >= 0.50 {
+            Some(PlayerSquadStatus::FirstTeamRegular)
+        } else if floor_share >= 0.28 {
+            Some(PlayerSquadStatus::FirstTeamSquadRotation)
+        } else {
+            None
+        }
+    }
+
     /// Highest senior status the player's ACTUAL match involvement justifies,
     /// or `None` when there isn't enough evidence to judge — too few eligible
     /// matches, or still settling in after a transfer. This is the honesty
@@ -215,5 +303,118 @@ impl SquadStatusUpdater {
             PlayerSquadStatus::MainBackupPlayer
         };
         Some(ceiling)
+    }
+}
+
+#[cfg(test)]
+mod returnee_verdict_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, PlayerStatCompetitionKind, PlayerStatLedgerEntry, PlayerStatistics,
+    };
+    use chrono::NaiveDate;
+
+    fn today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()
+    }
+
+    fn returnee(days_since_return: i64) -> Player {
+        let mut p = PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("T".into(), "1".into()))
+            .birth_date(NaiveDate::from_ymd_opt(2006, 3, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Striker,
+                    level: 20,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap();
+        p.last_transfer_date = Some(today() - Duration::days(days_since_return));
+        p
+    }
+
+    fn loan_season(year: u16, starts: u16, reputation: u16) -> PlayerStatLedgerEntry {
+        PlayerStatLedgerEntry {
+            seq_id: 0,
+            season_start_year: year,
+            team_slug: "borrower".into(),
+            team_name: "B".into(),
+            team_reputation: reputation,
+            league_slug: "l".into(),
+            league_name: "L".into(),
+            competition_kind: PlayerStatCompetitionKind::League,
+            competition_slug: String::new(),
+            is_loan: true,
+            transfer_fee: None,
+            coverage_days: None,
+            statistics: PlayerStatistics {
+                played: starts,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn full_loan_season_graduates_the_label_to_rotation() {
+        let mut p = returnee(20);
+        p.statistics_history
+            .season_ledger
+            .push(loan_season(2025, 24, 5_000));
+        assert_eq!(
+            SquadStatusUpdater::returnee_record_floor(&p, 5_000, today()),
+            Some(PlayerSquadStatus::FirstTeamSquadRotation),
+            "a full same-level loan season graduates the prospect label"
+        );
+    }
+
+    #[test]
+    fn two_proven_loan_seasons_graduate_to_regular() {
+        let mut p = returnee(20);
+        p.statistics_history
+            .season_ledger
+            .push(loan_season(2024, 28, 5_000));
+        p.statistics_history
+            .season_ledger
+            .push(loan_season(2025, 30, 5_000));
+        assert_eq!(
+            SquadStatusUpdater::returnee_record_floor(&p, 5_000, today()),
+            Some(PlayerSquadStatus::FirstTeamRegular),
+            "two near-ever-present loan seasons earn a regular's role"
+        );
+    }
+
+    #[test]
+    fn stale_return_gets_no_verdict() {
+        let mut p = returnee(100);
+        p.statistics_history
+            .season_ledger
+            .push(loan_season(2025, 24, 5_000));
+        assert_eq!(
+            SquadStatusUpdater::returnee_record_floor(&p, 5_000, today()),
+            None,
+            "the verdict belongs to the arrival window"
+        );
+    }
+
+    #[test]
+    fn record_earned_far_below_gets_no_verdict_at_a_giant() {
+        let mut p = returnee(20);
+        p.statistics_history
+            .season_ledger
+            .push(loan_season(2025, 24, 3_000));
+        assert_eq!(
+            SquadStatusUpdater::returnee_record_floor(&p, 9_000, today()),
+            None,
+            "a lower-league record does not graduate a label at a giant"
+        );
     }
 }

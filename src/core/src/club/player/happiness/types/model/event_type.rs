@@ -487,6 +487,20 @@ pub enum HappinessEventType {
     /// bar is higher now, and the monthly returnee-breakthrough audit
     /// gives the mood teeth if the minutes never come.
     ReturnedFromLoanProven,
+    /// The failure branch of the return triptych: the loan flopped —
+    /// barely used across a real spell, or a real sample of matches
+    /// clearly below the water line — and the player comes home with
+    /// his confidence knocked. How hard it lands scales with how well
+    /// he handles pressure; the mentor-support and resilience arcs are
+    /// the way back up.
+    ReturnedFromLoanDeflated,
+    /// The returnee verdict, said out loud: the club looked at the loan
+    /// record and committed to a real senior role — the squad-status
+    /// label graduates from prospect/backup and the commitment is bound
+    /// as a role promise, so a silent walk-back next month reads as a
+    /// breach rather than a relabel. The positive mirror of coming home
+    /// to silence.
+    BackedAfterLoanReturn,
 
     // ── Contract negotiation tension ─────────────────────────────
     /// Player / agent explicitly demands a release clause in the next
@@ -582,6 +596,15 @@ pub enum HappinessEventType {
     /// lacking minutes. Suppressed when the signing plays an unrelated
     /// position.
     ThreatenedByNewSigning,
+    /// The kid is back — and he's good. A loanee returning with a
+    /// starter's record competes for this player's shirt exactly like a
+    /// new signing would, except he's homegrown and the whole dressing
+    /// room knows it. Fired on the credible incumbents in the
+    /// returnee's position group; the same positional-rivalry scaling
+    /// as `ThreatenedByNewSigning`, plus a competition-rivalry relation
+    /// drift toward the returnee — the one teammate who does NOT join
+    /// the admiration.
+    ThreatenedByReturningLoanee,
     /// Repeated selections, public backing, improved role, or big-match
     /// trust signal the manager relationship is improving. Low-frequency
     /// positive aggregate of small good signs.

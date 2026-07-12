@@ -236,6 +236,11 @@ impl TeamBehaviour {
         // the aura and the star treatment stops.
         Self::process_big_club_aura_audit(players, &ctx);
 
+        // Monthly returning-rival audit: the incumbent's side of a loan
+        // return — a returnee with a starter's record contests the
+        // shirt, and the credible holders in his position group feel it.
+        Self::process_returning_rival_audit(players, &ctx);
+
         // Monthly contract-horizon audit: final-year seniors with no
         // renewal talks on record — anxiety for most, a shop-window
         // drive for the in-form.

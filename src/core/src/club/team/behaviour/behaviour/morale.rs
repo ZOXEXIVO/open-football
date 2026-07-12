@@ -19,9 +19,10 @@ use crate::{
     ConflictLocation, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
     HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
     LoanConcernReason, LoanDevelopmentConcernReason, LoanEventContext, LoanEventKind,
-    MatchExperienceBackground, Player, PlayerClubContract, PlayerCollection,
-    PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatCompetitionKind, PlayerStatusType,
-    RelationshipChange, TeamType, TeammateConflictContext, TeammateConflictReason,
+    MatchExperienceBackground, NewSigningThreatContext, NewSigningThreatReason, Player,
+    PlayerClubContract, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus,
+    PlayerStatCompetitionKind, PlayerStatusType, RelationshipChange, TeamType,
+    TeammateConflictContext, TeammateConflictReason,
 };
 use chrono::{Datelike, Duration, NaiveDate};
 use std::cmp::Ordering;
@@ -1577,6 +1578,8 @@ impl TeamBehaviour {
         // ── Star treatment while the aura holds, puncture on a poor run ──
         struct AuraHolder {
             id: u32,
+            group: PlayerFieldPositionGroup,
+            ability: u8,
         }
         let mut holders: Vec<AuraHolder> = Vec::new();
         let mut popped: Vec<u32> = Vec::new();
@@ -1600,7 +1603,11 @@ impl TeamBehaviour {
             if apps >= FADE_MIN_APPS && rating < FADE_RATING {
                 popped.push(player.id);
             } else {
-                holders.push(AuraHolder { id: player.id });
+                holders.push(AuraHolder {
+                    id: player.id,
+                    group: player.position().position_group(),
+                    ability: player.player_attributes.current_ability,
+                });
             }
         }
 
@@ -1615,15 +1622,128 @@ impl TeamBehaviour {
                 continue;
             }
             // Teammates orbit the aura holders — a monthly drip, stronger
-            // from the young players who grew up watching that badge.
+            // from the young players who grew up watching that badge. The
+            // exception is the man whose shirt the star is here to take:
+            // a credible rival in the same position group feels the
+            // competition, not the glow — his side of the story is the
+            // returning-rival audit, not this one.
             for holder in &holders {
                 if holder.id == player.id {
+                    continue;
+                }
+                let credible_rival = player.position().position_group() == holder.group
+                    && holder.ability.saturating_add(10) >= player.player_attributes.current_ability;
+                if credible_rival {
                     continue;
                 }
                 let admiration = if player.age(today) <= 23 { 0.35 } else { 0.20 };
                 player.relations.update_player_relationship(
                     holder.id,
                     RelationshipChange::positive(ChangeType::ReputationAdmiration, admiration),
+                    today,
+                );
+            }
+        }
+    }
+
+    /// Monthly returning-rival audit — the incumbent's side of a loan
+    /// return. A loanee coming home with a starter's record is a new
+    /// signing in competition terms: the credible incumbents in his
+    /// position group feel the shirt contest (`ThreatenedByReturningLoanee`,
+    /// per-pair cooldown) and cool toward him — the one corner of the
+    /// dressing room that does not join the admiration. A rival clearly
+    /// below the incumbent's level is shrugged off, and fellow prospects
+    /// just gained a training partner, not a displacement. Runs on day 1.
+    pub(super) fn process_returning_rival_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        /// How fresh the return must be for the threat to land.
+        const ARRIVAL_WINDOW_DAYS: i64 = 45;
+        /// The returnee's record must show a real run of loan starts.
+        const MIN_RECORD_LOAN_STARTS: u16 = 12;
+        /// A rival this far below the incumbent on ability is shrugged off.
+        const CREDIBLE_ABILITY_MARGIN: u8 = 10;
+
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+
+        struct ReturningRival {
+            id: u32,
+            group: PlayerFieldPositionGroup,
+            ability: u8,
+            age: u8,
+        }
+        let rivals: Vec<ReturningRival> = players
+            .players
+            .iter()
+            .filter(|p| !p.is_on_loan())
+            .filter(|p| {
+                p.days_since_transfer(today)
+                    .map(|d| (0..=ARRIVAL_WINDOW_DAYS).contains(&d))
+                    .unwrap_or(false)
+            })
+            .filter(|p| {
+                MatchExperienceBackground::from_player(p).recent_loan_starts
+                    >= MIN_RECORD_LOAN_STARTS
+            })
+            .map(|p| ReturningRival {
+                id: p.id,
+                group: p.position().position_group(),
+                ability: p.player_attributes.current_ability,
+                age: p.age(today),
+            })
+            .collect();
+        if rivals.is_empty() {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            if player.is_on_loan() {
+                continue;
+            }
+            let Some(status) = player.contract.as_ref().map(|c| c.squad_status.clone()) else {
+                continue;
+            };
+            // Only holders of (or contenders for) a senior place feel
+            // displaced.
+            if !matches!(
+                status,
+                PlayerSquadStatus::KeyPlayer
+                    | PlayerSquadStatus::FirstTeamRegular
+                    | PlayerSquadStatus::FirstTeamSquadRotation
+                    | PlayerSquadStatus::MainBackupPlayer
+            ) {
+                continue;
+            }
+            let own_ability = player.player_attributes.current_ability;
+            let own_age = player.age(today);
+            let own_group = player.position().position_group();
+            for rival in &rivals {
+                if rival.id == player.id || rival.group != own_group {
+                    continue;
+                }
+                if rival.ability.saturating_add(CREDIBLE_ABILITY_MARGIN) < own_ability {
+                    continue;
+                }
+                let primary = if rival.ability > own_ability {
+                    NewSigningThreatReason::HigherAbility
+                } else {
+                    NewSigningThreatReason::SamePosition
+                };
+                let threat_ctx = NewSigningThreatContext::new(rival.id, primary)
+                    .with_player_status(status.clone())
+                    .with_player_age(own_age)
+                    .with_rival_age(rival.age);
+                player.on_returning_rival_threat(threat_ctx);
+                // The shirt is between them now — a cooling, not a feud;
+                // bounded by the arrival window, so it applies once or
+                // twice, not forever.
+                player.relations.update_player_relationship(
+                    rival.id,
+                    RelationshipChange::negative(ChangeType::CompetitionRivalry, 0.4),
                     today,
                 );
             }
@@ -3059,7 +3179,9 @@ mod tests {
         let today = first_of_month(2026, 6);
         let name = "Minnow".to_string();
         let star = aura_returnee(today);
-        let teammate = with_contract(
+        // A defender — NOT competing for the returnee's shirt, so he
+        // joins the admiration rather than the rivalry.
+        let mut teammate = with_contract(
             build_player(
                 2,
                 NaiveDate::from_ymd_opt(2005, 6, 1).unwrap(),
@@ -3069,6 +3191,12 @@ mod tests {
             ),
             PlayerSquadStatus::FirstTeamSquadRotation,
         );
+        teammate.positions = PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: PlayerPositionType::DefenderCenter,
+                level: 20,
+            }],
+        };
         let mut players = PlayerCollection::new(vec![star, teammate]);
         let ctx = small_club_ctx(today, &name);
         // First pass: the admiration beat lands. Second pass a month on:
@@ -3088,6 +3216,146 @@ mod tests {
         assert!(
             level > 0.0,
             "the teammate should warm to the big-club returnee (got {level})"
+        );
+    }
+
+    // ── Returning rival (ThreatenedByReturningLoanee) ───────────
+
+    #[test]
+    fn incumbent_feels_the_returning_loanee_coming_for_his_shirt() {
+        let today = first_of_month(2026, 6);
+        // Returnee: 20yo striker, fresh return, full loan season, CA 110.
+        let mut returnee = proven_returnee(today);
+        returnee.last_transfer_date = Some(today - Duration::days(20));
+        // Incumbent: 26yo starting striker, CA 105 — a credible contest.
+        let incumbent = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(2000, 3, 1).unwrap(),
+                105,
+                2_000,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        let mut players = PlayerCollection::new(vec![returnee, incumbent]);
+        TeamBehaviour::process_returning_rival_audit(&mut players, &month_ctx(today));
+
+        let incumbent = &players.players[1];
+        assert_eq!(
+            count(incumbent, HappinessEventType::ThreatenedByReturningLoanee),
+            1,
+            "the starting striker should feel the returnee contesting his shirt"
+        );
+        let level = incumbent
+            .relations
+            .get_player(1)
+            .map(|r| r.level)
+            .unwrap_or(0.0);
+        assert!(
+            level < 0.0,
+            "the incumbent cools toward the returnee, not warms (got {level})"
+        );
+        // The returnee himself feels nothing from this audit.
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::ThreatenedByReturningLoanee
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn clearly_better_incumbent_shrugs_off_the_returnee() {
+        let today = first_of_month(2026, 6);
+        let mut returnee = proven_returnee(today); // CA 110
+        returnee.last_transfer_date = Some(today - Duration::days(20));
+        let star_incumbent = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(1998, 3, 1).unwrap(),
+                150,
+                6_000,
+                12.0,
+            ),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        let mut players = PlayerCollection::new(vec![returnee, star_incumbent]);
+        TeamBehaviour::process_returning_rival_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[1],
+                HappinessEventType::ThreatenedByReturningLoanee
+            ),
+            0,
+            "a star far above the returnee's level is not displaced by him"
+        );
+    }
+
+    #[test]
+    fn different_position_group_is_not_threatened() {
+        let today = first_of_month(2026, 6);
+        let mut returnee = proven_returnee(today);
+        returnee.last_transfer_date = Some(today - Duration::days(20));
+        let mut keeper = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(2000, 3, 1).unwrap(),
+                105,
+                2_000,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        keeper.positions = PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: PlayerPositionType::Goalkeeper,
+                level: 20,
+            }],
+        };
+        let mut players = PlayerCollection::new(vec![returnee, keeper]);
+        TeamBehaviour::process_returning_rival_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[1],
+                HappinessEventType::ThreatenedByReturningLoanee
+            ),
+            0,
+            "a returning striker does not contest the goalkeeper's shirt"
+        );
+    }
+
+    #[test]
+    fn returnee_without_a_record_threatens_no_one() {
+        let today = first_of_month(2026, 6);
+        let mut returnee = proven_returnee(today);
+        returnee.last_transfer_date = Some(today - Duration::days(20));
+        // Three cameo starts — came back quietly.
+        returnee.statistics_history.season_ledger.clear();
+        returnee
+            .statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 3, true));
+        let incumbent = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(2000, 3, 1).unwrap(),
+                105,
+                2_000,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        let mut players = PlayerCollection::new(vec![returnee, incumbent]);
+        TeamBehaviour::process_returning_rival_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[1],
+                HappinessEventType::ThreatenedByReturningLoanee
+            ),
+            0,
+            "a returnee with no record contests nothing yet"
         );
     }
 
