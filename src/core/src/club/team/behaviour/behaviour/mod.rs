@@ -223,6 +223,19 @@ impl TeamBehaviour {
         // return to the parent's fringe.
         Self::process_loanee_permanence_audit(players, &ctx);
 
+        // Monthly returnee-breakthrough audit: an under-24 back from a
+        // loan he owned — real official starts in the record, none at
+        // the parent since — wants to play or go where he plays. The
+        // young returnee's voice that the 24+ backup audit deliberately
+        // doesn't cover.
+        Self::process_returnee_breakthrough_audit(players, &ctx);
+
+        // Monthly big-club-aura audit: the squad receives an arrival
+        // whose record outshines the club like a star — admiration beat
+        // plus teammate relation drift — until a visibly poor run pops
+        // the aura and the star treatment stops.
+        Self::process_big_club_aura_audit(players, &ctx);
+
         // Monthly contract-horizon audit: final-year seniors with no
         // renewal talks on record — anxiety for most, a shop-window
         // drive for the in-form.

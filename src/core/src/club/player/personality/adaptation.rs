@@ -8,8 +8,8 @@ use crate::{
     CareerDesireEventContext, CareerDesireEvidence, CareerDesireKind, ContractEventContext,
     ContractEventEvidence, ContractEventKind, HappinessEventCause, HappinessEventContext,
     HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
-    PersonalAdaptationEventContext, PersonalAdaptationKind, PlayerHappiness,
-    RoleStatusEventContext, RoleStatusKind,
+    MatchExperienceBackground, PersonalAdaptationEventContext, PersonalAdaptationKind,
+    PlayerHappiness, RoleStatusEventContext, RoleStatusKind,
 };
 use chrono::NaiveDate;
 use std::cmp::Reverse;
@@ -691,6 +691,12 @@ impl Player {
         let app_bonus = appearances_after_transfer.min(5) as f32 * 2.0;
         let start_bonus = starts_after_transfer.min(5) as f32 * 2.0;
         score += app_bonus + start_bonus;
+
+        // Official football behind him — a seasoned professional treats a
+        // new dressing room as routine, and a player who has changed clubs
+        // before knows how to arrive. A rookie with no official record gets
+        // no help and settles on the base curve.
+        score += MatchExperienceBackground::from_player(self).adaptation_points();
 
         // Step-up dream move.
         if self.is_step_up_move(club_rep_0_to_1) {

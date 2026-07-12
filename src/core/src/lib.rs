@@ -147,6 +147,7 @@ pub use club::{
     ManagerInteractionTopic,
     ManagerTalkResult,
     ManagerTalkType,
+    MatchExperienceBackground,
     MatchHistory,
     MatchHistoryItem,
     MatchOutcome,

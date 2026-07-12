@@ -111,6 +111,7 @@ pub use player::{
     ManagerInteractionEventContext,
     ManagerInteractionTone,
     ManagerInteractionTopic,
+    MatchExperienceBackground,
     MatchPerformanceEventContext,
     MatchPerformanceEvidence,
     MatchPerformanceKind,

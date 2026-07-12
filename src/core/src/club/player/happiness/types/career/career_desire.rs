@@ -117,6 +117,10 @@ pub enum CareerDesireEvidence {
     RelegatedWithClub,
     /// Player is starting regularly and performing on his current loan.
     ThrivingOnLoan,
+    /// Player came back from a loan with a season of real official
+    /// starts behind him — the record says first-team footballer, the
+    /// current role says prospect.
+    ProvenOnLoan,
 }
 
 impl CareerDesireEvidence {
@@ -165,6 +169,7 @@ impl CareerDesireEvidence {
             CareerDesireEvidence::SerialLoanSpells => "career_desire_evidence_serial_loans",
             CareerDesireEvidence::RelegatedWithClub => "career_desire_evidence_relegated_with_club",
             CareerDesireEvidence::ThrivingOnLoan => "career_desire_evidence_thriving_on_loan",
+            CareerDesireEvidence::ProvenOnLoan => "career_desire_evidence_proven_on_loan",
         }
     }
 }

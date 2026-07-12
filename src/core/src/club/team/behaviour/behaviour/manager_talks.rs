@@ -567,7 +567,7 @@ impl TeamBehaviour {
             };
 
             let playing_time_factor =
-                calculate_playing_time_factor_for_complaint(player, &opp, &cfg) * frustration_mult;
+                ComplaintPlayingTime::deficit(player, &opp, &cfg) * frustration_mult;
 
             if playing_time_factor <= cfg.complaint_threshold {
                 // A young player normally asks for a development LOAN, not a
@@ -1086,31 +1086,39 @@ impl PlayerForcedTerminationReview {
 }
 
 /// Playing-time deficit for a complaint, on the match-opportunity model.
-/// Compares the player's weighted involvement against what his squad
-/// status leads him to expect across the eligible official matches the
-/// club has actually played since he joined. Returns a value in
-/// `[max_negative, 0]`; `0` when he's meeting or beating expectations.
-/// The caller scales this by the grace `frustration_multiplier`.
-fn calculate_playing_time_factor_for_complaint(
-    player: &Player,
-    opp: &PlayingTimeOpportunityContext,
-    cfg: &PlayingTimeFrustrationConfig,
-) -> f32 {
-    let eligible = opp.eligible_official_matches_since_join as f32;
-    if eligible <= 0.0 {
-        return 0.0;
+/// Compares the player's weighted involvement against what his own
+/// expectation bar demands across the eligible official matches the
+/// club has actually played since he joined.
+struct ComplaintPlayingTime;
+
+impl ComplaintPlayingTime {
+    /// Returns a value in `[max_negative, 0]`; `0` when the player is
+    /// meeting or beating expectations. The caller scales this by the
+    /// grace `frustration_multiplier`.
+    fn deficit(
+        player: &Player,
+        opp: &PlayingTimeOpportunityContext,
+        cfg: &PlayingTimeFrustrationConfig,
+    ) -> f32 {
+        let eligible = opp.eligible_official_matches_since_join as f32;
+        if eligible <= 0.0 {
+            return 0.0;
+        }
+        let status = player.contract.as_ref().map(|c| &c.squad_status);
+        // Same record-raised bar as the morale factor — a returnee whose
+        // loan record says "starter" complains on the starter's schedule,
+        // not the prospect's, so the talk pass and the mood never disagree.
+        let expected_share = player.own_expected_start_share(status);
+        let expected_raw = eligible * expected_share;
+        let expected = expected_raw.max(1.0);
+        let actual = opp.actual_involvement_score(cfg);
+        if actual >= expected_raw {
+            return 0.0;
+        }
+        let deficit_ratio = ((expected_raw - actual) / expected).clamp(0.0, 1.0);
+        (cfg.max_negative_playing_time_factor * deficit_ratio)
+            .clamp(cfg.max_negative_playing_time_factor, 0.0)
     }
-    let status = player.contract.as_ref().map(|c| &c.squad_status);
-    let expected_share = PlayingTimeFrustrationConfig::expected_start_share(status);
-    let expected_raw = eligible * expected_share;
-    let expected = expected_raw.max(1.0);
-    let actual = opp.actual_involvement_score(cfg);
-    if actual >= expected_raw {
-        return 0.0;
-    }
-    let deficit_ratio = ((expected_raw - actual) / expected).clamp(0.0, 1.0);
-    (cfg.max_negative_playing_time_factor * deficit_ratio)
-        .clamp(cfg.max_negative_playing_time_factor, 0.0)
 }
 
 /// Choose a tone for a manager-player talk based on the talk type and

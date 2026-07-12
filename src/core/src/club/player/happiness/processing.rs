@@ -9,7 +9,7 @@ use crate::club::{PlayerResult, PlayerStatusType};
 use crate::utils::DateUtils;
 use crate::{
     ContractType, HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope,
-    HappinessEventSeverity, HappinessEventType, PlayerSquadStatus,
+    HappinessEventSeverity, HappinessEventType, MatchExperienceBackground, PlayerSquadStatus,
 };
 use chrono::NaiveDate;
 
@@ -658,7 +658,7 @@ impl Player {
         let ability_factor = ((ability - 40.0) / 80.0).clamp(0.0, 1.0);
 
         let status = self.contract.as_ref().map(|c| &c.squad_status);
-        let expected_share = PlayingTimeFrustrationConfig::expected_start_share(status);
+        let expected_share = self.own_expected_start_share(status);
         let eligible = opp.eligible_official_matches_since_join as f32;
         let expected_raw = eligible * expected_share;
         let expected = expected_raw.max(1.0);
@@ -685,6 +685,30 @@ impl Player {
                 * frustration_multiplier)
                 .clamp(cfg.max_negative_playing_time_factor, 0.0)
         }
+    }
+
+    /// The start share this player himself expects — the squad-status
+    /// table as the club's side of the story, raised by the player's own
+    /// recent record of official starts. A young returnee who owned a
+    /// full loan season no longer accepts the prospect's 10% even though
+    /// his contract still says prospect; the record-based floor is
+    /// level-adjusted inside [`MatchExperienceBackground`] so a fourth-
+    /// tier record doesn't demand top-flight minutes. Deliberately
+    /// one-directional: a thin record never LOWERS the status-based
+    /// expectation — the status table already encodes patience.
+    pub(crate) fn own_expected_start_share(&self, status: Option<&PlayerSquadStatus>) -> f32 {
+        let base = PlayingTimeFrustrationConfig::expected_start_share(status);
+        let current_team_reputation = self
+            .statistics_history
+            .current
+            .iter()
+            .rev()
+            .find(|e| e.departed_date.is_none())
+            .map(|e| e.team_reputation)
+            .unwrap_or(0);
+        let record_floor = MatchExperienceBackground::from_player(self)
+            .expected_start_share_floor(current_team_reputation);
+        base.max(record_floor)
     }
 
     /// Salary factor uses the same `ContractValuation` as the renewal AI

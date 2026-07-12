@@ -496,6 +496,16 @@ pub struct MoraleEventCatalog {
     /// Back from a loan where he was first-choice, straight into a
     /// fringe role at the parent club.
     pub unsettled_after_loan_return: f32,
+    /// Young returnee with a season of real starts behind him — came
+    /// back a footballer, not a prospect. Positive confidence beat.
+    pub returned_from_loan_proven: f32,
+
+    // ── Squad standing / dressing-room aura ──────────────────────
+    /// The room receives the big-club arrival like a star. Positive;
+    /// scaled up at the emit site by the size of the background gap.
+    pub admired_for_big_club_spell: f32,
+    /// The star treatment stops after a visibly poor run.
+    pub big_club_aura_faded: f32,
 
     // ── Contract negotiation tension ─────────────────────────────
     pub release_clause_demanded: f32,
@@ -773,6 +783,15 @@ impl Default for MoraleEventCatalog {
             wants_loan_made_permanent: -1.0,
             // Back from real football to a bench he didn't choose.
             unsettled_after_loan_return: -3.5,
+            // Came back a footballer — quiet confidence, not euphoria;
+            // the record's real weight is in the expectation machinery.
+            returned_from_loan_proven: 3.0,
+            // Star treatment on arrival lifts harder than a routine
+            // welcome; the emit site scales it by the background gap.
+            admired_for_big_club_spell: 4.0,
+            // The bubble bursting stings, but it's embarrassment, not a
+            // grievance against the club — milder than a broken promise.
+            big_club_aura_faded: -3.0,
             // Contract tension.
             release_clause_demanded: -2.0,
             contract_talks_stalled: -3.0,
@@ -981,6 +1000,9 @@ impl MoraleEventCatalog {
             LoanRecallRequested => self.loan_recall_requested,
             WantsLoanMadePermanent => self.wants_loan_made_permanent,
             UnsettledAfterLoanReturn => self.unsettled_after_loan_return,
+            ReturnedFromLoanProven => self.returned_from_loan_proven,
+            AdmiredForBigClubSpell => self.admired_for_big_club_spell,
+            BigClubAuraFaded => self.big_club_aura_faded,
             ReleaseClauseDemanded => self.release_clause_demanded,
             ContractTalksStalled => self.contract_talks_stalled,
             RejectedContractOffer => self.rejected_contract_offer,

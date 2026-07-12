@@ -1232,6 +1232,18 @@ impl CountryResult {
             player
                 .happiness
                 .add_event(HappinessEventType::UnsettledAfterLoanReturn, magnitude);
+        } else if age <= 23 && loan_starts >= 12 && loan_rating >= 6.5 {
+            // The young player who went out a prospect comes back a
+            // footballer — quiet confidence rather than grievance. The
+            // record keeps working after this beat fades: the frozen
+            // loan spell raises his own playing-time bar
+            // (`own_expected_start_share`) and feeds the monthly
+            // returnee-breakthrough audit if the parent never gives him
+            // the minutes his record earned.
+            let magnitude = HappinessConfig::default().catalog.returned_from_loan_proven;
+            player
+                .happiness
+                .add_event(HappinessEventType::ReturnedFromLoanProven, magnitude);
         }
 
         // Place at parent club

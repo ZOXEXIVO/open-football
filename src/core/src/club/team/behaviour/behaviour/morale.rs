@@ -15,12 +15,13 @@ use crate::club::player::lifecycle::CareerStageDetector;
 use crate::context::GlobalContext;
 use crate::utils::IntegerUtils;
 use crate::{
-    CareerDesireEventContext, CareerDesireEvidence, CareerDesireKind, ConflictLocation,
-    HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
-    HappinessEventScope, HappinessEventSeverity, HappinessEventType, LoanConcernReason,
-    LoanDevelopmentConcernReason, LoanEventContext, LoanEventKind, Player, PlayerClubContract,
-    PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatCompetitionKind,
-    PlayerStatusType, TeamType, TeammateConflictContext, TeammateConflictReason,
+    CareerDesireEventContext, CareerDesireEvidence, CareerDesireKind, ChangeType,
+    ConflictLocation, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
+    HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
+    LoanConcernReason, LoanDevelopmentConcernReason, LoanEventContext, LoanEventKind,
+    MatchExperienceBackground, Player, PlayerClubContract, PlayerCollection,
+    PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatCompetitionKind, PlayerStatusType,
+    RelationshipChange, TeamType, TeammateConflictContext, TeammateConflictReason,
 };
 use chrono::{Datelike, Duration, NaiveDate};
 use std::cmp::Ordering;
@@ -1380,6 +1381,255 @@ impl TeamBehaviour {
         }
     }
 
+    /// Monthly returnee-breakthrough audit for the MAIN squad. The
+    /// under-24 gap in the stuck-career machinery is deliberate — the
+    /// prospect pathway owns the club's side of a young career — but a
+    /// returnee whose loan record says "first-team footballer" is no
+    /// longer a generic prospect, and until now he had no voice at all:
+    /// too young for `BackupCareerAnxiety`, possibly not fringe enough
+    /// for `UnsettledAfterLoanReturn`. This audit reads the same
+    /// match-experience background that raised his playing-time bar —
+    /// a real season of official loan starts behind him, no minutes at
+    /// the parent since — and lets him say it: play me or send me where
+    /// I play. The mood escalates through the existing weekly complaint
+    /// / transfer-desire machinery; the club-side stalled-prospect sweep
+    /// still owns the actual re-loan decision.
+    pub(super) fn process_returnee_breakthrough_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let is_main_team = ctx
+            .team
+            .as_ref()
+            .and_then(|t| t.team_type)
+            .map(|t| matches!(t, TeamType::Main))
+            .unwrap_or(false);
+        if !is_main_team {
+            return;
+        }
+        let league_matches_played = ctx
+            .club
+            .as_ref()
+            .map(|c| c.league_matches_played)
+            .unwrap_or(0);
+        // Too early in the season to call the parent's silence a verdict.
+        if league_matches_played < 6 {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            if player.is_on_loan() || player.is_force_match_selection {
+                continue;
+            }
+            let age = player.age(today);
+            if !(18..=23).contains(&age) {
+                continue;
+            }
+            let Some(contract) = player.contract.as_ref() else {
+                continue;
+            };
+            // Listed / written-off players belong to the exit pipelines.
+            if contract.is_transfer_listed
+                || matches!(contract.squad_status, PlayerSquadStatus::NotNeeded)
+            {
+                continue;
+            }
+            let statuses = player.statuses.get();
+            if statuses.contains(&PlayerStatusType::Req)
+                || statuses.contains(&PlayerStatusType::Loa)
+                || player.statuses.is_on_international_duty()
+            {
+                continue;
+            }
+            // A fair look first — at least two months back at the parent.
+            let settled = player
+                .days_since_transfer(today)
+                .map(|d| d >= 60)
+                .unwrap_or(false);
+            if !settled {
+                continue;
+            }
+
+            // The record: a real season of official loan starts behind
+            // him. Background reads the frozen ledger + closed spells,
+            // so the just-returned loan counts immediately.
+            let background = MatchExperienceBackground::from_player(player);
+            if background.recent_loan_starts < 12 || background.recent_start_share < 0.40 {
+                continue;
+            }
+
+            // The silence: the parent has played its matches without him.
+            let share = player.statistics.played as f32 / league_matches_played as f32;
+            if share >= 0.30 {
+                continue;
+            }
+
+            let days_at_club = player
+                .days_since_transfer(today)
+                .map(|d| d.clamp(0, u32::MAX as i64) as u32)
+                .unwrap_or(0);
+            let mut desire =
+                CareerDesireEventContext::new(CareerDesireKind::FirstTeamBreakthroughAmbition)
+                    .with_player_ability(player.player_attributes.current_ability)
+                    .with_evidence(CareerDesireEvidence::ProvenOnLoan);
+            if days_at_club > 0 {
+                desire = desire.with_days_at_club(days_at_club);
+            }
+            if player.attributes.ambition >= 14.0 {
+                desire = desire.with_evidence(CareerDesireEvidence::HighAmbition);
+            }
+
+            let magnitude = HappinessConfig::default().catalog.wants_first_team_football;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::ReputationAdmiration,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Personal,
+            )
+            .with_career_desire_context(desire)
+            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::WantsFirstTeamFootball,
+                magnitude,
+                None,
+                happiness_ctx,
+                60,
+            );
+        }
+    }
+
+    /// Monthly big-club-aura audit — the squad-perception side of the
+    /// match-experience background. A player whose record was earned at
+    /// a club that clearly outshines this one (the small-town kid back
+    /// from a top-flight loan he owned, the arrival who once started for
+    /// the giant) is received like a star: an arrival-window admiration
+    /// beat on him, and a slow relation drift from teammates — the young
+    /// ones especially — toward him while the aura holds. The aura is
+    /// borrowed status, though: a visibly poor run pops it, the star
+    /// treatment stops, and the room re-rates him on what he actually
+    /// shows. Runs on day 1 for every squad.
+    pub(super) fn process_big_club_aura_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        /// Background must outshine the club this much before the room
+        /// treats the record as an aura.
+        const MIN_AURA: f32 = 0.35;
+        /// Arrival window (days since transfer / loan return) for the
+        /// admiration beat.
+        const ARRIVAL_WINDOW_DAYS: i64 = 45;
+        /// How long the admiration beat keeps the star treatment alive.
+        const AURA_HOLD_DAYS: u16 = 210;
+        /// Rated official sample before form can pop the aura…
+        const FADE_MIN_APPS: u16 = 5;
+        /// …and the season average that reads as "not showing it".
+        const FADE_RATING: f32 = 6.35;
+
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let club_reputation = ctx
+            .club
+            .as_ref()
+            .map(|c| {
+                if c.main_team_reputation > 0 {
+                    c.main_team_reputation
+                } else {
+                    5_000
+                }
+            })
+            .unwrap_or(5_000);
+
+        // ── Arrival admiration + aura bookkeeping (per player) ──────
+        for player in players.players.iter_mut() {
+            let fresh_arrival = player
+                .days_since_transfer(today)
+                .map(|d| (0..=ARRIVAL_WINDOW_DAYS).contains(&d))
+                .unwrap_or(false);
+            if !fresh_arrival {
+                continue;
+            }
+            let aura = MatchExperienceBackground::from_player(player)
+                .aura_over(club_reputation, today);
+            if aura < MIN_AURA {
+                continue;
+            }
+            let catalog = HappinessConfig::default().catalog;
+            let magnitude = catalog.admired_for_big_club_spell * (0.7 + 0.6 * aura);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::ReputationAdmiration,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Personal,
+            );
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::AdmiredForBigClubSpell,
+                magnitude,
+                None,
+                happiness_ctx,
+                365,
+            );
+        }
+
+        // ── Star treatment while the aura holds, puncture on a poor run ──
+        struct AuraHolder {
+            id: u32,
+        }
+        let mut holders: Vec<AuraHolder> = Vec::new();
+        let mut popped: Vec<u32> = Vec::new();
+        for player in players.players.iter() {
+            if !player
+                .happiness
+                .has_recent_event(&HappinessEventType::AdmiredForBigClubSpell, AURA_HOLD_DAYS)
+            {
+                continue;
+            }
+            if player
+                .happiness
+                .has_recent_event(&HappinessEventType::BigClubAuraFaded, AURA_HOLD_DAYS)
+            {
+                continue;
+            }
+            let apps = player.statistics.played + player.statistics.played_subs;
+            let rating = player
+                .statistics
+                .average_rating_realistic(player.position().position_group());
+            if apps >= FADE_MIN_APPS && rating < FADE_RATING {
+                popped.push(player.id);
+            } else {
+                holders.push(AuraHolder { id: player.id });
+            }
+        }
+
+        for player in players.players.iter_mut() {
+            if popped.contains(&player.id) {
+                let catalog = HappinessConfig::default().catalog;
+                player.happiness.add_event_with_cooldown(
+                    HappinessEventType::BigClubAuraFaded,
+                    catalog.big_club_aura_faded,
+                    300,
+                );
+                continue;
+            }
+            // Teammates orbit the aura holders — a monthly drip, stronger
+            // from the young players who grew up watching that badge.
+            for holder in &holders {
+                if holder.id == player.id {
+                    continue;
+                }
+                let admiration = if player.age(today) <= 23 { 0.35 } else { 0.20 };
+                player.relations.update_player_relationship(
+                    holder.id,
+                    RelationshipChange::positive(ChangeType::ReputationAdmiration, admiration),
+                    today,
+                );
+            }
+        }
+    }
+
     /// Monthly contract-horizon audit. A senior inside the final year
     /// of his deal with NO renewal activity on record — no offer, no
     /// stalled negotiation, just silence — reads the situation two
@@ -2610,6 +2860,259 @@ mod tests {
             ),
             1,
             "the loan carousel counts as years without a first-team place at the parent club"
+        );
+    }
+
+    // ── Returnee breakthrough (WantsFirstTeamFootball, under-24) ──
+
+    /// Context for the returnee audit: main team, club mid-season with
+    /// 10 league matches already played.
+    fn returnee_ctx<'a>(date: NaiveDate, name: &'a str) -> GlobalContext<'a> {
+        let mut ctx = month_ctx(date);
+        ctx.team = Some(TeamContext::new(1).with_type(TeamType::Main));
+        ctx.club = Some(
+            ClubContext::new(1, name)
+                .with_league_position(10, 20, 38, 10)
+                .with_reputations(5_000, 5_000, 5_000, 5_000),
+        );
+        ctx
+    }
+
+    /// A 20-year-old back at the parent for three months, a full loan
+    /// season of starts in the record, one parent appearance since.
+    fn proven_returnee(today: NaiveDate) -> Player {
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(2006, 3, 1).unwrap(),
+                110,
+                1_500,
+                12.0,
+            ),
+            PlayerSquadStatus::HotProspectForTheFuture,
+        );
+        p.last_transfer_date = Some(today - Duration::days(90));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 24, true));
+        p.statistics.played = 1;
+        p
+    }
+
+    #[test]
+    fn proven_young_returnee_wants_first_team_football() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut players = PlayerCollection::new(vec![proven_returnee(today)]);
+        TeamBehaviour::process_returnee_breakthrough_audit(&mut players, &returnee_ctx(today, &name));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            1,
+            "a young returnee with a full loan season behind him and no parent minutes should speak up"
+        );
+    }
+
+    #[test]
+    fn returnee_without_a_loan_record_stays_quiet() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut p = proven_returnee(today);
+        // Same age and situation, but the record is three cameo starts.
+        p.statistics_history.season_ledger.clear();
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 3, true));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_returnee_breakthrough_audit(&mut players, &returnee_ctx(today, &name));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "without a real loan record the prospect pathway owns the story"
+        );
+    }
+
+    #[test]
+    fn returnee_getting_minutes_stays_quiet() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut p = proven_returnee(today);
+        // The parent IS playing him — 4 of the club's 10 league matches.
+        p.statistics.played = 4;
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_returnee_breakthrough_audit(&mut players, &returnee_ctx(today, &name));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "a returnee who is getting his chance has nothing to say"
+        );
+    }
+
+    #[test]
+    fn fresh_returnee_gets_a_fair_look_first() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut p = proven_returnee(today);
+        p.last_transfer_date = Some(today - Duration::days(20));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_returnee_breakthrough_audit(&mut players, &returnee_ctx(today, &name));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "twenty days after the return is too soon to call the silence a verdict"
+        );
+    }
+
+    #[test]
+    fn senior_returnee_is_not_this_audits_story() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut p = proven_returnee(today);
+        // 27 years old — the perennial-backup audit owns seniors.
+        p.birth_date = NaiveDate::from_ymd_opt(1999, 3, 1).unwrap();
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_returnee_breakthrough_audit(&mut players, &returnee_ctx(today, &name));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+        );
+    }
+
+    // ── Big-club aura (AdmiredForBigClubSpell / BigClubAuraFaded) ──
+
+    fn small_club_ctx<'a>(date: NaiveDate, name: &'a str) -> GlobalContext<'a> {
+        let mut ctx = month_ctx(date);
+        ctx.club = Some(ClubContext::new(1, name).with_reputations(2_500, 2_500, 3_000, 3_000));
+        ctx
+    }
+
+    /// A 21-year-old freshly back at his small club from a top-club loan
+    /// he genuinely played through: 25 starts at a rep-8000 side.
+    fn aura_returnee(today: NaiveDate) -> Player {
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(2005, 3, 1).unwrap(),
+                110,
+                2_000,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        p.last_transfer_date = Some(today - Duration::days(20));
+        let mut row = ledger_row(2025, 25, true);
+        row.team_reputation = 8_000;
+        p.statistics_history.season_ledger.push(row);
+        p
+    }
+
+    #[test]
+    fn big_club_returnee_is_admired_at_his_small_club() {
+        let today = first_of_month(2026, 6);
+        let name = "Minnow".to_string();
+        let mut players = PlayerCollection::new(vec![aura_returnee(today)]);
+        TeamBehaviour::process_big_club_aura_audit(&mut players, &small_club_ctx(today, &name));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::AdmiredForBigClubSpell
+            ),
+            1,
+            "the room should receive the top-club returnee like a star"
+        );
+    }
+
+    #[test]
+    fn no_aura_among_peers_at_the_same_level() {
+        let today = first_of_month(2026, 6);
+        let name = "Giant".to_string();
+        let mut ctx = month_ctx(today);
+        ctx.club = Some(ClubContext::new(1, &name).with_reputations(8_000, 8_000, 8_000, 8_000));
+        let mut players = PlayerCollection::new(vec![aura_returnee(today)]);
+        TeamBehaviour::process_big_club_aura_audit(&mut players, &ctx);
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::AdmiredForBigClubSpell
+            ),
+            0,
+            "a big-club spell is unremarkable inside another big club"
+        );
+    }
+
+    #[test]
+    fn teammates_orbit_the_aura_holder_while_it_lasts() {
+        let today = first_of_month(2026, 6);
+        let name = "Minnow".to_string();
+        let star = aura_returnee(today);
+        let teammate = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(2005, 6, 1).unwrap(),
+                90,
+                500,
+                10.0,
+            ),
+            PlayerSquadStatus::FirstTeamSquadRotation,
+        );
+        let mut players = PlayerCollection::new(vec![star, teammate]);
+        let ctx = small_club_ctx(today, &name);
+        // First pass: the admiration beat lands. Second pass a month on:
+        // form is fine (no rated sample yet), so the star treatment drips
+        // into the teammate's relation toward him.
+        TeamBehaviour::process_big_club_aura_audit(&mut players, &ctx);
+        TeamBehaviour::process_big_club_aura_audit(
+            &mut players,
+            &small_club_ctx(first_of_month(2026, 7), &name),
+        );
+        let teammate = &players.players[1];
+        let level = teammate
+            .relations
+            .get_player(1)
+            .map(|r| r.level)
+            .unwrap_or(0.0);
+        assert!(
+            level > 0.0,
+            "the teammate should warm to the big-club returnee (got {level})"
+        );
+    }
+
+    #[test]
+    fn poor_run_pops_the_aura() {
+        let today = first_of_month(2026, 6);
+        let name = "Minnow".to_string();
+        let mut star = aura_returnee(today);
+        let mut players = PlayerCollection::new(vec![star]);
+        TeamBehaviour::process_big_club_aura_audit(&mut players, &small_club_ctx(today, &name));
+        // A month later: a real rated sample, clearly below the water line.
+        star = players.players.remove(0);
+        star.statistics.played = 20;
+        star.statistics.rating_weight = 20.0;
+        star.statistics.rating_points = 20.0 * 5.2;
+        let mut players = PlayerCollection::new(vec![star]);
+        TeamBehaviour::process_big_club_aura_audit(
+            &mut players,
+            &small_club_ctx(first_of_month(2026, 7), &name),
+        );
+        let p = &players.players[0];
+        assert_eq!(
+            count(p, HappinessEventType::BigClubAuraFaded),
+            1,
+            "a visibly poor run must pop the aura"
         );
     }
 

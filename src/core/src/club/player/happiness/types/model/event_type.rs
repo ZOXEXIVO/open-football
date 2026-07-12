@@ -397,6 +397,20 @@ pub enum HappinessEventType {
     /// Loan level is either too easy or too hard for the player's tier.
     LoanLevelMismatch,
 
+    // ── Squad standing / dressing-room aura ──────────────────────
+    /// The dressing room receives him like a star: his record at a club
+    /// that clearly outshines this one (the season he played for the
+    /// giant, the top-flight loan he owned) gives him instant standing —
+    /// teammates, the young ones especially, orbit him. Emitted on
+    /// arrival / return while the background gap is fresh; the standing
+    /// holds only as long as his performances don't puncture it.
+    AdmiredForBigClubSpell,
+    /// The aura popped: the big-club arrival's actual performances fell
+    /// visibly short, and the star treatment stops. The room re-rates
+    /// him on what he shows in training and on the pitch, not on the
+    /// badge he used to wear. Counterpart to `AdmiredForBigClubSpell`.
+    BigClubAuraFaded,
+
     // ── Career-stage / late-career arc ───────────────────────────
     /// Older player has started to weigh up retirement — reduced role,
     /// recurring injuries, long free-agency, or physical decline. A
@@ -464,6 +478,15 @@ pub enum HappinessEventType {
     /// clean-slate reset, so the unsettled mood carries into the new
     /// parent spell and feeds the stuck-career machinery.
     UnsettledAfterLoanReturn,
+    /// The young player who went out a prospect has come back a
+    /// footballer — a season of real official starts on loan behind him.
+    /// Positive confidence beat at loan-return time, the counterpart of
+    /// `UnsettledAfterLoanReturn` for a returnee the parent hasn't
+    /// (yet) shoved to the fringe. The record itself keeps working
+    /// through the match-experience background: his own playing-time
+    /// bar is higher now, and the monthly returnee-breakthrough audit
+    /// gives the mood teeth if the minutes never come.
+    ReturnedFromLoanProven,
 
     // ── Contract negotiation tension ─────────────────────────────
     /// Player / agent explicitly demands a release clause in the next
