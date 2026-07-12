@@ -34,7 +34,8 @@ use crate::{
     InjuryRecoveryEventContext, InjuryRecoveryEvidence, InjuryRecoveryStage,
     ManagerInteractionEventContext, ManagerInteractionTone, ManagerInteractionTopic,
     MatchSelectionContext, NewSigningThreatContext, NewSigningThreatReason, PlayerAcceptance,
-    PlayerSquadStatus, PrivateTalkReason, PrivateTalkRequestContext, RoleStatusEventContext,
+    PlayerSquadStatus, PrivateTalkReason, PrivateTalkRequestContext, RivalThreatResponse,
+    RoleStatusEventContext,
     RoleStatusKind, SelectionDecisionScope, SelectionOmissionReason, SelectionRole,
     SubstitutionFrustrationContext, SubstitutionFrustrationKind,
 };
@@ -365,25 +366,55 @@ impl Player {
     /// to filter to direct competition before calling this. Magnitude
     /// scales by player's existing fragility (already fringe, older,
     /// already lacking minutes).
-    pub fn on_new_signing_threat(&mut self, ctx: NewSigningThreatContext) {
-        self.on_positional_rival_threat(HappinessEventType::ThreatenedByNewSigning, ctx, 90);
+    pub fn on_new_signing_threat(&mut self, ctx: NewSigningThreatContext) -> RivalThreatResponse {
+        self.on_positional_rival_threat(HappinessEventType::ThreatenedByNewSigning, ctx, 90)
     }
 
     /// React to a loanee coming home with a starter's record — the
     /// homegrown version of a new signing landing in the player's lane.
     /// Same rivalry scaling; longer cooldown because there is only one
     /// of him and the competition builds over a season, not a window.
-    pub fn on_returning_rival_threat(&mut self, ctx: NewSigningThreatContext) {
-        self.on_positional_rival_threat(HappinessEventType::ThreatenedByReturningLoanee, ctx, 180);
+    pub fn on_returning_rival_threat(
+        &mut self,
+        ctx: NewSigningThreatContext,
+    ) -> RivalThreatResponse {
+        self.on_positional_rival_threat(HappinessEventType::ThreatenedByReturningLoanee, ctx, 180)
     }
 
     /// Shared positional-rivalry reaction behind both threat events.
+    /// Returns how the player answered the competition so the caller —
+    /// which owns the date — can apply the matching relation drift.
     fn on_positional_rival_threat(
         &mut self,
         event_type: HappinessEventType,
         ctx: NewSigningThreatContext,
         cooldown_days: u16,
-    ) {
+    ) -> RivalThreatResponse {
+        // The other way to meet your replacement: an aging pro with the
+        // professionalism for it doesn't defend the shirt from a kid —
+        // he passes it on properly. Same trigger, opposite response,
+        // chosen by personality.
+        let aging_pro = matches!(ctx.player_age, Some(a) if a >= 29);
+        let young_rival = matches!(ctx.rival_age, Some(a) if a <= 23);
+        if aging_pro && young_rival && self.attributes.professionalism >= 15.0 {
+            let rival_id = ctx.rival_player_id;
+            let magnitude = HappinessConfig::default().catalog.takes_replacement_under_wing;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::TrainingPartnership,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::DressingRoom,
+            )
+            .with_new_signing_threat_context(ctx);
+            self.happiness.add_event_with_partner_context_and_cooldown(
+                HappinessEventType::TakesReplacementUnderWing,
+                magnitude,
+                rival_id,
+                happiness_ctx,
+                300,
+            );
+            return RivalThreatResponse::Mentoring;
+        }
+
         let rival_id = ctx.rival_player_id;
         let base = HappinessConfig::default().catalog.magnitude(event_type.clone());
         let age_mul = match ctx.player_age {
@@ -430,6 +461,7 @@ impl Player {
             happiness_ctx,
             cooldown_days,
         );
+        RivalThreatResponse::Threatened
     }
 
     // ───────────────────────────────────────────────────────────

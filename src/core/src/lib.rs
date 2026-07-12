@@ -170,6 +170,7 @@ pub use club::{
     NegotiationPolicy,
     NewSigningThreatContext,
     NewSigningThreatReason,
+    RivalThreatResponse,
     OutgoingTransfersResponsibility,
     PeriodizationPhase,
     // Person exports

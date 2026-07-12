@@ -1114,6 +1114,9 @@ impl CountryResult {
                 selling_league_reputation,
                 record_sell_on: None,
                 personal_terms: None,
+                // Buyout of a player already in this dressing room — no
+                // arrival reception of any kind (pending is cleared below).
+                source_is_rival: false,
             });
             // No new-club arrival shock: he never changed dressing rooms.
             player.pending_signing = None;

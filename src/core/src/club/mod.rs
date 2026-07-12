@@ -125,6 +125,7 @@ pub use player::{
     NegativeHappiness,
     NewSigningThreatContext,
     NewSigningThreatReason,
+    RivalThreatResponse,
     PersonalAdaptationEventContext,
     PersonalAdaptationKind,
     Physical,

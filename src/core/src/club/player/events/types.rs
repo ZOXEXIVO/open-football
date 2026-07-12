@@ -150,6 +150,11 @@ pub struct TransferCompletion<'a> {
     /// can compare league_rep_gap without re-walking the world. 0 when
     /// unknown.
     pub selling_league_reputation: u16,
+    /// True when the selling club sits in the buying club's rivals list.
+    /// Captured at staging time (the executor has both club objects; the
+    /// player never does) — drives the cold-shoulder reception at the
+    /// new club.
+    pub source_is_rival: bool,
     /// Sell-on percentage pledged by the buyer to the current seller. Added
     /// to `player.sell_on_obligations` so the next sale pays the seller out.
     pub record_sell_on: Option<f32>,

@@ -410,6 +410,46 @@ pub enum HappinessEventType {
     /// him on what he shows in training and on the pitch, not on the
     /// badge he used to wear. Counterpart to `AdmiredForBigClubSpell`.
     BigClubAuraFaded,
+    /// The young understudy's take on the star landing in HIS position:
+    /// no shirt contest at that ability gap, just a masterclass to study
+    /// every day in training. The apprentice band between "threatened"
+    /// (close ability, senior role) and plain admiration (other
+    /// position groups) — fires once per star, with a mentorship-bond
+    /// drift toward him while the aura holds.
+    LearningFromStarTeammate,
+    /// The leaders have stopped covering for the big signing: the fee /
+    /// arrival hype came with a standard, a real sample of matches sits
+    /// clearly below it, and the senior pros' patience is gone. Fired on
+    /// the leaders themselves (the flop's side is
+    /// `FeelsDressingRoomPressure`); a highly professional leader keeps
+    /// the frustration private and backs him instead.
+    LosingPatienceWithSigning,
+    /// The flop signing can feel the room: training goes quiet around
+    /// him, senior pros stop offering the encouraging word. The
+    /// dressing-room counterpart of fan / media pressure — how hard it
+    /// lands depends on how he handles pressure.
+    FeelsDressingRoomPressure,
+    /// The academy product watches a loan signing start every week in
+    /// his position while he can't buy a league minute — the club chose
+    /// a borrowed stopgap over its own kid at comparable level. Sharper
+    /// grievance than plain lack of minutes: the pathway itself reads
+    /// as blocked.
+    PathwayBlockedByLoanSigning,
+    /// The homegrown core's side of a blocked pathway: senior players
+    /// who came through the academy themselves see the club bench its
+    /// own kid for a borrowed player of comparable level, and they
+    /// don't like the message it sends.
+    UnhappyAboutBlockedHomegrown,
+    /// The overlooked man's read of the team sheet: the big name keeps
+    /// starting on reputation while this player's own form — a real
+    /// sample, visibly better ratings — can't get him in. The classic
+    /// "the name on the shirt picks the team" grievance.
+    FeelsSelectionFavouritism,
+    /// The dressing room hasn't forgotten where the new arrival came
+    /// from: signing directly from the hated rival buys a cold first
+    /// few months — long-serving players keep their distance until his
+    /// performances speak for the new badge.
+    ColdShoulderOverRivalPast,
 
     // ── Career-stage / late-career arc ───────────────────────────
     /// Older player has started to weigh up retirement — reduced role,
@@ -605,6 +645,13 @@ pub enum HappinessEventType {
     /// drift toward the returnee — the one teammate who does NOT join
     /// the admiration.
     ThreatenedByReturningLoanee,
+    /// The other way an aging pro can meet his replacement: instead of
+    /// feeling the threat, a deeply professional veteran takes the
+    /// young rival under his wing — passing the position on rather than
+    /// defending it. The personality fork of `ThreatenedByNewSigning` /
+    /// `ThreatenedByReturningLoanee`; comes with a mentorship bond
+    /// toward the youngster instead of a rivalry.
+    TakesReplacementUnderWing,
     /// Repeated selections, public backing, improved role, or big-match
     /// trust signal the manager relationship is improving. Low-frequency
     /// positive aggregate of small good signs.

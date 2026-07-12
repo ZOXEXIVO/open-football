@@ -180,6 +180,11 @@ pub struct PendingSigning {
     /// 2 = second option, etc. `None` when the caller didn't compute it.
     /// Drives the `RolePathBlockedAtEliteClub` gate.
     pub dest_position_depth_rank: Option<u8>,
+    /// True when the player signed directly from a club in the buying
+    /// club's rivals list. Captured at staging time (only the executor
+    /// holds both club objects); drives the `ColdShoulderOverRivalPast`
+    /// reception. Always false for free agents and loans.
+    pub source_is_rival: bool,
 }
 
 // All settlement-shock thresholds (ambition gap, dream-move surplus,
@@ -1847,6 +1852,9 @@ pub struct TransferEnvironmentProfile {
     pub is_loan: bool,
     pub destination_is_favorite: bool,
     pub dest_position_depth_rank: Option<u8>,
+    /// The move came directly from a club in the destination's rivals
+    /// list — the dressing room remembers the badge he just took off.
+    pub source_is_rival: bool,
     // Personality axes — captured so the cooldown helper doesn't have to
     // re-walk the player struct.
     pub ambition: f32,
@@ -1880,6 +1888,7 @@ impl TransferEnvironmentProfile {
             is_loan: pending.is_loan,
             destination_is_favorite,
             dest_position_depth_rank: pending.dest_position_depth_rank,
+            source_is_rival: pending.source_is_rival,
             ambition: player.attributes.ambition,
             pressure: player.attributes.pressure,
             professionalism: player.attributes.professionalism,
@@ -2099,6 +2108,11 @@ impl Player {
             }
         }
         if let Some(c) = profile.media_spotlight_pressure_candidate() {
+            self.emit_candidate(c);
+        }
+        // Crossing the rivalry line is orthogonal to the weak↔elite
+        // narratives — it fires whatever the reputation gap looks like.
+        if let Some(c) = profile.cold_shoulder_over_rival_past_candidate() {
             self.emit_candidate(c);
         }
     }
@@ -2544,6 +2558,41 @@ impl TransferEnvironmentProfile {
             role: EnvRole::Flavor,
             priority: 40,
             cooldown_days: 45,
+        })
+    }
+
+    /// Signed directly from the destination's sworn rival — the room is
+    /// cold before he's kicked a ball. Permanent moves only (rivals
+    /// don't loan to each other, and the staging layer never sets the
+    /// flag for loans). The thaw is time + performances: the event
+    /// decays like any other, and the aura / bonding machinery works on
+    /// him the same as on anyone else.
+    fn cold_shoulder_over_rival_past_candidate(&self) -> Option<EnvCandidate> {
+        if !self.source_is_rival || self.is_loan {
+            return None;
+        }
+        let cfg = HappinessConfig::default();
+        let base = cfg.catalog.cold_shoulder_over_rival_past;
+        // Thin skin makes the frost bite harder; the thick-skinned
+        // signing knew exactly what he was walking into.
+        let mul = if self.pressure <= 8.0 { 1.25 } else { 1.0 };
+        let mag = base * mul;
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationTension,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+        if self.pressure <= 8.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::LowPressurePersonality);
+        }
+        Some(EnvCandidate {
+            event_type: HappinessEventType::ColdShoulderOverRivalPast,
+            magnitude: mag,
+            context: ctx,
+            role: EnvRole::Flavor,
+            priority: 42,
+            cooldown_days: 365,
         })
     }
 
@@ -3404,6 +3453,7 @@ mod transfer_environment_tests {
             source_club_reputation: src_club,
             source_league_reputation: src_league,
             dest_position_depth_rank: depth_rank,
+            source_is_rival: false,
         }
     }
 
@@ -3810,6 +3860,40 @@ mod transfer_environment_tests {
 
     // ── Full process_transfer_shock pipeline (Spartak ↔ Dynamo Kyiv,
     //    elite-club loan, favourite-club permanent) ──────────────────
+
+    // ── ColdShoulderOverRivalPast (signed from the sworn rival) ────
+
+    #[test]
+    fn signing_from_the_rival_carries_the_cold_shoulder_mark() {
+        // Lateral permanent move, but staged as crossing the rivalry
+        // line — the reception event must fire regardless of the
+        // reputation gap.
+        let mut p = player_with(24, 12.0, 3000, 3000, 130, 12.0, 12.0, 10.0);
+        let now = d(2026, 4, 26);
+        let mut pend = pending(200, 5_000_000.0, false, 4000, 4000, Some(2));
+        pend.source_is_rival = true;
+        p.pending_signing = Some(pend);
+        p.process_transfer_shock(now, 0.45, 4500, "es", None);
+        assert_eq!(
+            count(&p, HappinessEventType::ColdShoulderOverRivalPast),
+            1,
+            "a permanent signing straight from the rival must walk into a cold room"
+        );
+    }
+
+    #[test]
+    fn ordinary_signing_carries_no_cold_shoulder_mark() {
+        let mut p = player_with(24, 12.0, 3000, 3000, 130, 12.0, 12.0, 10.0);
+        let now = d(2026, 4, 26);
+        let pend = pending(200, 5_000_000.0, false, 4000, 4000, Some(2));
+        p.pending_signing = Some(pend);
+        p.process_transfer_shock(now, 0.45, 4500, "es", None);
+        assert_eq!(
+            count(&p, HappinessEventType::ColdShoulderOverRivalPast),
+            0,
+            "no rivalry line crossed → no frost"
+        );
+    }
 
     #[test]
     fn spartak_loan_to_dynamo_kyiv_never_fires_dream_move() {

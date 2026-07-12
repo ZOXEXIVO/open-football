@@ -67,6 +67,7 @@ impl Player {
             source_club_reputation,
             source_league_reputation,
             dest_position_depth_rank: None,
+            source_is_rival: t.source_is_rival,
         });
     }
 
@@ -121,6 +122,9 @@ impl Player {
             source_club_reputation: history_source_club_rep,
             source_league_reputation: 0,
             dest_position_depth_rank: None,
+            // A free agent arrives unattached — whatever badge he wore
+            // before release, he didn't come STRAIGHT from the rival.
+            source_is_rival: false,
         });
     }
 
@@ -159,6 +163,10 @@ impl Player {
             source_club_reputation,
             source_league_reputation,
             dest_position_depth_rank: None,
+            // Loans between open rivals essentially don't happen — the
+            // parent won't strengthen the enemy — so the borrowed
+            // arrival never carries the rival-past stigma.
+            source_is_rival: false,
         });
     }
 
@@ -199,6 +207,10 @@ impl Player {
             source_club_reputation,
             source_league_reputation,
             dest_position_depth_rank,
+            // Manual web moves don't resolve the buying club's rivals
+            // list at this layer; the cold-shoulder beat is an AI-flow
+            // nuance, not a user-move guarantee.
+            source_is_rival: false,
         });
     }
 

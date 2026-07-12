@@ -2003,6 +2003,7 @@ mod morale_timeline_tests {
                 source_club_reputation: self.source_club_rep,
                 source_league_reputation: self.source_league_rep,
                 dest_position_depth_rank: Some(2),
+                source_is_rival: false,
             }
         }
 

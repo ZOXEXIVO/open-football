@@ -241,6 +241,28 @@ impl TeamBehaviour {
         // shirt, and the credible holders in his position group feel it.
         Self::process_returning_rival_audit(players, &ctx);
 
+        // Monthly flop-signing patience audit: the senior leaders stop
+        // covering for a big arrival whose real sample sits clearly
+        // under the standard his fee / hype set — and the flop feels
+        // the room turn.
+        Self::process_flop_signing_patience_audit(players, &ctx);
+
+        // Monthly blocked-homegrown audit: a loan-in owning the starts
+        // in a group where an academy kid of comparable level can't buy
+        // a minute — the kid's pathway grievance plus the homegrown
+        // core's displeasure at the message.
+        Self::process_blocked_homegrown_audit(players, &ctx);
+
+        // Monthly selection-favouritism audit: the big name keeps
+        // starting on reputation while a visibly in-form teammate
+        // watches from the bench.
+        Self::process_selection_favouritism_audit(players, &ctx);
+
+        // Monthly rival-past reception audit: the homegrown core keeps
+        // its distance from a signing who came straight from the hated
+        // rival, until the mark thaws.
+        Self::process_rival_past_reception_audit(players, &ctx);
+
         // Monthly contract-horizon audit: final-year seniors with no
         // renewal talks on record — anxiety for most, a shop-window
         // drive for the in-form.

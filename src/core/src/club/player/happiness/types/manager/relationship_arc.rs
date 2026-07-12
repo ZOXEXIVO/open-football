@@ -445,6 +445,19 @@ impl NewSigningThreatReason {
     }
 }
 
+/// How a player answered a positional rival landing in his lane —
+/// returned by the `on_new_signing_threat` / `on_returning_rival_threat`
+/// emit paths so the caller can apply the matching relation drift
+/// (rivalry cooling vs mentorship bond) with the date it owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RivalThreatResponse {
+    /// The competition registered as a threat.
+    Threatened,
+    /// A professional veteran took the young rival under his wing
+    /// instead of defending the shirt.
+    Mentoring,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewSigningThreatContext {
     /// The rival player id — the renderer names him in the headline.

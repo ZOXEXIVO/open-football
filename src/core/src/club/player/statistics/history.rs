@@ -1852,6 +1852,39 @@ impl PlayerStatisticsHistory {
             .map(|e| e.team_slug.as_str())
     }
 
+    /// Slug of the club where the player's career began — the earliest
+    /// entry (lowest `seq_id`) across frozen items and current-season
+    /// spells. Youth stats alias to the club's Main team, so an academy
+    /// product's origin resolves to his parent club's slug even for
+    /// seasons played entirely in the youth setup. `None` when the
+    /// player has no recorded history at all; callers should fall back
+    /// to "never transferred" signals in that case.
+    ///
+    /// Used by the homegrown checks (blocked-pathway audit, rival-past
+    /// reception): a player is homegrown at his current club when this
+    /// equals [`Self::active_team_slug`] — surviving loans out and even
+    /// a sell-and-buy-back, since the origin row never changes.
+    pub fn origin_team_slug(&self) -> Option<&str> {
+        let from_items = self
+            .items
+            .iter()
+            .min_by_key(|i| i.seq_id)
+            .map(|i| (i.seq_id, i.team_slug.as_str()));
+        let from_current = self
+            .current
+            .iter()
+            .min_by_key(|e| e.seq_id)
+            .map(|e| (e.seq_id, e.team_slug.as_str()));
+        match (from_items, from_current) {
+            (Some((item_seq, item)), Some((cur_seq, cur))) => {
+                Some(if item_seq <= cur_seq { item } else { cur })
+            }
+            (Some((_, item)), None) => Some(item),
+            (None, Some((_, cur))) => Some(cur),
+            (None, None) => None,
+        }
+    }
+
     /// League stats accumulated across every current-season spell, with
     /// the live counter standing in for the still-active spell. The live
     /// `player.statistics` field is per-spell and gets drained on every

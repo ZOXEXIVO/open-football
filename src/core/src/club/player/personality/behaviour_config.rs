@@ -514,6 +514,30 @@ pub struct MoraleEventCatalog {
     pub admired_for_big_club_spell: f32,
     /// The star treatment stops after a visibly poor run.
     pub big_club_aura_faded: f32,
+    /// The young understudy studies the star in his own position —
+    /// apprenticeship, not displacement.
+    pub learning_from_star_teammate: f32,
+    /// A professional veteran passes the position on to his young
+    /// replacement instead of defending it.
+    pub takes_replacement_under_wing: f32,
+
+    // ── Dressing-room politics: flops, pathways, favouritism ─────
+    /// A leader's patience with the underperforming big signing runs
+    /// out. Fired on the leader, not the flop.
+    pub losing_patience_with_signing: f32,
+    /// The flop senses the room turning. Scaled at the emit site by
+    /// pressure-handling.
+    pub feels_dressing_room_pressure: f32,
+    /// The academy kid watches a borrowed player hold his pathway shut.
+    pub pathway_blocked_by_loan_signing: f32,
+    /// Homegrown seniors resent the club benching its own kid for a
+    /// borrowed stopgap.
+    pub unhappy_about_blocked_homegrown: f32,
+    /// The in-form player who can't get past a big name's reputation.
+    pub feels_selection_favouritism: f32,
+    /// Signed straight from the hated rival — the room keeps its
+    /// distance at first.
+    pub cold_shoulder_over_rival_past: f32,
 
     // ── Contract negotiation tension ─────────────────────────────
     pub release_clause_demanded: f32,
@@ -809,6 +833,29 @@ impl Default for MoraleEventCatalog {
             // The bubble bursting stings, but it's embarrassment, not a
             // grievance against the club — milder than a broken promise.
             big_club_aura_faded: -3.0,
+            // Training next to a genuine star every day is a quiet
+            // privilege for the understudy, not a headline moment.
+            learning_from_star_teammate: 2.5,
+            // Passing the shirt on sits well with the professional —
+            // pride in the role, not joy.
+            takes_replacement_under_wing: 2.0,
+            // The leader's own mood dips only mildly — the frustration
+            // mostly lands on the flop via relations and his event.
+            losing_patience_with_signing: -1.5,
+            // Feeling the room turn is heavier than fan noise — these
+            // are the people he trains with every day.
+            feels_dressing_room_pressure: -2.5,
+            // Sharper than plain lack of minutes: the pathway itself
+            // reads as shut, and the kid knows who's holding it.
+            pathway_blocked_by_loan_signing: -3.5,
+            // A message-to-the-academy grievance, not a personal one —
+            // mild on any single senior.
+            unhappy_about_blocked_homegrown: -1.5,
+            // Being visibly better and still not picked gnaws harder
+            // than routine rotation.
+            feels_selection_favouritism: -2.5,
+            // A cold room, not an open feud — it thaws when he plays.
+            cold_shoulder_over_rival_past: -2.0,
             // Contract tension.
             release_clause_demanded: -2.0,
             contract_talks_stalled: -3.0,
@@ -1023,6 +1070,14 @@ impl MoraleEventCatalog {
             ThreatenedByReturningLoanee => self.threatened_by_returning_loanee,
             AdmiredForBigClubSpell => self.admired_for_big_club_spell,
             BigClubAuraFaded => self.big_club_aura_faded,
+            LearningFromStarTeammate => self.learning_from_star_teammate,
+            TakesReplacementUnderWing => self.takes_replacement_under_wing,
+            LosingPatienceWithSigning => self.losing_patience_with_signing,
+            FeelsDressingRoomPressure => self.feels_dressing_room_pressure,
+            PathwayBlockedByLoanSigning => self.pathway_blocked_by_loan_signing,
+            UnhappyAboutBlockedHomegrown => self.unhappy_about_blocked_homegrown,
+            FeelsSelectionFavouritism => self.feels_selection_favouritism,
+            ColdShoulderOverRivalPast => self.cold_shoulder_over_rival_past,
             ReleaseClauseDemanded => self.release_clause_demanded,
             ContractTalksStalled => self.contract_talks_stalled,
             RejectedContractOffer => self.rejected_contract_offer,
