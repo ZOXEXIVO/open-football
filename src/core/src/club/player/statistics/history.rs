@@ -753,22 +753,56 @@ impl PlayerStatisticsHistory {
                 && Season::from_date(e.joined_date).start_year > return_season)
         });
 
-        // Clear departed_date on parent entry — the player is back
-        if let Some(parent_entry) = self
+        // Restore the player's parent-club spell now that he is back.
+        self.restore_parent_spell_on_return(parent, date);
+    }
+
+    /// Bring the parent-club spell back to life when a loan ends (natural
+    /// return or cancel). The parent spell the loan interrupted is the most
+    /// recent departed non-loan entry.
+    ///
+    /// Crucially, when that spell already booked real appearances this
+    /// season — a mid-season loan-out, or a return→re-loan→return bounce
+    /// where an earlier River stint played games — it must NOT be
+    /// reactivated. The projection replaces an ACTIVE spell's stored
+    /// snapshot with the live counter (which restarts at 0 on return), so
+    /// reactivating a played spell silently discards those appearances —
+    /// the reported "returned to River Plate but the season's apps are
+    /// stuck / lost after loaning out and back" bug. Keep the played stint
+    /// DEPARTED as a frozen slice and open a FRESH 0-app active spell; the
+    /// `(season, team, league)` grouping folds both into one row that reads
+    /// pre-loan apps + post-return apps. This mirrors
+    /// [`Self::record_intra_club_move`]'s "open a fresh spell, never
+    /// reactivate a played one" rule, which was introduced for the same
+    /// snapshot-vs-live conflict.
+    ///
+    /// A pure 0-app registration (departed the day the loan began) carries
+    /// nothing to lose, so it is reactivated as before — adopting the live
+    /// counter is exact — with its `joined_date` reset to the return so
+    /// post-loan time-at-club is measured from today. When no parent entry
+    /// exists at all (the season-end snapshot drained `current` before the
+    /// return ran) a fresh one is created.
+    fn restore_parent_spell_on_return(&mut self, parent: &TeamInfo, date: NaiveDate) {
+        if let Some(pos) = self
             .current
-            .iter_mut()
-            .rev()
-            .find(|e| !e.is_loan && e.departed_date.is_some())
+            .iter()
+            .rposition(|e| !e.is_loan && e.departed_date.is_some())
         {
-            parent_entry.departed_date = None;
-            // Reset joined_date to return date for post-loan time calculation
-            if parent_entry.statistics.total_games() == 0 && parent_entry.transfer_fee.is_none() {
-                parent_entry.joined_date = date;
+            if self.current[pos].statistics.total_games() > 0 {
+                self.push_new_entry(parent, PlayerStatistics::default(), false, None, date);
+            } else {
+                let entry = &mut self.current[pos];
+                entry.departed_date = None;
+                // Reset joined_date to the return date for post-loan time
+                // calculation (a fee-carrying signing keeps its own join).
+                if entry.transfer_fee.is_none() {
+                    entry.joined_date = date;
+                }
             }
         } else if !self.current.iter().any(|e| !e.is_loan) {
-            // No parent entry exists — happens when season-end snapshot drained
-            // current before the loan return ran. Create one so the parent club
-            // has a current-season entry and view_items can show live stats.
+            // No parent entry exists — happens when the season-end snapshot
+            // drained `current` before the loan return ran. Create one so the
+            // parent club has a current-season entry the projection can show.
             self.push_new_entry(parent, PlayerStatistics::default(), false, None, date);
         }
     }
@@ -796,22 +830,9 @@ impl PlayerStatisticsHistory {
                 && Season::from_date(e.joined_date).start_year > cancel_season)
         });
 
-        // Mirror record_loan_return cleanup: clear parent departed_date
-        // so the parent entry correctly represents the post-return stint
-        if let Some(parent_entry) = self
-            .current
-            .iter_mut()
-            .rev()
-            .find(|e| !e.is_loan && e.departed_date.is_some())
-        {
-            parent_entry.departed_date = None;
-            if parent_entry.statistics.total_games() == 0 && parent_entry.transfer_fee.is_none() {
-                parent_entry.joined_date = date;
-            }
-        } else if !self.current.iter().any(|e| !e.is_loan) {
-            // No parent entry exists — create one (same fix as record_loan_return)
-            self.push_new_entry(parent, PlayerStatistics::default(), false, None, date);
-        }
+        // Restore the parent-club spell — identical rules to a natural
+        // loan return (never reactivate a played stint; see the helper).
+        self.restore_parent_spell_on_return(parent, date);
     }
 
     /// Record a release to the free-agent pool. Snapshots in-flight stats

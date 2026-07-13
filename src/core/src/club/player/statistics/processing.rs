@@ -1462,6 +1462,112 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // User-reported (Luciano Sokolić): a player who has already PLAYED
+    // for his club this season is loaned out and later returns to the
+    // SAME club. The pre-loan appearances must survive the return and the
+    // post-return games must add on top — the season row must not freeze
+    // at (or reset below) the pre-departure count.
+    //
+    // Root cause: `record_loan_return` used to REACTIVATE the parent spell
+    // that already held those appearances. The projection replaces an
+    // active spell's snapshot with the live counter (which restarts at 0
+    // on return), so the pre-loan apps were silently discarded. The fix
+    // keeps the played stint departed and opens a fresh active spell, so
+    // the (season, team, league) grouping folds them together.
+    // ---------------------------------------------------------------
+    #[test]
+    fn loan_out_after_playing_then_return_keeps_prior_apps() {
+        let river = team_with_league("River Plate", "river-plate", "Primera", "arg-primera");
+        let boca = team_with_league("Boca", "boca", "Primera-b", "arg-primera-b");
+        let mut p = make_player();
+
+        // Played 4 league games at River before being loaned out.
+        p.statistics_history
+            .seed_initial_team(&river, make_date(2026, 8, 1), false);
+        p.statistics = make_stats(4, 1);
+
+        p.contract_loan = Some(loan_contract_until(2027, 6, 30));
+        p.on_manual_loan(&river, &river, &boca, make_date(2026, 10, 1));
+        p.statistics = make_stats(5, 0); // 5 apps on loan at Boca
+
+        // Loan returns; back at River, plays 3 more.
+        p.contract_loan = None;
+        p.on_loan_return(&boca, &river, make_date(2027, 1, 10));
+        p.statistics = make_stats(3, 0);
+
+        let rows = history_rows_of(&p, make_date(2027, 2, 1));
+        let river_apps: u16 = rows
+            .iter()
+            .filter(|r| r.0 == 2026 && r.1 == "river-plate")
+            .map(|r| r.3)
+            .sum();
+        assert_eq!(
+            river_apps, 7,
+            "River must show 4 (pre-loan) + 3 (post-return) = 7: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.1 == "boca" && r.2 && r.3 == 5),
+            "the Boca loan spell keeps its own 5-app row: {rows:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // User-reported exact shape: the player bounces out and back, and one
+    // loan is dated the SAME DAY he returned from the previous club — so
+    // the intermediate River spell has zero duration (joined == departed).
+    // After the final return he keeps playing; the season's River row must
+    // still read pre-loan apps + post-return apps.
+    // ---------------------------------------------------------------
+    #[test]
+    fn same_day_return_and_reloan_bounce_preserves_river_apps() {
+        let river = team_with_league("River Plate", "river-plate", "Primera", "arg-primera");
+        let boca = team_with_league("Boca", "boca", "Primera-b", "arg-primera-b");
+        let velez = team_with_league("Velez", "velez", "Primera-c", "arg-primera-c");
+        let mut p = make_player();
+
+        p.statistics_history
+            .seed_initial_team(&river, make_date(2026, 8, 1), false);
+        p.statistics = make_stats(4, 1); // 4 apps at River
+
+        // Loan to Boca, +5 apps, returns on D.
+        p.contract_loan = Some(loan_contract_until(2027, 6, 30));
+        p.on_manual_loan(&river, &river, &boca, make_date(2026, 10, 1));
+        p.statistics = make_stats(5, 0);
+        let d_return = make_date(2026, 12, 1);
+        p.contract_loan = None;
+        p.on_loan_return(&boca, &river, d_return);
+
+        // SAME DAY D: loan to Velez, +7 apps, then returns.
+        p.contract_loan = Some(loan_contract_until(2027, 6, 30));
+        p.on_manual_loan(&river, &river, &velez, d_return);
+        p.statistics = make_stats(7, 1);
+        p.contract_loan = None;
+        p.on_loan_return(&velez, &river, make_date(2027, 2, 1));
+
+        // Plays 3 more back at River for good.
+        p.statistics = make_stats(3, 0);
+
+        let rows = history_rows_of(&p, make_date(2027, 3, 1));
+        let river_apps: u16 = rows
+            .iter()
+            .filter(|r| r.0 == 2026 && r.1 == "river-plate")
+            .map(|r| r.3)
+            .sum();
+        assert_eq!(
+            river_apps, 7,
+            "River must show 4 (pre-loans) + 3 (post-return) = 7, not stay stuck: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.1 == "boca" && r.2 && r.3 == 5),
+            "Boca loan spell (5 apps) preserved: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.1 == "velez" && r.2 && r.3 == 7),
+            "Velez loan spell (7 apps) preserved: {rows:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
     // A long 0-app registration at the parent club before a winter loan
     // (Aug→Jan ≈ 57% of the season) is a real stint per the 40% rule and
     // must coexist with the loan row — sorted below it, since the loan is
