@@ -531,6 +531,7 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::CoachingCareerInterest => "event_coaching_career_interest",
         HappinessEventType::WantsStrongerSquad => "event_wants_stronger_squad",
         HappinessEventType::WantsTitleChallenge => "event_wants_title_challenge",
+        HappinessEventType::WantsStrongerLeague => "event_wants_stronger_league",
         HappinessEventType::WantsFirstTeamFootball => "event_wants_first_team_football",
         HappinessEventType::WantsToLeaveAfterRelegation => "event_wants_to_leave_after_relegation",
         HappinessEventType::LoanDevelopmentConcern => "event_loan_development_concern",
@@ -2318,6 +2319,7 @@ impl CareerDesireRender {
                 | HappinessEventType::ContinentalAmbitionSatisfied
                 | HappinessEventType::WantsStrongerSquad
                 | HappinessEventType::WantsTitleChallenge
+                | HappinessEventType::WantsStrongerLeague
                 | HappinessEventType::WantsFirstTeamFootball
                 | HappinessEventType::WantsToLeaveAfterRelegation
                 | HappinessEventType::WantsLoanMadePermanent
@@ -2381,6 +2383,7 @@ impl CareerDesireRender {
             K::CopaLibertadoresAmbition => "copa_libertadores",
             K::StrongerSquadAmbition => "stronger_squad",
             K::TitleChallengeAmbition => "title_challenge",
+            K::StrongerLeagueAmbition => "stronger_league",
             K::FavoriteClubHomecoming => "favorite_club_homecoming",
             K::FirstTeamBreakthroughAmbition => "first_team_football",
             K::PostRelegationAmbition => "post_relegation",

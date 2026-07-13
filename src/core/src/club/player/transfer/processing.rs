@@ -334,6 +334,81 @@ impl Default for EuropeanAmbitionConfig {
     }
 }
 
+/// Tunables for the `WantsStrongerLeague` request — an ambitious, good
+/// player in a league well below the elite tier agitating to move up a
+/// LEAGUE (not just a bigger club), driven by the league/country
+/// reputation gap.
+///
+/// Deliberately gated on **current ability**, not world reputation:
+/// fame is earned on big stages, so a genuine talent in a weak or
+/// isolated league carries a low world-rep and a reputation floor (like
+/// the European mood's `min_world_rep`) would wrongly exclude exactly
+/// the players this pull exists for. The ability bar and the ambition
+/// bar both move on continuous curves rather than hard cliffs — the
+/// weaker (or more isolated) the league, the lower the ability needed;
+/// the more loyal the player, the more ambition it takes to want out.
+#[derive(Debug, Clone, Copy)]
+pub struct StrongerLeagueConfig {
+    /// League reputation (0..10000) treated as the elite reference. No
+    /// pull for leagues at/above this — they already offer the top stage.
+    pub elite_league_rep_ref: u16,
+    /// Minimum gap below `elite_league_rep_ref` before the pull engages,
+    /// so a league just short of elite doesn't shed its stars.
+    pub min_league_gap: u16,
+    /// Ability bar at the sub-elite boundary. A larger league gap and
+    /// continental isolation lower it toward `min_ca_floor`.
+    pub base_min_ca: u8,
+    /// Ability the pull never drops below — a modest player is never
+    /// pulled up a league however weak or isolated it is.
+    pub min_ca_floor: u8,
+    /// Rep points of extra gap (beyond `min_league_gap`) that lower the
+    /// ability bar by one point.
+    pub rep_per_ca_relax: f32,
+    /// Maximum ability relaxation the league gap alone can apply.
+    pub max_ca_relax: f32,
+    /// Extra ability relaxation when the country is continentally
+    /// isolated (UEFA-suspended) — the league is a genuine dead-end.
+    pub isolation_ca_relax: f32,
+    /// Base ambition bar at neutral loyalty.
+    pub base_min_ambition: f32,
+    /// Ambition relief when the country is continentally isolated.
+    pub isolation_ambition_relief: f32,
+    /// Extra ambition demanded per loyalty point above `loyalty_pivot`
+    /// (ambition must overcome loyalty before a settled player wants out).
+    pub loyalty_ambition_slope: f32,
+    /// Loyalty at/below which loyalty adds nothing to the ambition bar.
+    pub loyalty_pivot: f32,
+    /// Oldest age that still reads as a mobile step-up candidate.
+    pub max_age: u8,
+    /// Days at the club before the pull engages — a recent signing gets
+    /// time to settle first (mirrors `OutgrownClub`).
+    pub settle_days: i64,
+    /// A player this loyal whose current club is a favourite (boyhood /
+    /// one-club man) stays put despite the league gap.
+    pub loyalty_stay_floor: f32,
+}
+
+impl Default for StrongerLeagueConfig {
+    fn default() -> Self {
+        StrongerLeagueConfig {
+            elite_league_rep_ref: 8500,
+            min_league_gap: 800,
+            base_min_ca: 142,
+            min_ca_floor: 130,
+            rep_per_ca_relax: 350.0,
+            max_ca_relax: 10.0,
+            isolation_ca_relax: 3.0,
+            base_min_ambition: 15.0,
+            isolation_ambition_relief: 2.0,
+            loyalty_ambition_slope: 0.3,
+            loyalty_pivot: 12.0,
+            max_age: 29,
+            settle_days: 365,
+            loyalty_stay_floor: 17.0,
+        }
+    }
+}
+
 /// Heuristic for "is this club on a credible continental qualification
 /// path?" Reputation-aware, season-progress-respecting, and aware of
 /// elite European institutions and live continental-cup participation —
@@ -657,6 +732,69 @@ impl Player {
             active_reasons.push(TransferRequestReason::OutgrownClub);
         }
 
+        let cfg_stronger_league = StrongerLeagueConfig::default();
+        // Wants a stronger league: a good, ambitious player in a league well
+        // below the elite tier wants to test himself higher — even when his
+        // current CLUB is locally big, so the club-size prestige check
+        // (OutgrownClub) reads as satisfied. Keys off the league/country
+        // reputation gap, gated on ABILITY (not world reputation, which fame-
+        // on-big-stages would wrongly zero for a weak-league talent). The
+        // ability bar drops on a continuous curve as the league weakens and
+        // when the country is continentally isolated (a UEFA-suspended dead-
+        // end); the ambition bar rises with loyalty, so ambition must
+        // genuinely overcome a settled player's attachment. A loyal one-club
+        // man at his favourite club stays. Mirrors OutgrownClub: no Unh
+        // required, settled at the club for a full year first.
+        if !recently_transferred
+            && age <= cfg_stronger_league.max_age
+            && self
+                .days_since_transfer(now)
+                .map(|d| d >= cfg_stronger_league.settle_days)
+                .unwrap_or(true)
+        {
+            let league_gap = cfg_stronger_league
+                .elite_league_rep_ref
+                .saturating_sub(ctx.league_reputation);
+            let isolated = ctx.country_uefa_suspended;
+            // Boyhood / one-club man at a favourite club gives it time.
+            let boyhood_stay = self.attributes.loyalty >= cfg_stronger_league.loyalty_stay_floor
+                && ctx.destination_is_favourite;
+            // `league_reputation == 0` means "unknown" (no league context) —
+            // fail closed rather than treat it as an infinitely weak league.
+            if ctx.league_reputation > 0
+                && league_gap >= cfg_stronger_league.min_league_gap
+                && !boyhood_stay
+            {
+                let gap_relax = ((league_gap - cfg_stronger_league.min_league_gap) as f32
+                    / cfg_stronger_league.rep_per_ca_relax)
+                    .min(cfg_stronger_league.max_ca_relax);
+                let iso_ca = if isolated {
+                    cfg_stronger_league.isolation_ca_relax
+                } else {
+                    0.0
+                };
+                let effective_min_ca = (cfg_stronger_league.base_min_ca as f32
+                    - gap_relax
+                    - iso_ca)
+                    .max(cfg_stronger_league.min_ca_floor as f32);
+                let iso_amb = if isolated {
+                    cfg_stronger_league.isolation_ambition_relief
+                } else {
+                    0.0
+                };
+                let effective_min_ambition = cfg_stronger_league.base_min_ambition - iso_amb
+                    + (self.attributes.loyalty - cfg_stronger_league.loyalty_pivot).max(0.0)
+                        * cfg_stronger_league.loyalty_ambition_slope;
+                let good_enough =
+                    (self.player_attributes.current_ability as f32) >= effective_min_ca;
+                let ambitious_enough = self.attributes.ambition >= effective_min_ambition;
+                if good_enough && ambitious_enough {
+                    active_reasons.push(TransferRequestReason::WantsStrongerLeague);
+                    self.emit_wants_stronger_league_mood(ctx);
+                }
+            }
+        }
+
         // New challenge: long service at ONE club breeds a desire for a fresh
         // test, independent of whether he has outgrown it. This is the "many
         // years at one club" case — a settled star at a big club who has won
@@ -725,6 +863,39 @@ impl Player {
             // No active reason left — Req can finally clear.
             self.statuses.remove(PlayerStatusType::Req);
         }
+    }
+
+    /// Emit the `WantsStrongerLeague` narrative mood so the player's page
+    /// explains the step-up-a-league desire behind his transfer request.
+    /// The request itself is raised structurally in
+    /// [`Self::process_transfer_desire`]; this is the visible counterpart,
+    /// cooldowned so the weekly pass doesn't spam the events feed. Mirrors
+    /// the squad-ambition / European-competition mood emitters.
+    fn emit_wants_stronger_league_mood(&mut self, ctx: &TransferDesireContext) {
+        let mag = HappinessConfig::default().catalog.wants_stronger_league;
+        let mut desire = CareerDesireEventContext::new(CareerDesireKind::StrongerLeagueAmbition)
+            .with_player_ability(self.player_attributes.current_ability)
+            .with_evidence(CareerDesireEvidence::HighAmbition)
+            .with_evidence(CareerDesireEvidence::PlayerAboveClubLevel);
+        // A continentally-isolated (UEFA-suspended) league sharpens the
+        // "no path up from here" grievance.
+        if ctx.country_uefa_suspended {
+            desire = desire.with_evidence(CareerDesireEvidence::CurrentClubNotContinental);
+        }
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationAdmiration,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Personal,
+        )
+        .with_career_desire_context(desire)
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::WantsStrongerLeague,
+            mag,
+            None,
+            happiness_ctx,
+            45,
+        );
     }
 
     /// Pick at most one career-desire mood per tick. Resolves the
@@ -2034,6 +2205,144 @@ mod career_desire_tests {
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::OutgrownClub),
             "a low-ambition player doesn't agitate even at a too-small club"
+        );
+    }
+
+    #[test]
+    fn good_player_in_sub_elite_league_requests_a_stronger_league() {
+        // Ambitious (16), young (24), long-settled (400d) player at a
+        // locally-fine club in a sub-elite league (rep 6000). His club fits
+        // his stature (ambition_fit 0, so OutgrownClub stays silent), but the
+        // LEAGUE is a competitive ceiling — he wants to move up. Note the
+        // deliberately LOW world_rep (4000): this pull gates on ability, not
+        // reputation, so a genuine weak-league talent still qualifies (unlike
+        // the European mood, which a world-rep floor would exclude).
+        let today = d(2026, 5, 1);
+        let mut p = build(24, 16.0, 12.0, 10.0, 12.0, 1, 150, 4000, 400, today);
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "nl".to_string();
+        ctx.player_nationality_continent_id = 1;
+        ctx.league_reputation = 6000;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &ctx);
+        assert!(
+            p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsStrongerLeague),
+            "a good, ambitious player in a sub-elite league should want to step up"
+        );
+        assert!(p.statuses.has(PlayerStatusType::Req));
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::OutgrownClub),
+            "the pull is the league ceiling, not the club's size"
+        );
+        assert_eq!(
+            count_event(&p, HappinessEventType::WantsStrongerLeague),
+            1,
+            "the desire should also surface as a visible mood on the player's page"
+        );
+    }
+
+    #[test]
+    fn elite_league_player_does_not_request_a_stronger_league() {
+        // Same calibre of player, but already in an elite league (rep 9200) —
+        // there is no stronger league to chase.
+        let today = d(2026, 5, 1);
+        let mut p = build(24, 16.0, 12.0, 10.0, 12.0, 1, 150, 6000, 400, today);
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "es".to_string();
+        ctx.player_nationality_continent_id = 1;
+        ctx.league_reputation = 9200;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &ctx);
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsStrongerLeague)
+        );
+        assert!(!p.statuses.has(PlayerStatusType::Req));
+    }
+
+    #[test]
+    fn modest_player_in_weak_league_is_not_pulled_up() {
+        // A modest player (CA 128) in a weak, continentally-isolated league.
+        // High ambition/loyalty, but the ability bar — even relaxed by the
+        // league gap and isolation — keeps a merely-decent player put. This
+        // is why a mediocre first-choice at a big club in a cut-off league
+        // does NOT suddenly demand a move to a top-five league.
+        let today = d(2026, 5, 1);
+        let mut p = build(26, 17.0, 2.0, 18.0, 13.0, 1, 128, 4000, 400, today);
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "ru".to_string();
+        ctx.player_nationality_continent_id = 1;
+        ctx.league_reputation = 6000;
+        ctx.country_uefa_suspended = true;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &ctx);
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsStrongerLeague),
+            "a modest player isn't good enough to be pulled up a league"
+        );
+    }
+
+    #[test]
+    fn loyal_favourite_club_player_stays_despite_the_league_gap() {
+        // Good enough (CA 145) and ambitious (17) in a weak isolated league,
+        // but a fiercely loyal (18) one-club man at his favourite club — he
+        // gives the project his loyalty rather than agitating to leave.
+        let today = d(2026, 5, 1);
+        let mut p = build(26, 17.0, 12.0, 18.0, 12.0, 1, 145, 5000, 400, today);
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "ru".to_string();
+        ctx.player_nationality_continent_id = 1;
+        ctx.league_reputation = 6000;
+        ctx.country_uefa_suspended = true;
+        ctx.destination_is_favourite = true;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &ctx);
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsStrongerLeague),
+            "a loyal one-club man at his favourite club stays"
+        );
+    }
+
+    #[test]
+    fn continental_isolation_relaxes_the_step_up_bars() {
+        // A merely-good (CA 136), moderately-ambitious (13) player who would
+        // NOT qualify from an ordinary sub-elite league still wants out when
+        // his league is a continentally-isolated dead-end (UEFA-suspended):
+        // isolation lowers both the ability and the ambition bar.
+        let today = d(2026, 5, 1);
+        let mut isolated = build(24, 13.0, 12.0, 10.0, 12.0, 1, 136, 4000, 400, today);
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "ru".to_string();
+        ctx.player_nationality_continent_id = 1;
+        ctx.league_reputation = 6000;
+        ctx.country_uefa_suspended = true;
+        let mut result = PlayerResult::new(isolated.id);
+        isolated.process_transfer_desire(&mut result, today, &ctx);
+        assert!(
+            isolated
+                .transfer_request_reasons
+                .contains(&TransferRequestReason::WantsStrongerLeague),
+            "an isolated dead-end league should push even a merely-good player"
+        );
+
+        // The same player in an equally-weak but NOT isolated league stays —
+        // without the isolation relief the ability/ambition bars hold him.
+        let mut normal = build(24, 13.0, 12.0, 10.0, 12.0, 1, 136, 4000, 400, today);
+        let mut ctx2 = TransferDesireContext::default();
+        ctx2.country_code = "nl".to_string();
+        ctx2.player_nationality_continent_id = 1;
+        ctx2.league_reputation = 6000;
+        let mut result2 = PlayerResult::new(normal.id);
+        normal.process_transfer_desire(&mut result2, today, &ctx2);
+        assert!(
+            !normal
+                .transfer_request_reasons
+                .contains(&TransferRequestReason::WantsStrongerLeague),
+            "without isolation the same modest-ambition player isn't pulled up"
         );
     }
 

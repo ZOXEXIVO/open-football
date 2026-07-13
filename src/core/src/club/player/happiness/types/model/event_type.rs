@@ -479,6 +479,13 @@ pub enum HappinessEventType {
     /// by league-table context (position, points off the leader). Rare,
     /// mostly affects stars at mid-table clubs.
     WantsTitleChallenge,
+    /// A good, ambitious player wants to move up a LEAGUE — his league (or
+    /// country) sits well below the elite tier, so he has outgrown the
+    /// competitive ceiling even when his current club is locally big.
+    /// Narrative counterpart of the `WantsStrongerLeague` transfer
+    /// request (emitted alongside it from the weekly transfer-desire
+    /// pass). Carries a `CareerDesireEventContext`.
+    WantsStrongerLeague,
     /// Senior player stuck in a reserve / B / second squad dreams of
     /// genuine first-team football — his own club's first team or a
     /// club where he'd actually start. Distinct from

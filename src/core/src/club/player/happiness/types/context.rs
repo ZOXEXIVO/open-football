@@ -579,7 +579,8 @@ pub struct HappinessEventContext {
     /// counterparts). Drives the renderer for `WantsReturnHome` /
     /// `WantsEuropeanCompetition` / `WantsCopaLibertadores` /
     /// `HomeReturnOpportunity` / `ContinentalAmbitionSatisfied` /
-    /// `WantsStrongerSquad` / `WantsTitleChallenge`.
+    /// `WantsStrongerSquad` / `WantsTitleChallenge` /
+    /// `WantsStrongerLeague`.
     pub career_desire_context: Option<CareerDesireEventContext>,
     /// Career-stage payload — late-career arc: retirement considering /
     /// announced and coaching-career interest. Drives the renderer for

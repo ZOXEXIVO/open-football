@@ -480,6 +480,9 @@ pub struct MoraleEventCatalog {
     // ── Career-desire / squad-ambition pressure ──────────────────
     pub wants_stronger_squad: f32,
     pub wants_title_challenge: f32,
+    /// A good player wants to step up a whole league — his league sits
+    /// below the elite tier. Chronic drag while he stays put.
+    pub wants_stronger_league: f32,
     /// Senior reserve-squad player dreaming of genuine first-team
     /// football. Chronic drag while he stays stuck below the first team.
     pub wants_first_team_football: f32,
@@ -800,6 +803,9 @@ impl Default for MoraleEventCatalog {
             // top-player transfer realism); stronger-squad sits a notch up.
             wants_stronger_squad: -3.0,
             wants_title_challenge: -4.0,
+            // Wanting a stronger league is a chronic ambition itch on par
+            // with the squad-strength one — a settled drag, not an acute hit.
+            wants_stronger_league: -3.0,
             // A career visibly stalling in the reserves gnaws like the
             // squad-ambition moods — chronic, not acute.
             wants_first_team_football: -3.0,
@@ -1058,6 +1064,7 @@ impl MoraleEventCatalog {
             CoachingCareerInterest => self.coaching_career_interest,
             WantsStrongerSquad => self.wants_stronger_squad,
             WantsTitleChallenge => self.wants_title_challenge,
+            WantsStrongerLeague => self.wants_stronger_league,
             WantsFirstTeamFootball => self.wants_first_team_football,
             WantsToLeaveAfterRelegation => self.wants_to_leave_after_relegation,
             LoanDevelopmentConcern => self.loan_development_concern,

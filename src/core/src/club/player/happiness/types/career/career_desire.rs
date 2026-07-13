@@ -12,6 +12,11 @@ pub enum CareerDesireKind {
     /// Elite player wants to play for a genuine title challenger. Drives
     /// `WantsTitleChallenge`.
     TitleChallengeAmbition,
+    /// A good, ambitious player in a league well below the elite tier
+    /// wants to test himself in a stronger league — even when his current
+    /// CLUB is locally big. Keys off the league/country reputation gap
+    /// rather than club size. Drives `WantsStrongerLeague`.
+    StrongerLeagueAmbition,
     /// Sentimental move to a favourite/boyhood club that does not also
     /// clear the source-aware DreamMove gates. Distinct from
     /// `ReturnHomeAfterPoorAdaptation` because the player isn't escaping
@@ -43,6 +48,7 @@ impl CareerDesireKind {
             CareerDesireKind::CopaLibertadoresAmbition => "career_desire_kind_copa_libertadores",
             CareerDesireKind::StrongerSquadAmbition => "career_desire_kind_stronger_squad",
             CareerDesireKind::TitleChallengeAmbition => "career_desire_kind_title_challenge",
+            CareerDesireKind::StrongerLeagueAmbition => "career_desire_kind_stronger_league",
             CareerDesireKind::FavoriteClubHomecoming => {
                 "career_desire_kind_favorite_club_homecoming"
             }

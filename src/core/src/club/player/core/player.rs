@@ -319,6 +319,15 @@ pub enum TransferRequestReason {
     /// Post-relegation exodus mood lingered — a quality player wants to
     /// keep playing at the level the club just lost.
     RelegationEscape,
+    /// A good player in a league well below the elite tier wants to test
+    /// himself in a stronger league — even when his current CLUB is
+    /// locally big. Keys off the league/country reputation gap, not club
+    /// size (`OutgrownClub`) or continental football (`EuropeanAmbition`).
+    /// This is the "big fish in a weak or isolated league" pull that the
+    /// club-reputation prestige model misses: a locally-big club satisfies
+    /// the ambition-vs-club-size check while the league itself remains a
+    /// competitive ceiling.
+    WantsStrongerLeague,
 }
 
 /// What the manager committed to. Each variant carries everything the

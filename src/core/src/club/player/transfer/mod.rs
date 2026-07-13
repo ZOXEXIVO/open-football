@@ -9,5 +9,5 @@ pub use free_agent_market::{
 };
 pub use processing::{
     ContinentalAccessContext, ContinentalCompetitionTier, ContinentalPathHeuristic,
-    EuropeanAmbitionConfig, TransferDesireContext,
+    EuropeanAmbitionConfig, StrongerLeagueConfig, TransferDesireContext,
 };
