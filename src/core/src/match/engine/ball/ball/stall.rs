@@ -93,20 +93,31 @@ impl Ball {
         }
     }
 
+    /// Only the stall-resolution log (match-logs builds) consumes the
+    /// snapshot — production builds never call this (the capture site in
+    /// `force_takeball_if_unowned_too_long` is feature-gated). `write!`
+    /// straight into the output buffer: the previous `push_str(&format!)`
+    /// pattern built ~23 intermediate Strings per capture, and captures
+    /// fire on every owned→unowned transition.
+    #[cfg(feature = "match-logs")]
     pub(super) fn format_stall_snapshot(&self, players: &[MatchPlayer]) -> String {
+        use std::fmt::Write;
+
         let mut out = String::with_capacity(2048);
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "  ball pos=({:.1}, {:.1}, {:.1}) velocity=({:.2}, {:.2}, {:.2}) in_flight={} previous_owner={:?}",
             self.position.x, self.position.y, self.position.z,
             self.velocity.x, self.velocity.y, self.velocity.z,
             self.flags.in_flight_state,
             self.previous_owner,
-        ));
+        );
         for p in players {
             if p.is_sent_off {
                 continue;
             }
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "\n  id={} team={} pos=({:.1}, {:.1}) vel=({:.2}, {:.2}) state={} tactical={:?}",
                 p.id,
                 p.team_id,
@@ -116,7 +127,7 @@ impl Ball {
                 p.velocity.y,
                 p.state,
                 p.tactical_position.current_position,
-            ));
+            );
         }
         out
     }

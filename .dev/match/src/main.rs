@@ -25,6 +25,144 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 const RANDOM_LEVEL_MIN: u8 = 6;
 const RANDOM_LEVEL_MAX: u8 = 18;
 
+/// Allocation-counting global allocator — compiled in only with
+/// `--features alloc-count`. Two relaxed atomics per alloc: fine for
+/// counting, but it skews the timing benchmark, so the default build
+/// keeps the plain system allocator. `Bench::run` prints allocs/match
+/// and bytes/match when this is active.
+#[cfg(feature = "alloc-count")]
+mod alloc_count {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub static ALLOC_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static ALLOC_BYTES: AtomicU64 = AtomicU64::new(0);
+
+    /// Sample 1 of every N allocations with a captured backtrace so we
+    /// can attribute allocation volume to call sites. Backtrace capture
+    /// itself allocates, so a thread-local recursion guard keeps the
+    /// sampler from re-entering itself. Set OF_ALLOC_STACKS=1 to enable
+    /// (needs the `profiling` cargo profile for symbolicated frames).
+    const SAMPLE_EVERY: u64 = 512;
+    static STACKS_ENABLED: AtomicU64 = AtomicU64::new(u64::MAX); // MAX = unresolved
+    pub static SITE_COUNTS: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
+
+    thread_local! {
+        static IN_SAMPLER: Cell<bool> = const { Cell::new(false) };
+    }
+
+    fn stacks_enabled() -> bool {
+        match STACKS_ENABLED.load(Ordering::Relaxed) {
+            u64::MAX => {
+                let on = std::env::var_os("OF_ALLOC_STACKS").is_some() as u64;
+                STACKS_ENABLED.store(on, Ordering::Relaxed);
+                on == 1
+            }
+            v => v == 1,
+        }
+    }
+
+    fn maybe_sample(calls_so_far: u64) {
+        if calls_so_far % SAMPLE_EVERY != 0 || !stacks_enabled() {
+            return;
+        }
+        IN_SAMPLER.with(|flag| {
+            if flag.get() {
+                return;
+            }
+            flag.set(true);
+            let bt = std::backtrace::Backtrace::force_capture();
+            let text = bt.to_string();
+            // Keep only project frames — the interesting attribution is
+            // "which engine call site allocated", not the alloc plumbing.
+            let mut site = String::new();
+            let mut skipped_plumbing = 0u32;
+            for line in text.lines() {
+                let t = line.trim();
+                let name = t.split_once(": ").map(|(_, n)| n).unwrap_or(t);
+                // Skip the sampler's own frames and the raw alloc shims;
+                // keep everything else (RawVec / hashbrown growth frames
+                // included — they say WHAT grew even when the engine call
+                // site got inlined out of the walkable stack).
+                if name.contains("alloc_count")
+                    || name.contains("__rust_alloc")
+                    || name.contains("__rust_realloc")
+                    || name.contains("backtrace")
+                    || name.contains("LocalKey")
+                    || name.starts_with("at ")
+                    || name.starts_with("alloc::")
+                    || name.starts_with("core::iter")
+                    || name.starts_with("core::slice")
+                    || name.starts_with("core::ops")
+                {
+                    skipped_plumbing += 1;
+                    let _ = skipped_plumbing;
+                    continue;
+                }
+                if !site.is_empty() {
+                    site.push_str(" <- ");
+                }
+                site.push_str(&name[..name.len().min(120)]);
+                if site.len() > 420 {
+                    break;
+                }
+            }
+            if site.is_empty() {
+                site = "<non-engine>".to_string();
+            }
+            let mut guard = SITE_COUNTS.lock().unwrap();
+            let map = guard.get_or_insert_with(HashMap::new);
+            *map.entry(site).or_insert(0) += 1;
+            flag.set(false);
+        });
+    }
+
+    pub struct CountingAlloc;
+
+    unsafe impl GlobalAlloc for CountingAlloc {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let n = ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+            ALLOC_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
+            maybe_sample(n);
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let n = ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+            ALLOC_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
+            maybe_sample(n);
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    /// Print the aggregated alloc-site table (top `n`), then clear it.
+    pub fn dump_sites(n: usize) {
+        let mut guard = SITE_COUNTS.lock().unwrap();
+        let Some(map) = guard.take() else {
+            return;
+        };
+        let mut rows: Vec<(String, u64)> = map.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        let total: u64 = rows.iter().map(|r| r.1).sum();
+        println!("ALLOC SITES (sampled 1/{}, {} samples):", SAMPLE_EVERY, total);
+        for (site, count) in rows.into_iter().take(n) {
+            println!(
+                "  {:>6.2}%  {}",
+                count as f64 / total.max(1) as f64 * 100.0,
+                site
+            );
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: CountingAlloc = CountingAlloc;
+}
+
 fn random_level() -> u8 {
     rand::rng().random_range(RANDOM_LEVEL_MIN..=RANDOM_LEVEL_MAX)
 }
@@ -897,6 +1035,15 @@ impl Bench {
         let start = std::time::Instant::now();
         let mut checksum: u64 = 0;
         let mut total_goals: u64 = 0;
+        // Allocation counting starts AFTER squad construction of match 0
+        // would be unfair; instead snapshot before the loop and divide by
+        // n — squad building is ~1k allocs/match, noise next to the
+        // engine's total.
+        #[cfg(feature = "alloc-count")]
+        let (allocs_before, bytes_before) = (
+            alloc_count::ALLOC_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+            alloc_count::ALLOC_BYTES.load(std::sync::atomic::Ordering::Relaxed),
+        );
         for i in 0..n {
             let mut home = make_squad_calibrated(1, level);
             let mut away = make_squad_calibrated(2, level);
@@ -921,6 +1068,21 @@ impl Bench {
                 .wrapping_add(h.wrapping_mul(131).wrapping_add(a).wrapping_add(i as u64));
         }
         let secs = start.elapsed().as_secs_f64();
+        #[cfg(feature = "alloc-count")]
+        {
+            let calls = alloc_count::ALLOC_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+                - allocs_before;
+            let bytes =
+                alloc_count::ALLOC_BYTES.load(std::sync::atomic::Ordering::Relaxed) - bytes_before;
+            println!(
+                "ALLOC calls={} bytes={} per_match_calls={:.0} per_match_bytes={:.0}",
+                calls,
+                bytes,
+                calls as f64 / n.max(1) as f64,
+                bytes as f64 / n.max(1) as f64
+            );
+            alloc_count::dump_sites(30);
+        }
         println!(
             "BENCH n={} level={} time={:.3}s per_match={:.4}s total_goals={} avg_goals={:.2} checksum={:#018x}",
             n,

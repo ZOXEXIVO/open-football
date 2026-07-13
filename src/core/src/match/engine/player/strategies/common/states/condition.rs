@@ -28,6 +28,23 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
         Self::new(intensity)
     }
 
+    /// The velocity half of the metabolic curve — extracted verbatim from
+    /// `process` so the memo's miss path and debug oracle share one
+    /// definition. Pure in `(intensity_ratio_sq, sprint_peak)`.
+    #[inline]
+    fn velocity_fatigue_curve(intensity_ratio_sq: f32, sprint_peak: f32) -> f32 {
+        let intensity_ratio = intensity_ratio_sq.sqrt();
+        const BREAK_EVEN: f32 = 0.30;
+        if intensity_ratio < BREAK_EVEN {
+            // Recovery: deepest when fully stationary (−6.0 at rest),
+            // easing to zero at the break-even pace.
+            -6.0 * (1.0 - intensity_ratio / BREAK_EVEN)
+        } else {
+            let over = (intensity_ratio - BREAK_EVEN) / (1.0 - BREAK_EVEN);
+            sprint_peak * over.powf(1.15)
+        }
+    }
+
     /// Process condition changes based on activity intensity and player attributes
     /// Calculation: 75% velocity-based, 25% intensity-based
     pub fn process(self, ctx: ConditionContext) {
@@ -111,22 +128,34 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
         // 2%-of-max-speed change swinging fatigue by 50%). The anchor
         // points still track the old bands — jog≈+2.3, run≈+5.8,
         // sprint≈peak — so the calibrated trajectory is preserved.
-        let intensity_ratio = intensity_ratio_sq.sqrt();
-        const BREAK_EVEN: f32 = 0.30;
-        let sprint_peak = if T::sprint_multiplier() > 1.55 {
+        let sprint_peak: f32 = if T::sprint_multiplier() > 1.55 {
             10.0 // Forwards (highest)
         } else if T::sprint_multiplier() > 1.4 {
             9.0 // Defenders / Midfielders
         } else {
             7.0 // Goalkeepers (lowest)
         };
-        let velocity_fatigue = if intensity_ratio < BREAK_EVEN {
-            // Recovery: deepest when fully stationary (−6.0 at rest),
-            // easing to zero at the break-even pace.
-            -6.0 * (1.0 - intensity_ratio / BREAK_EVEN)
+        // The curve's `sqrt` + `powf` run per player per processed tick,
+        // yet the ratio is bit-stable across ticks whenever the player
+        // holds a steady velocity (LOD-skipped ticks carry the previous
+        // velocity verbatim; a settled `Arrive` reproduces it exactly).
+        // Memo keyed on the exact input bits — hits return the identical
+        // value (debug oracle below), misses compute the original
+        // expression unchanged.
+        let ratio_key = intensity_ratio_sq.to_bits();
+        let peak_key = sprint_peak.to_bits();
+        let memo = ctx.player.velocity_fatigue_memo;
+        let velocity_fatigue = if memo.0 == ratio_key && memo.1 == peak_key {
+            debug_assert_eq!(
+                memo.2.to_bits(),
+                Self::velocity_fatigue_curve(intensity_ratio_sq, sprint_peak).to_bits(),
+                "velocity-fatigue memo mismatch"
+            );
+            memo.2
         } else {
-            let over = (intensity_ratio - BREAK_EVEN) / (1.0 - BREAK_EVEN);
-            sprint_peak * over.powf(1.15)
+            let v = Self::velocity_fatigue_curve(intensity_ratio_sq, sprint_peak);
+            ctx.player.velocity_fatigue_memo = (ratio_key, peak_key, v);
+            v
         };
 
         // Calculate intensity-based fatigue modifier (25% of total effect)

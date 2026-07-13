@@ -1,5 +1,5 @@
 use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
-use crate::r#match::events::Event;
+use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{MatchContext, MatchField, PlayerSide};
 use log::debug;
@@ -63,12 +63,19 @@ pub struct BallGoalEventMetadata {
 pub struct BallEventDispatcher;
 
 impl BallEventDispatcher {
+    /// Dispatch one ball event, appending any follow-up events to `out`.
+    /// Out-parameter instead of a returned `Vec`: nearly every event
+    /// produces exactly one follow-up, and the per-call `Vec` was ~2% of
+    /// all engine allocations (alloc-site sampler, July 2026). `out` is
+    /// the caller's inline-buffered `EventCollection`, so the dominant
+    /// path allocates nothing.
     pub fn dispatch(
         event: BallEvent,
         field: &mut MatchField,
         context: &MatchContext,
-    ) -> Vec<Event> {
-        let mut remaining_events = Vec::new();
+        out: &mut EventCollection,
+    ) {
+        let remaining_events = out;
 
         if context.logging_enabled {
             match event {
@@ -108,19 +115,19 @@ impl BallEventDispatcher {
                     }
                 }
 
-                remaining_events.push(Event::PlayerEvent(PlayerEvent::Goal(
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::Goal(
                     metadata.goalscorer_player_id,
                     metadata.auto_goal,
                 )));
 
                 if let Some(assist_id) = metadata.assist_player_id {
-                    remaining_events.push(Event::PlayerEvent(PlayerEvent::Assist(assist_id)));
+                    remaining_events.add(Event::PlayerEvent(PlayerEvent::Assist(assist_id)));
                 }
 
                 field.reset_players_positions();
             }
             BallEvent::Claimed(player_id) => {
-                remaining_events.push(Event::PlayerEvent(PlayerEvent::ClaimBall(player_id)));
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::ClaimBall(player_id)));
             }
             BallEvent::PassCompleted(receiver_id, passer_id) => {
                 // Single completion path — `credit_completed_pass`
@@ -135,7 +142,7 @@ impl BallEventDispatcher {
                     field,
                     context,
                 );
-                remaining_events.push(Event::PlayerEvent(PlayerEvent::ClaimBall(receiver_id)));
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::ClaimBall(receiver_id)));
             }
             BallEvent::Intercepted(interceptor_id, passer_id) => {
                 // Credit the interceptor. Opponent touch ends the pass
@@ -211,7 +218,7 @@ impl BallEventDispatcher {
                         player.statistics.note_interception_zone(zone);
                     }
                 }
-                remaining_events.push(Event::PlayerEvent(PlayerEvent::ClaimBall(interceptor_id)));
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::ClaimBall(interceptor_id)));
             }
             BallEvent::Blocked(blocker_id, position) => {
                 if let Some(player) = field.get_player_mut(blocker_id) {
@@ -224,14 +231,14 @@ impl BallEventDispatcher {
                 }
             }
             BallEvent::Gained(player_id) => {
-                remaining_events.push(Event::PlayerEvent(PlayerEvent::GainBall(player_id)));
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::GainBall(player_id)));
             }
             BallEvent::TakeMe(player_id) => {
-                remaining_events.push(Event::PlayerEvent(PlayerEvent::TakeBall(player_id)));
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::TakeBall(player_id)));
             }
             BallEvent::Offside(receiver_id, position) => {
                 field.ball.clear_pending_pass_metadata();
-                remaining_events.push(Event::PlayerEvent(PlayerEvent::Offside(
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::Offside(
                     receiver_id,
                     position,
                 )));
@@ -286,8 +293,6 @@ impl BallEventDispatcher {
                 }
             }
         }
-
-        remaining_events
     }
 
     /// Classify a concluded carry and credit progressive_carries /

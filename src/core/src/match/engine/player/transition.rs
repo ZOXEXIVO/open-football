@@ -193,6 +193,7 @@ mod recorder {
     use crate::r#match::player::state::PlayerState;
     use std::collections::HashSet;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     struct Store {
         edges: Vec<GraphEdge>,
@@ -200,6 +201,48 @@ mod recorder {
     }
 
     static STORE: Mutex<Option<Store>> = Mutex::new(None);
+
+    // ── Seen-edge bitmap fast path ──────────────────────────────────────
+    //
+    // `record` runs on EVERY state transition of every player (dominant
+    // dev-harness overhead: the Mutex + SipHash of the key were ~3.5% of
+    // match CPU in `match-logs` builds). Almost every call is a repeat of
+    // an already-seen edge, so a lock-free "seen" bitmap answers the
+    // dominant path with one relaxed load. Only a genuinely new edge (a
+    // few hundred per process lifetime) falls through to the Mutex.
+    //
+    // Dense index: compact ids occupy fixed bands (0, 100.., 200.., 300..,
+    // 400.. — see `PlayerState::compact_id`), each band at most
+    // `BAND_WIDTH` wide (snapshot-pinned by `compact_id_snapshot`).
+    const BAND_WIDTH: u16 = 25;
+    const DENSE_STATES: usize = 1 + 4 * BAND_WIDTH as usize; // 101
+    const NUM_SOURCES: usize = 6;
+    const EDGE_BITS: usize = DENSE_STATES * DENSE_STATES * NUM_SOURCES;
+    const SEEN_WORDS: usize = EDGE_BITS.div_ceil(64);
+    const ZERO_WORD: AtomicU64 = AtomicU64::new(0);
+    static SEEN_BITS: [AtomicU64; SEEN_WORDS] = [ZERO_WORD; SEEN_WORDS];
+
+    /// compact_id → dense 0..DENSE_STATES, `None` for an id outside the
+    /// known bands (future-proofing: those take the slow Mutex path).
+    fn dense_state(compact_id: u16) -> Option<usize> {
+        if compact_id == 0 {
+            return Some(0);
+        }
+        let band = compact_id / 100;
+        let offset = compact_id % 100;
+        if (1..=4).contains(&band) && offset < BAND_WIDTH {
+            Some(1 + (band as usize - 1) * BAND_WIDTH as usize + offset as usize)
+        } else {
+            None
+        }
+    }
+
+    fn edge_bit(key: (u16, u16, TransitionSource)) -> Option<usize> {
+        let from = dense_state(key.0)?;
+        let to = dense_state(key.1)?;
+        let src = key.2 as usize;
+        Some((from * DENSE_STATES + to) * NUM_SOURCES + src)
+    }
 
     impl TransitionGraph {
         /// Record a `from -> to` edge tagged with its source. Deduped by
@@ -209,11 +252,27 @@ mod recorder {
         pub fn record(from: PlayerState, to: PlayerState, source: TransitionSource) {
             let edge = GraphEdge { from, to, source };
             let key = edge.key();
+            if let Some(bit) = edge_bit(key) {
+                let word = &SEEN_BITS[bit / 64];
+                let mask = 1u64 << (bit % 64);
+                // Dominant path: edge already seen — one relaxed load.
+                if word.load(Ordering::Relaxed) & mask != 0 {
+                    return;
+                }
+                // First sighting: fetch_or decides a single winner even
+                // under cross-match contention; only that winner pushes.
+                if word.fetch_or(mask, Ordering::Relaxed) & mask != 0 {
+                    return;
+                }
+            }
             let mut guard = STORE.lock().unwrap();
             let store = guard.get_or_insert_with(|| Store {
                 edges: Vec::new(),
                 seen: HashSet::new(),
             });
+            // The HashSet stays as the dedup for keys outside the dense
+            // bands (edge_bit == None) and as a harmless double-check for
+            // bitmap winners.
             if store.seen.insert(key) {
                 store.edges.push(edge);
             }
@@ -223,6 +282,9 @@ mod recorder {
         pub fn reset() {
             let mut guard = STORE.lock().unwrap();
             *guard = None;
+            for word in SEEN_BITS.iter() {
+                word.store(0, Ordering::Relaxed);
+            }
         }
 
         /// Snapshot the distinct edges observed so far.

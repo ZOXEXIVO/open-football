@@ -228,11 +228,20 @@ impl EventDispatcher {
                         }
                     }
 
-                    let ball_remaining_events =
-                        BallEventDispatcher::dispatch(ball_event, field, context);
-
-                    if process_remaining_events && !ball_remaining_events.is_empty() {
-                        remaining_events.add_range(ball_remaining_events);
+                    if process_remaining_events {
+                        BallEventDispatcher::dispatch(
+                            ball_event,
+                            field,
+                            context,
+                            &mut remaining_events,
+                        );
+                    } else {
+                        // Depth-2 dispatch intentionally DROPS follow-up
+                        // events (matching the old "compute the Vec, don't
+                        // add it" behaviour) — hand the dispatcher a
+                        // throwaway inline-buffered sink.
+                        let mut sink = EventCollection::new();
+                        BallEventDispatcher::dispatch(ball_event, field, context, &mut sink);
                     }
                 }
                 Event::PlayerEvent(player_event) => {

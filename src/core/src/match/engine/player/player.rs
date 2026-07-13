@@ -175,6 +175,17 @@ pub struct MatchPlayer {
     /// `Cell`) so `MatchPlayer` stays `Sync` — league/world harnesses
     /// share rosters across match threads.
     max_speed_memo: MaxSpeedMemo,
+
+    /// Memo for the fatigue processor's velocity curve, keyed on
+    /// `(intensity_ratio_sq bits, sprint_peak bits)` — see
+    /// `ConditionProcessor::velocity_fatigue_curve`. The curve costs a
+    /// `sqrt` + `powf` per player per processed tick, yet its input is
+    /// bit-stable across ticks whenever the player cruises at a steady
+    /// velocity (every LOD-skipped tick, every settled `Arrive`). Plain
+    /// tuple (not a `Cell`): the condition processor holds `&mut`, and a
+    /// plain field keeps `MatchPlayer` `Sync`. The sentinel peak-bits `0`
+    /// never matches a real key (sprint peaks are 7/9/10).
+    pub(crate) velocity_fatigue_memo: (u32, u32, f32),
 }
 
 /// `(condition, max_speed)` packed into one `AtomicU64` (key in the high
@@ -357,6 +368,7 @@ impl MatchPlayer {
             starting_recovery_debt: player.load.recovery_debt,
             crowd_arousal: 1.0,
             max_speed_memo: MaxSpeedMemo::new(),
+            velocity_fatigue_memo: (0, 0, 0.0),
         }
     }
 
@@ -422,6 +434,7 @@ impl MatchPlayer {
             // re-stamps it at match start like the local path does.
             crowd_arousal: 1.0,
             max_speed_memo: MaxSpeedMemo::new(),
+            velocity_fatigue_memo: (0, 0, 0.0),
         }
     }
 

@@ -181,8 +181,44 @@ impl StateProcessingHandler for MidfielderGuardingState {
 }
 
 impl MidfielderGuardingState {
-    /// Find the best opponent to guard — attackers without ball trying to find space
+    /// Find the best opponent to guard — memoized per (player, tick):
+    /// `process()` and `velocity()` both run the scored scan within one
+    /// tick over tick-frozen inputs, so the second call returns the
+    /// identical pick (debug oracle on every hit). Shares the
+    /// `guard_target` slot with the defender variant — a player is in
+    /// exactly one role-specific state per tick.
     fn find_guard_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        let tick = ctx.current_tick();
+        let cached = ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .guard_target;
+        match cached {
+            Some(target) => {
+                debug_assert_eq!(
+                    target.map(|p| p.id),
+                    self.compute_find_guard_target(ctx).map(|p| p.id),
+                    "guard-target memo mismatch (midfielder)"
+                );
+                target
+            }
+            None => {
+                let target = self.compute_find_guard_target(ctx);
+                ctx.tick_context
+                    .player_agg_cache
+                    .borrow_mut()
+                    .slot_mut(ctx.player.id, tick)
+                    .guard_target = Some(target);
+                target
+            }
+        }
+    }
+
+    /// The scored scan behind [`find_guard_target`](Self::find_guard_target)
+    /// — attackers without ball trying to find space.
+    fn compute_find_guard_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
         let own_goal = ctx.ball().direction_to_own_goal();
         let ball_position = ctx.tick_context.positions.ball.position;
         // Our grid-stored position, fetched once — Factor 5 used to

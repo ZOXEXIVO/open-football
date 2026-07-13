@@ -617,11 +617,16 @@ impl Ball {
         self.unowned_ticks += 1;
 
         // Period just started — capture the state snapshot while it's
-        // still fresh. Every transition from owned → unowned triggers
-        // this, so routine passes also allocate; negligible for match
-        // runtime (~100 passes × 1–2KB string ≈ 200KB discarded across
-        // a 90-minute match). Held until resolution, then discarded if
-        // below the log threshold or emitted with the log otherwise.
+        // still fresh. Only the stall-resolution log (match-logs builds)
+        // ever reads it, so production skips the capture entirely.
+        // Every transition from owned → unowned lands here — that is
+        // every pass, shot and clearance, several THOUSAND per match,
+        // not the ~100 the original estimate assumed — and the capture
+        // was ~25% of all engine allocations (alloc-site sampler,
+        // July 2026). The snapshot writes into a reused buffer inside
+        // `format_stall_snapshot`, so even match-logs builds no longer
+        // pay per-capture heap churn.
+        #[cfg(feature = "match-logs")]
         if self.unowned_ticks == 1 {
             self.stall_start_snapshot = Some(self.format_stall_snapshot(players));
         }

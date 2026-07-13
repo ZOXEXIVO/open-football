@@ -216,8 +216,47 @@ impl PassEvaluator {
         cfg.angle_factor_from_dot(dot_product)
     }
 
-    /// Calculate pressure on the passer from opponents
+    /// Calculate pressure on the passer from opponents — memoized per
+    /// (passer, tick): the value doesn't depend on the candidate
+    /// receiver, yet `evaluate_pass` runs once per candidate (and some
+    /// states call `find_best_pass_option` several times per tick).
+    /// Inputs (grid snapshot, passer condition/skills, match minute)
+    /// are all tick-frozen, so the memo is bit-identical (debug oracle
+    /// on every hit). Only the slot player caches — a foreign passer
+    /// would thrash the slot's other entries.
     fn calculate_pressure_factor(ctx: &StateProcessingContext, passer: &MatchPlayer) -> f32 {
+        if passer.id != ctx.player.id {
+            return Self::compute_pressure_factor(ctx, passer);
+        }
+        let tick = ctx.current_tick();
+        let cached = ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(passer.id, tick)
+            .pass_pressure_factor;
+        match cached {
+            Some(v) => {
+                debug_assert_eq!(
+                    v.to_bits(),
+                    Self::compute_pressure_factor(ctx, passer).to_bits(),
+                    "pass-pressure memo mismatch"
+                );
+                v
+            }
+            None => {
+                let v = Self::compute_pressure_factor(ctx, passer);
+                ctx.tick_context
+                    .player_agg_cache
+                    .borrow_mut()
+                    .slot_mut(passer.id, tick)
+                    .pass_pressure_factor = Some(v);
+                v
+            }
+        }
+    }
+
+    fn compute_pressure_factor(ctx: &StateProcessingContext, passer: &MatchPlayer) -> f32 {
         let pressure_radius = PassEvaluatorConfig::default().pressure_radius;
 
         // Compute closest distance and count without allocation
@@ -340,14 +379,13 @@ impl PassEvaluator {
         passer: &MatchPlayer,
         distance: f32,
     ) -> f32 {
-        let minute = sc::minute_from_ms(ctx.context.total_match_time);
         // Distance blend: short passes weighted toward `passing_execution`
         // (technique-led), long passes weighted toward `long_passing`
         // (vision-led). Crossover at ~80u so the weighting transitions
-        // smoothly across the field.
+        // smoothly across the field. Only the blend depends on the
+        // candidate — the two composites are memoized per (passer, tick).
         let long_weight = (distance / 80.0).clamp(0.0, 1.0);
-        let short = sc::passing_execution(passer, minute);
-        let long = sc::long_passing(passer, minute);
+        let (short, long) = Self::passing_composites(ctx, passer);
         let composite = short * (1.0 - long_weight) + long * long_weight;
         // Floor lowered 0.30 → 0.05 so a sub-5 passer is meaningfully
         // worse than a 10/20 passer — the downstream success formula
@@ -368,6 +406,53 @@ impl PassEvaluator {
         // visibly worse at receiving than an average 10/20 — instead
         // of cliff-equal to anyone below 6/20.
         sc::receiving_first_touch(receiver_player, minute).clamp(0.05, 1.0)
+    }
+
+    /// `(passing_execution, long_passing)` for the passer — memoized
+    /// per (passer, tick); see `PlayerTickCache::passing_composites`.
+    /// Each composite builds a full `SkillBands` set, and
+    /// `calculate_passer_ability` re-derived both once per candidate
+    /// receiver.
+    fn passing_composites(ctx: &StateProcessingContext, passer: &MatchPlayer) -> (f32, f32) {
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        if passer.id != ctx.player.id {
+            return (
+                sc::passing_execution(passer, minute),
+                sc::long_passing(passer, minute),
+            );
+        }
+        let tick = ctx.current_tick();
+        let cached = ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(passer.id, tick)
+            .passing_composites;
+        match cached {
+            Some(pair) => {
+                debug_assert_eq!(
+                    (pair.0.to_bits(), pair.1.to_bits()),
+                    (
+                        sc::passing_execution(passer, minute).to_bits(),
+                        sc::long_passing(passer, minute).to_bits()
+                    ),
+                    "passing-composites memo mismatch"
+                );
+                pair
+            }
+            None => {
+                let pair = (
+                    sc::passing_execution(passer, minute),
+                    sc::long_passing(passer, minute),
+                );
+                ctx.tick_context
+                    .player_agg_cache
+                    .borrow_mut()
+                    .slot_mut(passer.id, tick)
+                    .passing_composites = Some(pair);
+                pair
+            }
+        }
     }
 
     /// Calculate tactical value of the pass
@@ -864,6 +949,19 @@ impl PassEvaluator {
                 let projected_point = passer.position + pass_direction * projection_distance;
                 let perp_distance = (opponent.position - projected_point).norm();
 
+                // The skill-scaled radius below is bounded to [3.0, 7.0]
+                // (skills are non-negative and capped at 20), so outside
+                // 7.0 the predicate can never pass and strictly inside
+                // 3.0 it always does — only the band in between needs
+                // the per-opponent skill lookup. Same boolean, fewer
+                // `by_id` probes.
+                if perp_distance >= 7.0 {
+                    return false;
+                }
+                if perp_distance < 3.0 {
+                    return true;
+                }
+
                 // Consider opponent's interception ability
                 let players = ctx.player();
                 let opponent_skills = players.skills(opponent.id);
@@ -968,9 +1066,20 @@ impl PassEvaluator {
                 .grid
                 .teammates(teammate.id, 0.0, 50.0)
                 .count();
-            let close_opponents_count = ctx.tick_context.grid.opponents(teammate.id, 30.0).count();
-            let medium_opponents_count =
-                ctx.tick_context.grid.opponents(teammate.id, 60.0).count() - close_opponents_count;
+            // One opponent walk instead of two: grid membership is
+            // decided on `dist_sq <= r²` and the yielded distance is the
+            // correctly-rounded sqrt, so `dist <= 30.0` splits the r=60
+            // result set exactly like a separate r=30 query (30² = 900
+            // is exact in f32).
+            let mut close_opponents_count: usize = 0;
+            let mut medium_opponents_count: usize = 0;
+            for (_, dist) in ctx.tick_context.grid.opponents(teammate.id, 60.0) {
+                if dist <= 30.0 {
+                    close_opponents_count += 1;
+                } else {
+                    medium_opponents_count += 1;
+                }
+            }
 
             // Close opponents count triple — passing into tight marking is very risky
             let weighted_nearby =

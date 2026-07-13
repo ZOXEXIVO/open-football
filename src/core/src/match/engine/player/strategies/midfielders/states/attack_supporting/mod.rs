@@ -500,16 +500,22 @@ impl MidfielderAttackSupportingState {
     ) -> Vector3<f32> {
         let field_height = ctx.context.field_size.height as f32;
 
-        // Identify gaps in the box
-        let box_defenders = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opp| {
-                let dist_to_goal = (opp.position - goal_position).magnitude();
-                dist_to_goal < 200.0 && opp.tactical_positions.is_defender()
-            })
-            .collect::<Vec<_>>();
+        // Identify gaps in the box. Only the defenders' y coordinates are
+        // ever read, and at most 11 opponents exist — a stack buffer
+        // replaces the per-tick Vec collect (same iteration order).
+        let mut defender_ys = [0.0f32; 11];
+        let mut n = 0usize;
+        for opp in ctx.players().opponents().all() {
+            let dist_to_goal = (opp.position - goal_position).magnitude();
+            if dist_to_goal < 200.0 && opp.tactical_positions.is_defender() {
+                if n == defender_ys.len() {
+                    break;
+                }
+                defender_ys[n] = opp.position.y;
+                n += 1;
+            }
+        }
+        let box_defenders = &defender_ys[..n];
 
         // Find best entry point based on defender positions
         if box_defenders.is_empty() {
@@ -521,8 +527,8 @@ impl MidfielderAttackSupportingState {
             let mut max_gap_size = 0.0;
 
             for window in box_defenders.windows(2) {
-                let gap_y = (window[0].position.y + window[1].position.y) / 2.0;
-                let gap_size = (window[1].position.y - window[0].position.y).abs();
+                let gap_y = (window[0] + window[1]) / 2.0;
+                let gap_size = (window[1] - window[0]).abs();
 
                 if gap_size > max_gap_size {
                     max_gap_size = gap_size;
@@ -531,13 +537,9 @@ impl MidfielderAttackSupportingState {
             }
 
             // Also check edges
-            let edge_gap_top =
-                field_height * 0.35 - box_defenders.first().map(|d| d.position.y).unwrap_or(0.0);
-            let edge_gap_bottom = field_height * 0.65
-                - box_defenders
-                    .last()
-                    .map(|d| d.position.y)
-                    .unwrap_or(field_height);
+            let edge_gap_top = field_height * 0.35 - box_defenders.first().copied().unwrap_or(0.0);
+            let edge_gap_bottom =
+                field_height * 0.65 - box_defenders.last().copied().unwrap_or(field_height);
 
             if edge_gap_top > max_gap_size {
                 best_gap_y = goal_position.y - 80.0;
@@ -703,10 +705,8 @@ impl MidfielderAttackSupportingState {
         let player_position = ctx.player.position;
         let goal_position = ctx.player().opponent_goal_position();
 
-        // Identify free channels between defenders
-        let channels = self.identify_free_channels(ctx, goal_position);
-
-        if let Some(best_channel) = channels.first() {
+        // Identify the best free channel between defenders
+        if let Some(best_channel) = self.best_free_channel(ctx, goal_position) {
             // Run into the free channel, all the way to the edge of the
             // box (~95u from goal) instead of stopping at 150u — at 150u
             // a midfielder making a "late box run" was still ~1.7x beyond
@@ -747,18 +747,11 @@ impl MidfielderAttackSupportingState {
         field_width: f32,
         field_height: f32,
     ) -> Vector3<f32> {
-        // Check where attacking teammates are
-        let attacking_players = self.get_attacking_teammates(ctx);
-
         // Create triangles with ball carrier and forwards
         if let Some(ball_holder) = self.find_ball_holder(ctx) {
             // Position to create a passing triangle
-            let triangle_position = self.create_passing_triangle(
-                ctx,
-                &ball_holder,
-                &attacking_players,
-                attacking_direction,
-            );
+            let triangle_position =
+                self.create_passing_triangle(ctx, &ball_holder, attacking_direction);
 
             if self.is_position_valuable(ctx, triangle_position) {
                 return triangle_position.clamp_to_field(field_width, field_height);
@@ -799,54 +792,89 @@ impl MidfielderAttackSupportingState {
         adjusted_position.clamp_to_field(field_width, field_height)
     }
 
-    /// Identify free channels between defenders
-    fn identify_free_channels(
+    /// Least-congested free channel between defenders. The old
+    /// `identify_free_channels` materialised every channel into a Vec and
+    /// congestion-sorted it, yet its only consumer ever read `.first()` —
+    /// and it ran once per velocity tick for every attack-supporting
+    /// midfielder in the final third (~47% of all engine allocations,
+    /// alloc-site sampler July 2026). A stack buffer + single best-pick
+    /// pass returns the same channel: the sort was stable, so its
+    /// `.first()` was the first-encountered minimum-congestion channel in
+    /// defender-y window order — exactly what the strictly-less
+    /// comparison below keeps.
+    fn best_free_channel(
         &self,
         ctx: &StateProcessingContext,
         goal_position: Vector3<f32>,
-    ) -> Vec<Channel> {
-        // Collect only defender positions (small data), not the full player
-        // structs, and sort in place — avoids two Vec<MatchPlayerLite> clones.
-        let mut defender_ys: Vec<(f32, Vector3<f32>)> = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opp| opp.tactical_positions.is_defender())
-            .map(|opp| (opp.position.y, opp.position))
-            .collect();
+    ) -> Option<Channel> {
+        // At most 11 opponents are on the pitch — the roster fits a
+        // fixed stack buffer.
+        let mut defender_ys = [(0.0f32, Vector3::<f32>::zeros()); 11];
+        let mut n = 0usize;
+        for opp in ctx.players().opponents().all() {
+            if !opp.tactical_positions.is_defender() {
+                continue;
+            }
+            if n == defender_ys.len() {
+                break;
+            }
+            defender_ys[n] = (opp.position.y, opp.position);
+            n += 1;
+        }
 
-        if defender_ys.len() < 2 {
-            return vec![Channel {
+        if n < 2 {
+            return Some(Channel {
                 center_y: goal_position.y,
                 width: 30.0,
                 congestion: 0.0,
-            }];
+            });
         }
 
-        defender_ys.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+        // Insertion sort by y — stable, matching the old Vec `sort_by`
+        // (equal keys keep their encounter order).
+        for i in 1..n {
+            let item = defender_ys[i];
+            let mut j = i;
+            while j > 0
+                && defender_ys[j - 1]
+                    .0
+                    .partial_cmp(&item.0)
+                    .unwrap_or(Ordering::Equal)
+                    == Ordering::Greater
+            {
+                defender_ys[j] = defender_ys[j - 1];
+                j -= 1;
+            }
+            defender_ys[j] = item;
+        }
 
-        let mut channels: Vec<Channel> = Vec::with_capacity(defender_ys.len().saturating_sub(1));
-
-        // Find gaps between defenders
-        for window in defender_ys.windows(2) {
+        // Find gaps between defenders, keeping the first-encountered
+        // least-congested one.
+        let mut best: Option<Channel> = None;
+        for window in defender_ys[..n].windows(2) {
             let gap = (window[1].0 - window[0].0).abs();
             if gap > CHANNEL_WIDTH {
-                channels.push(Channel {
-                    center_y: (window[0].0 + window[1].0) / 2.0,
-                    width: gap,
-                    congestion: self.calculate_channel_congestion(ctx, window[0].1, window[1].1),
-                });
+                let congestion = self.calculate_channel_congestion(ctx, window[0].1, window[1].1);
+                let better = match &best {
+                    None => true,
+                    Some(b) => {
+                        congestion
+                            .partial_cmp(&b.congestion)
+                            .unwrap_or(Ordering::Equal)
+                            == Ordering::Less
+                    }
+                };
+                if better {
+                    best = Some(Channel {
+                        center_y: (window[0].0 + window[1].0) / 2.0,
+                        width: gap,
+                        congestion,
+                    });
+                }
             }
         }
 
-        // Sort by least congested
-        channels.sort_by(|a, b| {
-            a.congestion
-                .partial_cmp(&b.congestion)
-                .unwrap_or(Ordering::Equal)
-        });
-
-        channels
+        best
     }
 
     /// Check if position risks being offside
@@ -939,17 +967,29 @@ impl MidfielderAttackSupportingState {
         &self,
         ctx: &StateProcessingContext,
         ball_holder: &MatchPlayerLite,
-        attacking_players: &[MatchPlayerLite],
         attacking_direction: f32,
     ) -> Vector3<f32> {
         let ball_holder_pos = ball_holder.position;
 
-        // Find the most advanced attacker
-        let forward = attacking_players.iter().max_by(|a, b| {
-            let a_advance = a.position.x * attacking_direction;
-            let b_advance = b.position.x * attacking_direction;
-            a_advance.partial_cmp(&b_advance).unwrap_or(Ordering::Equal)
-        });
+        // Find the most advanced attacker among the attacking teammates
+        // (forwards, plus midfielders already in an attacking position).
+        // Same candidate set and `max_by` tie-break the old
+        // `get_attacking_teammates` Vec materialised — run directly over
+        // the iterator so the per-tick collect is gone.
+        let forward = ctx
+            .players()
+            .teammates()
+            .nearby(300.0)
+            .filter(|t| {
+                t.tactical_positions.is_forward()
+                    || (t.tactical_positions.is_midfielder()
+                        && self.is_in_attacking_position(ctx, t))
+            })
+            .max_by(|a, b| {
+                let a_advance = a.position.x * attacking_direction;
+                let b_advance = b.position.x * attacking_direction;
+                a_advance.partial_cmp(&b_advance).unwrap_or(Ordering::Equal)
+            });
 
         if let Some(forward) = forward {
             // Position to create triangle
@@ -969,19 +1009,6 @@ impl MidfielderAttackSupportingState {
 
         // Default progressive position
         ball_holder_pos + Vector3::new(attacking_direction * 40.0, 20.0, 0.0)
-    }
-
-    /// Get attacking teammates
-    fn get_attacking_teammates(&self, ctx: &StateProcessingContext) -> Vec<MatchPlayerLite> {
-        ctx.players()
-            .teammates()
-            .nearby(300.0)
-            .filter(|t| {
-                t.tactical_positions.is_forward()
-                    || (t.tactical_positions.is_midfielder()
-                        && self.is_in_attacking_position(ctx, t))
-            })
-            .collect()
     }
 
     /// Check if a position is valuable for attack

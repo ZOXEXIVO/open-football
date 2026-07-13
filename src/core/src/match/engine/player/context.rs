@@ -3,8 +3,8 @@ use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSk
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::player::strategies::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
-    MatchField, MatchObjectsPositions, MatchPlayerCollection, PassOriginRestart, PlayerSide,
-    ShotTarget, Space, SpatialGrid,
+    MatchField, MatchObjectsPositions, MatchPlayerCollection, MatchPlayerLite, PassOriginRestart,
+    PlayerSide, ShotTarget, Space, SpatialGrid,
 };
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 use nalgebra::Vector3;
@@ -65,6 +65,11 @@ pub struct ProfileMemos {
     defender: Vec<(u32, u64, DefenderSkillProfile)>,
     midfielder: Vec<(u32, u64, MidfielderSkillProfile)>,
     goalkeeper: Vec<(u32, u64, GoalkeeperSkillProfile)>,
+    /// Keyless rows: the guard receiver-threat blend
+    /// (`DefenderGuardingState::receiver_threat`) reads only static
+    /// in-match skills, so a value computed once holds for the whole
+    /// match — no invalidation key needed.
+    receiver_threat: Vec<(u32, f32)>,
 }
 
 impl ProfileMemos {
@@ -73,7 +78,20 @@ impl ProfileMemos {
             defender: Vec::with_capacity(24),
             midfielder: Vec::with_capacity(24),
             goalkeeper: Vec::with_capacity(4),
+            receiver_threat: Vec::with_capacity(24),
         }
+    }
+
+    #[inline]
+    pub fn receiver_threat_get(&self, player_id: u32) -> Option<f32> {
+        self.receiver_threat
+            .iter()
+            .find(|(id, _)| *id == player_id)
+            .map(|(_, v)| *v)
+    }
+
+    pub fn receiver_threat_put(&mut self, player_id: u32, value: f32) {
+        self.receiver_threat.push((player_id, value));
     }
 
     #[inline]
@@ -167,6 +185,25 @@ pub struct PlayerTickCache {
     /// iterator is non-empty).
     pub nearest_opponent_sq: Option<f32>,
     pub nearest_teammate_sq: Option<f32>,
+    /// Guard-target pick (`find_guard_target`) — a scored scan over
+    /// nearby opponents that both `process()` and `velocity()` of the
+    /// guarding states run within one tick. One slot serves the
+    /// defender AND midfielder variants: a player occupies exactly one
+    /// role-specific state per tick, so the slot never mixes formulas.
+    /// `Some(inner)` = computed this tick (`inner` = the pick).
+    pub guard_target: Option<Option<MatchPlayerLite>>,
+    /// Passer-side invariants of the pass evaluator, recomputed
+    /// identically for EVERY candidate receiver — and some states run
+    /// `find_best_pass_option` several times within one tick. Both are
+    /// pure over the frozen snapshot + the passer's own frozen
+    /// condition, and cached only when the passer IS the slot player
+    /// (`evaluate_pass` keeps an explicit passer arg for generality,
+    /// but every live call site passes `ctx.player`).
+    pub pass_pressure_factor: Option<f32>,
+    /// `(passing_execution, long_passing)` composite pair backing
+    /// `PassEvaluator::calculate_passer_ability` — only the per-
+    /// candidate distance blend varies between calls.
+    pub passing_composites: Option<(f32, f32)>,
 }
 
 impl Default for PlayerTickCache {
@@ -193,6 +230,9 @@ impl PlayerTickCache {
             offside_last_defender_x: None,
             nearest_opponent_sq: None,
             nearest_teammate_sq: None,
+            guard_target: None,
+            pass_pressure_factor: None,
+            passing_composites: None,
         }
     }
 
@@ -213,6 +253,9 @@ impl PlayerTickCache {
             self.offside_last_defender_x = None;
             self.nearest_opponent_sq = None;
             self.nearest_teammate_sq = None;
+            self.guard_target = None;
+            self.pass_pressure_factor = None;
+            self.passing_composites = None;
         }
         self
     }

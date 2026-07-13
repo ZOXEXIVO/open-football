@@ -1,4 +1,5 @@
 use crate::IntegerUtils;
+use crate::PlayerPositionType;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
@@ -1719,7 +1720,23 @@ impl ForwardRunningState {
     /// Calculate supporting movement when team has ball
 
     fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
-        let teammates: Vec<MatchPlayerLite> = ctx.players().teammates().nearby(300.0).collect();
+        // ≤10 teammates are on the pitch — a stack buffer replaces the
+        // per-evaluation Vec collect (same iteration order, the helper
+        // predicates below take a slice either way).
+        let mut teammates_buf = [MatchPlayerLite {
+            id: 0,
+            position: Vector3::zeros(),
+            tactical_positions: PlayerPositionType::Goalkeeper,
+        }; 11];
+        let mut teammates_len = 0usize;
+        for t in ctx.players().teammates().nearby(300.0) {
+            if teammates_len == teammates_buf.len() {
+                break;
+            }
+            teammates_buf[teammates_len] = t;
+            teammates_len += 1;
+        }
+        let teammates = &teammates_buf[..teammates_len];
 
         if teammates.is_empty() {
             return false;

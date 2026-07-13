@@ -227,9 +227,82 @@ impl StateProcessingHandler for DefenderGuardingState {
 }
 
 impl DefenderGuardingState {
-    /// Find the best opponent to guard — focus on attackers without the ball
-    /// who are trying to find space near our goal
+    /// Find the best opponent to guard — memoized per (player, tick):
+    /// `process()` and `velocity()` both run the scored scan within one
+    /// tick over tick-frozen inputs (grid roster, ball snapshot, own
+    /// position — mutated only after the state runs), so the second
+    /// call returns the identical pick (debug oracle on every hit).
     fn find_guard_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        let tick = ctx.current_tick();
+        let cached = ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .guard_target;
+        match cached {
+            Some(target) => {
+                debug_assert_eq!(
+                    target.map(|p| p.id),
+                    self.compute_find_guard_target(ctx).map(|p| p.id),
+                    "guard-target memo mismatch (defender)"
+                );
+                target
+            }
+            None => {
+                let target = self.compute_find_guard_target(ctx);
+                ctx.tick_context
+                    .player_agg_cache
+                    .borrow_mut()
+                    .slot_mut(ctx.player.id, tick)
+                    .guard_target = Some(target);
+                target
+            }
+        }
+    }
+
+    /// Receiver-threat blend over the opponent's STATIC in-match skills
+    /// — six `powf` curves whose inputs cannot move during a match, so
+    /// the value is computed once per opponent and memoized for the
+    /// whole match (keyless `ProfileMemos` rows).
+    fn receiver_threat(ctx: &StateProcessingContext, opponent_id: u32) -> f32 {
+        let player_ops = ctx.player();
+        let skills = player_ops.skills(opponent_id);
+        ((skills.mental.off_the_ball / 20.0).powf(1.45) * 0.22
+            + (skills.physical.pace / 20.0).powf(1.25) * 0.14
+            + (skills.physical.acceleration / 20.0).powf(1.25) * 0.12
+            + (skills.technical.finishing / 20.0).powf(1.45) * 0.16
+            + (skills.mental.anticipation / 20.0).powf(1.30) * 0.14
+            + (skills.mental.composure / 20.0).powf(1.20) * 0.08)
+            .clamp(0.0, 1.0)
+    }
+
+    fn receiver_threat_cached(ctx: &StateProcessingContext, opponent_id: u32) -> f32 {
+        if let Some(v) = ctx
+            .tick_context
+            .profile_memos
+            .borrow()
+            .receiver_threat_get(opponent_id)
+        {
+            debug_assert_eq!(
+                v.to_bits(),
+                Self::receiver_threat(ctx, opponent_id).to_bits(),
+                "receiver-threat memo mismatch"
+            );
+            return v;
+        }
+        let v = Self::receiver_threat(ctx, opponent_id);
+        ctx.tick_context
+            .profile_memos
+            .borrow_mut()
+            .receiver_threat_put(opponent_id, v);
+        v
+    }
+
+    /// The scored scan behind [`find_guard_target`](Self::find_guard_target)
+    /// — focus on attackers without the ball who are trying to find
+    /// space near our goal.
+    fn compute_find_guard_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
         let own_goal = ctx.ball().direction_to_own_goal();
         let ball_position = ctx.tick_context.positions.ball.position;
 
@@ -286,16 +359,7 @@ impl DefenderGuardingState {
             // pacy poacher scores materially above a midfielder of the
             // same total skill, replacing the simple pace+finishing+
             // off_the_ball average.
-            let player_ops = ctx.player();
-            let skills = player_ops.skills(opponent.id);
-            let receiver_threat = ((skills.mental.off_the_ball / 20.0).powf(1.45) * 0.22
-                + (skills.physical.pace / 20.0).powf(1.25) * 0.14
-                + (skills.physical.acceleration / 20.0).powf(1.25) * 0.12
-                + (skills.technical.finishing / 20.0).powf(1.45) * 0.16
-                + (skills.mental.anticipation / 20.0).powf(1.30) * 0.14
-                + (skills.mental.composure / 20.0).powf(1.20) * 0.08)
-                .clamp(0.0, 1.0);
-            score += receiver_threat * 12.0;
+            score += Self::receiver_threat_cached(ctx, opponent.id) * 12.0;
 
             if score > best_score {
                 best_score = score;

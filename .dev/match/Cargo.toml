@@ -29,3 +29,30 @@ rand = "0.10"
 [profile.release]
 lto = true
 codegen-units = 1
+
+# Optimized build that keeps full debug info + symbols so samply can
+# resolve match-engine stacks (same pattern as `.dev/simulate`):
+#   cargo build --profile profiling
+#   samply record --save-only -o prof.json.gz -r 4000 \
+#       ./target/profiling/dev_match bench 10 14
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+
+# Low-inlining diagnostic build: same optimization level but no LTO and
+# many codegen units, so allocation backtraces keep the real call-site
+# frames instead of collapsing into play_with_config. Timing from this
+# profile is NOT comparable to release/profiling.
+[profile.diag]
+inherits = "release"
+lto = false
+codegen-units = 16
+debug = true
+strip = false
+
+[features]
+# Wraps the global allocator in an alloc/byte counter and makes `bench`
+# print allocation totals per match. Off by default — the counter's two
+# relaxed atomics per alloc would pollute the timing benchmark.
+alloc-count = []
