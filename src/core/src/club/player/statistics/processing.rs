@@ -1462,6 +1462,89 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // Calendar-year league (River Plate plays Feb–Dec): a stint joined in
+    // Jan–Jul maps via Season::from_date's hardcoded Aug boundary to the
+    // PRIOR season. A mid-season loan-out-and-back must NOT split the
+    // campaign across two season rows, nor leak the early months (and their
+    // merge) into the frozen prior season. season_floor clamps it back.
+    // ---------------------------------------------------------------
+    #[test]
+    fn calendar_year_league_stint_stays_in_current_season() {
+        use crate::{PlayerStatLedgerEntry, PlayerStatisticsHistoryItem};
+        let river = team_with_league("River Plate", "river-plate", "Primera", "arg-primera");
+        let boca = team_with_league("Boca", "boca", "Primera-b", "arg-primera-b");
+        let mut p = make_player();
+
+        // A frozen 2025 League row (25 apps) → season_floor resolves to 2026
+        // and current_season_year() puts the in-progress campaign at 2026.
+        let frozen = |year: u16, apps: u16| PlayerStatisticsHistoryItem {
+            season: Season::new(year),
+            team_name: "River Plate".into(),
+            team_slug: "river-plate".into(),
+            team_reputation: 9000,
+            league_name: "Primera".into(),
+            league_slug: "arg-primera".into(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: make_stats(apps, 3),
+            seq_id: year as u32,
+        };
+        p.statistics_history.items.push(frozen(2025, 25));
+        p.statistics_history.season_ledger.push(PlayerStatLedgerEntry {
+            seq_id: 2025,
+            season_start_year: 2025,
+            team_slug: "river-plate".into(),
+            team_name: "River Plate".into(),
+            team_reputation: 9000,
+            league_slug: "arg-primera".into(),
+            league_name: "Primera".into(),
+            competition_kind: crate::PlayerStatCompetitionKind::League,
+            competition_slug: "arg-primera".into(),
+            is_loan: false,
+            transfer_fee: None,
+            coverage_days: None,
+            statistics: make_stats(25, 3),
+        });
+
+        // 2026 campaign: River spell joined in FEBRUARY, 4 apps, loaned to
+        // Boca in April, back in June, plays 3 more.
+        p.statistics_history
+            .seed_initial_team(&river, make_date(2026, 2, 1), false);
+        p.statistics = make_stats(4, 1);
+        p.contract_loan = Some(loan_contract_until(2026, 12, 20));
+        p.on_manual_loan(&river, &river, &boca, make_date(2026, 4, 1));
+        p.statistics = make_stats(5, 0);
+        p.contract_loan = None;
+        p.on_loan_return(&boca, &river, make_date(2026, 6, 1));
+        p.statistics = make_stats(3, 0);
+
+        let rows = history_rows_of(&p, make_date(2026, 7, 14));
+
+        let river_2026: u16 = rows
+            .iter()
+            .filter(|r| r.0 == 2026 && r.1 == "river-plate")
+            .map(|r| r.3)
+            .sum();
+        assert_eq!(
+            river_2026, 7,
+            "2026 River must hold 4 (pre-loan) + 3 (post-return): {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.0 == 2026 && r.1 == "boca" && r.2 && r.3 == 5),
+            "the April–June Boca loan belongs to the 2026 campaign, not 2025: {rows:?}"
+        );
+        let river_2025: u16 = rows
+            .iter()
+            .filter(|r| r.0 == 2025 && r.1 == "river-plate")
+            .map(|r| r.3)
+            .sum();
+        assert_eq!(
+            river_2025, 25,
+            "the frozen 2025 row must stay 25 — current-campaign apps must not leak in: {rows:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
     // User-reported (Luciano Sokolić): a player who has already PLAYED
     // for his club this season is loaned out and later returns to the
     // SAME club. The pre-loan appearances must survive the return and the

@@ -83,6 +83,10 @@ impl PlayerStatisticsProjection {
     ) -> Vec<PlayerStatLedgerEntry> {
         let mut ledger: Vec<PlayerStatLedgerEntry> = Vec::new();
         let current_year = Self::current_season_year(history, current_date);
+        // The earliest season an entry still sitting in `current` may belong
+        // to — used to correct `Season::from_date`'s hardcoded Aug boundary
+        // for calendar-year leagues (see `season_floor`).
+        let season_floor = Self::season_floor(history);
 
         // ── 1. Past-season frozen records ─────────────────────────
         //
@@ -259,6 +263,7 @@ impl PlayerStatisticsProjection {
                     Season::from_date(e.joined_date)
                         .start_year
                         .min(current_year)
+                        .max(season_floor)
                 })
             }))
             .collect();
@@ -270,7 +275,17 @@ impl PlayerStatisticsProjection {
             let row_season_year = if is_active {
                 current_year
             } else {
-                joined_year.min(current_year)
+                // A departed spell still in `current` is part of the
+                // in-progress campaign (genuinely past spells are flushed to
+                // `items`/ledger). `Season::from_date`'s Aug boundary maps a
+                // calendar-year-league stint joined Jan–Jul to the prior
+                // season, which would split the campaign across two rows and
+                // (display-)inflate the frozen row it merges into. Clamp UP to
+                // `season_floor` (one past the last frozen season) so the
+                // stint stays in the current campaign; the `.min(current_year)`
+                // still clamps a future re-seed DOWN. No-op for Aug-boundary
+                // leagues, where `from_date` already agrees.
+                joined_year.min(current_year).max(season_floor)
             };
 
             let mut live_stats_backfilled = false;
@@ -517,6 +532,34 @@ impl PlayerStatisticsProjection {
     /// configuration into the projection. Non-League ledger rows are ignored
     /// here: inter-spell drains stamp them with the in-progress season year,
     /// so they are not proof a season has ended.
+    /// The earliest season year a spell still sitting in `history.current`
+    /// can belong to: one past the last COMPLETED (frozen) League season.
+    ///
+    /// `Season::from_date` hardcodes an Aug–Jul split, so for a calendar-year
+    /// league (Argentina, Brazil, MLS, …) a stint joined in Jan–Jul resolves
+    /// to the PRIOR season. But everything left in `current` is current-
+    /// campaign by the flush invariant (`flush_stale_entries` /
+    /// `flush_prior_season_seeds` move genuinely-past spells to `items`/the
+    /// ledger). Clamping a departed stint's row year UP to this floor keeps a
+    /// calendar-year campaign in one season row instead of leaking its early
+    /// months — and their frozen-row merge — into the season just gone.
+    ///
+    /// Returns 0 (no clamp) when there is no frozen League history yet: with
+    /// nothing frozen, `current_season_year` also falls back to the raw
+    /// calendar boundary, so every spell maps consistently and there is
+    /// nothing to correct.
+    fn season_floor(history: &PlayerStatisticsHistory) -> u16 {
+        history
+            .season_ledger
+            .iter()
+            .filter(|e| e.competition_kind == PlayerStatCompetitionKind::League)
+            .map(|e| e.season_start_year)
+            .chain(history.items.iter().map(|i| i.season.start_year))
+            .max()
+            .map(|y| y.saturating_add(1))
+            .unwrap_or(0)
+    }
+
     fn current_season_year(history: &PlayerStatisticsHistory, current_date: NaiveDate) -> u16 {
         let today_year = Season::from_date(current_date).start_year;
         let last_frozen_league_year = history

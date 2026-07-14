@@ -391,6 +391,17 @@ impl PlayerStatisticsHistory {
     }
 
     /// Mark the most recent entry for a team as departed on the given date.
+    ///
+    /// The exact `(team_slug, is_loan)` match is tried first (unchanged
+    /// behaviour). Callers derive `is_loan` from the live `is_on_loan()`,
+    /// which can disagree with the stored spell's flag at an edge — a player
+    /// transferred while `contract_loan` still lingers, or a loan→permanent
+    /// conversion. When the exact match misses, fall back to departing the
+    /// player's ACTIVE spell at this club under whatever flag it was opened:
+    /// a departure must always close the spell it left, otherwise a phantom
+    /// active entry survives and the projection / match-routing (which both
+    /// key off the first active spell — see [`Self::active_current_count`])
+    /// silently misattribute later stats.
     fn mark_departed(&mut self, team_slug: &str, is_loan: bool, date: NaiveDate) {
         if let Some(entry) = self
             .current
@@ -399,7 +410,28 @@ impl PlayerStatisticsHistory {
             .find(|e| e.team_slug == team_slug && e.is_loan == is_loan)
         {
             entry.departed_date = Some(date);
+            return;
         }
+        if let Some(entry) = self
+            .current
+            .iter_mut()
+            .rev()
+            .find(|e| e.team_slug == team_slug && e.departed_date.is_none())
+        {
+            entry.departed_date = Some(date);
+        }
+    }
+
+    /// Number of still-active (`departed_date.is_none()`) current-season
+    /// spells. Match-stat routing (`home_slug` in `on_match_played`) and the
+    /// projection's live-counter adoption both assume this is at most 1 — a
+    /// second active spell routes league games into a secondary bucket or the
+    /// wrong row. Exposed so the match path can `debug_assert!` the invariant.
+    pub fn active_current_count(&self) -> usize {
+        self.current
+            .iter()
+            .filter(|e| e.departed_date.is_none())
+            .count()
     }
 
     /// Add or update a current-season entry for (team_slug, is_loan).
@@ -499,6 +531,19 @@ impl PlayerStatisticsHistory {
             .iter()
             .rev()
             .find(|i| i.team_slug == team_slug && !i.league_slug.is_empty())
+        {
+            return (prior.league_name.clone(), prior.league_slug.clone());
+        }
+        // Final fallback: the canonical ledger. A modern save populates
+        // `season_ledger` while `items` may be empty, so without this a fresh
+        // spell opened with an empty league (e.g. an intra-club move, or the
+        // loan-return fresh-push) could land in a different `RowKey` than the
+        // player's frozen rows for the same club and split the history row.
+        if let Some(prior) = self
+            .season_ledger
+            .iter()
+            .rev()
+            .find(|e| e.team_slug == team_slug && !e.league_slug.is_empty())
         {
             return (prior.league_name.clone(), prior.league_slug.clone());
         }

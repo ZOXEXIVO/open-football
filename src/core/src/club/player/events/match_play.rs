@@ -36,6 +36,16 @@ impl Player {
         // folding under this spell. Empty when there is no active spell
         // (freshly built player) — the appearance then books to the home
         // bucket as before.
+        // Match-stat routing keys off the FIRST active (non-departed)
+        // current-season spell — a second active spell would divert this
+        // club's league games into a secondary bucket (or the wrong row).
+        // Every inter-spell event is meant to leave exactly one active spell;
+        // guard that invariant here where a violation actually corrupts data.
+        debug_assert!(
+            self.statistics_history.active_current_count() <= 1,
+            "player {} has >1 active current-season spell — match stats will misroute",
+            self.id
+        );
         let home_slug = self
             .statistics_history
             .current
