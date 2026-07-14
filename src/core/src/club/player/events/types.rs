@@ -167,6 +167,11 @@ pub struct TransferCompletion<'a> {
     /// individually `Option` so a partial package is honoured field-
     /// by-field.
     pub personal_terms: Option<PersonalTermsOffer>,
+    /// Whether to stamp a "permanent transfer" row on the player's
+    /// decision history. True for a genuine club-to-club move; false for
+    /// the loan-buyout path, which flips ownership through this same
+    /// method but narrates itself with the richer `dec_loan_buyout` row.
+    pub record_decision: bool,
 }
 
 pub struct LoanCompletion<'a> {

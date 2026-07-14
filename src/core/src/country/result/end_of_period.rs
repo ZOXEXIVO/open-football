@@ -858,7 +858,7 @@ impl CountryResult {
                 Some((fee, obligation)) => {
                     Self::execute_loan_buyout(data, event, fee, obligation, date)
                 }
-                None => Self::execute_loan_return(data, event, date),
+                None => Self::execute_loan_return(data, event, date, true),
             }
         }
     }
@@ -1032,11 +1032,11 @@ impl CountryResult {
         date: NaiveDate,
     ) {
         let Some((bci, bcoi, bcli, bti)) = data.find_club_main_team(event.borrowing_club_id) else {
-            Self::execute_loan_return(data, event, date);
+            Self::execute_loan_return(data, event, date, true);
             return;
         };
         let Some((pci, pcoi, pcli, pti)) = data.find_club_main_team(event.parent_club_id) else {
-            Self::execute_loan_return(data, event, date);
+            Self::execute_loan_return(data, event, date, true);
             return;
         };
 
@@ -1048,7 +1048,7 @@ impl CountryResult {
                 "Loan option lapsed: club {} cannot afford {} for player {}",
                 event.borrowing_club_id, fee, event.player_id
             );
-            Self::execute_loan_return(data, event, date);
+            Self::execute_loan_return(data, event, date, true);
             return;
         }
 
@@ -1117,14 +1117,19 @@ impl CountryResult {
                 // Buyout of a player already in this dressing room — no
                 // arrival reception of any kind (pending is cleared below).
                 source_is_rival: false,
+                // The buyout narrates itself with the richer row below —
+                // suppress the generic "permanent transfer" stamp so the
+                // register shows one decision, not two, for one event.
+                record_decision: false,
             });
             // No new-club arrival shock: he never changed dressing rooms.
             player.pending_signing = None;
-            player.decision_history.add(
+            player.decision_history.add_move(
                 date,
-                FormattingUtils::format_money(fee as f64),
-                "dec_loan_buyout".to_string(),
-                String::new(),
+                &parent_info.name,
+                &event.borrowing_info.name,
+                fee as f64,
+                "dec_loan_buyout",
             );
             debug!(
                 "Loan buyout: club {} signs player {} permanently from club {} for {}",
@@ -1154,7 +1159,17 @@ impl CountryResult {
 
     /// Execute a single loan return: take player from borrowing club, place at parent club.
     /// Both clubs are resolved globally by ID — works for domestic and cross-country.
-    fn execute_loan_return(data: &mut SimulatorData, event: LoanReturnEvent, date: NaiveDate) {
+    ///
+    /// `record_return` stamps a `dec_loan_returned` row on the player's
+    /// decision register. True when a loan simply runs its course; false
+    /// on the early-recall path, which records its own `dec_loan_recalled`
+    /// row at the call site and must not be double-logged.
+    fn execute_loan_return(
+        data: &mut SimulatorData,
+        event: LoanReturnEvent,
+        date: NaiveDate,
+        record_return: bool,
+    ) {
         // Find parent club location first — abort early if missing
         let parent_pos = data.find_club_main_team(event.parent_club_id);
         if parent_pos.is_none() {
@@ -1270,6 +1285,19 @@ impl CountryResult {
             player
                 .happiness
                 .add_event(HappinessEventType::ReturnedFromLoanDeflated, magnitude);
+        }
+
+        // A loan running its course is a club decision too — the player
+        // comes home. Only genuine returns stamp this; an early recall
+        // records its own `dec_loan_recalled` row at the call site.
+        if record_return {
+            player.decision_history.add_move(
+                date,
+                &event.borrowing_info.name,
+                &parent_info.name,
+                0.0,
+                "dec_loan_returned",
+            );
         }
 
         // Place at parent club
@@ -1415,7 +1443,7 @@ impl CountryResult {
 
         for event in events {
             let player_id = event.player_id;
-            Self::execute_loan_return(data, event, date);
+            Self::execute_loan_return(data, event, date, false);
             // Stamp the recall on the player's decision history so the
             // early return reads as a club decision, not a mystery.
             if let Some((ci, coi, cli, ti)) = data.find_player_position(player_id) {

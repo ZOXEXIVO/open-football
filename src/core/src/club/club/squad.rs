@@ -3,6 +3,7 @@ use super::graduation_salary;
 use crate::club::player::calculators::{
     AutomaticReleaseEligibility, FreeAgentReleaseReason, ReleaseEligibilityContext,
 };
+use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::squad::SquadAssetContext;
 use crate::{
     ContractType, Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerStatusType,
@@ -592,6 +593,12 @@ impl Club {
             // Active players only: if a player has already been released
             // (no contract, Frt) they shouldn't count against the cap, or
             // we'd re-release them every season until someone signs.
+            // Rank by the coach-observable level (visible skill + results +
+            // training), not the hidden CA digit: who is "surplus to squad
+            // requirements" is a judgement on how a player performs and
+            // applies himself, so the worst-first order the trim walks is his
+            // assessed standing. Each candidate still passes the observable
+            // `classify` + release gate below before anything happens to him.
             let mut players_at_pos: Vec<(usize, u32, u8)> = Vec::new();
             for (ti, team) in self.teams.iter().enumerate() {
                 for p in team.players.iter() {
@@ -599,7 +606,7 @@ impl Club {
                         continue;
                     }
                     if p.position().position_group() == *group {
-                        players_at_pos.push((ti, p.id, p.player_attributes.current_ability));
+                        players_at_pos.push((ti, p.id, AbilityEstimator::observable_level(p)));
                     }
                 }
             }
@@ -608,8 +615,8 @@ impl Club {
                 continue;
             }
 
-            // Sort by ability ascending — move the worst out first
-            players_at_pos.sort_by_key(|&(_, _, ca)| ca);
+            // Sort by observable level ascending — move the worst out first
+            players_at_pos.sort_by_key(|&(_, _, level)| level);
 
             let to_trim = players_at_pos.len() - max_count;
             for &(team_idx, player_id, _) in players_at_pos.iter().take(to_trim) {
@@ -839,7 +846,7 @@ mod trim_surplus_tests {
                 .birth_date(NaiveDate::from_ymd_opt(date.year() - age as i32, 1, 1).unwrap())
                 .country_id(1)
                 .attributes(PersonAttributes::default())
-                .skills(PlayerSkills::default())
+                .skills(PlayerSkills::flat_for_ability(ability))
                 .positions(PlayerPositions {
                     positions: vec![PlayerPosition {
                         position: PlayerPositionType::Goalkeeper,

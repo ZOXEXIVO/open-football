@@ -2901,7 +2901,7 @@ mod scan_loan_market_tests {
                 .birth_date(NaiveDate::from_ymd_opt(2026 - age as i32, 1, 1).unwrap())
                 .country_id(1)
                 .attributes(PersonAttributes::default())
-                .skills(PlayerSkills::default())
+                .skills(PlayerSkills::flat_for_ability(ca))
                 .positions(PlayerPositions {
                     positions: vec![PlayerPosition {
                         position: PlayerPositionType::Goalkeeper,

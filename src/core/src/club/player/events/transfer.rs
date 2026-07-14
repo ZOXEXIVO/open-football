@@ -69,6 +69,19 @@ impl Player {
             dest_position_depth_rank: None,
             source_is_rival: t.source_is_rival,
         });
+        // Stamp the move on the decisions register — the "From → To" row a
+        // demotion/listing already reads like, now closing the loop on the
+        // actual sale. A fee-bearing deal reads as a permanent transfer; a
+        // free-of-charge club-to-club move reads as a free transfer.
+        if t.record_decision {
+            let decision = if t.fee > 0.0 {
+                "dec_transfer_completed"
+            } else {
+                "dec_free_transfer_completed"
+            };
+            self.decision_history
+                .add_move(t.date, &t.from.name, &t.to.name, t.fee, decision);
+        }
     }
 
     /// React to a completed free-agent signing — the no-source-club mirror
@@ -126,6 +139,14 @@ impl Player {
             // before release, he didn't come STRAIGHT from the rival.
             source_is_rival: false,
         });
+        // A free-agent capture is a genuine recruitment decision — there is
+        // no selling club, so the register shows the club he joined.
+        self.decision_history.add(
+            date,
+            to.name.clone(),
+            "dec_free_agent_signed".to_string(),
+            String::new(),
+        );
     }
 
     /// Take and return all active sell-on obligations, clearing the list on
@@ -168,6 +189,16 @@ impl Player {
             // arrival never carries the rival-past stigma.
             source_is_rival: false,
         });
+        // Record the loan departure on the register (parent → borrower). A
+        // loan fee, when one was paid, rides alongside the route; most youth
+        // loans carry none and simply show the two clubs.
+        self.decision_history.add_move(
+            l.date,
+            &l.from.name,
+            &l.to.name,
+            l.loan_fee,
+            "dec_loan_started",
+        );
     }
 
     /// Stage a `PendingSigning` after a manual web-driven move. Mirrors
@@ -829,5 +860,115 @@ mod free_agent_source_aware_tests {
         p.complete_free_agent_signing(&FreeAgentFixtures::dest(9500), date, 42, 9500, Some(80_000));
         let pending = p.pending_signing.as_ref().expect("pending signing staged");
         assert_eq!(pending.source_club_reputation, 2_000);
+    }
+
+    /// Fixtures + assertions for the decisions-register rows the transfer
+    /// completion paths now stamp. Wrapped in a unit struct per convention.
+    struct MoveFixtures;
+
+    impl MoveFixtures {
+        fn team(name: &str) -> TeamInfo {
+            TeamInfo {
+                name: name.to_string(),
+                slug: name.to_ascii_lowercase(),
+                reputation: 5_000,
+                league_name: String::new(),
+                league_slug: String::new(),
+            }
+        }
+
+        fn dec_count(p: &Player, key: &str) -> usize {
+            p.decision_history
+                .items
+                .iter()
+                .filter(|d| d.decision == key)
+                .count()
+        }
+
+        fn completion<'a>(
+            from: &'a TeamInfo,
+            to: &'a TeamInfo,
+            fee: f64,
+            date: NaiveDate,
+            record_decision: bool,
+        ) -> TransferCompletion<'a> {
+            TransferCompletion {
+                from,
+                to,
+                fee,
+                date,
+                selling_club_id: 10,
+                buying_club_id: 20,
+                agreed_wage: None,
+                buying_league_reputation: 5_000,
+                selling_league_reputation: 5_000,
+                source_is_rival: false,
+                record_sell_on: None,
+                personal_terms: None,
+                record_decision,
+            }
+        }
+    }
+
+    /// A fee-bearing permanent transfer stamps a `dec_transfer_completed`
+    /// row whose movement carries both clubs and the fee.
+    #[test]
+    fn complete_transfer_records_permanent_transfer_decision() {
+        let mut p = FreeAgentFixtures::player(24, 12.0, 3000);
+        let from = MoveFixtures::team("Old FC");
+        let to = MoveFixtures::team("New FC");
+        let date = FreeAgentFixtures::d(2026, 7, 1);
+        p.complete_transfer(MoveFixtures::completion(&from, &to, 2_500_000.0, date, true));
+
+        assert_eq!(MoveFixtures::dec_count(&p, "dec_transfer_completed"), 1);
+        let row = p
+            .decision_history
+            .items
+            .iter()
+            .find(|d| d.decision == "dec_transfer_completed")
+            .unwrap();
+        assert!(row.movement.contains("Old FC"), "movement: {}", row.movement);
+        assert!(row.movement.contains("New FC"), "movement: {}", row.movement);
+        assert!(row.movement.contains('→'), "movement: {}", row.movement);
+    }
+
+    /// A zero-fee club-to-club move reads as a free transfer, not a
+    /// permanent one.
+    #[test]
+    fn complete_transfer_free_move_records_free_transfer_decision() {
+        let mut p = FreeAgentFixtures::player(24, 12.0, 3000);
+        let from = MoveFixtures::team("Old FC");
+        let to = MoveFixtures::team("New FC");
+        let date = FreeAgentFixtures::d(2026, 7, 1);
+        p.complete_transfer(MoveFixtures::completion(&from, &to, 0.0, date, true));
+
+        assert_eq!(MoveFixtures::dec_count(&p, "dec_free_transfer_completed"), 1);
+        assert_eq!(MoveFixtures::dec_count(&p, "dec_transfer_completed"), 0);
+    }
+
+    /// The loan-buyout path reuses `complete_transfer` to flip ownership but
+    /// narrates itself with `dec_loan_buyout`; `record_decision: false` must
+    /// keep the generic transfer row off so one event reads as one decision.
+    #[test]
+    fn complete_transfer_suppresses_decision_when_flagged() {
+        let mut p = FreeAgentFixtures::player(24, 12.0, 3000);
+        let from = MoveFixtures::team("Old FC");
+        let to = MoveFixtures::team("New FC");
+        let date = FreeAgentFixtures::d(2026, 7, 1);
+        p.complete_transfer(MoveFixtures::completion(&from, &to, 1_000_000.0, date, false));
+
+        assert_eq!(MoveFixtures::dec_count(&p, "dec_transfer_completed"), 0);
+        assert_eq!(MoveFixtures::dec_count(&p, "dec_free_transfer_completed"), 0);
+    }
+
+    /// A free-agent capture is a genuine recruitment decision — one
+    /// `dec_free_agent_signed` row naming the club he joined.
+    #[test]
+    fn complete_free_agent_signing_records_signed_decision() {
+        let mut p = FreeAgentFixtures::player(24, 12.0, 3000);
+        let date = FreeAgentFixtures::d(2026, 7, 1);
+        p.complete_free_agent_signing(&FreeAgentFixtures::dest(5000), date, 42, 5000, Some(60_000));
+
+        assert_eq!(MoveFixtures::dec_count(&p, "dec_free_agent_signed"), 1);
     }
 }

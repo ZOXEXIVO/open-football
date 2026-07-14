@@ -109,6 +109,25 @@ fn promote_status(status: PlayerSquadStatus) -> PlayerSquadStatus {
 }
 
 fn accept_and_clear(player: &mut Player, proposal: PlayerContractProposal, now: NaiveDate) {
+    // A renewal closes the loop the offered / rejected rows opened — the
+    // player putting pen to a fresh deal at his current club is a
+    // first-class decision the register should show alongside them. Read
+    // the incumbent contract BEFORE the handler installs the new one; a
+    // free-agent first signing (no current contract) is narrated by the
+    // signing path, not here.
+    if player.contract.is_some() {
+        let movement = format!(
+            "{}y · ${}/y",
+            proposal.years,
+            FormattingUtils::format_money(proposal.salary as f64)
+        );
+        player.decision_history.add(
+            now,
+            movement,
+            "dec_contract_renewal_signed".to_string(),
+            String::new(),
+        );
+    }
     AcceptContractHandler::process(player, proposal, now);
     player.pending_contract_ask = None;
 }

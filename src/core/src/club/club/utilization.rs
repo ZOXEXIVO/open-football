@@ -1,5 +1,5 @@
 use super::Club;
-use crate::club::staff::perception::PotentialEstimator;
+use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::pipeline::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
@@ -162,23 +162,28 @@ impl Club {
                 }
 
                 let age = player.age(date);
-                let ca = player.player_attributes.current_ability;
-                // Board decisions read the observable ceiling — the
-                // hidden biological PA is not visible to clubs.
+                // Squad decisions read what the coach can see — the
+                // observable current level (visible skill + results +
+                // training), never the hidden CA digit — and the observable
+                // ceiling, never the hidden biological PA.
+                let level = AbilityEstimator::observable_level(player);
                 let pa = PotentialEstimator::observable_ceiling(player, date);
 
-                // Compare player CA to the main team average —
-                // don't list players who are still competitive with the first team
-                let main_avg_ca = self.teams.teams[main_idx].players.current_ability_avg();
+                // Compare the player's assessed level to the main team's
+                // assessed average (the same CA-blind metric the classifier
+                // ranks by) — don't list players still competitive with the
+                // first team.
+                let main_avg_level = asset_ctx.squad_avg_level();
 
                 // Wealthy clubs within squad limits: only list truly unwanted players
-                if wealthy_within_limits && ca >= 50 {
+                if wealthy_within_limits && level >= 50 {
                     continue;
                 }
 
-                // Protect quality players who are competitive with the main team,
-                // regardless of age — don't list a CA 120 player just because they're 31
-                if ca >= main_avg_ca.saturating_sub(10) && age < 35 {
+                // Protect quality players who are competitive with the main
+                // team, regardless of age — don't list a first-team-level
+                // player just because they're 31.
+                if level >= main_avg_level.saturating_sub(10) && age < 35 {
                     continue;
                 }
 
@@ -202,15 +207,15 @@ impl Club {
                 }
 
                 // Decision: choose Lst vs Loa based on player profile and club context
-                if age <= 23 && pa > ca.saturating_add(5) {
+                if age <= 23 && pa > level.saturating_add(5) {
                     loan_players.push((ti, player.id, "dec_reason_young_develop".to_string()));
-                } else if ca < 60 && pa < 70 {
+                } else if level < 60 && pa < 70 {
                     transfer_players.push((
                         ti,
                         player.id,
                         "dec_reason_low_ability_surplus".to_string(),
                     ));
-                } else if age >= 34 && ca < main_avg_ca.saturating_sub(20) {
+                } else if age >= 34 && level < main_avg_level.saturating_sub(20) {
                     transfer_players.push((ti, player.id, "dec_reason_aging_surplus".to_string()));
                 } else if matches!(
                     rep_level,
@@ -243,7 +248,9 @@ impl Club {
                 .map(|(_, id, _)| *id)
                 .collect();
             let excess = total_squad - max_squad;
-            // (team_idx, id, ca, age) — rank low CA first, then older first.
+            // (team_idx, id, observable level, age) — rank lowest assessed
+            // level first, then older first, so the weakest genuine surplus
+            // goes before anyone the coach still rates.
             let mut surplus: Vec<(usize, u32, u8, u8)> = Vec::new();
             for (ti, team) in self.teams.iter().enumerate() {
                 for player in team.players.iter() {
@@ -267,7 +274,7 @@ impl Club {
                     surplus.push((
                         ti,
                         player.id,
-                        player.player_attributes.current_ability,
+                        AbilityEstimator::observable_level(player),
                         player.age(date),
                     ));
                 }
@@ -402,12 +409,13 @@ impl Club {
     /// side, or any non-main team without a league) by positional surplus.
     /// Such a side fields and rotates roughly one match a week, so it needs
     /// only so many per position; the rest are blocked depth that develops
-    /// better playing senior football on loan. Keeps the best `keep` by
-    /// current ability and loans the remainder — a manager-pinned player in
-    /// the surplus simply stays. Players already on loan / listed, or without
-    /// a contract, are left alone. Contract type is deliberately not checked:
-    /// this is the one path that loans both full-time and youth-contract
-    /// prospects out.
+    /// better playing senior football on loan. Keeps the best `keep` by the
+    /// coach-observable level (visible skill + training — youth football
+    /// produces no official ratings) and loans the remainder — a
+    /// manager-pinned player in the surplus simply stays. Players already on
+    /// loan / listed, or without a contract, are left alone. Contract type is
+    /// deliberately not checked: this is the one path that loans both
+    /// full-time and youth-contract prospects out.
     fn collect_surplus_loans(
         team: &Team,
         team_idx: usize,
@@ -433,7 +441,7 @@ impl Club {
                 .map(|p| {
                     (
                         p.id,
-                        p.player_attributes.current_ability,
+                        AbilityEstimator::observable_level(p),
                         p.is_force_match_selection,
                     )
                 })
@@ -441,7 +449,7 @@ impl Club {
             if active.len() <= keep {
                 continue;
             }
-            // Keep the best `keep` by current ability; the rest are surplus.
+            // Keep the best `keep` by observable level; the rest are surplus.
             active.sort_by(|a, b| b.1.cmp(&a.1));
             for (player_id, _, pinned) in active.into_iter().skip(keep) {
                 if !pinned {
@@ -533,6 +541,14 @@ impl Club {
 /// promotion-bound prospect (at/above the bar) is left for the rebalance to
 /// promote rather than loaned away. Depths mirror `MIN_MAIN_DEPTH` in
 /// squad.rs — keep them in sync.
+///
+/// This bar is deliberately expressed in raw `current_ability`, unlike the
+/// surplus classifier, because it must agree with the promotion engine
+/// (`rebalance_squads`), which promotes on CA. Measuring "would he be
+/// promoted?" in observable-level units while the promoter still reads CA
+/// would let the two disagree and loan away a player the rebalance is about
+/// to call up. It is a coordination bar with that engine, not a surplus /
+/// keep judgement, so it stays CA-based until the promoter itself moves.
 struct MainPromotionFloor {
     floors: [(PlayerFieldPositionGroup, u8); 4],
 }
@@ -668,9 +684,20 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 5, 1).unwrap()
         }
 
+        /// Flat skills tuned so the position-weighted visible ability lands
+        /// on `target`. The utilization audit now judges players by their
+        /// observable level (visible skill + results + training), so fixtures
+        /// express quality through skills rather than the hidden CA digit.
+        fn skills_for(target: u8) -> PlayerSkills {
+            PlayerSkills::flat_for_ability(target)
+        }
+
         /// `played` seeds official appearances (early-season sample);
         /// `idle` drives the underutilization trigger; condition is set
         /// full so the new match-readiness guard doesn't short-circuit.
+        /// Visible ability is set from `ca` via skills; `current_ability` is
+        /// also stamped to `ca` for the paths (promotion floor) that still
+        /// read it.
         fn player(
             id: u32,
             ca: u8,
@@ -694,7 +721,7 @@ mod tests {
                 .birth_date(NaiveDate::from_ymd_opt(2026 - age as i32, 1, 1).unwrap())
                 .country_id(1)
                 .attributes(PersonAttributes::default())
-                .skills(PlayerSkills::default())
+                .skills(Fx::skills_for(ca))
                 .positions(PlayerPositions {
                     positions: vec![PlayerPosition {
                         position: PlayerPositionType::MidfielderCenter,
@@ -725,7 +752,7 @@ mod tests {
                 .birth_date(NaiveDate::from_ymd_opt(2026 - age as i32, 1, 1).unwrap())
                 .country_id(1)
                 .attributes(PersonAttributes::default())
-                .skills(PlayerSkills::default())
+                .skills(Fx::skills_for(ca))
                 .positions(PlayerPositions {
                     positions: vec![PlayerPosition {
                         position: PlayerPositionType::Goalkeeper,

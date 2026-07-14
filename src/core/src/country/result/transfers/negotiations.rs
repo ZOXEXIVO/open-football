@@ -2420,8 +2420,9 @@ mod seller_fee_floor_tests {
         }
 
         /// A central midfielder with explicit CA / age / reputation / squad
-        /// status / contract expiry. Skills are the builder default — the
-        /// valuation only needs them present, not tuned.
+        /// status / contract expiry. Visible ability is set from `ca` via
+        /// skills so the squad-asset classifier (which ranks by observable
+        /// level, not the hidden CA) reads the intended pecking order.
         fn player(
             id: u32,
             ca: u8,
@@ -2445,7 +2446,7 @@ mod seller_fee_floor_tests {
                 .birth_date(NaiveDate::from_ymd_opt(birth_year, 1, 1).unwrap())
                 .country_id(1)
                 .attributes(PersonAttributes::default())
-                .skills(PlayerSkills::default())
+                .skills(PlayerSkills::flat_for_ability(ca))
                 .positions(PlayerPositions {
                     positions: vec![PlayerPosition {
                         position: PlayerPositionType::MidfielderCenter,

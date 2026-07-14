@@ -1,3 +1,4 @@
+use crate::utils::FormattingUtils;
 use chrono::NaiveDate;
 
 #[derive(Debug, Clone)]
@@ -25,5 +26,18 @@ impl PlayerDecisionHistory {
             decision,
             decided_by,
         });
+    }
+
+    /// Record a roster or market move as a `From → To` row, appending the
+    /// fee (`From → To · $2.5M`) when one changed hands. The register's
+    /// transfers, loans, buyouts and returns all share this shape, so the
+    /// label is composed here rather than re-spelled at each call site.
+    pub fn add_move(&mut self, date: NaiveDate, from: &str, to: &str, fee: f64, decision: &str) {
+        let movement = if fee > 0.0 {
+            format!("{} → {} · {}", from, to, FormattingUtils::format_money(fee))
+        } else {
+            format!("{} → {}", from, to)
+        };
+        self.add(date, movement, decision.to_string(), String::new());
     }
 }

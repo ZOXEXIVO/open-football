@@ -663,6 +663,7 @@ pub(crate) fn execute_transfer_within_country(
             selling_league_reputation,
             record_sell_on: transfer.sell_on_percentage,
             personal_terms: transfer.personal_terms.clone(),
+            record_decision: true,
             source_is_rival,
         });
 
@@ -1232,6 +1233,7 @@ fn execute_transfer_across_countries(
         record_sell_on: transfer.sell_on_percentage,
         personal_terms: transfer.personal_terms.clone(),
         source_is_rival,
+        record_decision: true,
     });
 
     let arrival_country_id = player.country_id;

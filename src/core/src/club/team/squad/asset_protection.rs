@@ -15,16 +15,28 @@
 //! of re-deriving the answer.
 //!
 //! Core principles encoded here:
+//!   * A coach never sees the hidden `current_ability` (CA) digit, so the
+//!     classifier never reads it either. A player's standing is measured by
+//!     his **observable level** — [`AbilityEstimator::observable_level`],
+//!     which fuses his visible (position-weighted) skill, his match results,
+//!     his training performance and a reputation benefit-of-the-doubt —
+//!     exactly the evidence a coach actually has. Rank within a position
+//!     group and the squad/group averages are all computed from that assessed
+//!     level, so a player is judged on how he plays and applies himself, not
+//!     on a number nobody can see. (Reputation also drives a separate,
+//!     intra-squad top-quartile "recognised name" rescue below — the absolute
+//!     nudge in the level and this relative rescue are complementary.)
 //!   * `NotYetSet` is **unknown, not surplus** — when the formal squad
-//!     status hasn't been assigned yet the role is inferred from CA rank,
-//!     reputation, age, position scarcity and prior-season minutes, and a
-//!     player we genuinely cannot place is [`SquadAssetClass::UnknownNeedsEvaluation`]
-//!     (free-transfer protected), never surplus.
+//!     status hasn't been assigned yet the role is inferred from that
+//!     observable-level rank, reputation, age, position scarcity and
+//!     prior-season minutes, and a player we genuinely cannot place is
+//!     [`SquadAssetClass::UnknownNeedsEvaluation`] (free-transfer protected),
+//!     never surplus.
 //!   * Early-season low minutes are not evidence of being unwanted — the
-//!     classifier reads CA / reputation / rank / prior season, never the
-//!     current (tiny) appearance count, and [`SquadEvidenceContext`] lets
-//!     the appearance-driven paths suppress themselves while the sample is
-//!     small.
+//!     assessed level's results channel stays silent until a real sample
+//!     exists (a benched player reads at his visible skill), and
+//!     [`SquadEvidenceContext`] lets the appearance-driven disposal paths
+//!     suppress themselves while the sample is small.
 //!   * `KeyPlayer` / `FirstTeamRegular` (and their inferred equivalents)
 //!     are always protected from loan and free transfer.
 //!
@@ -36,7 +48,7 @@ use std::collections::HashMap;
 
 use chrono::NaiveDate;
 
-use crate::club::staff::perception::PotentialEstimator;
+use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::{Club, Person, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus};
 
 /// What a player is to his club, derived from observable signals. Ordered
@@ -179,11 +191,19 @@ impl SquadEvidenceContext {
 /// adaptation "build context once, share across players" pattern) so the
 /// classifier never re-walks the roster per call.
 pub struct SquadAssetContext {
-    /// Current-ability values per position group on the senior squad. Used
-    /// for rank ("how many at my position are strictly better") and the
-    /// group average. Order within a group is irrelevant.
-    group_ca: HashMap<PlayerFieldPositionGroup, Vec<u8>>,
-    /// Mean current ability of the senior squad — the "team level".
+    /// Observable-level values ([`AbilityEstimator::observable_level`]) per
+    /// position group on the senior squad. Used for rank ("how many at my
+    /// position are strictly better in the coach's eyes") and the group
+    /// average. Never the hidden CA. Order within a group is irrelevant.
+    group_levels: HashMap<PlayerFieldPositionGroup, Vec<u8>>,
+    /// Mean observable level of the senior squad — the "team level" the
+    /// classifier measures a player's assessed level against.
+    squad_avg_level: u8,
+    /// Mean *raw* current ability of the senior squad. Not used by the
+    /// classifier itself (which is deliberately CA-blind) — retained only
+    /// for the external release-eligibility gate, whose own numeric checks
+    /// still compare a player's raw CA to a raw squad average, so its inputs
+    /// stay internally consistent. Exposed via [`Self::squad_avg_ability`].
     squad_avg_ability: u8,
     /// Reputation value (max of current / home) at the squad's top-quartile
     /// boundary. A player strictly above it is a recognised name. `i16::MAX`
@@ -240,10 +260,11 @@ impl SquadAssetContext {
     /// "team level" is then that squad's average, which is exactly the bar
     /// a reserve / youth coach measures his own deadwood against.
     pub fn for_squad(players: &PlayerCollection) -> Self {
-        let mut group_ca: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
+        let mut group_levels: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
         let mut reputations: Vec<i16> = Vec::new();
+        let mut level_sum: u32 = 0;
         let mut ca_sum: u32 = 0;
-        let mut ca_count: u32 = 0;
+        let mut count: u32 = 0;
 
         for player in players.iter() {
             // Loanees belong to their parent club — they are not this
@@ -252,31 +273,47 @@ impl SquadAssetContext {
                 continue;
             }
             let group = player.position().position_group();
-            let ca = player.player_attributes.current_ability;
-            group_ca.entry(group).or_default().push(ca);
-            ca_sum += ca as u32;
-            ca_count += 1;
+            // The rank / average picture is built from the coach-observable
+            // level, never the hidden CA.
+            let level = AbilityEstimator::observable_level(player);
+            group_levels.entry(group).or_default().push(level);
+            level_sum += level as u32;
+            // Raw CA average kept solely for the external release gate.
+            ca_sum += player.player_attributes.current_ability as u32;
+            count += 1;
             reputations.push(Self::display_reputation(player));
         }
 
-        let squad_avg_ability = ca_sum
-            .checked_div(ca_count)
-            .map(|avg| avg as u8)
-            .unwrap_or(0);
+        let squad_avg_level = level_sum.checked_div(count).map(|avg| avg as u8).unwrap_or(0);
+        let squad_avg_ability = ca_sum.checked_div(count).map(|avg| avg as u8).unwrap_or(0);
         let top_quartile_reputation = Self::top_quartile(&mut reputations);
         let evidence = SquadEvidenceContext::from_squad(players);
 
         SquadAssetContext {
-            group_ca,
+            group_levels,
+            squad_avg_level,
             squad_avg_ability,
             top_quartile_reputation,
             evidence,
         }
     }
 
-    /// The senior-squad average ability the classifier measured against.
+    /// The senior-squad average *raw* current ability. This is **not** what
+    /// the classifier ranks by (that is [`Self::squad_avg_level`]); it exists
+    /// only for the external release-eligibility gate, whose numeric checks
+    /// still work in raw-CA units. Prefer [`Self::squad_avg_level`] for any
+    /// coach-facing "how does this player compare to the squad" judgement.
     pub fn squad_avg_ability(&self) -> u8 {
         self.squad_avg_ability
+    }
+
+    /// The senior-squad average *observable level* — the coach-visible "team
+    /// level" the classifier measures each player's assessed level against.
+    /// Callers making a surplus / keep decision should compare a player's
+    /// [`AbilityEstimator::observable_level`] to this, so both sides of the
+    /// comparison are in the same CA-blind units.
+    pub fn squad_avg_level(&self) -> u8 {
+        self.squad_avg_level
     }
 
     /// Season-sample view — lets a caller suppress appearance-driven
@@ -338,18 +375,20 @@ impl SquadAssetContext {
     }
 
     /// Infer the class from observable signals when there is no decisive
-    /// formal status. Reads CA rank, reputation, age, potential and
-    /// prior-season minutes — never the current (possibly tiny) appearance
-    /// count, so it is robust to early-season / international-duty gaps.
+    /// formal status. Ranks by the coach-observable level (visible skill +
+    /// results + training), reputation, age, potential and prior-season
+    /// minutes — never the hidden CA, and never the current (possibly tiny)
+    /// appearance count, so it is robust to early-season / international-duty
+    /// gaps.
     fn infer(&self, player: &Player, date: NaiveDate) -> SquadAssetClass {
         let group = player.position().position_group();
-        let ca = player.player_attributes.current_ability;
+        let level = AbilityEstimator::observable_level(player);
         let age = player.age(date);
 
         let group_size = self.group_size(group);
-        let higher_in_group = self.higher_ca_in_group(group, ca);
-        let group_avg = self.group_avg(group).unwrap_or(ca) as i16;
-        let squad_avg = self.squad_avg_ability as i16;
+        let higher_in_group = self.higher_level_in_group(group, level);
+        let group_avg = self.group_avg(group).unwrap_or(level) as i16;
+        let squad_avg = self.squad_avg_level as i16;
 
         // De-facto starter — best in a genuinely contested position group.
         if group_size >= 2 && higher_in_group == 0 {
@@ -358,7 +397,7 @@ impl SquadAssetContext {
 
         // A recognised name at this club (top reputation tier) is a
         // first-team asset even with a thin current sample — the Zobnin
-        // case: ability may have dipped but standing has not.
+        // case: form may have dipped but standing has not.
         if self.is_high_reputation_for_club(player) {
             return SquadAssetClass::FirstTeamUseful;
         }
@@ -372,7 +411,7 @@ impl SquadAssetContext {
         // Top two-three of a real position group, at his group's level.
         if group_size >= Self::MIN_GROUP_FOR_TOP_RANK
             && higher_in_group <= Self::TOP_GROUP_RANK
-            && (ca as i16) >= group_avg - Self::NEAR_GROUP_GAP
+            && (level as i16) >= group_avg - Self::NEAR_GROUP_GAP
         {
             return SquadAssetClass::FirstTeamUseful;
         }
@@ -383,28 +422,28 @@ impl SquadAssetContext {
         // routes mean the same thing for disposal: loanable for development,
         // never the free-transfer scrapheap.
         let believed_upside = PotentialEstimator::observable_ceiling(player, date)
-            > ca.saturating_add(Self::CEILING_GAP);
-        let clearly_below_group = (ca as i16) <= group_avg - Self::NEAR_GROUP_GAP;
+            > level.saturating_add(Self::CEILING_GAP);
+        let clearly_below_group = (level as i16) <= group_avg - Self::NEAR_GROUP_GAP;
         if age <= Self::PROSPECT_MAX_AGE
-            && (ca as i16) < group_avg
+            && (level as i16) < group_avg
             && (believed_upside || clearly_below_group)
         {
             return SquadAssetClass::ProspectDevelopment;
         }
 
         // Near the group or squad level → useful rotation depth.
-        if (ca as i16) >= group_avg - Self::ROTATION_GAP
-            || (ca as i16) >= squad_avg - Self::ROTATION_GAP
+        if (level as i16) >= group_avg - Self::ROTATION_GAP
+            || (level as i16) >= squad_avg - Self::ROTATION_GAP
         {
             return SquadAssetClass::RotationUseful;
         }
 
         // Clearly below team level with no upside, or an undistinguished
-        // declining veteran → genuine surplus. Same gaps the release gate
-        // uses, so the two never disagree.
-        let clearly_below = (ca as i16) <= squad_avg - Self::SURPLUS_GAP;
+        // declining veteran → genuine surplus. Mirrors the release gate's
+        // quality gaps (in observable-level units) so the two agree.
+        let clearly_below = (level as i16) <= squad_avg - Self::SURPLUS_GAP;
         let veteran_done =
-            age >= Self::VETERAN_AGE && (ca as i16) <= squad_avg - Self::VETERAN_SURPLUS_GAP;
+            age >= Self::VETERAN_AGE && (level as i16) <= squad_avg - Self::VETERAN_SURPLUS_GAP;
         if clearly_below || veteran_done {
             return SquadAssetClass::TrueSurplus;
         }
@@ -414,25 +453,26 @@ impl SquadAssetContext {
     }
 
     fn group_size(&self, group: PlayerFieldPositionGroup) -> usize {
-        self.group_ca.get(&group).map(|v| v.len()).unwrap_or(0)
+        self.group_levels.get(&group).map(|v| v.len()).unwrap_or(0)
     }
 
-    /// Number of senior squad-mates in the same position group with
-    /// strictly higher current ability — the player's depth rank (0 = best).
-    fn higher_ca_in_group(&self, group: PlayerFieldPositionGroup, ca: u8) -> usize {
-        self.group_ca
+    /// Number of senior squad-mates in the same position group with a
+    /// strictly higher observable level — the player's depth rank in the
+    /// coach's eyes (0 = the best option at his position).
+    fn higher_level_in_group(&self, group: PlayerFieldPositionGroup, level: u8) -> usize {
+        self.group_levels
             .get(&group)
-            .map(|v| v.iter().filter(|&&c| c > ca).count())
+            .map(|v| v.iter().filter(|&&l| l > level).count())
             .unwrap_or(0)
     }
 
     fn group_avg(&self, group: PlayerFieldPositionGroup) -> Option<u8> {
-        let cas = self.group_ca.get(&group)?;
-        if cas.is_empty() {
+        let levels = self.group_levels.get(&group)?;
+        if levels.is_empty() {
             return None;
         }
-        let sum: u32 = cas.iter().map(|&c| c as u32).sum();
-        Some((sum / cas.len() as u32) as u8)
+        let sum: u32 = levels.iter().map(|&l| l as u32).sum();
+        Some((sum / levels.len() as u32) as u8)
     }
 
     /// True when the player's reputation sits in the squad's top quartile —
@@ -526,9 +566,19 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 9, 5).unwrap()
         }
 
-        /// A contracted player. `rep` sets BOTH current and home reputation
-        /// so the squad-percentile test is deterministic; `status` is the
-        /// formal squad status (use `NotYetSet` to exercise inference).
+        /// Flat skills tuned so the position-weighted visible ability lands
+        /// on `target`. The classifier now ranks by observable level (skills
+        /// + results + training), never the hidden CA digit, so fixtures must
+        /// express quality through skills. Inverts `skill_to_ability`.
+        fn skills_for(target: u8) -> PlayerSkills {
+            PlayerSkills::flat_for_ability(target)
+        }
+
+        /// A contracted player whose *visible* ability (via skills) is `ca`;
+        /// `current_ability` is also stamped to `ca` but is deliberately not
+        /// read by the classifier. `rep` sets BOTH current and home
+        /// reputation so the squad-percentile test is deterministic; `status`
+        /// is the formal squad status (use `NotYetSet` to exercise inference).
         fn player(
             id: u32,
             position: PlayerPositionType,
@@ -552,7 +602,7 @@ mod tests {
                 .birth_date(NaiveDate::from_ymd_opt(birth_year, 1, 1).unwrap())
                 .country_id(1)
                 .attributes(PersonAttributes::default())
-                .skills(PlayerSkills::default())
+                .skills(Fx::skills_for(ca))
                 .positions(PlayerPositions {
                     positions: vec![PlayerPosition {
                         position,
@@ -565,15 +615,28 @@ mod tests {
                 .unwrap()
         }
 
-        /// A young prospect with believed upside (potential well above CA).
+        /// A young prospect with believed upside. The upside is expressed
+        /// through *person* attributes (professionalism / ambition), which
+        /// the observable-ceiling estimate reads but which do NOT feed the
+        /// visible skill ability — so the prospect stays clearly below his
+        /// group's level (a development profile) rather than being lifted out
+        /// of it by his own mentals.
         fn prospect(id: u32, position: PlayerPositionType, ca: u8, age: u8) -> Player {
             let mut p = Self::player(id, position, ca, age, 200, PlayerSquadStatus::NotYetSet);
-            // Strong mentals so the observable-ceiling estimate sees upside.
             p.player_attributes.potential_ability = ca.saturating_add(40);
-            p.skills.mental.determination = 18.0;
-            p.skills.mental.work_rate = 18.0;
-            p.skills.mental.composure = 16.0;
-            p.skills.mental.anticipation = 16.0;
+            p.attributes.professionalism = 18.0;
+            p.attributes.ambition = 18.0;
+            p
+        }
+
+        /// Give a player a current-season league record at a fixed average
+        /// rating, driving the weighted ledger so the observable level's
+        /// results channel reads a real sample.
+        fn with_form(mut p: Player, games: u16, rating: f32) -> Player {
+            p.statistics.played = games;
+            p.statistics.rating_points = rating * games as f32;
+            p.statistics.rating_weight = games as f32;
+            p.statistics.average_rating = rating;
             p
         }
 
@@ -904,6 +967,134 @@ mod tests {
         let class = ctx.classify(r, Fx::date());
         assert_ne!(class, SquadAssetClass::TrueSurplus);
         assert!(class.is_free_transfer_protected());
+    }
+
+    // ── observable level, not the CA digit ──────────────────────────────
+
+    #[test]
+    fn high_ca_digit_with_poor_observable_level_is_surplus() {
+        // The headline case. This player's hidden CA is stamped at 130 — the
+        // top of the squad — but on the pitch he looks like an 85 (low
+        // visible skill, no form). The coach never sees the digit, only the
+        // level, so he is genuine surplus, NOT the de-facto starter his CA
+        // would have made him under a CA-ranked classifier.
+        let mut impostor = Fx::player(
+            60,
+            PlayerPositionType::MidfielderCenter,
+            85,
+            30,
+            500,
+            PlayerSquadStatus::NotYetSet,
+        );
+        impostor.player_attributes.current_ability = 130;
+        let club = Fx::club(Fx::squad_with(vec![impostor]));
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let p = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 60)
+            .unwrap();
+        assert_eq!(ctx.classify(p, Fx::date()), SquadAssetClass::TrueSurplus);
+    }
+
+    #[test]
+    fn strong_form_rescues_a_fringe_player_from_surplus() {
+        // Same visible skill (a borderline-surplus 88), same everything —
+        // except one has torn the league up all season. His results lift his
+        // assessed level out of the surplus band (he is kept / evaluated,
+        // never walked), while his no-form twin is genuine surplus. Results
+        // drive the judgement, not the identical underlying skill.
+        let make = |form: Option<(u16, f32)>| {
+            let mut p = Fx::player(
+                60,
+                PlayerPositionType::MidfielderCenter,
+                88,
+                27,
+                1000,
+                PlayerSquadStatus::NotYetSet,
+            );
+            if let Some((games, rating)) = form {
+                p = Fx::with_form(p, games, rating);
+            }
+            Fx::club(Fx::squad_with(vec![p]))
+        };
+
+        let no_form = make(None);
+        let ctx = SquadAssetContext::build(&no_form, Fx::date());
+        let p = no_form.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 60)
+            .unwrap();
+        assert_eq!(
+            ctx.classify(p, Fx::date()),
+            SquadAssetClass::TrueSurplus,
+            "no-form fringe player is surplus"
+        );
+
+        let in_form = make(Some((30, 7.8)));
+        let ctx = SquadAssetContext::build(&in_form, Fx::date());
+        let p = in_form.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 60)
+            .unwrap();
+        let class = ctx.classify(p, Fx::date());
+        assert_ne!(
+            class,
+            SquadAssetClass::TrueSurplus,
+            "a strong performer must not be surplus"
+        );
+        assert!(class.is_free_transfer_protected());
+    }
+
+    #[test]
+    fn training_performance_shifts_the_surplus_judgement() {
+        // Two identical fringe players with no match minutes; the only fresh
+        // signal is training. The diligent one is assessed strictly more
+        // favourably than the slacker — training is the coach's read on the
+        // players the surplus judgement most concerns, the ones who never get
+        // on. `protection_rank` orders the classes most-protected first.
+        let protection_rank = |c: SquadAssetClass| -> u8 {
+            match c {
+                SquadAssetClass::CorePlayer => 5,
+                SquadAssetClass::FirstTeamUseful => 4,
+                SquadAssetClass::RotationUseful => 3,
+                SquadAssetClass::UnknownNeedsEvaluation => 2,
+                SquadAssetClass::ProspectDevelopment => 1,
+                SquadAssetClass::TrueSurplus => 0,
+            }
+        };
+        let classify_with_training = |train: f32| {
+            let mut p = Fx::player(
+                60,
+                PlayerPositionType::MidfielderCenter,
+                95,
+                27,
+                1000,
+                PlayerSquadStatus::NotYetSet,
+            );
+            p.training.training_performance = train;
+            let club = Fx::club(Fx::squad_with(vec![p]));
+            let ctx = SquadAssetContext::build(&club, Fx::date());
+            let p = club.teams.teams[0]
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == 60)
+                .unwrap();
+            ctx.classify(p, Fx::date())
+        };
+
+        let slacker = classify_with_training(2.0);
+        let grafter = classify_with_training(18.0);
+        assert!(
+            protection_rank(grafter) > protection_rank(slacker),
+            "the hard trainer ({grafter:?}) must be assessed above the slacker ({slacker:?})",
+        );
     }
 
     // ── evidence context ────────────────────────────────────────────────

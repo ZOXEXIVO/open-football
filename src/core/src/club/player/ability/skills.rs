@@ -154,6 +154,22 @@ impl PlayerSkills {
         (normalized * 199.0 + 1.0).round().min(200.0).max(1.0) as u8
     }
 
+    /// Build a flat skill set (every attribute equal) whose visible ability —
+    /// [`Self::calculate_ability_for_position`] for *any* position, and
+    /// [`Self::calculate_ability`] — evaluates to `target` on the 1..200
+    /// scale. The inverse of [`Self::skill_to_ability`]; the canonical way to
+    /// construct a synthetic player of a known, *visible* level without
+    /// touching the hidden `current_ability` digit.
+    pub fn flat_for_ability(target: u8) -> PlayerSkills {
+        let v = 1.0 + (target.max(1) as f32 - 1.0) / 199.0 * 19.0;
+        let mut skills = PlayerSkills::default();
+        skills.technical.raise_floor(v);
+        skills.mental.raise_floor(v);
+        skills.physical.raise_floor(v);
+        skills.goalkeeping.raise_floor(v);
+        skills
+    }
+
     /// Calculate maximum speed without condition factor (raw speed based on skills only)
     /// Returns units/tick scaled for 10ms tick on 840-unit field (~105m pitch).
     /// At 1u = 0.125m and 100 ticks/s:

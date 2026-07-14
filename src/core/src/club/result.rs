@@ -966,7 +966,7 @@ mod tests {
             .birth_date(birth_date)
             .country_id(1)
             .attributes(PersonAttributes::default())
-            .skills(PlayerSkills::default())
+            .skills(PlayerSkills::flat_for_ability(ability))
             .positions(PlayerPositions {
                 positions: vec![PlayerPosition {
                     position: PlayerPositionType::MidfielderCenter,
