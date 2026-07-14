@@ -321,6 +321,72 @@ impl CountryResult {
                 }
             }
         }
+
+        // Self-healing: clear any `Lst` / `Loa` badge no longer backed by a
+        // live market listing or a pending listing intent, so the flag and
+        // the status can never drift into a stale "Transfer Listed".
+        Self::reconcile_stale_market_statuses(country);
+    }
+
+    /// Clear a player's `Lst` / `Loa` market badge when it no longer reflects
+    /// any market state — the self-healing counterpart to the listing pass
+    /// above. The genuine delist events already clear these (a sale via
+    /// `reset_on_club_change`, a free release via the free-agent sweep), so
+    /// this is a guard against drift: a badge left behind when a listing is
+    /// resolved or an intent flag cleared. Conservative and double-gated — a
+    /// badge is removed ONLY when there is no active market listing of its
+    /// type AND no pending intent (`is_transfer_listed` for `Lst`, a live
+    /// loan-out candidate for `Loa`) — so a genuinely-listed player is never
+    /// stripped off the market by mistake.
+    fn reconcile_stale_market_statuses(country: &mut Country) {
+        let mut transfer_listed: HashSet<u32> = HashSet::new();
+        let mut loan_listed: HashSet<u32> = HashSet::new();
+        for listing in &country.transfer_market.listings {
+            if listing.status != TransferListingStatus::Available {
+                continue;
+            }
+            match listing.listing_type {
+                TransferListingType::Loan => {
+                    loan_listed.insert(listing.player_id);
+                }
+                TransferListingType::Transfer => {
+                    transfer_listed.insert(listing.player_id);
+                }
+                TransferListingType::EndOfContract => {}
+            }
+        }
+
+        for club in country.clubs.iter_mut() {
+            // Owned snapshot so the immutable borrow of `transfer_plan` ends
+            // before the mutable walk of `teams` (disjoint `club` fields, but
+            // the set outlives the borrow this way).
+            let loan_candidates: HashSet<u32> = club
+                .transfer_plan
+                .loan_out_candidates
+                .iter()
+                .map(|c| c.player_id)
+                .collect();
+            for team in club.teams.teams.iter_mut() {
+                for player in team.players.players.iter_mut() {
+                    if player.statuses.has(PlayerStatusType::Lst) {
+                        let flagged = player
+                            .contract
+                            .as_ref()
+                            .map(|c| c.is_transfer_listed)
+                            .unwrap_or(false);
+                        if !flagged && !transfer_listed.contains(&player.id) {
+                            player.statuses.remove(PlayerStatusType::Lst);
+                        }
+                    }
+                    if player.statuses.has(PlayerStatusType::Loa)
+                        && !loan_listed.contains(&player.id)
+                        && !loan_candidates.contains(&player.id)
+                    {
+                        player.statuses.remove(PlayerStatusType::Loa);
+                    }
+                }
+            }
+        }
     }
 
     /// Escape valve for players stranded on the transfer list. A listing
@@ -1257,6 +1323,7 @@ mod tests {
     use crate::academy::ClubAcademy;
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::transfers::pipeline::{LoanOutCandidate, LoanOutStatus};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -1366,6 +1433,125 @@ mod tests {
                 .build()
                 .unwrap()
         }
+    }
+
+    /// A `Lst` badge no longer backed by a listing or the
+    /// `is_transfer_listed` flag is cleared, so a delisted player never shows
+    /// a stale "Transfer Listed" — the guard behind the "11× Transfer Listed"
+    /// report. Genuinely-listed players (flagged, or with a live listing) keep
+    /// their badge.
+    #[test]
+    fn reconcile_clears_stale_transfer_badge_but_keeps_backed_ones() {
+        let today = Fixture::date(2026, 5, 1);
+        let mut stale = Fixture::player(101);
+        stale.statuses.add(today, PlayerStatusType::Lst);
+        let mut flagged = Fixture::player(102);
+        flagged.statuses.add(today, PlayerStatusType::Lst);
+        flagged.contract.as_mut().unwrap().is_transfer_listed = true;
+        let mut listed = Fixture::player(103);
+        listed.statuses.add(today, PlayerStatusType::Lst);
+
+        let club = Fixture::club(vec![Fixture::team(
+            10,
+            "main",
+            TeamType::Main,
+            vec![stale, flagged, listed],
+        )]);
+        let mut country = Fixture::country(club);
+        country.transfer_market.add_listing(TransferListing::new(
+            103,
+            100,
+            10,
+            CurrencyValue::new(1_000_000.0, Currency::Usd),
+            today,
+            TransferListingType::Transfer,
+        ));
+
+        CountryResult::reconcile_stale_market_statuses(&mut country);
+
+        let has = |id: u32, s: PlayerStatusType| {
+            country.clubs[0].teams.teams[0]
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
+                .statuses
+                .has(s)
+        };
+        assert!(
+            !has(101, PlayerStatusType::Lst),
+            "an unbacked badge must be cleared"
+        );
+        assert!(
+            has(102, PlayerStatusType::Lst),
+            "a flagged player keeps his badge"
+        );
+        assert!(
+            has(103, PlayerStatusType::Lst),
+            "an actively-listed player keeps his badge"
+        );
+    }
+
+    /// `Loa` mirrors `Lst`: a badge with no loan listing and no live loan-out
+    /// candidate is stale and cleared; a candidate or an active loan listing
+    /// keeps it.
+    #[test]
+    fn reconcile_clears_stale_loan_badge_but_keeps_candidates_and_listings() {
+        let today = Fixture::date(2026, 5, 1);
+        let mut stale = Fixture::player(201);
+        stale.statuses.add(today, PlayerStatusType::Loa);
+        let mut candidate = Fixture::player(202);
+        candidate.statuses.add(today, PlayerStatusType::Loa);
+        let mut listed = Fixture::player(203);
+        listed.statuses.add(today, PlayerStatusType::Loa);
+
+        let mut club = Fixture::club(vec![Fixture::team(
+            10,
+            "main",
+            TeamType::Main,
+            vec![stale, candidate, listed],
+        )]);
+        club.transfer_plan.loan_out_candidates.push(LoanOutCandidate {
+            player_id: 202,
+            reason: LoanOutReason::LackOfPlayingTime,
+            status: LoanOutStatus::Listed,
+            loan_fee: 0.0,
+        });
+        let mut country = Fixture::country(club);
+        country.transfer_market.add_listing(TransferListing::new(
+            203,
+            100,
+            10,
+            CurrencyValue::new(0.0, Currency::Usd),
+            today,
+            TransferListingType::Loan,
+        ));
+
+        CountryResult::reconcile_stale_market_statuses(&mut country);
+
+        let has = |id: u32, s: PlayerStatusType| {
+            country.clubs[0].teams.teams[0]
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
+                .statuses
+                .has(s)
+        };
+        assert!(
+            !has(201, PlayerStatusType::Loa),
+            "an unbacked loan badge must be cleared"
+        );
+        assert!(
+            has(202, PlayerStatusType::Loa),
+            "a loan-out candidate keeps his badge"
+        );
+        assert!(
+            has(203, PlayerStatusType::Loa),
+            "an actively loan-listed player keeps his badge"
+        );
     }
 
     /// Regression guard: a contract that's about to expire is NOT, on its

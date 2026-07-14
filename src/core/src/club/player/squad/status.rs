@@ -25,7 +25,25 @@ impl PlayerStatus {
         }
     }
 
+    /// Add a status the player isn't already carrying. Statuses are
+    /// single-instance flags — a player either has a status or he doesn't,
+    /// there is no "transfer-listed twice" — and every reader treats them as
+    /// a set (`has` / `get` / `remove` / `held_for_days` all assume one
+    /// instance). So `add` is idempotent: re-affirming a status already held
+    /// is a no-op, and the original `start_date` is preserved as the start of
+    /// the continuous spell `held_for_days` reports.
+    ///
+    /// This guard is load-bearing, not just defensive. Several listing paths
+    /// re-stamp `Lst` / `Loa` each period (the `contract.is_transfer_listed`
+    /// flag can be cleared on delist while the status is not, so the "already
+    /// listed?" guards miss it), and nothing ever `remove`s `Lst` / `Loa`.
+    /// Without idempotency a player who stays listed across seasons
+    /// accumulated one status row per period — the "11× Transfer Listed"
+    /// display seen on long-lived players.
     pub fn add(&mut self, start_date: NaiveDate, status: PlayerStatusType) {
+        if self.has(status) {
+            return;
+        }
         self.statuses.push(StatusData::new(start_date, status));
     }
 
@@ -50,11 +68,10 @@ impl PlayerStatus {
     /// Number of whole days the given status has been continuously held as
     /// of `now`, or `None` when the player is not currently carrying it.
     ///
-    /// `add` only appends a status the player isn't already carrying (every
-    /// caller guards with `!contains`) and `remove` drops it, so for the
-    /// single-instance market statuses (`Unh`, `Req`, …) the stored
-    /// `start_date` marks the beginning of the current continuous spell —
-    /// and this returns that spell's length.
+    /// `add` is idempotent — it never appends a status the player already
+    /// carries — and `remove` drops it, so for the single-instance statuses
+    /// (`Unh`, `Req`, `Lst`, …) the stored `start_date` marks the beginning
+    /// of the current continuous spell, and this returns that spell's length.
     pub fn held_for_days(&self, status: PlayerStatusType, now: NaiveDate) -> Option<i64> {
         self.statuses
             .iter()
@@ -154,4 +171,60 @@ pub enum PlayerStatusType {
     YI,
     //The player is on a youth contract and is not yet on professional terms
     Yth,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    /// Re-affirming a status each period must not stack duplicate rows — the
+    /// "11× Transfer Listed" display seen on long-lived listed players.
+    #[test]
+    fn add_is_idempotent_single_instance_per_status() {
+        let mut s = PlayerStatus::new();
+        for _ in 0..11 {
+            s.add(d(2026, 6, 1), PlayerStatusType::Lst);
+        }
+        assert_eq!(
+            s.get()
+                .iter()
+                .filter(|&&x| x == PlayerStatusType::Lst)
+                .count(),
+            1,
+            "a status must appear at most once",
+        );
+    }
+
+    /// The first add wins: `held_for_days` measures the continuous spell from
+    /// when the status was first taken, not the last re-stamp.
+    #[test]
+    fn add_preserves_original_spell_start() {
+        let mut s = PlayerStatus::new();
+        s.add(d(2026, 6, 1), PlayerStatusType::Lst);
+        s.add(d(2029, 1, 1), PlayerStatusType::Lst); // re-stamped years later
+        assert_eq!(
+            s.held_for_days(PlayerStatusType::Lst, d(2026, 6, 11)),
+            Some(10),
+            "spell start must remain the first add",
+        );
+    }
+
+    /// Distinct statuses coexist, and with single-instance storage one
+    /// `remove` fully clears a status (no lingering duplicate).
+    #[test]
+    fn distinct_statuses_coexist_and_remove_clears_fully() {
+        let mut s = PlayerStatus::new();
+        s.add(d(2026, 6, 1), PlayerStatusType::Lst);
+        s.add(d(2026, 6, 1), PlayerStatusType::Loa);
+        s.add(d(2026, 6, 1), PlayerStatusType::Lst); // duplicate ignored
+        assert!(s.has(PlayerStatusType::Lst));
+        assert!(s.has(PlayerStatusType::Loa));
+        s.remove(PlayerStatusType::Lst);
+        assert!(!s.has(PlayerStatusType::Lst));
+        assert!(s.has(PlayerStatusType::Loa));
+    }
 }
