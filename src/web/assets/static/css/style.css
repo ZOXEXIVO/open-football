@@ -4823,6 +4823,83 @@ a:active {
     line-height: 1;
 }
 
+/* AI badge — purple pill riding alongside the workers chip. Label
+   reads "AI" in every locale, so it's hardcoded rather than translated.
+   Status (ON/OFF) is carried by the fm-ai-badge-status-* modifier;
+   OFF (white) is the default. Bootstrap makes every box border-box, so
+   the workers chip's outer height is 21px content + 12px padding + 2px
+   border = 35px; min-height pins the single-line badge to that same 35px
+   border-box height so both pills stand exactly equal. */
+.fm-ai-badge {
+    align-self: center;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 35px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: linear-gradient(159deg, #0d4188 0%, #1b3a65 100%);
+    border: 1px solid #21416d;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+    transition:
+        border-color 0.15s,
+        transform 0.15s,
+        box-shadow 0.2s;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.1) inset,
+        0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.fm-ai-badge:hover {
+    border-color: #356aad;
+    transform: translateY(-1px);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.12) inset,
+        0 4px 10px rgba(0, 0, 0, 0.3);
+}
+
+.fm-ai-badge:focus-visible {
+    outline: 2px solid #356aad;
+    outline-offset: 2px;
+}
+
+.fm-ai-badge-label {
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 1.4px;
+    color: #eae7ff;
+    line-height: 1;
+}
+
+.fm-ai-badge-status {
+    font-size: 11px;
+    font-weight: 200;
+    letter-spacing: 0.8px;
+    line-height: 1;
+}
+
+.fm-ai-badge-status-on {
+    color: #4ade80;
+}
+
+.fm-ai-badge-status-off {
+    color: #ffffff;
+}
+
+/* AI settings dialog — reuses the worker-dialog shell, but stacks its
+   three fields (Base URL / Model / API Key) full-width instead of the
+   worker dialog's host+port row, and widens a touch for long model ids. */
+.fm-ai-dialog {
+    width: min(480px, calc(100vw - 32px));
+}
+
+.fm-ai-dialog-body {
+    flex-direction: column;
+}
+
 /* Tablets and small laptops — Machine claims its own full-width row
    so the long CPU brand string never gets clipped. iPad mini portrait
    (768px) and landscape (1024px) both hit this band. */
@@ -4913,8 +4990,8 @@ a:active {
     text-transform: uppercase;
     text-decoration: none;
     color: #fff;
-    background: linear-gradient(160deg, #306f60 0%, #027b71 100%);
-    border: 1px solid #50c4a8;
+    background: linear-gradient(160deg, #2c7463 0%, #064c46 100%);
+        border: 1px solid #288f76;
     border-radius: 6px;
     white-space: nowrap;
     box-shadow:
@@ -4939,7 +5016,7 @@ a:active {
 
 .fm-download-btn:hover {
     color: #fff;
-    background: linear-gradient(160deg, #306f60 0%, #027b71 100%);
+    background: linear-gradient(160deg, #2c7463 0%, #064c46 100%);
     border-color: #5cd4b6;
     box-shadow:
         0 1px 0 rgba(255, 255, 255, 0.18) inset,
@@ -4955,7 +5032,7 @@ a:active {
 
 .fm-download-btn:active {
     transform: translateY(0);
-    background: linear-gradient(160deg, #306f60 0%, #027b71 100%);
+    background: linear-gradient(160deg, #2c7463 0%, #064c46 100%);
     box-shadow:
         0 1px 2px rgba(0, 0, 0, 0.15) inset,
         0 1px 2px rgba(50, 140, 120, 0.2);

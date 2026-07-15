@@ -24,7 +24,7 @@ use simulator_core::utils::TimeEstimation;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use web::{
-    DistributedDispatcher, FootballSimulatorServer, GameAppData, I18nManager, Settings,
+    AiConfig, DistributedDispatcher, FootballSimulatorServer, GameAppData, I18nManager, Settings,
     WorkerRegistry, WorkerServer,
 };
 
@@ -83,6 +83,7 @@ async fn main() {
         cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         i18n,
         workers,
+        ai: AiConfig::new(),
     };
 
     // Open browser

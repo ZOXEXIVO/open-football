@@ -31,6 +31,15 @@
                         <span class="fm-workers-chip-label">{{ i18n.t("workers_chip_workers") }}</span>
                     </span>
                 </a>
+                <span class="fm-ai-badge" id="fm-ai-badge" role="button" tabindex="0"
+                      title="{{ i18n.t("ai_settings_title") }}">
+                    <span class="fm-ai-badge-label">AI</span>
+                    {% if ai_enabled %}
+                    <span class="fm-ai-badge-status fm-ai-badge-status-on" id="fm-ai-badge-status">ON</span>
+                    {% else %}
+                    <span class="fm-ai-badge-status fm-ai-badge-status-off" id="fm-ai-badge-status">OFF</span>
+                    {% endif %}
+                </span>
             </div>
             <div class="fm-info-tile fm-info-tile-countries">
                 <div class="fm-info-tile-icon"><i class="fa fa-globe"></i></div>
@@ -64,6 +73,131 @@
             </button>
         </div>
     </div>
+    <dialog class="fm-worker-dialog fm-ai-dialog" id="fm-ai-dialog">
+        <form method="dialog" class="fm-worker-dialog-form" id="fm-ai-form">
+            <div class="fm-worker-dialog-head">
+                <h3>{{ i18n.t("ai_settings_title") }}</h3>
+                <button type="button" class="fm-worker-dialog-close" id="fm-ai-close" aria-label="{{ i18n.t("ai_settings_cancel") }}">
+                    <i class="fa fa-times"></i>
+                </button>
+            </div>
+            <div class="fm-worker-dialog-info">
+                <i class="fa fa-robot" aria-hidden="true"></i>
+                <div class="fm-worker-dialog-info-text">
+                    <p>{{ i18n.t("ai_settings_info") }}</p>
+                </div>
+            </div>
+            <div class="fm-worker-dialog-body fm-ai-dialog-body">
+                <label class="fm-worker-dialog-field">
+                    <span>{{ i18n.t("ai_settings_base_url") }}</span>
+                    <input type="text" id="fm-ai-base-url" autocomplete="off" spellcheck="false" value="{{ ai_base_url }}" required>
+                </label>
+                <label class="fm-worker-dialog-field">
+                    <span>{{ i18n.t("ai_settings_model") }}</span>
+                    <input type="text" id="fm-ai-model" autocomplete="off" spellcheck="false" value="{{ ai_model }}" required>
+                </label>
+                <label class="fm-worker-dialog-field">
+                    <span>{{ i18n.t("ai_settings_api_key") }}</span>
+                    <input type="text" id="fm-ai-api-key" autocomplete="off" spellcheck="false" value="{{ ai_api_key }}" placeholder="{{ i18n.t("ai_settings_api_key_placeholder") }}">
+                </label>
+            </div>
+            <div class="fm-worker-dialog-result" id="fm-ai-result" hidden></div>
+            <div class="fm-worker-dialog-actions">
+                <button type="button" class="fm-worker-dialog-btn fm-worker-dialog-btn-cancel" id="fm-ai-cancel">{{ i18n.t("ai_settings_cancel") }}</button>
+                <button type="submit" class="fm-worker-dialog-btn fm-worker-dialog-btn-add" id="fm-ai-submit">{{ i18n.t("ai_settings_save") }}</button>
+            </div>
+        </form>
+    </dialog>
+    <script>
+    /* AI badge → open the LLM contract dialog; on save, POST the settings
+       (kept in memory server-side) and flip the badge to ON in place. */
+    (function() {
+        var badge = document.getElementById('fm-ai-badge');
+        var dialog = document.getElementById('fm-ai-dialog');
+        if (!badge || !dialog) { return; }
+        var form = document.getElementById('fm-ai-form');
+        var closeBtn = document.getElementById('fm-ai-close');
+        var cancelBtn = document.getElementById('fm-ai-cancel');
+        var submitBtn = document.getElementById('fm-ai-submit');
+        var result = document.getElementById('fm-ai-result');
+        var baseUrlInput = document.getElementById('fm-ai-base-url');
+        var modelInput = document.getElementById('fm-ai-model');
+        var apiKeyInput = document.getElementById('fm-ai-api-key');
+        var statusEl = document.getElementById('fm-ai-badge-status');
+
+        var labels = {
+            saving: "{{ i18n.t("ai_settings_saving") }}",
+            saved: "{{ i18n.t("ai_settings_saved") }}",
+            error: "{{ i18n.t("ai_settings_error") }}"
+        };
+
+        function showResult(kind, text) {
+            result.hidden = false;
+            result.className = 'fm-worker-dialog-result fm-worker-dialog-result-' + kind;
+            result.textContent = text;
+        }
+        function resetResult() {
+            result.hidden = true;
+            result.textContent = '';
+            result.className = 'fm-worker-dialog-result';
+        }
+        function openDialog() {
+            resetResult();
+            submitBtn.disabled = false;
+            if (typeof dialog.showModal === 'function') { dialog.showModal(); }
+            else { dialog.setAttribute('open', ''); }
+            baseUrlInput.focus();
+        }
+        function closeDialog() {
+            if (typeof dialog.close === 'function') { dialog.close(); }
+            else { dialog.removeAttribute('open'); }
+        }
+
+        badge.addEventListener('click', openDialog);
+        badge.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDialog(); }
+        });
+        closeBtn.addEventListener('click', closeDialog);
+        cancelBtn.addEventListener('click', closeDialog);
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var baseUrl = baseUrlInput.value.trim();
+            var model = modelInput.value.trim();
+            if (!baseUrl || !model) { return; }
+
+            submitBtn.disabled = true;
+            showResult('pending', labels.saving);
+
+            fetch('/api/ai/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ base_url: baseUrl, model: model, api_key: apiKeyInput.value.trim() })
+            })
+            .then(function(resp) {
+                if (!resp.ok) { throw new Error('http ' + resp.status); }
+                return resp.json();
+            })
+            .then(function(data) {
+                if (data.status === 'ok') {
+                    showResult('ok', labels.saved);
+                    if (statusEl) {
+                        statusEl.textContent = 'ON';
+                        statusEl.className = 'fm-ai-badge-status fm-ai-badge-status-on';
+                    }
+                    setTimeout(closeDialog, 600);
+                } else {
+                    showResult('bad', labels.error + (data.detail ? ': ' + data.detail : ''));
+                    submitBtn.disabled = false;
+                }
+            })
+            .catch(function() {
+                showResult('bad', labels.error);
+                submitBtn.disabled = false;
+            });
+        });
+    })();
+    </script>
     <script>
     var _holidayTexts = {
         go: '{{ i18n.t("go_on_holiday") }}',

@@ -1,3 +1,4 @@
+mod ai;
 mod champions_league;
 mod common;
 mod conference_league;
@@ -26,6 +27,7 @@ mod workers;
 
 pub use settings::Settings;
 
+pub use ai::{AiConfig, LlmSettings};
 pub use error::{ApiError, ApiResult};
 pub use i18n::{I18n, I18nManager};
 pub use worker::{
@@ -95,6 +97,9 @@ pub struct GameAppData {
     /// Live registry of distributed match workers. Always present;
     /// starts empty and is populated at runtime from the /workers page.
     pub workers: WorkerRegistry,
+    /// In-memory OpenAI-compatible LLM contract, set from the home-page
+    /// "AI" badge dialog. Unset until the operator saves settings.
+    pub ai: AiConfig,
 }
 
 impl Clone for GameAppData {
@@ -106,6 +111,7 @@ impl Clone for GameAppData {
             cancel_flag: Arc::clone(&self.cancel_flag),
             i18n: Arc::clone(&self.i18n),
             workers: self.workers.clone(),
+            ai: self.ai.clone(),
         }
     }
 }

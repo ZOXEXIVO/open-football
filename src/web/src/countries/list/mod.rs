@@ -3,7 +3,7 @@ pub mod routes;
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::views::MenuSection;
 use crate::worker::WorkerStatus;
-use crate::{ApiError, ApiResult, GameAppData, I18n};
+use crate::{ApiError, ApiResult, GameAppData, I18n, LlmSettings};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -47,6 +47,14 @@ pub struct CountryListTemplate {
     /// Workers currently in `Ready` state — surfaced alongside the
     /// total so the badge can read "3/4 ready" at a glance.
     pub workers_ready: usize,
+    /// True once an OpenAI-compatible LLM contract has been saved — the
+    /// "AI" badge renders ON when set, OFF otherwise.
+    pub ai_enabled: bool,
+    /// Values pre-filled into the AI settings dialog: the saved contract
+    /// when configured, otherwise the built-in defaults.
+    pub ai_base_url: String,
+    pub ai_model: String,
+    pub ai_api_key: String,
 }
 
 pub struct ContinentDto {
@@ -150,6 +158,10 @@ pub async fn country_list_action(
         .filter(|w| matches!(w.status, WorkerStatus::Ready))
         .count();
 
+    let ai_saved = state.ai.get().await;
+    let ai_enabled = ai_saved.is_some();
+    let ai_settings = ai_saved.unwrap_or_else(LlmSettings::defaults);
+
     Ok(CountryListTemplate {
         css_version: CSS_VERSION,
         computer_name: &COMPUTER_NAME,
@@ -174,5 +186,9 @@ pub async fn country_list_action(
         show_download,
         workers_count,
         workers_ready,
+        ai_enabled,
+        ai_base_url: ai_settings.base_url,
+        ai_model: ai_settings.model,
+        ai_api_key: ai_settings.api_key,
     })
 }
