@@ -1,3 +1,4 @@
+pub mod ai_report;
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
@@ -41,6 +42,11 @@ pub struct TeamGetTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
+    /// Numeric club id — the AI team-report button posts this to the agent.
+    pub club_id: u32,
+    /// Gates the AI report button: true only on the Main team page when an
+    /// LLM contract is configured (hidden on B / reserve / youth squads).
+    pub ai_enabled: bool,
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
@@ -296,6 +302,12 @@ pub async fn team_get_action(
         .map(|l| views::league_display_name(l, &i18n, simulator_data))
         .unwrap_or_default();
 
+    let club_id = team.club_id;
+    // The AI team report is a club-level feature surfaced once, on the Main
+    // team page only — not on B / reserve / youth (U18…) squads.
+    let ai_enabled =
+        team.team_type == core::TeamType::Main && state.ai.is_configured().await;
+
     Ok(TeamGetTemplate {
         css_version: CSS_VERSION,
         computer_name: &COMPUTER_NAME,
@@ -321,6 +333,8 @@ pub async fn team_get_action(
             .unwrap_or_default(),
         menu_sections,
         team_slug: team.slug.clone(),
+        club_id,
+        ai_enabled,
         active_tab: "squad",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == core::TeamType::Main

@@ -1,8 +1,15 @@
+pub mod agent;
+mod client;
+mod jobs;
 pub mod routes;
+mod tools;
+
+pub use jobs::AiJobs;
 
 use crate::GameAppData;
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -128,4 +135,26 @@ pub async fn ai_config_save_action(
         status: "ok",
         detail: String::new(),
     })
+}
+
+/// Long-poll query for a running agent job. `cursor` is the number of tool
+/// calls the client has already rendered; the endpoint holds the request
+/// until there are more (or the job finishes) so tool activity streams live.
+#[derive(Deserialize)]
+pub struct ProgressQuery {
+    pub job_id: u64,
+    #[serde(default)]
+    pub cursor: usize,
+}
+
+/// Generic progress endpoint shared by every page's AI feature: it only
+/// speaks in job ids, so per-page start handlers own their own prompts.
+pub async fn ai_progress_action(
+    State(state): State<GameAppData>,
+    Query(query): Query<ProgressQuery>,
+) -> impl IntoResponse {
+    match state.ai_jobs.wait(query.job_id, query.cursor).await {
+        Some(snapshot) => Json(snapshot).into_response(),
+        None => (StatusCode::NOT_FOUND, "unknown job").into_response(),
+    }
 }

@@ -4823,6 +4823,14 @@ a:active {
     line-height: 1;
 }
 
+/* Shared AI accent — the home badge and the squad-page AI report button
+   read the same colors so they always match. Restyle both in one place. */
+:root {
+    --fm-ai-bg: linear-gradient(159deg, #072247 0%, #04224c 100%);
+    --fm-ai-border: #06295a;
+    --fm-ai-border-hover: #356aad;
+}
+
 /* AI badge — purple pill riding alongside the workers chip. Label
    reads "AI" in every locale, so it's hardcoded rather than translated.
    Status (ON/OFF) is carried by the fm-ai-badge-status-* modifier;
@@ -4839,8 +4847,8 @@ a:active {
     min-height: 35px;
     padding: 6px 12px;
     border-radius: 6px;
-    background: linear-gradient(159deg, #0d4188 0%, #1b3a65 100%);
-    border: 1px solid #21416d;
+    background: var(--fm-ai-bg);
+    border: 1px solid var(--fm-ai-border);
     line-height: 1;
     cursor: pointer;
     user-select: none;
@@ -4854,7 +4862,7 @@ a:active {
 }
 
 .fm-ai-badge:hover {
-    border-color: #356aad;
+    border-color: var(--fm-ai-border-hover);
     transform: translateY(-1px);
     box-shadow:
         0 1px 0 rgba(255, 255, 255, 0.12) inset,
@@ -4862,7 +4870,7 @@ a:active {
 }
 
 .fm-ai-badge:focus-visible {
-    outline: 2px solid #356aad;
+    outline: 2px solid var(--fm-ai-border-hover);
     outline-offset: 2px;
 }
 
@@ -10765,6 +10773,139 @@ html:has(.fm-workers-page) {
 .fm-worker-dialog-btn-add:disabled {
     opacity: 0.55;
     cursor: default;
+}
+
+/* Squad-page "AI" report button — same badge-blue as the home AI badge,
+   sized to sit at the right of the .fm-panel-head next to the "Squad" title. */
+.fm-ai-analyze-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    background: var(--fm-ai-bg);
+    border: 1px solid var(--fm-ai-border);
+    color: #eaf1ff;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition:
+        border-color 0.15s,
+        transform 0.15s,
+        box-shadow 0.2s;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.1) inset,
+        0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.fm-ai-analyze-btn:hover {
+    border-color: var(--fm-ai-border-hover);
+    transform: translateY(-1px);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.12) inset,
+        0 4px 10px rgba(0, 0, 0, 0.3);
+}
+
+/* AI team-report dialog — reuses the worker-dialog shell (defined above, so
+   these overrides win the cascade), widened for prose with a scrollable body.
+   While the agent runs, the cyan status + a live tool-call log stream in; once
+   the report arrives the log is hidden and only the prose remains. */
+.fm-ai-report-dialog {
+    width: min(640px, calc(100vw - 32px));
+    max-height: min(80vh, 760px);
+}
+
+.fm-ai-report-body {
+    padding: 16px;
+    overflow-y: auto;
+}
+
+/* Preloaded / running state — cyan status, then a plain left-aligned log of
+   the tools the model is calling, streamed in over the long-poll. */
+.fm-ai-report-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    color: #22d3ee;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.fm-ai-report-status .spinner {
+    border-top-color: #22d3ee;
+}
+
+.fm-ai-report-status-error {
+    color: #e87a7a;
+}
+
+.fm-ai-report-status-error .spinner {
+    display: none;
+}
+
+.fm-ai-report-live {
+    margin: 8px 0 4px;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+}
+
+.fm-ai-report-live:empty {
+    display: none;
+}
+
+.fm-ai-tool-call {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #9db3c1;
+    animation: fm-ai-tool-in 0.3s ease both;
+}
+
+.fm-ai-tool-call::before {
+    content: "";
+    flex: 0 0 auto;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #22d3ee;
+    box-shadow: 0 0 6px rgba(34, 211, 238, 0.6);
+}
+
+@keyframes fm-ai-tool-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fm-ai-tool-call {
+        animation: none;
+    }
+}
+
+.fm-ai-report-text {
+    white-space: pre-wrap;
+    line-height: 1.55;
+    font-size: 13.5px;
+    color: #d7e2ea;
+}
+
+.fm-ai-report-text strong {
+    color: #ffffff;
+    font-weight: 700;
 }
 
 /* ============================================================

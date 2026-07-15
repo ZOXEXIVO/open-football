@@ -27,7 +27,7 @@ mod workers;
 
 pub use settings::Settings;
 
-pub use ai::{AiConfig, LlmSettings};
+pub use ai::{AiConfig, AiJobs, LlmSettings};
 pub use error::{ApiError, ApiResult};
 pub use i18n::{I18n, I18nManager};
 pub use worker::{
@@ -100,6 +100,9 @@ pub struct GameAppData {
     /// In-memory OpenAI-compatible LLM contract, set from the home-page
     /// "AI" badge dialog. Unset until the operator saves settings.
     pub ai: AiConfig,
+    /// In-flight AI agent runs, polled by the per-page report dialogs so
+    /// tool calls stream in live.
+    pub ai_jobs: AiJobs,
 }
 
 impl Clone for GameAppData {
@@ -112,6 +115,7 @@ impl Clone for GameAppData {
             i18n: Arc::clone(&self.i18n),
             workers: self.workers.clone(),
             ai: self.ai.clone(),
+            ai_jobs: self.ai_jobs.clone(),
         }
     }
 }

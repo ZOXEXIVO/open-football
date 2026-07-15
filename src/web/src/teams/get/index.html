@@ -5,6 +5,13 @@
     <section class="fm-panel">
         <div class="fm-panel-head">
             <h3>{{ i18n.t("squad") }}</h3>
+            {% if ai_enabled %}
+            <button type="button" class="fm-ai-analyze-btn" id="fm-ai-report-btn"
+                    data-club-id="{{ club_id }}" data-lang="{{ lang }}"
+                    title="{{ i18n.t("ai_report_title") }}">
+                <span>AI</span>
+            </button>
+            {% endif %}
         </div>
         <table class="fm-squad">
             <thead>
@@ -87,5 +94,146 @@
             </tbody>
         </table>
     </section>
+    {% if ai_enabled %}
+    <dialog class="fm-worker-dialog fm-ai-report-dialog" id="fm-ai-report-dialog">
+        <div class="fm-worker-dialog-head">
+            <h3>{{ i18n.t("ai_report_title") }}</h3>
+            <button type="button" class="fm-worker-dialog-close" id="fm-ai-report-close" aria-label="{{ i18n.t("ai_settings_cancel") }}">
+                <i class="fa fa-times"></i>
+            </button>
+        </div>
+        <div class="fm-ai-report-body">
+            <div class="fm-ai-report-status" id="fm-ai-report-status">
+                <span id="fm-ai-report-status-text">{{ i18n.t("ai_report_running") }}</span>
+                <div class="spinner"></div>
+            </div>
+            <ol class="fm-ai-report-live" id="fm-ai-report-live"></ol>
+            <div class="fm-ai-report-text" id="fm-ai-report-text" hidden></div>
+        </div>
+    </dialog>
+    {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% if ai_enabled %}
+<script>
+/* Squad-page "AI" button → start a server-side agent run, then long-poll its
+   progress so the tools the model calls stream into the dialog in real time.
+   When the run finishes, the live tool log is hidden and the report shown. */
+(function() {
+    var btn = document.getElementById('fm-ai-report-btn');
+    var dialog = document.getElementById('fm-ai-report-dialog');
+    if (!btn || !dialog) { return; }
+    var closeBtn = document.getElementById('fm-ai-report-close');
+    var statusEl = document.getElementById('fm-ai-report-status');
+    var statusText = document.getElementById('fm-ai-report-status-text');
+    var liveEl = document.getElementById('fm-ai-report-live');
+    var textEl = document.getElementById('fm-ai-report-text');
+
+    var labels = {
+        running: "{{ i18n.t("ai_report_running") }}",
+        error: "{{ i18n.t("ai_report_error") }}"
+    };
+    // Friendly, localized labels for the tools the model may call, keyed by
+    // tool name. Unknown tools fall back to their raw name.
+    var toolLabels = {
+        "club_get_by_id": "{{ i18n.t("club_get_by_id") }}",
+        "club_players": "{{ i18n.t("club_players") }}",
+        "player_get_by_id": "{{ i18n.t("player_get_by_id") }}"
+    };
+    var running = false;
+
+    function openDialog() {
+        if (typeof dialog.showModal === 'function') { dialog.showModal(); }
+        else { dialog.setAttribute('open', ''); }
+    }
+    function closeDialog() {
+        if (typeof dialog.close === 'function') { dialog.close(); }
+        else { dialog.removeAttribute('open'); }
+    }
+    closeBtn.addEventListener('click', closeDialog);
+
+    function escapeHtml(s) {
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    // LLM output is markdown-ish: escape it, then honour **bold**. Newlines
+    // are preserved by white-space: pre-wrap on the container.
+    function renderText(md) {
+        return escapeHtml(md).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    }
+
+    function addTool(call) {
+        var li = document.createElement('li');
+        li.className = 'fm-ai-tool-call';
+        li.textContent = toolLabels[call.name] || call.name;
+        liveEl.appendChild(li);
+    }
+
+    function fail(detail) {
+        running = false;
+        statusEl.classList.add('fm-ai-report-status-error');
+        statusText.textContent = labels.error + (detail ? ': ' + detail : '');
+    }
+
+    function finish(text) {
+        running = false;
+        statusEl.hidden = true;
+        liveEl.hidden = true;                 // report only — no tool list at the end
+        textEl.innerHTML = renderText(text || '');
+        textEl.hidden = false;
+    }
+
+    // Long-poll one round; the server holds the request until there is new
+    // tool activity or the run ends, then we immediately poll again.
+    function poll(jobId, cursor) {
+        fetch('/api/ai/progress?job_id=' + jobId + '&cursor=' + cursor)
+        .then(function(resp) {
+            if (!resp.ok) { throw new Error('http ' + resp.status); }
+            return resp.json();
+        })
+        .then(function(data) {
+            (data.new_tool_calls || []).forEach(addTool);
+            var next = (typeof data.cursor === 'number') ? data.cursor : cursor;
+            if (data.status === 'done') { finish(data.text); }
+            else if (data.status === 'error') { fail(data.detail); }
+            else { poll(jobId, next); }
+        })
+        .catch(function() { fail(''); });
+    }
+
+    btn.addEventListener('click', function() {
+        if (running) { openDialog(); return; }
+        running = true;
+
+        statusEl.hidden = false;
+        statusEl.classList.remove('fm-ai-report-status-error');
+        statusText.textContent = labels.running;
+        liveEl.hidden = false;
+        liveEl.innerHTML = '';
+        textEl.hidden = true;
+        textEl.innerHTML = '';
+        openDialog();
+
+        fetch('/api/ai/team-report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                club_id: parseInt(btn.getAttribute('data-club-id'), 10),
+                lang: btn.getAttribute('data-lang')
+            })
+        })
+        .then(function(resp) {
+            if (!resp.ok) { throw new Error('http ' + resp.status); }
+            return resp.json();
+        })
+        .then(function(data) {
+            if (data.job_id != null) { poll(data.job_id, 0); }
+            else { fail(data.error); }
+        })
+        .catch(function() { fail(''); });
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

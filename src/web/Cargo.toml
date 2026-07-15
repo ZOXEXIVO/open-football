@@ -22,6 +22,7 @@ tower = "0.5.3"
 tower-http = { version = "0.7.0", features = ["fs", "catch-panic"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 chrono = "0.4.45"
 itertools = "0.15.0"
 askama = "0.16.0"

@@ -1,3 +1,4 @@
+pub mod ai_report;
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
@@ -52,6 +53,9 @@ pub struct PlayerGetTemplate {
     pub player_id: u32,
     pub player_slug: String,
     pub club_id: u32,
+    /// True when an LLM contract is configured; gates the AI player-report
+    /// button in the Attributes panel head.
+    pub ai_enabled: bool,
     pub player: PlayerViewModel,
     pub is_goalkeeper: bool,
     pub is_on_loan: bool,
@@ -297,6 +301,7 @@ pub async fn player_get_action(
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
     let debug_enabled = query.debug.is_some();
+    let ai_enabled = state.ai.is_configured().await;
 
     let simulator_data = guard
         .as_ref()
@@ -462,6 +467,7 @@ pub async fn player_get_action(
             player_id: player.id,
             player_slug: canonical,
             club_id: team.club_id,
+            ai_enabled,
             player: player_vm,
             is_goalkeeper,
             is_on_loan,
@@ -562,6 +568,7 @@ pub async fn player_get_action(
         player_id: player.id,
         player_slug: canonical,
         club_id: 0,
+        ai_enabled,
         player: player_vm,
         is_goalkeeper,
         is_on_loan: false,
