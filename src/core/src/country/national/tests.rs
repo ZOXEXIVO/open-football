@@ -8,7 +8,7 @@ use crate::{
     PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
     Tactics,
 };
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use std::collections::HashSet;
 
 fn comp_date() -> NaiveDate {
@@ -1012,4 +1012,134 @@ fn senior_scoring_unaffected_by_u21_branch() {
     // The two blends are different functions; they should not coincide for
     // a mid-tier 27-year-old (sanity that the branch actually diverges).
     assert!((senior_score - u21_score).abs() > f32::EPSILON);
+}
+
+// ---------- Match-day rotation scoring (see `super::matchday`) ----------
+
+/// Build a match-day player with explicit fitness/experience inputs so the
+/// rotation-scoring tests can pin condition, sharpness, caps and age.
+/// `condition_pct` is 0..100 (mapped onto the 0..10000 condition scale).
+fn make_match_player(
+    id: u32,
+    ability: u8,
+    condition_pct: i16,
+    days_since: u16,
+    caps: u16,
+    age: i32,
+    position: PlayerPositionType,
+) -> Player {
+    let birth_year = comp_date().year() - age;
+    PlayerBuilder::new()
+        .id(id)
+        .full_name(FullName::new("Test".to_string(), "Player".to_string()))
+        .birth_date(NaiveDate::from_ymd_opt(birth_year, 5, 1).unwrap())
+        .country_id(1)
+        .skills(PlayerSkills::default())
+        .attributes(PersonAttributes::default())
+        .player_attributes(PlayerAttributes {
+            current_ability: ability,
+            potential_ability: ability + 10,
+            condition: condition_pct * 100,
+            days_since_last_match: days_since,
+            international_apps: caps,
+            ..Default::default()
+        })
+        .contract(None)
+        .positions(PlayerPositions {
+            positions: vec![PlayerPosition { position, level: 18 }],
+        })
+        .statistics(PlayerStatistics::default())
+        .statistics_history(PlayerStatisticsHistory::from_items(vec![]))
+        .build()
+        .expect("build test player")
+}
+
+/// A near-equal but rested deputy is picked ahead of a tired regular in a
+/// competitive fixture — this is the fatigue rotation that spreads minutes
+/// across a double-header. The regular carries a slightly higher ability
+/// but sits at 60% condition; the fresher deputy overtakes them.
+#[test]
+fn tired_regular_yields_to_fresh_deputy_in_competitive() {
+    let regular = make_match_player(1, 150, 60, 3, 10, 27, PlayerPositionType::MidfielderCenter);
+    let deputy = make_match_player(2, 146, 100, 3, 10, 27, PlayerPositionType::MidfielderCenter);
+    let date = comp_date();
+    let reg = NationalTeam::matchday_overall_score(
+        &regular,
+        NationalMatchImportance::Competitive,
+        date,
+    );
+    let dep =
+        NationalTeam::matchday_overall_score(&deputy, NationalMatchImportance::Competitive, date);
+    assert!(
+        dep > reg,
+        "fresh deputy ({dep}) should outrank tired regular ({reg}) in a competitive fixture"
+    );
+}
+
+/// The same tired regular keeps their place in a knockout — `Peak` damps
+/// the freshness swing so the strongest fit XI takes the field when it
+/// matters. Guards against over-rotating in finals.
+#[test]
+fn tired_regular_keeps_place_in_knockout() {
+    let regular = make_match_player(1, 150, 60, 3, 10, 27, PlayerPositionType::MidfielderCenter);
+    let deputy = make_match_player(2, 146, 100, 3, 10, 27, PlayerPositionType::MidfielderCenter);
+    let date = comp_date();
+    let reg = NationalTeam::matchday_overall_score(&regular, NationalMatchImportance::Peak, date);
+    let dep = NationalTeam::matchday_overall_score(&deputy, NationalMatchImportance::Peak, date);
+    assert!(
+        reg > dep,
+        "stronger regular ({reg}) should keep their place over the deputy ({dep}) in a knockout"
+    );
+}
+
+/// A friendly bloods an uncapped youngster ahead of an established
+/// veteran, but the same youngster does NOT displace them in a competitive
+/// fixture (the experimentation lift is friendly-sized, not a free pass).
+#[test]
+fn friendly_bloods_uncapped_youth_but_competitive_does_not() {
+    let veteran = make_match_player(1, 158, 100, 5, 50, 30, PlayerPositionType::Striker);
+    let youngster = make_match_player(2, 145, 100, 5, 0, 20, PlayerPositionType::Striker);
+    let date = comp_date();
+
+    let vet_friendly =
+        NationalTeam::matchday_overall_score(&veteran, NationalMatchImportance::Friendly, date);
+    let kid_friendly =
+        NationalTeam::matchday_overall_score(&youngster, NationalMatchImportance::Friendly, date);
+    assert!(
+        kid_friendly > vet_friendly,
+        "friendly should blood the uncapped kid ({kid_friendly}) over the veteran ({vet_friendly})"
+    );
+
+    let vet_comp =
+        NationalTeam::matchday_overall_score(&veteran, NationalMatchImportance::Competitive, date);
+    let kid_comp = NationalTeam::matchday_overall_score(
+        &youngster,
+        NationalMatchImportance::Competitive,
+        date,
+    );
+    assert!(
+        vet_comp > kid_comp,
+        "competitive should still favour the better veteran ({vet_comp}) over the kid ({kid_comp})"
+    );
+}
+
+/// Knockout experimentation is off entirely: an uncapped youngster gets no
+/// lift, so a clearly stronger veteran is never displaced in a final.
+#[test]
+fn knockout_gives_uncapped_youth_no_lift() {
+    let veteran = make_match_player(1, 158, 100, 5, 50, 30, PlayerPositionType::Striker);
+    let youngster = make_match_player(2, 145, 100, 5, 0, 20, PlayerPositionType::Striker);
+    let date = comp_date();
+    let vet = NationalTeam::matchday_overall_score(&veteran, NationalMatchImportance::Peak, date);
+    let kid = NationalTeam::matchday_overall_score(&youngster, NationalMatchImportance::Peak, date);
+    // Identical fitness inputs → identical freshness term, so any gap is
+    // pure merit. With no experimentation at Peak the difference must equal
+    // the raw ability gap (158 − 145 = 13); an experimentation lift would
+    // shrink it. Guards against blooding fringe youth in a knockout.
+    assert!(vet > kid);
+    assert!(
+        (vet - kid - 13.0).abs() < 0.001,
+        "Peak score gap ({}) must equal the raw ability gap (13) — no youth lift",
+        vet - kid
+    );
 }

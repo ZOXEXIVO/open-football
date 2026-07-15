@@ -18,7 +18,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::lookups::{country_lookup, country_lookup_mut};
 use crate::continent::Continent;
 use crate::r#match::MatchSquad;
-use crate::{Club, Country, NationalSelectionPolicy, NationalTeam, NationalTeamLevel};
+use crate::{
+    Club, Country, NationalMatchImportance, NationalSelectionPolicy, NationalTeam,
+    NationalTeamLevel,
+};
 use std::collections::HashSet;
 
 static EMERGENCY_CALLUPS: AtomicU64 = AtomicU64::new(0);
@@ -84,7 +87,16 @@ impl NationalSquadBuilder {
         }
 
         let all_clubs = Self::collect_world_clubs(continents);
-        Self::build_from_clubs(continents, &all_clubs, country_id, date, level)
+        // Single-shot builds have no fixture-stakes context (they back the
+        // emergency path and tests); default to competitive rotation.
+        Self::build_from_clubs(
+            continents,
+            &all_clubs,
+            country_id,
+            date,
+            level,
+            NationalMatchImportance::Competitive,
+        )
     }
 
     /// Build match squads for a whole matchday of fixtures at once.
@@ -125,8 +137,13 @@ impl NationalSquadBuilder {
             .par_iter()
             .enumerate()
             .filter_map(|(idx, &(home, away, level, is_knockout))| {
-                let home_squad = Self::build_from_clubs(continents, &all_clubs, home, date, level)?;
-                let away_squad = Self::build_from_clubs(continents, &all_clubs, away, date, level)?;
+                // Knockouts field the strongest fit XI; group / league-phase
+                // fixtures rotate for fatigue and blood fringe players.
+                let importance = NationalMatchImportance::from_knockout(is_knockout);
+                let home_squad =
+                    Self::build_from_clubs(continents, &all_clubs, home, date, level, importance)?;
+                let away_squad =
+                    Self::build_from_clubs(continents, &all_clubs, away, date, level, importance)?;
                 Some((idx, home_squad, away_squad, is_knockout))
             })
             .collect()
@@ -172,9 +189,13 @@ impl NationalSquadBuilder {
         country_id: u32,
         date: NaiveDate,
         level: NationalTeamLevel,
+        importance: NationalMatchImportance,
     ) -> Option<MatchSquad> {
         let country = country_lookup(continents, country_id)?;
-        Some(Self::team_for_level(country, level).build_match_squad_from_refs(all_clubs, date))
+        Some(
+            Self::team_for_level(country, level)
+                .build_match_squad_from_refs_with_importance(all_clubs, date, importance),
+        )
     }
 
     /// Pick the national team at `level` from a country.

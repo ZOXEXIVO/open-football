@@ -307,6 +307,10 @@ impl Player {
         self.statistics_history
             .record_loan_return(stats, borrowing, parent, date);
         self.last_transfer_date = Some(date);
+        // Any force-selection pin belonged to the borrowing club's spell —
+        // the parent's manager hasn't asked for this player, so the pin must
+        // not survive the return. Mirrors the transfer / loan-out paths.
+        self.is_force_match_selection = false;
     }
 
     /// Record season-end snapshot (called when new season starts).
@@ -453,6 +457,9 @@ impl Player {
         self.statistics_history
             .record_cancel_loan(stats, borrowing, parent, is_loan, date);
         self.last_transfer_date = Some(date);
+        // The pin belonged to the borrowing club's spell — drop it as the
+        // player returns to the parent, same as the natural loan return.
+        self.is_force_match_selection = false;
     }
 
     /// Record a manual transfer from the web UI.
@@ -1073,6 +1080,24 @@ mod tests {
         assert!(
             !any_under_parent_non_league,
             "no loan-period non-League entry may land under the parent club"
+        );
+    }
+
+    #[test]
+    fn on_loan_return_clears_force_selection_pin() {
+        // A force-selection pin set during the loan (by the borrowing
+        // club's manager) must not survive the return to the parent —
+        // same contract as the transfer / loan-out paths.
+        let mut player = make_player();
+        player.is_force_match_selection = true;
+
+        let borrowing = make_team("Torino", "torino");
+        let parent = make_team("Juventus", "juventus");
+        player.on_loan_return(&borrowing, &parent, make_date(2032, 5, 31));
+
+        assert!(
+            !player.is_force_match_selection,
+            "loan return must drop the force-selection pin"
         );
     }
 
@@ -4336,6 +4361,23 @@ mod drain_invariants_tests {
                 .iter()
                 .any(|e| e.team_slug == "spartak"
                     && e.competition_kind != PlayerStatCompetitionKind::League)
+        );
+    }
+
+    #[test]
+    fn on_cancel_loan_clears_force_selection_pin() {
+        // Manual loan cancellation returns the player to the parent — a
+        // pin from the borrowing spell must not ride along.
+        let mut p = player();
+        p.is_force_match_selection = true;
+
+        let parent = team("Spartak", "spartak", "rpl");
+        let borrowing = team("Pari", "pari", "rpl");
+        p.on_cancel_loan(&borrowing, &parent, d(2026, 12, 1));
+
+        assert!(
+            !p.is_force_match_selection,
+            "cancel loan must drop the force-selection pin"
         );
     }
 

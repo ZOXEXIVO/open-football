@@ -18,23 +18,39 @@
         {% if nodes.is_empty() %}
         <div class="fm-empty">{{ i18n.t("rel_empty") }}</div>
         {% else %}
-        <div class="fm-rel-summary">
-            <div class="fm-rel-stat fm-rel-stat-bond">
-                <span class="fm-rel-stat-num">{{ bond_count }}</span>
-                <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_bond") }}</span>
-            </div>
-            <div class="fm-rel-stat fm-rel-stat-friendly">
-                <span class="fm-rel-stat-num">{{ friendly_count }}</span>
-                <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_friendly") }}</span>
-            </div>
-            <div class="fm-rel-stat fm-rel-stat-tension">
-                <span class="fm-rel-stat-num">{{ tension_count }}</span>
-                <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_tension") }}</span>
-            </div>
-            <div class="fm-rel-stat fm-rel-stat-rivalry">
-                <span class="fm-rel-stat-num">{{ rivalry_count }}</span>
-                <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_rivalry") }}</span>
-            </div>
+        <div class="fm-rel-summary" role="group" aria-label="{{ i18n.t("rel_heading") }}">
+            <label class="fm-rel-stat fm-rel-stat-bond fm-rel-filter">
+                <input type="checkbox" class="fm-rel-filter-input" data-tier="bond" checked>
+                <span class="fm-rel-filter-box" aria-hidden="true"></span>
+                <span class="fm-rel-stat-body">
+                    <span class="fm-rel-stat-num">{{ bond_count }}</span>
+                    <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_bond") }}</span>
+                </span>
+            </label>
+            <label class="fm-rel-stat fm-rel-stat-friendly fm-rel-filter">
+                <input type="checkbox" class="fm-rel-filter-input" data-tier="friendly" checked>
+                <span class="fm-rel-filter-box" aria-hidden="true"></span>
+                <span class="fm-rel-stat-body">
+                    <span class="fm-rel-stat-num">{{ friendly_count }}</span>
+                    <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_friendly") }}</span>
+                </span>
+            </label>
+            <label class="fm-rel-stat fm-rel-stat-tension fm-rel-filter">
+                <input type="checkbox" class="fm-rel-filter-input" data-tier="tension" checked>
+                <span class="fm-rel-filter-box" aria-hidden="true"></span>
+                <span class="fm-rel-stat-body">
+                    <span class="fm-rel-stat-num">{{ tension_count }}</span>
+                    <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_tension") }}</span>
+                </span>
+            </label>
+            <label class="fm-rel-stat fm-rel-stat-rivalry fm-rel-filter">
+                <input type="checkbox" class="fm-rel-filter-input" data-tier="rivalry" checked>
+                <span class="fm-rel-filter-box" aria-hidden="true"></span>
+                <span class="fm-rel-stat-body">
+                    <span class="fm-rel-stat-num">{{ rivalry_count }}</span>
+                    <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_rivalry") }}</span>
+                </span>
+            </label>
         </div>
 
         <div class="fm-rel-stage" id="relStage">
@@ -398,6 +414,35 @@
         document.removeEventListener('mouseup', endDrag);
         document.removeEventListener('touchend', endDrag);
     }
+
+    // Tier filters: the summary tiles double as toggles. Unchecking a tier
+    // hides its threads and any teammate left without a visible one, so the
+    // web can be pared down to just the bonds — or just the feuds — you want
+    // to read. Node positions are frozen while filtering: the sim keeps every
+    // node in its force calculation, so the remaining shape never reflows out
+    // from under the cursor when a tier is switched off.
+    var active = { bond: true, friendly: true, tension: true, rivalry: true };
+    function applyFilters() {
+        var shown = new Array(N);
+        for (var m = 0; m < N; m++) shown[m] = nodes[m].isRoot === true;
+        for (var i = 0; i < edges.length; i++) {
+            var on = active[edges[i].k];
+            lineEls[i].style.display = on ? '' : 'none';
+            if (on) { shown[edges[i].s] = true; shown[edges[i].t] = true; }
+        }
+        for (var p = 0; p < N; p++) {
+            nodes[p].el.style.display = shown[p] ? '' : 'none';
+        }
+    }
+    Array.prototype.slice.call(document.querySelectorAll('.fm-rel-filter-input'))
+        .forEach(function (inp) {
+            inp.addEventListener('change', function () {
+                active[inp.getAttribute('data-tier')] = inp.checked;
+                var tile = inp.closest('.fm-rel-stat');
+                if (tile) tile.classList.toggle('is-off', !inp.checked);
+                applyFilters();
+            });
+        });
 
     var rt;
     window.addEventListener('resize', function () {

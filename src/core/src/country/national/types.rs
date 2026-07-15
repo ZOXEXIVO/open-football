@@ -201,6 +201,38 @@ pub enum CallUpWindowType {
     FriendlyWindow,
 }
 
+/// How much a single national fixture matters, which drives match-day
+/// rotation (see [`super::matchday`]). Distinct from [`CallUpWindowType`]:
+/// that shapes the 23/26-man *squad* for a whole cycle, this shapes the
+/// *starting XI* for one game. A knockout gets the strongest fit XI; a
+/// group qualifier rotates for fatigue and bloods the odd uncapped
+/// youngster; a friendly experiments freely with depth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NationalMatchImportance {
+    /// Knockout / final — field the best fit XI, rest only the truly
+    /// overloaded, no experimentation.
+    Peak,
+    /// Group-stage / league-phase qualifier — rotate on fatigue and give
+    /// promising uncapped youngsters the occasional competitive debut.
+    Competitive,
+    /// Friendly — heavy rotation and experimentation with uncapped depth;
+    /// well-capped veterans make way for prospects.
+    Friendly,
+}
+
+impl NationalMatchImportance {
+    /// Map a fixture's knockout flag onto an importance tier. Group /
+    /// league-phase fixtures (`is_knockout == false`) rotate; knockouts
+    /// field the strongest available XI.
+    pub fn from_knockout(is_knockout: bool) -> Self {
+        if is_knockout {
+            Self::Peak
+        } else {
+            Self::Competitive
+        }
+    }
+}
+
 /// Inputs gathered once per call-up cycle. Replaces the old
 /// `is_tournament: bool` flag with enough structure to differentiate
 /// "March friendly" from "qualifying double-header" from "World Cup".

@@ -10786,18 +10786,116 @@ html:has(.fm-workers-page) {
 
 .fm-rel-stat-bond {
     border-left-color: #35d36a;
+    --rel-tier: #35d36a;
 }
 
 .fm-rel-stat-friendly {
     border-left-color: #4ec95e;
+    --rel-tier: #4ec95e;
 }
 
 .fm-rel-stat-tension {
     border-left-color: #e0a23a;
+    --rel-tier: #e0a23a;
 }
 
 .fm-rel-stat-rivalry {
     border-left-color: #e5442c;
+    --rel-tier: #e5442c;
+}
+
+/* --- Tier filter toggles ---
+   Each summary tile doubles as a checkbox that shows or hides its tier's
+   threads. A real <input> stays in the DOM (visually hidden) so the toggle
+   keeps native keyboard + focus behaviour; the custom box fills with the
+   tier's own accent when on, and the whole tile fades when off so a
+   switched-off tier reads as "not shown" at a glance. --- */
+.fm-rel-filter {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+    transition: opacity 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.fm-rel-filter:hover {
+    background: #22303a;
+    border-color: #2f4150;
+}
+
+.fm-rel-stat-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.fm-rel-filter-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    margin: 0;
+    pointer-events: none;
+}
+
+.fm-rel-filter-box {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border: 2px solid #3a4a58;
+    background: #131c23;
+    position: relative;
+    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.fm-rel-filter-box::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 1px;
+    width: 4px;
+    height: 9px;
+    border: solid #10191f;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg) scale(0);
+    transform-origin: center;
+    transition: transform 0.15s ease;
+}
+
+.fm-rel-filter-input:checked + .fm-rel-filter-box {
+    background: var(--rel-tier, #35d36a);
+    border-color: var(--rel-tier, #35d36a);
+}
+
+.fm-rel-filter-input:checked + .fm-rel-filter-box::after {
+    transform: rotate(45deg) scale(1);
+}
+
+.fm-rel-filter-input:focus-visible + .fm-rel-filter-box {
+    box-shadow: 0 0 0 3px rgba(120, 170, 255, 0.35);
+}
+
+.fm-rel-stat.is-off {
+    opacity: 0.5;
+    background: #171f26;
+    border-left-color: #33404b;
+}
+
+.fm-rel-stat.is-off .fm-rel-stat-num,
+.fm-rel-stat.is-off .fm-rel-stat-label {
+    color: #6a747d;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fm-rel-filter,
+    .fm-rel-filter-box,
+    .fm-rel-filter-box::after {
+        transition: none;
+    }
 }
 
 /* --- Graph stage: transparent, sits directly on the panel. Height is set

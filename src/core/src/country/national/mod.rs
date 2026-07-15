@@ -12,6 +12,7 @@
 
 mod calendar;
 mod callup;
+mod matchday;
 mod synthetic;
 mod types;
 mod world_status;
@@ -232,7 +233,9 @@ impl NationalTeam {
     }
 
     /// Build a MatchSquad from the called-up squad + generated players.
-    /// `date` drives the matchday-armband age read.
+    /// `date` drives the matchday-armband age read. Rotation defaults to
+    /// [`NationalMatchImportance::Competitive`] — the historical callers
+    /// are all competitive fixtures.
     pub fn build_match_squad(&self, clubs: &[Club], date: NaiveDate) -> MatchSquad {
         let club_refs: Vec<&Club> = clubs.iter().collect();
         self.build_match_squad_from_refs(&club_refs, date)
@@ -242,8 +245,31 @@ impl NationalTeam {
     /// This variant accepts refs so the caller can collect clubs from multiple
     /// countries. `date` is plumbed through to the matchday-armband resolver so
     /// the senior leader is picked against the player's age at kickoff rather
-    /// than a guessed "now".
+    /// than a guessed "now". Rotation defaults to
+    /// [`NationalMatchImportance::Competitive`]; callers that know the stakes
+    /// should use [`build_match_squad_from_refs_with_importance`](Self::build_match_squad_from_refs_with_importance).
     pub fn build_match_squad_from_refs(&self, clubs: &[&Club], date: NaiveDate) -> MatchSquad {
+        self.build_match_squad_from_refs_with_importance(
+            clubs,
+            date,
+            NationalMatchImportance::Competitive,
+        )
+    }
+
+    /// Rotation-aware match-squad builder. `importance` decides how far
+    /// the XI drifts from the strongest-available eleven: knockouts field
+    /// the best fit XI, group qualifiers rotate for fatigue and blood the
+    /// odd uncapped youngster, friendlies experiment freely. The per-slot
+    /// picks below select on the rotation-aware scores from
+    /// [`super::matchday`] instead of raw ability, so a tired regular
+    /// yields to a fresher deputy and fringe players earn low-stakes
+    /// minutes — the previous builder always fielded the identical XI.
+    pub fn build_match_squad_from_refs_with_importance(
+        &self,
+        clubs: &[&Club],
+        date: NaiveDate,
+        importance: NationalMatchImportance,
+    ) -> MatchSquad {
         let team_id = self.country_id;
         let team_name = self.country_name.clone();
 
@@ -287,7 +313,11 @@ impl NationalTeam {
                     .iter()
                     .any(|pos| pos.position == PlayerPositionType::Goalkeeper)
             })
-            .max_by_key(|p| p.player_attributes.current_ability);
+            .max_by(|a, b| {
+                Self::matchday_overall_score(a, importance, date)
+                    .partial_cmp(&Self::matchday_overall_score(b, importance, date))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
         let gk_choice = natural_gk.copied().or_else(|| {
             // No natural keeper — draft the lowest-ability outfielder.
@@ -327,10 +357,10 @@ impl NationalTeam {
                         .iter()
                         .any(|pp| pp.position == PlayerPositionType::Goalkeeper)
                 })
-                .max_by_key(|p| {
-                    let pos_fit = p.positions.get_level(pos) as u16;
-                    let ability = p.player_attributes.current_ability as u16;
-                    pos_fit * 3 + ability
+                .max_by(|a, b| {
+                    Self::matchday_position_score(a, pos, importance, date)
+                        .partial_cmp(&Self::matchday_position_score(b, pos, importance, date))
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 });
 
             if let Some(player) = best {
@@ -344,7 +374,11 @@ impl NationalTeam {
             let best = all_players
                 .iter()
                 .filter(|p| !used_ids.contains(&p.id))
-                .max_by_key(|p| p.player_attributes.current_ability);
+                .max_by(|a, b| {
+                    Self::matchday_overall_score(a, importance, date)
+                        .partial_cmp(&Self::matchday_overall_score(b, importance, date))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
 
             match best {
                 Some(player) => {
@@ -372,7 +406,11 @@ impl NationalTeam {
                     .iter()
                     .any(|pos| pos.position == PlayerPositionType::Goalkeeper)
             })
-            .max_by_key(|p| p.player_attributes.current_ability)
+            .max_by(|a, b| {
+                Self::matchday_overall_score(a, importance, date)
+                    .partial_cmp(&Self::matchday_overall_score(b, importance, date))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
         {
             substitutes.push(MatchPlayer::from_player(
                 team_id,
@@ -390,9 +428,9 @@ impl NationalTeam {
             .copied()
             .collect();
         bench_remaining.sort_by(|a, b| {
-            b.player_attributes
-                .current_ability
-                .cmp(&a.player_attributes.current_ability)
+            Self::matchday_overall_score(b, importance, date)
+                .partial_cmp(&Self::matchday_overall_score(a, importance, date))
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         for player in bench_remaining.iter().take(6) {

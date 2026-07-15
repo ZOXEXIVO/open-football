@@ -1862,17 +1862,24 @@ impl PipelineProcessor {
     /// Realism gate for the borrower side of a domestic loan: players
     /// don't drop from a giant to a minnow for a bit-part role.
     /// `borrower_rep` / `parent_rep` are main-team world reputations
-    /// (0..10000). Very raw players — far below the parent's best at
-    /// their position — tolerate a much bigger drop, because for them
-    /// ANY senior football is the point of the loan.
+    /// (0..10000).
     ///
-    /// `is_development` lifts the floor entirely: a youth / match-practice
-    /// loan (a young player going out to PLAY) is supposed to drop a level
-    /// or two for senior minutes, and the stricter `would_get_loan_minutes`
-    /// gate already guarantees he actually plays wherever he lands — so that,
-    /// not club reputation, is the realism check. Without this a near-ready
-    /// 20-23 (who isn't "very raw") hit the 0.25 floor and could never drop
-    /// far enough to get games.
+    /// **Readiness, not age, decides how far a player may drop.** The signal is
+    /// how far he sits below the parent's best at his position:
+    ///   * A genuinely raw player (`very_raw` — 25+ below the best) tolerates
+    ///     the biggest drop: for him ANY senior football is the point, and the
+    ///     stricter `would_get_loan_minutes` gate already guarantees he plays
+    ///     wherever he lands. A raw *development* youngster (the classic
+    ///     teenage keeper) has the floor lifted entirely so he can drop to a
+    ///     small club where he STARTS; a raw non-development player keeps a
+    ///     light 0.12 floor.
+    ///   * Everyone else — INCLUDING a young **displaced first-choice** who is
+    ///     close to the parent's best — is held to the peer-level 0.25 floor.
+    ///     He moves down a tier or two for minutes, not several tiers to a
+    ///     minnow's bench. (Previously the age-based `is_development` flag
+    ///     lifted the floor for him too, which is exactly what sent polished
+    ///     young regulars tumbling far below their level — e.g. a Serie A
+    ///     first-choice keeper loaned to Serie C.)
     fn loan_reputation_drop_ok(
         borrower_rep: u16,
         parent_rep: u16,
@@ -1880,11 +1887,19 @@ impl PipelineProcessor {
         parent_best_in_group: u8,
         is_development: bool,
     ) -> bool {
-        if is_development || parent_rep == 0 {
+        if parent_rep == 0 {
             return true;
         }
         let very_raw = player_ability.saturating_add(25) <= parent_best_in_group;
-        let floor = if very_raw { 0.12 } else { 0.25 };
+        let floor = if very_raw {
+            // Raw player: a development youngster drops without a reputation
+            // floor (the minutes gate is the realism check); a non-development
+            // raw player keeps only the light floor.
+            if is_development { 0.0 } else { 0.12 }
+        } else {
+            // Near-ready or established: peer-level moves only, whatever the age.
+            0.25
+        };
         borrower_rep as f32 >= parent_rep as f32 * floor
     }
 
@@ -2117,13 +2132,17 @@ impl UnsolicitedLoanTarget {
     /// For a development loan the realism check is "will he actually play
     /// here", which the caller enforces with the position-aware minutes /
     /// room gates (and, for keepers, the strict plausible-#1 rule). When
-    /// that holds, the squad-average floor and the reputation-drop floor are
-    /// not merely redundant but actively harmful — they block the signature
-    /// development move: a big-club youngster dropping to a smaller club to
-    /// START. Young keepers are the sharpest case — they develop late, so a
-    /// teenage keeper's CA sits far below an outfield-heavy squad average and
-    /// far below a giant parent's reputation, which is exactly why none ever
-    /// moved. Cover (non-development) loans keep both floors.
+    /// that holds, the squad-average floor is actively harmful — it blocks
+    /// the signature development move: a big-club youngster dropping to a
+    /// smaller club to START. Young keepers are the sharpest case — they
+    /// develop late, so a teenage keeper's CA sits far below an outfield-heavy
+    /// squad average, which is exactly why none ever moved. So a development
+    /// loan skips the squad-average floor. The reputation-drop floor is NOT
+    /// skipped wholesale: it is itself keyed to readiness (see
+    /// [`Self::loan_reputation_drop_ok`]), so a genuinely raw youngster still
+    /// drops to a club where he STARTS, but a near-ready player (a displaced
+    /// first-choice) is held to a peer-level move rather than tumbling several
+    /// tiers. Cover (non-development) loans keep both floors.
     fn clears_level_gate(
         is_development: bool,
         ability: u8,
@@ -2132,16 +2151,14 @@ impl UnsolicitedLoanTarget {
         parent_rep: u16,
         parent_best_in_group: u8,
     ) -> bool {
-        if is_development {
-            return true;
-        }
-        ability >= borrower_avg_ability.saturating_sub(5)
+        let avg_ok = is_development || ability >= borrower_avg_ability.saturating_sub(5);
+        avg_ok
             && PipelineProcessor::loan_reputation_drop_ok(
                 borrower_rep,
                 parent_rep,
                 ability,
                 parent_best_in_group,
-                false,
+                is_development,
             )
     }
 }
@@ -2577,12 +2594,19 @@ mod borrower_gate_tests {
         assert!(PipelineProcessor::loan_reputation_drop_ok(
             2000, 0, 120, 130, false
         ));
-        // Youth / match-practice loan: the reputation floor is lifted
-        // entirely so a 20-23 can drop a level or two for senior minutes —
-        // even the giant-to-minnow case the first assertion blocks for a
-        // cover loan. The minutes gate is the realism check instead.
-        assert!(PipelineProcessor::loan_reputation_drop_ok(
+        // Readiness, not age, decides the drop. The development flag no longer
+        // lifts the floor for a NEAR-READY player: a young displaced first-
+        // choice (close to the parent's best) is held to the same peer-level
+        // floor as an established player, so the giant-to-minnow drop is
+        // blocked — he moves down a tier or two, not several.
+        assert!(!PipelineProcessor::loan_reputation_drop_ok(
             2000, 9000, 120, 130, true
+        ));
+        // A genuinely raw development player still has the floor lifted
+        // entirely — any senior football is the point, and the minutes gate is
+        // the realism check instead.
+        assert!(PipelineProcessor::loan_reputation_drop_ok(
+            400, 9000, 90, 130, true
         ));
     }
 
