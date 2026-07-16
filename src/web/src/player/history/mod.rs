@@ -1,6 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::common::friendly_source::FriendlySourceSlug;
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::decisions::PlayerDecisionsCounter;
 use crate::player::events::PlayerEventsCounter;
@@ -209,46 +210,11 @@ pub async fn player_history_action(
             statistics: &c.statistics,
         })
         .collect();
-    // Source slug for the live Friendly entry. Priority:
-    //   1. `player.friendly_source_slug` — set at match-record time, so
-    //      it reflects the actual league the player played friendlies
-    //      in this spell (the only authoritative source for a senior
-    //      loanee playing youth friendlies).
-    //   2. Inference from the player's current team's club roster — used
-    //      for save-loaded players who haven't played a friendly yet, or
-    //      legacy saves that pre-date the field.
-    // Senior callers with no youth squad fall through to empty → the
-    // projection inherits the active spell's league_slug → web layer
-    // renders the generic "Friendly".
-    let friendly_source_slug: String = player
-        .friendly_source_slug
-        .clone()
-        .or_else(|| {
-            team_opt.and_then(|team| {
-                let direct = if !team.team_type.is_own_team() {
-                    team.league_id
-                        .and_then(|lid| simulator_data.league(lid))
-                        .map(|l| l.slug.clone())
-                } else {
-                    None
-                };
-                if direct.is_some() {
-                    return direct;
-                }
-                simulator_data
-                    .club(team.club_id)
-                    .and_then(|club| {
-                        club.teams
-                            .teams
-                            .iter()
-                            .find(|t| !t.team_type.is_own_team() && t.league_id.is_some())
-                    })
-                    .and_then(|youth| youth.league_id)
-                    .and_then(|lid| simulator_data.league(lid))
-                    .map(|l| l.slug.clone())
-            })
-        })
-        .unwrap_or_default();
+    // Source slug for the live Friendly entry — shared with the Overview
+    // page so both label the Friendly row from the same league (see
+    // `FriendlySourceSlug` for the lookup order).
+    let friendly_source_slug: String =
+        FriendlySourceSlug::resolve(player, team_opt, simulator_data);
     let live_input = PlayerLiveStatsInput {
         league: live_league,
         friendly: live_friendly,

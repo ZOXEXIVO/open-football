@@ -251,7 +251,7 @@
             <tbody>
             {% if let Some(fs) = player.friendly_statistics %}
             <tr>
-                <td>{{ i18n.t("friendly") }}</td>
+                <td>{{ player.friendly_label }}</td>
                 <td>{{ fs.played }}{% if fs.played_subs > 0 %} ({{ fs.played_subs }}){% endif %}</td>
                 {% if is_goalkeeper %}
                 <td>{{ fs.conceded }}</td>
@@ -292,7 +292,7 @@
             </tr>
             {% endfor %}
             <tr>
-                <td>{{ i18n.t("league") }}</td>
+                <td>{{ player.league_label }}</td>
                 <td>{{ player.statistics.played }}{% if player.statistics.played_subs > 0 %} ({{ player.statistics.played_subs }}){% endif %}</td>
                 {% if is_goalkeeper %}
                 <td>{{ player.statistics.conceded }}</td>

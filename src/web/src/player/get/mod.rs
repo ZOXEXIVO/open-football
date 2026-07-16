@@ -2,6 +2,7 @@ pub mod ai_report;
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::common::friendly_source::FriendlySourceSlug;
 use crate::common::potential_stars::PotentialStarsView;
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::decisions::PlayerDecisionsCounter;
@@ -129,7 +130,15 @@ pub struct PlayerViewModel {
     pub preferred_foot: String,
     pub player_attributes: PlayerAttributesDto,
     pub statistics: PlayerStatistics,
+    /// Display label for the League row — the real league name when the
+    /// season's games all came from one league ("First League"), the
+    /// generic i18n "League" when sources mix or none is known.
+    pub league_label: String,
     pub friendly_statistics: Option<PlayerStatistics>,
+    /// Display label for the Friendly row — the real source-league name
+    /// for youth-league football ("Premier League U19"), the generic
+    /// i18n "Friendly" for ordinary pre-season friendlies.
+    pub friendly_label: String,
     /// One row per cup competition the player has appeared in this spell,
     /// each labelled with the real competition. Built from the player's
     /// per-competition cup breakdown recorded at match time.
@@ -377,8 +386,8 @@ pub async fn player_get_action(
             .map(|t| (t.name.clone(), t.slug.clone()))
             .unwrap_or_else(|| (team.name.clone(), team.slug.clone()));
 
-        let (overview_league, overview_friendly, overview_cups) =
-            PlayerOverviewStatsBuilder::new(simulator_data, &i18n).build(player);
+        let overview =
+            PlayerOverviewStatsBuilder::new(simulator_data, &i18n).build(player, Some(team));
 
         let player_vm = PlayerViewModel {
             id: player.id,
@@ -405,9 +414,11 @@ pub async fn player_get_action(
             ),
             preferred_foot: player.preferred_foot_str().to_string(),
             player_attributes: get_attributes(player),
-            statistics: overview_league,
-            friendly_statistics: overview_friendly,
-            cup_statistics: overview_cups,
+            statistics: overview.league,
+            league_label: overview.league_label,
+            friendly_statistics: overview.friendly,
+            friendly_label: overview.friendly_label,
+            cup_statistics: overview.cups,
             status: PlayerStatusDto::new(player.statuses.get()),
             position_map: get_position_map(player),
             loan_status,
@@ -507,8 +518,7 @@ pub async fn player_get_action(
         player.full_name.display_last_name()
     );
 
-    let (overview_league, overview_friendly, overview_cups) =
-        PlayerOverviewStatsBuilder::new(simulator_data, &i18n).build(player);
+    let overview = PlayerOverviewStatsBuilder::new(simulator_data, &i18n).build(player, None);
 
     let player_vm = PlayerViewModel {
         id: player.id,
@@ -526,9 +536,11 @@ pub async fn player_get_action(
         value: String::from("-"),
         preferred_foot: player.preferred_foot_str().to_string(),
         player_attributes: get_attributes(player),
-        statistics: overview_league,
-        friendly_statistics: overview_friendly,
-        cup_statistics: overview_cups,
+        statistics: overview.league,
+        league_label: overview.league_label,
+        friendly_statistics: overview.friendly,
+        friendly_label: overview.friendly_label,
+        cup_statistics: overview.cups,
         status: PlayerStatusDto::new(player.statuses.get()),
         position_map: get_position_map(player),
         loan_status: None,
@@ -799,6 +811,18 @@ struct PlayerOverviewStatsBuilder<'a> {
     i18n: &'a I18n,
 }
 
+/// The Overview statistics panel's view data: the League aggregate, the
+/// optional Friendly bucket, and per-cup rows — each aggregate row
+/// paired with its display label (real league name when the projection
+/// pinned a single source league, generic kind label otherwise).
+struct OverviewStatsView {
+    league: PlayerStatistics,
+    league_label: String,
+    friendly: Option<PlayerStatistics>,
+    friendly_label: String,
+    cups: Vec<CupCompetitionStatistics>,
+}
+
 impl<'a> PlayerOverviewStatsBuilder<'a> {
     fn new(data: &'a SimulatorData, i18n: &'a I18n) -> Self {
         Self { data, i18n }
@@ -806,25 +830,18 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
 
     /// Project the active spell's per-competition Overview rows from
     /// the central [`PlayerStatisticsProjection`] and split them into
-    /// the three slots the view model exposes:
+    /// the slots the view model exposes:
     ///
-    ///   - `statistics`         — the League aggregate row,
-    ///   - `friendly_statistics` — the Friendly row (None when empty),
-    ///   - `cup_statistics`     — Domestic + Continental cup rows.
+    ///   - `league` / `league_label`     — the League aggregate row,
+    ///   - `friendly` / `friendly_label` — the Friendly row (None when empty),
+    ///   - `cups`                        — Domestic + Continental cup rows.
     ///
     /// The per-player Overview shows the *raw* minutes-weighted average
     /// (see [`PlayerStatistics::average_rating_str`]). Sample-size
     /// regression is reserved for aggregate ranking surfaces (squad
     /// list, top-rated, scouting, awards) where small-sample inflation
     /// distorts comparisons.
-    fn build(
-        &self,
-        player: &Player,
-    ) -> (
-        PlayerStatistics,
-        Option<PlayerStatistics>,
-        Vec<CupCompetitionStatistics>,
-    ) {
+    fn build(&self, player: &Player, team: Option<&Team>) -> OverviewStatsView {
         let domestic_override = self.domestic_cup_override(player);
         let live_cups: Vec<LiveCupSlice<'_>> = player
             .cup_statistics_by_competition
@@ -835,14 +852,15 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
                 statistics: &c.statistics,
             })
             .collect();
+        // Same source resolution as the History page, so a youth-squad
+        // player's live friendly slice carries its real league slug
+        // ("premier-league-u19") and the row below can wear that name.
+        let friendly_source_slug = FriendlySourceSlug::resolve(player, team, self.data);
         let live_input = PlayerLiveStatsInput {
             league: &player.statistics,
             friendly: &player.friendly_statistics,
             cups: &live_cups,
-            // Overview aggregates Friendly into one row regardless of
-            // source league, so the slug override the History page
-            // uses (youth-aliased players) doesn't apply here.
-            friendly_source_slug: "",
+            friendly_source_slug: &friendly_source_slug,
         };
         let rows = PlayerStatisticsProjection::player_overview_statistics(
             &player.statistics_history,
@@ -852,16 +870,24 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
         );
 
         let mut league: PlayerStatistics = self.empty_dto();
+        let mut league_label = self.i18n.t("league").to_string();
         let mut friendly: Option<PlayerStatistics> = None;
+        let mut friendly_label = self.i18n.t("friendly").to_string();
         let mut cups: Vec<CupCompetitionStatistics> = Vec::new();
 
         for row in rows {
             match row.competition_kind {
                 PlayerStatCompetitionKind::League => {
                     league = Self::to_dto(&row.statistics);
+                    league_label = self.league_row_label(
+                        &row.competition_slug,
+                        &row.competition_name,
+                        "league",
+                    );
                 }
                 PlayerStatCompetitionKind::Friendly => {
                     friendly = Some(Self::to_dto(&row.statistics));
+                    friendly_label = self.league_row_label(&row.competition_slug, "", "friendly");
                 }
                 PlayerStatCompetitionKind::DomesticCup
                 | PlayerStatCompetitionKind::ContinentalCup => {
@@ -873,16 +899,50 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
             }
         }
 
-        // Friendly bucket is shown even when the projection rejected it
-        // for being all zeros — the template uses `if let Some(fs)` and
-        // legacy callers always passed Some(empty). Surface it as
-        // Some(default) for an active spell so existing renders are
-        // bit-identical.
-        if friendly.is_none() {
-            friendly = Some(Self::to_dto(&player.friendly_statistics));
-        }
+        // No games in the friendly bucket → no Friendly row at all. The
+        // legacy 0-app placeholder rendered a generic "Friendly" line
+        // that told the reader nothing (user: "Remove friendly as is") —
+        // when the bucket has games the projection emits the row and it
+        // wears its real source league's name instead.
 
-        (league, friendly, cups)
+        OverviewStatsView {
+            league,
+            league_label,
+            friendly,
+            friendly_label,
+            cups,
+        }
+    }
+
+    /// Display label for an aggregated League / Friendly row. The
+    /// projection stamps the row's `competition_slug` when every merged
+    /// entry came from ONE league ("first-league",
+    /// "premier-league-u19"); resolve it to the live league name, an
+    /// i18n entry, or the ledger-frozen name. An empty slug — mixed
+    /// sources, or a friendly with no specific source league — falls
+    /// back to the generic kind label.
+    fn league_row_label(&self, slug: &str, ledger_name: &str, generic_key: &str) -> String {
+        if !slug.is_empty() {
+            if let Some(name) = self
+                .data
+                .indexes
+                .as_ref()
+                .and_then(|idx| idx.slug_indexes.get_league_by_slug(slug))
+                .and_then(|id| self.data.league(id))
+                .map(|l| l.name.clone())
+            {
+                return name;
+            }
+            let key = slug.replace('-', "_");
+            let translated = self.i18n.t(&key);
+            if translated != key.as_str() {
+                return translated.to_string();
+            }
+            if !ledger_name.is_empty() {
+                return ledger_name.to_string();
+            }
+        }
+        self.i18n.t(generic_key).to_string()
     }
 
     /// Records-sourced domestic-cup row, used by the projection as the
