@@ -114,12 +114,16 @@ impl<'p> DefensiveOperationsImpl<'p> {
 
     /// Find the opponent defensive line position — single-pass, zero allocation
     pub fn find_defensive_line(&self) -> f32 {
+        // `x >= 0.0` drops sent-off players (stashed off-pitch at
+        // (-500,-500)); one red-card defender otherwise drags min_x to
+        // -500 and kills the Right-side offside logic for the rest of
+        // the match.
         let (sum, count, min_x, max_x) = self
             .ctx
             .players()
             .opponents()
             .all()
-            .filter(|p| p.tactical_positions.is_defender())
+            .filter(|p| p.tactical_positions.is_defender() && p.position.x >= 0.0)
             .map(|p| p.position.x)
             .fold((0.0f32, 0u32, f32::MAX, f32::MIN), |(s, c, mn, mx), x| {
                 (s + x, c + 1, mn.min(x), mx.max(x))
@@ -143,6 +147,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .players()
             .teammates()
             .defenders()
+            .filter(|p| p.position.x >= 0.0) // exclude sent-off sentinel
             .map(|p| p.position.x)
             .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
 
@@ -177,6 +182,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .players()
             .teammates()
             .defenders()
+            .filter(|d| d.position.x >= 0.0) // exclude sent-off sentinel
             .all(|d| match self.ctx.player.side {
                 Some(PlayerSide::Left) => d.position.x >= self.ctx.player.position.x,
                 Some(PlayerSide::Right) => d.position.x <= self.ctx.player.position.x,
@@ -191,6 +197,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .players()
             .teammates()
             .defenders()
+            .filter(|d| d.position.x >= 0.0) // exclude sent-off sentinel
             .map(|d| d.position.x)
             .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
 

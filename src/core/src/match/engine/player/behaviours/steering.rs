@@ -239,8 +239,13 @@ impl<'a> SteeringBehavior<'a> {
                 distance,
                 angle,
             } => {
-                // The wander circle is projected in front of the player
-                let circle_center = player.position + player.velocity.normalize() * *distance;
+                // The wander circle is projected in front of the player.
+                // A fully-stopped player has no facing to project from —
+                // fall back to +x so idle players still drift instead of
+                // freezing (normalize() of a zero vector is NaN, which
+                // zeroed the whole wander output).
+                let facing = player.velocity.try_normalize(1e-4).unwrap_or(Vector3::x());
+                let circle_center = player.position + facing * *distance;
 
                 // Calculate the displacement around the circle using the stored angle
                 let displacement = Vector3::new(angle.cos() * *radius, angle.sin() * *radius, 0.0);
@@ -335,16 +340,21 @@ impl<'a> SteeringBehavior<'a> {
                     Vector3::zeros()
                 };
 
-                // Apply slight offset if specified (makes movement more natural)
-                let offset_direction = if *path_offset > 0.0 {
-                    // Create a perpendicular vector for offset
-                    Vector3::new(-direction.y, direction.x, 0.0) * *path_offset
+                // Apply slight offset if specified (makes movement more
+                // natural). Guarded normalize: with no offset — or when
+                // standing exactly on the waypoint — the perpendicular
+                // is the zero vector and normalize() would poison the
+                // velocity with NaN.
+                let offset_term = if *path_offset > 0.0 {
+                    Vector3::new(-direction.y, direction.x, 0.0)
+                        .try_normalize(1e-4)
+                        .map_or(Vector3::zeros(), |p| p * 0.1)
                 } else {
                     Vector3::zeros()
                 };
 
                 let max_speed = player.max_speed_with_condition_cached();
-                let desired_velocity = (direction + offset_direction.normalize() * 0.1) * max_speed;
+                let desired_velocity = (direction + offset_term) * max_speed;
                 let steering = desired_velocity - player.velocity;
 
                 // Limit steering force

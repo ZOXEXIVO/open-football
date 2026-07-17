@@ -26,15 +26,18 @@ impl StateProcessingHandler for ForwardReturningState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        if !ctx.team().is_control_ball() && ctx.ball().distance() < 200.0 {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Intercepting,
-            ));
-        }
-
+        // Narrower check first — the old order put the 200u Intercepting
+        // branch above this one, so the close-range Tackling branch was
+        // unreachable.
         if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0 {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Tackling,
+            ));
+        }
+
+        if !ctx.team().is_control_ball() && ctx.ball().distance() < 200.0 {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Intercepting,
             ));
         }
 
@@ -52,9 +55,11 @@ impl StateProcessingHandler for ForwardReturningState {
             ));
         }
 
-        // Transition to Pressing late in the game only if ball is close as well
+        // Transition to Pressing late in the game only if ball is close
+        // as well. Final ~1/15 of the match (~6 min full length) — the
+        // old `- 180` was 180 ms, so this never fired.
         if ctx.team().is_loosing()
-            && ctx.context.total_match_time > (MATCH_TIME_MS - 180)
+            && ctx.context.total_match_time > MATCH_TIME_MS - MATCH_TIME_MS / 15
             && ctx.ball().distance() < 30.0
         {
             return Some(StateChangeResult::with_forward_state(

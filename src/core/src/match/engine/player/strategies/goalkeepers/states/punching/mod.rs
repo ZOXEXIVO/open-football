@@ -48,13 +48,37 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
             let mut state_change =
                 StateChangeResult::with_goalkeeper_state(GoalkeeperState::Standing);
 
-            // Determine the direction to punch the ball (e.g., towards the sidelines)
-            let punch_direction = ctx.ball().direction_to_own_goal().normalize() * -1.0;
+            // Punch AWAY from the own goal, through the ball, with real
+            // loft. `direction_to_own_goal()` returns the own-goal
+            // POSITION (not a direction), so the outward line is
+            // ball-minus-goal. A punch is a shorter, flatter contact
+            // than the Clearing hoof (3.8-4.8 h / 4.5-5.5 v): strong
+            // aerial keepers push it toward midfield, weak ones only
+            // shift the danger a few metres.
+            let ball_pos = ctx.tick_context.positions.ball.position;
+            let own_goal = ctx.ball().direction_to_own_goal();
+            let fallback_x = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+            let outward = Vector3::new(ball_pos.x - own_goal.x, ball_pos.y - own_goal.y, 0.0);
+            let outward_dir = outward
+                .try_normalize(1e-4)
+                .unwrap_or_else(|| Vector3::new(fallback_x, 0.0, 0.0));
+            // Lateral spray — a punch is a deflection under pressure,
+            // not an aimed pass.
+            let y_jitter: f32 = ctx.context.rng.random_range(-0.35..0.35);
+            let punch_dir = Vector3::new(outward_dir.x, outward_dir.y + y_jitter, 0.0)
+                .try_normalize(1e-4)
+                .unwrap_or(outward_dir);
+            let punch_power = 2.8 + prof.aerial_command * 1.2; // 2.8 - 4.0 u/tick
+            let punch_velocity = Vector3::new(
+                punch_dir.x * punch_power,
+                punch_dir.y * punch_power,
+                2.6 + prof.aerial_command * 0.8, // flatter arc than a kicked clearance
+            );
 
             // Generate a punch event
             state_change
                 .events
-                .add_player_event(PlayerEvent::ClearBall(punch_direction));
+                .add_player_event(PlayerEvent::ClearBall(punch_velocity));
 
             Some(state_change)
         } else {

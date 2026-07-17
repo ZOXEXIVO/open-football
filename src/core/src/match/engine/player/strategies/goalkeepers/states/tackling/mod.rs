@@ -81,11 +81,12 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
         // Move towards the opponent to attempt the tackle
 
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-            // Calculate direction towards the opponent
-            let direction = (opponent.position - ctx.player.position).normalize();
-            // Set speed based on player's pace
-            let speed = ctx.player.skills.physical.pace;
-            Some(direction * speed)
+            // Direction towards the opponent — guarded normalize so an
+            // exact overlap doesn't NaN the tick.
+            match (opponent.position - ctx.player.position).try_normalize(1e-4) {
+                Some(direction) => Some(direction * ctx.player.skills.physical.pace),
+                None => Some(Vector3::zeros()),
+            }
         } else {
             // No opponent with the ball found
             // Remain stationary or move back to position

@@ -1362,14 +1362,21 @@ impl ForwardRunningState {
                 .next()
             {
                 let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
-                let goal_pos = ctx.player().opponent_goal_position();
-                let opp_goal = ctx.tick_context.positions.ball.position * 2.0 - goal_pos; // Approximate own goal
+                // The carrier's OWN goal is the goal we attack — no
+                // reflection needed. (The old `ball*2 - goal` mirror
+                // pointed at OUR goal instead, so the trap fired on
+                // advancing carriers and missed the retreating ones it
+                // was written for.)
+                let opp_own_goal = ctx.player().opponent_goal_position();
 
-                // Opponent facing own goal (velocity pointing away from us)
+                // Opponent retreating toward their own goal (back to us)
                 if opp_velocity.magnitude() > 0.5 {
-                    let to_own_goal = (opp_goal - opponent.position).normalize();
-                    if opp_velocity.normalize().dot(&to_own_goal) > 0.4 {
-                        return true; // Opponent in trouble — press!
+                    if let Some(to_own_goal) =
+                        (opp_own_goal - opponent.position).try_normalize(1e-4)
+                    {
+                        if opp_velocity.normalize().dot(&to_own_goal) > 0.4 {
+                            return true; // Opponent in trouble — press!
+                        }
                     }
                 }
 
@@ -1951,7 +1958,17 @@ impl ForwardRunningState {
         ctx: &StateProcessingContext,
         _teammate: &MatchPlayerLite,
     ) -> bool {
-        // Single scan at max distance, bucket by distance
+        // KNOWN LATENT BUG, deliberately preserved (same class as the
+        // event-only drop in `merge_state_change`): this scans the
+        // CARRIER's markers (`ctx.player.id`), not `_teammate`'s, so
+        // under pressure every teammate reads as "marked" and the
+        // forward holds instead of releasing. That selfish hold is
+        // load-bearing for chance volume: scanning the real teammate
+        // (dev_match A/B, 200 matches) collapsed forward in-range
+        // possession ~6× and goals 0.27→0.12/match, because carriers
+        // released to open (backward) outlets instead of settling and
+        // shooting. Fixing the entity must land together with a
+        // shot-willingness / pass-economy recalibration.
         let mut markers = 0;
         let mut very_close = 0;
         for (_id, dist) in ctx.tick_context.grid.opponents(ctx.player.id, 8.0) {

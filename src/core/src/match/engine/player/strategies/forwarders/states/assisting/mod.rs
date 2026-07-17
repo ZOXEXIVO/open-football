@@ -41,33 +41,57 @@ impl StateProcessingHandler for ForwardAssistingState {
             ));
         }
 
-        // Check if there's an immediate threat from an opponent
-        if self.is_under_pressure(ctx) {
-            // If under high pressure, decide between quick pass or dribbling
-            if self.should_make_quick_pass(ctx) {
-                if let Some(_teammate_id) = self.find_best_teammate_to_assist(ctx) {
-                    //result.events.add_player_event(PlayerEvent::Pass(ctx.player.player_id, teammate_id));
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Dribbling,
-                    ));
+        // Ball-required actions only while actually carrying it. This
+        // state is usually entered OFF the ball (support play after a
+        // press/tackle win, or from CreatingSpace) — and Passing /
+        // Dribbling both bounce straight back to Running when entered
+        // without the ball, so routing there off-ball just churned
+        // transitions instead of assisting.
+        if ctx.player.has_ball(ctx) {
+            // Under immediate pressure: quick release to a runner if the
+            // passer's skills allow it, otherwise carry out of pressure.
+            if self.is_under_pressure(ctx) {
+                if self.should_make_quick_pass(ctx)
+                    && self.find_best_teammate_to_assist(ctx).is_some()
+                {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                 }
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Dribbling,
+                ));
             }
-            // If no good passing option, try to dribble
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Dribbling,
-            ));
+
+            // If not under immediate pressure, look for assist opportunities
+            if self.find_best_teammate_to_assist(ctx).is_some() {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+            }
+
+            if self.is_in_shooting_range(ctx) {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Shooting,
+                ));
+            }
         }
 
-        // If not under immediate pressure, look for assist opportunities
-        if let Some(_) = self.find_best_teammate_to_assist(ctx) {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+        // Off the ball, hand movement back to Running immediately —
+        // Running owns the off-ball attacking repertoire (runs in
+        // behind, box entries, shot logic). Letting Assisting persist
+        // off-ball parks a forward on an Arrive-at-goal vector where he
+        // stops generating runs AND reads as a "much better positioned
+        // teammate" to every carrier's defer gate — the pre-fix code
+        // reached the same Running hand-off accidentally, by bouncing
+        // through Passing/Dribbling's !has_ball guards.
+        if !ctx.player.has_ball(ctx) {
+            if self.should_create_space(ctx) {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::CreatingSpace,
+                ));
+            }
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        if self.is_in_shooting_range(ctx) && ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Shooting,
-            ));
-        } else if self.should_create_space(ctx) {
+        // Carrier with nothing better to do: keep supporting movement.
+        if self.should_create_space(ctx) {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::CreatingSpace,
             ));

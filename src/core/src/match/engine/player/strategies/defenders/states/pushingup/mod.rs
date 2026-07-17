@@ -43,10 +43,13 @@ impl StateProcessingHandler for DefenderPushingUpState {
         }
 
         if !ctx.team().is_control_ball() {
+            // Scan out to press range — the tackle branch re-checks its
+            // own tighter radius. (The old scan used the 2u tackle radius,
+            // so the 20u press branch below could never see a candidate.)
             if let Some(opponent) = ctx
                 .players()
                 .opponents()
-                .nearby(TACKLING_DISTANCE_THRESHOLD)
+                .nearby(PRESSING_DISTANCE_THRESHOLD)
                 .next()
             {
                 let distance_to_opponent = ctx.tick_context.grid.get(opponent.id, ctx.player.id);
@@ -57,8 +60,12 @@ impl StateProcessingHandler for DefenderPushingUpState {
                     ));
                 }
 
+                // Condition gate matches the sibling states (0-100 match
+                // fitness, not the static 0-20 stamina skill, which made
+                // this branch unreachable).
                 if distance_to_opponent <= PRESSING_DISTANCE_THRESHOLD
-                    && ctx.player.skills.physical.stamina > STAMINA_THRESHOLD
+                    && ctx.player.player_attributes.condition_percentage() as f32
+                        > STAMINA_THRESHOLD
                 {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Pressing,

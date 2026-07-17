@@ -35,8 +35,13 @@ impl StateProcessingHandler for DefenderTrackingBackState {
             ));
         }
 
-        // If the team is losing and there's little time left, consider a more aggressive stance
-        if ctx.team().is_loosing() && ctx.context.total_match_time > (MATCH_TIME_MS - 300) {
+        // If the team is losing and there's little time left, consider a
+        // more aggressive stance. Window = the final ~1/15 of the match
+        // (~6 min at full length) — the previous `- 300` subtracted 300
+        // MILLISECONDS, so the branch effectively never fired.
+        if ctx.team().is_loosing()
+            && ctx.context.total_match_time > MATCH_TIME_MS - MATCH_TIME_MS / 15
+        {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Pressing,
             ));
@@ -73,7 +78,9 @@ impl StateProcessingHandler for DefenderTrackingBackState {
         let urgency = if ctx.ball().on_own_side() {
             // Ball on own side - more urgent to get back
             1.5
-        } else if ctx.team().is_loosing() && ctx.context.total_match_time > (MATCH_TIME_MS - 300) {
+        } else if ctx.team().is_loosing()
+            && ctx.context.total_match_time > MATCH_TIME_MS - MATCH_TIME_MS / 15
+        {
             // Losing late in game - less urgent to defend
             0.8
         } else {

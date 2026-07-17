@@ -269,8 +269,14 @@ impl GoalkeeperPassingState {
                 _ => 0.5,
             };
 
-            // Forward progress
-            let forward_progress = (teammate.position.x - ctx.player.position.x).max(0.0);
+            // Forward progress (side-aware: "upfield" flips for Right teams)
+            let forward_progress = ctx
+                .player
+                .side
+                .map_or(0.0, |s| {
+                    s.forward_delta(ctx.player.position.x, teammate.position.x)
+                })
+                .max(0.0);
             let progress_factor = forward_progress / 100.0;
 
             let position_bonus = if is_midfielder { 1.3 } else { 1.0 };
@@ -302,8 +308,11 @@ impl GoalkeeperPassingState {
                 continue;
             }
 
-            // Check if on the wing (throws often go wide)
-            let is_wide = teammate.position.y.abs() > (ctx.context.field_size.height as f32 * 0.3);
+            // Check if on the wing (throws often go wide). y runs 0..height
+            // with the centre line at height/2, so "wide" is distance from
+            // the centre, not the raw coordinate.
+            let field_height = ctx.context.field_size.height as f32;
+            let is_wide = (teammate.position.y - field_height * 0.5).abs() > field_height * 0.3;
 
             // Space around receiver
             let opponents_near = ctx.tick_context.grid.opponents(teammate.id, 10.0).count();
@@ -358,8 +367,10 @@ impl GoalkeeperPassingState {
                 continue;
             }
 
-            // Forward progress (reduced requirement)
-            let forward_progress = teammate.position.x - ctx.player.position.x;
+            // Forward progress (side-aware; reduced requirement)
+            let forward_progress = ctx.player.side.map_or(0.0, |s| {
+                s.forward_delta(ctx.player.position.x, teammate.position.x)
+            });
             if forward_progress < 30.0 {
                 continue; // Don't kick to players not upfield
             }

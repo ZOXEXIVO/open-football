@@ -180,6 +180,15 @@ impl ForwardRunningInBehindState {
             // Pace decides the chance of beating a single blocker on
             // a run-in-behind. Sigmoid pivot at 12/20 so the full
             // 1-20 range matters instead of a hard cliff.
+            //
+            // NOTE: this per-tick re-roll makes a mid-pace forward flip
+            // RunningInBehind↔CreatingSpace frequently against a single
+            // blocker — but the flicker is load-bearing: it acts as the
+            // run's timebox, cycling the forward back through Running
+            // (where receiving/shot logic lives). A "commit to the run"
+            // variant (return true) parked runners behind the line and
+            // cut forward shots ~4× in dev_match. Change only together
+            // with a chance-economy recalibration.
             let p = SkillCurve::new(ctx.player.skills.physical.pace, 12.0, 0.6).probability();
             return ctx.context.rng.unit_f32() < p;
         }

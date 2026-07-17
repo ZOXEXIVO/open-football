@@ -218,7 +218,10 @@ impl DefenderWalkingState {
         let ball_speed = ctx.ball().speed();
         let ball_towards_player = ctx.ball().is_towards_player();
 
-        if ball_distance < threat_distance && ball_speed > 10.0 && ball_towards_player {
+        // Per-tick ball speeds are single-digit (shots ~1-2, lofted
+        // clearances ~6-7), so the threat gate keys on "meaningfully
+        // moving", not the old unreachable > 10.0.
+        if ball_distance < threat_distance && ball_speed > 2.0 && ball_towards_player {
             return true;
         }
 

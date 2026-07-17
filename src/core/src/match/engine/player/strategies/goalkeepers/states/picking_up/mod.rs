@@ -58,11 +58,14 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Move towards the ball to pick it up
+        // Move towards the ball to pick it up. Guarded normalize — the
+        // state is entered with the ball ~1u away, so "exactly on the
+        // ball" is reachable and normalize() of zero would NaN the tick.
         let ball_position = ctx.tick_context.positions.ball.position;
-        let direction = (ball_position - ctx.player.position).normalize();
-        let speed = ctx.player.skills.physical.pace;
-        Some(direction * speed)
+        match (ball_position - ctx.player.position).try_normalize(1e-4) {
+            Some(direction) => Some(direction * ctx.player.skills.physical.pace),
+            None => Some(Vector3::zeros()),
+        }
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

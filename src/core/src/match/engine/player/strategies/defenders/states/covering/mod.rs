@@ -3,8 +3,8 @@ use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondi
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
+    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -263,7 +263,10 @@ impl DefenderCoveringState {
         let ball_in_attacking_third = ball_ops.distance_to_opponent_goal()
             < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD;
         let team_in_possession = ctx.team().is_control_ball();
-        let defender_not_last_man = !self.is_last_defender(ctx);
+        // Side-aware shared helper — the previous local copy only knew
+        // the Left-team geometry, so the genuine last man on a Right
+        // team was cleared to push up.
+        let defender_not_last_man = !ctx.player().defensive().is_last_defender();
 
         ball_in_attacking_third
             && team_in_possession
@@ -272,25 +275,24 @@ impl DefenderCoveringState {
                 < ctx.context.field_size.width as f32 * 0.25
     }
 
-    fn is_last_defender(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players()
-            .teammates()
-            .defenders()
-            .all(|d| d.position.x >= ctx.player.position.x)
-    }
-
     fn calculate_optimal_covering_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_position = ctx.tick_context.positions.ball.position;
         let player_position = ctx.player.position;
         let field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
 
-        // Calculate the center of the middle third with slight offset towards own goal
-        let middle_third_center = Vector3::new(
-            field_width * 0.4, // Moved slightly back from 0.5
-            field_height * 0.5,
-            0.0,
-        );
+        // Calculate the center of the middle third with slight offset
+        // towards own goal — mirrored for Right-side teams (own goal at
+        // x = width), so a cover defender biases toward HIS OWN half.
+        // The clamp bounds below mirror the same way; the previous
+        // hard-coded [0.1w, 0.7w] band meant a Right-team cover
+        // defender could never drop deeper than the edge of his own
+        // defensive third.
+        let (center_x, clamp_min_x, clamp_max_x) = match ctx.player.side {
+            Some(PlayerSide::Right) => (field_width * 0.6, field_width * 0.3, field_width * 0.9),
+            _ => (field_width * 0.4, field_width * 0.1, field_width * 0.7),
+        };
+        let middle_third_center = Vector3::new(center_x, field_height * 0.5, 0.0);
 
         // Cache own goal position (expensive to recompute)
         let own_goal = ctx.ball().direction_to_own_goal();
@@ -342,11 +344,9 @@ impl DefenderCoveringState {
             smoothed_position
         };
 
-        // Final boundary check
+        // Final boundary check (side-mirrored, see above)
         Vector3::new(
-            capped_position
-                .x
-                .clamp(field_width * 0.1, field_width * 0.7), // Prevent getting too close to either goal
+            capped_position.x.clamp(clamp_min_x, clamp_max_x), // Prevent getting too close to either goal
             capped_position
                 .y
                 .clamp(field_height * 0.1, field_height * 0.9), // Keep away from sidelines

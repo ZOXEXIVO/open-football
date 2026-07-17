@@ -63,8 +63,10 @@ impl StateProcessingHandler for DefenderReturningState {
                 ));
             }
 
+            // Final ~1/15 of the match (~6 min full length) — the old
+            // `- 180` was 180 ms, so the losing-team press never fired.
             if ctx.team().is_loosing()
-                && ctx.context.total_match_time > (MATCH_TIME_MS - 180)
+                && ctx.context.total_match_time > MATCH_TIME_MS - MATCH_TIME_MS / 15
                 && ctx.ball().distance() < 30.0
             {
                 return Some(StateChangeResult::with_defender_state(

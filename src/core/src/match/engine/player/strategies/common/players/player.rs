@@ -100,10 +100,16 @@ impl<'p> PlayerOperationsImpl<'p> {
     }
 
     pub fn on_own_side(&self) -> bool {
-        let field_half_width = self.ctx.context.field_size.width / 2;
-
-        self.ctx.player.side == Some(PlayerSide::Left)
-            && self.ctx.player.position.x < field_half_width as f32
+        // Own half flips with the side: Left defends low-x, Right
+        // defends high-x. (The old `side == Left && x < half` meant a
+        // Right-side player was NEVER "on own side", so every caller's
+        // stay-back logic silently vanished for away teams.)
+        let field_half_width = self.ctx.context.field_size.width as f32 / 2.0;
+        match self.ctx.player.side {
+            Some(PlayerSide::Left) => self.ctx.player.position.x < field_half_width,
+            Some(PlayerSide::Right) => self.ctx.player.position.x > field_half_width,
+            None => false,
+        }
     }
 
     /// Clearing direction for defenders: aims AWAY from own goal with moderate randomness.
@@ -388,9 +394,20 @@ impl<'p> PlayerOperationsImpl<'p> {
 
     pub fn goal_angle(&self) -> f32 {
         // Calculate the angle between the player's facing direction and the goal direction
-        let player_direction = self.ctx.player.velocity.normalize();
-        let goal_direction = (self.goal_position() - self.ctx.player.position).normalize();
-        player_direction.angle(&goal_direction)
+        let goal_direction =
+            match (self.goal_position() - self.ctx.player.position).try_normalize(1e-4) {
+                Some(d) => d,
+                None => return 0.0, // standing on the goal line
+            };
+        // A stationary player has no velocity to read a facing from —
+        // treat them as squared up to the goal (angle 0): a stopped
+        // player can strike in any direction. The old normalize() of a
+        // zero velocity produced NaN, and `NaN < threshold` is false,
+        // so has_good_angle() silently vetoed every standing shot.
+        match self.ctx.player.velocity.try_normalize(1e-4) {
+            Some(player_direction) => player_direction.angle(&goal_direction),
+            None => 0.0,
+        }
     }
 
     pub fn goal_distance(&self) -> f32 {

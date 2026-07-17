@@ -316,11 +316,16 @@ impl DefenderHoldingLineState {
             // No opponent in zone - use base tactical position with ball influence
             let ball_influence = (ball_position.x - tactical_position.x) * 0.2;
 
-            // Wide defenders push up more when ball is on their side
+            // Wide defenders push up more when ball is on their side.
+            // "Up" is toward the opponent goal, so the depth offset is
+            // signed by the side's forward direction — a raw +x push
+            // sent Right-team fullbacks the wrong way (deeper when the
+            // ball was on their flank).
+            let forward_sign = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
             let wide_push = if is_wide_defender {
                 let ball_on_my_side = (ball_position.y - field_center_y).signum()
                     == (tactical_position.y - field_center_y).signum();
-                if ball_on_my_side { 15.0 } else { -5.0 }
+                (if ball_on_my_side { 15.0 } else { -5.0 }) * forward_sign
             } else {
                 0.0
             };

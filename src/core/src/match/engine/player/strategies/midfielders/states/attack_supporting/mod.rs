@@ -151,6 +151,22 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
             }
         }
 
+        // Opponent owns the ball: process() holds this state for up to
+        // MIN_STAY_TIME ticks of hysteresis, but the MOVEMENT must flip
+        // to recovery immediately — continuing the attacking support
+        // run walked the midfielder further out of defensive shape
+        // during exactly the ticks a turnover punishes.
+        if !ctx.team().is_control_ball() && ctx.ball().is_owned() {
+            return Some(
+                SteeringBehavior::Arrive {
+                    target: ctx.player.start_position,
+                    slowing_distance: 10.0,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            );
+        }
+
         // Default: Make intelligent supporting run
         let target_position = self.calculate_optimal_support_position(ctx);
 
@@ -515,12 +531,29 @@ impl MidfielderAttackSupportingState {
                 n += 1;
             }
         }
+        // Sort ascending by y — the `windows(2)` gap scan and the
+        // first()/last() edge checks below are only meaningful on a
+        // sorted array (the sibling `best_free_channel` insertion-sorts
+        // the same buffer before its scan; this path had omitted it, so
+        // "gaps" were measured between arbitrary roster-order pairs).
+        for i in 1..n {
+            let mut j = i;
+            while j > 0 && defender_ys[j - 1] > defender_ys[j] {
+                defender_ys.swap(j - 1, j);
+                j -= 1;
+            }
+        }
         let box_defenders = &defender_ys[..n];
+
+        // "In front of the box" is toward the attacker, i.e. backwards
+        // along the attacking direction — signed, so a Right-side team
+        // (attacking x=0) offsets INTO the pitch instead of off it.
+        let forward_x = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
 
         // Find best entry point based on defender positions
         if box_defenders.is_empty() {
             // No defenders - go straight to goal
-            Vector3::new(goal_position.x - 100.0, goal_position.y, 0.0)
+            Vector3::new(goal_position.x - 100.0 * forward_x, goal_position.y, 0.0)
         } else {
             // Find gap between defenders
             let mut best_gap_y = goal_position.y;
@@ -547,7 +580,7 @@ impl MidfielderAttackSupportingState {
                 best_gap_y = goal_position.y + 80.0;
             }
 
-            Vector3::new(goal_position.x - 150.0, best_gap_y, 0.0)
+            Vector3::new(goal_position.x - 150.0 * forward_x, best_gap_y, 0.0)
         }
     }
 

@@ -68,21 +68,18 @@ impl MidfielderSwitchingPlayState {
     fn find_switch_play_target(&self, ctx: &StateProcessingContext) -> Option<(u32, Vector3<f32>)> {
         // Find the best position to switch play to
         let player_position = ctx.player.position;
-        let ball_position = ctx.tick_context.positions.ball.position;
+        let field_height = ctx.context.field_size.height as f32;
 
-        // Calculate the direction perpendicular to the player's forward direction
-        let forward_direction = (ball_position - player_position).normalize();
-        let perpendicular_direction = Vector3::new(-forward_direction.y, forward_direction.x, 0.0);
-
-        // Find the teammate on the opposite side with the most space.
+        // A switch of play travels to the FAR flank, so select by real
+        // lateral separation from the carrier. (The old axis was derived
+        // from `ball - player`, which is the zero vector while carrying
+        // — the ball snaps to its owner — so its normalize() was NaN and
+        // no target ever matched; the state always fell through to plain
+        // Passing.)
         ctx.players()
             .teammates()
             .all()
-            .filter(|teammate| {
-                let teammate_to_player = player_position - teammate.position;
-                let dot_product = teammate_to_player.dot(&perpendicular_direction);
-                dot_product > 0.0 // Teammate is on the opposite side
-            })
+            .filter(|teammate| (teammate.position.y - player_position.y).abs() > field_height * 0.3)
             .max_by(|a, b| {
                 let space_a = self.calculate_space_around_player(ctx, a);
                 let space_b = self.calculate_space_around_player(ctx, b);

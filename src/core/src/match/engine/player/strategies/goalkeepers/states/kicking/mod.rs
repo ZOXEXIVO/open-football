@@ -79,7 +79,14 @@ impl GoalkeeperKickingState {
             let distance = (teammate.position - ctx.player.position).norm();
 
             // Calculate base score using vision-weighted evaluation
-            let forward_progress = (teammate.position.x - ctx.player.position.x).max(0.0);
+            // (side-aware: "upfield" flips for Right teams)
+            let forward_progress = ctx
+                .player
+                .side
+                .map_or(0.0, |s| {
+                    s.forward_delta(ctx.player.position.x, teammate.position.x)
+                })
+                .max(0.0);
             let field_progress = forward_progress / ctx.context.field_size.width as f32;
 
             // Check if receiver is a forward

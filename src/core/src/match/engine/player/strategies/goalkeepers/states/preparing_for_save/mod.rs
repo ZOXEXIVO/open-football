@@ -251,12 +251,23 @@ impl GoalkeeperPreparingForSaveState {
             return false;
         }
 
-        // Get goal direction from ball
-        let goal_direction = ctx.ball().direction_to_own_goal();
+        // Direction from the ball to the own goal mouth.
+        // `direction_to_own_goal()` returns the goal POSITION — it must
+        // be anchored at the ball before normalizing, otherwise the dot
+        // below compares against the field-origin→goal axis and a real
+        // shot at the left goal (travelling −x) never reads as "toward
+        // goal".
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let goal_position = ctx.ball().direction_to_own_goal();
+        let to_goal = match (goal_position - ball_position).try_normalize(1e-4) {
+            Some(dir) => dir,
+            // Ball already on the goal line — that is "toward goal".
+            None => return true,
+        };
 
         // Check if ball velocity is pointing toward goal
         // Use dot product: > 0 means moving in same general direction
-        let toward_goal_dot = ball_velocity.normalize().dot(&goal_direction.normalize());
+        let toward_goal_dot = ball_velocity.normalize().dot(&to_goal);
 
         // Consider it "toward goal" if angle is less than 90 degrees (dot > 0)
         // More strict for positioning: require at least 30 degree alignment

@@ -730,6 +730,23 @@ impl StateProcessingHandler for MidfielderRunningState {
                     MidfielderState::Guarding,
                 ));
             }
+
+            // Fatigue recovery during a lull — midfielders cover the most
+            // ground yet were the one outfield role that never entered
+            // Resting (defenders gate on stamina in Pressing/Marking,
+            // forwards via needs_recovery; nothing produced the
+            // midfielder variant). Conservative gate: genuinely gassed,
+            // play far away, and not in our half — catch breath while
+            // the opponents circulate harmlessly. Resting's own exits
+            // (ball close, team under threat) pull the player back out.
+            if ctx.player.player_attributes.condition_percentage() < 40
+                && ctx.ball().distance() > 150.0
+                && !ctx.ball().on_own_side()
+            {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Resting,
+                ));
+            }
         }
 
         // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
