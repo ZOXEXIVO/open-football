@@ -61,6 +61,43 @@ impl ContractRenewalManager {
         wage_budget: Option<u32>,
         league_reputation: u16,
     ) {
+        Self::run_for_squads(teams, &[main_idx], date, wage_budget, league_reputation)
+    }
+
+    /// Run the renewal pass for several squads of the SAME club against one
+    /// shared wage budget. The budget is a club-level number: seeding each
+    /// squad's pass with only its own team bill let the main and reserve
+    /// loops each spend the full headroom — together busting the budget the
+    /// chairman set. Every pass here starts from the club-wide bill and
+    /// carries forward the salary deltas the previous pass reserved.
+    pub fn run_for_squads(
+        teams: &mut [Team],
+        squad_indexes: &[usize],
+        date: NaiveDate,
+        wage_budget: Option<u32>,
+        league_reputation: u16,
+    ) {
+        let mut club_bill = WageStructureSnapshot::club_wide_bill(teams);
+        for &idx in squad_indexes {
+            if idx >= teams.len() {
+                continue;
+            }
+            club_bill =
+                Self::run_squad(teams, idx, date, wage_budget, league_reputation, club_bill);
+        }
+    }
+
+    /// One squad's renewal pass. Wage-structure caps read the squad's own
+    /// hierarchy; the budget gate reads (and returns) the club-wide bill so
+    /// sequential squad passes share one pot.
+    fn run_squad(
+        teams: &mut [Team],
+        main_idx: usize,
+        date: NaiveDate,
+        wage_budget: Option<u32>,
+        league_reputation: u16,
+        club_bill: u32,
+    ) -> u32 {
         // Apply team-level clause helpers once per pass before generating
         // new offers — match-highest-earner can change the snapshot used
         // by the renewal AI, and optional extensions can take a player out
@@ -75,7 +112,10 @@ impl ContractRenewalManager {
         // current_bill so subsequent candidates in this same monthly pass
         // see the budget already spent. Without this the loop could blow
         // the wage budget by approving five star offers in parallel.
+        // The bill itself is the CLUB-wide figure handed in by the caller
+        // (this squad's structure only anchors the wage-hierarchy caps).
         let mut structure = WageStructureSnapshot::from_team(&teams[main_idx]);
+        structure.current_bill = club_bill;
         let mut candidates = Self::collect_candidates(&teams[main_idx], date);
         // Fund the contracts the club can least afford to lose first, so a
         // wage-capped pass doesn't let roster-order backups soak up the
@@ -152,6 +192,16 @@ impl ContractRenewalManager {
                 None => continue,
             };
 
+            // Beyond the yearly attempts cap the club only comes back when
+            // the offer puts something materially new on the table — the
+            // Bosman / final-panic overrides lift the CAP, not the
+            // obligation to actually improve. Without this the override
+            // re-sent a structurally identical offer every monthly pass of
+            // the final months, collecting the same rejection each time.
+            if over_cap && !Self::offer_materially_improves(player_ref, &proposal) {
+                continue;
+            }
+
             // Match-highest-earner is genuinely elite — only one offer per
             // monthly pass may carry it, and only if the candidate is a
             // KeyPlayer. Without this guard a wave of "star" candidates
@@ -167,14 +217,10 @@ impl ContractRenewalManager {
 
             // Reserve the salary delta against the running wage bill so the
             // next candidate's budget check sees this offer as already
-            // spent. Conservative: assume the player will accept.
-            let salary_delta = proposal.salary.saturating_sub(current_salary);
-            structure.current_bill = structure.current_bill.saturating_add(salary_delta);
-            // Lift top_earner so a follow-on KeyPlayer offer doesn't
-            // immediately leapfrog the just-promised one.
-            if proposal.salary > structure.top_earner {
-                structure.top_earner = proposal.salary;
-            }
+            // spent, and lift the top-earner anchors so a follow-on
+            // KeyPlayer offer doesn't immediately leapfrog the
+            // just-promised one. Conservative: assume the player accepts.
+            structure.note_offer(candidate.player_id, current_salary, proposal.salary);
 
             if let Some(player) = teams[main_idx]
                 .players
@@ -198,6 +244,8 @@ impl ContractRenewalManager {
                 });
             }
         }
+
+        structure.current_bill
     }
 
     /// Apply the clause helpers that need team-level context once per
@@ -610,18 +658,32 @@ impl ContractRenewalManager {
         }
         offered = ((offered as f32) * escalation) as u32;
 
-        // Converge toward the player's own ask when we have it, but never
-        // beyond max_acceptable.
+        // Converge toward the player's own ask when we have it.
         if let Some(ask) = &player.pending_contract_ask {
             if ask.desired_salary > offered {
                 offered = (offered + ask.desired_salary) / 2;
             }
         }
 
+        // The club's own sanity ceiling: escalation and ask-convergence
+        // never push the offer past what the club believes the player could
+        // possibly be worth. An already-overpaid player still gets the
+        // token anchor bump rather than a forced cut — the club just stops
+        // chasing the agent's ratchet beyond that.
+        let token_raise = (contract.salary + contract.salary / 20).max(contract.salary + 1);
+        offered = offered.min(valuation.max_acceptable.max(token_raise));
+
         // Wage structure protection: only KeyPlayer can break the
         // top-earner ceiling, and only by a small margin. FirstTeamRegular
         // can approach but not exceed; everyone else is capped under it.
-        offered = structure.cap_for_status(offered, &candidate.effective_status);
+        // Floored at the token raise: a renewal the club CHOOSES to offer a
+        // player it wants to keep is never a pay cut — before this floor,
+        // the structural cap could clamp the club's best-paid non-KeyPlayer
+        // below his own salary, and every offer he ever saw was a cut he
+        // rejected until he walked on a Bosman.
+        offered = structure
+            .cap_for_status(offered, &candidate.effective_status, candidate.player_id)
+            .max(token_raise);
 
         // FFP / wage-budget gate: never bust it. If the available budget
         // can't even cover the player's acceptance floor, return None —
@@ -715,7 +777,7 @@ impl ContractRenewalManager {
             }
             if let Some(status) = &ask.demanded_status {
                 if proposal.squad_status_promise.is_none()
-                    && status_rank(status) > status_rank(&contract.squad_status)
+                    && status.seniority_rank() > contract.squad_status.seniority_rank()
                 {
                     proposal.squad_status_promise = Some(status.clone());
                 }
@@ -846,7 +908,7 @@ impl ContractRenewalManager {
         // *why* (for diagnostics) and make no offer rather than firing the
         // same losing proposal again.
         if attempts >= MAX_RENEWAL_ATTEMPTS_PER_YEAR
-            && !Self::expiry_offer_materially_improves(player, &proposal)
+            && !Self::offer_materially_improves(player, &proposal)
         {
             let reason = Self::diagnose_walk(player, &proposal);
             debug!(
@@ -864,16 +926,14 @@ impl ContractRenewalManager {
         Some((proposal, coach_name))
     }
 
-    /// Whether the final expiry-day offer is worth making to a player who
-    /// has already rejected the season's worth of attempts: it must match
-    /// his stated wage ask, or grant a key demand (release clause, squad
-    /// role, or contract length) he was holding out for. With no recorded
-    /// ask there is nothing new to put on the table, so a repeat offer is
-    /// pointless.
-    fn expiry_offer_materially_improves(
-        player: &Player,
-        proposal: &PlayerContractProposal,
-    ) -> bool {
+    /// Whether an over-the-cap offer is worth making to a player who has
+    /// already rejected the season's worth of attempts: it must match his
+    /// stated wage ask, or grant a key demand (release clause, squad role,
+    /// or contract length) he was holding out for. With no recorded ask
+    /// there is nothing new to put on the table, so a repeat offer is
+    /// pointless. Gates both the expiry-day last chance and the
+    /// Bosman-window / final-panic monthly overrides.
+    fn offer_materially_improves(player: &Player, proposal: &PlayerContractProposal) -> bool {
         // Full-package check FIRST, independent of any stated ask. The
         // acceptance handler signs off when the total package (base wage
         // plus amortized bonuses / fees / clauses) is at least a 10% uplift
@@ -883,13 +943,18 @@ impl ContractRenewalManager {
         //
         // The acceptance handler gates that package path on
         // `proposal.salary >= current_salary` — a base pay cut is refused
-        // regardless of sweeteners (e.g. a player who is his own top earner
-        // gets the offer clamped below his wage by the wage-structure cap).
-        // Mirror that gate too, or we'd green-light a doomed pay-cut offer.
+        // regardless of sweeteners — AND on the package clearing the
+        // player's absolute walk-away floor (`min_acceptable`). Mirror both
+        // gates, or we'd green-light a doomed offer the acceptance side
+        // provably rejects.
         if let Some(current) = player.contract.as_ref().map(|c| c.salary.max(1)) {
             if proposal.salary >= current {
                 let pkg = ProcessContractHandler::expected_package_value(proposal, player);
-                if pkg as f32 / current as f32 >= 1.10 {
+                let clears_walkaway = proposal
+                    .valuation_min_acceptable
+                    .map(|floor| pkg >= floor)
+                    .unwrap_or(true);
+                if clears_walkaway && pkg as f32 / current as f32 >= 1.10 {
                     return true;
                 }
             }
@@ -985,13 +1050,38 @@ impl RenewalWalkReason {
 pub struct WageStructureSnapshot {
     pub current_bill: u32,
     pub top_earner: u32,
+    /// Who holds `top_earner`. His own renewal must be capped against the
+    /// SECOND earner — capping the top man against himself turned every
+    /// offer to a top-paid FirstTeamRegular into a forced pay cut he could
+    /// only reject, and he walked for free at expiry.
+    pub top_earner_id: Option<u32>,
+    pub second_top_earner: u32,
     pub average_first_team: u32,
     pub average_backup: u32,
 }
 
 impl WageStructureSnapshot {
+    /// Club-wide annual wage bill across every squad, using the same
+    /// per-player rule as [`Self::from_team`] (loan contract over parent
+    /// contract). The wage budget is a club-level pot, so budget gating
+    /// must start from this figure, never a single team's bill.
+    pub fn club_wide_bill(teams: &[Team]) -> u32 {
+        teams
+            .iter()
+            .flat_map(|t| t.players.players.iter())
+            .filter_map(|p| {
+                p.contract_loan
+                    .as_ref()
+                    .or(p.contract.as_ref())
+                    .map(|c| c.salary)
+            })
+            .fold(0u32, |acc, s| acc.saturating_add(s))
+    }
+
     pub fn from_team(team: &Team) -> Self {
         let mut top: u32 = 0;
+        let mut top_id: Option<u32> = None;
+        let mut second: u32 = 0;
         let mut bill: u32 = 0;
         let mut first_team_sum: u32 = 0;
         let mut first_team_count: u32 = 0;
@@ -1013,7 +1103,13 @@ impl WageStructureSnapshot {
                 continue;
             };
             bill = bill.saturating_add(c.salary);
-            top = top.max(c.salary);
+            if c.salary > top {
+                second = top;
+                top = c.salary;
+                top_id = Some(p.id);
+            } else if c.salary > second {
+                second = c.salary;
+            }
             // Squad-status counters use the player's *resolved* status —
             // a loanee's status sits on the parent contract; we still
             // bucket them by it so the wage-tier averages stay coherent.
@@ -1048,19 +1144,52 @@ impl WageStructureSnapshot {
         Self {
             current_bill: bill,
             top_earner: top,
+            top_earner_id: top_id,
+            second_top_earner: second,
             average_first_team,
             average_backup,
         }
     }
 
+    /// The top-earner anchor as seen from one candidate's negotiation:
+    /// everyone is measured against the top earner, except the top earner
+    /// himself, who is measured against the second — his own salary is not
+    /// a ceiling on his own renewal.
+    fn top_for(&self, player_id: u32) -> u32 {
+        if self.top_earner_id == Some(player_id) {
+            self.second_top_earner
+        } else {
+            self.top_earner
+        }
+    }
+
+    /// Record an outgoing offer: reserve its salary delta against the
+    /// running bill and lift the top-earner anchors so later candidates in
+    /// the same pass can't leapfrog the just-promised wage.
+    pub fn note_offer(&mut self, player_id: u32, current_salary: u32, offered: u32) {
+        let salary_delta = offered.saturating_sub(current_salary);
+        self.current_bill = self.current_bill.saturating_add(salary_delta);
+        if offered > self.top_earner {
+            if self.top_earner_id != Some(player_id) {
+                self.second_top_earner = self.top_earner;
+            }
+            self.top_earner = offered;
+            self.top_earner_id = Some(player_id);
+        } else if self.top_earner_id != Some(player_id) && offered > self.second_top_earner {
+            self.second_top_earner = offered;
+        }
+    }
+
     /// Cap the offered wage based on squad status. KeyPlayer may exceed
     /// the current top earner by up to 10%; FirstTeamRegular gets to
-    /// 95%; rotation/backup are held below the first-team average.
-    pub fn cap_for_status(&self, offered: u32, status: &PlayerSquadStatus) -> u32 {
-        if self.top_earner == 0 && self.average_first_team == 0 {
+    /// 95%; rotation/backup are held below the first-team average. The
+    /// anchor excludes the candidate's own salary (see [`Self::top_for`]).
+    pub fn cap_for_status(&self, offered: u32, status: &PlayerSquadStatus, player_id: u32) -> u32 {
+        let top_anchor = self.top_for(player_id);
+        if top_anchor == 0 && self.average_first_team == 0 {
             return offered;
         }
-        let top = self.top_earner.max(self.average_first_team);
+        let top = top_anchor.max(self.average_first_team);
         match status {
             PlayerSquadStatus::KeyPlayer => offered.min((top as f32 * 1.10) as u32),
             PlayerSquadStatus::FirstTeamRegular => offered.min((top as f32 * 0.95) as u32),
@@ -1312,20 +1441,6 @@ fn attach_position_bonus(
     }
 }
 
-fn status_rank(status: &PlayerSquadStatus) -> u8 {
-    use PlayerSquadStatus::*;
-    match status {
-        KeyPlayer => 7,
-        FirstTeamRegular => 6,
-        HotProspectForTheFuture => 5,
-        FirstTeamSquadRotation => 4,
-        MainBackupPlayer => 3,
-        DecentYoungster => 2,
-        NotNeeded => 1,
-        _ => 0,
-    }
-}
-
 #[cfg(test)]
 mod wage_structure_tests {
     use super::*;
@@ -1334,17 +1449,23 @@ mod wage_structure_tests {
         WageStructureSnapshot {
             current_bill: top * 5,
             top_earner: top,
+            top_earner_id: None,
+            second_top_earner: 0,
             average_first_team: avg_first_team,
             average_backup: avg_backup,
         }
     }
+
+    /// Arbitrary candidate id distinct from any `top_earner_id` in these
+    /// fixtures, so the classic cap semantics are exercised.
+    const CANDIDATE: u32 = 42;
 
     #[test]
     fn key_player_may_marginally_exceed_top() {
         let s = snapshot(200_000, 150_000, 60_000);
         // Asking for 300k — clamped to 110% of top = 220k.
         assert_eq!(
-            s.cap_for_status(300_000, &PlayerSquadStatus::KeyPlayer),
+            s.cap_for_status(300_000, &PlayerSquadStatus::KeyPlayer, CANDIDATE),
             220_000
         );
     }
@@ -1354,7 +1475,7 @@ mod wage_structure_tests {
         let s = snapshot(200_000, 150_000, 60_000);
         // Asking for 300k — clamped to 95% of top = 190k.
         assert_eq!(
-            s.cap_for_status(300_000, &PlayerSquadStatus::FirstTeamRegular),
+            s.cap_for_status(300_000, &PlayerSquadStatus::FirstTeamRegular, CANDIDATE),
             190_000
         );
     }
@@ -1362,7 +1483,7 @@ mod wage_structure_tests {
     #[test]
     fn backup_capped_well_below_first_team() {
         let s = snapshot(200_000, 150_000, 60_000);
-        let capped = s.cap_for_status(180_000, &PlayerSquadStatus::MainBackupPlayer);
+        let capped = s.cap_for_status(180_000, &PlayerSquadStatus::MainBackupPlayer, CANDIDATE);
         // 1.20 × average_backup = 72k, max with top/4 = 50k → cap is 72k.
         assert_eq!(capped, 72_000);
     }
@@ -1371,7 +1492,7 @@ mod wage_structure_tests {
     fn cap_passes_through_when_under_limit() {
         let s = snapshot(200_000, 150_000, 60_000);
         assert_eq!(
-            s.cap_for_status(50_000, &PlayerSquadStatus::FirstTeamRegular),
+            s.cap_for_status(50_000, &PlayerSquadStatus::FirstTeamRegular, CANDIDATE),
             50_000
         );
     }
@@ -1380,9 +1501,44 @@ mod wage_structure_tests {
     fn empty_structure_does_not_clamp() {
         let s = snapshot(0, 0, 0);
         assert_eq!(
-            s.cap_for_status(500_000, &PlayerSquadStatus::KeyPlayer),
+            s.cap_for_status(500_000, &PlayerSquadStatus::KeyPlayer, CANDIDATE),
             500_000
         );
+    }
+
+    #[test]
+    fn top_earner_is_capped_against_second_not_himself() {
+        // Top earner (id 7, 200k) is a FirstTeamRegular; second earns 180k.
+        // His own renewal must anchor on the SECOND earner: 95% of 180k =
+        // 171k — but crucially NOT 95% of his own 200k. The old
+        // self-referential cap made every offer to him a pay cut.
+        let mut s = snapshot(200_000, 150_000, 60_000);
+        s.top_earner_id = Some(7);
+        s.second_top_earner = 180_000;
+        assert_eq!(
+            s.cap_for_status(300_000, &PlayerSquadStatus::FirstTeamRegular, 7),
+            171_000
+        );
+        // Everyone else still anchors on the true top earner.
+        assert_eq!(
+            s.cap_for_status(300_000, &PlayerSquadStatus::FirstTeamRegular, CANDIDATE),
+            190_000
+        );
+    }
+
+    #[test]
+    fn note_offer_lifts_top_and_second_anchors() {
+        let mut s = snapshot(200_000, 150_000, 60_000);
+        s.top_earner_id = Some(7);
+        s.second_top_earner = 180_000;
+        // A new star (id 9) is promised 240k: he becomes the top anchor and
+        // the previous top man slides to second.
+        s.note_offer(9, 100_000, 240_000);
+        assert_eq!(s.top_earner, 240_000);
+        assert_eq!(s.top_earner_id, Some(9));
+        assert_eq!(s.second_top_earner, 200_000);
+        // The bill reserved exactly the delta.
+        assert_eq!(s.current_bill, 200_000 * 5 + 140_000);
     }
 
     #[test]
@@ -1651,7 +1807,7 @@ mod expiry_evaluate_tests {
         // NOT be suppressed even though base < ask. This is the fix.
         let sweetened = PlayerContractProposal::basic(110_000, 3, 10, 0, 60_000, None);
         assert!(
-            ContractRenewalManager::expiry_offer_materially_improves(&player, &sweetened),
+            ContractRenewalManager::offer_materially_improves(&player, &sweetened),
             "a package-sweetened offer the player would accept must not be suppressed"
         );
 
@@ -1659,7 +1815,7 @@ mod expiry_evaluate_tests {
         // ~1.05x current) IS pointless — suppress it rather than spam.
         let meagre = PlayerContractProposal::basic(105_000, 3, 10, 0, 0, None);
         assert!(
-            !ContractRenewalManager::expiry_offer_materially_improves(&player, &meagre),
+            !ContractRenewalManager::offer_materially_improves(&player, &meagre),
             "a meagre below-ask offer with no package value is correctly suppressed"
         );
 
@@ -1667,13 +1823,13 @@ mod expiry_evaluate_tests {
         // path — the acceptance gate refuses base pay cuts outright.
         let pay_cut = PlayerContractProposal::basic(90_000, 3, 10, 0, 500_000, None);
         assert!(
-            !ContractRenewalManager::expiry_offer_materially_improves(&player, &pay_cut),
+            !ContractRenewalManager::offer_materially_improves(&player, &pay_cut),
             "a base pay cut is suppressed regardless of sweeteners"
         );
 
         // (d) Meeting the wage ask outright is always worth offering.
         let meets_ask = PlayerContractProposal::basic(800_000, 3, 10, 0, 0, None);
-        assert!(ContractRenewalManager::expiry_offer_materially_improves(
+        assert!(ContractRenewalManager::offer_materially_improves(
             &player, &meets_ask
         ));
     }

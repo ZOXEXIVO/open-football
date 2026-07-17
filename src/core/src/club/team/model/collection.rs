@@ -303,29 +303,25 @@ impl TeamCollection {
             Some(idx) => idx,
             None => return,
         };
-        ContractRenewalManager::run_with_budget(
+        // Main squad first, then the reserve / U21 squad, so a valuable
+        // prospect or depth player housed there isn't left to run his deal
+        // down to the single expiry-day panic offer (and lost on a Bosman).
+        // Each squad negotiates against its own wage structure, but both
+        // passes draw down ONE club-level wage budget — a single
+        // `run_for_squads` call keeps the shared bill honest across them.
+        let mut squad_indexes = vec![main_idx];
+        if let Some(reserve_idx) = self.reserve_index() {
+            if reserve_idx != main_idx {
+                squad_indexes.push(reserve_idx);
+            }
+        }
+        ContractRenewalManager::run_for_squads(
             &mut self.teams,
-            main_idx,
+            &squad_indexes,
             date,
             wage_budget,
             league_reputation,
         );
-        // Also open early talks with the reserve / U21 squad, so a valuable
-        // prospect or depth player housed there isn't left to run his deal
-        // down to the single expiry-day panic offer (and lost on a Bosman).
-        // Runs against that squad's own wage structure and the shared club
-        // budget.
-        if let Some(reserve_idx) = self.reserve_index() {
-            if reserve_idx != main_idx {
-                ContractRenewalManager::run_with_budget(
-                    &mut self.teams,
-                    reserve_idx,
-                    date,
-                    wage_budget,
-                    league_reputation,
-                );
-            }
-        }
     }
 
     /// Daily critical squad moves: immediate demotions and ability-based swaps

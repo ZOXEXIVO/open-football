@@ -23,23 +23,16 @@
                     <div class="fm-info-machine-value">{{ cpu_brand }}</div>
                     <div class="fm-info-tile-label">{{ i18n.t("info_machine") }}</div>
                 </div>
-                <a class="fm-workers-chip" href="/{{ lang }}/workers"
-                   title="{{ workers_ready }}/{{ workers_count }} {{ i18n.t("workers_chip_tooltip_suffix") }}">
-                    <span class="fm-workers-chip-count">{{ workers_ready }}</span>
-                    <span class="fm-workers-chip-stack">
-                        <span class="fm-workers-chip-sublabel">{{ i18n.t("workers_chip_external") }}</span>
-                        <span class="fm-workers-chip-label">{{ i18n.t("workers_chip_workers") }}</span>
-                    </span>
-                </a>
-                <span class="fm-ai-badge" id="fm-ai-badge" role="button" tabindex="0"
-                      title="{{ i18n.t("ai_settings_title") }}">
-                    <span class="fm-ai-badge-label">AI</span>
-                    {% if ai_enabled %}
-                    <span class="fm-ai-badge-status fm-ai-badge-status-on" id="fm-ai-badge-status">ON</span>
-                    {% else %}
-                    <span class="fm-ai-badge-status fm-ai-badge-status-off" id="fm-ai-badge-status">OFF</span>
-                    {% endif %}
-                </span>
+                <div class="fm-machine-actions">
+                    <a class="fm-workers-chip" href="/{{ lang }}/workers"
+                       title="{{ workers_ready }}/{{ workers_count }} {{ i18n.t("workers_chip_tooltip_suffix") }}">
+                        <span class="fm-workers-chip-count">{{ workers_ready }}</span>
+                        <span class="fm-workers-chip-stack">
+                            <span class="fm-workers-chip-sublabel">{{ i18n.t("workers_chip_external") }}</span>
+                            <span class="fm-workers-chip-label">{{ i18n.t("workers_chip_workers") }}</span>
+                        </span>
+                    </a>
+                </div>
             </div>
             <div class="fm-info-tile fm-info-tile-countries">
                 <div class="fm-info-tile-icon"><i class="fa fa-globe"></i></div>
@@ -62,15 +55,24 @@
                     <div class="fm-info-tile-label">{{ i18n.t("stats_players") }}</div>
                 </div>
             </div>
-            <button class="fm-holiday-btn" id="holiday-btn" type="button"
-                    onclick="handleHolidayClick()"
-                    title="{{ i18n.t("go_on_holiday") }}"
-                    aria-label="{{ i18n.t("go_on_holiday") }}">
-                <i class="fa fa-umbrella-beach fm-holiday-ic fm-holiday-ic-go"></i>
-                <i class="fa fa-briefcase fm-holiday-ic fm-holiday-ic-back"></i>
-                <div class="fm-holiday-spinner"><div class="spinner"></div></div>
-                <span class="fm-holiday-label">{{ i18n.t("go_on_holiday") }}</span>
-            </button>
+            <div class="fm-home-actions">
+                <button class="fm-ai-btn{% if ai_enabled %} fm-ai-btn-on{% endif %}" id="fm-ai-btn" type="button"
+                        title="{{ i18n.t("ai_settings_title") }}"
+                        aria-label="{{ i18n.t("ai_settings_title") }}">
+                    <i class="fa fa-robot fm-ai-btn-ic" aria-hidden="true"></i>
+                    <span class="fm-ai-btn-dot" aria-hidden="true"></span>
+                    <span class="fm-ai-btn-label">{{ i18n.t("ai_settings_title") }}</span>
+                </button>
+                <button class="fm-holiday-btn" id="holiday-btn" type="button"
+                        onclick="handleHolidayClick()"
+                        title="{{ i18n.t("go_on_holiday") }}"
+                        aria-label="{{ i18n.t("go_on_holiday") }}">
+                    <i class="fa fa-umbrella-beach fm-holiday-ic fm-holiday-ic-go"></i>
+                    <i class="fa fa-briefcase fm-holiday-ic fm-holiday-ic-back"></i>
+                    <div class="fm-holiday-spinner"><div class="spinner"></div></div>
+                    <span class="fm-holiday-label">{{ i18n.t("go_on_holiday") }}</span>
+                </button>
+            </div>
         </div>
     </div>
     <dialog class="fm-worker-dialog fm-ai-dialog" id="fm-ai-dialog">
@@ -113,7 +115,7 @@
     /* AI badge → open the LLM contract dialog; on save, POST the settings
        (kept in memory server-side) and flip the badge to ON in place. */
     (function() {
-        var badge = document.getElementById('fm-ai-badge');
+        var badge = document.getElementById('fm-ai-btn');
         var dialog = document.getElementById('fm-ai-dialog');
         if (!badge || !dialog) { return; }
         var form = document.getElementById('fm-ai-form');
@@ -125,7 +127,6 @@
         var baseUrlInput = document.getElementById('fm-ai-base-url');
         var modelInput = document.getElementById('fm-ai-model');
         var apiKeyInput = document.getElementById('fm-ai-api-key');
-        var statusEl = document.getElementById('fm-ai-badge-status');
 
         var labels = {
             saving: "{{ i18n.t("ai_settings_saving") }}",
@@ -159,9 +160,6 @@
         }
 
         badge.addEventListener('click', openDialog);
-        badge.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDialog(); }
-        });
         closeBtn.addEventListener('click', closeDialog);
         cancelBtn.addEventListener('click', closeDialog);
 
@@ -179,10 +177,7 @@
                 .then(function(data) {
                     if (data.status === 'ok') {
                         showResult('ok', labels.disabled);
-                        if (statusEl) {
-                            statusEl.textContent = 'OFF';
-                            statusEl.className = 'fm-ai-badge-status fm-ai-badge-status-off';
-                        }
+                        badge.classList.remove('fm-ai-btn-on');
                         disableBtn.hidden = true;
                         setTimeout(closeDialog, 600);
                     } else {
@@ -220,10 +215,7 @@
             .then(function(data) {
                 if (data.status === 'ok') {
                     showResult('ok', labels.saved);
-                    if (statusEl) {
-                        statusEl.textContent = 'ON';
-                        statusEl.className = 'fm-ai-badge-status fm-ai-badge-status-on';
-                    }
+                    badge.classList.add('fm-ai-btn-on');
                     if (disableBtn) { disableBtn.hidden = false; }
                     setTimeout(closeDialog, 600);
                 } else {

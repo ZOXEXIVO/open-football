@@ -88,6 +88,11 @@ pub(crate) struct NegotiationData {
     pub(crate) selling_club_name: String,
     /// Annual wage the buying club has staged for PersonalTerms.
     pub(crate) offered_annual_wage: Option<u32>,
+    /// Creation-time reservation wage for players unreachable at
+    /// resolution (foreign moves, global-pool free agents). Foreign moves
+    /// carry a relocation premium above the opening wage; see
+    /// `TransferNegotiation::staged_reservation_wage`.
+    pub(crate) staged_reservation_wage: Option<u32>,
     /// Buying club's league reputation (0–10000). Used to anchor the
     /// player's reservation wage and for wage installation fallback.
     pub(crate) buying_league_reputation: u16,

@@ -3,6 +3,13 @@ use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::calculators::{
     ContractValuation, ValuationContext, expected_annual_value, package_inputs_from_proposal,
 };
+/// Written into `decision_history.decision` whenever the player turns
+/// down a proposal. The ContractRenewalManager reads this back to tell
+/// "still waiting" from "already said no", applies a longer cooldown,
+/// caps the retry count, and escalates terms on the next attempt.
+/// Canonical definition lives with the stalemate assessment; re-exported
+/// here so existing call sites keep their import path.
+pub use crate::club::player::contract::RENEWAL_REJECTED_LABEL;
 use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
 use crate::handlers::AcceptContractHandler;
 use crate::utils::DateUtils;
@@ -16,12 +23,6 @@ use crate::{
 use chrono::NaiveDate;
 
 pub struct ProcessContractHandler;
-
-/// Written into `decision_history.decision` whenever the player turns
-/// down a proposal. The ContractRenewalManager reads this back to tell
-/// "still waiting" from "already said no", applies a longer cooldown,
-/// caps the retry count, and escalates terms on the next attempt.
-pub const RENEWAL_REJECTED_LABEL: &str = "dec_contract_renewal_rejected";
 
 fn log_rejection(player: &mut Player, proposal: &PlayerContractProposal, now: NaiveDate) {
     let movement = format!(
@@ -53,8 +54,15 @@ fn record_counter_offer(
     let agent = PlayerAgent::for_player(player);
 
     let salary_anchor = proposal.salary.max(current_salary);
-    // Greedy agents push the next ask up sharply; loyal agents hold roughly steady.
-    let greed_multiplier = 1.0 + agent.greed * 0.25;
+    // Greedy agents push the next ask up sharply — but only when money was
+    // actually the sticking point. A rejection over length, role, or a
+    // missing clause must not ratchet the wage ask above an offer the
+    // player never complained about, or the club chases a moving target
+    // it was never asked to hit.
+    let greed_multiplier = match reason {
+        RejectionReason::LowSalary | RejectionReason::NoSweetener => 1.0 + agent.greed * 0.25,
+        _ => 1.0,
+    };
     let desired_salary = ((salary_anchor as f32) * greed_multiplier) as u32;
     let desired_years = proposal.years.max(min_years);
 
@@ -181,7 +189,8 @@ impl ProcessContractHandler {
             proposal.squad_status_promise.clone(),
             player.contract.as_ref().map(|c| c.squad_status.clone()),
         ) {
-            if status_rank(&promised) < status_rank(&current) && player.attributes.ambition >= 12.0
+            if promised.seniority_rank() < current.seniority_rank()
+                && player.attributes.ambition >= 12.0
             {
                 result.contract.contract_rejected = true;
                 record_counter_offer(
@@ -275,6 +284,31 @@ impl ProcessContractHandler {
                 };
                 let market_floor = (valuation.expected_wage as f32 * tolerance) as u32;
                 let badly_underpaid = pkg_value < market_floor;
+
+                // Absolute walk-away floor. Below `min_acceptable` the player
+                // refuses no matter how the offer is framed — a +20% raise on
+                // a deeply underpaid deal is still a deeply underpaid deal.
+                // Without this, the relative-raise gates below let a
+                // budget-capped panic offer lock a star at a fraction of his
+                // market value, and the salary-happiness model immediately
+                // re-detected the gap on a contract he just signed.
+                if pkg_value < valuation.min_acceptable {
+                    result.contract.contract_rejected = true;
+                    record_counter_offer(
+                        player,
+                        &proposal,
+                        now,
+                        min_acceptable_years,
+                        RejectionReason::LowSalary,
+                    );
+                    Self::emit_rejected_contract_offer(
+                        player,
+                        &proposal,
+                        RejectionReason::LowSalary,
+                    );
+                    log_rejection(player, &proposal, now);
+                    return;
+                }
 
                 if proposal.salary > player_contract.salary {
                     let raise_ratio = proposal.salary as f32 / current_salary as f32;
@@ -448,27 +482,56 @@ impl ProcessContractHandler {
             }
             None => {
                 // Free agent — uses the unified valuation to gate acceptance.
+                // Honor the offer-time context when the proposing club
+                // stamped it: a fourth-tier club's offer must be judged
+                // against fourth-tier expectations, not a hardcoded mid-tier
+                // league — and an elite club shouldn't get a mid-tier
+                // discount either.
                 let age = DateUtils::age(player.birth_date, now);
-                let ctx = ValuationContext {
-                    age,
-                    club_reputation_score: 0.5,
-                    league_reputation: 5_000,
-                    squad_status: proposal
-                        .squad_status_promise
-                        .clone()
-                        .unwrap_or(PlayerSquadStatus::FirstTeamRegular),
-                    current_salary: 0,
-                    months_remaining: 0,
-                    has_market_interest: player.statuses.has(PlayerStatusType::Wnt)
-                        || player.statuses.has(PlayerStatusType::Enq)
-                        || player.statuses.has(PlayerStatusType::Bid),
+                let valuation = match (
+                    proposal.valuation_expected_wage,
+                    proposal.valuation_min_acceptable,
+                ) {
+                    (Some(expected), Some(min_acc)) => ContractValuation {
+                        expected_wage: expected,
+                        min_acceptable: min_acc,
+                        max_acceptable: ((expected as f32) * 1.30) as u32,
+                        leverage: 0.3,
+                        status_premium: 1.0,
+                    },
+                    _ => {
+                        let ctx = ValuationContext {
+                            age,
+                            club_reputation_score: proposal
+                                .valuation_club_reputation
+                                .unwrap_or(0.5),
+                            league_reputation: proposal
+                                .valuation_league_reputation
+                                .unwrap_or(5_000),
+                            squad_status: proposal
+                                .squad_status_promise
+                                .clone()
+                                .unwrap_or(PlayerSquadStatus::FirstTeamRegular),
+                            current_salary: 0,
+                            months_remaining: 0,
+                            has_market_interest: player.statuses.has(PlayerStatusType::Wnt)
+                                || player.statuses.has(PlayerStatusType::Enq)
+                                || player.statuses.has(PlayerStatusType::Bid),
+                        };
+                        ContractValuation::evaluate(player, &ctx)
+                    }
                 };
-                let valuation = ContractValuation::evaluate(player, &ctx);
 
                 let meets_floor = proposal.salary >= valuation.min_acceptable;
 
+                // A difficult character holds out for his full price unless a
+                // skilled negotiator manages him — but he is not frozen out of
+                // the market entirely: money he can't argue with still signs.
                 let behaviour_pass = match player.behaviour.state {
-                    PersonBehaviourState::Poor => proposal.negotiation_skill >= 16,
+                    PersonBehaviourState::Poor => {
+                        proposal.negotiation_skill >= 12
+                            || proposal.salary >= valuation.expected_wage
+                    }
                     PersonBehaviourState::Normal => proposal.negotiation_skill >= 8,
                     PersonBehaviourState::Good => true,
                 };
@@ -711,20 +774,6 @@ impl ProcessContractHandler {
         }
 
         (min_years.round() as u8).clamp(1, 4)
-    }
-}
-
-fn status_rank(status: &PlayerSquadStatus) -> u8 {
-    use PlayerSquadStatus::*;
-    match status {
-        KeyPlayer => 7,
-        FirstTeamRegular => 6,
-        HotProspectForTheFuture => 5,
-        FirstTeamSquadRotation => 4,
-        MainBackupPlayer => 3,
-        DecentYoungster => 2,
-        NotNeeded => 1,
-        _ => 0,
     }
 }
 

@@ -198,6 +198,7 @@ impl CountryResult {
                         player_name: n.player_name.clone(),
                         selling_club_name: n.selling_club_name.clone(),
                         offered_annual_wage: n.offered_salary,
+                        staged_reservation_wage: n.staged_reservation_wage,
                         buying_league_reputation: n.buying_league_reputation,
                         sell_on_percentage,
                         loan_future_fee: n.current_offer.loan_future_fee().map(
@@ -429,29 +430,16 @@ impl CountryResult {
             return;
         }
 
-        // Absolute seller fee floor — anchored on the player's MARKET VALUE
-        // (recomputed from the selling club's context), not the listing's
-        // asking price. The ratio guard above only protects against a low
-        // offer relative to whatever the listing advertises; a synthetic or
-        // heavily-decayed listing can advertise far below the player's worth,
-        // so a 5M core player could clear the ratio test on a 340K bid. This
-        // floor closes that gap. Loans, foreign moves, surplus players, and
-        // typed distressed sales are exempt inside the helper.
-        if let Some(floor) = SellerFeeFloor::for_permanent_domestic(country, neg_data, date) {
-            if neg_data.offer_amount < floor.min_fee {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.reject_with_reason(floor.reason);
-                }
-                Self::reopen_listing_for_player(country, neg_data.player_id);
-                PipelineProcessor::on_negotiation_resolved(
-                    country,
-                    neg_data.buying_club_id,
-                    neg_data.player_id,
-                    false,
-                );
-                return;
-            }
-        }
+        // NOTE: the absolute SellerFeeFloor is deliberately NOT enforced
+        // here any more. A below-floor OPENING bid is what the
+        // club-negotiation escalation rounds exist to fix — killing the
+        // whole approach on the first number meant a buyer who opened at
+        // 60% of value but could afford 85% never reached round two. The
+        // floor still owns the outcome: `resolve_club_negotiation` refuses
+        // to ACCEPT any bid below it, steers the buyer's escalation target
+        // up to it, and terminally rejects on the final round if the bid
+        // still falls short — so no deal can ever CLOSE below the floor
+        // (the Litvinov 340K protection is intact, one phase later).
 
         // Important players are harder to prise away, but the seller no
         // longer refuses to TALK up front over an opening bid below a
@@ -604,26 +592,31 @@ impl CountryResult {
             return;
         }
 
-        // Absolute seller fee floor (see resolve_initial_approach). Re-checked
-        // here so an offer that reaches club negotiation through any path —
-        // or escalates toward a deflated synthetic asking — still can't close
-        // below the player's market-value floor. A triggered release clause
-        // above already short-circuited, so a forced sale is never blocked.
-        if let Some(floor) = SellerFeeFloor::for_permanent_domestic(country, neg_data, date) {
-            if neg_data.offer_amount < floor.min_fee {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.reject_with_reason(floor.reason);
-                }
-                Self::reopen_listing_for_player(country, neg_data.player_id);
-                PipelineProcessor::on_negotiation_resolved(
-                    country,
-                    neg_data.buying_club_id,
-                    neg_data.player_id,
-                    false,
-                );
-                return;
-            }
-        }
+        // Absolute seller fee floor. The seller never ACCEPTS a bid below it
+        // — but a below-floor bid mid-rounds is not an instant walk-away
+        // either: the escalation path below steers the buyer's target up to
+        // the floor, and only the FINAL round terminally rejects a bid that
+        // still falls short. A triggered release clause above already
+        // short-circuited, so a forced sale is never blocked.
+        let floor = SellerFeeFloor::for_permanent_domestic(country, neg_data, date);
+        let below_floor = floor
+            .as_ref()
+            .map(|f| neg_data.offer_amount < f.min_fee)
+            .unwrap_or(false);
+
+        // Peeked (not reserved) buyer transfer budget, so an escalation the
+        // buyer could never fund fails fast here instead of collapsing at
+        // the medical after weeks of sim time and a held shortlist slot.
+        let buyer_transfer_budget: Option<f64> = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.buying_club_id)
+            .and_then(|c| {
+                c.finance
+                    .transfer_budget
+                    .as_ref()
+                    .map(|b| b.amount.max(0.0))
+            });
 
         let ratio = if neg_data.asking_price > 0.0 {
             neg_data.offer_amount / neg_data.asking_price
@@ -719,59 +712,101 @@ impl CountryResult {
         chance = chance.clamp(5.0, 95.0);
         let roll = FloatUtils::random(0.0, 100.0);
 
-        if roll < chance {
+        // A below-floor bid can never be accepted, whatever the roll — the
+        // floor guards the outcome while the rounds guard the process.
+        if !below_floor && roll < chance {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation.advance_to_personal_terms(date);
             }
         } else if round < 3 {
+            // Buyer escalation closes 45% of the remaining gap per round at
+            // the start of the window, up to ~70% in the final panic days.
+            // The previous offer is archived to `counter_offers` so the
+            // negotiation history is auditable (who bid what, when).
+            // Escalate toward the price the seller will actually accept
+            // (asking × his reservation), not merely the asking price.
+            // A key man not pushing to leave commands a premium ABOVE
+            // asking; aiming only at asking left every such deal short
+            // of the reservation band, so it timed out. Clamped to
+            // [1.0, 1.55]×asking: never below asking (so the working
+            // available-player path is unchanged — its reservation is
+            // <= 1.0 and clamps to 1.0), and up to the same 1.55 ceiling
+            // the seller's reservation itself clamps to, so the buyer can
+            // actually reach a coveted player's premium instead of topping
+            // out below it. The target is additionally lifted to the
+            // seller's absolute fee floor, so a lowball opening converges
+            // toward a closable number instead of orbiting below it.
+            let mut buyer_walks = false;
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                // Buyer escalation rate climbs with urgency: 15% at start of
-                // window, up to ~30% on the last few days (panic buy).
-                // The previous offer is archived to `counter_offers` so the
-                // negotiation history is auditable (who bid what, when).
-                // Escalate toward the actual asking price, not
-                // asking × reservation. Targeting the reservation made the
-                // buyer aim exactly at the 62%-acceptance threshold, and
-                // because each round only closes a fraction of the gap (with
-                // a 3-round cap) the offer could never actually reach it —
-                // legitimate deals timed out short of the seller's minimum.
-                // Aiming at the ask gives the escalation headroom to clear
-                // the reservation; SellerFeeFloor + the reservation bands
-                // still gate how high the buyer realistically goes.
-                // Escalate toward the price the seller will actually accept
-                // (asking × his reservation), not merely the asking price.
-                // A key man not pushing to leave commands a premium ABOVE
-                // asking; aiming only at asking left every such deal short
-                // of the reservation band, so it timed out. Clamped to
-                // [1.0, 1.55]×asking: never below asking (so the working
-                // available-player path is unchanged — its reservation is
-                // <= 1.0 and clamps to 1.0), and up to the same 1.55 ceiling
-                // the seller's reservation itself clamps to, so the buyer can
-                // actually reach a coveted player's premium instead of topping
-                // out below it. If the resulting bid outruns the buyer's
-                // budget the agreement's `reserve_transfer_budget` gate still
-                // refuses it, and `SellerFeeFloor` still bounds the bottom.
                 let reservation_mult = seller_reservation.clamp(1.0, 1.55);
-                let target = if neg_data.asking_price > 0.0 {
+                let mut target = if neg_data.asking_price > 0.0 {
                     neg_data.asking_price * reservation_mult
                 } else {
                     negotiation.current_offer.base_fee.amount * 1.15
                 };
+                if let Some(f) = &floor {
+                    target = target.max(f.min_fee);
+                }
                 let escalation = 0.45 + urgency * 0.25;
-                let new_amount = FormattingUtils::round_fee(
-                    negotiation.current_offer.base_fee.amount
-                        + (target - negotiation.current_offer.base_fee.amount).max(0.0)
-                            * escalation,
+                let current_amount = negotiation.current_offer.base_fee.amount;
+                let mut new_amount = FormattingUtils::round_fee(
+                    current_amount + (target - current_amount).max(0.0) * escalation,
                 );
-                let mut escalated = negotiation.current_offer.clone();
-                escalated.base_fee.amount = new_amount;
-                escalated.offered_date = date;
-                negotiation.counter_offer(escalated);
-                negotiation.advance_club_negotiation_round(date);
+                // Cap the escalated headline at what the buyer can actually
+                // fund up front (installment tranches settle later from the
+                // balance, so they extend the affordable headline). When the
+                // BUDGET is what stops the bid improving, the buyer walks
+                // now — the same refusal `reserve_transfer_budget` would
+                // deliver at the medical, minus the wasted weeks. A bid that
+                // already meets the target simply re-enters the next round
+                // unchanged (the seller may yet say yes), as before.
+                let mut budget_blocked = false;
+                if let Some(available) = buyer_transfer_budget {
+                    let deferred = new_amount
+                        - TransferExecution::upfront_after_installments(
+                            new_amount,
+                            neg_data.selling_country_id.is_some(),
+                            &negotiation.current_offer.clauses,
+                        );
+                    let max_affordable = FormattingUtils::round_fee(available + deferred.max(0.0));
+                    if max_affordable < new_amount {
+                        new_amount = max_affordable;
+                        budget_blocked = true;
+                    }
+                }
+                if budget_blocked && new_amount <= current_amount {
+                    buyer_walks = true;
+                } else {
+                    let mut escalated = negotiation.current_offer.clone();
+                    escalated.base_fee.amount = new_amount.max(current_amount);
+                    escalated.offered_date = date;
+                    negotiation.counter_offer(escalated);
+                    negotiation.advance_club_negotiation_round(date);
+                }
+            }
+            if buyer_walks {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
+                }
+                Self::reopen_listing_for_player(country, neg_data.player_id);
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    false,
+                );
             }
         } else {
+            // Final round: a bid still under the seller's absolute floor is
+            // rejected with the floor's own reason (PlayerTooImportant for a
+            // core man), everything else as a plain price failure.
+            let reason = floor
+                .as_ref()
+                .filter(|f| neg_data.offer_amount < f.min_fee)
+                .map(|f| f.reason.clone())
+                .unwrap_or(NegotiationRejectionReason::AskingPriceTooHigh);
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation.reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
+                negotiation.reject_with_reason(reason);
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
             // Final-round rejection — the buying club really did pursue
@@ -1050,13 +1085,28 @@ impl CountryResult {
                 } else if player.statuses.has(PlayerStatusType::Unh) {
                     chance += 20.0; // Unhappy — willing to move
                 }
+            } else if neg_data.selling_club_id == 0 {
+                // Global-pool free agent — he lives in the simulator-level
+                // pool, unreachable from the country borrow, so score the
+                // wage from the reservation staged at negotiation creation.
+                // Before this, pool signings skipped the money question
+                // entirely: the offered wage never moved the roll and a
+                // money-shaped failure could never be rescued.
+                wage_negotiable = StagedWageAssessment::apply(neg_data, &mut chance);
             }
         } else {
-            // Foreign player — same age/ambition checks already applied above.
-            // Add salary estimate since we can't access the actual contract.
+            // Foreign player — same age/ambition checks already applied
+            // above. His contract can't be read from here, so the wage is
+            // scored against the reservation staged at creation (which
+            // carries the relocation premium a player expects for crossing
+            // a border). Meeting it earns the same bonus the domestic path
+            // grants; falling short opens the iterative wage rounds below —
+            // previously a purely-money failure on a foreign move was
+            // terminal, with no way for the buyer to sweeten the deal.
             if rep_diff > 0.2 {
                 chance += 10.0;
             }
+            wage_negotiable = StagedWageAssessment::apply(neg_data, &mut chance);
         }
 
         // Player reluctance to return to a club that sold them.
@@ -1837,7 +1887,8 @@ impl SellerFeeFloor {
         // more willing to deal. Without this a rated, long-listed player's
         // floor stayed permanently above any (decayed) bid and he could only
         // ever leave via the 365-day free exit.
-        let fraction = Self::erode_for_listing_age(base_fraction, country, neg_data.player_id, date);
+        let fraction =
+            Self::erode_for_listing_age(base_fraction, country, neg_data.player_id, date);
 
         let (league_rep, club_rep) = PlayerValuationCalculator::seller_context(country, seller);
         let market_value = PlayerValueCalculator::calculate(
@@ -1973,6 +2024,37 @@ impl SellerFeeFloor {
         let happiness = &player.happiness;
         happiness.unhappy_streak >= Self::DURABLE_UNHAPPY_STREAK
             || happiness.factors.ambition_fit <= Self::DURABLE_AMBITION_FIT
+    }
+}
+
+/// Wage-gap scoring for negotiations whose player can't be re-read at
+/// resolution time (foreign moves, global-pool free agents). Mirrors the
+/// domestic reservation-wage table so the money lever behaves the same on
+/// every personal-terms path, and hands back the `(reservation, offered)`
+/// pair that arms the iterative wage rounds for these deals too.
+pub(crate) struct StagedWageAssessment;
+
+impl StagedWageAssessment {
+    pub(crate) fn apply(neg_data: &NegotiationData, chance: &mut f32) -> Option<(f64, f64)> {
+        let offered = neg_data.offered_annual_wage? as f64;
+        let reservation = neg_data
+            .staged_reservation_wage
+            .map(|w| w as f64)
+            .unwrap_or(offered)
+            .max(500.0);
+        let wage_gap = offered / reservation;
+        if wage_gap >= 1.15 {
+            *chance += 15.0;
+        } else if wage_gap >= 0.95 {
+            *chance += 5.0;
+        } else if wage_gap >= 0.80 {
+            *chance -= 5.0;
+        } else if wage_gap >= 0.65 {
+            *chance -= 18.0;
+        } else {
+            *chance -= 35.0;
+        }
+        Some((reservation, offered))
     }
 }
 
@@ -2395,6 +2477,7 @@ mod development_pathway_protection_tests {
                 player_name: "Dev Prospect".to_string(),
                 selling_club_name: "Seller".to_string(),
                 offered_annual_wage: Some(50_000),
+                staged_reservation_wage: None,
                 buying_league_reputation: 5000,
                 sell_on_percentage: None,
                 loan_future_fee: None,
@@ -2639,6 +2722,7 @@ mod seller_fee_floor_tests {
                 player_name: "Target".to_string(),
                 selling_club_name: "Spartak".to_string(),
                 offered_annual_wage: Some(50_000),
+                staged_reservation_wage: None,
                 buying_league_reputation: 6000,
                 sell_on_percentage: None,
                 loan_future_fee: None,
@@ -2703,70 +2787,106 @@ mod seller_fee_floor_tests {
         assert_eq!(v.reason, NegotiationRejectionReason::PlayerTooImportant);
     }
 
-    /// Regression #2: end-to-end — a low-budget unsolicited 340K bid for a
-    /// valued first-team player is rejected by `resolve_initial_approach`,
-    /// deterministically (before any acceptance roll). The target is a
-    /// recent regular tagged `NotYetSet`, so the *plausibility* importance
-    /// is below 0.78 and the pre-existing importance gate does NOT fire —
-    /// only the new market-value floor catches the bid.
+    /// Shared seller squad for the end-to-end floor tests: a recent regular
+    /// tagged `NotYetSet` (so the plausibility importance gate does not
+    /// fire and only the market-value floor is in play) plus two stronger
+    /// squadmates.
+    impl Ff {
+        fn floor_squad() -> Vec<Player> {
+            let mut target = Ff::player(
+                100,
+                130,
+                26,
+                2000,
+                PlayerSquadStatus::NotYetSet,
+                Ff::far_contract(),
+            );
+            target
+                .statistics_history
+                .items
+                .push(Ff::history_row(2025, 14)); // recent regular
+            target.statistics.played = 2; // thin current sample
+            let better_a = Ff::player(
+                101,
+                142,
+                27,
+                2000,
+                PlayerSquadStatus::NotYetSet,
+                Ff::far_contract(),
+            );
+            let better_b = Ff::player(
+                102,
+                138,
+                25,
+                2000,
+                PlayerSquadStatus::NotYetSet,
+                Ff::far_contract(),
+            );
+            vec![target, better_a, better_b]
+        }
+
+        fn insert_negotiation(country: &mut Country, offer_amount: f64) {
+            let offer = TransferOffer::new(
+                CurrencyValue::new(offer_amount, Currency::Usd),
+                Ff::BUYER_ID,
+                Ff::date(),
+            );
+            let neg = TransferNegotiation::new(
+                Ff::NEG_ID,
+                100,
+                0,
+                Ff::SELLER_ID,
+                Ff::BUYER_ID,
+                offer,
+                Ff::date(),
+                0.75,
+                0.40,
+                26,
+                0.5,
+            );
+            country.transfer_market.negotiations.insert(Ff::NEG_ID, neg);
+        }
+    }
+
+    /// Regression #2a: a below-floor bid mid-rounds is NOT an instant
+    /// walk-away — the seller stays at the table and the buyer's escalation
+    /// is steered up toward the floor, deterministically (a below-floor bid
+    /// can never be accepted, so the escalation branch always runs).
     #[test]
-    fn low_budget_bid_for_protected_player_is_rejected_end_to_end() {
-        let mut target = Ff::player(
-            100,
-            130,
-            26,
-            2000,
-            PlayerSquadStatus::NotYetSet,
-            Ff::far_contract(),
-        );
-        target
-            .statistics_history
-            .items
-            .push(Ff::history_row(2025, 14)); // recent regular
-        target.statistics.played = 2; // thin current sample
-        let better_a = Ff::player(
-            101,
-            142,
-            27,
-            2000,
-            PlayerSquadStatus::NotYetSet,
-            Ff::far_contract(),
-        );
-        let better_b = Ff::player(
-            102,
-            138,
-            25,
-            2000,
-            PlayerSquadStatus::NotYetSet,
-            Ff::far_contract(),
-        );
-
-        let mut country = Ff::country(vec![target, better_a, better_b]);
-
-        let offer = TransferOffer::new(
-            CurrencyValue::new(340_000.0, Currency::Usd),
-            Ff::BUYER_ID,
-            Ff::date(),
-        );
-        let neg = TransferNegotiation::new(
-            Ff::NEG_ID,
-            100,
-            0,
-            Ff::SELLER_ID,
-            Ff::BUYER_ID,
-            offer,
-            Ff::date(),
-            0.75,
-            0.40,
-            26,
-            0.5,
-        );
-        country.transfer_market.negotiations.insert(Ff::NEG_ID, neg);
+    fn below_floor_bid_escalates_toward_floor_instead_of_dying() {
+        let mut country = Ff::country(Ff::floor_squad());
+        Ff::insert_negotiation(&mut country, 340_000.0);
 
         // Synthetic-style asking (offer × 1.2) — the exact laundering that
         // made the bug's ratio look healthy. The floor ignores it.
         let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
-        CountryResult::resolve_initial_approach(&mut country, Ff::NEG_ID, &nd, Ff::date());
+        CountryResult::resolve_club_negotiation(&mut country, Ff::NEG_ID, &nd, 1, Ff::date());
+
+        let neg = &country.transfer_market.negotiations[&Ff::NEG_ID];
+        assert_eq!(
+            neg.status,
+            NegotiationStatus::Countered,
+            "round 1 must counter (escalate), not terminally reject"
+        );
+        assert!(
+            neg.current_offer.base_fee.amount > 340_000.0,
+            "the escalated bid ({}) must move up toward the floor",
+            neg.current_offer.base_fee.amount
+        );
+    }
+
+    /// Regression #2b: end-to-end — a bid still below the market-value
+    /// floor on the FINAL round is rejected deterministically (before any
+    /// acceptance roll), so no deal can ever CLOSE below the floor. The
+    /// low-budget 340K laundered-asking protection is intact, one phase
+    /// after the approach.
+    #[test]
+    fn below_floor_bid_rejected_at_final_round_end_to_end() {
+        let mut country = Ff::country(Ff::floor_squad());
+        Ff::insert_negotiation(&mut country, 340_000.0);
+
+        let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
+        CountryResult::resolve_club_negotiation(&mut country, Ff::NEG_ID, &nd, 3, Ff::date());
 
         let neg = &country.transfer_market.negotiations[&Ff::NEG_ID];
         assert_eq!(

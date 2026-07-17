@@ -6,9 +6,11 @@ use crate::club::player::calculators::{
 use crate::club::player::contract::{
     AffordabilityInput, ContractStalemate, RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL,
 };
+use crate::club::player::mailbox::RejectionReason;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::squad::SquadAssetContext;
 use crate::club::{BoardResult, ClubFinanceResult};
+use crate::handlers::ProcessContractHandler;
 use crate::league::result::{DeferredContractInteraction, LeagueProcessAccess};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::{CompletedTransfer, TransferListing, TransferListingType};
@@ -425,8 +427,24 @@ impl ClubResult {
                     offered_salary
                 };
 
-            let years =
+            let mut years =
                 negotiate_contract_years(player, age, negotiation_skill, data.date().date());
+            // The agent's minimum acceptable length is known at the table —
+            // an offer below it is an automatic ShortContract rejection, so
+            // lift to it (the proactive pass already does the same via
+            // proactive_contract_years). And when length was the stated
+            // sticking point of the LAST rejection, honor the years the
+            // player actually asked for instead of re-offering the deal he
+            // already refused.
+            years = years.max(ProcessContractHandler::player_minimum_years(
+                player,
+                data.date().date(),
+            ));
+            if let Some(ask) = &player.pending_contract_ask {
+                if matches!(ask.rejection_reason, Some(RejectionReason::ShortContract)) {
+                    years = years.max(ask.desired_years);
+                }
+            }
 
             // Reactive path stays lean on sweeteners — the player has
             // asked for the renewal themselves, so greed is usually not
@@ -446,6 +464,30 @@ impl ClubResult {
                 loyalty_bonus,
                 None,
             );
+
+            // Honor the other non-wage demands captured from the last
+            // rejection — matching the proactive pass. Without this the
+            // reactive path kept re-offering the exact package the player
+            // had already turned down over a role promise or a missing
+            // clause, burning the yearly attempts (and escalating the
+            // stalemate toward a listing) on a resolvable negotiation.
+            if let Some(ask) = &player.pending_contract_ask {
+                if reactive_proposal.release_clause.is_none() {
+                    reactive_proposal.release_clause = ask.demanded_release_clause;
+                }
+                if let Some(status) = &ask.demanded_status {
+                    if reactive_proposal.squad_status_promise.is_none()
+                        && status.seniority_rank() > squad_status.seniority_rank()
+                    {
+                        reactive_proposal.squad_status_promise = Some(status.clone());
+                    }
+                }
+                if let Some(bonus) = ask.demanded_signing_bonus {
+                    if reactive_proposal.signing_bonus < bonus {
+                        reactive_proposal.signing_bonus = bonus;
+                    }
+                }
+            }
             // Pass the valuation context through so player acceptance
             // evaluates against the same club/league expectations this
             // reactive offer was built from — matches the proactive path.

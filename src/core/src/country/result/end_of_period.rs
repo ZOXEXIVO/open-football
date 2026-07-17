@@ -772,7 +772,11 @@ impl CountryResult {
                 .as_ref()
                 .map(|b| b.amount.max(0.0) as u32);
             let league_rep = parent_main.reputation.world;
-            let structure = WageStructureSnapshot::from_team(parent_main);
+            // Caps anchor on the parent main team's hierarchy; the budget
+            // gate compares against the club-wide bill (shared pot).
+            let mut structure = WageStructureSnapshot::from_team(parent_main);
+            structure.current_bill =
+                WageStructureSnapshot::club_wide_bill(&parent_club.teams.teams);
             let parent_club_id = parent_club.id;
 
             // Walk every roster in the country looking for loanees owned
@@ -1280,7 +1284,9 @@ impl CountryResult {
             // are the way back; the club-side verdict on the failed bet
             // stays with the stalled-prospect / listing pipelines.
             let pressure01 = (player.attributes.pressure / 20.0).clamp(0.0, 1.0);
-            let magnitude = HappinessConfig::default().catalog.returned_from_loan_deflated
+            let magnitude = HappinessConfig::default()
+                .catalog
+                .returned_from_loan_deflated
                 * (1.3 - 0.6 * pressure01);
             player
                 .happiness

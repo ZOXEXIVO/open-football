@@ -2198,6 +2198,14 @@ impl PipelineProcessor {
                     negotiation.player_name = action.player_name;
                     negotiation.selling_club_name = action.selling_club_name;
                     negotiation.offered_salary = Some(action.offered_annual_wage);
+                    // The player's resolution-time reservation for a
+                    // cross-border move: his expected wage at the buyer
+                    // plus a ~10% relocation premium. The opening offer
+                    // sits below it on purpose — that gap is what the
+                    // personal-terms wage rounds close when the deal
+                    // stalls on money instead of dying outright.
+                    negotiation.staged_reservation_wage =
+                        Some(((action.offered_annual_wage as f64) * 1.10) as u32);
                     negotiation.buying_league_reputation = action.buying_league_reputation;
                     negotiation.foreign_terms_floor_blocked = action.foreign_terms_floor_blocked;
                     negotiation.foreign_seller_importance = Some(action.foreign_seller_importance);

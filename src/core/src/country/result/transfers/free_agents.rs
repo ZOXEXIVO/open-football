@@ -1263,7 +1263,11 @@ impl CountryResult {
                 .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                 .map(|l| l.reputation)
                 .unwrap_or(0);
-            let structure = WageStructureSnapshot::from_team(main_team);
+            // Caps anchor on the main team's hierarchy; the budget gate
+            // compares against the CLUB-wide bill (the wage budget is a
+            // club-level pot, not a per-team one).
+            let mut structure = WageStructureSnapshot::from_team(main_team);
+            structure.current_bill = WageStructureSnapshot::club_wide_bill(&club.teams.teams);
 
             for team in &club.teams.teams {
                 for player in &team.players.players {
@@ -6101,8 +6105,10 @@ mod expiry_renewal_tests {
     #[test]
     fn accepted_expiry_offer_renews_contract_and_keeps_player() {
         let date = ExpiryRenewalFixtures::d(2026, 6, 10);
-        // Low current salary against a 100k top earner: the offer is a
-        // big raise that the acceptance handler takes deterministically.
+        // Low current salary against a 700k top earner: the wage-structure
+        // cap leaves the offer well above the player's own market
+        // valuation (his absolute walk-away floor), so the acceptance
+        // handler takes the big raise deterministically.
         let renewer = ExpiryRenewalFixtures::player(
             1,
             PlayerPositionType::MidfielderCenter,
@@ -6115,7 +6121,7 @@ mod expiry_renewal_tests {
             2,
             PlayerPositionType::Striker,
             ExpiryRenewalFixtures::attrs(8.0, 12.0),
-            100_000,
+            700_000,
             PlayerSquadStatus::KeyPlayer,
             ExpiryRenewalFixtures::d(2028, 6, 30),
         );
@@ -6237,11 +6243,13 @@ mod expiry_renewal_tests {
             PlayerSquadStatus::FirstTeamRegular,
             date,
         );
+        // High anchor for the same reason as the acceptance test above:
+        // the capped offer must clear the keeper's walk-away floor.
         let anchor = ExpiryRenewalFixtures::player(
             2,
             PlayerPositionType::Striker,
             ExpiryRenewalFixtures::attrs(8.0, 12.0),
-            100_000,
+            700_000,
             PlayerSquadStatus::KeyPlayer,
             ExpiryRenewalFixtures::d(2028, 6, 30),
         );

@@ -28,6 +28,23 @@ pub enum PlayerSquadStatus {
 }
 
 impl PlayerSquadStatus {
+    /// Seniority order used when comparing squad-role promises in contract
+    /// negotiation (higher = more senior). Single source of truth — the
+    /// acceptance handler, the renewal AI, and the reactive renewal path all
+    /// rank a demanded role against the current one through this.
+    pub fn seniority_rank(&self) -> u8 {
+        match self {
+            PlayerSquadStatus::KeyPlayer => 7,
+            PlayerSquadStatus::FirstTeamRegular => 6,
+            PlayerSquadStatus::HotProspectForTheFuture => 5,
+            PlayerSquadStatus::FirstTeamSquadRotation => 4,
+            PlayerSquadStatus::MainBackupPlayer => 3,
+            PlayerSquadStatus::DecentYoungster => 2,
+            PlayerSquadStatus::NotNeeded => 1,
+            _ => 0,
+        }
+    }
+
     /// Squad status from the player's current-ability rank **within his own
     /// position group**, made position-slot-aware so a winner-take-all
     /// position — above all goalkeeper — is judged against how many players

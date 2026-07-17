@@ -70,6 +70,14 @@ pub struct TransferNegotiation {
     /// Annual wage the buying club has staged for the player. None until the
     /// pipeline fills it at negotiation start.
     pub offered_salary: Option<u32>,
+    /// The player's reservation wage captured at negotiation start, for
+    /// negotiations whose player can't be re-read at resolution time
+    /// (foreign moves, global-pool free agents). Foreign moves stage it
+    /// ABOVE the opening wage — the relocation premium a player expects for
+    /// crossing a border — which is what gives the iterative wage rounds a
+    /// real gap to close. Domestic club-to-club deals leave it `None` and
+    /// recompute the reservation live from the player.
+    pub staged_reservation_wage: Option<u32>,
     pub selling_club_reputation: f32,
     pub buying_club_reputation: f32,
     pub player_age: u8,
@@ -154,6 +162,7 @@ impl TransferNegotiation {
             },
             phase_expiry,
             offered_salary: None,
+            staged_reservation_wage: None,
             selling_club_reputation,
             buying_club_reputation,
             player_age,

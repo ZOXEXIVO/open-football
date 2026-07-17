@@ -4658,11 +4658,12 @@ a:active {
     grid-column: auto;
 }
 
-/* Home info row: the four stat tiles plus a trailing square holiday
-   action card. The fixed 5th track equals the tile row height, so the
-   stretched button renders as a square. */
+/* Home info row: the four stat tiles plus a trailing actions cluster
+   holding the AI settings + holiday square cards. The fixed 5th track is
+   two 60px buttons + the 8px gap between them; the row stretches them to
+   the tile height so each button renders roughly square. */
 .fm-info-grid-home {
-    grid-template-columns: 2fr 1fr 1fr 1fr 60px;
+    grid-template-columns: 2fr 1fr 1fr 1fr 128px;
     align-items: stretch;
 }
 
@@ -4847,70 +4848,128 @@ a:active {
     --fm-ai-border-hover: #356aad;
 }
 
-/* AI badge — purple pill riding alongside the workers chip. Label
-   reads "AI" in every locale, so it's hardcoded rather than translated.
-   Status (ON/OFF) is carried by the fm-ai-badge-status-* modifier;
-   OFF (white) is the default. Bootstrap makes every box border-box, so
-   the workers chip's outer height is 21px content + 12px padding + 2px
-   border = 35px; min-height pins the single-line badge to that same 35px
-   border-box height so both pills stand exactly equal. */
-.fm-ai-badge {
-    align-self: center;
-    box-sizing: border-box;
-    display: inline-flex;
-    align-items: center;
+/* Trailing actions cluster — the AI settings + holiday square cards ride
+   together as the last item in the home info row. One grid cell holding
+   two equal buttons keeps them paired at every breakpoint (side by side
+   beside the Players tile once the row wraps on phones). The grid row
+   stretches this to tile height; the flex children fill it. */
+.fm-home-actions {
+    display: flex;
     gap: 8px;
-    min-height: 35px;
-    padding: 6px 12px;
-    border-radius: 6px;
-    background: var(--fm-ai-bg);
-    border: 1px solid var(--fm-ai-border);
-    line-height: 1;
-    cursor: pointer;
-    user-select: none;
-    transition:
-        border-color 0.15s,
-        transform 0.15s,
-        box-shadow 0.2s;
-    box-shadow:
-        0 1px 0 rgba(255, 255, 255, 0.1) inset,
-        0 1px 3px rgba(0, 0, 0, 0.25);
+    align-items: stretch;
+    min-width: 0;
 }
 
-.fm-ai-badge:hover {
-    border-color: var(--fm-ai-border-hover);
+.fm-home-actions .fm-ai-btn,
+.fm-home-actions .fm-holiday-btn {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+/* AI settings action — square card twin to the holiday button. The robot
+   icon is always shown; the corner dot and blue accent light up when a
+   model is configured (fm-ai-btn-on), otherwise the card stays grey. The
+   label is visually hidden (read by the tooltip / screen readers) so the
+   card reads as a clean icon button. Clicking opens the AI dialog. */
+.fm-ai-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 6px;
+    color: #88a4b8;
+    background: linear-gradient(160deg, #243240 0%, #1d2832 100%);
+    border: 1px solid #2c3c4a;
+    border-radius: 6px;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.06) inset,
+        0 1px 3px rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+    transition:
+        border-color 0.2s,
+        transform 0.15s,
+        box-shadow 0.2s,
+        color 0.2s,
+        background 0.2s;
+}
+
+.fm-ai-btn:hover {
+    border-color: #3a5468;
+    color: #ffffff;
     transform: translateY(-1px);
     box-shadow:
-        0 1px 0 rgba(255, 255, 255, 0.12) inset,
+        0 1px 0 rgba(255, 255, 255, 0.08) inset,
         0 4px 10px rgba(0, 0, 0, 0.3);
 }
 
-.fm-ai-badge:focus-visible {
+.fm-ai-btn:active {
+    transform: translateY(0);
+    transition-duration: 0.08s;
+}
+
+.fm-ai-btn:focus-visible {
     outline: 2px solid var(--fm-ai-border-hover);
     outline-offset: 2px;
 }
 
-.fm-ai-badge-label {
-    font-size: 12px;
-    font-weight: 800;
-    letter-spacing: 1.4px;
+.fm-ai-btn-ic {
+    font-size: 18px;
+    line-height: 1;
+}
+
+.fm-ai-btn-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* Connection status pip — dim by default (OFF), lit green when a model
+   is configured (ON). The one readout that says whether AI is live. */
+.fm-ai-btn-dot {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #47586a;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+    transition:
+        background 0.2s,
+        box-shadow 0.2s;
+}
+
+/* Configured — blue AI accent, robot lit, status pip glows green. */
+.fm-ai-btn.fm-ai-btn-on {
     color: #eae7ff;
-    line-height: 1;
+    background: var(--fm-ai-bg);
+    border-color: var(--fm-ai-border);
 }
 
-.fm-ai-badge-status {
-    font-size: 11px;
-    font-weight: 200;
-    letter-spacing: 0.8px;
-    line-height: 1;
-}
-
-.fm-ai-badge-status-on {
-    color: #4ade80;
-}
-
-.fm-ai-badge-status-off {
+.fm-ai-btn.fm-ai-btn-on:hover {
     color: #ffffff;
+    border-color: var(--fm-ai-border-hover);
+}
+
+.fm-ai-btn.fm-ai-btn-on .fm-ai-btn-dot {
+    background: #4ade80;
+    box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
+}
+
+/* Groups the workers chip + AI badge. `display: contents` makes the
+   wrapper invisible to layout, so on wide screens both pills stay direct
+   flex items of the machine tile (chip keeps its margin-left:auto and the
+   two ride side by side, right-aligned). The phones breakpoint promotes
+   this to a real flex column — see the max-width: 480px block. */
+.fm-machine-actions {
+    display: contents;
 }
 
 /* AI settings dialog — reuses the worker-dialog shell, but stacks its
@@ -4934,10 +4993,10 @@ a:active {
     .fm-info-tile-machine {
         grid-column: 1 / -1;
     }
-    /* Machine takes its own row; the three stat tiles plus the square
-       holiday card fill the row below. */
+    /* Machine takes its own row; the three stat tiles plus the trailing
+       actions cluster (AI + holiday) fill the row below. */
     .fm-info-grid-home {
-        grid-template-columns: repeat(3, 1fr) 60px;
+        grid-template-columns: repeat(3, 1fr) 128px;
     }
 }
 
@@ -4952,18 +5011,19 @@ a:active {
     .fm-info-tile-machine {
         grid-column: 1 / -1;
     }
-    /* Pair the tiles 2×2 so the holiday action rides alongside the Players
-       tile instead of wrapping to a lonely centred row of its own. Machine
-       keeps its own full-width row above (its long CPU string is never
-       clipped); Countries/Clubs and Players/Holiday pair up below. */
+    /* Pair the tiles 2×2 so the actions cluster rides alongside the
+       Players tile instead of wrapping to a lonely centred row of its own.
+       Machine keeps its own full-width row above (its long CPU string is
+       never clipped); Countries/Clubs and Players/Actions pair up below. */
     .fm-info-grid-home {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
-    /* The holiday card now spans a full half-width cell (it was a small
-       square before), so enlarge its icon to give the action presence
-       beside the content-filled Players tile. */
-    .fm-info-grid-home .fm-holiday-ic {
-        font-size: 24px;
+    /* The actions cluster now shares a half-width cell (the AI + holiday
+       buttons sit side by side), so nudge their icons up a touch to give
+       the pair presence beside the content-filled Players tile. */
+    .fm-info-grid-home .fm-holiday-ic,
+    .fm-info-grid-home .fm-ai-btn-ic {
+        font-size: 20px;
     }
     .fm-info-tile {
         gap: 8px;

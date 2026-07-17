@@ -204,6 +204,11 @@ impl FreeAgentNegotiationStager {
                 // only open question, so skip straight to his phase.
                 negotiation.advance_to_personal_terms(date);
                 negotiation.offered_salary = Some(action.terms.annual_wage);
+                // The staged wage was priced through the free-agent market
+                // chain (role, decay, desperation) — it IS the reservation,
+                // so the resolution-side wage check scores it at par
+                // instead of skipping the money question entirely.
+                negotiation.staged_reservation_wage = Some(action.terms.annual_wage);
                 negotiation.negotiator_staff_id = action.negotiator_staff_id;
                 negotiation.reason = action.reason.clone();
                 negotiation.player_name = action.player_name.clone();
