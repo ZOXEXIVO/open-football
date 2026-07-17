@@ -3,7 +3,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::friendly_source::FriendlySourceSlug;
-use crate::common::potential_stars::PotentialStarsView;
+use crate::common::potential_stars::{PotentialStarsView, StarRating};
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::decisions::PlayerDecisionsCounter;
 use crate::player::events::PlayerEventsCounter;
@@ -16,7 +16,7 @@ use core::utils::FormattingUtils;
 use core::{
     DomesticCupOverride, LiveCupSlice, Person, Player, PlayerLiveStatsInput, PlayerPositionType,
     PlayerSquadStatus, PlayerStatCompetitionKind, PlayerStatisticsProjection, PlayerStatusType,
-    SimulatorData, Team,
+    SimulatorData, Team, TeamType,
 };
 use serde::Deserialize;
 
@@ -124,8 +124,8 @@ pub struct PlayerViewModel {
     pub country_name: String,
     pub skills: PlayerSkillsDto,
     pub conditions: u8,
-    pub current_ability: u8,
-    pub potential_ability: u8,
+    pub current_ability: StarRating,
+    pub potential_ability: StarRating,
     pub value: String,
     pub preferred_foot: String,
     pub player_attributes: PlayerAttributesDto,
@@ -381,7 +381,7 @@ pub async fn player_get_action(
                 c.teams
                     .teams
                     .iter()
-                    .find(|t| t.team_type == core::TeamType::Main)
+                    .find(|t| t.team_type == TeamType::Main)
             })
             .map(|t| (t.name.clone(), t.slug.clone()))
             .unwrap_or_else(|| (team.name.clone(), team.slug.clone()));
@@ -401,7 +401,12 @@ pub async fn player_get_action(
             skills: get_skills(player),
             conditions: get_conditions(player),
             current_ability: PotentialStarsView::current(player),
-            potential_ability: PotentialStarsView::potential_by_staff(player, head_coach, now),
+            potential_ability: PotentialStarsView::potential_by_staff(
+                player,
+                head_coach,
+                team.team_type == TeamType::Main,
+                now,
+            ),
             value: FormattingUtils::format_money(
                 player.value(
                     now,

@@ -258,11 +258,14 @@ impl PotentialEstimator {
         // ── Deterministic noise. Existing perception code uses
         // (coach_seed, player_id, salt) hashing; reuse it so saves stay
         // stable and the same staff/player/date pair always produces
-        // the same estimate.
-        let week = date_to_week(date);
+        // the same estimate. Belief re-rolls run on a ~monthly cadence,
+        // not weekly — a coach's read of a ceiling drifts slowly, and a
+        // weekly re-roll made borderline star ratings flip every Monday
+        // on pure noise.
+        let period = date_to_week(date) / 4;
         let salt = ctx
             .salt
-            .wrapping_add(week.wrapping_mul(11))
+            .wrapping_add(period.wrapping_mul(11))
             .wrapping_add(ctx.observation_count as u32 * 0x9E37);
         let noise = perception_noise_raw(profile.coach_seed, player.id, salt);
         // Negativity bias skews the *direction* of the random read for

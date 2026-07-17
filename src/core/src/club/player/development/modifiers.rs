@@ -61,18 +61,21 @@ impl DevelopmentModifiers {
 
     // ── Official match bonus ────────────────────────────────────────────
     //
-    // Competitive (official league/cup) matches develop players significantly
-    // faster than friendlies or youth-team games due to higher pressure,
-    // intensity, and stakes.
+    // Competitive (official league/cup) matches develop players faster than
+    // friendlies due to higher pressure, intensity, and stakes.
     //
-    // Range: 0.75 (only friendlies) -> 1.0 (no games) -> 1.30 (only official)
+    // Range: 1.0 (no games, or only friendlies) -> 1.30 (only official).
+    // Friendlies are never a *penalty* relative to sitting idle — the old
+    // 0.75 floor made a preseason of friendlies develop a player slower
+    // than not playing at all. Minutes already flow through the exposure
+    // multiplier; this bonus only rewards the competitive share.
     pub(super) fn official_match_bonus(official_games: u16, friendly_games: u16) -> f32 {
         let total = official_games + friendly_games;
         if total == 0 {
             return 1.0;
         }
         let official_ratio = official_games as f32 / total as f32;
-        0.75 + official_ratio * 0.55
+        1.0 + official_ratio * 0.30
     }
 
     pub(super) fn rating_multiplier(avg_rating: f32, total_games: u16) -> f32 {

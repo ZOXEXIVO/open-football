@@ -74,12 +74,12 @@
                     </td>
                     <td class="wl-ability">
                         <div class="fm-stars">
-                            {% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}
+                            {% for _ in 0..player.current_ability.full %}<span class="star on"></span>{% endfor %}{% if player.current_ability.half %}<span class="star half"></span>{% endif %}{% for _ in 0..player.current_ability.empty %}<span class="star"></span>{% endfor %}
                         </div>
                     </td>
                     <td class="wl-potential">
                         <div class="fm-stars">
-                            {% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}
+                            {% for _ in 0..player.potential_ability.full %}<span class="star on"></span>{% endfor %}{% if player.potential_ability.half %}<span class="star half"></span>{% endif %}{% for _ in 0..player.potential_ability.empty %}<span class="star"></span>{% endfor %}
                         </div>
                     </td>
                     <td class="wl-cond">

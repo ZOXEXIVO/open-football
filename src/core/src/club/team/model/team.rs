@@ -58,6 +58,13 @@ pub struct Team {
     /// board mood) read [`Team::team_chemistry`] instead of averaging
     /// per-player chemistry numbers.
     pub social_snapshot: TeamSocialSnapshot,
+
+    /// Reputation (0..10000) of the league THIS team competes in, stamped
+    /// each tick by the country pipeline for teams present in a league
+    /// table (same refresh pattern as [`Team::fixture_window`]). Stays 0
+    /// for league-less squads (U18/U19, some reserves); consumers derive
+    /// a fallback from the club's main league.
+    pub league_reputation: u16,
 }
 
 impl Team {
@@ -94,9 +101,14 @@ impl Team {
             self.tactics = Some(TacticsSelector::select(self, self.staffs.head_coach()));
         };
 
+        let effective_league_rep = self.effective_league_reputation(&ctx);
         let mut player_ctx = ctx.with_team_reputation(self.id, self.reputation.overall_score());
-        if let (Some(team_ctx), Some(tac)) = (player_ctx.team.as_mut(), self.tactics.as_ref()) {
-            team_ctx.formation = Some(*tac.positions());
+        if let Some(team_ctx) = player_ctx.team.as_mut() {
+            team_ctx.team_type = Some(self.team_type);
+            team_ctx.league_reputation = Some(effective_league_rep);
+            if let Some(tac) = self.tactics.as_ref() {
+                team_ctx.formation = Some(*tac.positions());
+            }
         }
 
         TeamResult::new(
@@ -115,6 +127,24 @@ impl Team {
             ),
             TeamTraining::train(self, ctx.simulation.date, ctx.club_facilities_training()),
         )
+    }
+
+    /// League reputation of the competition this team actually plays in.
+    /// Stamped teams return their real league's value; league-less squads
+    /// (U18/U19, unregistered reserves) approximate their competition at
+    /// half the senior league's strength — youth football tracks the
+    /// club's footballing environment, it is not the top flight and not
+    /// a vacuum either.
+    fn effective_league_reputation(&self, ctx: &GlobalContext<'_>) -> u16 {
+        if self.league_reputation > 0 {
+            return self.league_reputation;
+        }
+        let main_rep = ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0);
+        if self.team_type == TeamType::Main {
+            main_rep
+        } else {
+            main_rep / 2
+        }
     }
 
     /// Monthly tick — squad statuses and captaincy reappointment. Runs

@@ -121,6 +121,7 @@ impl TeamBuilder {
             captain_id: None,
             vice_captain_id: None,
             social_snapshot: TeamSocialSnapshot::default(),
+            league_reputation: 0,
         })
     }
 }

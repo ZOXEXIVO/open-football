@@ -2,7 +2,7 @@ pub mod ai_report;
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::potential_stars::PotentialStarsView;
+use crate::common::potential_stars::{PotentialStarsView, StarRating};
 use crate::player::PlayerStatusDto;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
@@ -14,7 +14,7 @@ use core::Player;
 use core::PlayerPositionType;
 use core::PlayerStatusType;
 use core::utils::{DateUtils, FormattingUtils};
-use core::{SimulatorData, Team};
+use core::{SimulatorData, Team, TeamType};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -75,8 +75,8 @@ pub struct TeamPlayer {
     pub country_code: String,
     pub country_name: String,
     pub conditions: u8,
-    pub current_ability: u8,
-    pub potential_ability: u8,
+    pub current_ability: StarRating,
+    pub potential_ability: StarRating,
     pub age: u8,
     pub played: u16,
     pub played_subs: u16,
@@ -179,7 +179,12 @@ pub async fn team_get_action(
                 conditions: get_conditions(p),
                 value: FormattingUtils::format_money(p.value(now, league_rep, club_rep)),
                 current_ability: PotentialStarsView::current(p),
-                potential_ability: PotentialStarsView::potential_by_staff(p, head_coach, now),
+                potential_ability: PotentialStarsView::potential_by_staff(
+                    p,
+                    head_coach,
+                    team.team_type == TeamType::Main,
+                    now,
+                ),
                 age: DateUtils::age(p.birth_date, now),
                 played: season_stats.played,
                 played_subs: season_stats.played_subs,
@@ -250,9 +255,12 @@ pub async fn team_get_action(
                             value: FormattingUtils::format_money(
                                 player.value(now, league_rep, club_rep),
                             ),
+                            // Loaned-out: the parent's coach assesses a
+                            // player who trains elsewhere — reduced
+                            // visibility, not a daily read.
                             current_ability: PotentialStarsView::current(player),
                             potential_ability: PotentialStarsView::potential_by_staff(
-                                player, head_coach, now,
+                                player, head_coach, false, now,
                             ),
                             age: DateUtils::age(player.birth_date, now),
                             played: season_stats.played,
@@ -306,7 +314,7 @@ pub async fn team_get_action(
     // The AI team report is a club-level feature surfaced once, on the Main
     // team page only — not on B / reserve / youth (U18…) squads.
     let ai_enabled =
-        team.team_type == core::TeamType::Main && state.ai.is_configured().await;
+        team.team_type == TeamType::Main && state.ai.is_configured().await;
 
     Ok(TeamGetTemplate {
         css_version: CSS_VERSION,
@@ -337,8 +345,8 @@ pub async fn team_get_action(
         ai_enabled,
         active_tab: "squad",
         show_finances_tab: team.team_type.is_own_team(),
-        show_academy_tab: team.team_type == core::TeamType::Main
-            || team.team_type == core::TeamType::U18,
+        show_academy_tab: team.team_type == TeamType::Main
+            || team.team_type == TeamType::U18,
         players,
     })
 }

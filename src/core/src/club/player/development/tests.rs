@@ -1144,3 +1144,169 @@ fn coaching_effect_amplifies_growth() {
         weak_gain
     );
 }
+
+// ── Freeze-not-cut ceilings ───────────────────────────────────────────
+//
+// Real-world imports legitimately carry skills above the PA×dev-weight
+// ceiling (a forward's concentration, a target man's heading). The old
+// `min(skill_ceiling)` clamp confiscated those points on the first tick
+// with a positive roll — a silent world-wide CA cut in week one of every
+// save. Ceilings must gate growth, never take what a player already has.
+
+#[test]
+fn skills_above_dev_ceiling_freeze_instead_of_being_cut() {
+    let now = d(2025, 9, 1);
+    let birth = d(1998, 1, 1); // 27 — technical/mental bands are positive
+    let mut s = baseline_skills();
+    // Forward dev weight for concentration is 0.6 → ceiling ≈ 13 × 0.6 = 7.8
+    // for PA 130. Same idea for marking (weight 0.35 → ≈ 4.6).
+    s.mental.concentration = 14.0;
+    s.technical.marking = 9.0;
+    let mut p = make_player(
+        birth,
+        PlayerPositionType::Striker,
+        s,
+        130,
+        person_pro(12.0, 12.0),
+    );
+
+    let coach = CoachingEffect::neutral();
+    p.process_development_with(now, 6000, &coach, 0.5, &mut FixedRolls(1.0));
+
+    assert!(
+        (p.skills.mental.concentration - 14.0).abs() < 1e-3,
+        "above-ceiling skill must freeze, got {}",
+        p.skills.mental.concentration
+    );
+    assert!(
+        (p.skills.technical.marking - 9.0).abs() < 1e-3,
+        "above-ceiling low-weight skill must freeze, got {}",
+        p.skills.technical.marking
+    );
+}
+
+// ── Coach decline protection (was inverted) ───────────────────────────
+
+#[test]
+fn elite_coach_slows_veteran_decline_more_than_bad_coach() {
+    let birth = d(1991, 3, 1); // 34 all season — physical band negative
+    let elite = CoachingEffect::from_scores(19, 19, 19, 19, 0.9);
+    let bad = CoachingEffect::from_scores(2, 2, 2, 2, 0.0);
+
+    let mut with_elite = make_player(
+        birth,
+        PlayerPositionType::Striker,
+        baseline_skills(),
+        150,
+        person_pro(10.0, 10.0),
+    );
+    let mut with_bad = make_player(
+        birth,
+        PlayerPositionType::Striker,
+        baseline_skills(),
+        150,
+        person_pro(10.0, 10.0),
+    );
+
+    let start = d(2025, 6, 1);
+    for week in 0..26 {
+        let now = start + Duration::weeks(week);
+        with_elite.process_development_with(now, 6000, &elite, 0.5, &mut FixedRolls(0.0));
+        with_bad.process_development_with(now, 6000, &bad, 0.5, &mut FixedRolls(0.0));
+    }
+
+    assert!(
+        with_elite.skills.physical.pace > with_bad.skills.physical.pace + 0.02,
+        "elite coaching must preserve veteran pace better: elite={}, bad={}",
+        with_elite.skills.physical.pace,
+        with_bad.skills.physical.pace
+    );
+}
+
+// ── Veteran physical decline magnitude (FM parity) ────────────────────
+
+#[test]
+fn veteran_pace_declines_noticeably_over_a_season() {
+    let birth = d(1992, 1, 1); // 33 at season start
+    let mut p = make_player(
+        birth,
+        PlayerPositionType::Striker,
+        baseline_skills(),
+        160,
+        person_pro(10.0, 10.0),
+    );
+    let pre_pace = p.skills.physical.pace;
+
+    let coach = CoachingEffect::neutral();
+    let start = d(2025, 8, 1);
+    for week in 0..52 {
+        let now = start + Duration::weeks(week);
+        p.process_development_with(now, 6000, &coach, 0.5, &mut FixedRolls(0.5));
+    }
+
+    let loss = pre_pace - p.skills.physical.pace;
+    assert!(
+        loss > 0.3,
+        "a 33-year-old must lose visible pace over a season, lost only {:.2}",
+        loss
+    );
+    assert!(
+        loss < 2.5,
+        "decline should be gradual, not a cliff: lost {:.2}",
+        loss
+    );
+}
+
+// ── CA budget: PA bounds what the match engine reads ──────────────────
+
+#[test]
+fn recomputed_ca_from_skills_never_exceeds_pa() {
+    // Not just the stored digit — the position-weighted skill average
+    // itself must stop at PA, or "CA 110" players quietly play like 125s.
+    let birth = d(2001, 1, 1); // 24 — plenty of growth bands active
+    let pa = 110u8;
+    let mut p = make_player(
+        birth,
+        PlayerPositionType::Striker,
+        baseline_skills(),
+        pa,
+        person_pro(18.0, 18.0),
+    );
+
+    let elite = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
+    let start = d(2025, 8, 1);
+    for week in 0..104 {
+        let now = start + Duration::weeks(week);
+        p.process_development_with(now, 9000, &elite, 0.9, &mut FixedRolls(1.0));
+    }
+
+    let recomputed = p
+        .skills
+        .calculate_ability_for_position(PlayerPositionType::Striker);
+    assert!(
+        recomputed <= pa,
+        "skills drifted past PA: recomputed CA {} > PA {}",
+        recomputed,
+        pa
+    );
+    assert!(p.player_attributes.current_ability <= pa);
+}
+
+// ── Friendlies are never worse than sitting idle ──────────────────────
+
+#[test]
+fn friendly_only_play_is_not_worse_than_no_play() {
+    let none = DevelopmentModifiers::official_match_bonus(0, 0);
+    let friendly_only = DevelopmentModifiers::official_match_bonus(0, 6);
+    let official_only = DevelopmentModifiers::official_match_bonus(6, 0);
+    assert!(
+        friendly_only >= none,
+        "a preseason of friendlies ({}) must not develop a player slower than not playing ({})",
+        friendly_only,
+        none
+    );
+    assert!(
+        official_only > friendly_only,
+        "competitive football must outrank friendlies"
+    );
+}

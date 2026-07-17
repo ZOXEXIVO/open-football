@@ -12,6 +12,7 @@ pub use matchday::WorldMatchdayResult;
 pub use result::SimulationResult;
 
 use crate::club::board::manager_market;
+use crate::club::player::development::CoachingEffect;
 use crate::competitions::simulation::GlobalCompetitionSimulator;
 use crate::config::SimulatorConfig;
 use crate::context::{GlobalContext, SimulationContext};
@@ -286,6 +287,20 @@ impl FootballSimulator {
                 &fa_bumps,
                 current_date.date(),
             );
+
+            // Unattached players still age. A light weekly development
+            // tick with no club environment (neutral coach, league rep 0)
+            // keeps pool veterans declining and pool youngsters ticking
+            // over, instead of every free agent being frozen in time
+            // until someone signs them.
+            if SimulationContext::new(current_date).is_week_beginning() {
+                let neutral_coach = CoachingEffect::neutral();
+                let dev_date = current_date.date();
+                data.free_agents
+                    .par_iter_mut()
+                    .filter(|p| !p.retired)
+                    .for_each(|p| p.process_development(dev_date, 0, &neutral_coach, 0.0));
+            }
 
             // Season-start career-history snapshot. Used to run serially
             // per country inside the drain (each country's club walk was

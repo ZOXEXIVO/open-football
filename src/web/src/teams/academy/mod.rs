@@ -1,7 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::potential_stars::PotentialStarsView;
+use crate::common::potential_stars::{PotentialStarsView, StarRating};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -75,8 +75,8 @@ pub struct AcademyPlayer {
     pub country_code: String,
     pub country_name: String,
     pub age: u8,
-    pub current_ability: u8,
-    pub potential_ability: u8,
+    pub current_ability: StarRating,
+    pub potential_ability: StarRating,
     /// Assessed-ceiling sort key on the full 1..200 scale (finer than
     /// the 0..5 star band above). Staff belief, never the hidden PA.
     pub potential_sort: u8,
@@ -161,7 +161,7 @@ pub async fn team_academy_action(
                 country_name: country.name.clone(),
                 age,
                 current_ability: PotentialStarsView::current(p),
-                potential_ability: PotentialStarsView::potential_by_staff(p, head_coach, now),
+                potential_ability: PotentialStarsView::potential_by_staff(p, head_coach, false, now),
                 potential_sort: PotentialEstimator::observable_ceiling(p, now),
                 conditions: (100f32 * (p.player_attributes.condition as f32 / 10000.0)) as u8,
                 phase_key: phase_i18n_key(phase),

@@ -217,7 +217,14 @@ pub(super) fn skills_to_array(player: &Player) -> [f32; SKILL_COUNT] {
 }
 
 pub(super) fn write_skills_back(player: &mut Player, arr: &[f32; SKILL_COUNT]) {
-    let t = &mut player.skills.technical;
+    write_array_into(&mut player.skills, arr);
+}
+
+/// Write the flat array into a standalone `PlayerSkills` — used by the
+/// CA-budget pass to probe "what would CA be if these values landed"
+/// without mutating the player.
+pub(super) fn write_array_into(skills: &mut crate::PlayerSkills, arr: &[f32; SKILL_COUNT]) {
+    let t = &mut skills.technical;
     t.corners = arr[SK_CORNERS];
     t.crossing = arr[SK_CROSSING];
     t.dribbling = arr[SK_DRIBBLING];
@@ -233,7 +240,7 @@ pub(super) fn write_skills_back(player: &mut Player, arr: &[f32; SKILL_COUNT]) {
     t.tackling = arr[SK_TACKLING];
     t.technique = arr[SK_TECHNIQUE];
 
-    let m = &mut player.skills.mental;
+    let m = &mut skills.mental;
     m.aggression = arr[SK_AGGRESSION];
     m.anticipation = arr[SK_ANTICIPATION];
     m.bravery = arr[SK_BRAVERY];
@@ -249,7 +256,7 @@ pub(super) fn write_skills_back(player: &mut Player, arr: &[f32; SKILL_COUNT]) {
     m.vision = arr[SK_VISION];
     m.work_rate = arr[SK_WORK_RATE];
 
-    let p = &mut player.skills.physical;
+    let p = &mut skills.physical;
     p.acceleration = arr[SK_ACCELERATION];
     p.agility = arr[SK_AGILITY];
     p.balance = arr[SK_BALANCE];
@@ -260,7 +267,7 @@ pub(super) fn write_skills_back(player: &mut Player, arr: &[f32; SKILL_COUNT]) {
     p.strength = arr[SK_STRENGTH];
     p.match_readiness = arr[SK_MATCH_READINESS];
 
-    let g = &mut player.skills.goalkeeping;
+    let g = &mut skills.goalkeeping;
     g.aerial_reach = arr[SK_GK_AERIAL_REACH];
     g.command_of_area = arr[SK_GK_COMMAND_OF_AREA];
     g.communication = arr[SK_GK_COMMUNICATION];

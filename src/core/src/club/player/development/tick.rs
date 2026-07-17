@@ -183,10 +183,17 @@ impl Player {
         // ── Process each skill ────────────────────────────────────────
 
         let mut skills = skills_to_array(self);
+        // Pre-tick snapshot for the CA-budget pass below.
+        let pre_tick = skills;
 
         for i in 0..SKILL_COUNT {
             if i == SK_MATCH_READINESS {
                 continue; // managed by training/match system
+            }
+            if dev_weights[i] <= 0.0 {
+                // Outfield players neither train nor decay GK-specific
+                // skills — the attribute simply isn't part of their game.
+                continue;
             }
 
             let cat = skill_category(i);
@@ -264,36 +271,82 @@ impl Player {
             } else {
                 // Decline: position-irrelevant skills decline slightly faster;
                 // key skills are more "maintained" by regular use. Great
-                // coaches slow decline a little (load + technique management).
-                // Workload amplifier accelerates decline for chronically tired
-                // players.
+                // coaches slow decline a little (load + technique management)
+                // — the multiplier drops BELOW 1.0 as coach quality rises,
+                // shrinking the negative base. Workload amplifier accelerates
+                // decline for chronically tired players.
                 let decline_pos_mult = (2.0 - dev_weights[i]).clamp(0.5, 1.5);
-                let decline_coach_protection = ((coach_mult - 1.0) * 0.5 + 1.0).clamp(0.6, 1.0);
+                let decline_coach_protection = (1.0 - (coach_mult - 1.0) * 0.5).clamp(0.6, 1.0);
                 base * decline_prot * decline_pos_mult * decline_coach_protection * workload_decline
             };
 
-            let new_val = skills[i] + change;
+            let prev = skills[i];
+            let new_val = prev + change;
 
             skills[i] = if change > 0.0 {
-                new_val.min(skill_ceiling).clamp(1.0, 20.0)
+                // The ceiling gates growth — it never confiscates points the
+                // player already owns. Real-world imports legitimately carry
+                // skills above the PA×weight ceiling (a target man's heading,
+                // a poacher's composure); those freeze rather than get cut.
+                new_val.min(skill_ceiling.max(prev)).clamp(1.0, 20.0)
             } else {
                 new_val.clamp(1.0, 20.0)
             };
         }
 
-        write_skills_back(self, &skills);
-
-        // ── Recalculate current_ability from updated skills ───────────
-
+        // ── CA budget: PA bounds the position-weighted average ────────
+        //
+        // Per-skill ceilings alone let the weighted average drift past PA
+        // (key-skill ceilings sit at PA×1.2-1.5). FM semantics: at the
+        // ceiling, attributes stop accumulating — the CA digit must stay
+        // honest about what the match engine actually reads. If this
+        // week's growth would push recomputed CA over PA, scale the
+        // positive deltas down until it fits; declines always land.
         let position = self.position();
-        let recomputed_ca = self.skills.calculate_ability_for_position(position);
+        let pa_u8 = self.player_attributes.potential_ability;
+        let ca_of = |arr: &[f32; SKILL_COUNT]| -> u8 {
+            let mut probe = self.skills.clone();
+            write_array_into(&mut probe, arr);
+            probe.calculate_ability_for_position(position)
+        };
+        let mut recomputed_ca = ca_of(&skills);
+        if recomputed_ca > pa_u8 {
+            let post = skills;
+            let blend = |t: f32| -> [f32; SKILL_COUNT] {
+                let mut out = pre_tick;
+                for i in 0..SKILL_COUNT {
+                    let d = post[i] - pre_tick[i];
+                    out[i] = pre_tick[i] + if d > 0.0 { d * t } else { d };
+                }
+                out
+            };
+            let floor = blend(0.0);
+            if ca_of(&floor) >= pa_u8 {
+                // Already at (or, in legacy CA>PA states, above) the
+                // ceiling before any growth — no positive gains this week.
+                skills = floor;
+            } else {
+                let (mut lo, mut hi) = (0.0f32, 1.0f32);
+                for _ in 0..6 {
+                    let mid = (lo + hi) * 0.5;
+                    if ca_of(&blend(mid)) > pa_u8 {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                    }
+                }
+                skills = blend(lo);
+            }
+            recomputed_ca = ca_of(&skills);
+        }
+
+        write_skills_back(self, &skills);
 
         // PA is the biological ceiling — never raised as a development
         // side effect (a manager picking a kid for the first team must
-        // not bump his potential). If CA recomputation overshoots PA we
-        // clamp CA down instead of raising PA. Initialisation paths that
-        // legitimately need CA > PA must fix that at generation time,
-        // not via the weekly tick.
+        // not bump his potential). The budget pass above keeps growth
+        // inside PA; the final min() covers u8 rounding and legacy
+        // CA > PA states.
         self.player_attributes.current_ability =
             recomputed_ca.min(self.player_attributes.potential_ability);
     }

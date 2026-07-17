@@ -24,6 +24,13 @@ use super::skills_array::*;
 /// rolled uniformly inside that band.
 pub(super) fn base_weekly_rate(age: u8, cat: SkillCategory) -> (f32, f32) {
     match cat {
+        // Veteran bands (30+) tuned for FM parity: after decline
+        // protections (natural fitness + professionalism halve it, key
+        // skills are maintained by use, elite coaching shaves more) a
+        // well-kept 33-year-old still loses visible pace season over
+        // season (~0.5-1.0/yr), an unprotected one noticeably more. The
+        // previous bands netted ~0.2/yr and the world hoarded 34-year-old
+        // elites.
         SkillCategory::Physical => match age {
             0..=13 => (0.001, 0.005),
             14..=15 => (0.003, 0.010),
@@ -31,10 +38,10 @@ pub(super) fn base_weekly_rate(age: u8, cat: SkillCategory) -> (f32, f32) {
             18..=19 => (0.010, 0.025),
             20..=22 => (0.006, 0.015),
             23..=27 => (0.002, 0.008),
-            28..=29 => (-0.003, 0.003),
-            30..=31 => (-0.008, -0.001),
-            32..=33 => (-0.012, -0.003),
-            _ => (-0.018, -0.005),
+            28..=29 => (-0.006, 0.002),
+            30..=31 => (-0.018, -0.004),
+            32..=33 => (-0.034, -0.012),
+            _ => (-0.050, -0.020),
         },
         SkillCategory::Technical => match age {
             0..=13 => (0.005, 0.015),

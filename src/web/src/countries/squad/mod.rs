@@ -1,14 +1,16 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::potential_stars::PotentialStarsView;
+use crate::common::potential_stars::{PotentialStarsView, StarRating};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::utils::DateUtils;
-use core::{CallUpReason, Country, NationalTeam, NationalTeamLevel, PlayerPositionType, SquadPick};
+use core::{
+    CallUpReason, Country, NationalTeam, NationalTeamLevel, PlayerPositionType, SquadPick, TeamType,
+};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -56,8 +58,8 @@ pub struct NationalSquadPlayerDto {
     pub club_name: String,
     pub club_slug: String,
     pub age: u8,
-    pub current_ability: u8,
-    pub potential_ability: u8,
+    pub current_ability: StarRating,
+    pub potential_ability: StarRating,
     pub conditions: u8,
     pub international_apps: u16,
     pub international_goals: u16,
@@ -237,7 +239,12 @@ fn build_squad_dtos(
                 let (current, potential) = match club_view {
                     Some(t) => (
                         PotentialStarsView::current(player),
-                        PotentialStarsView::potential_by_staff(player, t.staffs.head_coach(), now),
+                        PotentialStarsView::potential_by_staff(
+                            player,
+                            t.staffs.head_coach(),
+                            t.team_type == TeamType::Main,
+                            now,
+                        ),
                     ),
                     None => (
                         PotentialStarsView::current(player),

@@ -1,7 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::potential_stars::PotentialStarsView;
+use crate::common::potential_stars::{PotentialStarsView, StarRating};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -46,8 +46,8 @@ pub struct FreeAgentPlayerDto {
     pub last_name: String,
     pub position: String,
     pub age: u8,
-    pub current_ability: u8,
-    pub potential_ability: u8,
+    pub current_ability: StarRating,
+    pub potential_ability: StarRating,
     /// Primary position used to bucket players in the squad-style sort
     /// (GK → DF → MF → FW). Not rendered — purely a sort key.
     pub position_sort: PlayerPositionType,

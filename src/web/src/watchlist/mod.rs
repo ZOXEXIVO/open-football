@@ -1,7 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::potential_stars::PotentialStarsView;
+use crate::common::potential_stars::{PotentialStarsView, StarRating};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -13,6 +13,7 @@ use core::Player;
 use core::PlayerPositionType;
 use core::PlayerStatusType;
 use core::SimulatorData;
+use core::TeamType;
 use core::utils::{DateUtils, FormattingUtils};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -32,8 +33,8 @@ pub struct WatchlistPlayerDto {
     pub country_name: String,
     pub country_slug: String,
     pub age: u8,
-    pub current_ability: u8,
-    pub potential_ability: u8,
+    pub current_ability: StarRating,
+    pub potential_ability: StarRating,
     pub conditions: u8,
     pub team_name: String,
     pub team_slug: String,
@@ -99,7 +100,10 @@ pub async fn watchlist_page_action(
                 Some(WatchlistPlayerDto {
                     current_ability: PotentialStarsView::current(player),
                     potential_ability: PotentialStarsView::potential_by_staff(
-                        player, head_coach, now,
+                        player,
+                        head_coach,
+                        team.team_type == TeamType::Main,
+                        now,
                     ),
                     team_name: team.name.clone(),
                     team_slug: team.slug.clone(),

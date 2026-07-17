@@ -736,6 +736,17 @@ impl Country {
         self.clubs
             .par_iter_mut()
             .map(|club| {
+                // Stamp each team with the reputation of the league it
+                // actually competes in (same per-tick refresh pattern as
+                // fixture_window). B/reserve squads in real lower
+                // divisions must develop at their own level, not the
+                // main team's.
+                for team in club.teams.teams.iter_mut() {
+                    if let Some(info) = team_league_info.get(&team.id) {
+                        team.league_reputation = info.5;
+                    }
+                }
+
                 let league_info = club
                     .teams
                     .main()

@@ -1129,8 +1129,16 @@ impl Player {
                 club_morale_ctx,
             );
             // Natural skill development (weekly). Build the coaching effect
-            // once per player from the club's best coach scores.
-            let league_reputation = ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0);
+            // once per player from the club's best coach scores. League
+            // reputation prefers the TEAM's own competition (a B squad in
+            // the third division, a U18 side in youth football) over the
+            // club's main league — development happens at the level the
+            // player actually competes at.
+            let league_reputation = ctx
+                .team
+                .as_ref()
+                .and_then(|t| t.league_reputation)
+                .unwrap_or_else(|| ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0));
             let coach_effect = ctx
                 .club
                 .as_ref()

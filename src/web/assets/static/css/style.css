@@ -1283,6 +1283,15 @@ a:active {
     text-shadow: 0 0 6px rgba(232, 182, 40, 0.35);
 }
 
+/* Half star: gold left half, empty-shade right half, painted onto the
+   same ★ glyph via background-clip so it aligns with .on/.off stars. */
+.fm-stars .star.half {
+    background: linear-gradient(90deg, #e8b628 50%, #2a3238 50%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
 .fm-stars-lg .star {
     width: 20px;
     height: 20px;
@@ -1293,6 +1302,13 @@ a:active {
 .fm-stars-lg .star.on {
     color: #ecc030;
     filter: drop-shadow(0 1px 3px rgba(236, 192, 48, 0.4));
+}
+
+.fm-stars-lg .star.half {
+    background: linear-gradient(90deg, #ecc030 50%, #2a3238 50%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
 }
 
 /* ============================================

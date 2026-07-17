@@ -20,7 +20,7 @@ pub struct PhaseGrowthCaps {
 /// category sum — the previous category-sum cap meant a 14-skill
 /// technical category effectively allowed only ~0.034/14 ≈ 0.002 per
 /// skill, which made development glacial.
-struct SkillSnapshot {
+pub(super) struct SkillSnapshot {
     technical: [f32; 14],
     mental: [f32; 14],
     physical: [f32; 8],
@@ -332,8 +332,10 @@ impl ClubAcademy {
             // PA-derived per-skill ceilings — PA is the biological cap;
             // it's never raised by training. Position-weighted so a GK
             // doesn't develop full-scale finishing and a striker doesn't
-            // peg max marking.
-            SkillCeilings { age, caps }.enforce(player, group);
+            // peg max marking. The pre-training snapshot rides along so
+            // a value that already sits above its ceiling (growth spurt,
+            // reassessed PA, imported record) is frozen, not cut.
+            SkillCeilings { age, caps }.enforce(player, group, &before);
 
             let pos = player.position();
             let recomputed_ca = player.skills.calculate_ability_for_position(pos);
@@ -665,7 +667,17 @@ impl SkillCeilings {
     /// per skill. The position weight is clamped to 0.65..1.25 so the
     /// floor is never punishing (a GK still needs to be able to
     /// develop a baseline pass) and the ceiling never overshoots.
-    pub fn enforce(&self, player: &mut Player, group: PlayerFieldPositionGroup) {
+    ///
+    /// Ceilings gate *growth* — a value already above its ceiling before
+    /// this week's session (growth spurt, PA edge case, imported record)
+    /// is frozen at its pre-training level, never cut down. `before` is
+    /// the same snapshot `cap_positive_delta` uses.
+    pub fn enforce(
+        &self,
+        player: &mut Player,
+        group: PlayerFieldPositionGroup,
+        before: &SkillSnapshot,
+    ) {
         let age_cap = match self.age {
             0..=8 => 3.0_f32,
             9 => 3.5,
@@ -684,69 +696,76 @@ impl SkillCeilings {
         let base = (pa / 200.0 * 20.0).clamp(1.0, 20.0);
         let w = AcademyCeilingWeights::for_group(group);
 
-        // Each skill gets `min(age_cap, (base * weight).clamp(1.0, 20.0))`.
+        // Each skill gets `min(age_cap, (base * weight).clamp(1.0, 20.0))`,
+        // lifted to the pre-training value when that already sat higher.
         let cap_for = |weight: f32| -> f32 {
             let w = weight.clamp(0.65, 1.25);
             age_cap.min((base * w).clamp(1.0, 20.0))
         };
-        let clamp = |v: f32, weight: f32| -> f32 { v.clamp(1.0, cap_for(weight)) };
+        let clamp = |v: f32, weight: f32, pre: f32| -> f32 {
+            v.clamp(1.0, cap_for(weight).max(pre.min(20.0)))
+        };
 
+        let b = &before.technical;
         let t = &mut player.skills.technical;
-        t.corners = clamp(t.corners, w.tech_corners);
-        t.crossing = clamp(t.crossing, w.tech_crossing);
-        t.dribbling = clamp(t.dribbling, w.tech_dribbling);
-        t.finishing = clamp(t.finishing, w.tech_finishing);
-        t.first_touch = clamp(t.first_touch, w.tech_first_touch);
-        t.free_kicks = clamp(t.free_kicks, w.tech_free_kicks);
-        t.heading = clamp(t.heading, w.tech_heading);
-        t.long_shots = clamp(t.long_shots, w.tech_long_shots);
-        t.long_throws = clamp(t.long_throws, w.tech_long_throws);
-        t.marking = clamp(t.marking, w.tech_marking);
-        t.passing = clamp(t.passing, w.tech_passing);
-        t.penalty_taking = clamp(t.penalty_taking, w.tech_penalty);
-        t.tackling = clamp(t.tackling, w.tech_tackling);
-        t.technique = clamp(t.technique, w.tech_technique);
+        t.corners = clamp(t.corners, w.tech_corners, b[0]);
+        t.crossing = clamp(t.crossing, w.tech_crossing, b[1]);
+        t.dribbling = clamp(t.dribbling, w.tech_dribbling, b[2]);
+        t.finishing = clamp(t.finishing, w.tech_finishing, b[3]);
+        t.first_touch = clamp(t.first_touch, w.tech_first_touch, b[4]);
+        t.free_kicks = clamp(t.free_kicks, w.tech_free_kicks, b[5]);
+        t.heading = clamp(t.heading, w.tech_heading, b[6]);
+        t.long_shots = clamp(t.long_shots, w.tech_long_shots, b[7]);
+        t.long_throws = clamp(t.long_throws, w.tech_long_throws, b[8]);
+        t.marking = clamp(t.marking, w.tech_marking, b[9]);
+        t.passing = clamp(t.passing, w.tech_passing, b[10]);
+        t.penalty_taking = clamp(t.penalty_taking, w.tech_penalty, b[11]);
+        t.tackling = clamp(t.tackling, w.tech_tackling, b[12]);
+        t.technique = clamp(t.technique, w.tech_technique, b[13]);
 
+        let b = &before.mental;
         let m = &mut player.skills.mental;
-        m.aggression = clamp(m.aggression, w.mental_aggression);
-        m.anticipation = clamp(m.anticipation, w.mental_anticipation);
-        m.bravery = clamp(m.bravery, w.mental_bravery);
-        m.composure = clamp(m.composure, w.mental_composure);
-        m.concentration = clamp(m.concentration, w.mental_concentration);
-        m.decisions = clamp(m.decisions, w.mental_decisions);
-        m.determination = clamp(m.determination, w.mental_determination);
-        m.flair = clamp(m.flair, w.mental_flair);
-        m.leadership = clamp(m.leadership, w.mental_leadership);
-        m.off_the_ball = clamp(m.off_the_ball, w.mental_off_the_ball);
-        m.positioning = clamp(m.positioning, w.mental_positioning);
-        m.teamwork = clamp(m.teamwork, w.mental_teamwork);
-        m.vision = clamp(m.vision, w.mental_vision);
-        m.work_rate = clamp(m.work_rate, w.mental_work_rate);
+        m.aggression = clamp(m.aggression, w.mental_aggression, b[0]);
+        m.anticipation = clamp(m.anticipation, w.mental_anticipation, b[1]);
+        m.bravery = clamp(m.bravery, w.mental_bravery, b[2]);
+        m.composure = clamp(m.composure, w.mental_composure, b[3]);
+        m.concentration = clamp(m.concentration, w.mental_concentration, b[4]);
+        m.decisions = clamp(m.decisions, w.mental_decisions, b[5]);
+        m.determination = clamp(m.determination, w.mental_determination, b[6]);
+        m.flair = clamp(m.flair, w.mental_flair, b[7]);
+        m.leadership = clamp(m.leadership, w.mental_leadership, b[8]);
+        m.off_the_ball = clamp(m.off_the_ball, w.mental_off_the_ball, b[9]);
+        m.positioning = clamp(m.positioning, w.mental_positioning, b[10]);
+        m.teamwork = clamp(m.teamwork, w.mental_teamwork, b[11]);
+        m.vision = clamp(m.vision, w.mental_vision, b[12]);
+        m.work_rate = clamp(m.work_rate, w.mental_work_rate, b[13]);
 
+        let b = &before.physical;
         let p = &mut player.skills.physical;
-        p.acceleration = clamp(p.acceleration, w.phys_acceleration);
-        p.agility = clamp(p.agility, w.phys_agility);
-        p.balance = clamp(p.balance, w.phys_balance);
-        p.jumping = clamp(p.jumping, w.phys_jumping);
-        p.natural_fitness = clamp(p.natural_fitness, w.phys_fitness);
-        p.pace = clamp(p.pace, w.phys_pace);
-        p.stamina = clamp(p.stamina, w.phys_stamina);
-        p.strength = clamp(p.strength, w.phys_strength);
+        p.acceleration = clamp(p.acceleration, w.phys_acceleration, b[0]);
+        p.agility = clamp(p.agility, w.phys_agility, b[1]);
+        p.balance = clamp(p.balance, w.phys_balance, b[2]);
+        p.jumping = clamp(p.jumping, w.phys_jumping, b[3]);
+        p.natural_fitness = clamp(p.natural_fitness, w.phys_fitness, b[4]);
+        p.pace = clamp(p.pace, w.phys_pace, b[5]);
+        p.stamina = clamp(p.stamina, w.phys_stamina, b[6]);
+        p.strength = clamp(p.strength, w.phys_strength, b[7]);
 
+        let b = &before.goalkeeping;
         let g = &mut player.skills.goalkeeping;
-        g.aerial_reach = clamp(g.aerial_reach, w.gk_aerial);
-        g.command_of_area = clamp(g.command_of_area, w.gk_command);
-        g.communication = clamp(g.communication, w.gk_communication);
-        g.eccentricity = clamp(g.eccentricity, w.gk_eccentricity);
-        g.first_touch = clamp(g.first_touch, w.gk_first_touch);
-        g.handling = clamp(g.handling, w.gk_handling);
-        g.kicking = clamp(g.kicking, w.gk_kicking);
-        g.one_on_ones = clamp(g.one_on_ones, w.gk_one_on_ones);
-        g.passing = clamp(g.passing, w.gk_passing);
-        g.punching = clamp(g.punching, w.gk_punching);
-        g.reflexes = clamp(g.reflexes, w.gk_reflexes);
-        g.rushing_out = clamp(g.rushing_out, w.gk_rushing);
-        g.throwing = clamp(g.throwing, w.gk_throwing);
+        g.aerial_reach = clamp(g.aerial_reach, w.gk_aerial, b[0]);
+        g.command_of_area = clamp(g.command_of_area, w.gk_command, b[1]);
+        g.communication = clamp(g.communication, w.gk_communication, b[2]);
+        g.eccentricity = clamp(g.eccentricity, w.gk_eccentricity, b[3]);
+        g.first_touch = clamp(g.first_touch, w.gk_first_touch, b[4]);
+        g.handling = clamp(g.handling, w.gk_handling, b[5]);
+        g.kicking = clamp(g.kicking, w.gk_kicking, b[6]);
+        g.one_on_ones = clamp(g.one_on_ones, w.gk_one_on_ones, b[7]);
+        g.passing = clamp(g.passing, w.gk_passing, b[8]);
+        g.punching = clamp(g.punching, w.gk_punching, b[9]);
+        g.reflexes = clamp(g.reflexes, w.gk_reflexes, b[10]);
+        g.rushing_out = clamp(g.rushing_out, w.gk_rushing, b[11]);
+        g.throwing = clamp(g.throwing, w.gk_throwing, b[12]);
     }
 }
 

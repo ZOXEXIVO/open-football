@@ -25,6 +25,12 @@ pub struct TeamContext {
     /// Official vice-captain (`Team::vice_captain_id`); same contract as
     /// [`Self::captain_id`].
     pub vice_captain_id: Option<u32>,
+    /// Reputation (0..10000) of the competition THIS team plays in — the
+    /// B team's third division, not the club's top flight. Development
+    /// reads this so a reserve squad doesn't train "in La Liga". `None`
+    /// when the constructing site didn't know it; consumers fall back to
+    /// the club's main-league reputation.
+    pub league_reputation: Option<u16>,
 }
 
 impl TeamContext {
@@ -36,6 +42,7 @@ impl TeamContext {
             team_type: None,
             captain_id: None,
             vice_captain_id: None,
+            league_reputation: None,
         }
     }
 
@@ -47,6 +54,7 @@ impl TeamContext {
             team_type: None,
             captain_id: None,
             vice_captain_id: None,
+            league_reputation: None,
         }
     }
 

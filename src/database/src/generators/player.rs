@@ -1,10 +1,12 @@
 use crate::DatabaseEntity;
+use crate::generators::rng::HydrationRng;
 use crate::loaders::{CountryLoader, OdbHistoryItem, OdbPlayer, OdbPosition};
 use chrono::{Datelike, NaiveDate, Utc};
 use core::league::Season;
 use core::next_player_id;
 use core::shared::FullName;
-use core::utils::{FloatUtils, IntegerUtils};
+use core::utils::IntegerUtils;
+use log::warn;
 use core::{
     ContractType, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
     PlayerAttributes, PlayerClubContract, PlayerFoots, PlayerPosition, PlayerPositionType,
@@ -58,17 +60,15 @@ const SKILL_COUNT: usize = 37;
 
 // ── Helper functions ────────────────────────────────────────────────────
 
-/// Box-Muller normal distribution (mean=0, std=1), no extra dependencies.
-fn random_normal() -> f32 {
-    let u1 = rand::random::<f32>().max(1e-10);
-    let u2 = rand::random::<f32>();
-    (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos()
-}
-
 #[inline]
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
+
+/// Per-skill hard ceiling for ODB hydration. Recorded CA is authoritative —
+/// a real 17-year-old phenom keeps their real level — so unlike procedural
+/// generation the age cap does not bound individual skills here.
+const ODB_SKILL_CAP: f32 = 20.0;
 
 // ── Age curves and per-skill peak timing ────────────────────────────────
 
@@ -157,16 +157,16 @@ impl SkillGroup {
 /// Apply a random role archetype to create variety within position groups.
 /// The base weights come from `core::PositionWeights::for_position` (per
 /// exact position); these archetype shifts add the "Poacher vs Target Man"
-/// flavour on top. Used as `RoleArchetype::apply(&mut weights, &bucket)`.
+/// flavour on top. Used as `RoleArchetype::apply(&mut weights, &bucket, rng)`.
 pub struct RoleArchetype;
 
 impl RoleArchetype {
-    pub fn apply(weights: &mut [f32; SKILL_COUNT], position: &PositionType) {
-        Self::apply_inner(weights, position);
+    pub fn apply(weights: &mut [f32; SKILL_COUNT], position: &PositionType, rng: &mut HydrationRng) {
+        Self::apply_inner(weights, position, rng);
     }
 
-    fn apply_inner(weights: &mut [f32; SKILL_COUNT], position: &PositionType) {
-        let roll = rand::random::<f32>();
+    fn apply_inner(weights: &mut [f32; SKILL_COUNT], position: &PositionType, rng: &mut HydrationRng) {
+        let roll = rng.f32();
         match position {
             PositionType::Goalkeeper => {
                 if roll < 0.35 {
@@ -353,6 +353,51 @@ impl SkillAffinities {
     }
 }
 
+/// Pull physical skills toward recorded body metrics so a 168cm winger
+/// doesn't roll elite jumping while a 198cm centre-back rolls none. Only
+/// fires for ODB records that actually carry height/weight; applied before
+/// CA rescaling so it reshapes the profile without moving the player off
+/// their recorded ability. Continuous z-score adjustments, no thresholds.
+pub struct BodySkillPrior;
+
+impl BodySkillPrior {
+    pub fn apply(
+        skills: &mut PlayerSkills,
+        height: Option<u8>,
+        weight: Option<u8>,
+        is_goalkeeper: bool,
+    ) {
+        let Some(h) = height else { return };
+        if !(150..=215).contains(&h) {
+            return;
+        }
+        // ~z-score against the outfield population (mean 182cm, sd 7cm).
+        let t = ((h as f32 - 182.0) / 7.0).clamp(-2.5, 2.5);
+        let p = &mut skills.physical;
+        p.jumping = (p.jumping + t * 1.6).clamp(1.0, 20.0);
+        p.strength = (p.strength + t * 1.0).clamp(1.0, 20.0);
+        p.agility = (p.agility - t * 0.8).clamp(1.0, 20.0);
+        p.balance = (p.balance - t * 0.5).clamp(1.0, 20.0);
+        skills.technical.heading = (skills.technical.heading + t * 1.2).clamp(1.0, 20.0);
+        if is_goalkeeper {
+            let g = &mut skills.goalkeeping;
+            g.aerial_reach = (g.aerial_reach + t * 1.4).clamp(1.0, 20.0);
+        }
+        // Mass relative to height: heavier builds trade acceleration for
+        // strength.
+        if let Some(w) = weight {
+            if (50..=120).contains(&w) {
+                let h_m = h as f32 / 100.0;
+                let bmi = w as f32 / (h_m * h_m);
+                let bt = ((bmi - 23.2) / 1.5).clamp(-2.0, 2.0);
+                let p = &mut skills.physical;
+                p.strength = (p.strength + bt * 0.8).clamp(1.0, 20.0);
+                p.acceleration = (p.acceleration - bt * 0.5).clamp(1.0, 20.0);
+            }
+        }
+    }
+}
+
 /// Conversion between the flat `[f32; SKILL_COUNT]` work array used inside
 /// the generator and the structured `PlayerSkills` consumed by the rest of
 /// the simulation. Stateless namespace so the generator never reaches for
@@ -504,11 +549,15 @@ pub struct PhysicalProfile {
 }
 
 impl PhysicalProfile {
-    pub fn for_position(primary: PlayerPositionType, country_id: u32) -> Self {
+    pub fn for_position(
+        primary: PlayerPositionType,
+        country_id: u32,
+        rng: &mut HydrationRng,
+    ) -> Self {
         let (lo, hi) = Self::height_range(primary);
         let offset = Self::country_height_offset(country_id);
-        let height = (IntegerUtils::random(lo + offset, hi + offset).clamp(160, 210)) as u8;
-        let weight = Self::weight_for(height, primary);
+        let height = (rng.int_range(lo + offset, hi + offset).clamp(160, 210)) as u8;
+        let weight = Self::weight_for(height, primary, rng);
         PhysicalProfile {
             height_cm: height,
             weight_kg: weight,
@@ -555,7 +604,7 @@ impl PhysicalProfile {
     /// Weight follows height for a body-mass index suited to professional
     /// athletes (~22-26 BMI), with role-specific muscle bias: defenders and
     /// strikers carry more mass, wingers/wide players run lean.
-    fn weight_for(height_cm: u8, primary: PlayerPositionType) -> u8 {
+    fn weight_for(height_cm: u8, primary: PlayerPositionType, rng: &mut HydrationRng) -> u8 {
         let h_m = height_cm as f32 / 100.0;
         let bmi_target = match primary {
             PlayerPositionType::Goalkeeper => 24.0,
@@ -575,7 +624,7 @@ impl PhysicalProfile {
             | PlayerPositionType::WingbackRight => 22.5,
             _ => 23.0,
         };
-        let jitter = (random_normal() * 1.2).clamp(-3.0, 3.0);
+        let jitter = (rng.normal() * 1.2).clamp(-3.0, 3.0);
         ((bmi_target + jitter) * h_m * h_m).clamp(55.0, 110.0) as u8
     }
 }
@@ -591,7 +640,7 @@ pub struct FitnessState {
 }
 
 impl FitnessState {
-    pub fn for_age(age: u32) -> Self {
+    pub fn for_age(age: u32, rng: &mut HydrationRng) -> Self {
         // Preseason snapshot: pros come back near full condition; older
         // players carry slightly more wear.
         let condition_base = if age >= 32 {
@@ -608,12 +657,12 @@ impl FitnessState {
         } else {
             8200
         };
-        let condition = (condition_base + IntegerUtils::random(-400, 600)).clamp(6500, 9700) as i16;
-        let fitness = (fitness_base + IntegerUtils::random(-500, 700)).clamp(6000, 9700) as i16;
+        let condition = (condition_base + rng.int_range(-400, 600)).clamp(6500, 9700) as i16;
+        let fitness = (fitness_base + rng.int_range(-500, 700)).clamp(6000, 9700) as i16;
         let jadedness = if age >= 32 {
-            IntegerUtils::random(800, 2500) as i16
+            rng.int_range(800, 2500) as i16
         } else {
-            IntegerUtils::random(0, 1500) as i16
+            rng.int_range(0, 1500) as i16
         };
         FitnessState {
             condition,
@@ -624,7 +673,7 @@ impl FitnessState {
 
     /// Initial match_readiness (0..20 scale). Pre-season state, lifted by
     /// fitness ratio. Older players ramp slightly slower.
-    pub fn match_readiness(age: u32) -> f32 {
+    pub fn match_readiness(age: u32, rng: &mut HydrationRng) -> f32 {
         let base = if age >= 32 {
             9.0
         } else if age >= 28 {
@@ -632,7 +681,7 @@ impl FitnessState {
         } else {
             12.5
         };
-        let jitter = random_normal() * 1.5;
+        let jitter = rng.normal() * 1.5;
         (base + jitter).clamp(6.0, 16.0)
     }
 }
@@ -659,24 +708,24 @@ impl AbilityTarget {
 
     /// Build the (CA, PA) pair for a generated player. Same continuous
     /// formula across every TeamType — squad role + age curve modulate it.
-    pub fn for_role(rep_factor: f32, age: u32, role: SquadRole) -> AbilityTarget {
-        let current = Self::current_for(rep_factor, age, role);
-        let potential = Self::potential_from(current, age, role);
+    pub fn for_role(rep_factor: f32, age: u32, role: SquadRole, rng: &mut HydrationRng) -> AbilityTarget {
+        let current = Self::current_for(rep_factor, age, role, rng);
+        let potential = Self::potential_from(current, age, role, rng);
         AbilityTarget { current, potential }
     }
 
-    fn current_for(rep_factor: f32, age: u32, role: SquadRole) -> u8 {
+    fn current_for(rep_factor: f32, age: u32, role: SquadRole, rng: &mut HydrationRng) -> u8 {
         // Slightly convex base so top reputation pulls away from the middle.
         let rep_curve = rep_factor * 0.85 + rep_factor * rep_factor * 0.15;
         let base_ca = 35.0 + rep_curve * 145.0; // ~35..180
         let raw = base_ca * role.ca_factor() * Self::age_factor(age);
-        let noise = random_normal() * (3.0 + rep_factor * 4.0);
+        let noise = rng.normal() * (3.0 + rep_factor * 4.0);
         (raw + noise).clamp(15.0, 195.0).round() as u8
     }
 
-    fn potential_from(target_ca: u8, age: u32, role: SquadRole) -> u8 {
+    fn potential_from(target_ca: u8, age: u32, role: SquadRole, rng: &mut HydrationRng) -> u8 {
         let (lo, hi) = role.pa_headroom_range(age);
-        let headroom = IntegerUtils::random(lo, hi.max(lo + 1));
+        let headroom = rng.int_range(lo, hi.max(lo + 1));
         ((target_ca as i32) + headroom).clamp(target_ca as i32, 200) as u8
     }
 
@@ -728,12 +777,15 @@ impl PlayerGenerator {
         max_age: i32,
     ) -> Player {
         let now = Utc::now();
+        let mut rng = HydrationRng::from_entropy();
 
         let rep_factor =
             AbilityTarget::rep_blend(team_reputation, league_reputation, country_reputation);
 
-        let year = IntegerUtils::random(now.year() - max_age, now.year() - min_age) as u32;
-        let month = IntegerUtils::random(1, 12) as u32;
+        // random() is [min, max): +1 keeps min_age reachable, and months
+        // run 1..=12 (the old (1, 12) bound skipped December entirely).
+        let year = IntegerUtils::random(now.year() - max_age, now.year() - min_age + 1) as u32;
+        let month = IntegerUtils::random(1, 13) as u32;
         let day = IntegerUtils::random(1, 29) as u32;
         let age = (now.year() as u32).saturating_sub(year);
 
@@ -745,7 +797,7 @@ impl PlayerGenerator {
         };
 
         // CA before PA: target CA is the anchor of skill generation.
-        let ability = AbilityTarget::for_role(rep_factor, age, role);
+        let ability = AbilityTarget::for_role(rep_factor, age, role, &mut rng);
         let target_ca = ability.current;
         let potential_ability = ability.potential;
 
@@ -763,10 +815,11 @@ impl PlayerGenerator {
             primary_position,
             age,
             rep_factor,
-            potential_ability,
             target_ca,
             continent_id,
             &country_code,
+            AgeCurve::skill_cap(age),
+            &mut rng,
         );
         SkillRescaler::to_target_ca(&mut skills, primary_position, target_ca);
         // Convergence contract:
@@ -777,7 +830,7 @@ impl PlayerGenerator {
         //     a CA-130 inflation of it. This is enforced post-rescale via
         //     `clamp_to_cap`. Tests assert both halves of the contract.
         SkillRescaler::clamp_to_cap(&mut skills, AgeCurve::skill_cap(age));
-        skills.physical.match_readiness = FitnessState::match_readiness(age);
+        skills.physical.match_readiness = FitnessState::match_readiness(age, &mut rng);
 
         let is_youth = matches!(
             team_type,
@@ -791,6 +844,7 @@ impl PlayerGenerator {
             &skills,
             primary_position,
             country_id,
+            &mut rng,
         );
 
         // Salary: exponential curve based on reputation and ability.
@@ -865,7 +919,7 @@ impl PlayerGenerator {
             .birth_date(NaiveDate::from_ymd_opt(year as i32, month, day).unwrap())
             .country_id(country_id)
             .skills(skills)
-            .attributes(Self::generate_person_attributes())
+            .attributes(Self::generate_person_attributes(&mut rng))
             .player_attributes(player_attributes)
             .contract(Some(contract))
             .positions(positions)
@@ -882,16 +936,19 @@ impl PlayerGenerator {
         primary_position: PlayerPositionType,
         age: u32,
         rep_factor: f32,
-        potential_ability: u8,
         target_ca: u8,
         continent_id: u32,
         country_code: &str,
+        skill_cap: f32,
+        rng: &mut HydrationRng,
     ) -> PlayerSkills {
-        // Target CA — not PA — drives current skill level. PA only governs
-        // the per-skill ceiling so a young CA-80 prospect with PA 160 still
-        // looks like an 80-CA player today, not a 160 mini-superstar.
-        let pa = potential_ability as f32;
-        let pa_final = (pa - 1.0) / 199.0 * 19.0 + 1.0;
+        // Target CA drives current skill level; `skill_cap` is the hard
+        // per-skill ceiling (age-based for procedural players, open for
+        // authoritative ODB records). PA deliberately does NOT cap
+        // individual skills — PA bounds the *weighted average*, and capping
+        // every attribute at the PA-implied level flattened real players
+        // whose PA sits near CA into spread-less profiles with no standout
+        // skills. Elite pace next to mediocre finishing is normal football.
         let target_ca_f = target_ca.max(1) as f32;
         let ca_skill_target = (target_ca_f - 1.0) / 199.0 * 19.0 + 1.0;
 
@@ -935,7 +992,7 @@ impl PlayerGenerator {
 
         let bucket = PositionType::from_player_position(primary_position);
         let mut pos_w = PositionWeights::for_position(primary_position);
-        RoleArchetype::apply(&mut pos_w, &bucket);
+        RoleArchetype::apply(&mut pos_w, &bucket, rng);
 
         let base_noise = 1.4 + rep_factor * 0.8;
         let tech_noise = if age <= 18 {
@@ -958,7 +1015,7 @@ impl PlayerGenerator {
                 SkillGroup::MatchReadiness => continue,
             };
             let pos_mean = group_mean + (pos_w[i] - 1.0) * spread;
-            let base = pos_mean + random_normal() * noise;
+            let base = pos_mean + rng.normal() * noise;
             skills[i] = (base * AgeCurve::peak_modifier(i, age)).clamp(1.0, 20.0);
         }
 
@@ -985,17 +1042,16 @@ impl PlayerGenerator {
             skills[i] += bias[i];
         }
 
-        // Floors & caps. Skills can't exceed PA's implied ceiling (capped
-        // at the age-based maximum), and can't fall below role-aware floors.
-        // The cap always wins: a low-PA player's floor is squeezed downward
-        // so it never exceeds the cap (otherwise `clamp(min>max)` panics).
-        let pa_cap_skill = pa_final;
+        // Floors & caps. Skills can't exceed the caller's per-skill ceiling
+        // and can't fall below role-aware floors. The cap always wins: a
+        // low-cap player's floor is squeezed downward so it never exceeds
+        // the cap (otherwise `clamp(min>max)` panics).
         let key_floor = (ca_skill_target * 0.40).clamp(1.0, 9.0);
         let universal_floor = (2.0 + ca_skill_target * 0.18).clamp(4.0, 6.0);
         let physical_floor_base = (3.0 + ca_skill_target * 0.32).clamp(6.0, 9.0);
         let trained_floor = (ca_skill_target * 0.32 + 3.0).clamp(6.0, 9.0);
         let footballer_tech_floor = (ca_skill_target * 0.28 + 2.0).clamp(4.0, 9.0);
-        let cap = AgeCurve::skill_cap(age).min(pa_cap_skill + 0.5);
+        let cap = skill_cap.clamp(1.5, 20.0);
         let safe_floor = |f: f32| f.min(cap).max(1.0);
 
         for i in 0..SKILL_COUNT {
@@ -1007,17 +1063,17 @@ impl PlayerGenerator {
             }
             match SkillGroup::from_index(i) {
                 SkillGroup::Physical => {
-                    let jitter = (random_normal() * 1.6).clamp(-2.0, 2.0);
+                    let jitter = (rng.normal() * 1.6).clamp(-2.0, 2.0);
                     let floor = safe_floor((physical_floor_base + jitter).max(4.0));
                     skills[i] = skills[i].clamp(floor, cap);
                 }
                 SkillGroup::Technical if pos_w[i] >= 0.8 => {
-                    let jitter = (random_normal() * 1.3).clamp(-2.0, 2.0);
+                    let jitter = (rng.normal() * 1.3).clamp(-2.0, 2.0);
                     let floor = safe_floor((trained_floor + jitter).max(4.0));
                     skills[i] = skills[i].clamp(floor, cap);
                 }
                 SkillGroup::Technical => {
-                    let jitter = (random_normal() * 0.9).clamp(-1.0, 1.0);
+                    let jitter = (rng.normal() * 0.9).clamp(-1.0, 1.0);
                     let floor = safe_floor((footballer_tech_floor + jitter).max(4.0));
                     skills[i] = skills[i].clamp(floor, cap);
                 }
@@ -1037,7 +1093,7 @@ impl PlayerGenerator {
 
         let mut result = SkillsArray::into_skills(&skills);
         if matches!(primary_position, PlayerPositionType::Goalkeeper) {
-            result.goalkeeping = Self::generate_gk_skills(ca_skill_target, age, &pos_w);
+            result.goalkeeping = Self::generate_gk_skills(ca_skill_target, age, &pos_w, rng);
         }
         result
     }
@@ -1055,6 +1111,7 @@ impl PlayerGenerator {
         ca_skill_target: f32,
         age: u32,
         _pos_w: &[f32; SKILL_COUNT],
+        rng: &mut HydrationRng,
     ) -> core::Goalkeeping {
         // GK skills develop like mental — peak in late 20s/early 30s (experience matters)
         let gk_age_ratio = match age {
@@ -1072,7 +1129,7 @@ impl PlayerGenerator {
         let noise = 1.5;
 
         // GK role archetype — creates variety between keepers
-        let roll = rand::random::<f32>();
+        let roll = rng.f32();
         // Weights: 1.0 = average, >1.0 = boosted, <1.0 = reduced
         let (_archetype_name, w) = if roll < 0.35 {
             // Shot Stopper — elite reflexes, handling, positioning
@@ -1148,7 +1205,7 @@ impl PlayerGenerator {
         let mut gk_skills = [0.0f32; 13];
         for i in 0..13 {
             let pos_mean = gk_mean + (w[i] - 1.0) * spread;
-            let raw = pos_mean + random_normal() * noise;
+            let raw = pos_mean + rng.normal() * noise;
             gk_skills[i] = raw.clamp(1.0, 20.0);
         }
 
@@ -1430,19 +1487,19 @@ impl PlayerGenerator {
         (years.round() as i32).clamp(1, 5)
     }
 
-    fn generate_person_attributes() -> PersonAttributes {
+    fn generate_person_attributes(rng: &mut HydrationRng) -> PersonAttributes {
         PersonAttributes {
-            adaptability: FloatUtils::random(0.0f32, 20.0f32),
-            ambition: FloatUtils::random(0.0f32, 20.0f32),
-            controversy: FloatUtils::random(0.0f32, 20.0f32),
-            loyalty: FloatUtils::random(0.0f32, 20.0f32),
-            pressure: FloatUtils::random(0.0f32, 20.0f32),
-            professionalism: FloatUtils::random(0.0f32, 20.0f32),
-            sportsmanship: FloatUtils::random(0.0f32, 20.0f32),
-            temperament: FloatUtils::random(0.0f32, 20.0f32),
-            consistency: FloatUtils::random(4.0f32, 18.0f32),
-            important_matches: FloatUtils::random(4.0f32, 18.0f32),
-            dirtiness: FloatUtils::random(0.0f32, 20.0f32),
+            adaptability: rng.float_range(0.0, 20.0),
+            ambition: rng.float_range(0.0, 20.0),
+            controversy: rng.float_range(0.0, 20.0),
+            loyalty: rng.float_range(0.0, 20.0),
+            pressure: rng.float_range(0.0, 20.0),
+            professionalism: rng.float_range(0.0, 20.0),
+            sportsmanship: rng.float_range(0.0, 20.0),
+            temperament: rng.float_range(0.0, 20.0),
+            consistency: rng.float_range(4.0, 18.0),
+            important_matches: rng.float_range(4.0, 18.0),
+            dirtiness: rng.float_range(0.0, 20.0),
         }
     }
 
@@ -1457,6 +1514,7 @@ impl PlayerGenerator {
         skills: &PlayerSkills,
         primary_position: PlayerPositionType,
         country_id: u32,
+        rng: &mut HydrationRng,
     ) -> PlayerAttributes {
         let current_ability = skills.calculate_ability_for_position(primary_position);
 
@@ -1465,8 +1523,8 @@ impl PlayerGenerator {
         let potential_ability = potential_ability.max(current_ability);
 
         let rep_base = (rep_factor * 3000.0) as i32;
-        let physical = PhysicalProfile::for_position(primary_position, country_id);
-        let state = FitnessState::for_age(age);
+        let physical = PhysicalProfile::for_position(primary_position, country_id, rng);
+        let state = FitnessState::for_age(age, rng);
 
         PlayerAttributes {
             is_banned: false,
@@ -1520,7 +1578,9 @@ impl PlayerGenerator {
         if names.is_empty() {
             return String::new();
         }
-        let idx = IntegerUtils::random(0, names.len() as i32 - 1) as usize;
+        // random() is [min, max) — full-length bound keeps the final list
+        // entry reachable.
+        let idx = IntegerUtils::random(0, names.len() as i32) as usize;
         names[idx].to_owned()
     }
 
@@ -1529,7 +1589,7 @@ impl PlayerGenerator {
         if names.is_empty() {
             return String::new();
         }
-        let idx = IntegerUtils::random(0, names.len() as i32 - 1) as usize;
+        let idx = IntegerUtils::random(0, names.len() as i32) as usize;
         names[idx].to_owned()
     }
 
@@ -1537,8 +1597,11 @@ impl PlayerGenerator {
     //
     // Build a `Player` from an `OdbPlayer` record loaded from `players.odb`.
     // CA/PA from the record are authoritative; per-skill values are generated
-    // through the same PA-anchored pipeline and then uniformly rescaled so the
-    // resulting position-weighted CA matches the target.
+    // through the shared CA-anchored pipeline (uncapped — the record trumps
+    // the procedural age ceiling), nudged toward recorded body metrics, and
+    // uniformly rescaled so the position-weighted CA matches the record.
+    // All randomness is seeded from the record id: same record, same player,
+    // every save.
     pub fn generate_from_odb(
         record: &OdbPlayer,
         continent_id: u32,
@@ -1548,35 +1611,54 @@ impl PlayerGenerator {
         let now = Utc::now().date_naive();
         let age = age_in_years(record.birth_date, now);
 
-        let positions = positions_from_odb(&record.positions);
+        // Every random draw in hydration comes from an id-seeded stream, so
+        // the same database record produces the same player in every new
+        // game — profile, archetype, PA band roll, body metrics, all of it.
+        let mut rng = HydrationRng::from_seed(record.id as u64);
+
+        // CA lives on a 1..=200 scale; scrapes occasionally carry junk.
+        if record.current_ability > 200 {
+            warn!(
+                "player {}: recorded CA {} exceeds the 200 scale, clamping",
+                record.id, record.current_ability
+            );
+        }
+        let record_ca = record.current_ability.min(200);
+
+        let positions = positions_from_odb(record.id, &record.positions);
         let primary = positions
             .positions
             .first()
             .map(|p| p.position)
             .unwrap_or(PlayerPositionType::MidfielderCenter);
-        let pos_type = PositionType::from_player_position(primary);
 
         // Drive the skill generator off the recorded CA so the spread is
-        // appropriate. The new pipeline takes both target_ca and PA so the
-        // ODB record's authoritative numbers flow straight through.
-        let _ = pos_type; // bucket no longer needed — pipeline picks weights from exact position
-        let rep_factor = (record.current_ability as f32 / 200.0).clamp(0.05, 1.0);
+        // appropriate; the recorded value is authoritative, so no age cap
+        // bounds individual skills (ODB_SKILL_CAP).
+        let rep_factor = (record_ca as f32 / 200.0).clamp(0.05, 1.0);
         // Negative PA records carry an FM-style scouting band; roll the
         // concrete value once so skills and attributes agree on the same PA,
         // and never let it land below the recorded CA.
         let potential_ability =
-            PotentialAbility::resolve(record.potential_ability).max(record.current_ability);
+            PotentialAbility::resolve(record.potential_ability, &mut rng).max(record_ca);
         let mut skills = Self::generate_skills(
             primary,
             age,
             rep_factor,
-            potential_ability,
-            record.current_ability,
+            record_ca,
             continent_id,
             country_code,
+            ODB_SKILL_CAP,
+            &mut rng,
         );
-        SkillRescaler::to_target_ca(&mut skills, primary, record.current_ability);
-        skills.physical.match_readiness = FitnessState::match_readiness(age);
+        BodySkillPrior::apply(
+            &mut skills,
+            record.height,
+            record.weight,
+            matches!(primary, PlayerPositionType::Goalkeeper),
+        );
+        SkillRescaler::to_target_ca(&mut skills, primary, record_ca);
+        skills.physical.match_readiness = FitnessState::match_readiness(age, &mut rng);
 
         let full_name = build_full_name(record);
 
@@ -1600,8 +1682,15 @@ impl PlayerGenerator {
         let contract = build_main_contract(record, age, primary, data);
         let contract_loan = build_loan_contract(record, data);
 
-        let player_attributes =
-            build_player_attributes(record, age, primary, &skills, potential_ability);
+        let player_attributes = build_player_attributes(
+            record,
+            record_ca,
+            age,
+            primary,
+            &skills,
+            potential_ability,
+            &mut rng,
+        );
 
         let native_languages: Vec<core::PlayerLanguage> =
             core::Language::from_country_code(country_code)
@@ -1617,7 +1706,7 @@ impl PlayerGenerator {
             .birth_date(record.birth_date)
             .country_id(record.country_id)
             .skills(skills)
-            .attributes(Self::generate_person_attributes())
+            .attributes(Self::generate_person_attributes(&mut rng))
             .player_attributes(player_attributes)
             .contract(contract)
             .contract_loan(contract_loan)
@@ -1672,7 +1761,7 @@ impl PotentialAbility {
         (-1, 0, 20),
     ];
 
-    pub fn resolve(raw: i16) -> u8 {
+    pub fn resolve(raw: i16, rng: &mut HydrationRng) -> u8 {
         if raw >= 0 {
             return raw.min(200) as u8;
         }
@@ -1682,7 +1771,7 @@ impl PotentialAbility {
             .iter()
             .find(|(band, _, _)| *band == raw)
             .map_or((0, 20), |(_, min, max)| (*min as i32, *max as i32));
-        IntegerUtils::random(min, max + 1) as u8
+        rng.int_range(min, max + 1) as u8
     }
 }
 
@@ -1759,16 +1848,11 @@ fn resolve_club_display(
     club_id: u32,
     data: &DatabaseEntity,
 ) -> (String, String, u16, String, String) {
-    let Some(club) = data.clubs.iter().find(|c| c.id == club_id) else {
-        if let Some(team) = data
-            .clubs
-            .iter()
-            .flat_map(|c| c.teams.iter())
-            .find(|t| t.id == club_id)
-        {
+    let Some(club) = data.club_by_id(club_id) else {
+        if let Some((_, team)) = data.team_by_id(club_id) {
             let (league_name, league_slug) = team
                 .league_id
-                .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
+                .and_then(|lid| data.league_by_id(lid))
                 .map(|l| (l.name.clone(), l.slug.clone()))
                 .unwrap_or_default();
             return (
@@ -1801,7 +1885,7 @@ fn resolve_club_display(
     };
 
     let (league_name, league_slug) = league_id
-        .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
+        .and_then(|lid| data.league_by_id(lid))
         .map(|l| (l.name.clone(), l.slug.clone()))
         .unwrap_or_default();
 
@@ -1882,22 +1966,36 @@ fn parse_position_code(code: &str) -> Option<PlayerPositionType> {
     })
 }
 
-fn positions_from_odb(odb_positions: &[OdbPosition]) -> PlayerPositions {
-    let mut positions: Vec<PlayerPosition> = odb_positions
-        .iter()
-        .filter_map(|p| {
-            parse_position_code(&p.code).map(|pt| PlayerPosition {
+fn positions_from_odb(player_id: u32, odb_positions: &[OdbPosition]) -> PlayerPositions {
+    let mut positions: Vec<PlayerPosition> = Vec::with_capacity(odb_positions.len());
+    for p in odb_positions {
+        match parse_position_code(&p.code) {
+            Some(pt) => positions.push(PlayerPosition {
                 position: pt,
                 level: p.level.clamp(1, 20),
-            })
-        })
-        .collect();
+            }),
+            None => warn!(
+                "player {}: unknown position code '{}' skipped",
+                player_id, p.code
+            ),
+        }
+    }
     if positions.is_empty() {
+        warn!(
+            "player {}: no usable position codes, defaulting to MC",
+            player_id
+        );
         positions.push(PlayerPosition {
             position: PlayerPositionType::MidfielderCenter,
             level: 20,
         });
     }
+    // Strongest first. The hydrator's primary pick and the runtime's
+    // `PlayerPositions::primary()` both read from the front, and record
+    // order isn't guaranteed to lead with the main role — a GK listed
+    // second would otherwise hydrate as an outfielder with no GK skills.
+    // Stable sort keeps record order between equal levels.
+    positions.sort_by(|a, b| b.level.cmp(&a.level));
     PlayerPositions { positions }
 }
 
@@ -1988,7 +2086,7 @@ fn default_annual_salary(
     primary: PlayerPositionType,
     data: &DatabaseEntity,
 ) -> u32 {
-    let club = data.clubs.iter().find(|c| c.id == record.club_id);
+    let club = data.club_by_id(record.club_id);
     let main_team = club.and_then(|c| {
         c.teams
             .iter()
@@ -2001,7 +2099,7 @@ fn default_annual_salary(
 
     let league_id = main_team.and_then(|t| t.league_id);
     let league_reputation = league_id
-        .and_then(|id| data.leagues.iter().find(|l| l.id == id))
+        .and_then(|id| data.league_by_id(id))
         .map(|l| l.reputation)
         .unwrap_or(1500);
 
@@ -2044,18 +2142,14 @@ fn build_loan_contract(record: &OdbPlayer, data: &DatabaseEntity) -> Option<Play
     // borrower. Fall back to B → U23/U21/U20/U19/U18 → Main in that
     // order for clubs that don't have a Reserve team.
     const TEAM_PRIORITY: [&str; 8] = ["Reserve", "B", "U23", "U21", "U20", "U19", "U18", "Main"];
-    let loan_from_team_id = data
-        .clubs
-        .iter()
-        .find(|c| c.id == record.club_id)
-        .and_then(|c| {
-            TEAM_PRIORITY.iter().find_map(|preferred| {
-                c.teams
-                    .iter()
-                    .find(|t| t.team_type.eq_ignore_ascii_case(preferred))
-                    .map(|t| t.id)
-            })
-        });
+    let loan_from_team_id = data.club_by_id(record.club_id).and_then(|c| {
+        TEAM_PRIORITY.iter().find_map(|preferred| {
+            c.teams
+                .iter()
+                .find(|t| t.team_type.eq_ignore_ascii_case(preferred))
+                .map(|t| t.id)
+        })
+    });
     // Loan-leg salary defaults to the borrower's share of the parent contract
     // when the data omits it (loan blocks scraped without a wage figure).
     let loan_salary = match loan.salary {
@@ -2132,17 +2226,19 @@ fn derive_reputation_from_ability(ca: u8) -> (i16, i16, i16) {
 
 fn build_player_attributes(
     record: &OdbPlayer,
+    record_ca: u8,
     age: u32,
     primary: PlayerPositionType,
     skills: &PlayerSkills,
     potential_ability: u8,
+    rng: &mut HydrationRng,
 ) -> PlayerAttributes {
     // Reputation: any record-supplied value wins for its own field;
     // every missing field falls back to an ability-curve derivation so
     // partial overrides (e.g. a scraper that only captured world fame)
     // still produce coherent home/current numbers.
     let (derived_current, derived_home, derived_world) =
-        derive_reputation_from_ability(record.current_ability);
+        derive_reputation_from_ability(record_ca);
     let (current_rep, home_rep, world_rep) = match record.reputation.as_ref() {
         Some(r) => (
             r.current.unwrap_or(derived_current),
@@ -2154,24 +2250,31 @@ fn build_player_attributes(
 
     // Scaled CA can drift a couple of points off target after rescaling;
     // pull the recorded value back in so downstream code (squad status,
-    // value calc) sees what the ODB intended.
+    // value calc) sees what the ODB intended. A larger drift means the
+    // generator could not realise the recorded value — keep the derived
+    // number but say so, since silently altering authoritative data hides
+    // both data problems and generator regressions.
     let derived_ca = skills.calculate_ability_for_position(primary);
-    let current_ability = if (derived_ca as i32 - record.current_ability as i32).abs() <= 6 {
-        record.current_ability
+    let current_ability = if (derived_ca as i32 - record_ca as i32).abs() <= 6 {
+        record_ca
     } else {
+        warn!(
+            "player {}: recorded CA {} not reachable from generated skills (derived {}), keeping derived",
+            record.id, record_ca, derived_ca
+        );
         derived_ca
     };
     let potential_ability = potential_ability.max(current_ability);
 
-    let physical = PhysicalProfile::for_position(primary, record.country_id);
-    let state = FitnessState::for_age(age);
+    let physical = PhysicalProfile::for_position(primary, record.country_id, rng);
+    let state = FitnessState::for_age(age, rng);
 
     PlayerAttributes {
         is_banned: false,
         is_injured: false,
         condition: state.condition,
         fitness: state.fitness,
-        jadedness: 0,
+        jadedness: state.jadedness,
         weight: record.weight.unwrap_or(physical.weight_kg),
         height: record.height.unwrap_or(physical.height_cm),
         value: record.value.unwrap_or(0),
@@ -2183,10 +2286,10 @@ fn build_player_attributes(
         international_apps: 0,
         international_goals: 0,
         under_21_international_apps: 0,
-        under_21_international_goals: if age <= 23 { 0 } else { 0 },
+        under_21_international_goals: 0,
         injury_days_remaining: 0,
         injury_type: None,
-        injury_proneness: (IntegerUtils::random(1, 10) + IntegerUtils::random(1, 10)) as u8,
+        injury_proneness: (rng.int_range(1, 10) + rng.int_range(1, 10)) as u8,
         recovery_days_remaining: 0,
         last_injury_body_part: 0,
         injury_count: 0,
@@ -3002,13 +3105,22 @@ mod generator_validation_tests {
             .find(|c| c.code.eq_ignore_ascii_case("jp"))
             .map(|c| c.id);
         if let (Some(nl_id), Some(jp_id)) = (nl, jp) {
+            let mut rng = HydrationRng::from_entropy();
             let mut nl_total = 0i32;
             let mut jp_total = 0i32;
             for _ in 0..200 {
-                nl_total += PhysicalProfile::for_position(PlayerPositionType::DefenderCenter, nl_id)
-                    .height_cm as i32;
-                jp_total += PhysicalProfile::for_position(PlayerPositionType::DefenderCenter, jp_id)
-                    .height_cm as i32;
+                nl_total += PhysicalProfile::for_position(
+                    PlayerPositionType::DefenderCenter,
+                    nl_id,
+                    &mut rng,
+                )
+                .height_cm as i32;
+                jp_total += PhysicalProfile::for_position(
+                    PlayerPositionType::DefenderCenter,
+                    jp_id,
+                    &mut rng,
+                )
+                .height_cm as i32;
             }
             let nl_avg = nl_total as f32 / 200.0;
             let jp_avg = jp_total as f32 / 200.0;
@@ -3400,11 +3512,12 @@ mod potential_ability_tests {
 
     #[test]
     fn positive_values_pass_through() {
-        assert_eq!(PotentialAbility::resolve(0), 0);
-        assert_eq!(PotentialAbility::resolve(1), 1);
-        assert_eq!(PotentialAbility::resolve(130), 130);
-        assert_eq!(PotentialAbility::resolve(200), 200);
-        assert_eq!(PotentialAbility::resolve(250), 200, "capped at 200");
+        let mut rng = HydrationRng::from_entropy();
+        assert_eq!(PotentialAbility::resolve(0, &mut rng), 0);
+        assert_eq!(PotentialAbility::resolve(1, &mut rng), 1);
+        assert_eq!(PotentialAbility::resolve(130, &mut rng), 130);
+        assert_eq!(PotentialAbility::resolve(200, &mut rng), 200);
+        assert_eq!(PotentialAbility::resolve(250, &mut rng), 200, "capped at 200");
     }
 
     #[test]
@@ -3430,9 +3543,10 @@ mod potential_ability_tests {
             (-15, 0, 30),
             (-1, 0, 20),
         ];
+        let mut rng = HydrationRng::from_entropy();
         for (raw, min, max) in bands {
             for _ in 0..200 {
-                let pa = PotentialAbility::resolve(raw);
+                let pa = PotentialAbility::resolve(raw, &mut rng);
                 assert!(
                     pa >= min && pa <= max,
                     "band {} rolled {} outside {}-{}",
@@ -3447,16 +3561,242 @@ mod potential_ability_tests {
 
     #[test]
     fn negative_band_rolls_vary() {
-        let first = PotentialAbility::resolve(-10);
-        let varied = (0..100).any(|_| PotentialAbility::resolve(-10) != first);
+        let mut rng = HydrationRng::from_entropy();
+        let first = PotentialAbility::resolve(-10, &mut rng);
+        let varied = (0..100).any(|_| PotentialAbility::resolve(-10, &mut rng) != first);
         assert!(varied, "band -10 must roll random values, not a constant");
     }
 
     #[test]
+    fn band_roll_is_deterministic_per_seed() {
+        // The same record id must resolve the same PA band value in every
+        // new game — cross-save stability for real wonderkids.
+        let a = PotentialAbility::resolve(-9, &mut HydrationRng::from_seed(777));
+        let b = PotentialAbility::resolve(-9, &mut HydrationRng::from_seed(777));
+        assert_eq!(a, b);
+    }
+
+    #[test]
     fn unknown_negative_code_falls_back_to_lowest_band() {
+        let mut rng = HydrationRng::from_entropy();
         for _ in 0..50 {
-            let pa = PotentialAbility::resolve(-42);
+            let pa = PotentialAbility::resolve(-42, &mut rng);
             assert!(pa <= 20, "unknown code must roll the 0-20 band, got {pa}");
         }
+    }
+}
+
+#[cfg(test)]
+mod odb_hydration_tests {
+    use super::*;
+    use crate::loaders::OdbContract;
+
+    fn empty_data() -> DatabaseEntity {
+        DatabaseEntity {
+            continents: vec![],
+            countries: vec![],
+            leagues: vec![],
+            clubs: vec![],
+            national_competitions: vec![],
+            names_by_country: vec![],
+            players_odb: None,
+            index: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn record(id: u32, ca: u8, pa: i16, positions: Vec<(&str, u8)>) -> OdbPlayer {
+        OdbPlayer {
+            id,
+            first_name: "Test".into(),
+            last_name: "Player".into(),
+            middle_name: None,
+            nickname: None,
+            birth_date: NaiveDate::from_ymd_opt(1998, 5, 15).unwrap(),
+            country_id: 776,
+            club_id: 1139,
+            positions: positions
+                .into_iter()
+                .map(|(code, level)| OdbPosition {
+                    code: code.into(),
+                    level,
+                })
+                .collect(),
+            preferred_foot: None,
+            foots: None,
+            height: None,
+            weight: None,
+            current_ability: ca,
+            potential_ability: pa,
+            value: None,
+            reputation: None,
+            contract: Some(OdbContract {
+                salary: Some(100_000),
+                expiration: NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+                started: None,
+                contract_type: None,
+                shirt_number: None,
+                squad_status: None,
+            }),
+            loan: None,
+            history: Vec::new(),
+            team_type_hint: None,
+        }
+    }
+
+    fn outfield_skill_values(p: &core::Player) -> Vec<f32> {
+        let t = &p.skills.technical;
+        let m = &p.skills.mental;
+        let ph = &p.skills.physical;
+        vec![
+            t.corners,
+            t.crossing,
+            t.dribbling,
+            t.finishing,
+            t.first_touch,
+            t.free_kicks,
+            t.heading,
+            t.long_shots,
+            t.long_throws,
+            t.marking,
+            t.passing,
+            t.penalty_taking,
+            t.tackling,
+            t.technique,
+            m.aggression,
+            m.anticipation,
+            m.bravery,
+            m.composure,
+            m.concentration,
+            m.decisions,
+            m.determination,
+            m.flair,
+            m.leadership,
+            m.off_the_ball,
+            m.positioning,
+            m.teamwork,
+            m.vision,
+            m.work_rate,
+            ph.acceleration,
+            ph.agility,
+            ph.balance,
+            ph.jumping,
+            ph.natural_fitness,
+            ph.pace,
+            ph.stamina,
+            ph.strength,
+        ]
+    }
+
+    #[test]
+    fn same_record_hydrates_identically() {
+        let data = empty_data();
+        let r = record(555_001, 145, 150, vec![("ST", 20), ("AMC", 14)]);
+        let a = PlayerGenerator::generate_from_odb(&r, 1, "it", &data);
+        let b = PlayerGenerator::generate_from_odb(&r, 1, "it", &data);
+        assert_eq!(outfield_skill_values(&a), outfield_skill_values(&b));
+        assert_eq!(
+            a.player_attributes.potential_ability,
+            b.player_attributes.potential_ability
+        );
+        assert_eq!(a.player_attributes.height, b.player_attributes.height);
+        assert_eq!(a.attributes.ambition, b.attributes.ambition);
+    }
+
+    #[test]
+    fn recorded_ca_is_preserved() {
+        let data = empty_data();
+        for ca in [60u8, 100, 150, 175] {
+            let r = record(555_100 + ca as u32, ca, ca as i16 + 5, vec![("MC", 20)]);
+            let p = PlayerGenerator::generate_from_odb(&r, 1, "it", &data);
+            let got = p.player_attributes.current_ability;
+            assert!(
+                (got as i32 - ca as i32).abs() <= 6,
+                "CA {} hydrated to {}",
+                ca,
+                got
+            );
+        }
+    }
+
+    #[test]
+    fn ca_and_pa_never_exceed_scale() {
+        let data = empty_data();
+        let r = record(555_200, 250, 250, vec![("MC", 20)]);
+        let p = PlayerGenerator::generate_from_odb(&r, 1, "it", &data);
+        assert!(p.player_attributes.current_ability <= 200);
+        assert!(p.player_attributes.potential_ability <= 200);
+    }
+
+    #[test]
+    fn strongest_position_becomes_primary() {
+        let data = empty_data();
+        // Record leads with a weak secondary; the level-20 role must win.
+        let r = record(555_300, 130, 135, vec![("MC", 12), ("ST", 20)]);
+        let p = PlayerGenerator::generate_from_odb(&r, 1, "it", &data);
+        assert_eq!(p.position(), PlayerPositionType::Striker);
+    }
+
+    #[test]
+    fn gk_listed_second_still_gets_gk_skills() {
+        let data = empty_data();
+        let r = record(555_400, 130, 135, vec![("ST", 8), ("GK", 20)]);
+        let p = PlayerGenerator::generate_from_odb(&r, 1, "it", &data);
+        assert_eq!(p.position(), PlayerPositionType::Goalkeeper);
+        assert!(
+            p.skills.goalkeeping.reflexes > 5.0,
+            "GK primary must generate real goalkeeping skills (reflexes={})",
+            p.skills.goalkeeping.reflexes
+        );
+    }
+
+    #[test]
+    fn profiles_keep_standout_attributes_when_pa_near_ca() {
+        // The old per-skill PA cap flattened every profile whose PA sat near
+        // CA — precisely the shape of real peak-age records. A CA-150 player
+        // must still show elite standout skills, not a uniform ~15.5 wall.
+        let data = empty_data();
+        let mut tops = 0.0f32;
+        let mut spreads = 0.0f32;
+        const N: u32 = 50;
+        for i in 0..N {
+            let r = record(560_000 + i, 150, 155, vec![("ST", 20)]);
+            let p = PlayerGenerator::generate_from_odb(&r, 1, "it", &data);
+            let values = outfield_skill_values(&p);
+            let top = values.iter().cloned().fold(f32::MIN, f32::max);
+            let mean = values.iter().sum::<f32>() / values.len() as f32;
+            tops += top;
+            spreads += top - mean;
+        }
+        let avg_top = tops / N as f32;
+        let avg_spread = spreads / N as f32;
+        eprintln!("CA150/PA155: avg top skill={avg_top:.2}, avg top-mean spread={avg_spread:.2}");
+        assert!(
+            avg_top > 16.5,
+            "CA-150 players must average a standout skill above 16.5 (got {avg_top:.2})"
+        );
+        assert!(
+            avg_spread > 3.0,
+            "profiles must keep spread between best and average skill (got {avg_spread:.2})"
+        );
+    }
+
+    #[test]
+    fn recorded_height_shapes_physical_skills() {
+        // Same id (same random stream), different recorded height: the tall
+        // twin must out-jump the short one — recorded body metrics and
+        // generated skills may not contradict each other.
+        let data = empty_data();
+        let mut tall = record(555_500, 130, 135, vec![("DC", 20)]);
+        tall.height = Some(196);
+        let mut short = record(555_500, 130, 135, vec![("DC", 20)]);
+        short.height = Some(168);
+        let p_tall = PlayerGenerator::generate_from_odb(&tall, 1, "it", &data);
+        let p_short = PlayerGenerator::generate_from_odb(&short, 1, "it", &data);
+        assert!(
+            p_tall.skills.physical.jumping > p_short.skills.physical.jumping + 2.0,
+            "196cm jumping ({:.1}) must clearly beat 168cm jumping ({:.1})",
+            p_tall.skills.physical.jumping,
+            p_short.skills.physical.jumping
+        );
     }
 }
