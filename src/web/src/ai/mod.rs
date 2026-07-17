@@ -65,6 +65,12 @@ impl AiConfig {
     pub async fn set(&self, settings: LlmSettings) {
         *self.inner.write().await = Some(settings);
     }
+
+    /// Drop the saved settings — the dialog's "Disable" action. Reverts the
+    /// badge to OFF and hides AI features on the next page render.
+    pub async fn clear(&self) {
+        *self.inner.write().await = None;
+    }
 }
 
 /// Body of the "AI settings" dialog POST.
@@ -131,6 +137,17 @@ pub async fn ai_config_save_action(
             api_key: body.api_key.trim().to_string(),
         })
         .await;
+    Json(SaveAiResult {
+        status: "ok",
+        detail: String::new(),
+    })
+}
+
+/// Clear the in-memory LLM contract — the dialog's "Disable" action. After
+/// this the home badge reads OFF and AI features stay hidden until settings
+/// are saved again.
+pub async fn ai_config_delete_action(State(state): State<GameAppData>) -> impl IntoResponse {
+    state.ai.clear().await;
     Json(SaveAiResult {
         status: "ok",
         detail: String::new(),

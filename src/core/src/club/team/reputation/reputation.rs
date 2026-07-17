@@ -460,6 +460,22 @@ impl ReputationLevel {
         }
     }
 
+    /// `next_lower` applied `steps` times, saturating at `Amateur`. Lets a
+    /// broadcast compute its current tier reach directly from how long a
+    /// player has been listed, rather than accumulating one rung per weekly
+    /// tick (which lagged the reach behind the true listing age).
+    pub fn step_down(self, steps: u32) -> ReputationLevel {
+        let mut tier = self;
+        for _ in 0..steps {
+            let lower = tier.next_lower();
+            if lower == tier {
+                break;
+            }
+            tier = lower;
+        }
+        tier
+    }
+
     /// True when a club of this tier runs the seller-side loan broadcast:
     /// resource-rich clubs (National and above) actively place their listed
     /// loanees instead of waiting to be scanned. Shared by the broadcast's

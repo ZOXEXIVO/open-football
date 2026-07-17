@@ -1,3 +1,4 @@
+use super::execution::TransferExecution;
 use super::free_agent_market_calc::BuyerRoleFit;
 use super::free_agents::{EmergencySignedTerms, GlobalFreeAgentSigning};
 use super::types::{
@@ -689,6 +690,18 @@ impl CountryResult {
             seller_reservation += 0.18;
         }
 
+        // A seller who stays at the table softens across rounds — real
+        // negotiations converge from BOTH sides, not just the buyer bidding
+        // up. Only the premium ABOVE asking concedes (never below 1.0, so the
+        // absolute floor is still owned by `SellerFeeFloor`), and an already
+        // available player (reservation <= 1.0) is untouched. Without this the
+        // buyer's escalation could never meet a coveted player's static
+        // premium and every such deal timed out in the sub-acceptance band.
+        if round > 1 && seller_reservation > 1.0 {
+            let concession = 0.05 * (round.saturating_sub(1) as f64);
+            seller_reservation = (seller_reservation - concession).max(1.0);
+        }
+
         seller_reservation = seller_reservation.clamp(0.55, 1.55);
 
         let mut chance: f32 = if ratio >= seller_reservation + 0.20 {
@@ -730,13 +743,15 @@ impl CountryResult {
                 // A key man not pushing to leave commands a premium ABOVE
                 // asking; aiming only at asking left every such deal short
                 // of the reservation band, so it timed out. Clamped to
-                // [1.0, 1.30]×asking: never below asking (so the working
+                // [1.0, 1.55]×asking: never below asking (so the working
                 // available-player path is unchanged — its reservation is
-                // <= 1.0 and clamps to 1.0), and never above a 1.30 premium
-                // (well within the strategy overpay ceiling, so the buyer
-                // can plausibly fund it). `SellerFeeFloor` still bounds the
-                // bottom.
-                let reservation_mult = seller_reservation.clamp(1.0, 1.30);
+                // <= 1.0 and clamps to 1.0), and up to the same 1.55 ceiling
+                // the seller's reservation itself clamps to, so the buyer can
+                // actually reach a coveted player's premium instead of topping
+                // out below it. If the resulting bid outruns the buyer's
+                // budget the agreement's `reserve_transfer_budget` gate still
+                // refuses it, and `SellerFeeFloor` still bounds the bottom.
+                let reservation_mult = seller_reservation.clamp(1.0, 1.55);
                 let target = if neg_data.asking_price > 0.0 {
                     neg_data.asking_price * reservation_mult
                 } else {
@@ -1364,12 +1379,32 @@ impl CountryResult {
             // moved). The reservation is released at execution-start, where
             // the real purchase accounting runs. Loans (lighter accounting)
             // and pool free agents (already returned above) are exempt.
+            //
+            // Reserve only the UPFRONT cash the buyer commits now: installment
+            // tranches are paid over time from the balance by the settlement
+            // walk, and execution itself already gates on the upfront portion,
+            // so reserving the full headline here blocked structured deals the
+            // club could genuinely fund — installments couldn't stretch a tight
+            // budget at all. Cross-country deals settle upfront, so their
+            // upfront IS the full fee.
             if !neg_data.is_loan {
+                let upfront = country
+                    .transfer_market
+                    .negotiations
+                    .get(&neg_id)
+                    .map(|n| {
+                        TransferExecution::upfront_after_installments(
+                            neg_data.offer_amount,
+                            neg_data.selling_country_id.is_some(),
+                            &n.current_offer.clauses,
+                        )
+                    })
+                    .unwrap_or(neg_data.offer_amount);
                 let reserved = country
                     .clubs
                     .iter_mut()
                     .find(|c| c.id == neg_data.buying_club_id)
-                    .map(|c| c.finance.reserve_transfer_budget(neg_data.offer_amount))
+                    .map(|c| c.finance.reserve_transfer_budget(upfront))
                     .unwrap_or(true);
                 if !reserved {
                     if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
@@ -1796,7 +1831,13 @@ impl SellerFeeFloor {
 
         let asset_class = SquadAssetProtection::classify(player, seller, date);
         let distress = Self::distress_for(player, seller, date);
-        let fraction = Self::floor_fraction(asset_class, distress)?;
+        let base_fraction = Self::floor_fraction(asset_class, distress)?;
+        // A genuine listing the club can't shift erodes the floor over time —
+        // a seller who's held a player on the market for months is genuinely
+        // more willing to deal. Without this a rated, long-listed player's
+        // floor stayed permanently above any (decayed) bid and he could only
+        // ever leave via the 365-day free exit.
+        let fraction = Self::erode_for_listing_age(base_fraction, country, neg_data.player_id, date);
 
         let (league_rep, club_rep) = PlayerValuationCalculator::seller_context(country, seller);
         let market_value = PlayerValueCalculator::calculate(
@@ -1820,6 +1861,40 @@ impl SellerFeeFloor {
             distress,
             reason,
         })
+    }
+
+    /// Days a genuine permanent listing persists before the floor fully eases
+    /// to its residual — roughly half a season of fruitless listing.
+    const FLOOR_EROSION_DAYS: f64 = 180.0;
+
+    /// A player a club has listed for permanent transfer but can't shift
+    /// signals a seller increasingly willing to deal: the floor eases from its
+    /// base fraction toward `DISTRESSED_RESIDUAL` across ~half a season of
+    /// listing, and never below it (a valued asset is never handed over for
+    /// pennies). Only a genuine `SellerListed` listing erodes — synthetic
+    /// (unsolicited-approach), loan-out and end-of-contract origins, and
+    /// unlisted players, hold firm, so a throwaway listing behind an
+    /// unsolicited bid can't game the floor down.
+    fn erode_for_listing_age(
+        fraction: f64,
+        country: &Country,
+        player_id: u32,
+        date: NaiveDate,
+    ) -> f64 {
+        if fraction <= Self::DISTRESSED_RESIDUAL {
+            return fraction;
+        }
+        let days_listed = country
+            .transfer_market
+            .get_listing_by_player(player_id)
+            .filter(|l| l.origin == TransferListingOrigin::SellerListed)
+            .map(|l| (date - l.listed_date).num_days().max(0))
+            .unwrap_or(0);
+        if days_listed <= 0 {
+            return fraction;
+        }
+        let t = (days_listed as f64 / Self::FLOOR_EROSION_DAYS).clamp(0.0, 1.0);
+        fraction - (fraction - Self::DISTRESSED_RESIDUAL) * t
     }
 
     /// Floor fraction for a (class, distress) pair. `None` = no floor at all

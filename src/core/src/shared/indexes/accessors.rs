@@ -4,6 +4,7 @@ use crate::country::Country;
 use crate::league::League;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::negotiation::NegotiationStatus;
+use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::pipeline::plausibility::{
     TransferMovePlausibility, TransferMoveStage, TransferPlausibilityBuilder,
 };
@@ -1012,7 +1013,22 @@ impl SimulatorData {
                                 .find(|t| matches!(t.team_type, TeamType::Main))
                                 .map(|t| t.reputation.world as i16)
                                 .unwrap_or(0);
-                            if !scouting_cfg.is_target_realistic_fields(buyer_world_rep, rt) {
+                            // Real fee headroom (transfer budget × the
+                            // negotiation fee-gate multiplier) so a well-funded
+                            // watcher isn't dropped merely for out-ranking the
+                            // seller on reputation — matches the negotiation's
+                            // budget-based fee gate.
+                            let buyer_fee_capacity = club
+                                .finance
+                                .transfer_budget
+                                .as_ref()
+                                .map(|b| b.amount * 1.40)
+                                .unwrap_or(0.0);
+                            if !scouting_cfg.is_target_realistic_fields(
+                                buyer_world_rep,
+                                rt,
+                                buyer_fee_capacity,
+                            ) {
                                 continue;
                             }
                         }
@@ -1252,6 +1268,20 @@ impl SimulatorData {
         let seller = self.resolve_seller_refs(player_id);
         let date = self.date.date();
 
+        // Seller-side market value, resolved once (buyer-independent). This is
+        // the same anchor the real negotiation path uses, so the fee gate in
+        // `assess` filters clubs that provably cannot fund the player. Passing
+        // 0.0 here (the old behaviour) disabled the fee gate at view time and
+        // let the panel show clubs that would never be allowed to bid.
+        let estimated_value = seller
+            .map(|(sell_country, sell_club, player)| {
+                let (league_rep, club_rep) =
+                    PlayerValuationCalculator::seller_context(sell_country, sell_club);
+                PlayerValuationCalculator::calculate_value(player, date, league_rep, club_rep)
+                    .amount
+            })
+            .unwrap_or(0.0);
+
         for continent in &self.continents {
             for country in &continent.countries {
                 for club in &country.clubs {
@@ -1299,7 +1329,7 @@ impl SimulatorData {
                                     sell_country,
                                     sell_club,
                                     player,
-                                    0.0,
+                                    estimated_value,
                                     false,
                                     true,
                                     date,

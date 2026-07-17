@@ -192,10 +192,25 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
         return Reject(NotListed);
     }
 
+    // How far above a buyer's normal aspirational ceiling a genuinely
+    // AVAILABLE player may sit and still be a realistic target — roughly one
+    // tier. A surplus/listed man at a bigger club is the classic "smaller
+    // side signs the fringe player who'd normally be out of reach"; without
+    // this lift he was too good for lower tiers (ceiling) yet not an upgrade
+    // for his own-tier peers (`upgrade < 3` below), so no club could sign him
+    // and he sat listed forever. Affordability and the reputation-gap gate
+    // still bound how far above his level a club can actually reach.
+    const AVAILABLE_CEILING_RELAX: u8 = 20;
+
     let baseline =
         PipelineProcessor::tier_starter_ca_score(ctx.buyer_rep_score, target.position_group);
-    let ceiling =
+    let base_ceiling =
         PipelineProcessor::tier_target_ceiling_score(ctx.buyer_rep_score, target.position_group);
+    let ceiling = if publicly_available {
+        base_ceiling.saturating_add(AVAILABLE_CEILING_RELAX)
+    } else {
+        base_ceiling
+    };
     let floor = baseline.saturating_sub(20);
     if target.ability < floor || target.ability > ceiling {
         return Reject(OutOfTierWindow);

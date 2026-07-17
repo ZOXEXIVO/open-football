@@ -103,6 +103,7 @@
             </div>
             <div class="fm-worker-dialog-result" id="fm-ai-result" hidden></div>
             <div class="fm-worker-dialog-actions">
+                <button type="button" class="fm-worker-dialog-btn fm-worker-dialog-btn-disable" id="fm-ai-disable"{% if !ai_enabled %} hidden{% endif %}>{{ i18n.t("ai_settings_disable") }}</button>
                 <button type="button" class="fm-worker-dialog-btn fm-worker-dialog-btn-cancel" id="fm-ai-cancel">{{ i18n.t("ai_settings_cancel") }}</button>
                 <button type="submit" class="fm-worker-dialog-btn fm-worker-dialog-btn-add" id="fm-ai-submit">{{ i18n.t("ai_settings_save") }}</button>
             </div>
@@ -119,6 +120,7 @@
         var closeBtn = document.getElementById('fm-ai-close');
         var cancelBtn = document.getElementById('fm-ai-cancel');
         var submitBtn = document.getElementById('fm-ai-submit');
+        var disableBtn = document.getElementById('fm-ai-disable');
         var result = document.getElementById('fm-ai-result');
         var baseUrlInput = document.getElementById('fm-ai-base-url');
         var modelInput = document.getElementById('fm-ai-model');
@@ -128,6 +130,8 @@
         var labels = {
             saving: "{{ i18n.t("ai_settings_saving") }}",
             saved: "{{ i18n.t("ai_settings_saved") }}",
+            disabling: "{{ i18n.t("ai_settings_disabling") }}",
+            disabled: "{{ i18n.t("ai_settings_disabled") }}",
             error: "{{ i18n.t("ai_settings_error") }}"
         };
 
@@ -144,6 +148,7 @@
         function openDialog() {
             resetResult();
             submitBtn.disabled = false;
+            if (disableBtn) { disableBtn.disabled = false; }
             if (typeof dialog.showModal === 'function') { dialog.showModal(); }
             else { dialog.setAttribute('open', ''); }
             baseUrlInput.focus();
@@ -159,6 +164,40 @@
         });
         closeBtn.addEventListener('click', closeDialog);
         cancelBtn.addEventListener('click', closeDialog);
+
+        if (disableBtn) {
+            disableBtn.addEventListener('click', function() {
+                disableBtn.disabled = true;
+                submitBtn.disabled = true;
+                showResult('pending', labels.disabling);
+
+                fetch('/api/ai/config', { method: 'DELETE' })
+                .then(function(resp) {
+                    if (!resp.ok) { throw new Error('http ' + resp.status); }
+                    return resp.json();
+                })
+                .then(function(data) {
+                    if (data.status === 'ok') {
+                        showResult('ok', labels.disabled);
+                        if (statusEl) {
+                            statusEl.textContent = 'OFF';
+                            statusEl.className = 'fm-ai-badge-status fm-ai-badge-status-off';
+                        }
+                        disableBtn.hidden = true;
+                        setTimeout(closeDialog, 600);
+                    } else {
+                        showResult('bad', labels.error);
+                        disableBtn.disabled = false;
+                        submitBtn.disabled = false;
+                    }
+                })
+                .catch(function() {
+                    showResult('bad', labels.error);
+                    disableBtn.disabled = false;
+                    submitBtn.disabled = false;
+                });
+            });
+        }
 
         form.addEventListener('submit', function(e) {
             e.preventDefault();
@@ -185,6 +224,7 @@
                         statusEl.textContent = 'ON';
                         statusEl.className = 'fm-ai-badge-status fm-ai-badge-status-on';
                     }
+                    if (disableBtn) { disableBtn.hidden = false; }
                     setTimeout(closeDialog, 600);
                 } else {
                     showResult('bad', labels.error + (data.detail ? ': ' + data.detail : ''));

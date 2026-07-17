@@ -651,7 +651,19 @@ impl ScoutingConfig {
     /// This encodes the realistic rule: a lower club only chases a top club's
     /// player when he fits its budget AND is surplus there — it is not in the
     /// market for the giant's first-choice keeper.
-    pub fn is_target_realistic(&self, buyer_world_rep: i16, target: &PlayerSummary) -> bool {
+    /// `buyer_fee_capacity` is the buyer's real fee headroom (transfer budget ×
+    /// the negotiation fee-gate multiplier), or `0.0` when the caller has no
+    /// budget to hand (a pure reputation-only, aspirational check). A club that
+    /// can genuinely FUND a target is allowed to scout him even if his value
+    /// sits above the bare reputation proxy, so this gate no longer excludes
+    /// players the negotiation layer would happily let a well-funded club bid
+    /// for.
+    pub fn is_target_realistic(
+        &self,
+        buyer_world_rep: i16,
+        target: &PlayerSummary,
+        buyer_fee_capacity: f64,
+    ) -> bool {
         self.is_target_realistic_fields(
             buyer_world_rep,
             &RealismTarget {
@@ -668,13 +680,19 @@ impl ScoutingConfig {
                 is_loan_listed: target.is_loan_listed,
                 squad_status: target.seller_ctx.squad_status.clone(),
             },
+            buyer_fee_capacity,
         )
     }
 
     /// Field-level core of [`Self::is_target_realistic`], shared with the
     /// match-scouting path (which reasons about a raw `Player`, not a
     /// `PlayerSummary`). Same policy documented on that method.
-    pub fn is_target_realistic_fields(&self, buyer_world_rep: i16, target: &RealismTarget) -> bool {
+    pub fn is_target_realistic_fields(
+        &self,
+        buyer_world_rep: i16,
+        target: &RealismTarget,
+        buyer_fee_capacity: f64,
+    ) -> bool {
         let r = &self.realism;
 
         // Only gate scouting "up": a peer or smaller selling club places no
@@ -687,8 +705,10 @@ impl ScoutingConfig {
         // Scouting up at a much bigger club. The budget gate is universal
         // here: a smaller side cannot fund a giant's player — fee or wages —
         // whatever his squad role, so an unaffordable target is never
-        // realistic. (The user-visible rule: "fits its budget".)
-        if !self.target_affordable_for_buyer(buyer_world_rep, target) {
+        // realistic. (The user-visible rule: "fits its budget".) A club with
+        // real money to spend clears this on its actual budget, not just its
+        // reputation tier.
+        if !self.target_affordable_for_buyer(buyer_world_rep, target, buyer_fee_capacity) {
             return false;
         }
 
@@ -749,12 +769,33 @@ impl ScoutingConfig {
     /// scouting "up". The buyer's reputation sets a salary and value ceiling;
     /// the target must fit both. A tiny club cannot fund a giant's player's
     /// fee or wages, whatever his squad role.
-    fn target_affordable_for_buyer(&self, buyer_world_rep: i16, target: &RealismTarget) -> bool {
+    ///
+    /// `buyer_fee_capacity` is the buyer's REAL fee headroom (its transfer
+    /// budget × the negotiation fee-gate multiplier), or `0.0` when the caller
+    /// has no budget to hand. A target the club can actually FUND is affordable
+    /// even if his value sits above the bare reputation proxy — this reconciles
+    /// the scouting gate with the negotiation's budget-based fee gate, so a
+    /// cash-rich but modest-reputation club (a takeover, or one flush after a
+    /// big sale) can pursue the bigger targets its money reaches. It only ever
+    /// WIDENS the gate — the reputation proxy still admits aspirational
+    /// interest, and the downstream wage plausibility gate still vets salary
+    /// exactly, so a funded scout can never smuggle an unaffordable wage
+    /// through here.
+    fn target_affordable_for_buyer(
+        &self,
+        buyer_world_rep: i16,
+        target: &RealismTarget,
+        buyer_fee_capacity: f64,
+    ) -> bool {
         let r = &self.realism;
         let buyer_tier = buyer_world_rep.max(0) as f64;
         let max_salary = buyer_tier * r.salary_per_rep_point;
         let max_value = buyer_tier * r.value_per_rep_point;
-        (target.salary as f64) <= max_salary && target.estimated_value <= max_value
+        let rep_affordable =
+            (target.salary as f64) <= max_salary && target.estimated_value <= max_value;
+        let budget_affordable =
+            buyer_fee_capacity > 0.0 && target.estimated_value <= buyer_fee_capacity;
+        rep_affordable || budget_affordable
     }
 
     /// Per-Monday refresh chunk size for shadow reports.
@@ -1028,7 +1069,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(!c.is_target_realistic(LOWER_TIER_BUYER, &star_gk));
+        assert!(!c.is_target_realistic(LOWER_TIER_BUYER, &star_gk, 0.0));
     }
 
     #[test]
@@ -1050,7 +1091,7 @@ mod tests {
         star.current_reputation = 5575;
         star.home_reputation = 6177;
         assert!(
-            !c.is_target_realistic(LOWER_TIER_BUYER, &star),
+            !c.is_target_realistic(LOWER_TIER_BUYER, &star, 0.0),
             "a domestic great must not read as a low-rep bargain in his market"
         );
 
@@ -1060,7 +1101,7 @@ mod tests {
         anonymous.current_reputation = 2869;
         anonymous.home_reputation = 2869;
         assert!(
-            c.is_target_realistic(LOWER_TIER_BUYER, &anonymous),
+            c.is_target_realistic(LOWER_TIER_BUYER, &anonymous, 0.0),
             "with world-level home/current rep the young regular is reachable"
         );
     }
@@ -1075,7 +1116,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &loan_listed));
+        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &loan_listed, 0.0));
     }
 
     #[test]
@@ -1087,7 +1128,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &listed));
+        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &listed, 0.0));
     }
 
     #[test]
@@ -1105,13 +1146,13 @@ mod tests {
         }
         .build();
         assert!(
-            !c.is_target_realistic(FOURTH_TIER_BUYER, &loan_listed_regular),
+            !c.is_target_realistic(FOURTH_TIER_BUYER, &loan_listed_regular, 0.0),
             "a 4th-tier side must not scout a loan-listed top-club first-teamer"
         );
         // Control: a mid/lower-tier club (within the widened band) still can —
         // a plausible loan destination is not over-blocked.
         assert!(
-            c.is_target_realistic(LOWER_TIER_BUYER, &loan_listed_regular),
+            c.is_target_realistic(LOWER_TIER_BUYER, &loan_listed_regular, 0.0),
             "a mid-tier club may still pursue the loan-listed player"
         );
     }
@@ -1127,7 +1168,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(!c.is_target_realistic(FOURTH_TIER_BUYER, &listed_regular));
+        assert!(!c.is_target_realistic(FOURTH_TIER_BUYER, &listed_regular, 0.0));
     }
 
     #[test]
@@ -1145,7 +1186,7 @@ mod tests {
         }
         .build();
         assert!(
-            c.is_target_realistic(FOURTH_TIER_BUYER, &listed_youth),
+            c.is_target_realistic(FOURTH_TIER_BUYER, &listed_youth, 0.0),
             "a surplus loan-listed youngster stays reachable via the fringe path"
         );
     }
@@ -1170,7 +1211,7 @@ mod tests {
         }
         .build();
         assert!(
-            c.is_target_realistic(LOWER_TIER_BUYER, &backup),
+            c.is_target_realistic(LOWER_TIER_BUYER, &backup, 0.0),
             "an affordable backup at a top club is a realistic lower-club target"
         );
     }
@@ -1190,7 +1231,7 @@ mod tests {
         }
         .build();
         assert!(
-            !c.is_target_realistic(LOWER_TIER_BUYER, &pricey_backup),
+            !c.is_target_realistic(LOWER_TIER_BUYER, &pricey_backup, 0.0),
             "a backup the buyer can't afford is not a realistic target"
         );
     }
@@ -1211,7 +1252,7 @@ mod tests {
         }
         .build();
         assert!(
-            !c.is_target_realistic(LOWER_TIER_BUYER, &regular),
+            !c.is_target_realistic(LOWER_TIER_BUYER, &regular, 0.0),
             "an affordable first-team regular is still out of a lower club's reach"
         );
     }
@@ -1227,7 +1268,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &backup));
+        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &backup, 0.0));
     }
 
     #[test]
@@ -1242,7 +1283,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &youth_reserve));
+        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &youth_reserve, 0.0));
     }
 
     #[test]
@@ -1257,7 +1298,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &youth_regular));
+        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &youth_regular, 0.0));
     }
 
     #[test]
@@ -1273,7 +1314,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(!c.is_target_realistic(LOWER_TIER_BUYER, &youth_star));
+        assert!(!c.is_target_realistic(LOWER_TIER_BUYER, &youth_star, 0.0));
     }
 
     #[test]
@@ -1289,7 +1330,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(!c.is_target_realistic(LOWER_TIER_BUYER, &expiring_star));
+        assert!(!c.is_target_realistic(LOWER_TIER_BUYER, &expiring_star, 0.0));
     }
 
     #[test]
@@ -1307,7 +1348,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(!c.is_target_realistic(LOWER_TIER_BUYER, &expiring_high_wage));
+        assert!(!c.is_target_realistic(LOWER_TIER_BUYER, &expiring_high_wage, 0.0));
     }
 
     #[test]
@@ -1324,7 +1365,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &expiring_realistic));
+        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &expiring_realistic, 0.0));
     }
 
     #[test]
@@ -1338,7 +1379,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(c.is_target_realistic(TOP_TIER_BUYER, &peer_target));
+        assert!(c.is_target_realistic(TOP_TIER_BUYER, &peer_target, 0.0));
     }
 
     #[test]
@@ -1352,7 +1393,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(c.is_target_realistic(TOP_TIER_BUYER, &smaller_club_regular));
+        assert!(c.is_target_realistic(TOP_TIER_BUYER, &smaller_club_regular, 0.0));
     }
 
     #[test]
@@ -1365,7 +1406,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &listed_elite));
+        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &listed_elite, 0.0));
 
         // Same prominent profile but at a peer-sized club: club gap doesn't
         // fire, so we never reach the prominence block.
@@ -1375,7 +1416,7 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(c.is_target_realistic(TOP_TIER_BUYER, &peer_prominent));
+        assert!(c.is_target_realistic(TOP_TIER_BUYER, &peer_prominent, 0.0));
 
         // Big-club elite played only twice all season → fringe path.
         let big_both_fringe = Target {
@@ -1384,6 +1425,6 @@ mod tests {
             ..Target::default()
         }
         .build();
-        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &big_both_fringe));
+        assert!(c.is_target_realistic(LOWER_TIER_BUYER, &big_both_fringe, 0.0));
     }
 }

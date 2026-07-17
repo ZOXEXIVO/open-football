@@ -1073,10 +1073,12 @@ impl PipelineProcessor {
     // Step 7a-ter: Staged Transfer-Availability Broadcast (stale listings)
     // ============================================================
 
-    /// Days a permanent listing sits unsold before the player asks the
-    /// club to find him a destination and the scouts start actively
-    /// shopping him around.
-    const TRANSFER_BROADCAST_AFTER_DAYS: i64 = 90;
+    /// Short grace a fresh permanent listing gets on the pull-side market
+    /// before the club starts actively shopping him. Replaces the old
+    /// 90-day dead zone in which nothing seller-side touched a listing for
+    /// three months; the club now offers him to peers within weeks and only
+    /// widens the tier reach if he stays unsold (see `broadcast_listed_transfers`).
+    const TRANSFER_BROADCAST_GRACE_DAYS: i64 = 21;
 
     /// Seller-side placement for STALE permanent listings — the
     /// permanent-transfer mirror of [`Self::broadcast_listed_loans`],
@@ -1127,7 +1129,7 @@ impl PipelineProcessor {
             {
                 continue;
             }
-            if (date - listing.listed_date).num_days() < Self::TRANSFER_BROADCAST_AFTER_DAYS {
+            if (date - listing.listed_date).num_days() < Self::TRANSFER_BROADCAST_GRACE_DAYS {
                 continue;
             }
             let Some(parent_club) = country.clubs.iter().find(|c| c.id == listing.club_id) else {
@@ -1173,34 +1175,44 @@ impl PipelineProcessor {
             let Some(club) = country.clubs.iter_mut().find(|c| c.id == s.parent_club_id) else {
                 continue;
             };
-            let next = match club.transfer_plan.transfer_broadcasts.get(&s.player_id) {
-                None => {
-                    newly_asking.push(s.player_id);
-                    AvailabilityBroadcast {
-                        tier: s.parent_tier,
-                        since: date,
-                    }
-                }
-                Some(prev) => {
-                    if (date - prev.since).num_days() >= Self::BROADCAST_RESPONSE_DAYS {
-                        AvailabilityBroadcast {
-                            tier: prev.tier.next_lower(),
-                            since: date,
-                        }
-                    } else {
-                        prev.clone()
-                    }
-                }
-            };
-            club.transfer_plan
+            // Anchor the cascade on when the broadcast FIRST opened (stable —
+            // never reset), so the tier reach widens continuously with time on
+            // the market: it opens at the club's own tier for a freshly-shopped
+            // player and drops one rung per response window from there.
+            // Deriving the reach from the stable anchor each tick — rather than
+            // accumulating one rung per weekly visit — removes the old cadence
+            // lag without teleporting a long-listed player straight to the
+            // bottom tier the moment the push first opens.
+            let first_since = club
+                .transfer_plan
                 .transfer_broadcasts
-                .insert(s.player_id, next);
+                .get(&s.player_id)
+                .map(|b| b.since)
+                .unwrap_or(date);
+            if !club
+                .transfer_plan
+                .transfer_broadcasts
+                .contains_key(&s.player_id)
+            {
+                newly_asking.push(s.player_id);
+            }
+            let steps_down =
+                ((date - first_since).num_days().max(0) / Self::BROADCAST_RESPONSE_DAYS) as u32;
+            let tier = s.parent_tier.step_down(steps_down);
+            club.transfer_plan.transfer_broadcasts.insert(
+                s.player_id,
+                AvailabilityBroadcast {
+                    tier,
+                    since: first_since,
+                },
+            );
         }
 
         // ── Pass 2b (mut players): the ask itself ───────────────────────
-        // Three months unsold — the player (or his agent) formally tells
-        // the club to find him a real destination. Cooldowned so a
-        // cascade re-opened after a failed negotiation doesn't spam.
+        // A few weeks unsold on the list — the player (or his agent) formally
+        // tells the club to find him a real destination, coinciding with the
+        // club opening the seller push. Cooldowned so a cascade re-opened
+        // after a failed negotiation doesn't spam.
         for player_id in newly_asking {
             for club in &mut country.clubs {
                 for team in &mut club.teams.teams {
@@ -3658,8 +3670,8 @@ mod transfer_broadcast_tests {
     #[test]
     fn fresh_listing_is_not_broadcast() {
         let date = Fx::monday();
-        // Listed 30 days ago — the pull-side market still owns it.
-        let mut country = Fx::market(30, TransferListingOrigin::SellerListed);
+        // Within the grace window — the pull-side market still owns it.
+        let mut country = Fx::market(14, TransferListingOrigin::SellerListed);
 
         PipelineProcessor::broadcast_listed_transfers(&mut country, date);
 

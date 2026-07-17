@@ -4842,8 +4842,8 @@ a:active {
 /* Shared AI accent — the home badge and the squad-page AI report button
    read the same colors so they always match. Restyle both in one place. */
 :root {
-    --fm-ai-bg: linear-gradient(159deg, #072247 0%, #04224c 100%);
-    --fm-ai-border: #06295a;
+        --fm-ai-bg: linear-gradient(159deg, #1280a3 0%, #15466e 100%);
+        --fm-ai-border: #1b607e;
     --fm-ai-border-hover: #356aad;
 }
 
@@ -10791,13 +10791,31 @@ html:has(.fm-workers-page) {
     cursor: default;
 }
 
+/* "Disable" turns the AI contract off — a destructive action, so it sits
+   apart on the left (margin-right:auto) with a muted danger tint. */
+.fm-worker-dialog-btn-disable {
+    margin-right: auto;
+    background: #3a2126;
+    border-color: #4a2b30;
+    color: #e2a7ad;
+}
+
+.fm-worker-dialog-btn-disable:hover {
+    background: #48282f;
+}
+
+.fm-worker-dialog-btn-disable:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
 /* Squad-page "AI" report button — same badge-blue as the home AI badge,
    sized to sit at the right of the .fm-panel-head next to the "Squad" title. */
 .fm-ai-analyze-btn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 5px 12px;
+    padding: 3px 9px;
     border-radius: 6px;
     background: var(--fm-ai-bg);
     border: 1px solid var(--fm-ai-border);

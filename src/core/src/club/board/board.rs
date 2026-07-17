@@ -954,7 +954,25 @@ impl ClubBoard {
         let owner_mult = self.ownership.budget_multiplier();
         let revenue_budget =
             projected_free_cash * ambition_mult * chair_mult * ffp_mult * owner_mult;
-        let raw_budget = (revenue_budget + seed_budget).max(0.0);
+
+        // Reserve floor: a solvent club that merely BREAKS EVEN on the P&L
+        // (revenue_budget ≈ 0) can still spend a bounded slice of its cash
+        // reserves on transfers — directly, or via installments against future
+        // revenue. Without this every established break-even club got a zero
+        // transfer budget and was frozen out of the market for the whole
+        // season, the single biggest cause of a stuck market. Gated on real,
+        // positive cash (never an owner-loan overdraft) and on FFP so a
+        // constrained club can't tap it freely; the division-tier ceiling
+        // below still caps the result. It's a FLOOR, not mandated spend —
+        // a rich club's revenue budget already exceeds it, so nothing changes
+        // for clubs that were never frozen.
+        const RESERVE_FLOOR_PCT: f64 = 0.10;
+        let reserve_floor = if board_ctx.balance > 0 {
+            board_ctx.balance as f64 * RESERVE_FLOOR_PCT * ffp_mult
+        } else {
+            0.0
+        };
+        let raw_budget = (revenue_budget + seed_budget).max(reserve_floor).max(0.0);
 
         let eco = board_ctx.country_economic_factor as f64;
         let price = board_ctx.country_price_level as f64;
@@ -2158,6 +2176,22 @@ mod budget_tests {
         ctx.balance = 0; // no seed cash
         let t = calc(&ctx);
         assert_eq!(t.transfer_budget, 0);
+    }
+
+    #[test]
+    fn break_even_but_cash_rich_club_still_gets_a_reserve_budget() {
+        // Established club (has trailing history, so no cold-start seed),
+        // P&L exactly break-even (revenue budget ≈ 0), but sitting on real
+        // cash: the reserve floor keeps it active in the market instead of
+        // freezing it at a zero budget for the whole season.
+        let mut ctx = make_ctx(80_000_000, 80_000_000, FfpStatus::Clean);
+        ctx.balance = 20_000_000;
+        let t = calc(&ctx);
+        assert!(
+            t.transfer_budget > 0,
+            "a solvent break-even club must still have a transfer budget: {}",
+            t.transfer_budget
+        );
     }
 
     #[test]

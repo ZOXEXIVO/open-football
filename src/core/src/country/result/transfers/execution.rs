@@ -7,6 +7,7 @@ use crate::simulator::SimulatorData;
 use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::market::{ClauseTrigger, TransferMarket};
+use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
 use crate::transfers::pipeline::{
     LoanOutCandidate, LoanOutReason, LoanOutStatus, PipelineProcessor,
@@ -29,7 +30,7 @@ const DEFAULT_AMORTIZATION_YEARS: u8 = 4;
 /// Stateless helpers for the transfer execution path — roster placement
 /// and fee-structure math. Grouped on a unit struct (rather than free
 /// functions) so the execution surface reads as one discoverable namespace.
-struct TransferExecution;
+pub(crate) struct TransferExecution;
 
 impl TransferExecution {
     /// History identity of the squad a player physically occupies at
@@ -85,16 +86,30 @@ impl TransferExecution {
     /// the headline) — money creation on every structured deal. Loans (no
     /// installments) return the full fee unchanged.
     fn upfront_fee(transfer: &DeferredTransfer) -> f64 {
-        let fee = transfer.fee.max(0.0);
         // Loans carry no installments; cross-country deals pay the fee
         // upfront because the daily settlement walk runs on the buyer's
         // country market and can't route a deferred tranche to a foreign
         // seller (mirrors how cross-country sell-ons settle upfront).
-        if transfer.is_loan || transfer.selling_country_id != transfer.buying_country_id {
+        let settles_upfront =
+            transfer.is_loan || transfer.selling_country_id != transfer.buying_country_id;
+        Self::upfront_after_installments(transfer.fee, settles_upfront, &transfer.offer_clauses)
+    }
+
+    /// Upfront cash a permanent fee commits now, once installment tranches
+    /// are carved out. Shared by the executor and the agreement-time budget
+    /// reservation so both agree on what a structured deal actually costs the
+    /// buyer up front. `settles_upfront` is true for loans / cross-country
+    /// deals, which pay the whole fee now.
+    pub(crate) fn upfront_after_installments(
+        fee: f64,
+        settles_upfront: bool,
+        clauses: &[TransferClause],
+    ) -> f64 {
+        let fee = fee.max(0.0);
+        if settles_upfront {
             return fee;
         }
-        let deferred: f64 = transfer
-            .offer_clauses
+        let deferred: f64 = clauses
             .iter()
             .filter_map(|clause| match clause {
                 TransferClause::Installments(amount, years) if *years > 0 => {
@@ -492,6 +507,49 @@ pub(crate) fn execute_transfer(
         }
     }
     success
+}
+
+/// Undo the buyer/seller bookkeeping an agreed deal left behind when its
+/// execution then failed (squad full, lost race, route block at the final
+/// step). `resolve_medical` optimistically finalises both sides — listing
+/// Completed, request Fulfilled, candidate Signed, interest cleared — before
+/// the deferred executor runs; on failure that state must be rolled back or
+/// the player silently vanishes from the market and the buyer's need reads as
+/// met. The player himself is already back at his club (the roster move is
+/// reversed inside the executor), so this restores the surrounding market
+/// state to mirror a normal rejection.
+pub(crate) fn compensate_failed_execution(data: &mut SimulatorData, transfer: &DeferredTransfer) {
+    let player_id = transfer.player_id;
+
+    // Seller side: the listing lives in the SELLING country. Reopen it so the
+    // listed-player pipeline re-engages instead of dropping him.
+    if let Some(seller_country) = data.country_mut(transfer.selling_country_id) {
+        seller_country
+            .transfer_market
+            .reopen_after_failed_execution(player_id, transfer.selling_club_id);
+    }
+
+    // Buyer side: the negotiation lives in the BUYING country (a foreign deal
+    // is stored in the buyer's market). Flag the agreed-but-unexecuted deal
+    // failed so scans and the prune stop treating it as live, then undo the
+    // premature signed/fulfilled bookkeeping so the club keeps looking —
+    // exactly the cleanup a normal rejection performs.
+    if let Some(buying_country) = data.country_mut(transfer.buying_country_id) {
+        for n in buying_country.transfer_market.negotiations.values_mut() {
+            if n.player_id == player_id
+                && n.buying_club_id == transfer.buying_club_id
+                && n.status == NegotiationStatus::Accepted
+            {
+                n.status = NegotiationStatus::Rejected;
+            }
+        }
+        PipelineProcessor::on_negotiation_resolved(
+            buying_country,
+            transfer.buying_club_id,
+            player_id,
+            false,
+        );
+    }
 }
 
 // ============================================================

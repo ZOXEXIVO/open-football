@@ -356,6 +356,10 @@ impl CountryResult {
                             && t.transfer_date == current_date)
                     });
                 }
+                // The deal was optimistically finalised at medical stage but
+                // never executed — roll the market state back so the player
+                // stays visible and the buyer keeps looking.
+                execution::compensate_failed_execution(data, transfer);
             }
         }
 
@@ -642,6 +646,10 @@ impl CountryResult {
                             && t.transfer_date == current_date)
                     });
                 }
+                // The deal was optimistically finalised at medical stage but
+                // never executed — roll the market state back so the player
+                // stays visible and the buyer keeps looking.
+                execution::compensate_failed_execution(data, transfer);
             }
         }
 

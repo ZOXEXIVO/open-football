@@ -5,6 +5,7 @@ use rustc_hash::FxHashSet;
 use std::collections::{HashMap, HashSet};
 
 use crate::SimulatorData;
+use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::player::transfer::FreeAgentBlockReason;
 use crate::country::result::transfers::FreeAgentBumpBatch;
 use crate::country::result::transfers::types::can_club_accept_player;
@@ -27,8 +28,8 @@ use crate::transfers::pipeline::{
 };
 use crate::utils::FormattingUtils;
 use crate::{
-    ClubPhilosophy, ClubTransferStrategy, Country, Person, PlayerStatusType, ReputationLevel,
-    StaffPosition, TransferStrategyContext, WageCalculator,
+    ClubPhilosophy, ClubTransferStrategy, Country, Person, Player, PlayerSquadStatus,
+    PlayerStatusType, ReputationLevel, StaffPosition, TransferStrategyContext, WageCalculator,
 };
 
 /// Continuous buying aggressiveness from reputation ratio.
@@ -391,7 +392,8 @@ impl PipelineProcessor {
                         &club.philosophy,
                         &club.board.vision,
                         buying_aggressiveness,
-                    );
+                    )
+                    .with_valuation_reputation(team.reputation.market_value_score());
 
                     let asking_price = Self::calculate_asking_price(
                         player,
@@ -545,12 +547,26 @@ impl PipelineProcessor {
                             }));
                     }
 
-                    let offered_annual_wage = WageCalculator::expected_annual_wage(
+                    // Offer a wage that reflects the ROLE the buyer signs the
+                    // player into — running it through the same
+                    // `ContractValuation` the player's personal-terms
+                    // reservation uses, so offer and demand share one wage
+                    // curve. The plain market wage (no squad-status premium)
+                    // sat structurally below a KeyPlayer/FirstTeamRegular
+                    // demand (market × 1.45 / 1.15), so personal terms opened
+                    // −18 to −5 and seldom converged. His current standing is
+                    // the best proxy for the role a suitor is buying — it
+                    // mirrors the reservation side's assumed status.
+                    let offered_annual_wage = ContractValuation::evaluate(
                         player,
-                        player.age(date),
-                        buying_rep_score,
-                        buying_league_reputation,
-                    );
+                        &Self::buyer_wage_context(
+                            player,
+                            player.age(date),
+                            buying_rep_score,
+                            buying_league_reputation,
+                        ),
+                    )
+                    .expected_wage;
 
                     // Resolve negotiator staff and build reason
                     let negotiator_staff_id = team.staffs.find_negotiator().map(|s| s.id);
@@ -777,6 +793,35 @@ impl PipelineProcessor {
     /// and wage room for the DevelopmentSigning branch — all observable
     /// signals, never the hidden biological PA.
     #[allow(clippy::too_many_arguments)]
+    /// Valuation context for the wage a BUYER offers a target — mirrors the
+    /// personal-terms reservation side so both run through one
+    /// `ContractValuation` curve. The intended role is proxied by the
+    /// player's current squad status (the reservation side assumes the same),
+    /// so a KeyPlayer is offered a KeyPlayer wage rather than the plain market
+    /// figure his demand then towered over. `months_remaining` is neutral here
+    /// — it only widens the acceptable band, never `expected_wage`.
+    fn buyer_wage_context(
+        player: &Player,
+        age: u8,
+        buyer_reputation_score: f32,
+        buyer_league_reputation: u16,
+    ) -> ValuationContext {
+        let (squad_status, current_salary) = player
+            .contract
+            .as_ref()
+            .map(|c| (c.squad_status.clone(), c.salary))
+            .unwrap_or((PlayerSquadStatus::FirstTeamRegular, 0));
+        ValuationContext {
+            age,
+            club_reputation_score: buyer_reputation_score,
+            league_reputation: buyer_league_reputation,
+            squad_status,
+            current_salary,
+            months_remaining: 24,
+            has_market_interest: true,
+        }
+    }
+
     fn determine_transfer_approach(
         rep_level: &ReputationLevel,
         budget: f64,
@@ -1974,6 +2019,14 @@ impl PipelineProcessor {
                 })
                 .unwrap_or(50);
 
+            let buyer_valuation_rep = buy_club
+                .teams
+                .teams
+                .first()
+                .map(|t| t.reputation.market_value_score())
+                .filter(|&s| s > 0)
+                .unwrap_or_else(|| (avg_ability as u16).saturating_mul(100).min(10_000));
+
             let strategy = ClubTransferStrategy::from_club_context(
                 cand.buying_club_id,
                 Some(CurrencyValue {
@@ -1985,7 +2038,8 @@ impl PipelineProcessor {
                 &buy_club.philosophy,
                 &buy_club.board.vision,
                 buying_aggressiveness_from_rep(buying_rep, selling_rep),
-            );
+            )
+            .with_valuation_reputation(buyer_valuation_rep);
 
             // Dossier built from the scout context hoisted above — the
             // dossier helper resolves the rest from the same plan.
@@ -2058,12 +2112,14 @@ impl PipelineProcessor {
                     }));
             }
 
-            let offered_annual_wage = WageCalculator::expected_annual_wage(
+            // Same role-aware wage curve as the domestic path (see
+            // `buyer_wage_context`) so offer and player demand can't diverge on
+            // the squad-status premium.
+            let offered_annual_wage = ContractValuation::evaluate(
                 player,
-                player_age,
-                buying_rep,
-                buying_league_reputation,
-            );
+                &Self::buyer_wage_context(player, player_age, buying_rep, buying_league_reputation),
+            )
+            .expected_wage;
 
             let reason = if is_loan {
                 "Loan signing".to_string()

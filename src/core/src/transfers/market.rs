@@ -658,7 +658,49 @@ impl TransferMarket {
             }
         }
 
+        self.prune_resolved_negotiations(current_date);
+
         expired_info
+    }
+
+    /// Drop long-resolved negotiations so the map stays bounded across a
+    /// multi-season save — it was previously insert-only and grew without
+    /// limit, leaking memory and slowing every per-player scan that walks it.
+    /// Active talks (Pending/Countered) always stay; a resolved entry is kept
+    /// a short while (past its overall expiry) for any in-tick reads, then
+    /// dropped. Every consumer that reads this map filters to active statuses,
+    /// so removing settled rows changes no behaviour.
+    fn prune_resolved_negotiations(&mut self, current_date: NaiveDate) {
+        const RESOLVED_RETENTION_DAYS: i64 = 30;
+        self.negotiations.retain(|_, n| match n.status {
+            NegotiationStatus::Pending | NegotiationStatus::Countered => true,
+            NegotiationStatus::Rejected
+            | NegotiationStatus::Expired
+            | NegotiationStatus::Accepted => {
+                (current_date - n.expiry_date).num_days() < RESOLVED_RETENTION_DAYS
+            }
+        });
+    }
+
+    /// Restore a seller's listing after an agreed deal failed to EXECUTE
+    /// (squad full, lost race, or a route block at the final step). By that
+    /// point `complete_transfer` had already flipped his listing to Completed
+    /// and cancelled his others; the player is back at his club, so flip the
+    /// seller-club listing(s) back to Available and let the market re-engage
+    /// rather than leaving him silently absent. Scoped to the selling club so
+    /// a stale Completed listing from an unrelated past deal isn't resurrected.
+    pub fn reopen_after_failed_execution(&mut self, player_id: u32, selling_club_id: u32) {
+        for listing in &mut self.listings {
+            if listing.player_id == player_id
+                && listing.club_id == selling_club_id
+                && matches!(
+                    listing.status,
+                    TransferListingStatus::Completed | TransferListingStatus::Cancelled
+                )
+            {
+                listing.status = TransferListingStatus::Available;
+            }
+        }
     }
 
     fn reopen_listing_if_no_active_bids(&mut self, player_id: u32) {

@@ -520,7 +520,20 @@ impl PipelineProcessor {
                             .map(|c| c.squad_status.clone())
                             .unwrap_or(PlayerSquadStatus::NotYetSet),
                     };
-                    if !config.is_target_realistic_fields(buyer_world_rep, &realism_target) {
+                    // Real fee headroom (transfer budget × the negotiation
+                    // fee-gate multiplier), so a funded club can scout up to
+                    // what it can actually spend, not just its reputation tier.
+                    let buyer_fee_capacity = club
+                        .finance
+                        .transfer_budget
+                        .as_ref()
+                        .map(|b| b.amount * 1.40)
+                        .unwrap_or(0.0);
+                    if !config.is_target_realistic_fields(
+                        buyer_world_rep,
+                        &realism_target,
+                        buyer_fee_capacity,
+                    ) {
                         continue;
                     }
 
@@ -1087,6 +1100,11 @@ impl PipelineProcessor {
             // first-choice prime-age GK at a peer-tier club (where the
             // simpler club-rep-gap test passes) still gets blocked.
             let buyer_plausibility_ctx = BuyerPlausibilityContext::build(country, club);
+            // Real fee headroom (transfer budget × the negotiation fee-gate
+            // multiplier). Lets a well-funded club scout up to what it can
+            // actually spend, not just its bare reputation tier — reconciling
+            // this gate with the negotiation's budget-based fee gate.
+            let buyer_fee_capacity = buyer_plausibility_ctx.buyer_transfer_budget * 1.40;
 
             // The club's scouting NETWORK reach — which regions of the world it
             // can spot talent in. Widens CONTINUOUSLY with reputation (see
@@ -1181,7 +1199,7 @@ impl PipelineProcessor {
                     if club.transfer_plan.is_rejected(p.player_id, date) {
                         return false;
                     }
-                    if !config.is_target_realistic(buyer_world_rep, p) {
+                    if !config.is_target_realistic(buyer_world_rep, p, buyer_fee_capacity) {
                         return false;
                     }
                     // Shared plausibility veto — closes the importance

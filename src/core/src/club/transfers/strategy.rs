@@ -314,6 +314,17 @@ pub struct ClubTransferStrategy {
     /// — typically the average squad current_ability of the
     /// buying club's main team.
     pub reputation_level: u16,
+    /// The buying club's real market-value reputation (0..10000),
+    /// used ONLY to value targets (`calculate_initial_offer_with_context`).
+    /// Kept separate from `reputation_level` because that field carries
+    /// squad-average ability, not reputation — feeding an ability value
+    /// into the valuation over-priced strong-squad buyers and under-priced
+    /// weak-squad ones versus the seller's own market value, which opened a
+    /// permanent floor-vs-ceiling gap. Defaults (in `from_club_context`) to
+    /// the historical `reputation_level * 100` so untouched callers behave
+    /// exactly as before; production wires the real score via
+    /// [`Self::with_valuation_reputation`].
+    pub valuation_reputation: u16,
     /// Positions actively being recruited. Empty = open.
     pub target_positions: Vec<PlayerPositionType>,
 
@@ -332,6 +343,7 @@ impl ClubTransferStrategy {
             club_id,
             budget: None,
             reputation_level: 50,
+            valuation_reputation: 5000,
             target_positions: Vec::new(),
             recruitment: RecruitmentPolicy::default(),
             negotiation: NegotiationPolicy::default(),
@@ -362,12 +374,26 @@ impl ClubTransferStrategy {
             club_id,
             budget,
             reputation_level,
+            // Preserve the historical valuation basis by default so callers
+            // that don't wire a real score (tests, back-compat) behave
+            // exactly as before; production overrides via
+            // `with_valuation_reputation`.
+            valuation_reputation: reputation_level.saturating_mul(100).min(10_000),
             target_positions,
             recruitment,
             negotiation,
             squad_building,
             selling,
         }
+    }
+
+    /// Set the real market-value reputation used to value targets. The
+    /// builder keeps `from_club_context`'s signature stable while letting
+    /// the negotiation pipeline supply the club's actual reputation (rather
+    /// than the squad-average-ability fallback baked into the default).
+    pub fn with_valuation_reputation(mut self, reputation: u16) -> Self {
+        self.valuation_reputation = reputation;
+        self
     }
 
     // ---- Back-compat shims ----------------------------------
@@ -596,14 +622,24 @@ impl ClubTransferStrategy {
     ) -> TransferOffer {
         let max_budget = self.budget.as_ref().map(|b| b.amount).unwrap_or(f64::MAX);
 
-        // Valuation anchored on the buying club's league/club
-        // reputation — old call used 0/0 which flattened prices.
-        let rep_for_value = self.reputation_level.saturating_mul(100).min(10_000);
+        // Valuation anchored on the buying club's real league/club
+        // reputation. `valuation_reputation` is the club's market-value
+        // score; the league side prefers the live context when present.
+        // (Feeding squad-average CA here — the historical bug — made a
+        // strong-squad buyer over-value every target and a weak-squad one
+        // under-value them versus the seller's own market value, which
+        // opened a permanent seller-floor-above-buyer-ceiling gap.)
+        let club_rep_for_value = self.valuation_reputation.min(10_000);
+        let league_rep_for_value = if ctx.league_reputation > 0 {
+            ctx.league_reputation
+        } else {
+            club_rep_for_value
+        };
         let player_value = PlayerValuationCalculator::calculate_value(
             player,
             ctx.date,
-            rep_for_value,
-            rep_for_value,
+            league_rep_for_value,
+            club_rep_for_value,
         );
 
         let aggression = self.negotiation.buying_aggressiveness as f64;
