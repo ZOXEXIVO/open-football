@@ -249,28 +249,7 @@
             </tr>
             </thead>
             <tbody>
-            {% if let Some(fs) = player.friendly_statistics %}
-            <tr>
-                <td>{{ player.friendly_label }}</td>
-                <td>{{ fs.played }}{% if fs.played_subs > 0 %} ({{ fs.played_subs }}){% endif %}</td>
-                {% if is_goalkeeper %}
-                <td>{{ fs.conceded }}</td>
-                <td>{{ fs.clean_sheets }}</td>
-                {% else %}
-                <td>{{ fs.goals }}</td>
-                <td>{{ fs.assists }}</td>
-                <td>{{ fs.penalties }}</td>
-                {% endif %}
-                <td>{{ fs.player_of_the_match }}</td>
-                <td>{{ fs.yellow_cards }}</td>
-                <td>{{ fs.red_cards }}</td>
-                <td>{{ fs.shots_on_target }}</td>
-                <td>{{ fs.passes }}</td>
-                <td>{{ fs.tackling }}</td>
-                <td>{{ fs.average_rating }}</td>
-            </tr>
-            {% endif %}
-            {% for cs in player.cup_statistics %}
+            {% for cs in player.statistics_rows %}
             <tr>
                 <td>{{ cs.competition_name }}</td>
                 <td>{{ cs.stats.played }}{% if cs.stats.played_subs > 0 %} ({{ cs.stats.played_subs }}){% endif %}</td>
@@ -291,25 +270,6 @@
                 <td>{{ cs.stats.average_rating }}</td>
             </tr>
             {% endfor %}
-            <tr>
-                <td>{{ player.league_label }}</td>
-                <td>{{ player.statistics.played }}{% if player.statistics.played_subs > 0 %} ({{ player.statistics.played_subs }}){% endif %}</td>
-                {% if is_goalkeeper %}
-                <td>{{ player.statistics.conceded }}</td>
-                <td>{{ player.statistics.clean_sheets }}</td>
-                {% else %}
-                <td>{{ player.statistics.goals }}</td>
-                <td>{{ player.statistics.assists }}</td>
-                <td>{{ player.statistics.penalties }}</td>
-                {% endif %}
-                <td>{{ player.statistics.player_of_the_match }}</td>
-                <td>{{ player.statistics.yellow_cards }}</td>
-                <td>{{ player.statistics.red_cards }}</td>
-                <td>{{ player.statistics.shots_on_target }}</td>
-                <td>{{ player.statistics.passes }}</td>
-                <td>{{ player.statistics.tackling }}</td>
-                <td>{{ player.statistics.average_rating }}</td>
-            </tr>
             </tbody>
         </table>
     </section>

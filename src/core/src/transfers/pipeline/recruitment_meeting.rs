@@ -255,24 +255,35 @@ impl PipelineProcessor {
                     .iter()
                     .find_map(|m| m.transfer_request_id)
                     .or_else(|| {
-                        // Shadow / staff-recommendation paths: try to align
-                        // against an open request in the same group.
-                        let group = monitorings.first().and_then(|m| {
-                            // Position group is implicit — fall back to
-                            // looking up the player position via the
-                            // assignment.
+                        // Shadow / staff-recommendation paths: align via the
+                        // assignment that surfaced the monitoring. Prefer the
+                        // request that commissioned that assignment; only if
+                        // it has since closed, scan for another open request
+                        // in the group whose age band overlaps the one the
+                        // player was observed under — group alone would let
+                        // a veteran watched for QualityUpgrade land on a
+                        // DevelopmentSigning shortlist.
+                        let origin = monitorings.first().and_then(|m| {
                             plan.scouting_assignments
                                 .iter()
                                 .find(|a| Some(a.id) == m.origin_assignment_id)
-                                .map(|a| a.target_position.position_group())
                         });
-                        if let Some(group) = group {
-                            plan.transfer_requests
-                                .iter()
-                                .find(|r| {
-                                    r.position.position_group() == group
-                                        && r.status != TransferRequestStatus::Fulfilled
-                                        && r.status != TransferRequestStatus::Abandoned
+                        if let Some(origin) = origin {
+                            let commissioned = plan.transfer_requests.iter().find(|r| {
+                                r.id == origin.transfer_request_id
+                                    && r.status != TransferRequestStatus::Fulfilled
+                                    && r.status != TransferRequestStatus::Abandoned
+                            });
+                            commissioned
+                                .or_else(|| {
+                                    plan.transfer_requests.iter().find(|r| {
+                                        r.position.position_group()
+                                            == origin.target_position.position_group()
+                                            && r.status != TransferRequestStatus::Fulfilled
+                                            && r.status != TransferRequestStatus::Abandoned
+                                            && r.preferred_age_min <= origin.preferred_age_max
+                                            && origin.preferred_age_min <= r.preferred_age_max
+                                    })
                                 })
                                 .map(|r| r.id)
                         } else {

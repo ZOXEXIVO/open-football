@@ -1657,24 +1657,37 @@ impl PipelineProcessor {
                 // Re-check plausibility before promoting a stale
                 // recommendation. Player status and seller balance may
                 // have shifted since the recommendation was filed.
-                if let Some(summary) = player_lookup.find_summary(country, rec.player_id, date) {
+                let summary = player_lookup.find_summary(country, rec.player_id, date);
+                if let Some(summary) = &summary {
                     let plausibility = TransferPlausibilityBuilder::evaluate_summary(
-                        &buyer_ctx, &summary, false, true, date,
+                        &buyer_ctx, summary, false, true, date,
                     );
                     if let Some(TransferPlausibilityVerdict::HardReject(_)) = plausibility {
                         continue;
                     }
                 }
+                let player_age = summary.as_ref().map(|s| s.age);
 
                 // Check if an existing unfulfilled request covers the same position group.
                 // Emergency free-agent depth requests don't count — attaching a paid
                 // recommendation to their shortlist would route a zero-budget request
                 // into the paid negotiation path.
+                // The request's age band must also fit (min strict, max + 3,
+                // matching the loan-market relaxation) — otherwise a
+                // recommended veteran lands on a DevelopmentSigning
+                // shortlist and the deal executes under a "young prospect"
+                // motive. A player who fits no open request falls through
+                // to the create-request branch below, whose
+                // StaffRecommendation band (18-32) is the honest label.
                 let matching_request = plan.transfer_requests.iter().find(|r| {
                     r.position.position_group() == player_pos_group
                         && r.status != TransferRequestStatus::Fulfilled
                         && r.status != TransferRequestStatus::Abandoned
                         && !r.is_emergency_free_agent_depth()
+                        && player_age.is_none_or(|age| {
+                            age >= r.preferred_age_min
+                                && age <= r.preferred_age_max.saturating_add(3)
+                        })
                 });
 
                 if let Some(req) = matching_request {

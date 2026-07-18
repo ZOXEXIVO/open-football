@@ -325,8 +325,16 @@ impl PipelineProcessor {
                         player_lookup
                             .find_summary(country, l.player_id, date)
                             .and_then(|p| {
+                                // The request's age band is part of the
+                                // recruitment brief — a DevelopmentSigning
+                                // request must not shortlist a veteran just
+                                // because he tops the group on current
+                                // ability. Same relaxed band as the loan
+                                // market: min strict, max + 3.
                                 if p.position_group == request.position.position_group()
                                     && p.skill_ability >= request.min_ability
+                                    && p.age >= request.preferred_age_min
+                                    && p.age <= request.preferred_age_max.saturating_add(3)
                                     && p.estimated_value <= request.budget_allocation * 2.0
                                 {
                                     // Plausibility veto: drop HardReject
@@ -698,5 +706,287 @@ impl PipelineProcessor {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod market_fallback_age_tests {
+    use crate::club::academy::ClubAcademy;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::fullname::FullName;
+    use crate::shared::{Currency, CurrencyValue, Location};
+    use crate::transfers::market::{TransferListing, TransferListingType};
+    use crate::transfers::pipeline::processor::PipelineProcessor;
+    use crate::transfers::pipeline::{
+        TransferNeedPriority, TransferNeedReason, TransferRequest, TransferRequestStatus,
+    };
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, Goalkeeping, Mental,
+        PersonAttributes, Physical, Player, PlayerAttributes, PlayerCollection, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatusType, StaffCollection, Team,
+        TeamCollection, TeamReputation, TeamType, Technical, TrainingSchedule,
+    };
+    use chrono::{NaiveDate, NaiveTime};
+
+    /// Fixtures for the market-fallback age-band gate. The scenario pins
+    /// the Radunović bug: a Serie A club with an open GK
+    /// DevelopmentSigning request (age band 16-21) must not shortlist a
+    /// listed 32-year-old keeper from the domestic market just because
+    /// he tops the group on current ability.
+    struct MarketAgeFixtures;
+
+    impl MarketAgeFixtures {
+        const BUYER_ID: u32 = 1;
+        const SELLER_ID: u32 = 2;
+        const VETERAN_ID: u32 = 901;
+        const PROSPECT_ID: u32 = 902;
+
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        /// Uniform mid-level skills so both keepers clear the request's
+        /// ability floor and are plausibility-identical — the ONLY thing
+        /// separating them is the birth year.
+        fn skills(v: f32) -> PlayerSkills {
+            PlayerSkills {
+                technical: Technical {
+                    corners: v,
+                    crossing: v,
+                    dribbling: v,
+                    finishing: v,
+                    first_touch: v,
+                    free_kicks: v,
+                    heading: v,
+                    long_shots: v,
+                    long_throws: v,
+                    marking: v,
+                    passing: v,
+                    penalty_taking: v,
+                    tackling: v,
+                    technique: v,
+                },
+                mental: Mental {
+                    aggression: v,
+                    anticipation: v,
+                    bravery: v,
+                    composure: v,
+                    concentration: v,
+                    decisions: v,
+                    determination: v,
+                    flair: v,
+                    leadership: v,
+                    off_the_ball: v,
+                    positioning: v,
+                    teamwork: v,
+                    vision: v,
+                    work_rate: v,
+                },
+                physical: Physical {
+                    acceleration: v,
+                    agility: v,
+                    balance: v,
+                    jumping: v,
+                    natural_fitness: v,
+                    pace: v,
+                    stamina: v,
+                    strength: v,
+                    match_readiness: v,
+                },
+                goalkeeping: Goalkeeping {
+                    aerial_reach: v,
+                    command_of_area: v,
+                    communication: v,
+                    eccentricity: v,
+                    first_touch: v,
+                    handling: v,
+                    kicking: v,
+                    one_on_ones: v,
+                    passing: v,
+                    punching: v,
+                    reflexes: v,
+                    rushing_out: v,
+                    throwing: v,
+                },
+            }
+        }
+
+        fn gk(id: u32, birth_year: i32) -> Player {
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Test".to_string(), format!("Keeper{id}")))
+                .birth_date(Self::d(birth_year, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(Self::skills(12.0))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Goalkeeper,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap()
+        }
+
+        fn team(id: u32, club_id: u32, players: Vec<Player>) -> Team {
+            Team::builder()
+                .id(id)
+                .league_id(Some(10))
+                .club_id(club_id)
+                .name(format!("Team {id}"))
+                .slug(format!("team-{id}"))
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(5000, 5000, 5000))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        fn club(id: u32, name: &str, teams: Vec<Team>) -> Club {
+            Club::new(
+                id,
+                name.to_string(),
+                Location::new(1),
+                ClubFinances::new(100_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(teams),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn league(id: u32) -> League {
+            League::new(
+                id,
+                "L".to_string(),
+                "league".to_string(),
+                1,
+                500,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            )
+        }
+
+        /// Country with a buyer holding one pending GK DevelopmentSigning
+        /// request and a seller advertising two listed keepers who differ
+        /// only in age: a 32-year-old veteran and a 19-year-old prospect.
+        fn world(date: NaiveDate) -> Country {
+            let buyer = Self::club(
+                Self::BUYER_ID,
+                "Buyer",
+                vec![Self::team(11, Self::BUYER_ID, vec![Self::gk(801, 1998)])],
+            );
+            let mut veteran = Self::gk(Self::VETERAN_ID, 1994);
+            let mut prospect = Self::gk(Self::PROSPECT_ID, 2007);
+            veteran.statuses.add(date, PlayerStatusType::Lst);
+            prospect.statuses.add(date, PlayerStatusType::Lst);
+            let seller = Self::club(
+                Self::SELLER_ID,
+                "Seller",
+                vec![Self::team(21, Self::SELLER_ID, vec![veteran, prospect])],
+            );
+
+            let mut country = Country::builder()
+                .id(1)
+                .code("IT".to_string())
+                .slug("italy".to_string())
+                .name("Italy".to_string())
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![Self::league(10)]))
+                .clubs(vec![buyer, seller])
+                .build()
+                .unwrap();
+
+            // Give the buyer real spending power — the plausibility fee
+            // and wage gates read these and would otherwise HardReject
+            // every candidate, hiding the age-band behaviour under test.
+            country.clubs[0].finance.transfer_budget = Some(CurrencyValue {
+                amount: 50_000_000.0,
+                currency: Currency::Usd,
+            });
+            country.clubs[0].finance.wage_budget = Some(CurrencyValue {
+                amount: 20_000_000.0,
+                currency: Currency::Usd,
+            });
+
+            country.clubs[0]
+                .transfer_plan
+                .transfer_requests
+                .push(TransferRequest::new(
+                    1,
+                    PlayerPositionType::Goalkeeper,
+                    TransferNeedPriority::Optional,
+                    TransferNeedReason::DevelopmentSigning,
+                    40,
+                    70,
+                    50_000_000.0,
+                ));
+
+            for player_id in [Self::VETERAN_ID, Self::PROSPECT_ID] {
+                country.transfer_market.add_listing(TransferListing::new(
+                    player_id,
+                    Self::SELLER_ID,
+                    21,
+                    CurrencyValue {
+                        amount: 1_000_000.0,
+                        currency: Currency::Usd,
+                    },
+                    date,
+                    TransferListingType::Transfer,
+                ));
+            }
+            country
+        }
+    }
+
+    #[test]
+    fn development_signing_market_fallback_respects_age_band() {
+        let date = MarketAgeFixtures::d(2026, 7, 1);
+        let mut country = MarketAgeFixtures::world(date);
+
+        PipelineProcessor::build_shortlists(&mut country, date);
+
+        let plan = &country.clubs[0].transfer_plan;
+        let shortlist = plan
+            .shortlists
+            .iter()
+            .find(|s| s.transfer_request_id == 1)
+            .expect("market fallback must still build a shortlist from the in-band prospect");
+
+        assert!(
+            shortlist
+                .candidates
+                .iter()
+                .any(|c| c.player_id == MarketAgeFixtures::PROSPECT_ID),
+            "the 19-year-old listed keeper fits the DevelopmentSigning band and must be shortlisted"
+        );
+        assert!(
+            !shortlist
+                .candidates
+                .iter()
+                .any(|c| c.player_id == MarketAgeFixtures::VETERAN_ID),
+            "a 32-year-old must never be shortlisted against a DevelopmentSigning request \
+             (age band 16-21, relaxed max +3)"
+        );
+        assert_eq!(
+            plan.transfer_requests[0].status,
+            TransferRequestStatus::Shortlisted
+        );
     }
 }

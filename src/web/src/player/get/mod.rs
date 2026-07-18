@@ -129,20 +129,9 @@ pub struct PlayerViewModel {
     pub value: String,
     pub preferred_foot: String,
     pub player_attributes: PlayerAttributesDto,
-    pub statistics: PlayerStatistics,
-    /// Display label for the League row — the real league name when the
-    /// season's games all came from one league ("First League"), the
-    /// generic i18n "League" when sources mix or none is known.
-    pub league_label: String,
-    pub friendly_statistics: Option<PlayerStatistics>,
-    /// Display label for the Friendly row — the real source-league name
-    /// for youth-league football ("Premier League U19"), the generic
-    /// i18n "Friendly" for ordinary pre-season friendlies.
-    pub friendly_label: String,
-    /// One row per cup competition the player has appeared in this spell,
-    /// each labelled with the real competition. Built from the player's
-    /// per-competition cup breakdown recorded at match time.
-    pub cup_statistics: Vec<CupCompetitionStatistics>,
+    /// The Statistics panel's rows, already in display order:
+    /// League → domestic cup(s) → continental cup(s) → Friendly.
+    pub statistics_rows: Vec<CompetitionStatisticsRow>,
     #[allow(dead_code)]
     pub status: PlayerStatusDto,
     pub position_map: PositionMapDto,
@@ -200,9 +189,10 @@ pub struct PlayerStatistics {
     pub clean_sheets: u16,
 }
 
-/// A single cup-competition row on the player overview: the resolved,
-/// localized competition name plus that competition's stats.
-pub struct CupCompetitionStatistics {
+/// A single row of the player overview's Statistics panel: the resolved,
+/// localized competition label plus that competition's stats. Covers the
+/// aggregated League and Friendly lines as well as each cup.
+pub struct CompetitionStatisticsRow {
     pub competition_name: String,
     pub stats: PlayerStatistics,
 }
@@ -377,16 +367,11 @@ pub async fn player_get_action(
 
         let (main_team_name, main_team_slug) = simulator_data
             .club(team.club_id)
-            .and_then(|c| {
-                c.teams
-                    .teams
-                    .iter()
-                    .find(|t| t.team_type == TeamType::Main)
-            })
+            .and_then(|c| c.teams.teams.iter().find(|t| t.team_type == TeamType::Main))
             .map(|t| (t.name.clone(), t.slug.clone()))
             .unwrap_or_else(|| (team.name.clone(), team.slug.clone()));
 
-        let overview =
+        let statistics_rows =
             PlayerOverviewStatsBuilder::new(simulator_data, &i18n).build(player, Some(team));
 
         let player_vm = PlayerViewModel {
@@ -419,11 +404,7 @@ pub async fn player_get_action(
             ),
             preferred_foot: player.preferred_foot_str().to_string(),
             player_attributes: get_attributes(player),
-            statistics: overview.league,
-            league_label: overview.league_label,
-            friendly_statistics: overview.friendly,
-            friendly_label: overview.friendly_label,
-            cup_statistics: overview.cups,
+            statistics_rows,
             status: PlayerStatusDto::new(player.statuses.get()),
             position_map: get_position_map(player),
             loan_status,
@@ -523,7 +504,8 @@ pub async fn player_get_action(
         player.full_name.display_last_name()
     );
 
-    let overview = PlayerOverviewStatsBuilder::new(simulator_data, &i18n).build(player, None);
+    let statistics_rows =
+        PlayerOverviewStatsBuilder::new(simulator_data, &i18n).build(player, None);
 
     let player_vm = PlayerViewModel {
         id: player.id,
@@ -541,11 +523,7 @@ pub async fn player_get_action(
         value: String::from("-"),
         preferred_foot: player.preferred_foot_str().to_string(),
         player_attributes: get_attributes(player),
-        statistics: overview.league,
-        league_label: overview.league_label,
-        friendly_statistics: overview.friendly,
-        friendly_label: overview.friendly_label,
-        cup_statistics: overview.cups,
+        statistics_rows,
         status: PlayerStatusDto::new(player.statuses.get()),
         position_map: get_position_map(player),
         loan_status: None,
@@ -816,37 +794,28 @@ struct PlayerOverviewStatsBuilder<'a> {
     i18n: &'a I18n,
 }
 
-/// The Overview statistics panel's view data: the League aggregate, the
-/// optional Friendly bucket, and per-cup rows — each aggregate row
-/// paired with its display label (real league name when the projection
-/// pinned a single source league, generic kind label otherwise).
-struct OverviewStatsView {
-    league: PlayerStatistics,
-    league_label: String,
-    friendly: Option<PlayerStatistics>,
-    friendly_label: String,
-    cups: Vec<CupCompetitionStatistics>,
-}
-
 impl<'a> PlayerOverviewStatsBuilder<'a> {
     fn new(data: &'a SimulatorData, i18n: &'a I18n) -> Self {
         Self { data, i18n }
     }
 
-    /// Project the active spell's per-competition Overview rows from
-    /// the central [`PlayerStatisticsProjection`] and split them into
-    /// the slots the view model exposes:
+    /// Project the active spell's per-competition Overview rows from the
+    /// central [`PlayerStatisticsProjection`] and order them the way the
+    /// panel reads: the League aggregate first, then the cups in the
+    /// projection's domestic-before-continental order, and the Friendly
+    /// bucket last — friendlies are the least meaningful football on the
+    /// page, so they never push competitive lines down.
     ///
-    ///   - `league` / `league_label`     — the League aggregate row,
-    ///   - `friendly` / `friendly_label` — the Friendly row (None when empty),
-    ///   - `cups`                        — Domestic + Continental cup rows.
+    /// Each row carries its display label: the real league / competition
+    /// name when the projection pinned a single source, the generic kind
+    /// label otherwise.
     ///
     /// The per-player Overview shows the *raw* minutes-weighted average
     /// (see [`PlayerStatistics::average_rating_str`]). Sample-size
     /// regression is reserved for aggregate ranking surfaces (squad
     /// list, top-rated, scouting, awards) where small-sample inflation
     /// distorts comparisons.
-    fn build(&self, player: &Player, team: Option<&Team>) -> OverviewStatsView {
+    fn build(&self, player: &Player, team: Option<&Team>) -> Vec<CompetitionStatisticsRow> {
         let domestic_override = self.domestic_cup_override(player);
         let live_cups: Vec<LiveCupSlice<'_>> = player
             .cup_statistics_by_competition
@@ -874,29 +843,35 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
             self.data.date.date(),
         );
 
-        let mut league: PlayerStatistics = self.empty_dto();
-        let mut league_label = self.i18n.t("league").to_string();
-        let mut friendly: Option<PlayerStatistics> = None;
-        let mut friendly_label = self.i18n.t("friendly").to_string();
-        let mut cups: Vec<CupCompetitionStatistics> = Vec::new();
+        let mut league: Option<CompetitionStatisticsRow> = None;
+        let mut friendly: Option<CompetitionStatisticsRow> = None;
+        let mut cups: Vec<CompetitionStatisticsRow> = Vec::new();
 
         for row in rows {
             match row.competition_kind {
                 PlayerStatCompetitionKind::League => {
-                    league = Self::to_dto(&row.statistics);
-                    league_label = self.league_row_label(
-                        &row.competition_slug,
-                        &row.competition_name,
-                        "league",
-                    );
+                    league = Some(CompetitionStatisticsRow {
+                        competition_name: self.league_row_label(
+                            &row.competition_slug,
+                            &row.competition_name,
+                            "league",
+                        ),
+                        stats: Self::to_dto(&row.statistics),
+                    });
                 }
                 PlayerStatCompetitionKind::Friendly => {
-                    friendly = Some(Self::to_dto(&row.statistics));
-                    friendly_label = self.league_row_label(&row.competition_slug, "", "friendly");
+                    friendly = Some(CompetitionStatisticsRow {
+                        competition_name: self.league_row_label(
+                            &row.competition_slug,
+                            "",
+                            "friendly",
+                        ),
+                        stats: Self::to_dto(&row.statistics),
+                    });
                 }
                 PlayerStatCompetitionKind::DomesticCup
                 | PlayerStatCompetitionKind::ContinentalCup => {
-                    cups.push(CupCompetitionStatistics {
+                    cups.push(CompetitionStatisticsRow {
                         competition_name: row.competition_name,
                         stats: Self::to_dto(&row.statistics),
                     });
@@ -904,19 +879,22 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
             }
         }
 
+        // The League line always shows, at 0 apps when the projection has
+        // no current-season entry — an empty league row still tells the
+        // reader which competition the player is registered for.
+        let mut ordered = Vec::with_capacity(cups.len() + 2);
+        ordered.push(league.unwrap_or_else(|| CompetitionStatisticsRow {
+            competition_name: self.i18n.t("league").to_string(),
+            stats: self.empty_dto(),
+        }));
+        ordered.append(&mut cups);
         // No games in the friendly bucket → no Friendly row at all. The
         // legacy 0-app placeholder rendered a generic "Friendly" line
         // that told the reader nothing (user: "Remove friendly as is") —
         // when the bucket has games the projection emits the row and it
         // wears its real source league's name instead.
-
-        OverviewStatsView {
-            league,
-            league_label,
-            friendly,
-            friendly_label,
-            cups,
-        }
+        ordered.extend(friendly);
+        ordered
     }
 
     /// Display label for an aggregated League / Friendly row. The
