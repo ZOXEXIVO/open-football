@@ -16,6 +16,7 @@ use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection};
 use crate::country::result::CountryResult;
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferListingStatus;
+use crate::transfers::TransferListingType;
 use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::market::TransferListingOrigin;
@@ -736,10 +737,32 @@ impl CountryResult {
             // out below it. The target is additionally lifted to the
             // seller's absolute fee floor, so a lowball opening converges
             // toward a closable number instead of orbiting below it.
+            // The asking price is only a valid escalation anchor when the
+            // bound listing sells the same kind of deal. `start_negotiation`
+            // binds to the first open listing for the player regardless of
+            // type, so a LOAN bid on a transfer-listed player used to
+            // escalate toward the full PERMANENT ask — loan fees converging
+            // on half the player's market value (the loan-fee-anchor bug
+            // reborn one phase later). A mismatched listing falls back to
+            // the modest own-offer escalation path instead.
+            let listing_matches_deal_type = country
+                .transfer_market
+                .negotiations
+                .get(&neg_id)
+                .and_then(|n| country.transfer_market.listings.get(n.listing_id as usize))
+                .map(|l| {
+                    if neg_data.is_loan {
+                        l.listing_type == TransferListingType::Loan
+                    } else {
+                        l.listing_type != TransferListingType::Loan
+                    }
+                })
+                .unwrap_or(true);
+
             let mut buyer_walks = false;
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 let reservation_mult = seller_reservation.clamp(1.0, 1.55);
-                let mut target = if neg_data.asking_price > 0.0 {
+                let mut target = if neg_data.asking_price > 0.0 && listing_matches_deal_type {
                     neg_data.asking_price * reservation_mult
                 } else {
                     negotiation.current_offer.base_fee.amount * 1.15
@@ -1405,6 +1428,24 @@ impl CountryResult {
                 country
                     .transfer_market
                     .complete_listings_for_player(neg_data.player_id);
+                // Snapshot losing bidders BEFORE the cancel flips them to
+                // Rejected — each must release its plan's negotiation
+                // slot, or the loser sits frozen at its concurrency cap
+                // for the rest of the window.
+                let losing_bidders: Vec<u32> = country
+                    .transfer_market
+                    .negotiations
+                    .values()
+                    .filter(|n| {
+                        n.player_id == neg_data.player_id
+                            && n.id != neg_id
+                            && matches!(
+                                n.status,
+                                NegotiationStatus::Pending | NegotiationStatus::Countered
+                            )
+                    })
+                    .map(|n| n.buying_club_id)
+                    .collect();
                 country
                     .transfer_market
                     .cancel_negotiations_for_player(neg_data.player_id, neg_id);
@@ -1414,8 +1455,48 @@ impl CountryResult {
                     neg_data.player_id,
                     true,
                 );
+                for loser in losing_bidders {
+                    PipelineProcessor::on_negotiation_resolved(
+                        country,
+                        loser,
+                        neg_data.player_id,
+                        false,
+                    );
+                }
                 PipelineProcessor::clear_player_interest(country, neg_data.player_id);
                 return;
+            }
+
+            // Registration must land inside the window. Negotiations
+            // legally survive the close (deals agreed near the deadline
+            // finish their paperwork), but a PERMANENT move whose medical
+            // resolves after deadline day cannot be registered — it
+            // collapses here exactly like a failed medical, instead of
+            // registering weeks past the deadline. Loans and free
+            // transfers (out-of-contract players) keep their
+            // window-independent paths.
+            if !neg_data.is_loan && !country.transfer_market.transfer_window_open {
+                let signs_free_agent = country
+                    .transfer_market
+                    .negotiations
+                    .get(&neg_id)
+                    .and_then(|n| country.transfer_market.listings.get(n.listing_id as usize))
+                    .map(|l| l.listing_type == TransferListingType::EndOfContract)
+                    .unwrap_or(false);
+                if !signs_free_agent {
+                    if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
+                    {
+                        negotiation.reject_with_reason(NegotiationRejectionReason::WindowClosed);
+                    }
+                    Self::reopen_listing_for_player(country, neg_data.player_id);
+                    PipelineProcessor::on_negotiation_resolved(
+                        country,
+                        neg_data.buying_club_id,
+                        neg_data.player_id,
+                        false,
+                    );
+                    return;
+                }
             }
 
             // Reserve the agreed fee against the buyer's transfer budget the
@@ -1454,7 +1535,19 @@ impl CountryResult {
                     .clubs
                     .iter_mut()
                     .find(|c| c.id == neg_data.buying_club_id)
-                    .map(|c| c.finance.reserve_transfer_budget(upfront))
+                    .map(|c| {
+                        let ok = c.finance.reserve_transfer_budget(upfront);
+                        // Mirror the finance reservation on the plan's own
+                        // ledger so `available_budget()` reflects committed
+                        // deals — these fields were dead (always zero), so
+                        // staff-recommendation allocations and broadcast
+                        // affordability reads saw the full window pot all
+                        // window long.
+                        if ok {
+                            c.transfer_plan.reserved += upfront;
+                        }
+                        ok
+                    })
                     .unwrap_or(true);
                 if !reserved {
                     if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
@@ -1497,6 +1590,26 @@ impl CountryResult {
                 .find(|c| c.id == neg_data.buying_club_id)
                 .map(|c| c.name.clone())
                 .unwrap_or_default();
+
+            // Snapshot losing bidders BEFORE `complete_transfer` flips
+            // their negotiations to Rejected — each must release its
+            // plan's negotiation slot (and advance its shortlist), or the
+            // loser sits frozen at its concurrency cap for the rest of
+            // the window.
+            let losing_bidders: Vec<u32> = country
+                .transfer_market
+                .negotiations
+                .values()
+                .filter(|n| {
+                    n.player_id == neg_data.player_id
+                        && n.id != neg_id
+                        && matches!(
+                            n.status,
+                            NegotiationStatus::Pending | NegotiationStatus::Countered
+                        )
+                })
+                .map(|n| n.buying_club_id)
+                .collect();
 
             if let Some(completed) = country.transfer_market.complete_transfer(
                 neg_id,
@@ -1548,6 +1661,14 @@ impl CountryResult {
                     neg_data.player_id,
                     true,
                 );
+                for loser in losing_bidders {
+                    PipelineProcessor::on_negotiation_resolved(
+                        country,
+                        loser,
+                        neg_data.player_id,
+                        false,
+                    );
+                }
                 PipelineProcessor::clear_player_interest(country, neg_data.player_id);
             }
         } else {
@@ -1638,7 +1759,17 @@ impl CountryResult {
             if listing.player_id == player_id
                 && listing.status == TransferListingStatus::InNegotiation
             {
-                listing.status = TransferListingStatus::Available;
+                // A synthetic row existed only to back the bid that just
+                // collapsed. Reopening it as Available advertised an
+                // unlisted player to the whole market forever (the parent
+                // never listed him, and listings are never removed) — it
+                // dies with its negotiation instead. Genuine seller
+                // listings reopen so the listed pipeline re-engages.
+                listing.status = if listing.is_seller_advertised() {
+                    TransferListingStatus::Available
+                } else {
+                    TransferListingStatus::Cancelled
+                };
                 break;
             }
         }

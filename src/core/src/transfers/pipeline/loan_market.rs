@@ -20,7 +20,7 @@ use crate::utils::FormattingUtils;
 use crate::{
     ClubPhilosophy, Country, HappinessEventCause, HappinessEventContext, HappinessEventScope,
     HappinessEventSeverity, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
-    PlayerStatusType, ReputationLevel, Team,
+    PlayerStatusType, ReputationLevel, Team, TeamType,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -54,7 +54,18 @@ impl PipelineProcessor {
             ) {
                 continue;
             }
-            if let Some(player) = Self::find_player_in_country(country, negotiation.player_id) {
+            // Stamped profile first — a FOREIGN loan target can't be
+            // resolved by the in-country walk, which made in-flight
+            // cross-border loans invisible to the depth cap (a borrower
+            // could stack a domestic keeper loan on top of a pending
+            // foreign one against the same "1 GK" snapshot).
+            if let Some(profile) = negotiation.loan_target_profile {
+                map.entry(negotiation.buying_club_id)
+                    .or_default()
+                    .push(profile);
+            } else if let Some(player) =
+                Self::find_player_in_country(country, negotiation.player_id)
+            {
                 map.entry(negotiation.buying_club_id).or_default().push((
                     player.position().position_group(),
                     player.player_attributes.current_ability,
@@ -64,12 +75,53 @@ impl PipelineProcessor {
         map
     }
 
+    /// Months from `date` to the borrower's league season end — the real
+    /// duration of a rest-of-season loan. The flat 10-month stamp put a
+    /// 10-month duration on every market-history row, including ~5-month
+    /// January loans. Mirrors the executor's `compute_loan_end` season
+    /// math (which owns the authoritative contract-side end date).
+    fn loan_duration_to_season_end(
+        country: &Country,
+        borrower_club_id: u32,
+        date: NaiveDate,
+    ) -> u8 {
+        let end = country
+            .clubs
+            .iter()
+            .find(|c| c.id == borrower_club_id)
+            .and_then(|c| c.teams.main().or_else(|| c.teams.teams.first()))
+            .and_then(|t| t.league_id)
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|league| {
+                let end = &league.settings.season_ending_half;
+                let end_month = end.to_month as u32;
+                let end_day = end.to_day as u32;
+                let year = if date.month() > end_month
+                    || (date.month() == end_month && date.day() > end_day)
+                {
+                    date.year() + 1
+                } else {
+                    date.year()
+                };
+                NaiveDate::from_ymd_opt(year, end_month, end_day).unwrap_or(date)
+            })
+            .unwrap_or_else(|| {
+                let year = if date.month() >= 6 {
+                    date.year() + 1
+                } else {
+                    date.year()
+                };
+                NaiveDate::from_ymd_opt(year, 5, 31).unwrap_or(date)
+            });
+        ((end - date).num_days().max(30) / 30).clamp(1, 12) as u8
+    }
+
     // ============================================================
     // Step 6.5: Scan Loan Market — Small clubs proactively seek loans
     // ============================================================
 
     pub fn scan_loan_market(country: &mut Country, date: NaiveDate) {
-        let is_january = Self::is_january_window(date);
+        let is_january = Self::is_mid_season_window_for(country, date);
 
         // Collect available loan listings (Pass 1 read)
         struct LoanListing {
@@ -99,6 +151,15 @@ impl PipelineProcessor {
                 continue;
             }
             if listing.status != TransferListingStatus::Available {
+                continue;
+            }
+            // Synthetic rows fabricated to back a cold approach are NOT
+            // seller loan availability. A failed unsolicited negotiation
+            // reopened its synthetic listing, and this scan then treated
+            // an unlisted prospect as permanently loan-listed at asking 0
+            // — every club in the country could "sign" him off a listing
+            // his parent never made.
+            if !listing.is_seller_advertised() {
                 continue;
             }
             if let Some(player) = Self::find_player_in_country(country, listing.player_id) {
@@ -190,6 +251,37 @@ impl PipelineProcessor {
                         };
 
                         let group = player.position().position_group();
+
+                        // A YOUTH side's only keeper is never a cold-approach
+                        // target — losing him leaves that playing side with
+                        // zero goalkeepers. Mirrors the board loan-out
+                        // listing rule, and stays scoped to youth teams:
+                        // the club's senior depth covers a Main/B/Reserve
+                        // keeper's departure (a reserve keeper going out on
+                        // a development loan is exactly the intended
+                        // pipeline).
+                        if group == PlayerFieldPositionGroup::Goalkeeper
+                            && matches!(
+                                team.team_type,
+                                TeamType::U18
+                                    | TeamType::U19
+                                    | TeamType::U20
+                                    | TeamType::U21
+                                    | TeamType::U23
+                            )
+                        {
+                            let team_keepers = team
+                                .players
+                                .iter()
+                                .filter(|p| {
+                                    p.position().position_group()
+                                        == PlayerFieldPositionGroup::Goalkeeper
+                                })
+                                .count();
+                            if team_keepers <= 1 {
+                                continue;
+                            }
+                        }
                         let parent_best_in_group = parent_team
                             .players
                             .iter()
@@ -407,6 +499,16 @@ impl PipelineProcessor {
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
                             && !actions.iter().any(|a| a.player_id == l.player_id)
+                            // Room check with the CANDIDATE's real ability
+                            // and dev flag — the request-level pre-gate
+                            // above judged the room bar at the request's
+                            // min_ability, letting a `relaxed_min`
+                            // candidate into a genuinely full line.
+                            && borrower_depth.has_room_for(
+                                l.position_group,
+                                l.ability,
+                                l.is_development,
+                            )
                             // Development realism: the move must buy
                             // minutes, and the reputation drop from the
                             // parent must stay plausible.
@@ -696,7 +798,7 @@ impl PipelineProcessor {
                 _ => {}
             }
 
-            // Loans run for a season — set the explicit duration field
+            // Loans run to the season end — set the explicit duration field
             // (months) rather than the permanent-contract years field so
             // the market history doesn't double-encode "1" as both 1 year
             // and 1 month.
@@ -708,7 +810,11 @@ impl PipelineProcessor {
                 clauses,
                 salary_contribution: None,
                 contract_length_years: None,
-                loan_duration_months: Some(10),
+                loan_duration_months: Some(Self::loan_duration_to_season_end(
+                    country,
+                    action.club_id,
+                    date,
+                )),
                 personal_terms: None,
                 offering_club_id: action.club_id,
                 offered_date: date,
@@ -784,11 +890,20 @@ impl PipelineProcessor {
         // Players with an in-flight negotiation already have a pending
         // response: don't widen their net or open a second approach. Their
         // broadcast entry is preserved (not pruned) so a failed negotiation
-        // resumes the cascade where it left off.
+        // resumes the cascade where it left off. LIVE negotiations only —
+        // resolved rows are retained ~30 days for diagnostics, and the
+        // status-blind set froze a player's cascade for weeks after a
+        // rejection, contradicting the resume-where-it-left-off contract.
         let in_negotiation: HashSet<u32> = country
             .transfer_market
             .negotiations
             .values()
+            .filter(|n| {
+                matches!(
+                    n.status,
+                    NegotiationStatus::Pending | NegotiationStatus::Countered
+                )
+            })
             .map(|n| n.player_id)
             .collect();
         let pending_loans = Self::pending_incoming_loans_by_club(country);
@@ -817,6 +932,12 @@ impl PipelineProcessor {
             {
                 continue;
             }
+            // Never broadcast a synthetic row: the parent did not list this
+            // player, so "the parent shops him to the market" is a lie —
+            // mirrors the `SellerListed` filter on the transfer broadcast.
+            if !listing.is_seller_advertised() {
+                continue;
+            }
             let Some(parent_club) = country.clubs.iter().find(|c| c.id == listing.club_id) else {
                 continue;
             };
@@ -837,6 +958,11 @@ impl PipelineProcessor {
                 continue;
             };
             if player.is_on_loan() {
+                continue;
+            }
+            // Same age ceiling every borrower-side scan enforces — the
+            // push must not place a listed 35-year-old no scan would take.
+            if player.age(date) > MAX_LOAN_TARGET_AGE {
                 continue;
             }
             let group = player.position().position_group();
@@ -956,6 +1082,29 @@ impl PipelineProcessor {
                 if club.id == b.parent_club_id || club.is_rival(b.parent_club_id) {
                     continue;
                 }
+                // The push must not commit a borrower its own scans would
+                // gate out: a full negotiation docket, or a loan fee the
+                // club can't fund (the scan's 20%-of-balance / 50k
+                // affordability bar) — a broke Regional club was being
+                // handed 300k+ fees here. No `initialized` requirement:
+                // accepting a pushed loan is a passive response, not a
+                // planning action.
+                if country
+                    .transfer_market
+                    .active_negotiation_count_for_club(club.id)
+                    >= club.transfer_plan.max_concurrent_negotiations
+                {
+                    continue;
+                }
+                let borrower_balance = club.finance.balance.balance;
+                let max_loan_fee = if borrower_balance < 0 {
+                    50_000.0
+                } else {
+                    borrower_balance as f64 * 0.20
+                };
+                if b.asking * 0.8 > max_loan_fee {
+                    continue;
+                }
                 let Some(team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
                     continue;
                 };
@@ -1021,7 +1170,11 @@ impl PipelineProcessor {
                 clauses: Vec::new(),
                 salary_contribution: None,
                 contract_length_years: None,
-                loan_duration_months: Some(10),
+                loan_duration_months: Some(Self::loan_duration_to_season_end(
+                    country,
+                    action.borrower_id,
+                    date,
+                )),
                 personal_terms: None,
                 offering_club_id: action.borrower_id,
                 offered_date: date,
@@ -1412,7 +1565,7 @@ impl PipelineProcessor {
             return;
         }
 
-        let is_january = Self::is_january_window(date);
+        let is_january = Self::is_mid_season_window_for(country, date);
 
         // The scanning country's own region — used to block loans from
         // clearly more prestigious regions (Paraguay can't loan from England).
@@ -1692,7 +1845,13 @@ impl PipelineProcessor {
                     })
                 {
                     let loan_fee = FormattingUtils::round_fee(best.estimated_value * 0.1 * 0.8);
-                    let reason = format!("Loan signing",);
+                    // Same shape as the domestic request scan — the empty
+                    // `format!` here dropped the request's "why" from every
+                    // foreign request-driven loan's history row.
+                    let reason = format!(
+                        "Loan signing — {}",
+                        Self::transfer_need_reason_text(&request.reason)
+                    );
                     actions.push(ForeignLoanAction {
                         club_id: club.id,
                         player: (*best).clone(),
@@ -1830,13 +1989,17 @@ impl PipelineProcessor {
 
             // Same as the domestic loan path — explicit months-side
             // duration so the market history record matches the actual
-            // loan length.
+            // loan length. The borrower is in the scanning country.
             let offer = TransferOffer {
                 base_fee: asking_price,
                 clauses: Vec::new(),
                 salary_contribution: None,
                 contract_length_years: None,
-                loan_duration_months: Some(10),
+                loan_duration_months: Some(Self::loan_duration_to_season_end(
+                    country,
+                    action.club_id,
+                    date,
+                )),
                 personal_terms: None,
                 offering_club_id: action.club_id,
                 offered_date: date,
@@ -1861,6 +2024,11 @@ impl PipelineProcessor {
                     negotiation.selling_country_code = action.player.country_code.clone();
                     negotiation.player_name = action.player.player_name.clone();
                     negotiation.selling_club_name = action.player.club_name.clone();
+                    // The borrower depth fold can't resolve a foreign
+                    // player in-country — the stamped profile keeps this
+                    // in-flight loan visible to the position cap.
+                    negotiation.loan_target_profile =
+                        Some((action.player.position_group, action.player.skill_ability));
                 }
 
                 debug!(

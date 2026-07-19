@@ -11,7 +11,7 @@ use crate::transfers::pipeline::{
     DetailedScoutingReport, ReportRiskFlag, ScoutingRecommendation, TransferNeedReason,
     TransferRequest,
 };
-use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::window::{PlayerValuationCalculator, TransferCalendar};
 use crate::utils::FormattingUtils;
 use crate::{
     Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType,
@@ -20,31 +20,73 @@ use crate::{
 use chrono::Weekday;
 
 impl PipelineProcessor {
+    /// European-calendar fallback for the mid-season window bias. Kept
+    /// only for the pure decision fns that carry no country context
+    /// (`resolve_initial_approach`); every country-holding caller uses
+    /// [`Self::is_mid_season_window_for`] instead.
     pub(super) fn is_january_window(date: NaiveDate) -> bool {
         date.month() == 1
     }
 
-    /// Full reset only at transfer window opening dates
-    pub(super) fn is_window_start(date: NaiveDate) -> bool {
-        let month = date.month();
-        let day = date.day();
-        (month == 5 && day == 31) || (month == 6 && day == 1) || (month == 1 && day == 1)
+    /// The date falls inside the COUNTRY's shorter (mid-season
+    /// reinforcement) window — January in Europe, July for MLS-style
+    /// calendars, June for Latam. Drives the "prefer loans, quick
+    /// fixes" mid-season bias, which the raw month==1 check applied to
+    /// the wrong month everywhere outside Europe.
+    pub(super) fn is_mid_season_window_for(country: &Country, date: NaiveDate) -> bool {
+        let w = TransferCalendar::for_country(&country.code, date);
+        let (s_start, s_end) = w.summer_window;
+        let (w_start, w_end) = w.winter_window;
+        let summer_len = (s_end - s_start).num_days();
+        let winter_len = (w_end - w_start).num_days();
+        let in_summer = date >= s_start && date <= s_end;
+        let in_winter = date >= w_start && date <= w_end;
+        if summer_len >= winter_len {
+            in_winter
+        } else {
+            in_summer
+        }
     }
 
-    /// Re-evaluate during transfer windows.
-    /// Daily during the first week of each window for fast pipeline startup,
-    /// then weekly (Monday) for the rest of the window.
-    pub(super) fn should_evaluate(date: NaiveDate) -> bool {
-        let month = date.month();
-        let day = date.day();
+    /// Full plan reset at the opening of each of the COUNTRY's transfer
+    /// windows — the opening day and the day before it, mirroring the
+    /// old May 31 + June 1 double for the European calendar. The
+    /// hard-coded European triple reset Latam plans MID-window (their
+    /// Dec–Jan window spans New Year, so Jan 1 wiped requests,
+    /// shortlists, and the spent/reserved ledger halfway through their
+    /// market) and never reset MLS-style calendars at their real
+    /// openings at all.
+    pub(super) fn is_window_start_for(country: &Country, date: NaiveDate) -> bool {
+        let tomorrow = date.checked_add_signed(chrono::Duration::days(1)).unwrap_or(date);
+        // Anchor the calendar on both dates: a window opening Jan 1
+        // belongs to next year's anchor when today is Dec 31.
+        let today_cal = TransferCalendar::for_country(&country.code, date);
+        let tomorrow_cal = TransferCalendar::for_country(&country.code, tomorrow);
+        [
+            today_cal.summer_window.0,
+            today_cal.winter_window.0,
+            tomorrow_cal.summer_window.0,
+            tomorrow_cal.winter_window.0,
+        ]
+        .into_iter()
+        .any(|start| date == start || tomorrow == start)
+    }
 
-        // First week of summer window (June 1-7) or winter window (Jan 1-7): daily
-        if (month == 6 && day <= 7) || (month == 1 && day <= 7) {
-            return true;
+    /// Re-evaluate during the COUNTRY's transfer windows.
+    /// Daily during the first week of each window for fast pipeline
+    /// startup, then weekly (Monday) for the rest of the window. The
+    /// old hard-coded June/January cadence starved every non-European
+    /// calendar: an MLS-style Feb–Apr window got no evaluation ticks
+    /// (and no staff recommendations) for its entire duration.
+    pub(super) fn should_evaluate_for(country: &Country, date: NaiveDate) -> bool {
+        let w = TransferCalendar::for_country(&country.code, date);
+        for (start, end) in [w.summer_window, w.winter_window] {
+            if date >= start && date <= end {
+                let days_in = (date - start).num_days();
+                return days_in < 7 || date.weekday() == Weekday::Mon;
+            }
         }
-
-        // Rest of window: weekly on Monday
-        ((month >= 6 && month <= 8) || month == 1) && date.weekday() == Weekday::Mon
+        false
     }
 
     pub fn transfer_need_reason_text(reason: &TransferNeedReason) -> &'static str {

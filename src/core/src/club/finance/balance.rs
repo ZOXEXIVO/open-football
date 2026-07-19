@@ -218,6 +218,32 @@ impl ClubFinances {
         true
     }
 
+    /// Binding-obligation variant of [`Self::register_transfer_purchase`].
+    /// An obligation-to-buy commits the club contractually regardless of its
+    /// internal budget planning, so the purchase always books — cash flows
+    /// out and the amortization schedule starts — and the transfer budget
+    /// floors at zero instead of vetoing. Without this the obligation path
+    /// credited the seller while a budget-short buyer paid nothing.
+    pub fn register_obligated_purchase(&mut self, amount: f64, contract_years: u8) {
+        let amount = amount.max(0.0);
+        if amount <= 0.0 {
+            return;
+        }
+        if let Some(ref mut budget) = self.transfer_budget {
+            budget.amount = (budget.amount - amount).max(0.0);
+        }
+        self.balance.push_cash_outflow(amount as i64);
+        let years = contract_years.max(1) as u32;
+        let months = years * 12;
+        let monthly = (amount as i64) / months as i64;
+        if monthly > 0 {
+            self.transfer_obligations.push(TransferObligation {
+                monthly_amount: monthly,
+                months_remaining: months,
+            });
+        }
+    }
+
     /// Set `amount` aside from the transfer budget the moment a permanent
     /// deal is AGREED, so two deals agreed in the same window can't both
     /// bank on the same money and one then silently collapse when its

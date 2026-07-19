@@ -425,8 +425,8 @@ impl PipelineProcessor {
     // ============================================================
 
     pub fn evaluate_squads(country: &mut Country, date: NaiveDate) {
-        let is_window_start = Self::is_window_start(date);
-        let should_evaluate = is_window_start || Self::should_evaluate(date);
+        let is_window_start = Self::is_window_start_for(country, date);
+        let should_evaluate = is_window_start || Self::should_evaluate_for(country, date);
         let window_mgr = TransferWindowManager::for_country(country, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
 
@@ -867,8 +867,19 @@ impl PipelineProcessor {
         };
 
         // Generate one request per group with priority and budget
-        // appropriate to the kind of need.
-        for need in &group_needs {
+        // appropriate to the kind of need. Fund in PRIORITY order, not
+        // formation order: the multipliers can over-demand the pot, and
+        // walking GK → DEF → MID → FWD meant a fully-funded Optional GK
+        // depth request could exhaust the budget before a Critical
+        // forward FormationGap was even emitted — the club then never
+        // learned it had a hole up front.
+        let mut ordered_needs: Vec<&GroupNeed> = group_needs.iter().collect();
+        ordered_needs.sort_by_key(|need| match need.kind {
+            NeedKind::FormationGap => 0u8,
+            NeedKind::QualityUpgrade => 1,
+            NeedKind::DepthCover => 2,
+        });
+        for need in ordered_needs {
             let group = need.group;
             let baseline = Self::tier_starter_ca_score(rep_score, group);
             let (priority, reason, mult, min_ca, ideal_ca) = match need.kind {
@@ -897,7 +908,24 @@ impl PipelineProcessor {
 
             let alloc = (budget_per_need * mult).min(available_budget - budget_used);
             if alloc <= 0.0 {
-                break;
+                // A Critical formation hole still gets its request at
+                // zero allocation — the free-agent matcher services
+                // zero-budget needs (same contract as the empty-squad
+                // and SquadPadding branches). Lower-priority needs are
+                // simply dropped when the pot is dry.
+                if priority == TransferNeedPriority::Critical {
+                    requests.push(TransferRequest::new(
+                        next_id,
+                        need.representative_pos,
+                        priority,
+                        reason,
+                        min_ca,
+                        ideal_ca,
+                        0.0,
+                    ));
+                    next_id += 1;
+                }
+                continue;
             }
 
             requests.push(TransferRequest::new(
@@ -1227,6 +1255,18 @@ impl PipelineProcessor {
                     if emitted >= max_pad_requests {
                         break;
                     }
+                    // In-batch dedup: a Critical FormationGap emitted by
+                    // step 3 THIS evaluation already covers the group —
+                    // stacking an Optional padding request on top gave
+                    // one hole two independent pursuit tracks. (The
+                    // pass-2 filter only dedups new-vs-existing, never
+                    // within the batch.)
+                    if requests
+                        .iter()
+                        .any(|r| r.position.position_group() == slot.group)
+                    {
+                        continue;
+                    }
                     // Padding allocates `budget_per_need * 0.3` so a
                     // small club still leaves headroom for upgrades.
                     // Free-agent fee is zero, but the same request
@@ -1284,6 +1324,14 @@ impl PipelineProcessor {
             for injured in long_injured.iter().take(2) {
                 if budget_used >= available_budget {
                     break;
+                }
+                // In-batch dedup: the injury usually IS why step 3 already
+                // emitted a gap/depth request for this group — a second
+                // request would give the same hole two pursuit tracks.
+                if requests.iter().any(|r| {
+                    r.position.position_group() == injured.primary_position.position_group()
+                }) {
+                    continue;
                 }
                 let alloc = (discretionary_unit * 0.3).min(available_budget - budget_used);
                 if alloc <= 0.0 {

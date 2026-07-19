@@ -163,6 +163,36 @@ impl PipelineProcessor {
             let dof_id: Option<u32> = resolved.director_of_football.map(|s| s.id);
             let manager_id: Option<u32> = team.staffs.manager().map(|s| s.id);
 
+            // The recruitment principals (DoF, head of recruitment,
+            // manager) speak at the meeting too. Monitoring rows from the
+            // breakout watch and the listed-star / bargain sweeps are
+            // keyed to the DoF — who resolves to the MANAGER at clubs
+            // without one — and restricting votes to Scout/ChiefScout
+            // contracts left those rows permanently voteless: consensus
+            // never crossed a threshold and the same names churned
+            // through the agenda every Monday forever.
+            let mut voter_snapshots = scout_snapshots.clone();
+            for id in [dof_id, head_of_recruitment_id, manager_id]
+                .into_iter()
+                .flatten()
+            {
+                if voter_snapshots.iter().any(|s| s.staff_id == id) {
+                    continue;
+                }
+                if let Some(s) = team.staffs.find(id) {
+                    voter_snapshots.push(ScoutSnapshot {
+                        staff_id: s.id,
+                        is_chief: false,
+                        judging_ability: s.staff_attributes.knowledge.judging_player_ability,
+                        judging_potential: s.staff_attributes.knowledge.judging_player_potential,
+                        discipline: s.staff_attributes.mental.discipline,
+                        adaptability: s.staff_attributes.mental.adaptability,
+                        determination: s.staff_attributes.mental.determination,
+                        tactical_knowledge: s.staff_attributes.knowledge.tactical_knowledge,
+                    });
+                }
+            }
+
             // Meeting participants — id list for the record.
             let mut participants: Vec<u32> = Vec::new();
             for s in &scout_snapshots {
@@ -193,6 +223,9 @@ impl PipelineProcessor {
             // weekly meetings tractable.
             let mut agenda_player_ids: Vec<u32> = Vec::new();
             for m in &plan.scout_monitoring {
+                if agenda_player_ids.len() >= 12 {
+                    break;
+                }
                 if m.is_ready_for_meeting() && !agenda_player_ids.contains(&m.player_id) {
                     agenda_player_ids.push(m.player_id);
                 }
@@ -251,9 +284,20 @@ impl PipelineProcessor {
                 // if any. Pick the first active request in the player's
                 // position group (we already restrict by group when assigning
                 // scouts, so this is essentially an alignment check).
+                // The stamped linkage must still point at a LIVE request —
+                // a need fulfilled by another signing (or vetoed) while the
+                // monitoring ran would otherwise get this player promoted
+                // onto its shortlist and pursued for an already-filled hole.
                 let request_id = monitorings
                     .iter()
-                    .find_map(|m| m.transfer_request_id)
+                    .filter_map(|m| m.transfer_request_id)
+                    .find(|id| {
+                        plan.transfer_requests.iter().any(|r| {
+                            r.id == *id
+                                && r.status != TransferRequestStatus::Fulfilled
+                                && r.status != TransferRequestStatus::Abandoned
+                        })
+                    })
                     .or_else(|| {
                         // Shadow / staff-recommendation paths: align via the
                         // assignment that surfaced the monitoring. Prefer the
@@ -352,7 +396,7 @@ impl PipelineProcessor {
                 let mut player_votes: Vec<ScoutVote> = Vec::new();
                 let mut total_weight: f32 = 0.0;
                 for m in &monitorings {
-                    let scout = match scout_snapshots
+                    let scout = match voter_snapshots
                         .iter()
                         .find(|s| s.staff_id == m.scout_staff_id)
                     {
@@ -566,6 +610,14 @@ impl PipelineProcessor {
                         RecruitmentDecisionType::PromoteToShortlist
                         | RecruitmentDecisionType::AskBoardApproval
                         | RecruitmentDecisionType::StartNegotiation => {
+                            // Only stamp Promoted when a PromotionPlan was
+                            // actually queued — a decision with no linked
+                            // request queues nothing, and stamping it
+                            // "shortlisted" left a dead-end row claiming a
+                            // shortlist entry that exists nowhere.
+                            if d.transfer_request_id.is_none() {
+                                continue;
+                            }
                             plan.set_monitoring_status_for_player(
                                 d.player_id,
                                 ScoutMonitoringStatus::PromotedToShortlist,
@@ -729,10 +781,16 @@ fn apply_promotion(plan: &mut ClubTransferPlan, promo: PromotionPlan) {
             .iter()
             .any(|c| c.player_id == promo.player_id)
         {
-            shortlist.candidates.push(candidate);
-            shortlist
-                .candidates
-                .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+            // Insert AT the pursuit cursor so the meeting's pick is
+            // pursued next. Re-sorting the whole vec corrupted the
+            // position-based cursor mid-window: already-tried candidates
+            // shifted past the cursor and were re-approached, while the
+            // promoted candidate could land BEHIND it — promoted yet
+            // never pursued.
+            let idx = shortlist
+                .current_pursuit_index
+                .min(shortlist.candidates.len());
+            shortlist.candidates.insert(idx, candidate);
         }
     } else {
         let allocation = plan

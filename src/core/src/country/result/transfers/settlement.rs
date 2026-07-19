@@ -10,13 +10,14 @@
 //!     league pipeline (it knows who got promoted); this module
 //!     leaves promotion clauses on the queue.
 //!
-//! Cross-country obligations route via direct lookup in the country
-//! (the buying side always settles to a same-country seller for the
-//! domestic execution path; cross-country sell-ons are settled
-//! upfront in `execution.rs`, so the queue only ever holds same-
-//! country obligations).
+//! Cross-country routing: the queue lives on the BUYER's market, so the
+//! buyer is always resolvable locally, but performance add-ons from
+//! cross-border deals name a foreign seller. Those credits are returned
+//! to the caller as `(club_id, amount)` pairs and routed globally in
+//! Phase C (installment tranches collapse to upfront for cross-country
+//! deals, so in practice only add-ons take this path).
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use log::debug;
 
 use crate::Country;
@@ -31,24 +32,74 @@ impl TransferClauseSettler {
     /// Resolve every clause whose calendar/counter trigger has fired
     /// today. Cash routing happens inline — buyer's finance debit,
     /// seller's finance credit — and the market's queue is rewritten
-    /// in place.
-    pub(crate) fn settle_due(country: &mut Country, today: NaiveDate) {
-        Self::settle_installments(country, today);
-        Self::settle_performance_addons(country, today);
+    /// in place. Returns `(club_id, amount)` credits owed to sellers
+    /// that don't live in this country (cross-border deals): the buyer
+    /// was debited here, and the caller must route the credit globally
+    /// once the country borrow ends, or the money is destroyed.
+    pub(crate) fn settle_due(country: &mut Country, today: NaiveDate) -> Vec<(u32, f64)> {
+        let mut foreign_credits = Self::settle_installments(country, today);
+        foreign_credits.extend(Self::settle_performance_addons(country, today));
+        foreign_credits
     }
 
-    fn settle_installments(country: &mut Country, today: NaiveDate) {
-        let due = country.transfer_market.drain_due_installments(today);
-        for clause in due {
-            Self::route_payout(country, &clause);
+    /// Season-end promotion add-ons. `promoted_clubs` comes from the
+    /// league pipeline — the only place that knows who actually went up.
+    /// Wired from `process_promotion_relegation`; before that wiring the
+    /// resolver had no caller at all, so every scheduled promotion bonus
+    /// silently expired and sellers were shortchanged. Locally-resolvable
+    /// payouts route immediately; a fired clause owed to a foreign seller
+    /// is re-queued as an immediately-due installment so the next daily
+    /// settlement pass routes it through the Phase-C global drain (this
+    /// walk runs inside the season-end country borrow, which cannot reach
+    /// other countries).
+    pub(crate) fn settle_promotions(
+        country: &mut Country,
+        today: NaiveDate,
+        promoted_clubs: &[u32],
+    ) {
+        if promoted_clubs.is_empty() {
+            return;
         }
+        let fired = country
+            .transfer_market
+            .resolve_promotion_clauses(today, promoted_clubs);
+        for clause in fired {
+            let seller_is_local = country.clubs.iter().any(|c| c.id == clause.selling_club_id);
+            if seller_is_local {
+                let _ = Self::route_payout(country, &clause);
+            } else {
+                country
+                    .transfer_market
+                    .pending_clauses
+                    .push(PendingTransferClause {
+                        trigger: ClauseTrigger::Installment {
+                            scheduled_date: today,
+                        },
+                        fires_so_far: 0,
+                        max_fires: 1,
+                        expires_on: None,
+                        ..clause
+                    });
+            }
+        }
+    }
+
+    fn settle_installments(country: &mut Country, today: NaiveDate) -> Vec<(u32, f64)> {
+        let due = country.transfer_market.drain_due_installments(today);
+        let mut foreign = Vec::new();
+        for clause in due {
+            if let Some(credit) = Self::route_payout(country, &clause) {
+                foreign.push(credit);
+            }
+        }
+        foreign
     }
 
     /// Resolve appearance/goal milestone bonuses. Reads counters off
     /// the buying club's roster — the player has to still be on it
     /// for the milestone to count (parent-club appearances accumulate
     /// elsewhere; this market only tracks the buyer-side total).
-    fn settle_performance_addons(country: &mut Country, today: NaiveDate) {
+    fn settle_performance_addons(country: &mut Country, today: NaiveDate) -> Vec<(u32, f64)> {
         // First pass: build a snapshot of (player_id → buying_club_id)
         // → (appearances, goals) from the country roster so the
         // closures below can do O(1) lookups without re-walking the
@@ -56,22 +107,35 @@ impl TransferClauseSettler {
         let snapshot = PlayerCountSnapshot::build(country);
         let fired = country.transfer_market.resolve_performance_clauses(
             today,
-            |player_id, buying_club_id| snapshot.appearances(player_id, buying_club_id),
-            |player_id, buying_club_id| snapshot.goals(player_id, buying_club_id),
+            |player_id, buying_club_id, since| {
+                snapshot.appearances(player_id, buying_club_id, since)
+            },
+            |player_id, buying_club_id, since| snapshot.goals(player_id, buying_club_id, since),
         );
+        let mut foreign = Vec::new();
         for clause in fired {
-            Self::route_payout(country, &clause);
+            if let Some(credit) = Self::route_payout(country, &clause) {
+                foreign.push(credit);
+            }
         }
+        foreign
     }
 
     /// Move cash from the buying club to the selling club. Routes through
     /// the pure-cash `adjust_cash` interface (debit = negative): a deferred
     /// installment / add-on tranche is an obligation settlement, NOT a
     /// player sale, so it must not perturb either club's transfer budget.
-    fn route_payout(country: &mut Country, clause: &PendingTransferClause) {
+    /// The buyer always lives in this country (clauses are queued on the
+    /// buyer's market); the seller may not — a cross-border deal's seller
+    /// is returned as `Some((club_id, amount))` for the caller to credit
+    /// globally after the country borrow ends.
+    fn route_payout(
+        country: &mut Country,
+        clause: &PendingTransferClause,
+    ) -> Option<(u32, f64)> {
         let amount = clause.amount.max(0.0);
         if amount <= 0.0 {
-            return;
+            return None;
         }
         let buyer = clause.buying_club_id;
         let seller = clause.selling_club_id;
@@ -104,6 +168,10 @@ impl TransferClauseSettler {
             "Clause settled: player {} club {} -> {} ({}): {}",
             clause.player_id, buyer, seller, label, amount
         );
+        match seller_idx {
+            Some(_) => None,
+            None => Some((seller, amount)),
+        }
     }
 }
 
@@ -111,38 +179,106 @@ impl TransferClauseSettler {
 /// settlement time so the trigger closures don't re-walk the world for
 /// each clause. Built fresh each tick — cheap relative to a full
 /// country sim.
+///
+/// The at-club total is the LIVE season counter plus the drained
+/// `season_ledger` rows at the club's teams. The live counter alone
+/// resets every July (and on every move), which silently turned "N
+/// appearances at the club" into "N appearances in a single season" —
+/// cross-season milestones could never fire. Loan-spell ledger rows are
+/// excluded: a loan-then-buy player's borrowed apps belong to the loan
+/// deal, not the purchase the clause was written on.
 struct PlayerCountSnapshot {
-    entries: Vec<(u32, u32, u32, u32)>, // (player_id, club_id, apps, goals)
+    entries: Vec<PlayerCountEntry>,
+}
+
+struct PlayerCountEntry {
+    player_id: u32,
+    club_id: u32,
+    live_apps: u32,
+    live_goals: u32,
+    /// Drained per-season rows at this club: (season_start_year, apps, goals).
+    ledger: Vec<(u16, u32, u32)>,
+}
+
+impl PlayerCountEntry {
+    /// Ledger rows that belong to the deal a clause created on `since`
+    /// tracks. A European season crossing the new year has
+    /// `season_start_year` one below the January calendar year, so the
+    /// season containing `since` always satisfies
+    /// `season_start_year + 1 >= since.year()`. `None` (legacy clause)
+    /// counts the full at-club record.
+    fn counts_since(&self, since: Option<NaiveDate>) -> (u32, u32) {
+        let mut apps = self.live_apps;
+        let mut goals = self.live_goals;
+        for (season_start_year, row_apps, row_goals) in &self.ledger {
+            let in_scope = match since {
+                Some(created) => u32::from(*season_start_year) + 1 >= created.year() as u32,
+                None => true,
+            };
+            if in_scope {
+                apps = apps.saturating_add(*row_apps);
+                goals = goals.saturating_add(*row_goals);
+            }
+        }
+        (apps, goals)
+    }
 }
 
 impl PlayerCountSnapshot {
     fn build(country: &Country) -> Self {
-        let mut entries: Vec<(u32, u32, u32, u32)> = Vec::new();
+        let mut entries: Vec<PlayerCountEntry> = Vec::new();
         for club in &country.clubs {
+            let club_slugs: Vec<&str> = club.teams.teams.iter().map(|t| t.slug.as_str()).collect();
             for team in &club.teams.teams {
                 for player in &team.players.players {
-                    let apps = (player.statistics.played as u32)
+                    let live_apps = (player.statistics.played as u32)
                         .saturating_add(player.statistics.played_subs as u32);
-                    let goals = player.statistics.goals as u32;
-                    entries.push((player.id, club.id, apps, goals));
+                    let live_goals = player.statistics.goals as u32;
+                    let ledger: Vec<(u16, u32, u32)> = player
+                        .statistics_history
+                        .season_ledger
+                        .iter()
+                        .filter(|row| !row.is_loan)
+                        .filter(|row| club_slugs.contains(&row.team_slug.as_str()))
+                        .map(|row| {
+                            (
+                                row.season_start_year,
+                                (row.statistics.played as u32)
+                                    .saturating_add(row.statistics.played_subs as u32),
+                                row.statistics.goals as u32,
+                            )
+                        })
+                        .collect();
+                    entries.push(PlayerCountEntry {
+                        player_id: player.id,
+                        club_id: club.id,
+                        live_apps,
+                        live_goals,
+                        ledger,
+                    });
                 }
             }
         }
         PlayerCountSnapshot { entries }
     }
 
-    fn appearances(&self, player_id: u32, buying_club_id: u32) -> Option<u32> {
+    fn appearances(
+        &self,
+        player_id: u32,
+        buying_club_id: u32,
+        since: Option<NaiveDate>,
+    ) -> Option<u32> {
         self.entries
             .iter()
-            .find(|(pid, cid, _, _)| *pid == player_id && *cid == buying_club_id)
-            .map(|(_, _, apps, _)| *apps)
+            .find(|e| e.player_id == player_id && e.club_id == buying_club_id)
+            .map(|e| e.counts_since(since).0)
     }
 
-    fn goals(&self, player_id: u32, buying_club_id: u32) -> Option<u32> {
+    fn goals(&self, player_id: u32, buying_club_id: u32, since: Option<NaiveDate>) -> Option<u32> {
         self.entries
             .iter()
-            .find(|(pid, cid, _, _)| *pid == player_id && *cid == buying_club_id)
-            .map(|(_, _, _, goals)| *goals)
+            .find(|e| e.player_id == player_id && e.club_id == buying_club_id)
+            .map(|e| e.counts_since(since).1)
     }
 }
 
@@ -208,6 +344,7 @@ mod tests {
                 max_fires: 1,
                 fires_so_far: 0,
                 expires_on: None,
+                created_on: None,
             });
         let buyer_before = c.clubs[0].finance.balance.balance;
         let seller_before = c.clubs[1].finance.balance.balance;
@@ -244,6 +381,7 @@ mod tests {
                 max_fires: 1,
                 fires_so_far: 0,
                 expires_on: None,
+                created_on: None,
             });
 
         TransferClauseSettler::settle_due(&mut c, today);
@@ -280,6 +418,7 @@ mod tests {
                 max_fires: 1,
                 fires_so_far: 0,
                 expires_on: None,
+                created_on: None,
             });
 
         TransferClauseSettler::settle_due(&mut c, today);
@@ -307,6 +446,7 @@ mod tests {
                 max_fires: 1,
                 fires_so_far: 0,
                 expires_on: None,
+                created_on: None,
             });
 
         TransferClauseSettler::settle_due(&mut c, today);
@@ -335,6 +475,7 @@ mod tests {
                 max_fires: 1,
                 fires_so_far: 0,
                 expires_on: Some(yesterday),
+                created_on: None,
             });
 
         TransferClauseSettler::settle_due(&mut c, today);

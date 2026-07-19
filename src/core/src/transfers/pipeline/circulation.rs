@@ -193,7 +193,7 @@ impl PipelineProcessor {
     /// cadence as the recommendation sweep and right after it, so the
     /// interest the sweep generated this tick is already visible.
     pub fn circulate_available_players(country: &mut Country, date: NaiveDate) {
-        if !Self::should_evaluate(date) {
+        if !Self::should_evaluate_for(country, date) {
             return;
         }
 

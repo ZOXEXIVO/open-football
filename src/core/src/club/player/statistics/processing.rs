@@ -184,6 +184,18 @@ impl Player {
         self.last_transfer_date = Some(date);
     }
 
+    /// Loan buyout — ownership flips to the borrower while the player
+    /// stays put. Live stats drain against the borrower's ACTIVE loan
+    /// spell and stay attributed to it; a fresh permanent spell opens at
+    /// the same club with the buyout fee. See
+    /// [`PlayerStatisticsHistory::record_loan_buyout`].
+    pub fn on_loan_buyout(&mut self, borrowing: &TeamInfo, fee: f64, date: NaiveDate) {
+        let stats = self.drain_match_stats(borrowing, Season::from_date(date).start_year, None);
+        self.statistics_history
+            .record_loan_buyout(stats, borrowing, fee, date);
+        self.last_transfer_date = Some(date);
+    }
+
     /// Player reassigned across teams of the same club (Main ↔ B / Second /
     /// Reserve / youth). Closes the previous spell and opens a new one on
     /// the destination so future match stats accumulate against the team

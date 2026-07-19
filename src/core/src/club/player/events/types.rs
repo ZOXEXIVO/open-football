@@ -135,11 +135,27 @@ impl<'a> MatchOutcome<'a> {
 
 pub struct TransferCompletion<'a> {
     pub from: &'a TeamInfo,
+    /// History identity of the squad the player physically occupies
+    /// (own slug for Main/B/Second, Main alias for Reserve/youth). The
+    /// transfer departs THIS spell. Distinct from `from`, which stays
+    /// the seller's Main team so the transfer-shock prestige anchor
+    /// remains the club rather than the reserve squad he was parked on
+    /// — same split `LoanCompletion` carries. Departing the Main spell
+    /// for a B/Second-squad sale left the real spell active and the
+    /// projection phantom-dropped the new club.
+    pub history_source: &'a TeamInfo,
     pub to: &'a TeamInfo,
     pub fee: f64,
     pub date: NaiveDate,
     pub selling_club_id: u32,
     pub buying_club_id: u32,
+    /// Loan buyout: ownership flips to the borrower while the player
+    /// stays put. History closes the ACTIVE loan spell at the borrower
+    /// (loan-season stats stay attributed to it) and opens a fresh
+    /// permanent spell there — routing through the ordinary
+    /// from → to recording drained the loan-season stats into a phantom
+    /// parent row and left the loan spell active forever.
+    pub loan_buyout: bool,
     /// Annual wage agreed during PersonalTerms. None = compute from context.
     pub agreed_wage: Option<u32>,
     /// Buying club's league reputation (0–10000), for fallback wage computation

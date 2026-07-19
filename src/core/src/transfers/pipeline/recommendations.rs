@@ -385,7 +385,7 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
 impl PipelineProcessor {
     pub fn generate_staff_recommendations(country: &mut Country, date: NaiveDate) {
         // Only runs weekly (same schedule as should_evaluate)
-        if !Self::should_evaluate(date) {
+        if !Self::should_evaluate_for(country, date) {
             return;
         }
 
@@ -393,7 +393,7 @@ impl PipelineProcessor {
         // resolve summaries via hash probe instead of a country scan.
         let player_lookup = CountryPlayerLookup::build(country);
 
-        let is_january = Self::is_january_window(date);
+        let is_january = Self::is_mid_season_window_for(country, date);
         let price_level = country.settings.pricing.price_level;
         let window_mgr = TransferWindowManager::for_country(country, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
@@ -615,8 +615,13 @@ impl PipelineProcessor {
                         return Vec::new();
                     }
 
-                    // Cap: 6 recommendations per club per window
-                    if plan.staff_recommendations.len() >= 6 {
+                    // Cap: 10 recommendations per club per window — matches
+                    // the pass-2 apply caps. The old early-return at 6
+                    // silently disabled the small-club loan-bargain /
+                    // free-agent / game-time sections for the rest of the
+                    // window once six recs accumulated (they only clear at
+                    // window reset).
+                    if plan.staff_recommendations.len() >= 10 {
                         return Vec::new();
                     }
                     let mut actions: Vec<RecommendationAction> = Vec::new();
@@ -1601,7 +1606,7 @@ impl PipelineProcessor {
 
     pub fn process_staff_recommendations(country: &mut Country, date: NaiveDate) {
         // Only runs weekly (same schedule as should_evaluate)
-        if !Self::should_evaluate(date) {
+        if !Self::should_evaluate_for(country, date) {
             return;
         }
 
@@ -1643,6 +1648,13 @@ impl PipelineProcessor {
                 .collect();
 
             for rec in &recent_recs {
+                // Meeting rejections blocklist the player for 6 months —
+                // the consumption chokepoint gate covers every
+                // recommendation source (scout network, listed-star sweep,
+                // bargain hunts) at once.
+                if plan.is_rejected(rec.player_id, date) {
+                    continue;
+                }
                 // Determine player's position group
                 let memory = plan.known_player(rec.player_id);
                 let player_pos_group =
@@ -1711,7 +1723,13 @@ impl PipelineProcessor {
                                     shortlist_request_id: req.id,
                                     candidate: ShortlistCandidate {
                                         player_id: rec.player_id,
-                                        score: rec.assessed_ability as f32 / 100.0
+                                        // Same /200 ability scale as the
+                                        // scouting and market shortlist
+                                        // paths — the old /100 doubled the
+                                        // per-point weight and let a bare
+                                        // staff rec leapfrog fully vetted
+                                        // candidates on scale alone.
+                                        score: rec.assessed_ability as f32 / 200.0
                                             + rec.confidence * 0.1,
                                         estimated_fee: rec.estimated_fee,
                                         status: ShortlistCandidateStatus::Available,
@@ -1770,7 +1788,9 @@ impl PipelineProcessor {
                         kind: RecommendationProcessKind::CreateRequest {
                             candidate: ShortlistCandidate {
                                 player_id: rec.player_id,
-                                score: rec.assessed_ability as f32 / 100.0 + rec.confidence * 0.1,
+                                // Same /200 scale as every other insertion
+                                // path (see the AddToShortlist twin above).
+                                score: rec.assessed_ability as f32 / 200.0 + rec.confidence * 0.1,
                                 estimated_fee: rec.estimated_fee,
                                 status: ShortlistCandidateStatus::Available,
                             },

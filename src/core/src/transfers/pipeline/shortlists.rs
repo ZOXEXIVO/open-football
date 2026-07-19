@@ -161,6 +161,16 @@ impl PipelineProcessor {
                     .find(|r| r.id == assignment.transfer_request_id);
                 let budget_alloc = request.map(|r| r.budget_allocation).unwrap_or(0.0);
 
+                // Zero-allocation requests are the free-agent matcher's
+                // exclusive territory (empty-squad, SquadPadding, and
+                // dry-pot Critical gaps all emit them for exactly that
+                // purpose). Treating zero as "unlimited" here let a
+                // broke club shortlist arbitrarily expensive scouted
+                // targets that could only die at the budget reservation.
+                if budget_alloc <= 0.0 {
+                    continue;
+                }
+
                 let reports: Vec<&DetailedScoutingReport> = plan
                     .scouting_reports
                     .iter()
@@ -175,7 +185,7 @@ impl PipelineProcessor {
 
                 let mut candidates: Vec<ShortlistCandidate> = reports
                     .iter()
-                    .filter(|r| budget_alloc <= 0.0 || r.estimated_value <= budget_alloc * 2.0)
+                    .filter(|r| r.estimated_value <= budget_alloc * 2.0)
                     .filter_map(|r| {
                         // Plausibility veto — drop HardReject candidates
                         // before scoring so they never become shortlist
@@ -300,8 +310,10 @@ impl PipelineProcessor {
                 // Emergency depth requests are serviced exclusively by
                 // the free-agent matcher — a market shortlist would
                 // point the paid negotiation path at a zero-budget
-                // request.
-                if request.is_emergency_free_agent_depth() {
+                // request. The same contract covers every zero-allocation
+                // request (empty-squad, SquadPadding, dry-pot Critical
+                // gaps).
+                if request.is_emergency_free_agent_depth() || request.budget_allocation <= 0.0 {
                     continue;
                 }
                 if existing_shortlist_request_ids.contains(&request.id) {
@@ -321,6 +333,10 @@ impl PipelineProcessor {
                     .iter()
                     .filter(|l| l.club_id != club.id)
                     .filter(|l| l.is_seller_advertised())
+                    // Recruitment-meeting rejections blocklist this player
+                    // for 6 months — the market fallback used to re-insert
+                    // him the week after the meeting voted him down.
+                    .filter(|l| !plan.is_rejected(l.player_id, date))
                     .filter_map(|l| {
                         player_lookup
                             .find_summary(country, l.player_id, date)

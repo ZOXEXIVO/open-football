@@ -167,12 +167,22 @@ impl PipelineProcessor {
                 continue;
             }
 
-            let budget = club
+            // Same FFP discipline the evaluation pass applies when it
+            // sizes allocations — the raw read here fed the offer /
+            // escalation strategy full spending power while the plan
+            // itself was operating on half, so the two layers disagreed
+            // about the same sanction.
+            let raw_budget = club
                 .finance
                 .transfer_budget
                 .as_ref()
                 .map(|b| b.amount)
                 .unwrap_or_else(|| (club.finance.balance.balance.max(0) as f64) * 0.3);
+            let budget = if club.finance.is_ffp_breach(date) {
+                raw_budget * 0.5
+            } else {
+                raw_budget
+            };
 
             if club.teams.teams.is_empty() {
                 continue;
@@ -221,6 +231,29 @@ impl PipelineProcessor {
                 }
 
                 if shortlist.all_exhausted() {
+                    continue;
+                }
+
+                // The owning request must still be live. A board veto
+                // stamps `board_approved = Some(false)` + Abandoned; a
+                // need already filled elsewhere (FA instant signing, a
+                // won race) stamps Fulfilled. This loop used to ignore
+                // both — vetoed targets were approached the same tick
+                // the chairman blocked them, and the negotiation open
+                // then overwrote the veto's Abandoned back to
+                // Negotiating.
+                let request = plan
+                    .transfer_requests
+                    .iter()
+                    .find(|r| r.id == shortlist.transfer_request_id);
+                let request_live = request
+                    .map(|r| {
+                        r.status != TransferRequestStatus::Abandoned
+                            && r.status != TransferRequestStatus::Fulfilled
+                            && r.board_approved != Some(false)
+                    })
+                    .unwrap_or(true);
+                if !request_live {
                     continue;
                 }
 
@@ -280,11 +313,6 @@ impl PipelineProcessor {
                 // - Player age and potential
                 // ──────────────────────────────────────────────────
 
-                let request = plan
-                    .transfer_requests
-                    .iter()
-                    .find(|r| r.id == shortlist.transfer_request_id);
-
                 // Scout-side context for this candidate — believed
                 // ability/potential from monitoring rows or reports.
                 // Drives both the buy/loan decision and (further down)
@@ -308,6 +336,27 @@ impl PipelineProcessor {
 
                 let target = Self::find_player_in_country(country, player_id);
                 let player_age = target.map(|p| p.age(date)).unwrap_or(25);
+
+                // Stale-row guard: a candidate outside the request's age
+                // band (inserted before the shortlist-side band gates
+                // existed, or aged across a window boundary) must not
+                // carry the request's motive into a deal — the
+                // "32-year-old signed as a young prospect" reason bug.
+                // Same relaxed band as every insertion path: min strict,
+                // max + 3. Staged as a reject so the cursor advances to
+                // the next candidate instead of stalling.
+                if let Some(req) = request {
+                    if player_age < req.preferred_age_min
+                        || player_age > req.preferred_age_max.saturating_add(3)
+                    {
+                        plausibility_rejected.push(PlausibilityReject {
+                            club_id: club.id,
+                            player_id,
+                            shortlist_request_id: shortlist.transfer_request_id,
+                        });
+                        continue;
+                    }
+                }
                 // "Gettable" signals: a peer/bigger seller only parts with
                 // a prospect who is listed, wants out, or barely plays.
                 let target_available = target
@@ -462,7 +511,7 @@ impl PipelineProcessor {
                         allocated_budget: allocated_for_move,
                         wage_budget_headroom: None,
                         buying_club_balance: club.finance.balance.balance,
-                        is_january: Self::is_january_window(date),
+                        is_january: Self::is_mid_season_window_for(country, date),
                         price_level,
                         shortlist_rank: shortlist
                             .candidates
@@ -504,6 +553,16 @@ impl PipelineProcessor {
                             0.10
                         };
                         offer.clauses.push(TransferClause::SellOnClause(pct));
+                    }
+
+                    // Loans carry an explicit duration on the offer — the
+                    // market uses it both for the history record and to
+                    // bind the negotiation to a LOAN listing when the
+                    // player is also transfer-listed (a loan bid anchored
+                    // on the permanent asking price escalated toward the
+                    // full valuation).
+                    if is_loan && offer.loan_duration_months.is_none() {
+                        offer.loan_duration_months = Some(10);
                     }
 
                     // Add appearance fee clause for loans from high-reputation sellers
@@ -748,15 +807,23 @@ impl PipelineProcessor {
             }
         }
 
-        // Apply plausibility rejects: mark each shortlist candidate as
-        // unavailable, advance the shortlist past the dud, and notify
-        // the pipeline so monitoring rows / request status update. No
-        // synthetic listing is created for these — they never reach
-        // start_negotiation.
+        // Apply plausibility/band rejects: mark each shortlist candidate
+        // as unavailable, advance the shortlist past the dud ONCE, and
+        // update monitoring + request status inline. These never opened a
+        // negotiation, so routing them through `on_negotiation_resolved`
+        // was wrong on three counts: it advanced the cursor a second time
+        // (silently skipping the next viable candidate), decremented the
+        // active-negotiation slot counter for a slot never taken, and
+        // charged the manager a failed-bid morale hit for a bid that was
+        // never made.
         for reject in plausibility_rejected {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == reject.club_id) {
-                if let Some(shortlist) = club
-                    .transfer_plan
+                let plan = &mut club.transfer_plan;
+                plan.set_monitoring_status_for_player(
+                    reject.player_id,
+                    ScoutMonitoringStatus::Lost,
+                );
+                if let Some(shortlist) = plan
                     .shortlists
                     .iter_mut()
                     .find(|s| s.transfer_request_id == reject.shortlist_request_id)
@@ -769,9 +836,28 @@ impl PipelineProcessor {
                         candidate.status = ShortlistCandidateStatus::Unavailable;
                     }
                     shortlist.advance_to_next();
+                    let exhausted = shortlist.all_exhausted();
+                    if let Some(req) = plan
+                        .transfer_requests
+                        .iter_mut()
+                        .find(|r| r.id == reject.shortlist_request_id)
+                    {
+                        // Never resurrect a need that was filled or
+                        // vetoed while this candidate sat on the list.
+                        let request_live = req.status != TransferRequestStatus::Fulfilled
+                            && req.status != TransferRequestStatus::Abandoned;
+                        if request_live {
+                            req.status = if !exhausted {
+                                TransferRequestStatus::Shortlisted
+                            } else if req.priority == TransferNeedPriority::Critical {
+                                TransferRequestStatus::Pending
+                            } else {
+                                TransferRequestStatus::Abandoned
+                            };
+                        }
+                    }
                 }
             }
-            Self::on_negotiation_resolved(country, reject.club_id, reject.player_id, false);
         }
 
         Self::process_loan_out_listings(country, date);
@@ -1176,7 +1262,23 @@ impl PipelineProcessor {
                         candidate.status = ShortlistCandidateStatus::NegotiationFailed;
                         shortlist.advance_to_next();
 
-                        if shortlist.all_exhausted() {
+                        // A need that was already Fulfilled (an FA instant
+                        // signing or a parallel deal landed while this
+                        // negotiation ran) or Abandoned (board veto) must
+                        // not be resurrected by an unrelated failed bid —
+                        // that re-opened filled needs and double-signed
+                        // the position.
+                        let request_live = plan
+                            .transfer_requests
+                            .iter()
+                            .find(|r| r.id == shortlist.transfer_request_id)
+                            .map(|r| {
+                                r.status != TransferRequestStatus::Fulfilled
+                                    && r.status != TransferRequestStatus::Abandoned
+                            })
+                            .unwrap_or(false);
+
+                        if request_live && shortlist.all_exhausted() {
                             if let Some(req) = plan
                                 .transfer_requests
                                 .iter_mut()
@@ -1198,7 +1300,7 @@ impl PipelineProcessor {
                                     };
                                 }
                             }
-                        } else {
+                        } else if request_live {
                             if let Some(req) = plan
                                 .transfer_requests
                                 .iter_mut()
@@ -1424,6 +1526,38 @@ impl PipelineProcessor {
         // SipHash default was a measurable share of the sweep's CPU.
         let signed: FxHashSet<u32> = player_ids.iter().copied().collect();
 
+        // Losing bidders first: any club still holding a live negotiation
+        // for a player someone else just signed loses the race here.
+        // Resolve each through `on_negotiation_resolved` BEFORE the
+        // clearing walk wipes the shortlist rows — that releases the
+        // plan's negotiation slot, advances the shortlist, and re-opens
+        // or abandons the request. The raw status flip at the end of the
+        // sweep leaked all three, freezing the loser at its concurrency
+        // cap for the rest of the window. Same-country losers were
+        // already flipped Rejected (and resolved) at completion time, so
+        // the Pending/Countered filter naturally selects only the
+        // cross-country stragglers.
+        for continent in data.continents.iter_mut() {
+            for country in continent.countries.iter_mut() {
+                let losers: Vec<(u32, u32)> = country
+                    .transfer_market
+                    .negotiations
+                    .values()
+                    .filter(|n| {
+                        signed.contains(&n.player_id)
+                            && matches!(
+                                n.status,
+                                NegotiationStatus::Pending | NegotiationStatus::Countered
+                            )
+                    })
+                    .map(|n| (n.buying_club_id, n.player_id))
+                    .collect();
+                for (club_id, player_id) in losers {
+                    Self::on_negotiation_resolved(country, club_id, player_id, false);
+                }
+            }
+        }
+
         data.continents
             .par_iter_mut()
             .flat_map(|c| c.countries.par_iter_mut())
@@ -1508,12 +1642,36 @@ impl PipelineProcessor {
                         }
                     });
 
+                // A signed player's open listings close — EXCEPT a Loan
+                // listing owned by the club that now rosters him: that's
+                // the same-window development-loan listing his new club
+                // just staged (young free signings stage during Phase A,
+                // before this sweep runs), and completing it here killed
+                // the dev loan before any borrower could see it.
+                let own_loan_listing_pairs: Vec<(u32, u32)> = country
+                    .clubs
+                    .iter()
+                    .flat_map(|c| {
+                        c.teams
+                            .teams
+                            .iter()
+                            .flat_map(|t| t.players.players.iter())
+                            .map(move |p| (p.id, c.id))
+                    })
+                    .filter(|(pid, _)| signed.contains(pid))
+                    .collect();
                 for listing in country.transfer_market.listings.iter_mut() {
                     if signed.contains(&listing.player_id)
                         && listing.status != TransferListingStatus::Completed
                         && listing.status != TransferListingStatus::Cancelled
                     {
-                        listing.status = listing_terminal.clone();
+                        let is_new_owners_loan_listing = listing.listing_type
+                            == TransferListingType::Loan
+                            && own_loan_listing_pairs
+                                .contains(&(listing.player_id, listing.club_id));
+                        if !is_new_owners_loan_listing {
+                            listing.status = listing_terminal.clone();
+                        }
                     }
                 }
 
@@ -1667,6 +1825,14 @@ impl PipelineProcessor {
                     continue;
                 }
 
+                // Same squad-cap gate as the domestic path: a club whose
+                // Main roster is full keeps agreeing cross-border deals the
+                // executor then refuses, holding slots and budget for the
+                // whole multi-phase lifetime each time.
+                if !can_club_accept_player(club) {
+                    continue;
+                }
+
                 let actual_active = country
                     .transfer_market
                     .active_negotiation_count_for_club(club.id);
@@ -1674,8 +1840,37 @@ impl PipelineProcessor {
                     continue;
                 }
 
+                // Per-tick slot budget, mirroring the domestic pass — the
+                // one-shot cap check above let a club with N shortlists
+                // open N foreign negotiations in a single tick, blowing
+                // past `max_concurrent_negotiations`.
+                let slots_available = plan
+                    .max_concurrent_negotiations
+                    .saturating_sub(actual_active) as usize;
+                let mut negotiations_this_club = 0usize;
+
                 for shortlist in &plan.shortlists {
+                    if negotiations_this_club >= slots_available {
+                        break;
+                    }
                     if shortlist.has_pursuing_candidate() || shortlist.all_exhausted() {
+                        continue;
+                    }
+
+                    // Mirror the domestic request-liveness gate: vetoed
+                    // (board_approved == false / Abandoned) and Fulfilled
+                    // requests must not be pursued abroad either.
+                    let request_live = plan
+                        .transfer_requests
+                        .iter()
+                        .find(|r| r.id == shortlist.transfer_request_id)
+                        .map(|r| {
+                            r.status != TransferRequestStatus::Abandoned
+                                && r.status != TransferRequestStatus::Fulfilled
+                                && r.board_approved != Some(false)
+                        })
+                        .unwrap_or(true);
+                    if !request_live {
                         continue;
                     }
 
@@ -1703,6 +1898,7 @@ impl PipelineProcessor {
                         player_id: candidate.player_id,
                         shortlist_request_id: shortlist.transfer_request_id,
                     });
+                    negotiations_this_club += 1;
                 }
             }
         }
@@ -1735,6 +1931,12 @@ impl PipelineProcessor {
             player_sold_from: Option<(u32, f64)>,
             offered_annual_wage: u32,
             buying_league_reputation: u16,
+            /// Cold cross-border approach (target not seller-advertised).
+            /// Stamped on the negotiation so the resolver applies the
+            /// unsolicited base chance — the foreign path used to leave
+            /// the flag unset and cold calls abroad engaged at the easier
+            /// solicited baseline.
+            is_unsolicited: bool,
             /// Captured at creation from the full cross-border assessment:
             /// the player would refuse this move on willingness grounds
             /// (a clear step down with no availability signal). Applied as
@@ -2064,7 +2266,7 @@ impl PipelineProcessor {
                 allocated_budget: budget,
                 wage_budget_headroom: None,
                 buying_club_balance: buy_club.finance.balance.balance,
-                is_january: Self::is_january_window(date),
+                is_january: Self::is_mid_season_window_for(buy_country, date),
                 price_level: sell_price_level,
                 shortlist_rank: None,
                 competition_count: None,
@@ -2112,6 +2314,13 @@ impl PipelineProcessor {
                     }));
             }
 
+            // Loans carry an explicit duration so the market binds the
+            // negotiation to a Loan listing and the history row records a
+            // real length — mirrors the domestic path.
+            if is_loan && offer.loan_duration_months.is_none() {
+                offer.loan_duration_months = Some(10);
+            }
+
             // Same role-aware wage curve as the domestic path (see
             // `buyer_wage_context`) so offer and player demand can't diverge on
             // the squad-status premium.
@@ -2121,11 +2330,27 @@ impl PipelineProcessor {
             )
             .expected_wage;
 
-            let reason = if is_loan {
-                "Loan signing".to_string()
+            // Same reason construction as the domestic path — the request
+            // motive and scout context were in scope all along, yet every
+            // cross-border move used to reach history as a bare
+            // "Loan signing" / "Transfer signing".
+            let need_and_scout = Self::build_transfer_reason(request, scouting_report);
+            let reason = if need_and_scout.is_empty() {
+                if is_loan {
+                    "Loan signing".to_string()
+                } else {
+                    "Transfer signing".to_string()
+                }
             } else {
-                "Transfer signing".to_string()
+                need_and_scout
             };
+
+            // A seller-advertised player (transfer- or loan-listed) makes
+            // this a solicited approach; anyone else is a cold call. The
+            // domestic path derives the same flag from the listing table;
+            // the player's own status flags are the cross-border proxy.
+            let is_unsolicited = !player.statuses.has(PlayerStatusType::Lst)
+                && !player.statuses.has(PlayerStatusType::Loa);
 
             resolved.push(ResolvedNeg {
                 buying_club_id: cand.buying_club_id,
@@ -2150,6 +2375,7 @@ impl PipelineProcessor {
                 player_sold_from: player.sold_from.clone(),
                 offered_annual_wage,
                 buying_league_reputation,
+                is_unsolicited,
                 foreign_terms_floor_blocked,
                 foreign_seller_importance,
             });
@@ -2190,6 +2416,7 @@ impl PipelineProcessor {
                 if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                     negotiation.is_loan = action.is_loan;
                     negotiation.has_option_to_buy = action.has_option_to_buy;
+                    negotiation.is_unsolicited = action.is_unsolicited;
                     negotiation.reason = action.reason;
                     negotiation.selling_country_id = Some(action.selling_country_id);
                     negotiation.selling_continent_id = Some(action.selling_continent_id);

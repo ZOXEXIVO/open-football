@@ -60,6 +60,15 @@ pub struct FirstTeamSquadNeeds {
     pub def_missing: usize,
     pub mid_missing: usize,
     pub fwd_missing: usize,
+    /// Actual per-group headcounts. Kept alongside the shortfalls so the
+    /// emergency projection can seed from real numbers — reconstructing
+    /// counts as `MIN - missing` clamped every above-minimum group at
+    /// its floor (10 defenders read as 7), which skewed the
+    /// thinnest-group rotation toward already-stuffed groups.
+    pub gk_count: usize,
+    pub def_count: usize,
+    pub mid_count: usize,
+    pub fwd_count: usize,
     /// Under-11 = the club can't even field a side — the most extreme
     /// emergency state, used to ignore wage / rep gates in matching.
     pub urgent: bool,
@@ -128,6 +137,10 @@ impl FirstTeamSquadNeeds {
             def_missing: MIN_GROUP_DEFENDER.saturating_sub(def),
             mid_missing: MIN_GROUP_MIDFIELDER.saturating_sub(mid),
             fwd_missing: MIN_GROUP_FORWARD.saturating_sub(fwd),
+            gk_count: gk,
+            def_count: def,
+            mid_count: mid,
+            fwd_count: fwd,
             urgent: main_team_size < 11,
         }
     }
@@ -552,16 +565,19 @@ pub struct EmergencyProjectedSquad {
 }
 
 impl EmergencyProjectedSquad {
-    /// Seed from the initial squad-needs snapshot. We project current
+    /// Seed from the initial squad-needs snapshot. We project the REAL
     /// group counts so the running "is this club still urgent / still
-    /// short of group X" decision can read off the same struct.
+    /// short of group X" decision can read off the same struct. The old
+    /// `MIN - missing` reconstruction clamped every above-minimum group
+    /// at its floor, so a defender-stuffed emergency club still tied on
+    /// the thinnest-group ratio and could receive more defenders.
     pub fn from_needs(needs: &FirstTeamSquadNeeds) -> Self {
         EmergencyProjectedSquad {
             total: needs.main_team_size,
-            gk: MIN_GROUP_GOALKEEPER.saturating_sub(needs.gk_missing),
-            def: MIN_GROUP_DEFENDER.saturating_sub(needs.def_missing),
-            mid: MIN_GROUP_MIDFIELDER.saturating_sub(needs.mid_missing),
-            fwd: MIN_GROUP_FORWARD.saturating_sub(needs.fwd_missing),
+            gk: needs.gk_count,
+            def: needs.def_count,
+            mid: needs.mid_count,
+            fwd: needs.fwd_count,
         }
     }
 
@@ -771,6 +787,10 @@ mod tests {
             def_missing: MIN_GROUP_DEFENDER,
             mid_missing: MIN_GROUP_MIDFIELDER,
             fwd_missing: MIN_GROUP_FORWARD,
+            gk_count: 0,
+            def_count: 0,
+            mid_count: 0,
+            fwd_count: 0,
             urgent: true,
         };
         let plan = needs.signing_plan();
@@ -798,6 +818,10 @@ mod tests {
             def_missing: 0,
             mid_missing: 0,
             fwd_missing: 0,
+            gk_count: MIN_GROUP_GOALKEEPER,
+            def_count: MIN_GROUP_DEFENDER,
+            mid_count: MIN_GROUP_MIDFIELDER,
+            fwd_count: MIN_GROUP_FORWARD,
             urgent: false,
         };
         let plan = needs.signing_plan();
@@ -818,6 +842,10 @@ mod tests {
             def_missing: 0,
             mid_missing: 0,
             fwd_missing: 0,
+            gk_count: MIN_GROUP_GOALKEEPER,
+            def_count: MIN_GROUP_DEFENDER,
+            mid_count: MIN_GROUP_MIDFIELDER,
+            fwd_count: MIN_GROUP_FORWARD,
             urgent: false,
         };
         assert!(!needs.needs_emergency_fill());
@@ -836,6 +864,10 @@ mod tests {
             def_missing: MIN_GROUP_DEFENDER,
             mid_missing: MIN_GROUP_MIDFIELDER,
             fwd_missing: MIN_GROUP_FORWARD,
+            gk_count: 0,
+            def_count: 0,
+            mid_count: 0,
+            fwd_count: 0,
             urgent: true,
         };
         assert!(needs.urgent);
@@ -972,6 +1004,10 @@ mod tests {
             def_missing: MIN_GROUP_DEFENDER,
             mid_missing: MIN_GROUP_MIDFIELDER,
             fwd_missing: MIN_GROUP_FORWARD,
+            gk_count: 0,
+            def_count: 0,
+            mid_count: 0,
+            fwd_count: 0,
             urgent: true,
         };
         let projected = EmergencyProjectedSquad::from_needs(&needs);
@@ -990,6 +1026,10 @@ mod tests {
             def_missing: 5,
             mid_missing: 5,
             fwd_missing: 3,
+            gk_count: 1,
+            def_count: 2,
+            mid_count: 2,
+            fwd_count: 1,
             urgent: true,
         };
         let mut projected = EmergencyProjectedSquad::from_needs(&needs);
@@ -1008,6 +1048,10 @@ mod tests {
             def_missing: 2,
             mid_missing: 2,
             fwd_missing: 1,
+            gk_count: 2,
+            def_count: 5,
+            mid_count: 5,
+            fwd_count: 3,
             urgent: true,
         };
         let mut projected = EmergencyProjectedSquad::from_needs(&needs);

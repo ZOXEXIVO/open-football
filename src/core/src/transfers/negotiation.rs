@@ -1,3 +1,4 @@
+use crate::PlayerFieldPositionGroup;
 use crate::transfers::offer::TransferOffer;
 use crate::utils::IntegerUtils;
 use chrono::Duration;
@@ -115,6 +116,13 @@ pub struct TransferNegotiation {
     /// equivalent domestic move. `None` for domestic moves, whose importance
     /// recomputes live.
     pub foreign_seller_importance: Option<f32>,
+    /// Loan-in target's `(position group, ability)` captured at creation.
+    /// The borrower depth cap folds pending loans by resolving each
+    /// negotiation's player in-country — impossible for FOREIGN targets,
+    /// which made in-flight cross-border loans invisible to the cap and
+    /// re-opened the loan over-accumulation hole. `None` for permanent
+    /// deals and for legacy rows (the fold then falls back to the lookup).
+    pub loan_target_profile: Option<(PlayerFieldPositionGroup, u8)>,
 }
 
 impl TransferNegotiation {
@@ -178,6 +186,7 @@ impl TransferNegotiation {
             selling_club_name: String::new(),
             foreign_terms_floor_blocked: false,
             foreign_seller_importance: None,
+            loan_target_profile: None,
         }
     }
 

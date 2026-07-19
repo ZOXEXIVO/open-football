@@ -765,6 +765,32 @@ impl PlayerStatisticsHistory {
         self.push_new_entry(to, PlayerStatistics::default(), true, Some(loan_fee), date);
     }
 
+    /// Record a loan buyout: the borrower exercised its option/obligation
+    /// and the player stays where he is. The ACTIVE loan spell closes
+    /// with its season stats intact (they belong to the borrower as a
+    /// loan stint), and a fresh permanent spell opens at the same club
+    /// carrying the buyout fee. The parent spell departed at loan start
+    /// and stays departed — ownership changes hands without a move.
+    /// Future-season loan re-seeds are purged like a loan return: the
+    /// loan they seeded for no longer exists.
+    pub fn record_loan_buyout(
+        &mut self,
+        loan_stats: PlayerStatistics,
+        borrowing: &TeamInfo,
+        fee: f64,
+        date: NaiveDate,
+    ) {
+        self.upsert_current(borrowing, loan_stats, true, None, date);
+        self.mark_departed(&borrowing.slug, true, date);
+        let buyout_season = Season::from_date(date).start_year;
+        self.current.retain(|e| {
+            !(e.is_loan
+                && e.statistics.total_games() == 0
+                && Season::from_date(e.joined_date).start_year > buyout_season)
+        });
+        self.push_new_entry(borrowing, PlayerStatistics::default(), false, Some(fee), date);
+    }
+
     pub fn record_loan_return(
         &mut self,
         remaining_stats: PlayerStatistics,

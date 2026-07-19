@@ -218,6 +218,14 @@ impl PipelineProcessor {
                     if !plan.monitorings_for_player(s.player_id).is_empty() {
                         return None;
                     }
+                    // Meeting rejections blocklist the player for 6 months.
+                    // The Rejected monitoring row fails is_active_interest,
+                    // so the dedup above misses him and the watch used to
+                    // re-seed a meeting-ready row the very next Monday —
+                    // an agenda churn loop the blocklist exists to stop.
+                    if plan.is_rejected(s.player_id, date) {
+                        return None;
+                    }
                     // Staged plausibility veto — importance / country route /
                     // step-down realism. Unsolicited: we're scouting on form.
                     if matches!(

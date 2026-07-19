@@ -35,7 +35,11 @@ impl Player {
         let desire_carry = self.snapshot_desire_carry();
         let source_club_reputation = t.from.reputation;
         let source_league_reputation = t.selling_league_reputation;
-        self.on_transfer(t.from, t.to, t.fee, t.date);
+        if t.loan_buyout {
+            self.on_loan_buyout(t.to, t.fee, t.date);
+        } else {
+            self.on_transfer(t.history_source, t.to, t.fee, t.date);
+        }
         self.sold_from = Some((t.selling_club_id, t.fee));
         self.reset_on_club_change();
         // No more market-state to track once they're under contract.
@@ -894,6 +898,7 @@ mod free_agent_source_aware_tests {
         ) -> TransferCompletion<'a> {
             TransferCompletion {
                 from,
+                history_source: from,
                 to,
                 fee,
                 date,
@@ -906,6 +911,7 @@ mod free_agent_source_aware_tests {
                 record_sell_on: None,
                 personal_terms: None,
                 record_decision,
+                loan_buyout: false,
             }
         }
     }

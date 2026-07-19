@@ -1,5 +1,5 @@
 use super::config::TransferConfig;
-use super::execution::DevelopmentLoanPathway;
+use super::execution::{DevelopmentLoanPathway, TransferExecution};
 use super::free_agent_depth::{
     DepthNegotiationAction, EmergencyDepthRequestIntent, EmergencyDepthRequestPlanner,
     FreeAgentNegotiationStager,
@@ -580,11 +580,16 @@ impl CountryResult {
                 // staged-negotiation flow below instead of instant
                 // signing. Explicitly marker-driven: a normal evaluated
                 // DepthCover / SquadPadding request keeps the legacy
-                // instant path. One pursuit in flight per request:
-                // Negotiating means the resolver already owns it —
-                // re-approaching daily would stack offers on the need.
+                // instant path.
                 let is_depth_request = request.is_emergency_free_agent_depth();
-                if is_depth_request && request.status == TransferRequestStatus::Negotiating {
+                // One pursuit in flight per request, for EVERY source:
+                // Negotiating means a live paid negotiation (or staged
+                // FA pursuit) already owns this need. Instant-signing on
+                // top of it delivered two players for one hole — the FA
+                // journeyman landed, `mark_group_fulfilled` stamped the
+                // request Fulfilled, and the paid negotiation still
+                // completed for the same position.
+                if request.status == TransferRequestStatus::Negotiating {
                     continue;
                 }
 
@@ -1066,8 +1071,15 @@ impl CountryResult {
                 // (no fee, no sell-on, no installments).
                 offer_clauses: Vec::new(),
             };
-            let executed =
-                super::execution::execute_transfer_within_country(country, &deferred, date);
+            // Free signings carry no fee, hence no sell-on payouts — the
+            // foreign-credit out-param stays empty by construction.
+            let mut no_foreign_credits: Vec<(u32, f64)> = Vec::new();
+            let executed = super::execution::execute_transfer_within_country(
+                country,
+                &deferred,
+                date,
+                &mut no_foreign_credits,
+            );
 
             if !executed {
                 debug!(
@@ -2573,6 +2585,14 @@ impl TransferPlanSync {
                 {
                     continue;
                 }
+                // A Negotiating request is owned by a live pursuit — the
+                // resolver stamps it at resolution. Stamping it Fulfilled
+                // here made the in-flight deal invisible to the plan: the
+                // negotiation still completed and the club ended up with
+                // two signings for one need.
+                if request.status == TransferRequestStatus::Negotiating {
+                    continue;
+                }
                 request.status = TransferRequestStatus::Fulfilled;
             }
         }
@@ -3138,9 +3158,11 @@ pub(crate) fn execute_global_free_agent_signing(
 
     let buying_club_name = buying_country.clubs[buying_club_idx].name.clone();
 
-    buying_country.clubs[buying_club_idx].teams.teams[0]
-        .players
-        .add(player);
+    // Main team by TYPE — `teams[0]` is not guaranteed to be the Main
+    // squad, and the contract/history identity and squad-cap check above
+    // were already keyed to it. The historical first-team insert rostered
+    // pool signings on whatever squad happened to sit first.
+    TransferExecution::add_to_main_team(&mut buying_country.clubs[buying_club_idx], player);
 
     // Country-level market log (separate from the player's career history
     // populated above by `complete_free_agent_signing`).
@@ -4228,6 +4250,10 @@ mod emergency_fill_tests {
             def_missing: 2,
             mid_missing: 0,
             fwd_missing: 0,
+            gk_count: 2,
+            def_count: 5,
+            mid_count: 7,
+            fwd_count: 4,
             urgent: false,
         };
         let projected = EmergencyProjectedSquad::from_needs(&needs);

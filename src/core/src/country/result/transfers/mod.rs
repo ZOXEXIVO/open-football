@@ -7,7 +7,7 @@ mod free_agents;
 mod listings;
 mod negotiations;
 mod pre_contract;
-mod settlement;
+pub(crate) mod settlement;
 pub(crate) mod types;
 
 use super::CountryResult;
@@ -18,6 +18,7 @@ use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use chrono::NaiveDate;
 use config::TransferConfig;
+use execution::TransferExecution;
 use free_agents::{GlobalFreeAgentSigning, execute_global_free_agent_signing};
 pub(crate) use free_agents::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use log::debug;
@@ -71,6 +72,12 @@ pub struct DeferredTransferOps {
     /// "signed pre-contract" vs "signed off a domestic expiry" counters
     /// from this plus `domestic_signed_ids.len()`.
     pub pre_contract_signed: u32,
+    /// Clause payouts owed to sellers that don't live in this country —
+    /// `(club_id, amount)` pairs the settler couldn't route locally.
+    /// Drained serially in Phase C via `credit_club_globally` so a
+    /// cross-border performance add-on actually reaches the foreign
+    /// seller instead of vanishing (the buyer was already debited).
+    pub cross_country_clause_credits: Vec<(u32, f64)>,
 }
 
 impl DeferredTransferOps {
@@ -87,6 +94,7 @@ impl DeferredTransferOps {
             completed_before: 0,
             completed_after: 0,
             pre_contract_signed: 0,
+            cross_country_clause_credits: Vec::new(),
         }
     }
 }
@@ -195,8 +203,11 @@ impl CountryResult {
         // performance / promotion add-ons whose triggers have just
         // fired. The settler routes cash buyer → seller (or buyer →
         // beneficiary for sell-on) so the deal's deferred cost
-        // actually lands on the books over time.
-        TransferClauseSettler::settle_due(country, current_date);
+        // actually lands on the books over time. Credits owed to
+        // foreign sellers can't be applied inside this country borrow —
+        // they ride up on `ops` and drain globally in Phase C.
+        ops.cross_country_clause_credits =
+            TransferClauseSettler::settle_due(country, current_date);
 
         // Free agents and contract expirations. Returns deferred
         // signings sourced from the global pool (`data.free_agents`),
@@ -311,6 +322,14 @@ impl CountryResult {
         // `data.free_agents` per tick via
         // `PipelineProcessor::apply_free_agent_market_bumps_batch`,
         // collapsing the old O(countries × pool) double-walk.
+
+        // Route clause credits owed to sellers outside the settling
+        // country — the buyer was debited during the parallel Phase-A
+        // pass; the foreign seller is credited here or the money is
+        // destroyed.
+        for (club_id, amount) in &ops.cross_country_clause_credits {
+            TransferExecution::credit_club_globally(data, *club_id, *amount);
+        }
 
         // Execute global free-agent signings (Move-on-Free players from
         // `data.free_agents`).
@@ -454,6 +473,7 @@ impl CountryResult {
         let mut global_offered_ids: Vec<u32> = Vec::new();
         let mut global_rejected_ids: Vec<u32> = Vec::new();
         let mut global_block_reasons: Vec<(u32, FreeAgentBlockReason)> = Vec::new();
+        let mut cross_country_clause_credits: Vec<(u32, f64)> = Vec::new();
         let deferred_transfers = if let Some(country) = data.country_mut(country_id) {
             // Sync market's window flag. On open→closed transitions this cancels
             // any stranded listings and expires pending negotiations.
@@ -479,8 +499,10 @@ impl CountryResult {
             // Daily clause settlement — installment tranches that
             // came due today, performance/promotion add-ons whose
             // triggers have crossed. Keeps the legacy path aligned
-            // with the parallel Phase-A path above.
-            TransferClauseSettler::settle_due(country, current_date);
+            // with the parallel Phase-A path above. Foreign-seller
+            // credits are drained right after the borrow ends below.
+            cross_country_clause_credits =
+                TransferClauseSettler::settle_due(country, current_date);
 
             // Free agents and contract expirations. Returns deferred
             // signings sourced from the global pool (`sim.free_agents`),
@@ -609,6 +631,13 @@ impl CountryResult {
                     player.on_market_blocked(current_date, *reason);
                 }
             }
+        }
+
+        // Route clause credits owed to sellers outside this country —
+        // the buyer was debited inside the borrow; the foreign seller
+        // is credited here or the money is destroyed.
+        for (club_id, amount) in &cross_country_clause_credits {
+            TransferExecution::credit_club_globally(data, *club_id, *amount);
         }
 
         // Execute any deferred global free-agent signings (players from

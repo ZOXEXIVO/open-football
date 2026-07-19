@@ -1,4 +1,5 @@
 use super::CountryResult;
+use super::transfers::settlement::TransferClauseSettler;
 use crate::ContractBonusType;
 use crate::PlayerContractProposal;
 use crate::club::player::behaviour_config::HappinessConfig;
@@ -1085,9 +1086,14 @@ impl CountryResult {
         };
 
         // Fee booking: buyer amortizes the purchase, seller banks it.
+        // The obligated variant always books the cash: options were
+        // affordability-checked above, and a binding obligation pays
+        // regardless of budget headroom — the fallible variant returned
+        // false for a budget-short borrower and silently minted the fee
+        // (seller credited, buyer never debited).
         data.continents[bci].countries[bcoi].clubs[bcli]
             .finance
-            .register_transfer_purchase(fee as f64, 4);
+            .register_obligated_purchase(fee as f64, 4);
         data.continents[pci].countries[pcoi].clubs[pcli]
             .finance
             .add_transfer_income(fee as f64);
@@ -1108,6 +1114,7 @@ impl CountryResult {
             let obligations = player.drain_sell_on_obligations();
             player.complete_transfer(TransferCompletion {
                 from: &parent_info,
+                history_source: &parent_info,
                 to: &event.borrowing_info,
                 fee: fee as f64,
                 date,
@@ -1125,6 +1132,11 @@ impl CountryResult {
                 // suppress the generic "permanent transfer" stamp so the
                 // register shows one decision, not two, for one event.
                 record_decision: false,
+                // History closes the ACTIVE loan spell at the borrower and
+                // opens a permanent spell there — the generic from → to
+                // recording drained the loan-season stats into a phantom
+                // parent row and left the loan spell active forever.
+                loan_buyout: true,
             });
             // No new-club arrival shock: he never changed dressing rooms.
             player.pending_signing = None;
@@ -1237,7 +1249,11 @@ impl CountryResult {
         player.on_loan_return(&event.borrowing_info, &parent_info, date);
         player.contract_loan = None;
         player.happiness = PlayerHappiness::new();
-        player.statuses.statuses.clear();
+        // The canonical transient reset — the wholesale `statuses.clear()`
+        // this replaces also wiped durable flags outside the documented
+        // club-change list (see `reset_on_club_change`, the single
+        // transient-status list every completion chokepoint runs).
+        player.reset_on_club_change();
 
         // A senior who was first-choice on loan and comes home to a
         // fringe role doesn't get a fully clean slate — the return he
@@ -1756,6 +1772,11 @@ impl CountryResult {
             })
             .collect();
 
+        // Promoted CLUB ids across every league pair — the transfer
+        // market's promotion add-on clauses key on the buying club, and
+        // this pipeline is the only place that knows who went up.
+        let mut promoted_club_ids: Vec<u32> = Vec::new();
+
         // For each league with relegation_spots > 0, find its paired league
         for &(tier1_id, tier1_tier, relegation_spots, _) in &league_info {
             if relegation_spots == 0 || tier1_tier == 0 {
@@ -1816,6 +1837,19 @@ impl CountryResult {
                 relegated_candidates.into_iter().take(swap_count).collect();
             let promoted_team_ids: Vec<u32> =
                 promoted_candidates.into_iter().take(swap_count).collect();
+
+            promoted_club_ids.extend(
+                country
+                    .clubs
+                    .iter()
+                    .filter(|c| {
+                        c.teams
+                            .teams
+                            .iter()
+                            .any(|t| promoted_team_ids.contains(&t.id))
+                    })
+                    .map(|c| c.id),
+            );
 
             // Snapshot per-team final standing so the per-player
             // relegation event can carry SeasonOutcomeContext (final
@@ -2016,6 +2050,11 @@ impl CountryResult {
                 }
             }
         }
+
+        // Fire any promotion add-on clauses owed on the promoted clubs'
+        // transfer deals — the resolver had no caller before this, so
+        // every scheduled promotion bonus silently expired unpaid.
+        TransferClauseSettler::settle_promotions(country, date, &promoted_club_ids);
 
         // Clear final tables after processing
         for league in &mut country.leagues.leagues {

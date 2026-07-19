@@ -61,6 +61,12 @@ pub struct PendingTransferClause {
     /// Last calendar date on which the clause can still fire. When `None`
     /// the clause has no end date — the `max_fires` cap retires it.
     pub expires_on: Option<NaiveDate>,
+    /// Date the underlying transfer executed. Performance triggers count
+    /// the player's at-club record from this point — without it, a spell
+    /// at the club from years earlier would pre-fire an appearance
+    /// milestone written on the new deal. `None` on legacy rows: the
+    /// settler then counts the full at-club record.
+    pub created_on: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone)]
@@ -242,6 +248,7 @@ impl TransferMarket {
                 max_fires: 1,
                 fires_so_far: 0,
                 expires_on: None,
+                created_on: Some(start_date),
             });
             next_id += 1;
         }
@@ -260,6 +267,7 @@ impl TransferMarket {
         trigger: ClauseTrigger,
         amount: f64,
         expires_on: Option<NaiveDate>,
+        created_on: NaiveDate,
     ) {
         if amount <= 0.0 {
             return;
@@ -277,6 +285,7 @@ impl TransferMarket {
             max_fires: 1,
             fires_so_far: 0,
             expires_on,
+            created_on: Some(created_on),
         });
     }
 
@@ -325,8 +334,11 @@ impl TransferMarket {
         mut goal_count: G,
     ) -> Vec<PendingTransferClause>
     where
-        F: FnMut(u32, u32) -> Option<u32>, // (player_id, buying_club_id) -> apps
-        G: FnMut(u32, u32) -> Option<u32>, // (player_id, buying_club_id) -> goals
+        // (player_id, buying_club_id, clause created_on) -> counter.
+        // `created_on` lets the counter source scope the at-club record
+        // to the deal the clause belongs to.
+        F: FnMut(u32, u32, Option<NaiveDate>) -> Option<u32>,
+        G: FnMut(u32, u32, Option<NaiveDate>) -> Option<u32>,
     {
         let mut fired: Vec<PendingTransferClause> = Vec::new();
         let mut keep: Vec<PendingTransferClause> = Vec::with_capacity(self.pending_clauses.len());
@@ -338,12 +350,12 @@ impl TransferMarket {
             }
             let crosses_threshold = match clause.trigger {
                 ClauseTrigger::AppearanceMilestone { target_appearances } => {
-                    appearance_count(clause.player_id, clause.buying_club_id)
+                    appearance_count(clause.player_id, clause.buying_club_id, clause.created_on)
                         .map(|apps| apps >= target_appearances)
                         .unwrap_or(false)
                 }
                 ClauseTrigger::GoalMilestone { target_goals } => {
-                    goal_count(clause.player_id, clause.buying_club_id)
+                    goal_count(clause.player_id, clause.buying_club_id, clause.created_on)
                         .map(|goals| goals >= target_goals)
                         .unwrap_or(false)
                 }
@@ -454,10 +466,29 @@ impl TransferMarket {
 
         // Find the listing. InNegotiation remains eligible so several clubs
         // can bid for the same player while the seller compares offers.
-        if let Some(listing_index) = self.listings.iter().position(|l| {
+        // Prefer a listing whose TYPE matches the deal being opened (the
+        // offer carries a loan duration only for loan bids): a loan bid on
+        // a player who is both transfer- and loan-listed must bind to the
+        // Loan listing, or its asking price anchors the loan-fee talks at
+        // the full permanent valuation. Falls back to any open listing when
+        // no type-matched one exists (unsolicited approaches back their bid
+        // with a synthetic listing of the right type anyway).
+        let wants_loan_listing = offer.loan_duration_months.is_some();
+        let open_listing = |l: &TransferListing| {
             l.player_id == player_id
                 && (l.status == TransferListingStatus::Available
                     || l.status == TransferListingStatus::InNegotiation)
+        };
+        let type_matched = self.listings.iter().position(|l| {
+            open_listing(l)
+                && if wants_loan_listing {
+                    l.listing_type == TransferListingType::Loan
+                } else {
+                    l.listing_type != TransferListingType::Loan
+                }
+        });
+        if let Some(listing_index) = type_matched.or_else(|| {
+            self.listings.iter().position(open_listing)
         }) {
             let listing = &mut self.listings[listing_index];
 
@@ -693,6 +724,7 @@ impl TransferMarket {
         for listing in &mut self.listings {
             if listing.player_id == player_id
                 && listing.club_id == selling_club_id
+                && listing.is_seller_advertised()
                 && matches!(
                     listing.status,
                     TransferListingStatus::Completed | TransferListingStatus::Cancelled
@@ -715,7 +747,15 @@ impl TransferMarket {
                 if listing.player_id == player_id
                     && listing.status == TransferListingStatus::InNegotiation
                 {
-                    listing.status = TransferListingStatus::Available;
+                    // Synthetic rows die with the bid they backed —
+                    // reopening one advertises a player his parent never
+                    // listed (listings are append-only, so the ghost row
+                    // would live forever).
+                    listing.status = if listing.is_seller_advertised() {
+                        TransferListingStatus::Available
+                    } else {
+                        TransferListingStatus::Cancelled
+                    };
                 }
             }
         }
