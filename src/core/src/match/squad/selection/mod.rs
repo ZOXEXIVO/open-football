@@ -25,6 +25,7 @@ use std::collections::HashSet;
 
 use helpers::*;
 use model::MatchSelectionGameModel;
+use rotation::{DevelopmentSelection, DevelopmentStakes, MatchInvolvement};
 use scoring::ScoringEngine;
 
 use chrono::Utc;
@@ -490,6 +491,10 @@ impl SquadSelector {
             reserve_players,
             &SelectionContext {
                 is_friendly: true,
+                // A bare rotation call is a pure development fixture — the
+                // default competitive importance (0.7) would read as real
+                // stakes and suppress the minutes plan.
+                match_importance: 0.1,
                 ..SelectionContext::default()
             },
         )
@@ -553,8 +558,22 @@ impl SquadSelector {
             }
         }
 
-        let main_squad =
-            rotation::select_rotation_starting_eleven(team.id, &available, staff, tactics.borrow());
+        // Development selector: season minutes plan + keeper rotation
+        // blocks + stakes slider. `team_matches` is estimated from the
+        // team's own roster (not the merged reserve pool) so borrowed
+        // players' senior appearance counts can't inflate the season
+        // length the deficits are measured against.
+        let development = DevelopmentSelection {
+            team_id: team.id,
+            tactics: tactics.borrow(),
+            date: ctx.date,
+            team_type: team.team_type,
+            stakes: DevelopmentStakes::from_context(ctx.match_importance, ctx.is_friendly),
+            team_matches: MatchInvolvement::team_matches_estimate(&team.players.players()),
+            coach: CoachProfile::from_staff(staff),
+        };
+
+        let main_squad = development.select_starting_eleven(&available);
 
         let main_squad_ids: HashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
         let remaining: Vec<&Player> = available
@@ -563,8 +582,7 @@ impl SquadSelector {
             .copied()
             .collect();
 
-        let mut substitutes =
-            rotation::select_rotation_substitutes(team.id, &remaining, staff, tactics.borrow());
+        let mut substitutes = development.select_substitutes(&remaining);
 
         if substitutes.is_empty() && !remaining.is_empty() {
             debug!(

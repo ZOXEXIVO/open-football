@@ -42,6 +42,21 @@ impl TeamType {
         }
     }
 
+    /// Last eligible age for an age-restricted development squad. The
+    /// season a player reaches it is his showcase year — the club must
+    /// decide whether he steps up or leaves, so development selection
+    /// gives him a minutes bump. `None` for senior team types.
+    pub fn development_age_cap(&self) -> Option<u8> {
+        match self {
+            TeamType::U18 => Some(18),
+            TeamType::U19 => Some(19),
+            TeamType::U20 => Some(20),
+            TeamType::U21 => Some(21),
+            TeamType::U23 => Some(23),
+            _ => None,
+        }
+    }
+
     /// Age-restricted development squads (U18..U23). They compete in
     /// friendly youth leagues, so they never accumulate the *official*
     /// appearances the senior squad-utilization audit reads — the idle-days

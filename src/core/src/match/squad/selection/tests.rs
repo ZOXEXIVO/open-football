@@ -3,6 +3,7 @@ use super::*;
 use crate::PlayerPositions;
 use crate::StaffStub;
 use crate::Team;
+use crate::club::player::skills::{Goalkeeping, Mental, Physical, Technical};
 use crate::club::{ClubPhilosophy, PlayerFieldPositionGroup};
 use crate::{
     ChangeType, IntegerUtils, MatchTacticType, PeopleNameGeneratorData, PlayerClubContract,
@@ -18,6 +19,81 @@ fn test_names() -> PeopleNameGeneratorData {
         first_names: vec!["Test".to_string()],
         last_names: vec!["Player".to_string()],
         nicknames: Vec::new(),
+    }
+}
+
+/// Uniform skill stamp for synthetic fixture players. Selection
+/// perception reads observable skills (`observable_level` /
+/// `observable_ceiling`), not the CA digit — `PlayerGenerator` ignores
+/// the level argument for skills, so without this stamp a "weak" and a
+/// "strong" fixture player carry the same random academy skills and are
+/// indistinguishable to any skill-based term.
+struct FixtureSkills;
+
+impl FixtureSkills {
+    fn stamp(player: &mut Player, level: f32) {
+        let v = level.clamp(1.0, 20.0);
+        player.skills.technical = Technical {
+            corners: v,
+            crossing: v,
+            dribbling: v,
+            finishing: v,
+            first_touch: v,
+            free_kicks: v,
+            heading: v,
+            long_shots: v,
+            long_throws: v,
+            marking: v,
+            passing: v,
+            penalty_taking: v,
+            tackling: v,
+            technique: v,
+        };
+        player.skills.mental = Mental {
+            aggression: v,
+            anticipation: v,
+            bravery: v,
+            composure: v,
+            concentration: v,
+            decisions: v,
+            determination: v,
+            flair: v,
+            leadership: v,
+            off_the_ball: v,
+            positioning: v,
+            teamwork: v,
+            vision: v,
+            work_rate: v,
+        };
+        let match_readiness = player.skills.physical.match_readiness;
+        player.skills.physical = Physical {
+            acceleration: v,
+            agility: v,
+            balance: v,
+            jumping: v,
+            natural_fitness: v,
+            pace: v,
+            stamina: v,
+            strength: v,
+            match_readiness,
+        };
+        if player.positions.is_goalkeeper() {
+            player.skills.goalkeeping = Goalkeeping {
+                aerial_reach: v,
+                command_of_area: v,
+                communication: v,
+                eccentricity: v,
+                first_touch: v,
+                handling: v,
+                kicking: v,
+                one_on_ones: v,
+                passing: v,
+                punching: v,
+                reflexes: v,
+                rushing_out: v,
+                throwing: v,
+            };
+        }
     }
 }
 
@@ -637,6 +713,7 @@ fn make_test_player(
     player.player_attributes.condition = 9500;
     player.player_attributes.fitness = 9000;
     player.player_attributes.days_since_last_match = 7;
+    FixtureSkills::stamp(&mut player, current_ability as f32 / 10.0);
     player
 }
 
@@ -1560,7 +1637,7 @@ fn friendly_rotation_ignores_force_selection() {
     let mut players = Vec::new();
     let mut id = 1u32;
     for &pos in slots.iter() {
-        players.push(make_cup_player(
+        let mut regular = make_cup_player(
             id,
             pos,
             16,
@@ -1569,7 +1646,11 @@ fn friendly_rotation_ignores_force_selection() {
             6,
             12,
             80.0,
-        ));
+        );
+        // The rotation path judges players on observable skills, so the
+        // strength gap must live in the skills, not just the CA digit.
+        FixtureSkills::stamp(&mut regular, 16.0);
+        players.push(regular);
         id += 1;
     }
     // A weak pinned midfielder: forced in a competitive match, ignored here.
@@ -1583,6 +1664,7 @@ fn friendly_rotation_ignores_force_selection() {
         2,
         80.0,
     );
+    FixtureSkills::stamp(&mut weak, 6.0);
     weak.is_force_match_selection = true;
     players.push(weak);
 
@@ -3800,4 +3882,218 @@ mod national_callup_tests {
         assert_eq!(req.min_goalkeepers, 3);
         assert!(req.min_left_flank >= 2 && req.min_right_flank >= 2);
     }
+}
+
+// ========== Development minutes economy (youth-league rotation) ==========
+
+/// One development-league matchday: run the rotation selector, book each
+/// starter's appearance into the friendly bucket (development leagues are
+/// friendly-flagged) and advance the idle-days clock a week — the same
+/// state the real weekly matchday loop leaves behind.
+fn play_development_round(team: &mut Team, staff: &Staff) -> Vec<u32> {
+    let ctx = SelectionContext {
+        is_friendly: true,
+        match_importance: 0.1,
+        ..SelectionContext::default()
+    };
+    let result = SquadSelector::select_for_rotation_with_context(team, staff, &[], &ctx);
+    let starters: Vec<u32> = result.main_squad.iter().map(|p| p.id).collect();
+    for player in team.players.players.iter_mut() {
+        if starters.contains(&player.id) {
+            player.friendly_statistics.played += 1;
+            player.player_attributes.days_since_last_match = 0;
+        }
+        player.player_attributes.days_since_last_match += 7;
+    }
+    starters
+}
+
+#[test]
+fn development_league_shares_goalkeeper_starts_in_blocks() {
+    // Two identical keepers in a U19 side playing a weekly development
+    // league: both must get a real share of starts, handed over in
+    // multi-match blocks — not a season-long monopoly (the old
+    // condition-first pick) and not per-match alternation (keepers need
+    // runs to build rhythm).
+    let staff = generate_test_staff();
+    let mut players = gk_outfield(4);
+    let keeper_a = make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        14,
+        PlayerSquadStatus::FirstTeamRegular,
+        18,
+        30,
+        0,
+        0.0,
+    );
+    let mut keeper_b = keeper_a.clone();
+    keeper_b.id = 2;
+    players.push(keeper_a);
+    players.push(keeper_b);
+    let mut team = cup_team(players);
+    team.team_type = TeamType::U19;
+
+    let mut gloves: Vec<u32> = Vec::new();
+    for _ in 0..20 {
+        let starters = play_development_round(&mut team, &staff);
+        let gk = starters
+            .iter()
+            .find(|id| **id == 1 || **id == 2)
+            .copied()
+            .expect("a real keeper must start every development match");
+        gloves.push(gk);
+    }
+
+    let starts_a = gloves.iter().filter(|&&id| id == 1).count();
+    let starts_b = gloves.iter().filter(|&&id| id == 2).count();
+    assert!(
+        starts_a >= 6 && starts_b >= 6,
+        "both keepers must get real starts over a season: A={} B={} ({:?})",
+        starts_a,
+        starts_b,
+        gloves
+    );
+
+    let switches = gloves.windows(2).filter(|w| w[0] != w[1]).count();
+    assert!(
+        switches >= 2,
+        "the gloves must change hands during the season: {:?}",
+        gloves
+    );
+    assert!(
+        switches <= 9,
+        "keeper rotation must come in blocks, not per-match alternation: {:?}",
+        gloves
+    );
+}
+
+#[test]
+fn development_league_minutes_deficit_rotates_the_squad() {
+    // A U19 squad with two identical players per outfield slot plus two
+    // keepers, playing 16 weekly rounds. The minutes plan must hand every
+    // outfielder real starts — nobody rots on 0 appearances (the old
+    // rest-signal selector fielded the same XI all season) and nobody
+    // monopolises a slot.
+    let staff = generate_test_staff();
+    let slots = [
+        PlayerPositionType::DefenderLeft,
+        PlayerPositionType::DefenderCenterLeft,
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::MidfielderRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardRight,
+    ];
+    let mut players = Vec::new();
+    let mut id = 100u32;
+    for &pos in slots.iter() {
+        let first = make_cup_player(
+            id,
+            pos,
+            15,
+            PlayerSquadStatus::FirstTeamRegular,
+            18,
+            14,
+            0,
+            0.0,
+        );
+        let mut twin = first.clone();
+        twin.id = id + 50;
+        players.push(first);
+        players.push(twin);
+        id += 1;
+    }
+    let keeper = make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        14,
+        PlayerSquadStatus::FirstTeamRegular,
+        18,
+        14,
+        0,
+        0.0,
+    );
+    let mut backup_keeper = keeper.clone();
+    backup_keeper.id = 2;
+    players.push(keeper);
+    players.push(backup_keeper);
+    let mut team = cup_team(players);
+    team.team_type = TeamType::U19;
+
+    for _ in 0..16 {
+        play_development_round(&mut team, &staff);
+    }
+
+    for player in team.players.players.iter() {
+        if player.positions.is_goalkeeper() {
+            continue;
+        }
+        let starts = player.friendly_statistics.played;
+        assert!(
+            starts >= 3,
+            "player {} rotted on {} starts of 16 — the minutes plan must reach everyone",
+            player.id,
+            starts
+        );
+        assert!(
+            starts <= 13,
+            "player {} started {} of 16 — no outfielder monopolises a development slot",
+            player.id,
+            starts
+        );
+    }
+}
+
+#[test]
+fn high_stakes_youth_fixture_fields_strongest_goalkeeper() {
+    // A must-win youth fixture (cup final semantics): the stakes slider
+    // overrides the minutes plan and the club's best keeper starts, even
+    // though the backup is owed starts and held the gloves last match.
+    let staff = generate_test_staff();
+    let mut players = gk_outfield(4);
+    let mut first_choice = make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::FirstTeamRegular,
+        18,
+        14,
+        0,
+        0.0,
+    );
+    FixtureSkills::stamp(&mut first_choice, 16.0);
+    first_choice.friendly_statistics.played = 12;
+    let mut backup = make_cup_player(
+        2,
+        PlayerPositionType::Goalkeeper,
+        10,
+        PlayerSquadStatus::FirstTeamRegular,
+        17,
+        7,
+        0,
+        0.0,
+    );
+    FixtureSkills::stamp(&mut backup, 10.0);
+    backup.friendly_statistics.played = 2;
+    players.push(first_choice);
+    players.push(backup);
+    let mut team = cup_team(players);
+    team.team_type = TeamType::U19;
+
+    let ctx = SelectionContext {
+        is_friendly: false,
+        match_importance: 0.95,
+        ..SelectionContext::default()
+    };
+    let result = SquadSelector::select_for_rotation_with_context(&team, &staff, &[], &ctx);
+
+    assert_eq!(
+        starting_goalkeeper_id(&result),
+        Some(1),
+        "a must-win fixture reverts to the strongest keeper"
+    );
 }
