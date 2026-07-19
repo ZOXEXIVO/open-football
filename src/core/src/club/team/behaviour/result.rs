@@ -183,42 +183,44 @@ impl TeamBehaviourResult {
                         _ => HappinessEventType::ManagerPraise,
                     }
                 } else {
-                    // A failed talk is a manager interaction outcome —
-                    // model it as ManagerCriticism (or Discipline), not
-                    // PoorTraining, which is reserved for actual
-                    // training-ground sessions.
+                    // A failed talk that actually stung is a manager
+                    // interaction outcome — model it as ManagerCriticism
+                    // (or Discipline), not PoorTraining, which is
+                    // reserved for actual training-ground sessions.
                     match talk.talk_type {
                         ManagerTalkType::Discipline => HappinessEventType::ManagerDiscipline,
                         _ => HappinessEventType::ManagerCriticism,
                     }
                 };
-                let topic = ManagerInteractionTopicMapper::from_talk(&talk.talk_type);
-                let tone = ManagerInteractionToneMapper::from_interaction(&talk.tone);
-                let acceptance = ManagerInteractionAcceptanceMapper::from_outcome(
-                    talk.success,
-                    talk.morale_change,
-                );
-                let mut mctx = ManagerInteractionEventContext::new(topic, tone, acceptance)
-                    .with_manager_staff_id(talk.staff_id);
-                if matches!(
-                    talk.talk_type,
-                    ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest
-                ) {
-                    let credibility = if talk.honest_framing { 0.9 } else { 0.55 };
-                    mctx = mctx.with_promise(PromiseKind::PlayingTime, credibility);
+                if TalkFeedGate::feed_worthy(&talk.talk_type, talk.success, talk.morale_change) {
+                    let topic = ManagerInteractionTopicMapper::from_talk(&talk.talk_type);
+                    let tone = ManagerInteractionToneMapper::from_interaction(&talk.tone);
+                    let acceptance = ManagerInteractionAcceptanceMapper::from_outcome(
+                        talk.success,
+                        talk.morale_change,
+                    );
+                    let mut mctx = ManagerInteractionEventContext::new(topic, tone, acceptance)
+                        .with_manager_staff_id(talk.staff_id);
+                    if matches!(
+                        talk.talk_type,
+                        ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest
+                    ) {
+                        let credibility = if talk.honest_framing { 0.9 } else { 0.55 };
+                        mctx = mctx.with_promise(PromiseKind::PlayingTime, credibility);
+                    }
+                    let happiness_ctx = HappinessEventContext::new(
+                        HappinessEventCause::Other,
+                        HappinessEventSeverity::from_magnitude(talk.morale_change),
+                        HappinessEventScope::DressingRoom,
+                    )
+                    .with_manager_interaction_context(mctx);
+                    player.happiness.add_event_with_context(
+                        event_type,
+                        talk.morale_change,
+                        None,
+                        happiness_ctx,
+                    );
                 }
-                let happiness_ctx = HappinessEventContext::new(
-                    HappinessEventCause::Other,
-                    HappinessEventSeverity::from_magnitude(talk.morale_change),
-                    HappinessEventScope::DressingRoom,
-                )
-                .with_manager_interaction_context(mctx);
-                player.happiness.add_event_with_context(
-                    event_type,
-                    talk.morale_change,
-                    None,
-                    happiness_ctx,
-                );
 
                 let mut promise_created = false;
 
@@ -1014,6 +1016,23 @@ pub(crate) fn topic_for_talk(talk: ManagerTalkType) -> InteractionTopic {
     }
 }
 
+/// Whether a manager-talk outcome deserves a row in the player's events
+/// feed. A failed talk that left the player neutral or better is not a
+/// life event: a praise chat the kid shrugged off (+1.0 morale) or a
+/// transfer discussion that changed nothing (0.0) used to land as
+/// `ManagerCriticism` and render as performance criticism — absurd for a
+/// youth player who hadn't played a minute. Relationship / rapport
+/// effects always apply; only the feed row is gated. Discipline is
+/// exempt: a dressing-down is an event whatever the morale arithmetic
+/// says.
+struct TalkFeedGate;
+
+impl TalkFeedGate {
+    fn feed_worthy(talk_type: &ManagerTalkType, success: bool, morale_change: f32) -> bool {
+        success || morale_change < 0.0 || matches!(talk_type, ManagerTalkType::Discipline)
+    }
+}
+
 struct ManagerInteractionTopicMapper;
 
 impl ManagerInteractionTopicMapper {
@@ -1022,9 +1041,13 @@ impl ManagerInteractionTopicMapper {
             ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest => {
                 ManagerInteractionTopic::PlayingTime
             }
-            ManagerTalkType::Praise
-            | ManagerTalkType::MoraleTalk
-            | ManagerTalkType::Motivational => ManagerInteractionTopic::Performance,
+            ManagerTalkType::Praise => ManagerInteractionTopic::Performance,
+            // Morale / motivational chats are about the player's state of
+            // mind, not his performances — mapping them to Performance
+            // made a failed pep talk render as performance criticism.
+            ManagerTalkType::MoraleTalk | ManagerTalkType::Motivational => {
+                ManagerInteractionTopic::Other
+            }
             ManagerTalkType::Discipline => ManagerInteractionTopic::Discipline,
             ManagerTalkType::TransferDiscussion => ManagerInteractionTopic::Other,
             ManagerTalkType::LoanRequest => ManagerInteractionTopic::Other,
@@ -1068,6 +1091,63 @@ impl ManagerInteractionAcceptanceMapper {
         } else {
             PlayerAcceptance::Ambivalent
         }
+    }
+}
+
+#[cfg(test)]
+mod talk_feed_gate_tests {
+    use super::*;
+
+    /// The Tsaliev case: a failed praise talk carries +1.0 morale — the
+    /// kid was simply unmoved. That must never reach the feed (it used to
+    /// render as "Criticised by manager after poor performance" for a
+    /// player with zero minutes).
+    #[test]
+    fn unmoved_failed_praise_talk_stays_out_of_the_feed() {
+        assert!(!TalkFeedGate::feed_worthy(
+            &ManagerTalkType::Praise,
+            false,
+            1.0
+        ));
+    }
+
+    /// A transfer discussion that changed nothing (0.0) is equally not an
+    /// event.
+    #[test]
+    fn neutral_failed_transfer_discussion_stays_out_of_the_feed() {
+        assert!(!TalkFeedGate::feed_worthy(
+            &ManagerTalkType::TransferDiscussion,
+            false,
+            0.0
+        ));
+    }
+
+    /// Failed talks that actually stung remain feed events — the
+    /// difficult conversation is real football life.
+    #[test]
+    fn stinging_failed_talks_reach_the_feed() {
+        assert!(TalkFeedGate::feed_worthy(
+            &ManagerTalkType::MoraleTalk,
+            false,
+            -3.0
+        ));
+        assert!(TalkFeedGate::feed_worthy(
+            &ManagerTalkType::PlayingTimeTalk,
+            false,
+            -5.0
+        ));
+    }
+
+    /// Discipline is an event whatever the morale arithmetic says, and
+    /// every successful talk keeps its row.
+    #[test]
+    fn discipline_and_successes_always_reach_the_feed() {
+        assert!(TalkFeedGate::feed_worthy(
+            &ManagerTalkType::Discipline,
+            false,
+            0.0
+        ));
+        assert!(TalkFeedGate::feed_worthy(&ManagerTalkType::Praise, true, 5.0));
     }
 }
 
