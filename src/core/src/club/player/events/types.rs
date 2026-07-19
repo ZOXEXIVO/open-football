@@ -83,6 +83,9 @@ pub struct MatchOutcome<'a> {
     /// appearance so it freezes under the right season; ignored for the
     /// home bucket. 0 when unresolved.
     pub match_season_year: u16,
+    /// Calendar date the match was played. Drives age reads in the
+    /// appearance-milestone handlers (senior debut).
+    pub date: NaiveDate,
 }
 
 impl<'a> MatchOutcome<'a> {

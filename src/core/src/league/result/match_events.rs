@@ -2249,6 +2249,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
                     },
                 ),
                 match_season_year,
+                date: today_date,
             });
             coach_observations.push(CoachObservationBuilder::build(
                 player,
@@ -2307,6 +2308,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
             opponent_team_id,
             played_for: None,
             match_season_year: 0,
+            date: today_date,
         }
         .big_match_kind();
 

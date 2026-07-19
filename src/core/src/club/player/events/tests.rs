@@ -130,6 +130,7 @@ fn outcome<'a>(
         opponent_team_id: Some(999),
         played_for: None,
         match_season_year: 0,
+        date: d(2026, 9, 1),
     }
 }
 
@@ -190,6 +191,7 @@ fn borrowed_appearance_books_to_secondary_team_not_home() {
             league_name: "Premier League",
         }),
         match_season_year: 2026,
+        date: d(2026, 9, 1),
     };
     p.on_match_played(&o);
 
@@ -241,6 +243,7 @@ fn home_appearance_books_to_player_statistics() {
             league_name: "Second Division B2",
         }),
         match_season_year: 2026,
+        date: d(2026, 9, 1),
     };
     p.on_match_played(&o);
 
@@ -6162,5 +6165,96 @@ fn on_match_played_form_and_average_agree_under_effective_rating() {
         (avg - 7.2).abs() < 0.05,
         "average should sit near effective 7.2, got {}",
         avg
+    );
+}
+
+// ── Senior debut (first official appearance) ──
+
+#[test]
+fn first_official_appearance_fires_youth_breakthrough() {
+    // An 18-year-old youth-rostered player's first official football — a
+    // senior cameo — is his debut: the YouthBreakthrough event fires at
+    // the match, not only at a later permanent squad move.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.birth_date = d(2008, 3, 1);
+    let s = stats(7.0, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        7.0,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Substitute,
+    );
+    p.on_match_played(&o);
+
+    assert_eq!(
+        count_events(&p, &HappinessEventType::YouthBreakthrough),
+        1,
+        "a first official appearance is the senior debut"
+    );
+
+    // A second appearance must not fire another breakthrough.
+    p.on_match_played(&o);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::YouthBreakthrough),
+        1,
+        "the debut event is one-shot"
+    );
+}
+
+#[test]
+fn friendly_appearance_is_not_a_senior_debut() {
+    // Youth-league fixtures are friendly-flagged — running up youth-league
+    // appearances never reads as a senior debut.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.birth_date = d(2008, 3, 1);
+    let s = stats(7.0, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        7.0,
+        true,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+
+    assert_eq!(
+        count_events(&p, &HappinessEventType::YouthBreakthrough),
+        0,
+        "friendly football is not a debut"
+    );
+}
+
+#[test]
+fn first_official_appearance_of_an_established_senior_is_not_a_debut() {
+    // Season counters reset every year — the first game of a new season
+    // for a 26-year-old must not read as a breakthrough.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let s = stats(7.0, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        7.0,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+
+    assert_eq!(
+        count_events(&p, &HappinessEventType::YouthBreakthrough),
+        0,
+        "an established senior's season opener is not a debut"
     );
 }

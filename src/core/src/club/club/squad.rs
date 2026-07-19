@@ -3,7 +3,8 @@ use super::graduation_salary;
 use crate::club::player::calculators::{
     AutomaticReleaseEligibility, FreeAgentReleaseReason, ReleaseEligibilityContext,
 };
-use crate::club::staff::perception::AbilityEstimator;
+use crate::club::ClubPhilosophy;
+use crate::club::staff::perception::{AbilityEstimator, CoachProfile, DevelopmentFormEvidence};
 use crate::club::team::squad::SquadAssetContext;
 use crate::{
     ContractType, Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerStatusType,
@@ -62,8 +63,8 @@ impl Club {
         }
 
         // Per-position promotion floor on the main team. Using a single
-        // global "bottom-3 CA" floor across all positions caused a keeper
-        // ping-pong: a youth GK at CA 82 cleared the global floor (~75)
+        // global "bottom-3" floor across all positions caused a keeper
+        // ping-pong: a youth GK at 82 cleared the global floor (~75)
         // even when the main team already had three senior keepers at
         // 100+, so the depth-cap demoted a keeper every pass and another
         // youth GK got promoted the next week. The position-aware floor
@@ -73,6 +74,11 @@ impl Club {
         // depth per group: if main has fewer than `MIN_MAIN_DEPTH` at a
         // position (retirement, transfer, release), any youth above
         // `DEPTH_GAP_FLOOR` is eligible to plug the gap.
+        //
+        // Both sides of the comparison read the coach-observable level
+        // (visible skill + results + training), never the hidden CA
+        // digit — a promotion is a staff judgement on what they can see,
+        // consistent with the surplus trim below.
         const MIN_MAIN_DEPTH: &[(PlayerFieldPositionGroup, usize)] = &[
             (PlayerFieldPositionGroup::Goalkeeper, 2),
             (PlayerFieldPositionGroup::Defender, 6),
@@ -86,7 +92,7 @@ impl Club {
                 .players
                 .iter()
                 .filter(|p| p.position().position_group() == group)
-                .map(|p| p.player_attributes.current_ability)
+                .map(|p| AbilityEstimator::observable_level(p))
                 .fold((0usize, u8::MAX), |(c, w), a| (c + 1, w.min(a)));
             (count, if count == 0 { 0 } else { worst })
         };
@@ -109,6 +115,14 @@ impl Club {
 
         let mut moves: Vec<PendingMove> = Vec::new();
 
+        // Club-level promotion aggressiveness, computed once: a head coach
+        // who judges potential well moves on a prospect earlier, and a
+        // develop-and-sell club earlier still. The per-player senior-cameo
+        // discount stacks on top inside the loop.
+        let head_coach_profile =
+            CoachProfile::from_staff(self.teams.teams[main_idx].staffs.head_coach());
+        let club_discount = PromotionEvidence::club_discount(&head_coach_profile, &self.philosophy);
+
         for (ti, team) in self.teams.iter().enumerate() {
             if ti == main_idx || team.team_type == TeamType::Main {
                 continue;
@@ -118,15 +132,22 @@ impl Club {
 
             for p in team.players.iter() {
                 let age = p.age(date);
-                let ca = p.player_attributes.current_ability;
+                let level = AbilityEstimator::observable_level(p);
                 let overage = max_age.map_or(false, |limit| age > limit);
 
                 // Never promote players marked for departure
                 let listed =
                     p.statuses.has(PlayerStatusType::Lst) || p.statuses.has(PlayerStatusType::Loa);
 
-                let floor = promotion_threshold(p.position().position_group());
-                if ca >= floor && !listed {
+                // Senior cameos already earned via matchday call-ups are
+                // direct evidence the player belongs — each one buys the
+                // bar down, so the staged pipeline (call-up → cameos →
+                // promotion) converges instead of waiting for the kid to
+                // out-level a senior on the training pitch alone.
+                let cameo_discount = PromotionEvidence::cameo_discount(p, team.team_type);
+                let floor = promotion_threshold(p.position().position_group())
+                    .saturating_sub(club_discount + cameo_discount);
+                if level >= floor && !listed {
                     moves.push(PendingMove {
                         from: ti,
                         to: main_idx,
@@ -350,7 +371,7 @@ impl Club {
                     if p.is_force_match_selection {
                         continue;
                     }
-                    candidates.push((ti, p.id, p.player_attributes.current_ability));
+                    candidates.push((ti, p.id, AbilityEstimator::observable_level(p)));
                 }
             }
 
@@ -727,6 +748,57 @@ impl Club {
     }
 }
 
+/// Evidence-based adjustments to the first-team promotion bar in
+/// [`Club::rebalance_squads`]. Real clubs don't wait for a prospect to
+/// out-train the worst senior: senior cameos already played, a coach who
+/// reads potential well, and a development-first club identity all bring
+/// the decision forward. Every input is observable — appearance counters
+/// and staff profile, never hidden attributes.
+struct PromotionEvidence;
+
+impl PromotionEvidence {
+    /// Bar discount per senior appearance already made (observable-level
+    /// points on the 1..200 scale).
+    const PER_SENIOR_APP: u16 = 3;
+    /// Cap on the cameo discount — four-plus senior games are a made
+    /// case; more cameos shouldn't erode the bar indefinitely.
+    const CAMEO_DISCOUNT_CAP: u16 = 12;
+    /// Reach of the head coach's potential judgement on the bar.
+    const JUDGEMENT_SPAN: f32 = 4.0;
+    /// Extra aggressiveness for a develop-and-sell club.
+    const DEVELOP_AND_SELL_DISCOUNT: u8 = 4;
+
+    /// Senior appearances a youth-rostered player has already made.
+    /// Youth-league fixtures are friendly-flagged and book into the
+    /// friendly bucket, so for an age-restricted squad the official
+    /// league + cup counters only move when the player turns out for a
+    /// senior side — they ARE his senior-cameo record. Senior reserve
+    /// squads (B/Second/Reserve) play official football of their own, so
+    /// no such read exists for them.
+    fn cameo_discount(player: &Player, team_type: TeamType) -> u8 {
+        if !team_type.is_youth() {
+            return 0;
+        }
+        let senior_apps = player.statistics.played
+            + player.statistics.played_subs
+            + player.cup_statistics.played
+            + player.cup_statistics.played_subs;
+        (senior_apps * Self::PER_SENIOR_APP).min(Self::CAMEO_DISCOUNT_CAP) as u8
+    }
+
+    /// Club-level bar discount from the head coach's potential judgement
+    /// and the club philosophy.
+    fn club_discount(profile: &CoachProfile, philosophy: &ClubPhilosophy) -> u8 {
+        let judgement =
+            (profile.potential_accuracy.clamp(0.0, 1.0) * Self::JUDGEMENT_SPAN).round() as u8;
+        let identity = match philosophy {
+            ClubPhilosophy::DevelopAndSell => Self::DEVELOP_AND_SELL_DISCOUNT,
+            _ => 0,
+        };
+        judgement + identity
+    }
+}
+
 /// Youth → professional contract promotion on merit: deciding whether a
 /// youth-contract player has earned pro terms, and performing the upgrade.
 /// Both the promotion sites in [`Club::rebalance_squads`] and the weekly
@@ -749,6 +821,12 @@ impl ProfessionalContractPromotion {
     /// above the positional neutral (~6.6). The realistic average already
     /// regresses small samples toward neutral, so a hot three-game streak
     /// can't trigger it — the player must sustain the form.
+    ///
+    /// Reads [`DevelopmentFormEvidence`] — the season bucket that actually
+    /// carries the player's football. Youth-league fixtures book into the
+    /// friendly bucket, so judging only the official counters (as this
+    /// gate originally did) made academy-league form invisible and the
+    /// merit upgrade effectively fired only off borrowed senior minutes.
     fn is_earned(player: &Player, date: NaiveDate) -> bool {
         let is_youth = player
             .contract
@@ -768,12 +846,11 @@ impl ProfessionalContractPromotion {
         if player.age(date) < Self::MIN_AGE {
             return false;
         }
-        if player.statistics.total_games() < Self::MIN_GAMES {
+        if DevelopmentFormEvidence::games(player) < Self::MIN_GAMES {
             return false;
         }
 
-        let pos = player.position().position_group();
-        player.statistics.average_rating_realistic(pos) >= Self::MIN_RATING
+        DevelopmentFormEvidence::regressed_rating(player) >= Self::MIN_RATING
     }
 
     /// Upgrade a youth contract to a full professional contract. Used both
@@ -1165,6 +1242,187 @@ mod trim_surplus_tests {
 }
 
 #[cfg(test)]
+mod promotion_evidence_tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
+        PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
+        StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TrainingSchedule,
+    };
+    use chrono::{Datelike, NaiveTime};
+
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()
+        }
+
+        fn schedule() -> TrainingSchedule {
+            TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            )
+        }
+
+        fn player(id: u32, position: PlayerPositionType, ability: u8, age: u8) -> Player {
+            let date = Self::date();
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ability;
+            attrs.potential_ability = ability;
+            attrs.condition = 10_000;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("T".to_string(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(date.year() - age as i32, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::flat_for_ability(ability))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(PlayerClubContract::new(
+                    20_000,
+                    NaiveDate::from_ymd_opt(2029, 6, 30).unwrap(),
+                )))
+                .build()
+                .unwrap()
+        }
+
+        /// 22 seniors at observable ~120, groups inside both the minimum
+        /// depth and the surplus caps, so neither the depth-gap floor nor
+        /// the demotion pass interferes with the promotion bar under test.
+        fn main_roster() -> Vec<Player> {
+            let mut players = Vec::new();
+            let mut id = 100u32;
+            let mut push = |pos: PlayerPositionType, n: usize, id: &mut u32, out: &mut Vec<Player>| {
+                for _ in 0..n {
+                    out.push(Self::player(*id, pos, 120, 27));
+                    *id += 1;
+                }
+            };
+            push(PlayerPositionType::Goalkeeper, 2, &mut id, &mut players);
+            push(PlayerPositionType::DefenderCenter, 8, &mut id, &mut players);
+            push(PlayerPositionType::MidfielderCenter, 6, &mut id, &mut players);
+            push(PlayerPositionType::Striker, 6, &mut id, &mut players);
+            players
+        }
+
+        /// U19 squad of twelve: the candidate plus eleven fillers far
+        /// below any promotion bar, keeping the squad-minimum guard open.
+        fn u19_roster(candidate: Player) -> Vec<Player> {
+            let mut players = vec![candidate];
+            let mut id = 300u32;
+            for _ in 0..4 {
+                players.push(Self::player(id, PlayerPositionType::DefenderCenter, 50, 17));
+                id += 1;
+            }
+            for _ in 0..4 {
+                players.push(Self::player(id, PlayerPositionType::MidfielderCenter, 50, 17));
+                id += 1;
+            }
+            for _ in 0..3 {
+                players.push(Self::player(id, PlayerPositionType::Striker, 50, 17));
+                id += 1;
+            }
+            players
+        }
+
+        fn club(candidate: Player) -> Club {
+            let main = TeamBuilder::new()
+                .id(10)
+                .league_id(Some(1))
+                .club_id(100)
+                .name("Main".to_string())
+                .slug("main".to_string())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(Self::main_roster()))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(500, 500, 500))
+                .training_schedule(Self::schedule())
+                .build()
+                .unwrap();
+            let u19 = TeamBuilder::new()
+                .id(19)
+                .league_id(None)
+                .club_id(100)
+                .name("U19".to_string())
+                .slug("u19".to_string())
+                .team_type(TeamType::U19)
+                .players(PlayerCollection::new(Self::u19_roster(candidate)))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(300, 300, 300))
+                .training_schedule(Self::schedule())
+                .build()
+                .unwrap();
+            Club::new(
+                100,
+                "Club".to_string(),
+                Location::new(1),
+                ClubFinances::new(10_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![main, u19]),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn on_team(club: &Club, team_idx: usize, id: u32) -> bool {
+            club.teams.teams[team_idx]
+                .players
+                .players
+                .iter()
+                .any(|p| p.id == id)
+        }
+    }
+
+    /// The staged pipeline converging: a near-senior U19 midfielder who
+    /// has already collected senior cameos (official appearances while
+    /// youth-rostered) clears the discounted promotion bar and moves up.
+    #[test]
+    fn senior_cameos_accelerate_promotion() {
+        let mut candidate = Fx::player(1, PlayerPositionType::MidfielderCenter, 112, 17);
+        candidate.statistics.played = 5;
+        for _ in 0..5 {
+            candidate.statistics.record_match_rating(7.0, 90, true);
+        }
+        let mut club = Fx::club(candidate);
+
+        club.rebalance_squads(Fx::date());
+
+        assert!(
+            Fx::on_team(&club, 0, 1),
+            "senior-cameo evidence promotes the near-level prospect to the first team"
+        );
+    }
+
+    /// The same prospect without a single senior appearance stays in the
+    /// academy — the bar only comes down on evidence.
+    #[test]
+    fn no_cameo_evidence_keeps_prospect_in_the_academy() {
+        let candidate = Fx::player(1, PlayerPositionType::MidfielderCenter, 112, 17);
+        let mut club = Fx::club(candidate);
+
+        club.rebalance_squads(Fx::date());
+
+        assert!(
+            !Fx::on_team(&club, 0, 1),
+            "without cameo evidence the promotion bar holds"
+        );
+        assert!(Fx::on_team(&club, 1, 1), "the prospect stays with the U19s");
+    }
+}
+
+#[cfg(test)]
 mod youth_contract_review_tests {
     use super::*;
     use crate::academy::ClubAcademy;
@@ -1344,6 +1602,25 @@ mod youth_contract_review_tests {
             Fx::contract_type(&club, 3),
             ContractType::Youth,
             "around-average form must not earn a professional contract"
+        );
+    }
+
+    /// Youth-league fixtures are friendly-flagged and book into the
+    /// friendly bucket — a standout academy-league season must count as
+    /// merit evidence even with zero official (senior) minutes.
+    #[test]
+    fn youth_league_form_earns_pro_contract() {
+        let mut prospect = Fx::youth(9, 17, 0, 0.0);
+        prospect.friendly_statistics.played = 12;
+        for _ in 0..12 {
+            prospect.friendly_statistics.record_match_rating(7.8, 90, true);
+        }
+        let mut club = Fx::club(vec![prospect]);
+        club.review_youth_contracts(Fx::date());
+        assert_eq!(
+            Fx::contract_type(&club, 9),
+            ContractType::FullTime,
+            "academy-league form must earn a professional contract"
         );
     }
 

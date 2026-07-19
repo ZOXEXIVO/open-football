@@ -1,4 +1,4 @@
-use crate::Player;
+use crate::{Player, PlayerStatistics};
 
 use super::potential::PotentialEstimator;
 
@@ -165,6 +165,46 @@ impl AbilityEstimator {
             / (Self::REP_STANDING_SATURATION - Self::REP_STANDING_NEUTRAL))
             .clamp(0.0, 1.0);
         norm * Self::REP_CAP
+    }
+}
+
+/// Coach-observable season form for a development player, read from the
+/// stats bucket that actually carries his football. Youth-league fixtures
+/// are friendly-flagged and book into the friendly bucket; senior
+/// football books into the official one — so any consumer judging a
+/// prospect's "season" (pro-contract merit, senior call-up form, the
+/// development selector's merit term) must read the busier of the two,
+/// not assume the official counters.
+pub struct DevelopmentFormEvidence;
+
+impl DevelopmentFormEvidence {
+    /// The busier of the friendly / official buckets and its appearance
+    /// count (starts + sub cameos).
+    fn bucket(player: &Player) -> (&PlayerStatistics, u16) {
+        let friendly = &player.friendly_statistics;
+        let official = &player.statistics;
+        let friendly_apps = friendly.played + friendly.played_subs;
+        let official_apps = official.played + official.played_subs;
+        if friendly_apps >= official_apps {
+            (friendly, friendly_apps)
+        } else {
+            (official, official_apps)
+        }
+    }
+
+    /// Appearances in the season bucket that carries the player's football.
+    pub fn games(player: &Player) -> u16 {
+        Self::bucket(player).1
+    }
+
+    /// Reliability-regressed season rating from the carrying bucket; 0.0
+    /// when there is no sample at all.
+    pub fn regressed_rating(player: &Player) -> f32 {
+        let (bucket, apps) = Self::bucket(player);
+        if apps == 0 {
+            return 0.0;
+        }
+        bucket.realistic_average_rating(player.position().position_group())
     }
 }
 

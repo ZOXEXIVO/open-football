@@ -9,8 +9,10 @@
 
 use super::scaling;
 use super::types::{MatchOutcome, MatchParticipation};
+use crate::Person;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
+use chrono::NaiveDate;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
     HappinessEventScope, HappinessEventSeverity, HappinessEventType, ManagerCriticismReason,
@@ -182,6 +184,13 @@ impl Player {
         if o.is_friendly && !o.competition_slug.is_empty() {
             self.friendly_source_slug = Some(o.competition_slug.to_string());
         }
+
+        // Senior-debut check runs before the counters bump so "first
+        // official appearance" is still readable from the buckets.
+        if !o.is_friendly {
+            SeniorDebut::observe(self, o.date);
+        }
+
         let s = stats_bucket_mut(self, o, home_slug);
         match o.participation {
             MatchParticipation::Starter => s.played += 1,
@@ -957,6 +966,37 @@ impl Player {
 /// match's competition slug; the rolled-up `cup_statistics` aggregate is
 /// rebuilt from those buckets in `on_match_played` once recording is
 /// done.
+/// First-official-appearance detector: a young player's first official
+/// football is his senior debut. Youth-league fixtures are
+/// friendly-flagged and book into the friendly bucket, so for a
+/// youth-rostered player the official league + cup counters only move
+/// when he actually turns out for a senior side — a borrowed league cameo
+/// (booked under his Main history alias) or a senior cup tie. Fires the
+/// same career-defining `YouthBreakthrough` event the permanent promotion
+/// does; its 5-year cooldown makes debut + later promotion read as one
+/// breakthrough, and also absorbs the season-reset false positive (the
+/// counters restart every season, the event can't).
+struct SeniorDebut;
+
+impl SeniorDebut {
+    /// Oldest age at which a first official appearance still reads as a
+    /// breakthrough. Guards the season/transfer counter resets: an
+    /// established senior's first game of a new spell is not a debut.
+    const MAX_DEBUT_AGE: u8 = 21;
+
+    fn observe(player: &mut Player, date: NaiveDate) {
+        let official = player.statistics.played + player.statistics.played_subs;
+        let cup = player.cup_statistics.played + player.cup_statistics.played_subs;
+        if official + cup > 0 {
+            return;
+        }
+        if player.age(date) > Self::MAX_DEBUT_AGE {
+            return;
+        }
+        player.on_youth_breakthrough(date);
+    }
+}
+
 fn stats_bucket_mut<'a>(
     player: &'a mut Player,
     o: &MatchOutcome<'_>,

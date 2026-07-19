@@ -20,7 +20,9 @@
 //! so a player falling behind his planned share builds selection pressure
 //! that no tie-break can hide.
 
-use crate::club::staff::perception::{AbilityEstimator, CoachProfile, PotentialEstimator};
+use crate::club::staff::perception::{
+    AbilityEstimator, CoachProfile, DevelopmentFormEvidence, PotentialEstimator,
+};
 use crate::club::{PlayerFieldPositionGroup, PlayerPositionType};
 use crate::r#match::player::MatchPlayer;
 use crate::utils::DateUtils;
@@ -482,26 +484,14 @@ impl DevelopmentPlan {
             .unwrap_or(CandidateProfile::NEUTRAL)
     }
 
-    /// Merit read from the bucket that actually carries this squad's
-    /// fixtures — development leagues book into the friendly bucket,
-    /// senior rotation candidates into the official one. Takes the
-    /// busier bucket and regresses small samples via
-    /// `realistic_average_rating`.
+    /// Merit read from the season bucket that actually carries this
+    /// squad's fixtures (see [`DevelopmentFormEvidence`]), regressed for
+    /// small samples.
     fn form_points(player: &Player) -> f32 {
-        let group = player.position().position_group();
-        let friendly = &player.friendly_statistics;
-        let official = &player.statistics;
-        let friendly_apps = friendly.played + friendly.played_subs;
-        let official_apps = official.played + official.played_subs;
-        let (bucket, apps) = if friendly_apps >= official_apps {
-            (friendly, friendly_apps)
-        } else {
-            (official, official_apps)
-        };
-        if apps < Self::FORM_MIN_APPS {
+        if DevelopmentFormEvidence::games(player) < Self::FORM_MIN_APPS {
             return 0.0;
         }
-        let rating = bucket.realistic_average_rating(group);
+        let rating = DevelopmentFormEvidence::regressed_rating(player);
         if rating <= 0.0 {
             return 0.0;
         }
