@@ -1957,7 +1957,11 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
         // texture). `num_days_from_ce` keeps the public rating fully
         // reproducible for a given (player, date) pair — the spec's
         // "deterministic noise seeded by real inputs" requirement.
-        let date_seed = now.num_days_from_ce() as f32;
+        // f64 on purpose: at the ~7×10⁵ magnitude of days-from-CE (and
+        // player ids up in the same range) an f32 mantissa quantises
+        // `.fract()` to steps of ~0.06, collapsing the jitter to a
+        // handful of shared levels instead of a per-identity spread.
+        let date_seed = now.num_days_from_ce() as f64;
 
         // Consistency × professionalism drive match-to-match volatility.
         // High consistency narrows the swing; high professionalism narrows
@@ -1969,7 +1973,7 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
         let prof_factor = (1.05 - (professionalism / 20.0) * 0.20).clamp(0.85, 1.05);
         let variance_band = cons_band * prof_factor * 0.45;
         if variance_band > 0.01 {
-            let seed = ((*player_id as f32 * 0.618033) + (date_seed * 0.381966)).fract();
+            let seed = ((*player_id as f64 * 0.618033) + (date_seed * 0.381966)).fract() as f32;
             let swing = (seed - 0.5) * 2.0 * variance_band;
             adjusted += swing;
         }
@@ -1994,10 +1998,10 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
                 right_team_id
             };
             let band = RatingContext::new(stats, 0, 0).texture_band();
-            let tex_seed = ((*player_id as f32 * 0.754877)
+            let tex_seed = ((*player_id as f64 * 0.754877)
                 + (date_seed * 0.569840)
-                + (player_team_id as f32 * 0.193147))
-                .fract();
+                + (player_team_id as f64 * 0.193147))
+                .fract() as f32;
             adjusted += (tex_seed - 0.5) * 2.0 * band;
         }
 
@@ -2055,6 +2059,20 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
             let gap_scale = (rep_gap / 2.0).min(1.0);
             adjusted += pressure_centered * 0.22 * gap_scale;
         }
+
+        // Combined bound on the personality/state shape applied since the
+        // settlement-adjusted value. Every factor above is individually
+        // bounded, but they stack: a low-morale, low-chemistry, streaky
+        // hot-head on an unlucky seed could shed their sum (≈ −1.5),
+        // overturning a clean stat line into a disaster verdict the match
+        // never showed — a clean-sheet keeper printing 6.2 reads as a
+        // rating bug to anyone looking at the match page. The shape's
+        // mandate is to colour the stat-line verdict, never to replace
+        // it, so the worst combined mood/state day costs about half a
+        // rating point and the best gains a shade less (upside stays the
+        // smaller lobe, matching every asymmetric factor above).
+        let shape = adjusted - adjusted_from_settlement;
+        let adjusted = adjusted_from_settlement + shape.clamp(-0.55, 0.40);
 
         out.insert(*player_id, adjusted.clamp(1.0, 10.0));
     }

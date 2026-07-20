@@ -2052,6 +2052,43 @@ fn single_keeper_blunder_is_not_triple_counted() {
 }
 
 #[test]
+fn gk_giveaway_to_shot_is_not_double_billed() {
+    // One bad pass out from the back, intercepted in the keeper's own
+    // box, opponent shot follows (saved — the sheet stays clean). The
+    // engine stamps BOTH counters on that single play:
+    // `dangerous_turnovers_own_box` at interception time and
+    // `errors_leading_to_shot` when the shot arrives. One mistake must
+    // cost like one mistake — the error lane owns the escalated bill.
+    let mut error_only = make_gk(1, 1);
+    error_only.errors_leading_to_shot = 1;
+    let error_only_r = RatingContext::new(&error_only, 1, 0).calculate();
+
+    let mut both = make_gk(1, 1);
+    both.errors_leading_to_shot = 1;
+    both.zone_stats.dangerous_turnovers_own_box = 1;
+    let both_r = RatingContext::new(&both, 1, 0).calculate();
+
+    assert!(
+        (error_only_r - both_r).abs() < 0.01,
+        "an escalated giveaway must be billed once: error-only \
+         {error_only_r:.3} vs full engine attribution {both_r:.3}",
+    );
+
+    // A giveaway that did NOT escalate into a shot keeps its own,
+    // smaller, turnover-lane bill.
+    let clean = make_gk(1, 1);
+    let clean_r = RatingContext::new(&clean, 1, 0).calculate();
+    let mut turnover_only = make_gk(1, 1);
+    turnover_only.zone_stats.dangerous_turnovers_own_box = 1;
+    let turnover_only_r = RatingContext::new(&turnover_only, 1, 0).calculate();
+    assert!(
+        turnover_only_r < clean_r - 0.05,
+        "a non-escalated dangerous giveaway still drags: clean \
+         {clean_r:.3} vs turnover-only {turnover_only_r:.3}",
+    );
+}
+
+#[test]
 fn untested_conceding_keeper_is_not_buried() {
     // A keeper beaten by essentially the only shot he faced — one goal, no
     // save — had no chance to influence the result; a single goal off a

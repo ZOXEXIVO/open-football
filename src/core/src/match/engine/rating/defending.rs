@@ -207,10 +207,24 @@ impl<'a> RatingContext<'a> {
         let z = self.stats.zone_stats;
         let failed_shot = z.gk_failed_claims_to_shot as f32 * ZoneCoeffs::GK_FAILED_CLAIM_TO_SHOT;
         let failed_goal = z.gk_failed_claims_to_goal as f32 * ZoneCoeffs::GK_FAILED_CLAIM_TO_GOAL;
-        let turnovers = RatingMath::sat(
-            z.dangerous_turnovers_own_third as f32 * 0.5 + z.dangerous_turnovers_own_box as f32,
-            4.0,
-        ) * 0.55;
+        // A dangerous giveaway that escalated into an opponent shot is
+        // already billed — far more harshly — through the error lanes in
+        // `errors_and_cards`: the engine notes the turnover at
+        // interception time AND charges `errors_leading_to_shot` on the
+        // same play when a shot follows (ball/events.rs stamps both).
+        // Billing the turnover lane on top double-counted one bad
+        // distribution, so a single pass out from the back that led to a
+        // (saved!) shot cancelled a keeper's entire clean-sheet credit.
+        // Bill here only the giveaways that stayed giveaways; the error
+        // lane owns the escalated ones. Errors carry no zone tag, so
+        // consume the own-box count first (the giveaways most likely to
+        // have produced the shot), then own-third.
+        let errors = self.stats.errors_leading_to_shot;
+        let own_box = z.dangerous_turnovers_own_box.saturating_sub(errors);
+        let spill = errors.saturating_sub(z.dangerous_turnovers_own_box);
+        let own_third = z.dangerous_turnovers_own_third.saturating_sub(spill);
+        let turnovers =
+            RatingMath::sat(own_third as f32 * 0.5 + own_box as f32, 4.0) * 0.55;
         // `errors_to_goal_own_box` is intentionally NOT re-penalised here.
         // The engine sets it on the very same play that already bumped
         // `errors_leading_to_goal` (an own-box giveaway that became a goal),
