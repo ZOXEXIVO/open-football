@@ -104,6 +104,31 @@ impl Player {
             .record_friendly(season_year, team, source_slug, friendly);
     }
 
+    /// Season anchor for an inter-spell drain: the campaign of the spell
+    /// being closed — its active `current` entry's join-date season,
+    /// clamped up to one past the last frozen League season (the same
+    /// formula the History projection uses to label the spell's League
+    /// row). Falls back to the event date's season when no entry exists.
+    ///
+    /// Stamping the drained cup / friendly slices with this anchor
+    /// instead of the raw event date keeps every bucket of one spell in
+    /// one (season, team) History row. With the event date, a
+    /// calendar-year-league spell joined Jan–Jul forks as soon as the
+    /// closing event lands on or after Aug 1: the reported Sokolić case,
+    /// where a Quilmes loan joined 14 Feb and cancelled 22 Aug rendered
+    /// its league apps under 2026/27 and its Copa Argentina apps under a
+    /// second 2027/28 Quilmes row — one Argentine campaign, two rows.
+    fn spell_season_anchor(&self, team_slug: &str, date: NaiveDate) -> u16 {
+        self.statistics_history
+            .current
+            .iter()
+            .rev()
+            .find(|e| e.team_slug == team_slug && e.departed_date.is_none())
+            .map(|e| Season::from_date(e.joined_date).start_year)
+            .unwrap_or_else(|| Season::from_date(date).start_year)
+            .max(self.statistics_history.frozen_league_season_floor())
+    }
+
     /// The single chokepoint for "this spell is done — freeze its match
     /// stats and reset the live buckets for the next spell." Every
     /// inter-spell event (transfer, loan, loan-return, release,
@@ -178,7 +203,8 @@ impl Player {
 
     /// Record a permanent transfer (called by transfer execution).
     pub fn on_transfer(&mut self, from: &TeamInfo, to: &TeamInfo, fee: f64, date: NaiveDate) {
-        let stats = self.drain_match_stats(from, Season::from_date(date).start_year, None);
+        let season_year = self.spell_season_anchor(&from.slug, date);
+        let stats = self.drain_match_stats(from, season_year, None);
         self.statistics_history
             .record_transfer(stats, from, to, fee, date);
         self.last_transfer_date = Some(date);
@@ -190,7 +216,8 @@ impl Player {
     /// the same club with the buyout fee. See
     /// [`PlayerStatisticsHistory::record_loan_buyout`].
     pub fn on_loan_buyout(&mut self, borrowing: &TeamInfo, fee: f64, date: NaiveDate) {
-        let stats = self.drain_match_stats(borrowing, Season::from_date(date).start_year, None);
+        let season_year = self.spell_season_anchor(&borrowing.slug, date);
+        let stats = self.drain_match_stats(borrowing, season_year, None);
         self.statistics_history
             .record_loan_buyout(stats, borrowing, fee, date);
         self.last_transfer_date = Some(date);
@@ -303,7 +330,8 @@ impl Player {
 
     /// Record a loan move (called by loan execution).
     pub fn on_loan(&mut self, from: &TeamInfo, to: &TeamInfo, loan_fee: f64, date: NaiveDate) {
-        let stats = self.drain_match_stats(from, Season::from_date(date).start_year, None);
+        let season_year = self.spell_season_anchor(&from.slug, date);
+        let stats = self.drain_match_stats(from, season_year, None);
         self.statistics_history
             .record_loan(stats, from, to, loan_fee, date);
         self.last_transfer_date = Some(date);
@@ -315,7 +343,8 @@ impl Player {
     /// reset; otherwise the loan-period games leak into the parent
     /// spell that starts fresh on return.
     pub fn on_loan_return(&mut self, borrowing: &TeamInfo, parent: &TeamInfo, date: NaiveDate) {
-        let stats = self.drain_match_stats(borrowing, Season::from_date(date).start_year, None);
+        let season_year = self.spell_season_anchor(&borrowing.slug, date);
+        let stats = self.drain_match_stats(borrowing, season_year, None);
         self.statistics_history
             .record_loan_return(stats, borrowing, parent, date);
         self.last_transfer_date = Some(date);
@@ -465,7 +494,8 @@ impl Player {
     /// Record a cancel-loan from the web UI.
     pub fn on_cancel_loan(&mut self, borrowing: &TeamInfo, parent: &TeamInfo, date: NaiveDate) {
         let is_loan = self.is_on_loan();
-        let stats = self.drain_match_stats(borrowing, Season::from_date(date).start_year, None);
+        let season_year = self.spell_season_anchor(&borrowing.slug, date);
+        let stats = self.drain_match_stats(borrowing, season_year, None);
         self.statistics_history
             .record_cancel_loan(stats, borrowing, parent, is_loan, date);
         self.last_transfer_date = Some(date);
@@ -483,7 +513,8 @@ impl Player {
         date: NaiveDate,
     ) {
         let is_loan = self.is_on_loan();
-        let stats = self.drain_match_stats(from, Season::from_date(date).start_year, None);
+        let season_year = self.spell_season_anchor(&from.slug, date);
+        let stats = self.drain_match_stats(from, season_year, None);
         self.statistics_history
             .record_departure_transfer(stats, from, to, fee, is_loan, date);
         self.last_transfer_date = Some(date);
@@ -498,7 +529,8 @@ impl Player {
     /// is responsible for clearing contract / statuses / happiness;
     /// this method only owns the history side.
     pub fn on_release(&mut self, from: &TeamInfo, date: NaiveDate) {
-        let stats = self.drain_match_stats(from, Season::from_date(date).start_year, None);
+        let season_year = self.spell_season_anchor(&from.slug, date);
+        let stats = self.drain_match_stats(from, season_year, None);
         self.statistics_history.record_release(stats, from, date);
         self.last_transfer_date = Some(date);
         self.is_force_match_selection = false;
@@ -538,7 +570,8 @@ impl Player {
         date: NaiveDate,
     ) {
         let is_loan = self.is_on_loan();
-        let stats = self.drain_match_stats(from, Season::from_date(date).start_year, None);
+        let season_year = self.spell_season_anchor(&from.slug, date);
+        let stats = self.drain_match_stats(from, season_year, None);
         self.statistics_history
             .record_departure_loan(stats, from, parent, to, is_loan, date);
         self.last_transfer_date = Some(date);
@@ -1531,21 +1564,23 @@ mod tests {
             seq_id: year as u32,
         };
         p.statistics_history.items.push(frozen(2025, 25));
-        p.statistics_history.season_ledger.push(PlayerStatLedgerEntry {
-            seq_id: 2025,
-            season_start_year: 2025,
-            team_slug: "river-plate".into(),
-            team_name: "River Plate".into(),
-            team_reputation: 9000,
-            league_slug: "arg-primera".into(),
-            league_name: "Primera".into(),
-            competition_kind: crate::PlayerStatCompetitionKind::League,
-            competition_slug: "arg-primera".into(),
-            is_loan: false,
-            transfer_fee: None,
-            coverage_days: None,
-            statistics: make_stats(25, 3),
-        });
+        p.statistics_history
+            .season_ledger
+            .push(PlayerStatLedgerEntry {
+                seq_id: 2025,
+                season_start_year: 2025,
+                team_slug: "river-plate".into(),
+                team_name: "River Plate".into(),
+                team_reputation: 9000,
+                league_slug: "arg-primera".into(),
+                league_name: "Primera".into(),
+                competition_kind: crate::PlayerStatCompetitionKind::League,
+                competition_slug: "arg-primera".into(),
+                is_loan: false,
+                transfer_fee: None,
+                coverage_days: None,
+                statistics: make_stats(25, 3),
+            });
 
         // 2026 campaign: River spell joined in FEBRUARY, 4 apps, loaned to
         // Boca in April, back in June, plays 3 more.
@@ -1571,7 +1606,8 @@ mod tests {
             "2026 River must hold 4 (pre-loan) + 3 (post-return): {rows:?}"
         );
         assert!(
-            rows.iter().any(|r| r.0 == 2026 && r.1 == "boca" && r.2 && r.3 == 5),
+            rows.iter()
+                .any(|r| r.0 == 2026 && r.1 == "boca" && r.2 && r.3 == 5),
             "the April–June Boca loan belongs to the 2026 campaign, not 2025: {rows:?}"
         );
         let river_2025: u16 = rows
@@ -1582,6 +1618,56 @@ mod tests {
         assert_eq!(
             river_2025, 25,
             "the frozen 2025 row must stay 25 — current-campaign apps must not leak in: {rows:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // User-reported (Luciano Sokolić, Quilmes): a loan at a calendar-year
+    // league club (Argentina, Feb–Dec) joined 14 Feb and cancelled 22 Aug.
+    // The player has NO frozen League history (he hopped countries between
+    // every season-end snapshot), so the season_floor clamp cannot engage.
+    // The cancel used to stamp the drained Copa Argentina bucket with the
+    // cancel date's season (2027) while the League spell rendered under
+    // its join-date season (2026) — one Argentine campaign, two Quilmes
+    // rows. With the drain anchored to the spell, History shows one row.
+    // ---------------------------------------------------------------
+    #[test]
+    fn cancel_loan_across_aug_boundary_keeps_one_borrowing_row() {
+        let slovan = team_with_league("Slovan", "slovan", "Super Liga", "slovak-super-liga");
+        let quilmes = team_with_league(
+            "Quilmes",
+            "quilmes",
+            "Second Division A",
+            "argentine-second-division-group-a",
+        );
+        let mut p = make_player();
+
+        p.statistics_history
+            .seed_initial_team(&slovan, make_date(2027, 1, 15), false);
+        p.contract_loan = Some(loan_contract_until(2028, 6, 30));
+        p.on_manual_loan(&slovan, &slovan, &quilmes, make_date(2027, 2, 14));
+
+        // Loan spell output: 28 league apps + 2 Copa Argentina apps.
+        p.statistics = make_stats(28, 0);
+        p.cup_statistics_by_competition
+            .push(crate::CompetitionStatistics {
+                competition_slug: "copa-argentina".to_string(),
+                statistics: make_stats(2, 1),
+            });
+
+        p.contract_loan = None;
+        p.on_cancel_loan(&quilmes, &slovan, make_date(2027, 8, 22));
+
+        let rows = history_rows_of(&p, make_date(2027, 8, 29));
+        let quilmes_rows: Vec<_> = rows.iter().filter(|r| r.1 == "quilmes").collect();
+        assert_eq!(
+            quilmes_rows.len(),
+            1,
+            "one loan spell in one Argentine campaign must be one History row: {rows:?}"
+        );
+        assert_eq!(
+            quilmes_rows[0].0, 2026,
+            "the merged row keeps the spell's campaign label: {rows:?}"
         );
     }
 
@@ -4377,6 +4463,59 @@ mod drain_invariants_tests {
                 .iter()
                 .any(|e| e.team_slug == "spartak"
                     && e.competition_kind != PlayerStatCompetitionKind::League)
+        );
+    }
+
+    #[test]
+    fn cancel_loan_across_aug_boundary_stamps_cup_under_spell_campaign() {
+        // User repro (Luciano Sokolić, Quilmes): Argentine leagues run
+        // Feb–Dec, so a loan spell joined 14 Feb belongs to the campaign
+        // `Season::from_date` labels 2026 — and that is where the History
+        // projection renders its League row. Cancelling on 22 Aug used to
+        // stamp the drained Copa Argentina bucket with the CANCEL date's
+        // season (2027), forking a second Quilmes row for the same single
+        // campaign. The drain must anchor non-League slices to the spell
+        // being closed, not the event date.
+        let mut p = player();
+        let parent = team("Slovan", "slovan", "slovak-super-liga");
+        let borrowing = team("Quilmes", "quilmes", "argentine-second-division-group-a");
+
+        p.statistics = stats(28, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "copa-argentina".to_string(),
+            statistics: stats(2, 1),
+        });
+        p.statistics_history.current.push(
+            crate::club::player::statistics::history::CurrentSeasonEntry {
+                team_name: borrowing.name.clone(),
+                team_slug: borrowing.slug.clone(),
+                team_reputation: borrowing.reputation,
+                league_name: borrowing.league_name.clone(),
+                league_slug: borrowing.league_slug.clone(),
+                is_loan: true,
+                transfer_fee: Some(0.0),
+                statistics: PlayerStatistics::default(),
+                joined_date: d(2027, 2, 14),
+                departed_date: None,
+                seq_id: 1,
+            },
+        );
+
+        p.on_cancel_loan(&borrowing, &parent, d(2027, 8, 22));
+
+        let cup = p
+            .statistics_history
+            .season_ledger
+            .iter()
+            .find(|e| {
+                e.team_slug == "quilmes"
+                    && e.competition_kind == PlayerStatCompetitionKind::DomesticCup
+            })
+            .expect("Copa Argentina slice must be frozen at cancel");
+        assert_eq!(
+            cup.season_start_year, 2026,
+            "cup slice must carry the spell's campaign (join-date season), \
+             not the cancel date's season"
         );
     }
 

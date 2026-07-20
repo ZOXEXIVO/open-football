@@ -294,6 +294,30 @@ impl PlayerStatisticsHistory {
         self.items.is_empty() && self.current.is_empty()
     }
 
+    /// One past the last COMPLETED (frozen) League season — the earliest
+    /// season a spell still sitting in `current` may belong to. League
+    /// rows only reach the ledger / `items` through a season-end drain or
+    /// a stale-entry flush, so the latest such year is a definitively
+    /// finished season. Returns 0 (no clamp) with no frozen League
+    /// history.
+    ///
+    /// Shared by the projection's row labeling and the inter-spell drain
+    /// season anchor (`Player::spell_season_anchor`): both must resolve a
+    /// spell to the same campaign, otherwise a calendar-year-league spell
+    /// (Argentina, Brazil, MLS — joined Jan–Jul, where
+    /// `Season::from_date`'s hardcoded Aug boundary points one season
+    /// back) splits its League and cup slices across two History rows.
+    pub fn frozen_league_season_floor(&self) -> u16 {
+        self.season_ledger
+            .iter()
+            .filter(|e| e.competition_kind == PlayerStatCompetitionKind::League)
+            .map(|e| e.season_start_year)
+            .chain(self.items.iter().map(|i| i.season.start_year))
+            .max()
+            .map(|y| y.saturating_add(1))
+            .unwrap_or(0)
+    }
+
     /// Mutable handle on the per-team league bucket for a team the player
     /// is turning out for that is NOT his active-spell (home) team — a
     /// borrowed appearance across two of the club's teams. Creates the
@@ -788,7 +812,13 @@ impl PlayerStatisticsHistory {
                 && e.statistics.total_games() == 0
                 && Season::from_date(e.joined_date).start_year > buyout_season)
         });
-        self.push_new_entry(borrowing, PlayerStatistics::default(), false, Some(fee), date);
+        self.push_new_entry(
+            borrowing,
+            PlayerStatistics::default(),
+            false,
+            Some(fee),
+            date,
+        );
     }
 
     pub fn record_loan_return(

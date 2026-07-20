@@ -616,30 +616,13 @@ impl PlayerStatisticsProjection {
     /// calendar boundary, so every spell maps consistently and there is
     /// nothing to correct.
     fn season_floor(history: &PlayerStatisticsHistory) -> u16 {
-        history
-            .season_ledger
-            .iter()
-            .filter(|e| e.competition_kind == PlayerStatCompetitionKind::League)
-            .map(|e| e.season_start_year)
-            .chain(history.items.iter().map(|i| i.season.start_year))
-            .max()
-            .map(|y| y.saturating_add(1))
-            .unwrap_or(0)
+        history.frozen_league_season_floor()
     }
 
     fn current_season_year(history: &PlayerStatisticsHistory, current_date: NaiveDate) -> u16 {
-        let today_year = Season::from_date(current_date).start_year;
-        let last_frozen_league_year = history
-            .season_ledger
-            .iter()
-            .filter(|e| e.competition_kind == PlayerStatCompetitionKind::League)
-            .map(|e| e.season_start_year)
-            .chain(history.items.iter().map(|i| i.season.start_year))
-            .max();
-        match last_frozen_league_year {
-            Some(frozen) => today_year.max(frozen.saturating_add(1)),
-            None => today_year,
-        }
+        Season::from_date(current_date)
+            .start_year
+            .max(history.frozen_league_season_floor())
     }
 
     /// The `current` entry the live per-spell counters belong to: the
