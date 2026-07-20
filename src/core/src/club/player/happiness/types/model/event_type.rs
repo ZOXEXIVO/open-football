@@ -514,6 +514,13 @@ pub enum HappinessEventType {
     /// the minutes-concern note, less severe than a permanent transfer
     /// request — the request / pressure layer above the recall window.
     LoanRecallRequested,
+    /// The loan is delivering minutes but not performances — the loanee
+    /// is featuring regularly, yet his season rating sits clearly below
+    /// the positional neutral over a real sample, and the parent club is
+    /// openly concerned the spell isn't working. A *form* worry, never a
+    /// minutes one: distinct from `LackOfPlayingTime`, which must only
+    /// describe a player who is not getting on the pitch.
+    LoanFormConcern,
     /// A loanee who is thriving at the borrowing club — starting
     /// regularly, performing — wants the move made permanent instead of
     /// returning to the parent's bench or the loan carousel. Longing,

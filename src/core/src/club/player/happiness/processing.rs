@@ -1449,14 +1449,14 @@ impl Player {
         }
 
         // Loan underperformance — apps but rating sits clearly below the
-        // positional neutral means the loan isn't yielding the kind of
-        // minutes the parent club hoped for. Surface this as a *loan*
-        // event (parent club concerned) rather than a fake training
-        // report — it's about competitive form, not attitude on the
-        // training ground. Using the regressed value, the trigger
-        // threshold rises to 6.2 (matches the neutral-minus-0.4 band)
-        // so a small-sample bad spell still triggers but a single
-        // off-week doesn't fake a loan crisis.
+        // positional neutral means the loan isn't yielding the form the
+        // parent club hoped for. Surface this as a *loan form* event
+        // (parent club concerned) — NOT `LackOfPlayingTime`, because the
+        // player may well be starting every week; the grievance is the
+        // level of his performances, not his minutes. Using the regressed
+        // value, the trigger threshold rises to 6.2 (matches the
+        // neutral-minus-0.4 band) so a small-sample bad spell still
+        // triggers but a single off-week doesn't fake a loan crisis.
         let apps = self.statistics.played + self.statistics.played_subs;
         let loan_pos = self.position().position_group();
         let form = self.statistics.average_rating_realistic(loan_pos);
@@ -1473,7 +1473,7 @@ impl Player {
             )
             .with_loan_context(lctx);
             self.happiness.add_event_with_context_and_cooldown(
-                HappinessEventType::LackOfPlayingTime,
+                HappinessEventType::LoanFormConcern,
                 -1.5,
                 None,
                 ctx,
@@ -1559,8 +1559,8 @@ mod loan_morale_tests {
             .happiness
             .recent_events
             .iter()
-            .find(|e| e.event_type == HappinessEventType::LackOfPlayingTime)
-            .expect("loan underperformance must emit LackOfPlayingTime");
+            .find(|e| e.event_type == HappinessEventType::LoanFormConcern)
+            .expect("loan underperformance must emit LoanFormConcern");
         let loan_ctx = lop_event
             .context
             .as_ref()
@@ -1577,7 +1577,7 @@ mod loan_morale_tests {
             p.happiness
                 .recent_events
                 .iter()
-                .all(|e| e.event_type != HappinessEventType::LackOfPlayingTime
+                .all(|e| e.event_type != HappinessEventType::LoanFormConcern
                     && e.event_type != HappinessEventType::PoorTraining),
             "decent form on loan must not fire the underperformance event"
         );

@@ -801,10 +801,9 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
 
     /// Project the active spell's per-competition Overview rows from the
     /// central [`PlayerStatisticsProjection`] and order them the way the
-    /// panel reads: the League aggregate first, then the cups in the
-    /// projection's domestic-before-continental order, and the Friendly
-    /// bucket last — friendlies are the least meaningful football on the
-    /// page, so they never push competitive lines down.
+    /// panel reads: the Friendly bucket (youth/U18 leagues) first, then
+    /// the cups in the projection's domestic-before-continental order,
+    /// and the League aggregate last.
     ///
     /// Each row carries its display label: the real league / competition
     /// name when the projection pinned a single source, the generic kind
@@ -879,21 +878,21 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
             }
         }
 
-        // The League line always shows, at 0 apps when the projection has
-        // no current-season entry — an empty league row still tells the
-        // reader which competition the player is registered for.
         let mut ordered = Vec::with_capacity(cups.len() + 2);
-        ordered.push(league.unwrap_or_else(|| CompetitionStatisticsRow {
-            competition_name: self.i18n.t("league").to_string(),
-            stats: self.empty_dto(),
-        }));
-        ordered.append(&mut cups);
         // No games in the friendly bucket → no Friendly row at all. The
         // legacy 0-app placeholder rendered a generic "Friendly" line
         // that told the reader nothing (user: "Remove friendly as is") —
         // when the bucket has games the projection emits the row and it
         // wears its real source league's name instead.
         ordered.extend(friendly);
+        ordered.append(&mut cups);
+        // The League line always shows, at 0 apps when the projection has
+        // no current-season entry — an empty league row still tells the
+        // reader which competition the player is registered for.
+        ordered.push(league.unwrap_or_else(|| CompetitionStatisticsRow {
+            competition_name: self.i18n.t("league").to_string(),
+            stats: self.empty_dto(),
+        }));
         ordered
     }
 

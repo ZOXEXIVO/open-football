@@ -136,6 +136,17 @@ impl CaptaincyAssigner {
     ///
     /// [`set_official_captain`]: CaptaincyAssigner::set_official_captain
     pub fn assign(team: &mut Team, date: NaiveDate) {
+        if !team.team_type.appoints_official_captaincy() {
+            // Reserve and development squads hold no standing club
+            // captaincy — they play no league of their own, and the
+            // matchday armband is resolved per match from the XI
+            // (`matchday_leadership`). Administrative clear, bypassing the
+            // event chokepoint on purpose: nobody is "stripped" of an
+            // armband this squad never awards.
+            team.captain_id = None;
+            team.vice_captain_id = None;
+            return;
+        }
         let model = CaptaincyModel::new(team, date);
         let ranked = model.ranked();
 
@@ -1345,6 +1356,44 @@ mod tests {
 
         assert_eq!(team.captain_id, Some(1));
         assert_ne!(team.captain_id, Some(2));
+    }
+
+    /// Reserve / development squads hold no standing captaincy: the review
+    /// appoints nobody, and a stale armband (e.g. left over from data or a
+    /// squad-type change) is cleared administratively without narrating a
+    /// stripping.
+    #[test]
+    fn development_squad_never_holds_official_captaincy() {
+        let mut team = TeamBuilder::new()
+            .id(1)
+            .league_id(None)
+            .club_id(1)
+            .name("Test Reserve".to_string())
+            .slug("test-res".to_string())
+            .team_type(TeamType::Reserve)
+            .players(PlayerCollection::new(vec![strong(1, 16.0), strong(2, 14.0)]))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 200))
+            .training_schedule(training())
+            .build()
+            .unwrap();
+        team.captain_id = Some(1);
+        team.vice_captain_id = Some(2);
+
+        CaptaincyAssigner::assign(&mut team, today());
+
+        assert_eq!(team.captain_id, None);
+        assert_eq!(team.vice_captain_id, None);
+        for p in team.players.players.iter() {
+            assert!(
+                p.happiness
+                    .recent_events
+                    .iter()
+                    .all(|e| e.event_type != HappinessEventType::CaptaincyRemoved
+                        && e.event_type != HappinessEventType::CaptaincyAwarded),
+                "administrative clear must not narrate armband events"
+            );
+        }
     }
 
     /// Two otherwise-identical leaders differ only in dressing-room

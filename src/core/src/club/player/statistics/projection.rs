@@ -1004,39 +1004,68 @@ impl PlayerStatisticsProjection {
             if paid_fee || (row.transfer_fee.is_some() && !row.is_loan) {
                 return true;
             }
-            // Time-based collapse — the primary rule whenever real
-            // coverage data exists (the canonical ledger writes it; the
-            // legacy adapters don't). A 0-app spell that covered less
-            // than 40% of the season is display noise: a days-long
-            // re-seed closed by a loan return processed just after the
-            // season snapshot, an early-recalled loan, a brief
-            // registration stop before a move. One that covered 40%+ is
-            // a real part of the season and stays — including the quiet
-            // middle years of a multi-season loan and a half-season
-            // parent-club registration before a winter loan. Fee-backed
-            // rows never reach here (kept above), so this decides only
-            // fee-less and loan-sentinel rows; rows without coverage
-            // data fall through to the sibling heuristics below.
-            if let Some(days) = row_coverage.get(key).copied().flatten() {
-                let season_span = (row.season.end_date() - row.season.start_date())
-                    .num_days()
-                    .max(1) as f64;
-                return (days as f64 / season_span) * 100.0 >= MIN_COVERAGE_PCT_FOR_QUIET_ROW;
-            }
             // Every loan spell is a real part of the player's career and
             // must show — even at 0 apps (injury, squad rotation, a loan
-            // they were registered for but never featured in). The ONLY
-            // loan row dropped is a genuine phantom: a 0-app loan stamped
-            // under a season the player demonstrably spent ELSEWHERE,
-            // proven by a sibling row that actually PLAYED games that
-            // season (e.g. 36 league games at the parent club, with a
-            // loan event mis-stamped into the same season window). A
-            // sibling that merely *exists* at 0 apps — the owning-club
-            // "career home" row — does NOT make the loan redundant; both
-            // coexist. The fee is irrelevant here: the re-seed for a
-            // continued loan drops it to `None`, so it can't distinguish
-            // a real spell from a seed.
+            // they were registered for but never featured in) and even
+            // when it was SHORT. A four-week loan the player never
+            // featured in is still a club he was registered at, and the
+            // transfers page already lists both its legs; history that
+            // silently omits it contradicts the move the reader just saw.
+            //
+            // This sits ABOVE the time-based collapse on purpose. Loans
+            // are precisely the spells that legitimately cover a small
+            // slice of a season, so a coverage threshold reads every
+            // genuine short loan as noise — the reported case (Sokolić's
+            // brief Orel spell, visible on /transfers, absent from
+            // /history).
+            //
+            // What is NOT a new loan event is the tail of an older one. A
+            // multi-season loan is re-seeded by each season-end snapshot,
+            // so a loan that expires days into the new campaign leaves a
+            // sliver row under a season the player never really spent
+            // there. That row is a continuation — the same borrowing club
+            // already holds a loan row in the previous season, and the
+            // spell is fully told by those rows. Rendering it would
+            // announce a loan season that never happened. It is dropped
+            // only when it is also a sliver: a continuation that covers a
+            // real share of the season is a genuine middle year of a
+            // multi-season loan and stays.
+            //
+            // A loan that BEGINS in its season is always a new event and
+            // is never collapsed, however short — that is the difference
+            // between the reported Orel spell (kept) and the re-seed tail
+            // (dropped). The only other loan dropped is one that never
+            // happened in time at all: a zero-day window, the signature
+            // of a re-seed closed by a return processed in the same tick.
+            //
+            // When coverage is unknown (legacy adapters write `None`) we
+            // can't measure the span, so fall back to the sibling
+            // heuristic: a 0-app loan stamped under a season the player
+            // demonstrably spent ELSEWHERE, proven by a sibling row that
+            // actually PLAYED, is a mis-stamped event. A sibling that
+            // merely *exists* at 0 apps — the owning-club "career home"
+            // row — does NOT make the loan redundant; both coexist. The
+            // fee is irrelevant here: the re-seed for a continued loan
+            // drops it to `None`, so it can't distinguish a real spell
+            // from a seed.
             if row.is_loan {
+                if let Some(days) = row_coverage.get(key).copied().flatten() {
+                    if days == 0 {
+                        return false;
+                    }
+                    let continues_prior_season_loan = snapshot.iter().any(|other| {
+                        other.is_loan
+                            && other.team_slug == row.team_slug
+                            && other.season.start_year + 1 == row.season.start_year
+                    });
+                    if !continues_prior_season_loan {
+                        return true;
+                    }
+                    let season_span = (row.season.end_date() - row.season.start_date())
+                        .num_days()
+                        .max(1) as f64;
+                    return (days as f64 / season_span) * 100.0 >= MIN_COVERAGE_PCT_FOR_QUIET_ROW;
+                }
                 let player_actually_played_elsewhere = snapshot.iter().any(|other| {
                     other.season.start_year == row.season.start_year
                         && !(other.team_slug == row.team_slug
@@ -1044,6 +1073,23 @@ impl PlayerStatisticsProjection {
                         && other.statistics.total_games() > 0
                 });
                 return !player_actually_played_elsewhere;
+            }
+            // Time-based collapse — the primary rule for NON-LOAN rows
+            // whenever real coverage data exists (the canonical ledger
+            // writes it; the legacy adapters don't). A 0-app spell that
+            // covered less than 40% of the season is display noise: a
+            // days-long re-seed, a brief registration stop before a move.
+            // One that covered 40%+ is a real part of the season and
+            // stays — including a half-season parent-club registration
+            // before a winter loan. Fee-backed rows never reach here
+            // (kept above), so this decides only fee-less rows; rows
+            // without coverage data fall through to the sibling
+            // heuristics below.
+            if let Some(days) = row_coverage.get(key).copied().flatten() {
+                let season_span = (row.season.end_date() - row.season.start_date())
+                    .num_days()
+                    .max(1) as f64;
+                return (days as f64 / season_span) * 100.0 >= MIN_COVERAGE_PCT_FOR_QUIET_ROW;
             }
             // Non-loan 0-app, no real fee. Drop when a sibling NON-LOAN
             // team in the same season actually played or paid a real
@@ -3644,6 +3690,122 @@ mod tests {
             .find(|r| r.season.start_year == 2025 && r.team_slug == "spartak")
             .expect("real parent row must remain");
         assert_eq!(spartak_2025.statistics.played, 36);
+    }
+
+    #[test]
+    fn history_keeps_short_zero_app_loan_alongside_played_parent_row() {
+        // User-reported repro (Sokolić / Orel): a brief loan the player
+        // never featured in, sandwiched inside a season he otherwise
+        // spent at his parent club. The move is listed on /transfers, so
+        // /history must show it too — a real spell with real time at the
+        // club is never collapsed, however short it was. This is the
+        // mirror of `history_drops_zero_app_phantom_loan_alongside_
+        // played_parent_row`: same shape, but that one has NO coverage
+        // data (so the sibling heuristic calls it a mis-stamped phantom)
+        // while this one carries a genuine multi-week window.
+        let parent = TeamInfo {
+            name: "River Plate".to_string(),
+            slug: "river-plate".to_string(),
+            reputation: 5_000,
+            league_name: "Primera".to_string(),
+            league_slug: "argentina-primera".to_string(),
+        };
+        let orel = TeamInfo {
+            name: "Orel".to_string(),
+            slug: "orel".to_string(),
+            reputation: 900,
+            league_name: "Second League".to_string(),
+            league_slug: "russian-second-league".to_string(),
+        };
+        let mut hist = PlayerStatisticsHistory::new();
+        let mut parent_played = PlayerStatistics::default();
+        parent_played.played = 28;
+        hist.append_to_ledger(
+            2025,
+            &parent,
+            PlayerStatCompetitionKind::League,
+            false,
+            None,
+            Some(300),
+            parent_played,
+        );
+        // The loan: 0 apps, no fee, but a real 35-day window — well
+        // under the 40% coverage bar that collapses quiet non-loan rows.
+        hist.append_to_ledger(
+            2025,
+            &orel,
+            PlayerStatCompetitionKind::League,
+            true,
+            None,
+            Some(35),
+            PlayerStatistics::default(),
+        );
+
+        let empty_stats = PlayerStatistics::default();
+        let live = empty_live(&empty_stats);
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2027, 9, 1));
+        let orel_row = rows
+            .iter()
+            .find(|r| r.season.start_year == 2025 && r.team_slug == "orel")
+            .expect("short 0-app loan spell must still show in history");
+        assert!(orel_row.is_loan, "the Orel row must be labelled a loan");
+        let parent_row = rows
+            .iter()
+            .find(|r| r.season.start_year == 2025 && r.team_slug == "river-plate")
+            .expect("parent row must remain");
+        assert_eq!(parent_row.statistics.played, 28);
+    }
+
+    #[test]
+    fn history_drops_zero_day_loan_window_as_phantom() {
+        // The one loan that is not a real event: a spell whose window
+        // covered no days at all — a re-seed closed by a return
+        // processed in the same tick. A real loan always spans days.
+        let parent = TeamInfo {
+            name: "River Plate".to_string(),
+            slug: "river-plate".to_string(),
+            reputation: 5_000,
+            league_name: "Primera".to_string(),
+            league_slug: "argentina-primera".to_string(),
+        };
+        let orel = TeamInfo {
+            name: "Orel".to_string(),
+            slug: "orel".to_string(),
+            reputation: 900,
+            league_name: "Second League".to_string(),
+            league_slug: "russian-second-league".to_string(),
+        };
+        let mut hist = PlayerStatisticsHistory::new();
+        let mut parent_played = PlayerStatistics::default();
+        parent_played.played = 28;
+        hist.append_to_ledger(
+            2025,
+            &parent,
+            PlayerStatCompetitionKind::League,
+            false,
+            None,
+            Some(300),
+            parent_played,
+        );
+        hist.append_to_ledger(
+            2025,
+            &orel,
+            PlayerStatCompetitionKind::League,
+            true,
+            None,
+            Some(0),
+            PlayerStatistics::default(),
+        );
+
+        let empty_stats = PlayerStatistics::default();
+        let live = empty_live(&empty_stats);
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2027, 9, 1));
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.season.start_year == 2025 && r.team_slug == "orel"),
+            "a zero-day loan window is a phantom seed, not a spell"
+        );
     }
 
     #[test]

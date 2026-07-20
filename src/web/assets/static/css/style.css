@@ -308,10 +308,13 @@ a:active {
     overflow: hidden;
 }
 
+/* Nav labels are league/competition names — a long one wraps onto a
+   second line rather than being clipped, so the sidebar always shows
+   the name in full. */
 .fm-nav-section li a span {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.25;
     min-width: 0;
 }
 
@@ -329,6 +332,7 @@ a:active {
 
 .fm-nav-section li a i {
     width: 18px;
+    flex-shrink: 0;
     text-align: center;
     font-size: 13px;
 }
@@ -2122,9 +2126,9 @@ a:active {
     font-size: 13px;
     font-weight: 500;
     color: #d8dee4;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.25;
 }
 
 .fm-rep-row:hover .rep-league-name {
@@ -4249,9 +4253,7 @@ a:active {
 
 .fm-history-table thead th.sq-league {
     text-align: left;
-    width: 140px;
-    min-width: 140px;
-    max-width: 140px;
+    min-width: 168px;
 }
 
 .fm-history-table thead th.sq-fee {
@@ -4273,20 +4275,31 @@ a:active {
     margin-right: 0.55em;
 }
 
-/* Pin the league column to a fixed width. The hidden breakdown rows
-   feed their competition label (`comp.label`) into this column, so under
-   the table's auto layout its width would otherwise be recomputed every
-   time a season's breakdown is expanded/collapsed — visibly shifting all
-   the other columns. A fixed width (with the existing nowrap + ellipsis)
-   keeps the column — and therefore the whole table — rock-steady on toggle. */
+/* Competition names stay on one line and are never truncated — the
+   column sizes itself to the longest name instead.
+
+   Keeping it steady on toggle: the hidden breakdown rows feed their own
+   `comp.label` (often a full league name) into this column, so expanding
+   a season would otherwise recompute the column width and shift every
+   other column. The season row carries a zero-height `.sq-league-sizer`
+   copy of each of its breakdown labels, so the column is already wide
+   enough for them before the first click and nothing moves. */
 .fm-history-table td.sq-league {
     text-align: left;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    width: 140px;
-    min-width: 140px;
-    max-width: 140px;
+    min-width: 168px;
+}
+
+/* Width-only stand-in for the breakdown labels. `visibility: hidden`
+   (not `display: none`) so it still counts toward the column's intrinsic
+   width; `height: 0` so it costs no vertical space. Deliberately no
+   `overflow: hidden` — that would zero its min-content contribution and
+   defeat the whole point. */
+.fm-history-table td.sq-league .sq-league-sizer {
+    display: block;
+    height: 0;
+    visibility: hidden;
+    white-space: nowrap;
 }
 
 .fm-history-table td.sq-fee {
@@ -7208,9 +7221,10 @@ a:active {
         font-size: 12px;
     }
 
-    /* History table: compact columns on mobile — show flag-only nat, truncated league */
+    /* History table: compact columns on mobile — flag-only nat, league name
+       kept in full (wrapped, never truncated) */
     .fm-history-table {
-        min-width: 530px;
+        min-width: 554px;
     }
 
     .fm-history-table td.sq-nat a {
@@ -7222,17 +7236,15 @@ a:active {
         margin-right: 0;
     }
 
+    /* Narrower floor than desktop — the name still sets the real width,
+       and the panel scrolls horizontally rather than cutting it. */
     .fm-history-table td.sq-league,
     .fm-history-table thead th.sq-league {
-        width: 80px;
-        min-width: 80px;
-        max-width: 80px;
+        min-width: 104px;
     }
 
     .fm-history-table td.sq-league {
         font-size: 11px;
-        overflow: hidden;
-        text-overflow: ellipsis;
     }
 
     .fm-history-table thead th,
@@ -7466,11 +7478,14 @@ a:active {
     font-weight: 400;
 }
 
+/* Shares leftover width with the name/team columns (`max-width: 0`), but
+   the league name is never cut — it wraps inside whatever width the
+   column ends up with. */
 .fm-watchlist-table .wl-league {
     max-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
     text-align: left;
 }
 

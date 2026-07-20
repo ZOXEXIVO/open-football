@@ -536,6 +536,7 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::WantsToLeaveAfterRelegation => "event_wants_to_leave_after_relegation",
         HappinessEventType::LoanDevelopmentConcern => "event_loan_development_concern",
         HappinessEventType::LoanRecallRequested => "event_loan_recall_requested",
+        HappinessEventType::LoanFormConcern => "event_loan_form_concern",
         HappinessEventType::WantsLoanMadePermanent => "event_wants_loan_made_permanent",
         HappinessEventType::UnsettledAfterLoanReturn => "event_unsettled_after_loan_return",
         HappinessEventType::ReturnedFromLoanProven => "event_returned_from_loan_proven",
@@ -2505,6 +2506,7 @@ impl LoanRender {
             HappinessEventType::LoanListingAccepted
                 | HappinessEventType::LoanRecallRequested
                 | HappinessEventType::LoanDevelopmentConcern
+                | HappinessEventType::LoanFormConcern
         )
     }
 

@@ -590,14 +590,20 @@ pub async fn transfer_action(
         // Squad status is club-roster-aware: it depends on the destination
         // team's full position-group depth (existing teammates + the new
         // arrival). Compute and pin on the freshly-installed contract so
-        // the UI shows a sensible value immediately.
+        // the UI shows a sensible value immediately. Team-aware: a signing
+        // parked in a reserve/development squad must not be crowned "Key
+        // Player" of a squad that owns no role labels.
+        let dest_team_type =
+            sim.continents[dci].countries[dcoi].clubs[dcli].teams.teams[dti].team_type;
         let player_age = core::utils::DateUtils::age(player.birth_date, date);
         let player_group = player.position().position_group();
         let mut full_group_cas = existing_group_cas.clone();
         full_group_cas.push(player_ca);
         full_group_cas.sort_unstable_by(|a, b| b.cmp(a));
         if let Some(contract) = player.contract.as_mut() {
-            contract.squad_status = core::PlayerSquadStatus::calculate(
+            contract.squad_status = core::PlayerSquadStatus::calculate_for_team(
+                dest_team_type,
+                &contract.squad_status,
                 player_ca,
                 player_age,
                 player_group,

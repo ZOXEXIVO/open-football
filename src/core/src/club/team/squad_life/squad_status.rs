@@ -43,8 +43,15 @@ impl SquadStatusUpdater {
 
     /// Recompute every player's `contract.squad_status` against the CA
     /// distribution of their position group, emitting a morale event
-    /// for genuine senior-ladder moves.
+    /// for genuine senior-ladder moves. Only squads that own role labels
+    /// ([`crate::TeamType::owns_squad_status`]) run the full re-rank;
+    /// development and parking squads take the administrative pass in
+    /// [`Self::apply_development_labels`] instead.
     pub fn apply(team: &mut Team, date: NaiveDate) {
+        if !team.team_type.owns_squad_status() {
+            Self::apply_development_labels(team, date);
+            return;
+        }
         let mut by_group: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
         for p in team.players.iter() {
             let g = p.position().position_group();
@@ -209,6 +216,63 @@ impl SquadStatusUpdater {
         }
     }
 
+    /// Label pass for squads that don't own role labels (Reserve,
+    /// U20..U23 — see [`crate::TeamType::owns_squad_status`]). Youngsters
+    /// get their prospect label refreshed; a senior keeps his club-level
+    /// label collapsed to at most backup via
+    /// [`PlayerSquadStatus::calculate_for_team`] — a Main-team backup
+    /// moved down stays a backup, and a stale "Key Player" tag can't
+    /// survive in a squad that has no key players. An unexpired signing
+    /// promise is still honored as a floor: parking a promised regular in
+    /// the reserves must surface as the broken promise it is (playing-time
+    /// expectations read this label), not be relabelled away. Purely
+    /// administrative — no `SquadStatusChange` events; the demotion story
+    /// belongs to the move that parked the player here, not to this
+    /// relabel.
+    fn apply_development_labels(team: &mut Team, date: NaiveDate) {
+        let team_type = team.team_type;
+        let mut by_group: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
+        for p in team.players.iter() {
+            let g = p.position().position_group();
+            by_group
+                .entry(g)
+                .or_default()
+                .push(p.player_attributes.current_ability);
+        }
+        for cas in by_group.values_mut() {
+            cas.sort_unstable_by(|a, b| b.cmp(a));
+        }
+
+        for player in team.players.iter_mut() {
+            let group = player.position().position_group();
+            let ca = player.player_attributes.current_ability;
+            let age = DateUtils::age(player.birth_date, date);
+            if let Some(ref mut contract) = player.contract {
+                let group_cas = by_group.get(&group).map(|v| v.as_slice()).unwrap_or(&[]);
+                let mut new_status = PlayerSquadStatus::calculate_for_team(
+                    team_type,
+                    &contract.squad_status,
+                    ca,
+                    age,
+                    group,
+                    group_cas,
+                );
+                if let Some((promised, until)) = contract.promised_squad_status.clone() {
+                    if date <= until {
+                        if Self::senior_rank(&promised).unwrap_or(0)
+                            > Self::senior_rank(&new_status).unwrap_or(0)
+                        {
+                            new_status = promised;
+                        }
+                    } else {
+                        contract.promised_squad_status = None;
+                    }
+                }
+                contract.squad_status = new_status;
+            }
+        }
+    }
+
     /// Senior-ladder rank for promotion/demotion detection. Youth
     /// labels return `None` — a prospect's label shifting with age is
     /// re-classification, not a conversation about his role.
@@ -303,6 +367,177 @@ impl SquadStatusUpdater {
             PlayerSquadStatus::MainBackupPlayer
         };
         Some(ceiling)
+    }
+}
+
+#[cfg(test)]
+mod development_squad_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection, Team, TeamBuilder,
+        TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    fn today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()
+    }
+
+    fn keeper(id: u32, birth_year: i32, ca: u8, status: PlayerSquadStatus) -> Player {
+        let mut attrs = PlayerAttributes::default();
+        attrs.current_ability = ca;
+        let mut contract =
+            PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
+        contract.squad_status = status;
+        let mut p = PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("D".into(), format!("P{id}")))
+            .birth_date(NaiveDate::from_ymd_opt(birth_year, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Goalkeeper,
+                    level: 18,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+        p.contract = Some(contract);
+        p
+    }
+
+    fn squad_of(team_type: TeamType, players: Vec<Player>) -> Team {
+        TeamBuilder::new()
+            .id(1)
+            .league_id(None)
+            .club_id(1)
+            .name("Dev".into())
+            .slug("dev".into())
+            .team_type(team_type)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 200))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap()
+    }
+
+    fn status_of(team: &Team, id: u32) -> PlayerSquadStatus {
+        team.players
+            .players
+            .iter()
+            .find(|p| p.id == id)
+            .unwrap()
+            .contract
+            .as_ref()
+            .unwrap()
+            .squad_status
+            .clone()
+    }
+
+    /// The Pinsoglio case: a veteran whose CA tops a development squad's
+    /// position group must NOT be crowned its "Key Player" — the label
+    /// collapses to backup, silently.
+    #[test]
+    fn veteran_label_collapses_to_backup_on_development_squad() {
+        let mut team = squad_of(
+            TeamType::U20,
+            vec![
+                keeper(1, 1990, 140, PlayerSquadStatus::KeyPlayer),
+                keeper(2, 2007, 90, PlayerSquadStatus::NotYetSet),
+                keeper(3, 2008, 80, PlayerSquadStatus::NotYetSet),
+            ],
+        );
+        SquadStatusUpdater::apply(&mut team, today());
+
+        assert_eq!(status_of(&team, 1), PlayerSquadStatus::MainBackupPlayer);
+        let vet = team.players.players.iter().find(|p| p.id == 1).unwrap();
+        assert!(
+            vet.happiness
+                .recent_events
+                .iter()
+                .all(|e| e.event_type != HappinessEventType::SquadStatusChange),
+            "administrative relabel must not narrate a demotion"
+        );
+    }
+
+    #[test]
+    fn backup_stays_backup_on_reserve_even_as_best_in_group() {
+        let mut team = squad_of(
+            TeamType::Reserve,
+            vec![
+                keeper(1, 1989, 120, PlayerSquadStatus::MainBackupPlayer),
+                keeper(2, 2006, 85, PlayerSquadStatus::NotYetSet),
+            ],
+        );
+        SquadStatusUpdater::apply(&mut team, today());
+
+        assert_eq!(
+            status_of(&team, 1),
+            PlayerSquadStatus::MainBackupPlayer,
+            "a parked backup must not become Key Player of the reserves"
+        );
+        // A 20-year-old senior with no label yet gets none invented for him.
+        assert_eq!(status_of(&team, 2), PlayerSquadStatus::NotYetSet);
+    }
+
+    /// Prospect labels are club-level assessments, not team-role claims —
+    /// they stay live on development squads.
+    #[test]
+    fn youngster_still_gets_prospect_label_on_development_squad() {
+        let mut team = squad_of(
+            TeamType::Reserve,
+            vec![
+                keeper(1, 2009, 110, PlayerSquadStatus::NotYetSet),
+                keeper(2, 2009, 70, PlayerSquadStatus::NotYetSet),
+            ],
+        );
+        SquadStatusUpdater::apply(&mut team, today());
+
+        assert_eq!(
+            status_of(&team, 1),
+            PlayerSquadStatus::HotProspectForTheFuture
+        );
+        assert_eq!(status_of(&team, 2), PlayerSquadStatus::DecentYoungster);
+    }
+
+    #[test]
+    fn unexpired_role_promise_floors_the_label_on_development_squad() {
+        let mut vet = keeper(1, 1994, 130, PlayerSquadStatus::FirstTeamRegular);
+        vet.contract.as_mut().unwrap().promised_squad_status = Some((
+            PlayerSquadStatus::FirstTeamRegular,
+            today() + Duration::days(100),
+        ));
+        let mut team = squad_of(TeamType::Reserve, vec![vet]);
+        SquadStatusUpdater::apply(&mut team, today());
+
+        assert_eq!(
+            status_of(&team, 1),
+            PlayerSquadStatus::FirstTeamRegular,
+            "an unexpired signing promise must survive the reserve relabel so the breach stays visible"
+        );
+    }
+
+    #[test]
+    fn expired_promise_clears_and_label_collapses_on_development_squad() {
+        let mut vet = keeper(1, 1994, 130, PlayerSquadStatus::KeyPlayer);
+        vet.contract.as_mut().unwrap().promised_squad_status =
+            Some((PlayerSquadStatus::KeyPlayer, today() - Duration::days(1)));
+        let mut team = squad_of(TeamType::Reserve, vec![vet]);
+        SquadStatusUpdater::apply(&mut team, today());
+
+        let c = team.players.players[0].contract.as_ref().unwrap();
+        assert_eq!(c.squad_status, PlayerSquadStatus::MainBackupPlayer);
+        assert!(c.promised_squad_status.is_none());
     }
 }
 

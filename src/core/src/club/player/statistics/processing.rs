@@ -1459,12 +1459,16 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // The user's collapse rule, both directions: a 0-app loan stint
-    // recalled after ~6 weeks (<40% of the season) folds away; the same
-    // recall in late February (>40%) keeps its row.
+    // A loan that BEGINS in its season is a real career event and shows
+    // at any length — an early recall after ~6 weeks with 0 apps still
+    // renders, because the player was genuinely registered at the
+    // borrowing club and the transfers page lists both legs of the move.
+    // Duration is not what makes a loan real; only a re-seed tail of an
+    // older loan collapses (see
+    // `return_after_new_season_snapshot_collapses_phantom_loan_year`).
     // ---------------------------------------------------------------
     #[test]
-    fn early_recall_collapses_loan_row_late_recall_keeps_it() {
+    fn short_and_long_recalls_both_keep_their_loan_row() {
         let juve = team_with_league("Juventus", "juventus", "Serie A", "serie-a");
         let palermo = team_with_league("Palermo", "palermo", "Serie B", "serie-b");
 
@@ -1482,8 +1486,8 @@ mod tests {
 
         let early = drive(make_date(2026, 9, 25));
         assert!(
-            !early.iter().any(|r| r.1 == "palermo"),
-            "a six-week 0-app loan stint is display noise: {early:?}"
+            early.contains(&(2026, "palermo".to_string(), true, 0)),
+            "a six-week 0-app loan is still a real spell and must show: {early:?}"
         );
         assert!(
             early.iter().any(|r| r.0 == 2026 && r.1 == "juventus"),

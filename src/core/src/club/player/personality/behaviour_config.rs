@@ -493,6 +493,10 @@ pub struct MoraleEventCatalog {
     // ── Loan management pressure ─────────────────────────────────
     pub loan_development_concern: f32,
     pub loan_recall_requested: f32,
+    /// Loanee playing regularly but performing clearly below the
+    /// positional neutral — the parent club's form worry, never a
+    /// minutes grievance.
+    pub loan_form_concern: f32,
     /// Thriving loanee wants the borrower to sign him permanently —
     /// mild longing, not a grievance.
     pub wants_loan_made_permanent: f32,
@@ -816,6 +820,7 @@ impl Default for MoraleEventCatalog {
             // sit above the routine minutes-concern note.
             loan_development_concern: -2.5,
             loan_recall_requested: -3.0,
+            loan_form_concern: -1.5,
             // Longing, not a grievance — he's playing and happy where he
             // is; he just doesn't want it to end.
             wants_loan_made_permanent: -1.0,
@@ -1069,6 +1074,7 @@ impl MoraleEventCatalog {
             WantsToLeaveAfterRelegation => self.wants_to_leave_after_relegation,
             LoanDevelopmentConcern => self.loan_development_concern,
             LoanRecallRequested => self.loan_recall_requested,
+            LoanFormConcern => self.loan_form_concern,
             WantsLoanMadePermanent => self.wants_loan_made_permanent,
             UnsettledAfterLoanReturn => self.unsettled_after_loan_return,
             ReturnedFromLoanProven => self.returned_from_loan_proven,
@@ -1433,6 +1439,7 @@ mod tests {
             crate::HappinessEventType::PoorTraining,
             crate::HappinessEventType::MatchDropped,
             crate::HappinessEventType::LackOfPlayingTime,
+            crate::HappinessEventType::LoanFormConcern,
             crate::HappinessEventType::LoanListingAccepted,
             crate::HappinessEventType::ConflictWithTeammate,
             crate::HappinessEventType::FeelingIsolated,

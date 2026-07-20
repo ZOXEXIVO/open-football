@@ -1,4 +1,5 @@
 use crate::PlayerFieldPositionGroup;
+use crate::TeamType;
 use chrono::Duration;
 use chrono::NaiveDateTime;
 pub use chrono::prelude::{DateTime, Datelike, NaiveDate, Utc};
@@ -111,6 +112,35 @@ impl PlayerSquadStatus {
             PlayerSquadStatus::MainBackupPlayer
         } else {
             PlayerSquadStatus::NotNeeded
+        }
+    }
+
+    /// Like [`calculate`](Self::calculate), but aware of WHICH squad the
+    /// ranking runs in. Senior role labels are club-level promises owned
+    /// only by squads listed in [`TeamType::owns_squad_status`]. On a
+    /// development or parking squad (Reserve, U20..U23) ranking whoever is
+    /// parked there against reserve teammates would crown a journeyman
+    /// third keeper "Key Player" of a squad that has no key players — so
+    /// there a youngster still gets his prospect label refreshed, while a
+    /// senior keeps the label he carried, collapsed to at most backup:
+    /// being sent to the reserves IS the club's verdict on his first-team
+    /// role.
+    pub fn calculate_for_team(
+        team_type: TeamType,
+        current: &PlayerSquadStatus,
+        player_ca: u8,
+        player_age: u8,
+        group: PlayerFieldPositionGroup,
+        team_cas: &[u8],
+    ) -> Self {
+        if team_type.owns_squad_status() || player_age <= 19 {
+            return Self::calculate(player_ca, player_age, group, team_cas);
+        }
+        match current {
+            PlayerSquadStatus::KeyPlayer
+            | PlayerSquadStatus::FirstTeamRegular
+            | PlayerSquadStatus::FirstTeamSquadRotation => PlayerSquadStatus::MainBackupPlayer,
+            other => other.clone(),
         }
     }
 }

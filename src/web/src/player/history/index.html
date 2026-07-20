@@ -37,7 +37,7 @@
                     </td>
                     <td class="sq-club">{% if !item.team_slug.is_empty() %}<a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a>{% else %}{{ item.team_name }}{% endif %}</td>
                     <td class="sq-nat">{% if !item.country_code.is_empty() %}<a href="/{{ lang }}/countries/{{ item.country_slug }}"><span class="flag flag-{{ item.country_code }}" title="{{ item.country_name }}"></span> {{ item.country_name }}</a>{% endif %}</td>
-                    <td class="sq-league">{% if !item.league_slug.is_empty() %}<a href="/{{ lang }}/leagues/{{ item.league_slug }}">{{ item.league_name }}</a>{% endif %}</td>
+                    <td class="sq-league">{% if !item.league_slug.is_empty() %}<a href="/{{ lang }}/leagues/{{ item.league_slug }}">{{ item.league_name }}</a>{% endif %}{# Zero-height copies of this season's breakdown labels. They only reserve column width so expanding the row can't resize the League column — see .sq-league-sizer. #}{% for comp in item.breakdown %}<span class="sq-league-sizer" aria-hidden="true">{{ comp.label }}</span>{% endfor %}</td>
                     <td class="sq-fee">{% if item.is_loan %}{{ i18n.t("loan") }}{% else if !item.transfer_fee.is_empty() %}{{ item.transfer_fee }}{% endif %}</td>
                     <td class="sq-stat">{{ item.stats.played }}{% if item.stats.played_subs > 0 %} ({{ item.stats.played_subs }}){% endif %}</td>
                     {% if is_goalkeeper %}

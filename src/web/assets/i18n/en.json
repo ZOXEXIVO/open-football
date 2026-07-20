@@ -2324,6 +2324,7 @@
   "event_wants_to_leave_after_relegation": "Wants to leave after relegation",
   "event_loan_development_concern": "Loan is not helping his development",
   "event_loan_recall_requested": "Loan recall requested",
+  "event_loan_form_concern": "Parent club concerned by loan form",
   "event_wants_loan_made_permanent": "Wants the loan made permanent",
   "event_unsettled_after_loan_return": "Unsettled after returning from loan",
   "event_returned_from_loan_proven": "Came back from loan a proven first-teamer",
