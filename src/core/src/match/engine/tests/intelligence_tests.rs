@@ -16,7 +16,7 @@ use crate::r#match::engine::coach::{
 };
 use crate::r#match::engine::sub_scoring::SubScoring;
 use crate::r#match::player::strategies::players::ops::dribble_duel::{
-    DuelContext, resolve_dribble_duel,
+    DribbleDuelResolver, DuelContext,
 };
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext, effective_skill,
@@ -237,8 +237,8 @@ fn dives_into_tackles_increases_foul_risk_in_duels() {
     let mut d_fouls = 0;
     for i in 0..200 {
         let roll = (i as f32 + 0.5) / 200.0;
-        let r1 = resolve_dribble_duel(&attacker, &stays, DuelContext::default(), roll);
-        let r2 = resolve_dribble_duel(&attacker, &dives, DuelContext::default(), roll);
+        let r1 = DribbleDuelResolver::resolve(&attacker, &stays, DuelContext::default(), roll);
+        let r2 = DribbleDuelResolver::resolve(&attacker, &dives, DuelContext::default(), roll);
         if r1.outcome.is_foul() {
             s_fouls += 1;
         }

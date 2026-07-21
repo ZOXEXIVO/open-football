@@ -1747,7 +1747,7 @@ impl MatchSideContext {
 ///     playing within himself), whereas contentment is the baseline a
 ///     professional is expected to bring; confidence helps, but less than
 ///     unhappiness hurts.
-///   * **Bounded** — capped at −0.45 / +0.20 so morale only *colours* the
+///   * **Bounded** — capped at −0.45 / +0.15 so morale only *colours* the
 ///     stat-line verdict, never overturns it. A brilliant shift on poor
 ///     morale is still brilliant; a poor shift on great morale is still
 ///     poor. Keeping the magnitude small also keeps the morale→rating→
@@ -1762,7 +1762,12 @@ impl MoraleRatingShaper {
         if centered < 0.0 {
             centered * 0.45
         } else {
-            centered * 0.20
+            // Upside trimmed 0.20 → 0.15 (FM-parity winger pass,
+            // 2026-07): a regular starter at a winning club sits well
+            // above neutral morale nearly all season, so the lift was
+            // a systematic +0.1..0.2 on exactly the players the season
+            // bands assume mean-neutral shaping for.
+            centered * 0.15
         }
     }
 }

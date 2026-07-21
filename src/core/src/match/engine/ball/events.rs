@@ -1,6 +1,9 @@
 use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::strategies::players::{
+    DribbleDuelResolver, DribbleOutcome, DuelContext,
+};
 use crate::r#match::{MatchContext, MatchField, PlayerSide};
 use log::debug;
 use nalgebra::Vector3;
@@ -345,67 +348,86 @@ impl BallEventDispatcher {
             .map(|nt| nt != carrier_team_id)
             .unwrap_or(false);
 
-        // Successful-dribble producer: count opponents who were on the
+        // Successful-dribble producer: find opponents who were on the
         // carry line between start and end (carrier physically ran past
         // their pressure cone). Defenders sitting right at the start or
         // right at the end are excluded — neither was "beaten".
-        let beaten_count = if !dispossessed_by_opponent && forward_progress >= 12.0 {
-            Self::count_beaten_on_carry_path(
+        let beaten_ids = if !dispossessed_by_opponent && forward_progress >= 12.0 {
+            Self::beaten_ids_on_carry_path(
                 start,
                 end,
                 field
                     .players
                     .iter()
                     .filter(|p| p.team_id != carrier_team_id)
-                    .map(|p| p.position),
+                    .map(|p| (p.id, p.position)),
             )
         } else {
-            0
+            Vec::new()
         };
 
-        // Skill-gate the dribble credit. Geometry alone — "carrier ran
-        // past opponent in their pressure cone" — overstated the take-on
-        // contribution for low-skill carriers, who in real football
-        // lose control of the ball at the pressure point. The rating's
-        // tier classifier uses `successful_dribbles` to lift a player
-        // out of the Passenger tier, so a fake credit here had a
-        // compounding effect: low-skill players escaped the engagement
-        // penalty and clean-context damping on the back of geometric
-        // beats they wouldn't have completed in reality.
+        // Resolve each geometric beat as a real 1v1 duel (FM-parity
+        // skill pass, 2026-07): the previously carrier-only credit
+        // curve ignored WHO was beaten — running past a Van Dijk paid
+        // the same as running past a fourth-tier fullback. The wired
+        // `DribbleDuelResolver` weighs the full attacker profile
+        // (dribbling / technique / flair / agility / acceleration /
+        // balance / composure / decisions + traits) against the full
+        // defender profile (tackling / positioning / anticipation /
+        // marking / strength / balance / agility / concentration +
+        // traits), all through `effective_skill` so fatigue bites.
         //
-        // Per-beat success rate: dribbling × technique × agility blend
-        // raised to a squaring curve. Skill=1 retains ~6% of beats,
-        // skill=10 retains ~26%, skill=20 retains ~90%.
-        let (carrier_skill_factor, carry_seed) = if let Some(carrier) = field.get_player(carrier_id)
-        {
-            let dribbling = (carrier.skills.technical.dribbling / 20.0).clamp(0.0, 1.0);
-            let technique = (carrier.skills.technical.technique / 20.0).clamp(0.0, 1.0);
-            let agility = (carrier.skills.physical.agility / 20.0).clamp(0.0, 1.0);
-            let composite = dribbling * 0.5 + technique * 0.3 + agility * 0.2;
-            // Squaring curve so skill ~1 → ~0.0025 success, skill 5 →
-            // ~6%, skill 10 → ~25%, skill 20 → ~90%. Floor at 0.01 (1%)
-            // so a sub-5 dribbler can occasionally beat a man on a
-            // lucky touch without flattening the whole bottom into the
-            // same rate; cap at 0.95 so even an elite has some chance
-            // of a slip.
-            let p = composite.powi(2).clamp(0.01, 0.95);
-            (p, context.current_tick())
-        } else {
-            (0.5, 0)
-        };
-
+        // Stat-only wiring: possession, foul events, and the carry
+        // physics stay untouched — the duel decides how the beat is
+        // recorded. Clean / heavy-touch beats credit a successful
+        // dribble, tackled / loose outcomes a failed one, and foul
+        // flavours record neither (no live foul fires on this path,
+        // and a fouled take-on is neither complete nor failed).
+        let minute = (context.total_match_time / 60_000) as u32;
+        let field_h = context.field_size.height as f32;
+        let wide_margin = field_h * 0.2;
+        let carry_seed = context.current_tick();
         let mut credited_beats: u16 = 0;
-        // Deterministic per-beat roll: same carry should produce the
-        // same dribble credit on re-simulation. Each beat gets its own
-        // sub-seed mixed from (tick × carrier × beat-index) so the
-        // outcomes of consecutive beats are independent.
-        for beat_idx in 0..beaten_count {
-            let seed = (carry_seed as u64).wrapping_mul(0x9E3779B97F4A7C15)
-                ^ (carrier_id as u64).wrapping_mul(0xBF58476D1CE4E5B9)
-                ^ (beat_idx as u64).wrapping_mul(0x94D049BB133111EB);
-            let roll = ((seed >> 11) & 0xFFFFFF) as f32 / 16_777_215.0;
-            if roll < carrier_skill_factor {
-                credited_beats = credited_beats.saturating_add(1);
+        let mut failed_beats: u16 = 0;
+        if let Some(carrier) = field.players.iter().find(|p| p.id == carrier_id) {
+            // Deterministic per-beat roll: same carry must produce the
+            // same dribble credit on re-simulation. Each beat gets its
+            // own sub-seed mixed from (tick × carrier × beat-index) so
+            // consecutive beats stay independent.
+            for (beat_idx, defender_id) in beaten_ids.iter().enumerate() {
+                let Some(defender) = field.players.iter().find(|p| p.id == *defender_id) else {
+                    continue;
+                };
+                let second_defender_cover = field.players.iter().any(|p| {
+                    p.team_id != carrier_team_id
+                        && p.id != *defender_id
+                        && (p.position - defender.position).magnitude() < 8.0
+                });
+                let y = defender.position.y;
+                let isolated_wide =
+                    !second_defender_cover && (y < wide_margin || y > field_h - wide_margin);
+                let duel_ctx = DuelContext {
+                    attacker_running_at_speed: forward_progress >= 40.0,
+                    defender_squared_up: false,
+                    isolated_wide,
+                    second_defender_cover,
+                    crowded_central: beaten_ids.len() >= 2 && !isolated_wide,
+                    minute,
+                };
+                let seed = carry_seed.wrapping_mul(0x9E3779B97F4A7C15)
+                    ^ (carrier_id as u64).wrapping_mul(0xBF58476D1CE4E5B9)
+                    ^ (beat_idx as u64).wrapping_mul(0x94D049BB133111EB);
+                let roll = ((seed >> 11) & 0xFFFFFF) as f32 / 16_777_215.0;
+                let resolution = DribbleDuelResolver::resolve(carrier, defender, duel_ctx, roll);
+                match resolution.outcome {
+                    DribbleOutcome::BeatManClean | DribbleOutcome::BeatManButHeavyTouch => {
+                        credited_beats = credited_beats.saturating_add(1);
+                    }
+                    DribbleOutcome::TackledClean | DribbleOutcome::LosesBallLoose => {
+                        failed_beats = failed_beats.saturating_add(1);
+                    }
+                    DribbleOutcome::WinsFoul | DribbleOutcome::CommitsFoul => {}
+                }
             }
         }
 
@@ -427,41 +449,44 @@ impl BallEventDispatcher {
             for _ in 0..credited_beats {
                 carrier.statistics.add_successful_dribble();
             }
-            // Beats geometrically "passed" but not credited as successful
-            // dribbles are credited as ATTEMPTED dribbles — the carrier
-            // tried to beat a defender and didn't actually maintain
-            // control. This gives the rating's `failed_drib` drag a
-            // signal for low-skill carriers who keep getting close to
-            // opponents on the run but never come out clean.
-            let failed_beats = beaten_count.saturating_sub(credited_beats);
+            // Beats the duel resolved against the carrier are credited
+            // as ATTEMPTED dribbles — the carrier tried to beat a
+            // defender and didn't come out clean. This gives the
+            // rating's `failed_drib` drag a signal for low-skill
+            // carriers who keep running at defenders and losing.
             for _ in 0..failed_beats {
                 carrier.statistics.add_failed_dribble();
             }
         }
     }
 
-    /// Count opponents the carrier physically ran past on this carry.
+    /// Opponents the carrier physically ran past on this carry.
     /// Geometry-only: an opponent is "beaten" if their CURRENT position
     /// projects onto the carry line between start and end (window
     /// `[3u .. carry_len - 4u]`) and is within a 5u lateral pressure
     /// cone of that line. Approximate — opponents move during the carry
-    /// too — but a deterministic stat-line signal that low-HQ ball
-    /// carriers who can't beat anyone will lack and elite ball-carriers
-    /// will accumulate. Capped at 3 per single carry: nobody beats 4+
-    /// defenders in one run.
-    fn count_beaten_on_carry_path(
+    /// too — but a deterministic signal that low-HQ ball carriers who
+    /// can't beat anyone will lack and elite ball-carriers will
+    /// accumulate. Capped at 3 per single carry: nobody beats 4+
+    /// defenders in one run. Returns the beaten opponents' ids so the
+    /// caller can resolve each beat against that defender's actual
+    /// skill profile.
+    fn beaten_ids_on_carry_path(
         start: Vector3<f32>,
         end: Vector3<f32>,
-        opponent_positions: impl Iterator<Item = Vector3<f32>>,
-    ) -> u16 {
+        opponents: impl Iterator<Item = (u32, Vector3<f32>)>,
+    ) -> Vec<u32> {
         let carry_vec = end - start;
         let carry_len = carry_vec.magnitude();
         if carry_len < 10.0 {
-            return 0;
+            return Vec::new();
         }
         let carry_dir = carry_vec / carry_len;
-        let mut beaten: u16 = 0;
-        for opp_pos in opponent_positions {
+        let mut beaten: Vec<u32> = Vec::new();
+        for (opp_id, opp_pos) in opponents {
+            if beaten.len() >= 3 {
+                break;
+            }
             let to_opp = opp_pos - start;
             let along = to_opp.dot(&carry_dir);
             if along < 3.0 || along > carry_len - 4.0 {
@@ -470,10 +495,26 @@ impl BallEventDispatcher {
             let proj = start + carry_dir * along;
             let perpendicular = (opp_pos - proj).magnitude();
             if perpendicular < 5.0 {
-                beaten = beaten.saturating_add(1);
+                beaten.push(opp_id);
             }
         }
-        beaten.min(3)
+        beaten
+    }
+
+    /// Test-only counting view of [`Self::beaten_ids_on_carry_path`] —
+    /// the geometry fixtures assert on counts, not identities.
+    #[cfg(test)]
+    fn count_beaten_on_carry_path(
+        start: Vector3<f32>,
+        end: Vector3<f32>,
+        opponent_positions: impl Iterator<Item = Vector3<f32>>,
+    ) -> u16 {
+        Self::beaten_ids_on_carry_path(
+            start,
+            end,
+            opponent_positions.enumerate().map(|(i, p)| (i as u32, p)),
+        )
+        .len() as u16
     }
 }
 

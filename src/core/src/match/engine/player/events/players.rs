@@ -1225,10 +1225,17 @@ impl PlayerEventDispatcher {
         let (composite01, pressure_count, _) = match field.get_player(receiver_id) {
             Some(p) => {
                 let s = &p.skills;
-                let composite = s.technical.first_touch * 0.40
-                    + s.technical.technique * 0.20
+                // Decisions folded in (FM-parity skill pass, 2026-07):
+                // control is not only feet — choosing the wrong touch
+                // (taking a ball into traffic, controlling into a
+                // closing lane) is the classic low-Decisions giveaway,
+                // and without it a weak-mentals winger with a good
+                // first touch never leaked control at all.
+                let composite = s.technical.first_touch * 0.35
+                    + s.technical.technique * 0.15
                     + s.mental.composure * 0.20
-                    + s.mental.anticipation * 0.20;
+                    + s.mental.anticipation * 0.15
+                    + s.mental.decisions * 0.15;
                 let comp01 = (composite / 20.0).clamp(0.0, 1.0);
                 let pos = p.position;
                 let team = p.team_id;
@@ -1277,18 +1284,29 @@ impl PlayerEventDispatcher {
     }
 
     /// Pure first-touch-loss probability formula. Returns a value in
-    /// `[0.0, 0.30]`. Tuned so:
-    ///   * `first_touch ≈ 5` + 2 close opponents → ~11%
-    ///   * `first_touch ≈ 10` + 2 close opponents → ~4%
-    ///   * `first_touch ≈ 15` + 2 close opponents → ~0.7%
-    /// The `^2.5` skill curve makes elite reception virtually immune
-    /// while weak receivers under pressure visibly leak control.
+    /// `[0.0, 0.30]`. Two lanes:
+    ///
+    ///   * **Pressured** — the original curve, amplified by close
+    ///     opponents: a weak receiver under a press visibly leaks.
+    ///   * **Unforced** — pressure-independent (FM-parity skill pass,
+    ///     2026-07): a low-composite player fluffs touches even
+    ///     unmarked. Without this lane a weak-mentals player at a
+    ///     dominant club in a weak league (rarely pressured) never
+    ///     registered a single loss of control all season, so nothing
+    ///     in his skill profile reached the rating.
+    ///
+    /// Tuned so (2 close opponents): composite ≈ 0.25 → ~13%,
+    /// ≈ 0.50 → ~5%, ≈ 0.75 → ~1%. The `^2.5` / `^2` curves keep
+    /// elite reception virtually immune in both lanes.
     /// Extracted as a pure function so the gradient is unit-testable
     /// without standing up a `MatchField`.
     #[inline]
     pub(crate) fn first_touch_loss_probability(composite01: f32, pressure_count: usize) -> f32 {
+        let c = composite01.clamp(0.0, 1.0);
         let pressure_mult = 1.0 + (pressure_count.min(4) as f32) * 0.6;
-        ((1.0 - composite01.clamp(0.0, 1.0)).powf(2.5) * 0.10 * pressure_mult).clamp(0.0, 0.30)
+        let pressured = (1.0 - c).powf(2.5) * 0.10 * pressure_mult;
+        let unforced = (1.0 - c).powi(2) * 0.05;
+        (pressured + unforced).clamp(0.0, 0.30)
     }
 
     /// Classify a completed pass and bump the passer's per-zone /

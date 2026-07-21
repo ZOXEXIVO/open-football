@@ -309,6 +309,50 @@ impl LineFactory {
         s
     }
 
+    /// Routine wide midfielder at a possession club: healthy pass
+    /// volume at good accuracy, ambient chance-service (1-3 key
+    /// passes, 2-4 box entries), some carrying and crossing, no goal
+    /// contribution. This is the live Massalyga symptom line — the
+    /// archetype that was averaging 7.3 with 0 G/A before the
+    /// 2026-07 FM-parity winger pass.
+    #[allow(clippy::too_many_arguments)]
+    fn wide_mid(
+        passes_attempted: u16,
+        passes_completed: u16,
+        key_passes: u16,
+        passes_into_box: u16,
+        prog_passes: u16,
+        drib_succ: u16,
+        drib_att: u16,
+        crosses_att: u16,
+        crosses_comp: u16,
+        sot: u16,
+        shots: u16,
+        xg: f32,
+        xg_buildup: f32,
+    ) -> PlayerMatchEndStats {
+        let mut s = Self::blank(PlayerFieldPositionGroup::Midfielder);
+        s.passes_attempted = passes_attempted;
+        s.passes_completed = passes_completed;
+        s.key_passes = key_passes;
+        s.passes_into_box = passes_into_box;
+        s.progressive_passes = prog_passes;
+        s.progressive_carries = 2;
+        s.successful_dribbles = drib_succ;
+        s.attempted_dribbles = drib_att;
+        s.crosses_attempted = crosses_att;
+        s.crosses_completed = crosses_comp;
+        s.shots_on_target = sot;
+        s.shots_total = shots;
+        s.xg = xg;
+        s.xg_buildup = xg_buildup;
+        s.tackles = 1;
+        s.successful_pressures = 1;
+        s.pressures = 3;
+        s.fouls = 1;
+        s
+    }
+
     /// Low-touch passenger midfielder: starter minutes, sub-floor
     /// touch volume, no creative or defensive footprint.
     fn mid_passenger() -> PlayerMatchEndStats {
@@ -1410,6 +1454,79 @@ impl SeasonFixture {
         f
     }
 
+    /// Routine winger at a dominant club: 30 starts, 0 G/A, ambient
+    /// creative volume every week, 19W 7D 4L. The live-symptom
+    /// archetype (Massalyga, Dynamo Kyiv 2026/27: 7.30 over 10+
+    /// matches with nothing decisive) — FM's anchor for this season
+    /// is "solid, nothing more", clearly below the AM creator.
+    fn winger_dominant_club_season() -> Self {
+        let mut f = SeasonFixture {
+            matches: Vec::new(),
+            team_shot_share: 0.62,
+            team_possession: 0.61,
+        };
+        // (pa, pc, kp, pbox, pp, drib_s, drib_a, cr_a, cr_c, sot,
+        //  shots, xg, xgb, tg, og). Wins: 19.
+        let rows: [(
+            u16,
+            u16,
+            u16,
+            u16,
+            u16,
+            u16,
+            u16,
+            u16,
+            u16,
+            u16,
+            u16,
+            f32,
+            f32,
+            u8,
+            u8,
+        ); 30] = [
+            (38, 33, 2, 3, 3, 1, 2, 3, 1, 0, 1, 0.05, 0.5, 2, 0),
+            (42, 37, 1, 2, 4, 1, 3, 2, 0, 1, 1, 0.15, 0.4, 3, 1),
+            (35, 30, 2, 4, 2, 0, 1, 4, 1, 0, 0, 0.0, 0.6, 1, 0),
+            (40, 35, 3, 3, 3, 2, 3, 2, 1, 0, 1, 0.08, 0.7, 2, 1),
+            (37, 32, 1, 3, 3, 1, 2, 3, 1, 1, 2, 0.22, 0.3, 2, 0),
+            (33, 28, 2, 2, 2, 1, 2, 2, 0, 0, 0, 0.0, 0.4, 1, 0),
+            (44, 39, 2, 4, 4, 1, 1, 3, 1, 0, 1, 0.06, 0.8, 4, 0),
+            (36, 31, 1, 2, 3, 0, 2, 2, 1, 1, 1, 0.12, 0.5, 2, 1),
+            (39, 34, 2, 3, 2, 1, 2, 4, 2, 0, 0, 0.0, 0.6, 1, 0),
+            (41, 36, 3, 4, 3, 1, 3, 2, 0, 1, 2, 0.18, 0.7, 3, 0),
+            (34, 29, 1, 2, 2, 0, 1, 3, 1, 0, 1, 0.05, 0.3, 1, 0),
+            (38, 33, 2, 3, 3, 2, 3, 2, 1, 0, 0, 0.0, 0.5, 2, 0),
+            (43, 38, 1, 3, 4, 1, 2, 3, 1, 1, 1, 0.10, 0.6, 2, 1),
+            (36, 31, 2, 2, 2, 1, 2, 2, 0, 0, 1, 0.07, 0.4, 1, 0),
+            (40, 35, 2, 4, 3, 0, 1, 4, 1, 0, 0, 0.0, 0.7, 3, 1),
+            (35, 30, 1, 2, 3, 1, 3, 2, 1, 1, 2, 0.20, 0.3, 2, 0),
+            (39, 34, 3, 3, 2, 1, 2, 3, 1, 0, 1, 0.06, 0.5, 1, 0),
+            (37, 32, 2, 3, 3, 1, 2, 2, 0, 0, 0, 0.0, 0.6, 2, 0),
+            (42, 37, 1, 4, 4, 2, 3, 3, 2, 1, 1, 0.14, 0.8, 3, 0),
+            // Draws: 7.
+            (36, 30, 1, 2, 2, 1, 2, 3, 1, 0, 1, 0.05, 0.3, 1, 1),
+            (33, 28, 2, 2, 3, 0, 1, 2, 0, 0, 0, 0.0, 0.4, 0, 0),
+            (38, 32, 1, 3, 2, 1, 2, 3, 1, 1, 1, 0.12, 0.5, 1, 1),
+            (35, 29, 2, 2, 2, 1, 3, 2, 1, 0, 0, 0.0, 0.3, 2, 2),
+            (31, 26, 1, 1, 3, 0, 1, 2, 0, 0, 1, 0.04, 0.2, 0, 0),
+            (37, 31, 2, 3, 2, 1, 2, 3, 1, 0, 0, 0.0, 0.5, 1, 1),
+            (34, 28, 1, 2, 3, 1, 2, 2, 0, 1, 1, 0.10, 0.4, 1, 1),
+            // Losses: 4.
+            (32, 26, 1, 2, 2, 0, 2, 2, 0, 0, 1, 0.05, 0.3, 0, 1),
+            (36, 30, 1, 1, 2, 1, 2, 3, 1, 0, 0, 0.0, 0.2, 1, 2),
+            (30, 24, 0, 2, 2, 0, 1, 2, 0, 0, 0, 0.0, 0.3, 0, 2),
+            (35, 29, 2, 2, 3, 1, 3, 2, 1, 1, 1, 0.08, 0.4, 1, 3),
+        ];
+        for (pa, pc, kp, pb, pp, ds, da, ca, cc, sot, sh, xg, xgb, tg, og) in rows {
+            f.push(
+                LineFactory::wide_mid(pa, pc, kp, pb, pp, ds, da, ca, cc, sot, sh, xg, xgb),
+                tg,
+                og,
+            );
+        }
+        f
+    }
+
     /// Low-touch passenger midfielder: 28 starts below the engagement
     /// floor at a weak club (8W 9D 11L). Must stay ordinary-poor.
     fn passenger_midfielder_season() -> Self {
@@ -1734,9 +1851,13 @@ fn recycler_midfielder_season_is_solid_not_elite() {
     let f = SeasonFixture::cm_recycler_season();
     let avg = f.average();
     assert!(
-        (6.50..=6.75).contains(&avg),
+        // Floor re-pinned 6.50 → 6.45 in the 2026-07 FM-parity winger
+        // pass: the no-G/A midfielder win-credit damping (context factor
+        // ≤ 0.75) intentionally shaves ~0.02 off a goal-free recycler
+        // season riding team results.
+        (6.45..=6.75).contains(&avg),
         "CM recycler season (35 starts, ~90% on 60+ passes, little progression) \
-         averaged {:.3} — FM band is 6.50..=6.75: tidy volume is solid, not elite\n{}",
+         averaged {:.3} — FM band is 6.45..=6.75: tidy volume is solid, not elite\n{}",
         avg,
         f.breakdown()
     );
@@ -1750,6 +1871,21 @@ fn creator_midfielder_season_lands_in_good_band() {
         (6.80..=7.15).contains(&avg),
         "AM creator season (30 starts, repeated KP/box entries/progression, \
          1g+4a) averaged {:.3} — FM band is 6.80..=7.15\n{}",
+        avg,
+        f.breakdown()
+    );
+}
+
+#[test]
+fn winger_dominant_club_season_stays_solid_not_elite() {
+    let f = SeasonFixture::winger_dominant_club_season();
+    let avg = f.average();
+    assert!(
+        (6.55..=6.90).contains(&avg),
+        "routine winger at a dominant club (30 starts, 0 G/A, ambient \
+         creative volume, 19W) averaged {:.3} — FM band is 6.55..=6.90: \
+         riding a winning side without a goal contribution is solid, \
+         never elite\n{}",
         avg,
         f.breakdown()
     );
@@ -1770,6 +1906,7 @@ fn passenger_midfielder_season_stays_ordinary_poor() {
 #[test]
 fn defender_and_midfielder_archetypes_order_correctly() {
     let creator = SeasonFixture::am_creator_season().average();
+    let winger = SeasonFixture::winger_dominant_club_season().average();
     let recycler = SeasonFixture::cm_recycler_season().average();
     let mid_passenger = SeasonFixture::passenger_midfielder_season().average();
     let cb_cs = SeasonFixture::cb_clean_sheet_season().average();
@@ -1780,6 +1917,14 @@ fn defender_and_midfielder_archetypes_order_correctly() {
          recycler {:.3} > passenger {:.3}",
         creator,
         recycler,
+        mid_passenger
+    );
+    assert!(
+        creator > winger && winger > mid_passenger,
+        "a 0 G/A winger riding a dominant side ({:.3}) must sit below the \
+         decisive AM creator ({:.3}) and above the passenger ({:.3})",
+        winger,
+        creator,
         mid_passenger
     );
     assert!(
@@ -1834,6 +1979,10 @@ fn dump_season_calibration_values() {
         ("DM destroyer", SeasonFixture::dm_destroyer_season()),
         ("CM recycler", SeasonFixture::cm_recycler_season()),
         ("AM creator", SeasonFixture::am_creator_season()),
+        (
+            "Winger dominant",
+            SeasonFixture::winger_dominant_club_season(),
+        ),
         (
             "MID passenger",
             SeasonFixture::passenger_midfielder_season(),

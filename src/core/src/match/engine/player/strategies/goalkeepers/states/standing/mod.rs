@@ -236,10 +236,20 @@ impl GoalkeeperStandingState {
         // 1. Keeper can reach ball first (with skill advantage)
         // 2. Ball is loose or opponent has poor control
         // 3. Ball is within reasonable distance
+        //
+        // Eccentricity is the keeper's risk appetite — a tendency, not
+        // a quality. It widens how speculative a race he's willing to
+        // join and how far from goal he'll sweep; it does NOT make him
+        // faster or better once committed. Centered at 10/20 so an
+        // ordinary keeper keeps the pre-existing gate.
+        let risk_appetite =
+            (ctx.player.skills.goalkeeping.eccentricity / 20.0).clamp(0.0, 1.0) - 0.5;
 
-        let can_reach_first = keeper_time < opponent_time * (1.0 + rushing_out * 0.2);
+        let can_reach_first =
+            keeper_time < opponent_time * (1.0 + rushing_out * 0.2 + risk_appetite * 0.15);
         let ball_loose_or_poor_control = !ctx.ball().is_owned() || opponent_control < 0.5;
-        let reasonable_distance = keeper_to_ball < CLOSE_DANGER_DISTANCE * 1.5;
+        let reasonable_distance =
+            keeper_to_ball < CLOSE_DANGER_DISTANCE * (1.5 + risk_appetite * 0.5);
 
         can_reach_first && ball_loose_or_poor_control && reasonable_distance
     }

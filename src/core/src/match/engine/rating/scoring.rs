@@ -291,10 +291,13 @@ impl<'a> RatingContext<'a> {
     ///
     /// The producer (`add_miscontrol` / `add_heavy_touch`) IS wired in
     /// `match/engine/player/events/players.rs` — it fires per receive
-    /// roll against `first_touch_loss_probability`, which scales with
-    /// (1 − first_touch_skill)² · pressure. A low-skill player under
-    /// regular pressure will accumulate 3-5 events per 90 minutes,
-    /// landing roughly −0.45 to −0.6 of rating drag.
+    /// roll against `first_touch_loss_probability`: a pressured lane
+    /// scaling with (1 − composite)^2.5 · pressure plus an unforced
+    /// pressure-independent lane (1 − composite)² · 0.05, where the
+    /// composite reads first_touch / technique / composure /
+    /// anticipation / decisions. A low-skill player under regular
+    /// pressure accumulates 3-5 events per 90; a weak-mentals player
+    /// even unmarked leaks 1-2, landing −0.2 to −0.6 of rating drag.
     pub(super) fn touch_quality(&self) -> f32 {
         let s = self.stats;
         let m = s.miscontrols as f32;

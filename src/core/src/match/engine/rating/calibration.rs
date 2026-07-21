@@ -133,13 +133,26 @@ impl<'a> RatingContext<'a> {
             let high_pass_volume = s.passes_completed >= 30 && pct >= 0.75;
             let big_pass_volume = s.passes_completed >= 50 && pct >= 0.80;
 
+            // Creative Strong bar tightened (FM-parity winger pass,
+            // 2026-07): `creative_strong >= 2` meant two key passes —
+            // or two dribbles — promoted a routine winger at a
+            // possession club to Strong (cap +1.3) nearly every week,
+            // and KP+PB ≥ 4 is ambient volume for a wide midfielder in
+            // a 60%-possession side. Live symptom: a 0 G/A debutant
+            // averaging 7.3, above the AM-creator contract band. FM
+            // treats that shift as "did the job" (~6.8-7.0), not a
+            // standout. Strong now needs a genuinely headline creative
+            // line (3+ of one decisive kind, or 6+ combined box
+            // service). Defensive routes (zone_impact, big_def,
+            // routine_def) are untouched — a firefighting shift is a
+            // different currency and its bands are separately pinned.
             if zone_impact >= 2
-                || creative_strong >= 2
+                || creative_strong >= 3
                 || big_def >= 3
                 || routine_def >= 7
                 || big_pass_volume
                 || s.crosses_completed >= 3
-                || (s.key_passes + s.passes_into_box) >= 4
+                || (s.key_passes + s.passes_into_box) >= 6
             {
                 return EvidenceTier::Strong;
             }
@@ -181,18 +194,23 @@ impl<'a> RatingContext<'a> {
             EvidenceTier::QuietCameo => RatingMath::soft_cap(positive_delta, 0.7, 0.25),
             EvidenceTier::Strong => RatingMath::soft_cap(positive_delta, 1.3, 0.40),
             EvidenceTier::Modest => {
-                // Unified Modest cap at 0.95 for all outfield positions
-                // (was forward-specific 0.80 → 0.65 → 0.80). The
-                // forward-specific tighter cap was added to prevent
-                // goalless forwards from drifting to 6.9+ season
-                // averages; but the soft_cap slope 0.30 above the cap
-                // already provides natural compression, and the broader
-                // forward over-tightening of the prior round (ARE +
-                // wasted-xG + context damping) is what was actually
-                // doing that work. Restoring 0.95 lets an active
-                // goalless forward's busy routine line register, while
-                // ARE still drags the rating below the good band.
-                RatingMath::soft_cap(positive_delta, 0.95, 0.30)
+                // Forwards keep the 0.95 cap (an active goalless
+                // forward's busy routine line has to register — ARE
+                // drags the rating back below the good band on its
+                // own). Midfielders get a tighter 0.85 (FM-parity
+                // winger pass, 2026-07): with the Strong bar raised,
+                // the routine possession-club winger lands here, and
+                // at 0.95 his ~1.0 routine sum still printed 7.1+ on
+                // every win — FM's anchor for "solid shift, nothing
+                // decisive" is ~6.8-7.0. Defenders keep 0.95: their
+                // Modest tier carries the clean-sheet season bands
+                // pinned in season_tests.rs.
+                let cap = if self.pos == PlayerFieldPositionGroup::Midfielder {
+                    0.85
+                } else {
+                    0.95
+                };
+                RatingMath::soft_cap(positive_delta, cap, 0.30)
             }
             // Tightened: passenger routine volume alone is severely
             // bounded. The engagement penalty + context damping handle
@@ -256,6 +274,22 @@ impl<'a> RatingContext<'a> {
             EvidenceTier::GkPassenger => 0.85,
             _ => 1.0,
         };
+        // Midfielders without a goal contribution take a lighter version
+        // of the goalless-forward discount (FM-parity winger pass,
+        // 2026-07): full win credit on top of an already near-cap routine
+        // line was part of what held a 0 G/A winger at a winning club in
+        // the 7.2-7.4 band. 0.75 keeps most of the result credit — a
+        // midfielder's job description isn't G/A the way a forward's is —
+        // while FM-style "rode the winning side" damping still registers.
+        // Defenders and keepers are exempt: their result currency is the
+        // clean sheet, and those season bands are pinned separately.
+        if self.pos == PlayerFieldPositionGroup::Midfielder
+            && self.stats.goals == 0
+            && self.stats.assists == 0
+            && self.stats.minutes_played >= 30
+        {
+            return base.min(0.75);
+        }
         if self.pos == PlayerFieldPositionGroup::Forward
             && self.stats.goals == 0
             && self.stats.assists == 0

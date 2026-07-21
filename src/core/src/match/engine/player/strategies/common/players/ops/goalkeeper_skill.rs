@@ -44,6 +44,12 @@ pub struct GoalkeeperSkillProfile {
     pub aerial_command: f32,
     /// Sweeper / coming-out execution.
     pub rushing_out_profile: f32,
+    /// Risk appetite (0..1) from `goalkeeping.eccentricity` — a
+    /// TENDENCY, not a quality: it widens how speculative a race the
+    /// keeper is willing to join and how far he'll sweep, without
+    /// making him any better at arriving. Raw read (no fatigue band):
+    /// temperament doesn't tire.
+    pub eccentricity: f32,
     /// Close-range one-on-one save quality.
     pub one_v_one: f32,
     /// Distribution composite (kicks/throws/passes).
@@ -321,6 +327,7 @@ impl GoalkeeperSkillProfile {
             + keeper_curve(one_on_ones01) * 0.08
             + keeper_curve(bravery01) * 0.04;
         let rushing_out_profile = (rushing_out_raw * explosive_mult).clamp(0.0, 1.0);
+        let eccentricity = skill01(s.goalkeeping.eccentricity);
 
         let one_v_one = (reaction_curve(one_on_ones01) * 0.26
             + reaction_curve(reflexes01) * 0.18
@@ -364,6 +371,7 @@ impl GoalkeeperSkillProfile {
             parry_control,
             aerial_command,
             rushing_out_profile,
+            eccentricity,
             one_v_one,
             distribution,
             communication,

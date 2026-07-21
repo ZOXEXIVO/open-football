@@ -288,9 +288,16 @@ impl GoalkeeperComingOutState {
         // Keeper foot-race advantage routed through the unified
         // rushing-out profile. Keeps the constant 1.2 hand advantage
         // (real rule — keepers use hands to claim from further away).
+        // Eccentricity tilts the *judgement*, not the execution: an
+        // eccentric keeper gambles on races an ordinary keeper would
+        // decline (±6% margin at the extremes), a conservative one
+        // demands a clearer head start. Centered at 10/20 so the
+        // ordinary keeper keeps the pre-existing gate.
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         let hand_advantage = 1.2;
-        let total_advantage = hand_advantage * (0.85 + prof.rushing_out_profile * 0.50);
+        let risk_appetite = prof.eccentricity - 0.5;
+        let total_advantage =
+            hand_advantage * (0.85 + prof.rushing_out_profile * 0.50 + risk_appetite * 0.12);
 
         // Keeper wins if their time is less than opponent's time adjusted for advantages
         keeper_time < (opponent_time * total_advantage)
