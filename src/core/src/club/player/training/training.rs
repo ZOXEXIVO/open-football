@@ -2,8 +2,9 @@ use crate::HappinessEventType;
 use crate::club::player::training::result::{PlayerTrainingResult, TrainingOutcomeBreakdown};
 use crate::utils::DateUtils;
 use crate::{
-    MentalGains, Person, PhysicalGains, Player, Staff, TechnicalGains, TrainingEffects,
-    TrainingEventEvidence, TrainingEventReason, TrainingIntensity, TrainingSession, TrainingType,
+    GoalkeepingGains, MentalGains, Person, PhysicalGains, Player, SkillType, Staff,
+    TechnicalGains, TrainingEffects, TrainingEventEvidence, TrainingEventReason, TrainingFocus,
+    TrainingIntensity, TrainingSession, TrainingType,
 };
 use chrono::NaiveDate;
 use chrono::{Datelike, NaiveDateTime};
@@ -82,6 +83,7 @@ impl PlayerTraining {
             physical_gains: PhysicalGains::default(),
             technical_gains: TechnicalGains::default(),
             mental_gains: MentalGains::default(),
+            goalkeeping_gains: GoalkeepingGains::default(),
             fatigue_change: 0.0,
             injury_risk: 0.0,
             morale_change: 0.0,
@@ -99,7 +101,8 @@ impl PlayerTraining {
         let specialization_bonus = coach.specialization_bonus(player_group);
         let coach_quality = base_coach_quality * specialization_bonus;
         let player_receptiveness = Self::calculate_player_receptiveness(player, coach, date.date());
-        let age_factor = Self::calculate_age_training_factor(player.age(date.date()));
+        let age = player.age(date.date());
+        let age_factor = Self::calculate_age_training_factor(age);
         let potential_factor = Self::calculate_potential_development_factor(player, date.date());
 
         // Intensity multipliers
@@ -180,7 +183,9 @@ impl PlayerTraining {
             TrainingType::Shooting => {
                 effects.technical_gains.finishing = 0.05 * coach_quality * player_receptiveness;
                 effects.technical_gains.technique = 0.02 * coach_quality * player_receptiveness;
+                effects.technical_gains.long_shots = 0.02 * coach_quality * player_receptiveness;
                 effects.mental_gains.decisions = 0.01 * coach_quality * player_receptiveness;
+                effects.mental_gains.composure = 0.01 * coach_quality * player_receptiveness;
                 effects.fatigue_change = 50.0 * intensity_multiplier;
                 effects.injury_risk = 0.002 * intensity_multiplier;
                 effects.physical_load_units = 16.0 * intensity_multiplier;
@@ -191,6 +196,7 @@ impl PlayerTraining {
                 effects.mental_gains.positioning = 0.06 * coach_quality * player_receptiveness;
                 effects.mental_gains.concentration = 0.03 * coach_quality * player_receptiveness;
                 effects.mental_gains.decisions = 0.02 * coach_quality * player_receptiveness;
+                effects.mental_gains.anticipation = 0.02 * coach_quality * player_receptiveness;
                 // Tactical walkthrough — slight net recovery, real
                 // sharpness gain (you're rehearsing match shape).
                 effects.fatigue_change = -30.0 * intensity_multiplier;
@@ -259,6 +265,7 @@ impl PlayerTraining {
             TrainingType::TransitionPlay => {
                 effects.technical_gains.passing = 0.03 * coach_quality * player_receptiveness;
                 effects.mental_gains.decisions = 0.03 * coach_quality * player_receptiveness;
+                effects.mental_gains.off_the_ball = 0.02 * coach_quality * player_receptiveness;
                 effects.fatigue_change = 160.0 * intensity_multiplier;
                 effects.injury_risk = 0.003 * intensity_multiplier;
                 effects.physical_load_units = 34.0 * intensity_multiplier;
@@ -268,6 +275,7 @@ impl PlayerTraining {
             TrainingType::MatchPreparation => {
                 effects.mental_gains.concentration = 0.03 * coach_quality * player_receptiveness;
                 effects.mental_gains.positioning = 0.02 * coach_quality * player_receptiveness;
+                effects.mental_gains.composure = 0.015 * coach_quality * player_receptiveness;
                 effects.fatigue_change = 30.0 * intensity_multiplier;
                 effects.injury_risk = 0.0015 * intensity_multiplier;
                 effects.physical_load_units = 18.0 * intensity_multiplier;
@@ -277,6 +285,8 @@ impl PlayerTraining {
             TrainingType::SetPieces => {
                 effects.technical_gains.crossing = 0.03 * coach_quality * player_receptiveness;
                 effects.technical_gains.heading = 0.02 * coach_quality * player_receptiveness;
+                effects.technical_gains.corners = 0.025 * coach_quality * player_receptiveness;
+                effects.technical_gains.free_kicks = 0.025 * coach_quality * player_receptiveness;
                 effects.fatigue_change = 20.0 * intensity_multiplier;
                 effects.injury_risk = 0.0008 * intensity_multiplier;
                 effects.physical_load_units = 8.0 * intensity_multiplier;
@@ -292,13 +302,137 @@ impl PlayerTraining {
                 effects.high_intensity_share = 0.10;
                 effects.readiness_change = 0.6;
             }
-            _ => {
-                // Default minimal load for unspecified training types
-                effects.fatigue_change = 10.0 * intensity_multiplier;
+            TrainingType::Agility => {
+                effects.physical_gains.agility =
+                    0.04 * coach_quality * player_receptiveness * age_factor;
+                effects.physical_gains.balance =
+                    0.03 * coach_quality * player_receptiveness * age_factor;
+                effects.fatigue_change = 80.0 * intensity_multiplier;
+                effects.injury_risk = 0.003 * intensity_multiplier;
+                effects.physical_load_units = 24.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.40;
+                effects.readiness_change = 0.4;
+            }
+            TrainingType::Crossing => {
+                effects.technical_gains.crossing = 0.05 * coach_quality * player_receptiveness;
+                effects.technical_gains.technique = 0.02 * coach_quality * player_receptiveness;
+                effects.fatigue_change = 30.0 * intensity_multiplier;
                 effects.injury_risk = 0.001 * intensity_multiplier;
+                effects.physical_load_units = 14.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.15;
+                effects.readiness_change = 0.4;
+            }
+            TrainingType::SetPiecesDefensive => {
+                effects.mental_gains.positioning = 0.03 * coach_quality * player_receptiveness;
+                effects.technical_gains.marking = 0.03 * coach_quality * player_receptiveness;
+                effects.technical_gains.heading = 0.02 * coach_quality * player_receptiveness;
+                effects.mental_gains.bravery = 0.01 * coach_quality * player_receptiveness;
+                effects.fatigue_change = 20.0 * intensity_multiplier;
+                effects.injury_risk = 0.0008 * intensity_multiplier;
                 effects.physical_load_units = 8.0 * intensity_multiplier;
                 effects.high_intensity_share = 0.10;
+                effects.readiness_change = 0.4;
+            }
+            TrainingType::Concentration => {
+                effects.mental_gains.concentration = 0.05 * coach_quality * player_receptiveness;
+                effects.mental_gains.composure = 0.02 * coach_quality * player_receptiveness;
+                effects.fatigue_change = -60.0;
+                effects.injury_risk = 0.0;
+                effects.physical_load_units = 0.0;
+                effects.high_intensity_share = 0.0;
                 effects.readiness_change = 0.2;
+            }
+            TrainingType::DecisionMaking => {
+                effects.mental_gains.decisions = 0.05 * coach_quality * player_receptiveness;
+                effects.mental_gains.vision = 0.02 * coach_quality * player_receptiveness;
+                effects.mental_gains.anticipation = 0.02 * coach_quality * player_receptiveness;
+                effects.fatigue_change = -60.0;
+                effects.injury_risk = 0.0;
+                effects.physical_load_units = 0.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.2;
+            }
+            TrainingType::Leadership => {
+                effects.mental_gains.leadership = 0.05 * coach_quality * player_receptiveness;
+                effects.mental_gains.teamwork = 0.02 * coach_quality * player_receptiveness;
+                effects.fatigue_change = -60.0;
+                effects.injury_risk = 0.0;
+                effects.physical_load_units = 0.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.2;
+            }
+            TrainingType::GoalkeeperTraining => {
+                let q = coach_quality * player_receptiveness;
+                let g = &mut effects.goalkeeping_gains;
+                g.handling = 0.04 * q;
+                g.reflexes = 0.04 * q;
+                g.one_on_ones = 0.025 * q;
+                g.aerial_reach = 0.02 * q;
+                g.command_of_area = 0.02 * q;
+                g.kicking = 0.02 * q;
+                g.rushing_out = 0.015 * q;
+                g.communication = 0.01 * q;
+                g.punching = 0.01 * q;
+                g.throwing = 0.01 * q;
+                effects.fatigue_change = 60.0 * intensity_multiplier;
+                effects.injury_risk = 0.002 * intensity_multiplier;
+                effects.physical_load_units = 20.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.30;
+                effects.readiness_change = 0.8;
+            }
+        }
+
+        // ===== INDIVIDUAL TRAINING PLAN =====
+        // Focused extra reps layered on top of the group session, so a
+        // coach-assigned plan (training_direction) actually moves the
+        // targeted skill. Added before the modifier chain so facility /
+        // professionalism / potential / outcome scaling all apply to the
+        // extra work too. Recovery-family days carry no extra reps.
+        let is_recovery_family = matches!(
+            session.session_type,
+            TrainingType::Recovery
+                | TrainingType::LightRecovery
+                | TrainingType::Rehabilitation
+                | TrainingType::RestDay
+                | TrainingType::VideoAnalysis
+        );
+        if !is_recovery_family {
+            if let Some(plan) = &player.individual_training {
+                let focus_gain = 0.02
+                    * coach_quality
+                    * player_receptiveness
+                    * plan.intensity_modifier.clamp(0.5, 1.5);
+                for focus in &plan.focus_areas {
+                    match focus {
+                        TrainingFocus::SpecificSkill(skill) => {
+                            let t = &mut effects.technical_gains;
+                            match skill {
+                                SkillType::FreeKicks => t.free_kicks += focus_gain,
+                                SkillType::Penalties => t.penalty_taking += focus_gain,
+                                SkillType::LongShots => t.long_shots += focus_gain,
+                                SkillType::Heading => t.heading += focus_gain,
+                                SkillType::Tackling => t.tackling += focus_gain,
+                                SkillType::Crossing => t.crossing += focus_gain,
+                                SkillType::Dribbling => t.dribbling += focus_gain,
+                            }
+                        }
+                        TrainingFocus::FitnessBuilding => {
+                            effects.physical_gains.stamina += focus_gain * 0.6 * age_factor;
+                            effects.physical_gains.natural_fitness +=
+                                focus_gain * 0.4 * age_factor;
+                        }
+                        TrainingFocus::MentalDevelopment => {
+                            effects.mental_gains.composure += focus_gain * 0.5;
+                            effects.mental_gains.decisions += focus_gain * 0.5;
+                        }
+                        // Weak-foot work, position retraining, and injury
+                        // recovery move foot levels / position levels /
+                        // rehab state, not skills.
+                        TrainingFocus::WeakFootImprovement
+                        | TrainingFocus::PositionRetraining(_)
+                        | TrainingFocus::InjuryRecovery => {}
+                    }
+                }
             }
         }
 
@@ -319,6 +453,24 @@ impl PlayerTraining {
         effects.readiness_change *= duration_mult.sqrt();
         effects.injury_risk *= duration_mult;
 
+        // ===== GAIN DOSE SCALING =====
+        // Skill gains scale sub-linearly with intensity and duration — a
+        // light drill still teaches, and a double-length session doesn't
+        // teach double. The body costs above scale linearly: the price is
+        // paid in full even where learning saturates.
+        let gain_intensity = match session.intensity {
+            TrainingIntensity::VeryLight => 0.60,
+            TrainingIntensity::Light => 0.80,
+            TrainingIntensity::Moderate => 1.0,
+            TrainingIntensity::High => 1.15,
+            TrainingIntensity::VeryHigh => 1.25,
+        };
+        let gain_dose = gain_intensity * duration_mult.sqrt();
+        effects.physical_gains = Self::scale_physical(effects.physical_gains, gain_dose);
+        effects.technical_gains = Self::scale_technical(effects.technical_gains, gain_dose);
+        effects.mental_gains = Self::scale_mental(effects.mental_gains, gain_dose);
+        effects.goalkeeping_gains = Self::scale_goalkeeping(effects.goalkeeping_gains, gain_dose);
+
         // ===== FACILITY QUALITY EFFECTS =====
         // Training facilities directly multiply all skill gains.
         // Poor (0.05) → 0.55x gains, Average (0.35) → 0.85x, Good (0.55) → 1.0x,
@@ -337,6 +489,8 @@ impl PlayerTraining {
         effects.physical_gains = Self::scale_physical(effects.physical_gains, facility_modifier);
         effects.technical_gains = Self::scale_technical(effects.technical_gains, facility_modifier);
         effects.mental_gains = Self::scale_mental(effects.mental_gains, facility_modifier);
+        effects.goalkeeping_gains =
+            Self::scale_goalkeeping(effects.goalkeeping_gains, facility_modifier);
 
         // Apply facility modifier to injury risk
         effects.injury_risk *= facility_injury_mod;
@@ -361,11 +515,33 @@ impl PlayerTraining {
             Self::apply_bonus_to_technical(effects.technical_gains, professionalism_bonus);
         effects.mental_gains =
             Self::apply_bonus_to_mental(effects.mental_gains, professionalism_bonus);
+        effects.goalkeeping_gains =
+            Self::scale_goalkeeping(effects.goalkeeping_gains, 1.0 + professionalism_bonus);
 
         // Apply potential development factor to all skill gains
         effects.physical_gains = Self::scale_physical(effects.physical_gains, potential_factor);
         effects.technical_gains = Self::scale_technical(effects.technical_gains, potential_factor);
         effects.mental_gains = Self::scale_mental(effects.mental_gains, potential_factor);
+        effects.goalkeeping_gains =
+            Self::scale_goalkeeping(effects.goalkeeping_gains, potential_factor);
+
+        // Category age tapers for non-physical work. The physical arms
+        // already carry `age_factor`; without these a 36-year-old kept
+        // absorbing passing/positioning session gains at prime rate,
+        // refilling the CA headroom his physical decline opened. Mental
+        // tapers latest — reading the game is coachable deep into a
+        // career; goalkeeping later than outfield technique (GK skills
+        // peak 28-33).
+        effects.technical_gains = Self::scale_technical(
+            effects.technical_gains,
+            Self::technical_age_training_factor(age),
+        );
+        effects.mental_gains =
+            Self::scale_mental(effects.mental_gains, Self::mental_age_training_factor(age));
+        effects.goalkeeping_gains = Self::scale_goalkeeping(
+            effects.goalkeeping_gains,
+            Self::goalkeeping_age_training_factor(age),
+        );
 
         // Physical maturity gate: applies *only* to physical_gains so a
         // 14-year-old's strength/stamina session doesn't pour senior-grade
@@ -416,6 +592,7 @@ impl PlayerTraining {
         effects.physical_gains = Self::scale_physical(effects.physical_gains, gain_factor);
         effects.technical_gains = Self::scale_technical(effects.technical_gains, gain_factor);
         effects.mental_gains = Self::scale_mental(effects.mental_gains, gain_factor);
+        effects.goalkeeping_gains = Self::scale_goalkeeping(effects.goalkeeping_gains, gain_factor);
 
         // Morale change is now derived from the outcome — not a fixed
         // table per session type. Recovery sessions can still gain a
@@ -688,6 +865,7 @@ impl PlayerTraining {
         let p = &player.skills.physical;
         let t = &player.skills.technical;
         let m = &player.skills.mental;
+        let g = &player.skills.goalkeeping;
         let avg = |xs: &[f32]| -> f32 {
             if xs.is_empty() {
                 10.0
@@ -716,6 +894,7 @@ impl PlayerTraining {
             TrainingType::MatchPreparation => avg(&[m.concentration, m.positioning, m.decisions]),
             TrainingType::OpponentSpecific => avg(&[m.decisions, m.vision, m.concentration]),
             TrainingType::VideoAnalysis => avg(&[m.decisions, m.positioning, m.vision]),
+            TrainingType::GoalkeeperTraining => avg(&[g.handling, g.reflexes, p.agility]),
             TrainingType::Recovery
             | TrainingType::LightRecovery
             | TrainingType::Rehabilitation
@@ -926,27 +1105,12 @@ impl PlayerTraining {
         gains
     }
 
-    fn apply_bonus_to_technical(mut gains: TechnicalGains, bonus: f32) -> TechnicalGains {
-        gains.first_touch *= 1.0 + bonus;
-        gains.passing *= 1.0 + bonus;
-        gains.crossing *= 1.0 + bonus;
-        gains.dribbling *= 1.0 + bonus;
-        gains.finishing *= 1.0 + bonus;
-        gains.heading *= 1.0 + bonus;
-        gains.tackling *= 1.0 + bonus;
-        gains.technique *= 1.0 + bonus;
-        gains
+    fn apply_bonus_to_technical(gains: TechnicalGains, bonus: f32) -> TechnicalGains {
+        Self::scale_technical(gains, 1.0 + bonus)
     }
 
-    fn apply_bonus_to_mental(mut gains: MentalGains, bonus: f32) -> MentalGains {
-        gains.concentration *= 1.0 + bonus;
-        gains.decisions *= 1.0 + bonus;
-        gains.positioning *= 1.0 + bonus;
-        gains.teamwork *= 1.0 + bonus;
-        gains.vision *= 1.0 + bonus;
-        gains.work_rate *= 1.0 + bonus;
-        gains.leadership *= 1.0 + bonus;
-        gains
+    fn apply_bonus_to_mental(gains: MentalGains, bonus: f32) -> MentalGains {
+        Self::scale_mental(gains, 1.0 + bonus)
     }
 
     fn calculate_coach_effectiveness(coach: &Staff, training_type: &TrainingType) -> f32 {
@@ -962,6 +1126,10 @@ impl PlayerTraining {
             }
             TrainingType::Concentration | TrainingType::DecisionMaking => {
                 coach.staff_attributes.coaching.mental as f32 / 20.0
+            }
+            TrainingType::GoalkeeperTraining => {
+                let gk = &coach.staff_attributes.goalkeeping;
+                (gk.shot_stopping as f32 + gk.handling as f32 + gk.distribution as f32) / 60.0
             }
             _ => {
                 // Average of all coaching attributes
@@ -1033,6 +1201,42 @@ impl PlayerTraining {
             31..=33 => 0.5,
             34..=36 => 0.3,
             _ => 0.1, // Very old players barely improve
+        }
+    }
+
+    /// Veteran taper for technical session gains. Neutral through the
+    /// prime years — youth pacing already flows through receptiveness
+    /// and the potential factor — then motor learning slows.
+    fn technical_age_training_factor(age: u8) -> f32 {
+        match age {
+            0..=27 => 1.0,
+            28..=30 => 0.85,
+            31..=33 => 0.60,
+            34..=36 => 0.40,
+            _ => 0.25,
+        }
+    }
+
+    /// Veteran taper for mental session gains — the latest taper of the
+    /// outfield families, mirroring the development tick's mental age
+    /// curve: reading the game keeps improving into the 30s.
+    fn mental_age_training_factor(age: u8) -> f32 {
+        match age {
+            0..=29 => 1.0,
+            30..=32 => 0.90,
+            33..=35 => 0.75,
+            _ => 0.55,
+        }
+    }
+
+    /// Veteran taper for goalkeeping session gains — GK skills peak
+    /// 28-33 and stay coachable longer than outfield technique.
+    fn goalkeeping_age_training_factor(age: u8) -> f32 {
+        match age {
+            0..=31 => 1.0,
+            32..=34 => 0.85,
+            35..=37 => 0.65,
+            _ => 0.45,
         }
     }
 
@@ -1109,6 +1313,11 @@ impl PlayerTraining {
         gains.heading *= factor;
         gains.tackling *= factor;
         gains.technique *= factor;
+        gains.marking *= factor;
+        gains.long_shots *= factor;
+        gains.free_kicks *= factor;
+        gains.corners *= factor;
+        gains.penalty_taking *= factor;
         gains
     }
 
@@ -1120,6 +1329,24 @@ impl PlayerTraining {
         gains.vision *= factor;
         gains.work_rate *= factor;
         gains.leadership *= factor;
+        gains.composure *= factor;
+        gains.anticipation *= factor;
+        gains.bravery *= factor;
+        gains.off_the_ball *= factor;
+        gains
+    }
+
+    fn scale_goalkeeping(mut gains: GoalkeepingGains, factor: f32) -> GoalkeepingGains {
+        gains.handling *= factor;
+        gains.reflexes *= factor;
+        gains.one_on_ones *= factor;
+        gains.aerial_reach *= factor;
+        gains.command_of_area *= factor;
+        gains.communication *= factor;
+        gains.rushing_out *= factor;
+        gains.punching *= factor;
+        gains.kicking *= factor;
+        gains.throwing *= factor;
         gains
     }
 
@@ -1152,6 +1379,7 @@ impl PlayerTraining {
             TrainingType::RestDay => 22,
             TrainingType::LightRecovery => 23,
             TrainingType::Rehabilitation => 24,
+            TrainingType::GoalkeeperTraining => 25,
         }
     }
 
@@ -1312,6 +1540,121 @@ mod training_load_tests {
             "prep readiness {} vs rest readiness {}",
             prep.effects.readiness_change,
             rest.effects.readiness_change
+        );
+    }
+
+    // ── Goalkeeper training ──────────────────────────────────────
+
+    #[test]
+    fn goalkeeper_session_trains_goalkeeping_skills() {
+        let player = build_player(PlayerPositionType::Goalkeeper);
+        let coach = StaffStub::default();
+        let s = session(
+            TrainingType::GoalkeeperTraining,
+            TrainingIntensity::Moderate,
+        );
+        let r = PlayerTraining::train(&player, &coach, &s, d(2025, 9, 14), 0.6);
+        assert!(
+            r.effects.goalkeeping_gains.total() > 0.0,
+            "GK session must produce goalkeeping gains"
+        );
+        assert!(
+            r.effects.goalkeeping_gains.handling > 0.0
+                && r.effects.goalkeeping_gains.reflexes > 0.0,
+            "core GK skills must be trained"
+        );
+        assert_eq!(
+            r.effects.technical_gains.total(),
+            0.0,
+            "GK session trains goalkeeping, not outfield technique"
+        );
+    }
+
+    // ── Veteran session-gain tapers ──────────────────────────────
+
+    #[test]
+    fn veteran_technical_session_gains_taper_below_prime() {
+        // Same PA, same session: a 36-year-old must absorb materially
+        // less passing work than a 24-year-old. Without the taper the
+        // veteran kept refilling the CA headroom his physical decline
+        // opened, so squads never aged.
+        let coach = StaffStub::default();
+        let s = session(TrainingType::Passing, TrainingIntensity::Moderate);
+        let date = d(2025, 9, 14);
+        let prime = build_player_with_birth(
+            PlayerPositionType::MidfielderCenter,
+            NaiveDate::from_ymd_opt(2001, 1, 1).unwrap(), // 24
+            150,
+        );
+        let veteran = build_player_with_birth(
+            PlayerPositionType::MidfielderCenter,
+            NaiveDate::from_ymd_opt(1989, 1, 1).unwrap(), // 36
+            150,
+        );
+        let prime_r = PlayerTraining::train(&prime, &coach, &s, date, 0.6);
+        let vet_r = PlayerTraining::train(&veteran, &coach, &s, date, 0.6);
+        assert!(
+            vet_r.effects.technical_gains.total() < prime_r.effects.technical_gains.total() * 0.6,
+            "veteran technical gains {} should sit well below prime {}",
+            vet_r.effects.technical_gains.total(),
+            prime_r.effects.technical_gains.total()
+        );
+    }
+
+    // ── Session dose scaling ─────────────────────────────────────
+
+    #[test]
+    fn light_short_session_teaches_less_than_high_long() {
+        let player = build_player(PlayerPositionType::MidfielderCenter);
+        let coach = StaffStub::default();
+        let date = d(2025, 9, 14);
+        let light = TrainingSession {
+            session_type: TrainingType::Passing,
+            intensity: TrainingIntensity::VeryLight,
+            duration_minutes: 30,
+            focus_positions: vec![],
+            participants: vec![],
+        };
+        let heavy = TrainingSession {
+            session_type: TrainingType::Passing,
+            intensity: TrainingIntensity::High,
+            duration_minutes: 90,
+            focus_positions: vec![],
+            participants: vec![],
+        };
+        let light_r = PlayerTraining::train(&player, &coach, &light, date, 0.6);
+        let heavy_r = PlayerTraining::train(&player, &coach, &heavy, date, 0.6);
+        assert!(
+            light_r.effects.technical_gains.total() < heavy_r.effects.technical_gains.total(),
+            "a 30-min very-light drill ({}) must teach less than a 90-min high one ({})",
+            light_r.effects.technical_gains.total(),
+            heavy_r.effects.technical_gains.total()
+        );
+    }
+
+    // ── Individual training plans ────────────────────────────────
+
+    #[test]
+    fn individual_plan_focus_skill_receives_extra_gain() {
+        let mut player = build_player(PlayerPositionType::MidfielderCenter);
+        let coach = StaffStub::default();
+        let s = session(TrainingType::Passing, TrainingIntensity::Moderate);
+        let date = d(2025, 9, 14);
+
+        let without = PlayerTraining::train(&player, &coach, &s, date, 0.6);
+        assert_eq!(without.effects.technical_gains.free_kicks, 0.0);
+
+        player.individual_training = Some(crate::IndividualTrainingPlan {
+            player_id: player.id,
+            focus_areas: vec![crate::TrainingFocus::SpecificSkill(SkillType::FreeKicks)],
+            intensity_modifier: 1.0,
+            special_instructions: vec![],
+            started: Some(NaiveDate::from_ymd_opt(2025, 9, 1).unwrap()),
+        });
+        let with = PlayerTraining::train(&player, &coach, &s, date, 0.6);
+        assert!(
+            with.effects.technical_gains.free_kicks > 0.0,
+            "a free-kick plan must produce free-kick gains"
         );
     }
 

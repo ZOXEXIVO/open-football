@@ -266,9 +266,9 @@ pub use staff::contract as staff_contract_mod;
 // Team exports (except conflicting modules)
 pub use team::{
     Achievement, AchievementType, CoachingPhilosophy, FacilityQuality, FormationChange,
-    IndividualTrainingPlan, ManagerTalkResult, ManagerTalkType, MatchHistory, MatchHistoryItem,
-    MatchOutcome, MatchResultInfo, MatchTacticType, MentalGains, PeriodizationPhase, PhysicalGains,
-    PlayerBehaviourResult, PlayerRelationshipChangeResult, PlayerTrainingLoad,
+    GoalkeepingGains, IndividualTrainingPlan, ManagerTalkResult, ManagerTalkType, MatchHistory,
+    MatchHistoryItem, MatchOutcome, MatchResultInfo, MatchTacticType, MentalGains,
+    PeriodizationPhase, PhysicalGains, PlayerBehaviourResult, PlayerRelationshipChangeResult,
     RecommendationCategory, RecommendationPriority, ReputationLevel, ReputationRequirements,
     ReputationTrend, RotationPreference, SkillType, SpecialInstruction, SquadAnalysis,
     TACTICS_POSITIONS, TacticSelectionReason, TacticalDecisionEngine, TacticalDecisionResult,
@@ -276,8 +276,7 @@ pub use team::{
     TeamBehaviour, TeamBehaviourResult, TeamBuilder, TeamCollection, TeamContext, TeamReputation,
     TeamResult, TeamTraining, TeamTrainingResult, TeamType, TechnicalGains, TrainingEffects,
     TrainingFacilities, TrainingFocus, TrainingIntensity, TrainingIntensityPreference,
-    TrainingLoadManager, TrainingSchedule, TrainingSession, TrainingType, TransferItem, Transfers,
-    WeeklyTrainingPlan,
+    TrainingSchedule, TrainingSession, TrainingType, TransferItem, Transfers, WeeklyTrainingPlan,
 };
 // Also export context module for those who want to import from it
 pub use team::behaviour;

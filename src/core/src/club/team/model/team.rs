@@ -2,8 +2,8 @@ use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::{
     Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
     MatchResultInfo, MentorshipProcessor, PreventiveRestPass, SquadSocialViewBuilder,
-    SquadStatusUpdater, TeamBuilder, TeamFixtureWindow, TeamSocialDebug, TeamSocialSnapshot,
-    TeamType,
+    SquadStatusUpdater, TeamBuilder, TeamCoachingScores, TeamFixtureWindow, TeamSocialDebug,
+    TeamSocialSnapshot, TeamType,
 };
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
@@ -106,6 +106,7 @@ impl Team {
         if let Some(team_ctx) = player_ctx.team.as_mut() {
             team_ctx.team_type = Some(self.team_type);
             team_ctx.league_reputation = Some(effective_league_rep);
+            team_ctx.coaching = Some(TeamCoachingScores::from_staffs(&self.staffs));
             if let Some(tac) = self.tactics.as_ref() {
                 team_ctx.formation = Some(*tac.positions());
             }

@@ -293,7 +293,9 @@ impl TeamTraining {
     }
 
     fn can_participate(player: &Player, session: &TrainingSession) -> bool {
-        if player.player_attributes.is_injured || player.player_attributes.is_banned {
+        // Suspension costs matches, not development — banned players
+        // still train with the squad.
+        if player.player_attributes.is_injured {
             return false;
         }
         if player.player_attributes.condition_percentage() <= 30 {
@@ -333,13 +335,15 @@ impl TeamTraining {
         // ids so tests stay stable across runs.
         Self::apply_pairwise_bonding(team, &participant_ids, training_results, sim_date);
 
-        // Coach-player relationship updates based on training quality
-        let coach_id = team.staffs.head_coach().id;
-        let coach_effectiveness = team
-            .staffs
-            .head_coach()
-            .recent_performance
-            .training_effectiveness;
+        // Coach-player relationship updates based on training quality.
+        // Must be the SAME coach who ran the sessions (`training_coach`),
+        // because rapport and specialization are read back through that
+        // coach's id in `PlayerTraining::train` / `CoachPlayerBond` — if
+        // the accrual landed on the head coach instead, a club with a
+        // dedicated training coach would never close either feedback loop.
+        let session_coach = team.staffs.training_coach(&team.team_type);
+        let coach_id = session_coach.id;
+        let coach_effectiveness = session_coach.recent_performance.training_effectiveness;
 
         // Rapport accrual: every participant spent a day with the coach.
         // Small positive drift + shared_days increment, even if no other
@@ -778,6 +782,9 @@ pub enum TrainingType {
     Concentration,
     DecisionMaking,
     Leadership,
+
+    // Goalkeeper Training (focus_positions = [Goalkeeper])
+    GoalkeeperTraining,
 
     // Match Preparation
     MatchPreparation,
@@ -1238,6 +1245,13 @@ impl WeeklyTrainingPlan {
                     focus_positions: vec![],
                     participants: vec![],
                 },
+                TrainingSession {
+                    session_type: TrainingType::GoalkeeperTraining,
+                    intensity: TrainingIntensity::Moderate,
+                    duration_minutes: 45,
+                    focus_positions: vec![PlayerPositionType::Goalkeeper],
+                    participants: vec![],
+                },
             ],
             Weekday::Wed => vec![
                 TrainingSession {
@@ -1255,6 +1269,13 @@ impl WeeklyTrainingPlan {
                         PlayerPositionType::Striker,
                         PlayerPositionType::ForwardCenter,
                     ],
+                    participants: vec![],
+                },
+                TrainingSession {
+                    session_type: TrainingType::SetPiecesDefensive,
+                    intensity: TrainingIntensity::Light,
+                    duration_minutes: 30,
+                    focus_positions: vec![],
                     participants: vec![],
                 },
             ],
@@ -1279,6 +1300,13 @@ impl WeeklyTrainingPlan {
                     intensity: TrainingIntensity::Moderate,
                     duration_minutes: 60,
                     focus_positions: vec![],
+                    participants: vec![],
+                },
+                TrainingSession {
+                    session_type: TrainingType::GoalkeeperTraining,
+                    intensity: TrainingIntensity::Moderate,
+                    duration_minutes: 45,
+                    focus_positions: vec![PlayerPositionType::Goalkeeper],
                     participants: vec![],
                 },
             ],
@@ -1331,6 +1359,7 @@ pub struct TrainingEffects {
     pub physical_gains: PhysicalGains,
     pub technical_gains: TechnicalGains,
     pub mental_gains: MentalGains,
+    pub goalkeeping_gains: GoalkeepingGains,
     /// Net change to in-match condition. Positive = costs condition,
     /// negative = recovery. Applied after clamping.
     pub fatigue_change: f32,
@@ -1370,6 +1399,11 @@ impl TrainingEffects {
         t.heading *= f;
         t.tackling *= f;
         t.technique *= f;
+        t.marking *= f;
+        t.long_shots *= f;
+        t.free_kicks *= f;
+        t.corners *= f;
+        t.penalty_taking *= f;
         let m = &mut self.mental_gains;
         m.concentration *= f;
         m.decisions *= f;
@@ -1378,6 +1412,21 @@ impl TrainingEffects {
         m.vision *= f;
         m.work_rate *= f;
         m.leadership *= f;
+        m.composure *= f;
+        m.anticipation *= f;
+        m.bravery *= f;
+        m.off_the_ball *= f;
+        let g = &mut self.goalkeeping_gains;
+        g.handling *= f;
+        g.reflexes *= f;
+        g.one_on_ones *= f;
+        g.aerial_reach *= f;
+        g.command_of_area *= f;
+        g.communication *= f;
+        g.rushing_out *= f;
+        g.punching *= f;
+        g.kicking *= f;
+        g.throwing *= f;
     }
 }
 
@@ -1414,6 +1463,11 @@ pub struct TechnicalGains {
     pub heading: f32,
     pub tackling: f32,
     pub technique: f32,
+    pub marking: f32,
+    pub long_shots: f32,
+    pub free_kicks: f32,
+    pub corners: f32,
+    pub penalty_taking: f32,
 }
 
 impl TechnicalGains {
@@ -1426,6 +1480,11 @@ impl TechnicalGains {
             + self.heading
             + self.tackling
             + self.technique
+            + self.marking
+            + self.long_shots
+            + self.free_kicks
+            + self.corners
+            + self.penalty_taking
     }
 }
 
@@ -1438,6 +1497,10 @@ pub struct MentalGains {
     pub vision: f32,
     pub work_rate: f32,
     pub leadership: f32,
+    pub composure: f32,
+    pub anticipation: f32,
+    pub bravery: f32,
+    pub off_the_ball: f32,
 }
 
 impl MentalGains {
@@ -1449,6 +1512,42 @@ impl MentalGains {
             + self.vision
             + self.work_rate
             + self.leadership
+            + self.composure
+            + self.anticipation
+            + self.bravery
+            + self.off_the_ball
+    }
+}
+
+/// Goalkeeping-specific session gains. Until this existed, senior GK
+/// skills could only move through the weekly development tick — clubs
+/// had GK coaches on staff but no session that used them.
+#[derive(Debug, Clone, Default)]
+pub struct GoalkeepingGains {
+    pub handling: f32,
+    pub reflexes: f32,
+    pub one_on_ones: f32,
+    pub aerial_reach: f32,
+    pub command_of_area: f32,
+    pub communication: f32,
+    pub rushing_out: f32,
+    pub punching: f32,
+    pub kicking: f32,
+    pub throwing: f32,
+}
+
+impl GoalkeepingGains {
+    pub fn total(&self) -> f32 {
+        self.handling
+            + self.reflexes
+            + self.one_on_ones
+            + self.aerial_reach
+            + self.command_of_area
+            + self.communication
+            + self.rushing_out
+            + self.punching
+            + self.kicking
+            + self.throwing
     }
 }
 
@@ -1607,91 +1706,6 @@ impl TrainingFacilities {
         let sports_science_bonus = if self.has_sports_science { 0.15 } else { 0.0 };
 
         base + pool_bonus + sports_science_bonus
-    }
-}
-
-// ============== Training Load Management ==============
-
-#[derive(Debug, Clone)]
-pub struct TrainingLoadManager {
-    pub player_loads: HashMap<u32, PlayerTrainingLoad>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PlayerTrainingLoad {
-    pub acute_load: f32,   // Last 7 days
-    pub chronic_load: f32, // Last 28 days
-    pub load_ratio: f32,   // Acute/Chronic ratio
-    pub cumulative_fatigue: f32,
-    pub last_high_intensity: Option<NaiveDateTime>,
-    pub sessions_this_week: u8,
-}
-
-impl PlayerTrainingLoad {
-    pub fn new() -> Self {
-        PlayerTrainingLoad {
-            acute_load: 0.0,
-            chronic_load: 0.0,
-            load_ratio: 1.0,
-            cumulative_fatigue: 0.0,
-            last_high_intensity: None,
-            sessions_this_week: 0,
-        }
-    }
-
-    pub fn update_load(
-        &mut self,
-        session_load: f32,
-        intensity: &TrainingIntensity,
-        date: NaiveDateTime,
-    ) {
-        // Update acute load (exponentially weighted)
-        self.acute_load = self.acute_load * 0.9 + session_load * 0.1;
-
-        // Update chronic load (slower adaptation)
-        self.chronic_load = self.chronic_load * 0.97 + session_load * 0.03;
-
-        // Calculate load ratio
-        self.load_ratio = if self.chronic_load > 0.0 {
-            self.acute_load / self.chronic_load
-        } else {
-            1.0
-        };
-
-        // Update fatigue
-        self.cumulative_fatigue = (self.cumulative_fatigue + session_load * 0.2).min(100.0);
-
-        // Track high intensity sessions
-        if matches!(
-            intensity,
-            TrainingIntensity::High | TrainingIntensity::VeryHigh
-        ) {
-            self.last_high_intensity = Some(date);
-        }
-
-        self.sessions_this_week += 1;
-    }
-
-    pub fn get_injury_risk_factor(&self) -> f32 {
-        // High acute:chronic ratios increase injury risk
-        if self.load_ratio > 1.5 {
-            1.5
-        } else if self.load_ratio > 1.3 {
-            1.2
-        } else if self.load_ratio < 0.8 {
-            1.1 // Too little load can also increase injury risk
-        } else {
-            1.0
-        }
-    }
-
-    pub fn needs_rest(&self) -> bool {
-        self.cumulative_fatigue > 75.0 || self.load_ratio > 1.5 || self.sessions_this_week >= 6
-    }
-
-    pub fn weekly_reset(&mut self) {
-        self.sessions_this_week = 0;
-        self.cumulative_fatigue *= 0.7; // Partial recovery
     }
 }
 

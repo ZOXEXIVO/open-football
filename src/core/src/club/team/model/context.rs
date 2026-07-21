@@ -31,6 +31,44 @@ pub struct TeamContext {
     /// when the constructing site didn't know it; consumers fall back to
     /// the club's main-league reputation.
     pub league_reputation: Option<u16>,
+    /// Best coaching scores (0-20) on THIS team's own staff, stamped by
+    /// `Team::simulate`. The development tick prefers these over the
+    /// club-wide bests so a U18 squad trains under its own coaches.
+    /// `None` when the constructing site didn't know them.
+    pub coaching: Option<TeamCoachingScores>,
+}
+
+/// Per-team best coaching attribute scores (0-20 each), computed from the
+/// team's own staff list. GK is the average of the three goalkeeping
+/// coaching attributes, mirroring the club-wide snapshot's formula.
+#[derive(Debug, Clone, Copy)]
+pub struct TeamCoachingScores {
+    pub technical: u8,
+    pub mental: u8,
+    pub fitness: u8,
+    pub goalkeeping: u8,
+}
+
+impl TeamCoachingScores {
+    pub fn from_staffs(staffs: &crate::StaffCollection) -> Self {
+        let mut best = TeamCoachingScores {
+            technical: 0,
+            mental: 0,
+            fitness: 0,
+            goalkeeping: 0,
+        };
+        for staff in staffs.iter() {
+            let coaching = &staff.staff_attributes.coaching;
+            best.technical = best.technical.max(coaching.technical);
+            best.mental = best.mental.max(coaching.mental);
+            best.fitness = best.fitness.max(coaching.fitness);
+            let gk = &staff.staff_attributes.goalkeeping;
+            let gk_avg =
+                ((gk.shot_stopping as u16 + gk.handling as u16 + gk.distribution as u16) / 3) as u8;
+            best.goalkeeping = best.goalkeeping.max(gk_avg);
+        }
+        best
+    }
 }
 
 impl TeamContext {
@@ -43,6 +81,7 @@ impl TeamContext {
             captain_id: None,
             vice_captain_id: None,
             league_reputation: None,
+            coaching: None,
         }
     }
 
@@ -55,6 +94,7 @@ impl TeamContext {
             captain_id: None,
             vice_captain_id: None,
             league_reputation: None,
+            coaching: None,
         }
     }
 

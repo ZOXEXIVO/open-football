@@ -2,6 +2,24 @@ use super::{AcademyDevelopmentIdentity, AcademyPlayerPhase, AcademyTier, ClubAca
 use crate::Staff;
 use crate::context::GlobalContext;
 use crate::{Person, Player, PlayerFieldPositionGroup};
+use chrono::{Datelike, NaiveDate};
+
+/// Deterministic per-(player, date, salt) roll in `[0.0, 1.0)`, mirroring
+/// the development tick's RollSource seam: the same player on the same
+/// day always rolls the same value, so academy development is
+/// reproducible in tests and stable across thread scheduling.
+struct AcademyRoll;
+
+impl AcademyRoll {
+    fn unit(player_id: u32, date: NaiveDate, salt: u32) -> f32 {
+        let h = (player_id as u64)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add((date.num_days_from_ce() as u64).wrapping_mul(0xC6BC_279E_9286_5A2B))
+            .wrapping_add((salt as u64).wrapping_mul(0x1657_8F35_4D38_C5A7));
+        let frac = ((h >> 11) as u32 as f32) / (u32::MAX as f32);
+        frac.clamp(0.0, 0.999)
+    }
+}
 
 /// Per-phase, per-category soft weekly growth caps. Applied as a hard
 /// upper bound on the sum of positive gains for the week — keeps a hot
@@ -286,7 +304,7 @@ impl ClubAcademy {
 
             let personality_mult = PersonalityTrainingFactor::compute(player);
             let welfare_mult = WelfareMultiplier::compute(player);
-            let variance = 0.88 + rand::random::<f32>() * 0.24; // 0.88..1.12
+            let variance = 0.88 + AcademyRoll::unit(player.id, date, 0xACAD) * 0.24; // 0.88..1.12
 
             let base_mult = environment_mult
                 * youth_bonus
@@ -320,7 +338,7 @@ impl ClubAcademy {
             // Growth spurts during puberty: small physical gain with a
             // temporary coordination cost. Bounded by the cap below.
             if (13..=15).contains(&age) {
-                GrowthSpurt::roll_and_apply(player);
+                GrowthSpurt::roll_and_apply(player, date);
             }
 
             let caps = PhaseGrowthCaps::for_phase(phase);
@@ -636,12 +654,12 @@ pub struct GrowthSpurt;
 impl GrowthSpurt {
     /// 12% chance of firing. When it fires: small physical gain
     /// (strength/jumping), small coordination cost (agility/balance).
-    pub fn roll_and_apply(player: &mut Player) {
-        if rand::random::<f32>() > 0.12 {
+    pub fn roll_and_apply(player: &mut Player, date: NaiveDate) {
+        if AcademyRoll::unit(player.id, date, 0x5B02) > 0.12 {
             return;
         }
 
-        let intensity = 0.01 + rand::random::<f32>() * 0.02;
+        let intensity = 0.01 + AcademyRoll::unit(player.id, date, 0x5B03) * 0.02;
         player.skills.physical.strength += intensity;
         player.skills.physical.jumping += intensity * 0.6;
 

@@ -37,6 +37,7 @@
 //! [`Player::process_development_with`]: crate::club::player::Player::process_development_with
 
 mod age_curve;
+mod ceilings;
 mod coaching;
 mod maturity;
 mod modifiers;
@@ -45,6 +46,7 @@ mod rolls;
 mod skills_array;
 mod tick;
 
+pub use ceilings::PositionalSkillCeilings;
 pub use coaching::CoachingEffect;
 pub use modifiers::FitnessState;
 pub use rolls::{FixedRolls, RollSource, ThreadRolls};
