@@ -1,6 +1,7 @@
 use crate::{CountryEntity, DatabaseEntity};
 use core::league::{
-    DayMonthPeriod, DomesticCup, League, LeagueFinancials, LeagueGroup, LeagueSettings,
+    DayMonthPeriod, DomesticCup, League, LeagueFinancials, LeagueGroup, LeaguePlayoff,
+    LeaguePlayoffConfig, LeagueSettings,
 };
 use core::{Club, TeamType};
 use std::str::FromStr;
@@ -12,6 +13,12 @@ use super::DatabaseGenerator;
 /// 800_002_000` — clear of every real league id (which are either small or
 /// in the ~2.0e9 Russian range) and of the continental cups (900_000_001+).
 const DOMESTIC_CUP_ID_BASE: u32 = 800_000_000;
+
+/// Base for generated grouped-competition playoff league ids:
+/// `BASE + country_id * 1000 + competition_index`. Sits in the
+/// `850_000_000 ..` band — clear of real league ids, domestic cups
+/// (`800_000_000+`) and continental cups (`900_000_001+`).
+const PLAYOFF_ID_BASE: u32 = 850_000_000;
 
 /// Lowercase, hyphenate, and strip non-alphanumerics from a string so a
 /// country slug like "czech republic" yields a URL-safe "czech-republic".
@@ -68,6 +75,9 @@ impl DatabaseGenerator {
                         name: g.name.clone(),
                         competition: g.competition.clone(),
                         total_groups: g.total_groups,
+                        playoff: g.playoff.as_ref().map(|p| LeaguePlayoffConfig {
+                            qualifiers_per_group: p.qualifiers_per_group,
+                        }),
                     }),
                 };
 
@@ -134,6 +144,79 @@ impl DatabaseGenerator {
         league.is_cup = true;
 
         Some(DomesticCup::new(league))
+    }
+
+    /// Build one [`LeaguePlayoff`] per grouped competition that declares a
+    /// `playoff` block on its `league_group` (MLS Cup, Serie C promotion
+    /// playoff, …). The member groups are the same-tier leagues that share
+    /// the competition name; the regular season still runs as N independent
+    /// group tables, and the playoff crowns a single champion from their
+    /// final standings. Competitions with fewer than two groups are skipped.
+    pub(super) fn generate_playoffs(
+        country: &CountryEntity,
+        leagues: &[League],
+    ) -> Vec<LeaguePlayoff> {
+        use std::collections::BTreeMap;
+
+        // Group the playoff-enabled leagues by competition name. BTreeMap
+        // keeps competitions in a stable (alphabetical) order so the
+        // synthetic ids below are deterministic across runs.
+        let mut by_competition: BTreeMap<String, Vec<&League>> = BTreeMap::new();
+        for league in leagues {
+            if let Some(group) = &league.settings.league_group {
+                if group.playoff.is_some() {
+                    by_competition
+                        .entry(group.competition.clone())
+                        .or_default()
+                        .push(league);
+                }
+            }
+        }
+
+        let mut playoffs = Vec::new();
+        for (index, (competition, mut members)) in by_competition.into_iter().enumerate() {
+            if members.len() < 2 {
+                continue; // a cross-group playoff needs at least two groups
+            }
+
+            // Seed priority: stronger group first (its winner outranks the
+            // other winners when byes are handed out), id breaks ties.
+            members.sort_by(|a, b| b.reputation.cmp(&a.reputation).then(a.id.cmp(&b.id)));
+            let group_ids: Vec<u32> = members.iter().map(|l| l.id).collect();
+            let qualifiers_per_group = members[0]
+                .settings
+                .league_group
+                .as_ref()
+                .and_then(|g| g.playoff.as_ref())
+                .map(|p| p.qualifiers_per_group)
+                .unwrap_or(1);
+
+            let primary = members[0];
+            let settings = LeagueSettings {
+                season_starting_half: primary.settings.season_starting_half,
+                season_ending_half: primary.settings.season_ending_half,
+                tier: 0,
+                promotion_spots: 0,
+                relegation_spots: 0,
+                league_group: None,
+            };
+
+            let id = PLAYOFF_ID_BASE + country.id * 1000 + index as u32;
+            let slug = format!("{}-playoff", slugify(&competition));
+            let name = format!("{} Playoff", competition);
+            let reputation = primary.reputation;
+
+            let mut league = League::new(id, name, slug, country.id, reputation, settings, false);
+            league.is_cup = true;
+
+            playoffs.push(LeaguePlayoff::new(
+                league,
+                competition,
+                group_ids,
+                qualifiers_per_group,
+            ));
+        }
+        playoffs
     }
 
     pub(super) fn create_subteams_leagues(

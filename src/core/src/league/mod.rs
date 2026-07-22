@@ -1,6 +1,7 @@
 pub mod awards;
 pub mod core;
 pub mod domestic_cup;
+pub mod playoff;
 pub mod result;
 pub mod rules;
 pub mod schedule;
@@ -18,6 +19,7 @@ pub use awards::{
 };
 pub use core::*;
 pub use domestic_cup::{CupHistoryEntry, DomesticCup};
+pub use playoff::{GroupStanding, LeaguePlayoff};
 pub use result::*;
 pub use rules::*;
 pub use schedule::*;

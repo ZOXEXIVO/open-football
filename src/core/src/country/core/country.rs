@@ -28,6 +28,7 @@ use crate::country::{
     InternationalCompetition, MediaCoverage,
 };
 use crate::league::DomesticCup;
+use crate::league::playoff::{GroupStanding, LeaguePlayoff};
 use crate::league::League;
 use crate::league::LeagueResult;
 use crate::league::LeagueTableResult;
@@ -47,10 +48,25 @@ pub struct CountryPendingState {
     pub leagues: Vec<Option<LeaguePendingState>>,
     /// Cup pending state — `Some` when today produced cup matches.
     pub cup: Option<LeaguePendingState>,
+    /// One slot per entry in `self.playoffs`, in the same order. `Some`
+    /// when that playoff produced knockout matches today.
+    pub playoffs: Vec<Option<LeaguePendingState>>,
     /// `LeagueResult`s that finalised during the build pass — leagues
     /// without matches today, plus cups on a non-fixture day. Merged
     /// with the post-process `LeagueResult`s in [`simulate_process`].
     pub immediate_results: Vec<LeagueResult>,
+}
+
+/// True once a group's regular-season schedule is fully played — every
+/// fixture in every tour has a result, and there is at least one tour. A
+/// grouped competition's playoff waits for this on all its member groups
+/// before drawing round one, so the bracket seeds off completed tables.
+fn schedule_fully_played(league: &League) -> bool {
+    let tours = &league.schedule.tours;
+    !tours.is_empty()
+        && tours
+            .iter()
+            .all(|t| !t.items.is_empty() && t.items.iter().all(|i| i.result.is_some()))
 }
 
 #[derive(Clone)]
@@ -68,6 +84,13 @@ pub struct Country {
     /// cup is a first-class competition with its own knockout bracket.
     /// `None` only for countries with no enabled leagues.
     pub domestic_cup: Option<DomesticCup>,
+    /// End-of-season playoffs for grouped competitions (MLS Cup, …). One
+    /// entry per competition whose `league_group` declares a `playoff`.
+    /// Empty for countries with no grouped competitions. Stored apart from
+    /// `leagues` (like `domestic_cup`) so the round-robin programme is
+    /// untouched; each playoff runs its own knockout bracket seeded from
+    /// the member groups' final standings.
+    pub playoffs: Vec<LeaguePlayoff>,
     pub clubs: Vec<Club>,
     pub reputation: u16,
     pub settings: CountrySettings,
@@ -328,11 +351,43 @@ impl Country {
             }
         }
 
+        // Grouped-competition playoffs (MLS Cup, …). Each runs its own
+        // knockout bracket seeded from the member groups' standings. We
+        // snapshot every league's standings first (immutable borrow), then
+        // drive the playoffs mutably — disjoint fields, so `self.clubs`
+        // stays readable alongside `&mut self.playoffs`.
+        let mut playoff_pending: Vec<Option<LeaguePendingState>> =
+            Vec::with_capacity(self.playoffs.len());
+        if !self.playoffs.is_empty() {
+            let group_snaps: Vec<GroupStanding> = self
+                .leagues
+                .leagues
+                .iter()
+                .map(|l| GroupStanding {
+                    league_id: l.id,
+                    complete: schedule_fully_played(l),
+                    ordered_team_ids: l.table.rows.iter().map(|r| r.team_id).collect(),
+                })
+                .collect();
+
+            for playoff in &mut self.playoffs {
+                let pf_ctx =
+                    ctx.with_league(playoff.league.id, playoff.league.slug.clone(), &[], playoff.league.reputation);
+                let output = playoff.simulate_build(&self.clubs, &group_snaps, &pf_ctx);
+                all_matches.extend(output.matches);
+                playoff_pending.push(output.pending);
+                if let Some(r) = output.immediate {
+                    immediate_results.push(r);
+                }
+            }
+        }
+
         (
             all_matches,
             CountryPendingState {
                 leagues: pending_leagues,
                 cup: cup_pending,
+                playoffs: playoff_pending,
                 immediate_results,
             },
         )
@@ -408,6 +463,24 @@ impl Country {
                     }
                 }
                 league_results.push(cup_result);
+            }
+        }
+
+        // Playoff post-match work. Pending vector is parallel to
+        // `self.playoffs` (same length, same order).
+        let mut playoff_pending_iter = pending.playoffs.into_iter();
+        for playoff in &mut self.playoffs {
+            let slot = playoff_pending_iter.next().flatten();
+            if let Some(p) = slot {
+                let r = by_league.remove(&playoff.league.id).unwrap_or_default();
+                let pf_ctx = ctx.with_league(
+                    playoff.league.id,
+                    playoff.league.slug.clone(),
+                    &[],
+                    playoff.league.reputation,
+                );
+                let pr = playoff.simulate_process(r, p, &self.clubs, &pf_ctx, current_date);
+                league_results.push(pr);
             }
         }
 

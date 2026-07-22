@@ -48,6 +48,18 @@ pub struct LeagueGroupEntity {
     pub competition: String,
     /// Number of groups in the parent competition (e.g. 3 for Serie C)
     pub total_groups: u8,
+    /// Optional end-of-season playoff. When present, the competition crowns
+    /// a single champion via a knockout bracket seeded from every group's
+    /// final standings (MLS Cup, Serie C promotion playoff, …).
+    #[serde(default)]
+    pub playoff: Option<PlayoffConfigEntity>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PlayoffConfigEntity {
+    /// Top N of each group's table that enter the knockout bracket
+    /// (e.g. 8 for MLS: the top eight of each conference).
+    pub qualifiers_per_group: u8,
 }
 
 fn default_enabled() -> bool {

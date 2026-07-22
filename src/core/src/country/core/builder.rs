@@ -1,5 +1,5 @@
 use crate::country::national::{NationalTeam, NationalTeamLevel};
-use crate::league::{DomesticCup, LeagueCollection};
+use crate::league::{DomesticCup, LeagueCollection, LeaguePlayoff};
 use crate::transfers::market::TransferMarket;
 use crate::{
     Club, Country, CountryEconomicFactors, CountryGeneratorData, CountryRegulations,
@@ -17,6 +17,7 @@ pub struct CountryBuilder {
     continent_id: Option<u32>,
     leagues: Option<LeagueCollection>,
     domestic_cup: Option<DomesticCup>,
+    playoffs: Option<Vec<LeaguePlayoff>>,
     clubs: Option<Vec<Club>>,
     reputation: Option<u16>,
     settings: Option<CountrySettings>,
@@ -77,6 +78,11 @@ impl CountryBuilder {
 
     pub fn domestic_cup(mut self, domestic_cup: Option<DomesticCup>) -> Self {
         self.domestic_cup = domestic_cup;
+        self
+    }
+
+    pub fn playoffs(mut self, playoffs: Vec<LeaguePlayoff>) -> Self {
+        self.playoffs = Some(playoffs);
         self
     }
 
@@ -167,6 +173,7 @@ impl CountryBuilder {
             continent_id: self.continent_id.ok_or("continent_id is required")?,
             leagues: self.leagues.ok_or("leagues is required")?,
             domestic_cup: self.domestic_cup,
+            playoffs: self.playoffs.unwrap_or_default(),
             clubs: self.clubs.ok_or("clubs is required")?,
             reputation: self.reputation.unwrap_or(500), // Default reputation
             settings: self.settings.unwrap_or_default(),

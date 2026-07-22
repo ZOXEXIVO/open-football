@@ -65,6 +65,9 @@ impl DatabaseGenerator {
                 // sub-leagues are appended) so the tier-1 season window is
                 // picked up cleanly.
                 let domestic_cup = Self::generate_domestic_cup(country, &leagues_vec);
+                // Playoffs for grouped competitions (MLS Cup, …), also built
+                // from the real leagues before youth sub-leagues are added.
+                let playoffs = Self::generate_playoffs(country, &leagues_vec);
                 Self::create_subteams_leagues(country.id, &mut clubs, &mut leagues_vec, data);
                 let leagues = LeagueCollection::new(leagues_vec);
 
@@ -89,6 +92,7 @@ impl DatabaseGenerator {
                     .continent_id(continent.id)
                     .leagues(leagues)
                     .domestic_cup(domestic_cup)
+                    .playoffs(playoffs)
                     .clubs(clubs)
                     .reputation(country.reputation)
                     .settings(settings)
