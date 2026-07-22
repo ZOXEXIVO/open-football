@@ -1672,6 +1672,116 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // User-reported (Luciano Sokolić, Floriana → Naxxar Lions twice): a
+    // loan that RETURNS and is RE-AGREED with the same borrower before
+    // the season-end snapshot leaves two (club, loan=true) entries in
+    // `current` — the completed first spell and the new carried one. The
+    // carried-forward matcher used to key on (team_slug, is_loan) and
+    // skipped BOTH, silently dropping the first loan's League row (and
+    // its apps) from the ledger and items; its cup slices then rendered
+    // as a label-less non-loan row ("2026/27 Naxxar Lions, 1 app, no
+    // Loan tag" below the parent row). Carried skips must match the
+    // exact carried entry only.
+    // ---------------------------------------------------------------
+    #[test]
+    fn two_consecutive_loans_same_club_keep_first_loan_row() {
+        let river = team_with_league(
+            "River Plate",
+            "river-plate",
+            "Premier Division",
+            "argentine-premier-division",
+        );
+        let floriana = team_with_league(
+            "Floriana",
+            "floriana",
+            "Premier League",
+            "maltese-premier-league",
+        );
+        let naxxar = team_with_league(
+            "Naxxar Lions",
+            "naxxar-lions",
+            "Premier League",
+            "maltese-premier-league",
+        );
+        let mut p = make_player();
+
+        // Game start at River; manual transfer to Floriana 1 Aug 2026, 50K.
+        p.statistics_history
+            .seed_initial_team(&river, make_date(2026, 8, 1), false);
+        p.on_manual_transfer(&river, &floriana, Some(50_000.0), make_date(2026, 8, 1));
+
+        // Loan #1 to Naxxar, 10 Sep 2026. One league app + one cup app,
+        // early warehoused return 1 Jan 2027.
+        p.contract_loan = Some(loan_contract_until(2027, 6, 30));
+        p.on_manual_loan(&floriana, &floriana, &naxxar, make_date(2026, 9, 10));
+        p.statistics = make_stats(1, 0);
+        p.cup_statistics_by_competition
+            .push(crate::CompetitionStatistics {
+                competition_slug: "maltese-fa-trophy".to_string(),
+                statistics: make_stats(1, 0),
+            });
+        p.contract_loan = None;
+        p.on_loan_return(&naxxar, &floriana, make_date(2027, 1, 1));
+
+        // Loan #2 to Naxxar, 24 Jul 2027.
+        p.contract_loan = Some(loan_contract_until(2028, 6, 30));
+        p.on_manual_loan(&floriana, &floriana, &naxxar, make_date(2027, 7, 24));
+
+        // Malta snapshot 25 Aug 2027 closing 2026 — player on Naxxar roster.
+        p.on_season_end(Season::new(2026), &naxxar, make_date(2027, 8, 25));
+
+        // 2027/28: 23 apps on loan; natural return 30 Jun 2028.
+        p.statistics = make_stats(23, 0);
+        p.contract_loan = None;
+        p.on_loan_return(&naxxar, &floriana, make_date(2028, 6, 30));
+
+        // Malta snapshot 25 Aug 2028 closing 2027 — player home at Floriana.
+        p.on_season_end(Season::new(2027), &floriana, make_date(2028, 8, 25));
+
+        // 2028/29: 23 apps at Floriana; render on 18 Jan 2029.
+        p.statistics = make_stats(23, 0);
+
+        let rows = history_rows_of(&p, make_date(2029, 1, 18));
+
+        let naxxar_2026: Vec<_> = rows
+            .iter()
+            .filter(|r| r.0 == 2026 && r.1 == "naxxar-lions")
+            .collect();
+        assert_eq!(
+            naxxar_2026.len(),
+            1,
+            "the completed first loan must keep exactly one row: {rows:?}"
+        );
+        assert!(
+            naxxar_2026[0].2,
+            "the first loan spell must keep its Loan label: {rows:?}"
+        );
+        assert_eq!(
+            naxxar_2026[0].3, 2,
+            "the first loan's league + cup apps must survive the carried-forward skip: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.0 == 2027 && r.1 == "naxxar-lions" && r.2 && r.3 == 23),
+            "the second loan season keeps its own row: {rows:?}"
+        );
+        // Within 2026/27 the loan row sits above the 0-app parent
+        // registration row — the loan is the season's real story.
+        let naxxar_pos = rows
+            .iter()
+            .position(|r| r.0 == 2026 && r.1 == "naxxar-lions")
+            .unwrap();
+        let floriana_pos = rows
+            .iter()
+            .position(|r| r.0 == 2026 && r.1 == "floriana")
+            .expect("parent registration row must exist");
+        assert!(
+            naxxar_pos < floriana_pos,
+            "loan row must render above the parent registration row: {rows:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
     // User-reported (Luciano Sokolić): a player who has already PLAYED
     // for his club this season is loaned out and later returns to the
     // SAME club. The pre-loan appearances must survive the return and the

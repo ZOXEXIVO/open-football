@@ -1346,7 +1346,7 @@ impl PlayerStatisticsHistory {
         let season_matches_end = season.end_date();
         let season_span_days = (season_matches_end - season.start_date()).num_days().max(1);
         let next_season_start = Season::new(season.start_year + 1).start_date();
-        let carried_forward: Vec<(String, bool, Option<f64>)> = self
+        let carried_forward: Vec<(u32, String, bool, Option<f64>)> = self
             .current
             .iter()
             .filter(|e| {
@@ -1368,12 +1368,26 @@ impl PlayerStatisticsHistory {
                 let days_in_season = (season_matches_end - e.joined_date).num_days().max(0);
                 (days_in_season as f64 / season_span_days as f64) * 100.0 < 30.0
             })
-            .map(|e| (e.team_slug.clone(), e.is_loan, e.transfer_fee))
+            .map(|e| (e.seq_id, e.team_slug.clone(), e.is_loan, e.transfer_fee))
             .collect();
+        // Entry-identity check for the freeze loops. The (slug, loan) pair
+        // alone cannot tell the NEW carried spell apart from a COMPLETED
+        // earlier spell at the same club under the same flag — a
+        // return-then-re-loan to the same borrower before the season-end
+        // snapshot leaves both in `current` as (club, loan=true). Matching
+        // by pair skipped BOTH, silently dropping the first loan's row
+        // (and its apps) from the ledger and `items`; its cup slices then
+        // rendered as a label-less non-loan row — the reported "first of
+        // two Naxxar Lions loans loses its Loan tag" case. Only the exact
+        // carried entry may be skipped.
+        let is_carried_entry =
+            |seq_id: u32| -> bool { carried_forward.iter().any(|(s, _, _, _)| *s == seq_id) };
+        // Pair-level check, used only where no entry identity exists (the
+        // closing-team fallback write below).
         let is_carried_forward = |slug: &str, loan: bool| -> bool {
             carried_forward
                 .iter()
-                .any(|(s, l, _)| s == slug && *l == loan)
+                .any(|(_, s, l, _)| s == slug && *l == loan)
         };
         // Fee a carried spell brings into the next season (None when the
         // (slug, loan) pair isn't a carried move), so the destination's
@@ -1382,8 +1396,8 @@ impl PlayerStatisticsHistory {
         let carried_fee = |slug: &str, loan: bool| -> Option<f64> {
             carried_forward
                 .iter()
-                .find(|(s, l, _)| s == slug && *l == loan)
-                .and_then(|(_, _, fee)| *fee)
+                .find(|(_, s, l, _)| s == slug && *l == loan)
+                .and_then(|(_, _, _, fee)| *fee)
         };
         // Fee to stamp on the season-end re-seed for the continuing spell.
         // A LOAN that carries into the next season must keep the `Some(0.0)`
@@ -1414,11 +1428,12 @@ impl PlayerStatisticsHistory {
         // to the closing season's window) so the projection can apply
         // the coverage-based collapse rule instead of guessing from
         // sibling rows.
-        let entries_snapshot: Vec<(TeamInfo, bool, Option<f64>, PlayerStatistics, u16)> = self
+        let entries_snapshot: Vec<(u32, TeamInfo, bool, Option<f64>, PlayerStatistics, u16)> = self
             .current
             .iter()
             .map(|entry| {
                 (
+                    entry.seq_id,
                     TeamInfo {
                         name: entry.team_name.clone(),
                         slug: entry.team_slug.clone(),
@@ -1434,8 +1449,10 @@ impl PlayerStatisticsHistory {
             })
             .collect();
         let mut closing_team_recorded = false;
-        for (entry_team, entry_loan, entry_fee, entry_stats, entry_coverage) in entries_snapshot {
-            if is_carried_forward(&entry_team.slug, entry_loan) {
+        for (entry_seq, entry_team, entry_loan, entry_fee, entry_stats, entry_coverage) in
+            entries_snapshot
+        {
+            if is_carried_entry(entry_seq) {
                 continue;
             }
             let mut stats = entry_stats;
@@ -1498,7 +1515,7 @@ impl PlayerStatisticsHistory {
             // created by mid-season transfers (e.g. transfer fee lost).
             let entries = std::mem::take(&mut self.current);
             for entry in entries {
-                if is_carried_forward(&entry.team_slug, entry.is_loan) {
+                if is_carried_entry(entry.seq_id) {
                     continue;
                 }
                 let dominated_by_frozen = self.items.iter().any(|i| {
@@ -1613,7 +1630,7 @@ impl PlayerStatisticsHistory {
             .any(|e| e.statistics.total_games() > 0 || e.transfer_fee.is_some());
 
         for entry in entries {
-            if is_carried_forward(&entry.team_slug, entry.is_loan) {
+            if is_carried_entry(entry.seq_id) {
                 continue;
             }
             let games = entry.statistics.total_games();
