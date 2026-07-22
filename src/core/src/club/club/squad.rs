@@ -128,12 +128,19 @@ impl Club {
                 continue;
             }
 
-            let max_age = team.team_type.max_age();
+            // Graduate-out age for a development squad — use
+            // `development_age_cap` (U18→18 … U23→23), NOT `max_age`, which
+            // bounds only U18/U19. With `max_age` a U20/U21/U23 player was
+            // never flagged overage, so a keeper (or anyone) not good enough
+            // for a talent promotion could sit in a youth squad into his
+            // mid-20s: never playing senior football, and invisible to every
+            // ambition audit (which cover Main / B / Reserve / Second only).
+            let graduate_out_age = team.team_type.development_age_cap();
 
             for p in team.players.iter() {
                 let age = p.age(date);
                 let level = AbilityEstimator::observable_level(p);
-                let overage = max_age.map_or(false, |limit| age > limit);
+                let overage = graduate_out_age.map_or(false, |limit| age > limit);
 
                 // Never promote players marked for departure
                 let listed =
@@ -167,7 +174,14 @@ impl Club {
                             None => continue, // no youth team available, skip
                         }
                     } else {
-                        next.unwrap_or(main_idx)
+                        // Too old for any youth tier → a senior reserve
+                        // (Reserve / B / Second) so he keeps playing
+                        // competitive football and the reserve-ambition audit
+                        // can act on his case; only when the club has no
+                        // reserve at all does he land on the main bench, where
+                        // the positional-surplus pass then loans or lists him.
+                        next.or_else(|| self.find_demotion_target(age))
+                            .unwrap_or(main_idx)
                     };
                     moves.push(PendingMove {
                         from: ti,
@@ -467,8 +481,12 @@ impl Club {
         let current_pos = progression.iter().position(|t| *t == current_type)?;
 
         for next_type in &progression[current_pos + 1..] {
-            let age_ok = match next_type.max_age() {
-                Some(max_age) => player_age <= max_age,
+            // Skip a tier the player has already outgrown (graduate-out age),
+            // so an overage player lands on the youngest tier that still fits
+            // — or, if too old for all of them, `None` falls through to a
+            // senior squad at the call site.
+            let age_ok = match next_type.development_age_cap() {
+                Some(cap) => player_age <= cap,
                 None => true,
             };
             if age_ok {
@@ -1419,6 +1437,201 @@ mod promotion_evidence_tests {
             "without cameo evidence the promotion bar holds"
         );
         assert!(Fx::on_team(&club, 1, 1), "the prospect stays with the U19s");
+    }
+}
+
+#[cfg(test)]
+mod overage_graduation_tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
+        PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
+        StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TrainingSchedule,
+    };
+    use chrono::{Datelike, NaiveTime};
+
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()
+        }
+
+        fn schedule() -> TrainingSchedule {
+            TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            )
+        }
+
+        fn player(id: u32, position: PlayerPositionType, ability: u8, age: u8) -> Player {
+            let date = Self::date();
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ability;
+            attrs.potential_ability = ability;
+            attrs.condition = 10_000;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("T".to_string(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(date.year() - age as i32, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::flat_for_ability(ability))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(PlayerClubContract::new(
+                    20_000,
+                    NaiveDate::from_ymd_opt(2029, 6, 30).unwrap(),
+                )))
+                .build()
+                .unwrap()
+        }
+
+        /// 22 seniors at observable ~120 — the main GK slots sit far above
+        /// any promotion bar the candidate could clear, so only the overage
+        /// path can move him.
+        fn main_roster() -> Vec<Player> {
+            let mut players = Vec::new();
+            let mut id = 100u32;
+            let push =
+                |pos: PlayerPositionType, n: usize, id: &mut u32, out: &mut Vec<Player>| {
+                    for _ in 0..n {
+                        out.push(Self::player(*id, pos, 120, 27));
+                        *id += 1;
+                    }
+                };
+            push(PlayerPositionType::Goalkeeper, 2, &mut id, &mut players);
+            push(PlayerPositionType::DefenderCenter, 8, &mut id, &mut players);
+            push(PlayerPositionType::MidfielderCenter, 6, &mut id, &mut players);
+            push(PlayerPositionType::Striker, 6, &mut id, &mut players);
+            players
+        }
+
+        /// U20 squad: the overage keeper plus eleven age-appropriate fillers.
+        fn u20_roster(candidate: Player) -> Vec<Player> {
+            let mut players = vec![candidate];
+            let mut id = 300u32;
+            for _ in 0..4 {
+                players.push(Self::player(id, PlayerPositionType::DefenderCenter, 50, 18));
+                id += 1;
+            }
+            for _ in 0..4 {
+                players.push(Self::player(id, PlayerPositionType::MidfielderCenter, 50, 18));
+                id += 1;
+            }
+            for _ in 0..3 {
+                players.push(Self::player(id, PlayerPositionType::Striker, 50, 18));
+                id += 1;
+            }
+            players
+        }
+
+        /// Eleven senior reserves so the Second team is a valid demotion
+        /// target (its own size never blocks an incoming move).
+        fn second_roster() -> Vec<Player> {
+            let mut players = Vec::new();
+            let mut id = 500u32;
+            for _ in 0..11 {
+                players.push(Self::player(id, PlayerPositionType::DefenderCenter, 70, 24));
+                id += 1;
+            }
+            players
+        }
+
+        fn team(id: u32, slug: &str, tt: TeamType, players: Vec<Player>) -> crate::Team {
+            TeamBuilder::new()
+                .id(id)
+                .league_id(if tt == TeamType::U20 { None } else { Some(1) })
+                .club_id(100)
+                .name(slug.to_string())
+                .slug(slug.to_string())
+                .team_type(tt)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(400, 400, 400))
+                .training_schedule(Self::schedule())
+                .build()
+                .unwrap()
+        }
+
+        fn club(candidate: Player, with_second: bool) -> Club {
+            let mut teams = vec![
+                Self::team(10, "main", TeamType::Main, Self::main_roster()),
+                Self::team(20, "u20", TeamType::U20, Self::u20_roster(candidate)),
+            ];
+            if with_second {
+                teams.push(Self::team(80, "second", TeamType::Second, Self::second_roster()));
+            }
+            Club::new(
+                100,
+                "Club".to_string(),
+                Location::new(1),
+                ClubFinances::new(10_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(teams),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn team_idx_of(club: &Club, tt: TeamType) -> Option<usize> {
+            club.teams.teams.iter().position(|t| t.team_type == tt)
+        }
+
+        fn on_team(club: &Club, tt: TeamType, id: u32) -> bool {
+            Self::team_idx_of(club, tt)
+                .map(|idx| club.teams.teams[idx].players.players.iter().any(|p| p.id == id))
+                .unwrap_or(false)
+        }
+    }
+
+    /// The reported bug: a modest keeper too old for a talent promotion but
+    /// past the U20 age cap must not rot in the youth squad forever. He
+    /// graduates out — to the senior reserve when one exists.
+    #[test]
+    fn overage_keeper_graduates_out_of_u20_to_senior_reserve() {
+        let candidate = Fx::player(1, PlayerPositionType::Goalkeeper, 50, 25);
+        let mut club = Fx::club(candidate, /* with_second */ true);
+
+        club.rebalance_squads(Fx::date());
+
+        assert!(
+            !Fx::on_team(&club, TeamType::U20, 1),
+            "an overage keeper must not stay parked in the U20 squad"
+        );
+        assert!(
+            Fx::on_team(&club, TeamType::Second, 1),
+            "he graduates to the senior reserve where he plays competitive football"
+        );
+    }
+
+    /// With no senior reserve, the overage player still leaves the youth
+    /// squad — onto the main bench, where the surplus/loan machinery owns him.
+    #[test]
+    fn overage_keeper_leaves_u20_even_without_a_reserve() {
+        let candidate = Fx::player(1, PlayerPositionType::Goalkeeper, 50, 25);
+        let mut club = Fx::club(candidate, /* with_second */ false);
+
+        club.rebalance_squads(Fx::date());
+
+        assert!(
+            !Fx::on_team(&club, TeamType::U20, 1),
+            "with no reserve he still must not be stuck in the U20 squad"
+        );
+        assert!(
+            Fx::on_team(&club, TeamType::Main, 1),
+            "absent a reserve, he lands on the main roster for the surplus pass to route"
+        );
     }
 }
 
