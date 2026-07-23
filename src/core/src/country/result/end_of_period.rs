@@ -1756,6 +1756,75 @@ impl CountryResult {
         });
     }
 
+    /// Select the tier-(T+1) league that the tier-T league `tier1_id`
+    /// relegates into (returning `(lower_league_id, its promotion_spots)`).
+    ///
+    /// When the relegating tier and the tier below are BOTH split into
+    /// groups of the same competition (e.g. a two-zone top flight above a
+    /// two-group second division), zones are paired to groups by position —
+    /// zone 0 → group 0, zone 1 → group 1 — so each zone relegates into a
+    /// distinct group. The naive "first promotion-eligible league below"
+    /// would send every zone into the same first group, double-pairing it
+    /// and orphaning the others. Falls back to that first-match behaviour
+    /// whenever either side isn't grouped (the common single-league case).
+    fn paired_promotion_league(
+        leagues: &[crate::league::League],
+        tier1_id: u32,
+        tier1_tier: u8,
+    ) -> Option<(u32, u8)> {
+        let lower_tier = tier1_tier + 1;
+        let mut candidates: Vec<&crate::league::League> = leagues
+            .iter()
+            .filter(|l| {
+                l.id != tier1_id
+                    && l.settings.tier == lower_tier
+                    && l.settings.promotion_spots > 0
+            })
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+
+        if let Some(tier1_group) = leagues
+            .iter()
+            .find(|l| l.id == tier1_id)
+            .and_then(|l| l.settings.league_group.as_ref())
+        {
+            // Position of this zone among its competition's zones (by id).
+            let mut zones: Vec<u32> = leagues
+                .iter()
+                .filter(|l| {
+                    l.settings.tier == tier1_tier
+                        && l
+                            .settings
+                            .league_group
+                            .as_ref()
+                            .is_some_and(|g| g.competition == tier1_group.competition)
+                })
+                .map(|l| l.id)
+                .collect();
+            zones.sort_unstable();
+
+            // Grouped candidates below, ordered the same way, so index i on
+            // each side refers to the i-th group.
+            let mut grouped: Vec<&crate::league::League> = candidates
+                .iter()
+                .copied()
+                .filter(|l| l.settings.league_group.is_some())
+                .collect();
+            grouped.sort_unstable_by_key(|l| l.id);
+
+            if let Some(pos) = zones.iter().position(|&id| id == tier1_id) {
+                if let Some(l) = grouped.get(pos) {
+                    return Some((l.id, l.settings.promotion_spots));
+                }
+            }
+        }
+
+        let first = candidates.remove(0);
+        Some((first.id, first.settings.promotion_spots))
+    }
+
     fn process_promotion_relegation(country: &mut Country, date: NaiveDate) {
         // Collect league info: (league_id, tier, relegation_spots, promotion_spots)
         let league_info: Vec<(u32, u8, u8, u8)> = country
@@ -1783,15 +1852,15 @@ impl CountryResult {
                 continue;
             }
 
-            // Find paired league: same country, next tier, with promotion_spots > 0
-            let paired = league_info.iter().find(|&&(id, tier, _, promo)| {
-                id != tier1_id && tier == tier1_tier + 1 && promo > 0
-            });
-
-            let &(tier2_id, _, _, promotion_spots) = match paired {
-                Some(p) => p,
-                None => continue,
-            };
+            // Find the paired lower league — group-aware, so a two-zone top
+            // flight maps each zone to its own second-division group instead
+            // of every zone piling into the first one.
+            let (tier2_id, promotion_spots) =
+                match Self::paired_promotion_league(&country.leagues.leagues, tier1_id, tier1_tier)
+                {
+                    Some(p) => p,
+                    None => continue,
+                };
 
             let nominal_swap = relegation_spots.min(promotion_spots) as usize;
 
@@ -2265,6 +2334,71 @@ mod tests {
             })
             .collect();
         league
+    }
+
+    fn league_with_group(
+        id: u32,
+        tier: u8,
+        promo: u8,
+        releg: u8,
+        competition: Option<&str>,
+        group_name: &str,
+    ) -> League {
+        League::new(
+            id,
+            format!("L{id}"),
+            format!("l-{id}"),
+            1,
+            5000,
+            LeagueSettings {
+                season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                tier,
+                promotion_spots: promo,
+                relegation_spots: releg,
+                league_group: competition.map(|c| crate::league::LeagueGroup {
+                    name: group_name.to_string(),
+                    competition: c.to_string(),
+                    total_groups: 2,
+                    playoff: None,
+                }),
+            },
+            false,
+        )
+    }
+
+    #[test]
+    fn zones_pair_to_matching_second_division_groups() {
+        // Two-zone top flight above a two-group second division: each zone
+        // must relegate into its own group, not both into the first.
+        let leagues = vec![
+            league_with_group(100, 1, 0, 1, Some("Primera"), "Zona A"),
+            league_with_group(101, 1, 0, 1, Some("Primera"), "Zona B"),
+            league_with_group(200, 2, 1, 2, Some("Second"), "A"),
+            league_with_group(201, 2, 1, 2, Some("Second"), "B"),
+        ];
+        // zone 0 → group 0, zone 1 → group 1 (ordered by id).
+        assert_eq!(
+            CountryResult::paired_promotion_league(&leagues, 100, 1),
+            Some((200, 1))
+        );
+        assert_eq!(
+            CountryResult::paired_promotion_league(&leagues, 101, 1),
+            Some((201, 1))
+        );
+    }
+
+    #[test]
+    fn ungrouped_pairing_falls_back_to_first_match() {
+        // A plain single-league tier boundary keeps the original behaviour.
+        let leagues = vec![
+            league_with_group(10, 1, 0, 3, None, ""),
+            league_with_group(20, 2, 2, 0, None, ""),
+        ];
+        assert_eq!(
+            CountryResult::paired_promotion_league(&leagues, 10, 1),
+            Some((20, 2))
+        );
     }
 
     fn build_country(clubs: Vec<Club>, leagues: Vec<League>) -> Country {
