@@ -17,11 +17,11 @@ core = { path = "../core" }
 database = { path = "../database" }
 axum = "0.8.9"
 log = "0.4.33"
-tokio = { version = "1.52.3", features = ["full"] }
+tokio = { version = "1.53.1", features = ["full"] }
 tower = "0.5.3"
 tower-http = { version = "0.7.0", features = ["fs", "catch-panic"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 chrono = "0.4.45"
 itertools = "0.15.0"
