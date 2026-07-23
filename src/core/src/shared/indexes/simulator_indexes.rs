@@ -106,6 +106,15 @@ impl SimulatorDataIndexes {
                     .add_league_slug(&cup.league.slug, cup.league.id);
             }
 
+            // Grouped-competition playoffs (MLS Cup, Torneo Apertura/
+            // Clausura) also live outside `leagues` — same treatment as
+            // the cup so their bracket pages are routable by slug.
+            for playoff in &country.playoffs {
+                self.add_league_location(playoff.league.id, continent.id, country.id);
+                self.slug_indexes
+                    .add_league_slug(&playoff.league.slug, playoff.league.id);
+            }
+
             for (club_idx, club) in country.clubs.iter().enumerate() {
                 let club_idx = club_idx as u32;
                 self.add_club_location(club.id, continent.id, country.id);

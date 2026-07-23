@@ -28,10 +28,11 @@ use crate::country::{
     InternationalCompetition, MediaCoverage,
 };
 use crate::league::DomesticCup;
-use crate::league::playoff::{GroupStanding, LeaguePlayoff};
+use crate::league::playoff::{GroupStanding, LeaguePlayoff, StandingRow};
 use crate::league::League;
 use crate::league::LeagueResult;
 use crate::league::LeagueTableResult;
+use crate::league::LeagueTableRow;
 use std::collections::HashMap;
 
 /// State stashed between [`Country::simulate_build`] and
@@ -67,6 +68,20 @@ fn schedule_fully_played(league: &League) -> bool {
         && tours
             .iter()
             .all(|t| !t.items.is_empty() && t.items.iter().all(|i| i.result.is_some()))
+}
+
+/// Project league-table rows into the standings shape the playoff seeds
+/// from (points/wins/GD are enough for seeding, hosting rights and the
+/// Supporters' Shield).
+fn standing_rows(rows: &[LeagueTableRow]) -> Vec<StandingRow> {
+    rows.iter()
+        .map(|r| StandingRow {
+            team_id: r.team_id,
+            points: r.effective_points() as u16,
+            wins: r.win,
+            goal_difference: r.goal_difference(),
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -363,10 +378,25 @@ impl Country {
                 .leagues
                 .leagues
                 .iter()
-                .map(|l| GroupStanding {
-                    league_id: l.id,
-                    complete: schedule_fully_played(l),
-                    ordered_team_ids: l.table.rows.iter().map(|r| r.team_id).collect(),
+                .map(|l| {
+                    // Split seasons: the first tournament's standings come
+                    // from the frozen table once the mid-year flip has
+                    // happened, from the live table before that.
+                    let first_stage_rows = if l.settings.split_season {
+                        match &l.split_first_table {
+                            Some(frozen) => standing_rows(frozen),
+                            None => standing_rows(&l.table.rows),
+                        }
+                    } else {
+                        Vec::new()
+                    };
+                    GroupStanding {
+                        league_id: l.id,
+                        complete: schedule_fully_played(l),
+                        rows: standing_rows(&l.table.rows),
+                        first_stage_complete: l.first_stage_played(),
+                        first_stage_rows,
+                    }
                 })
                 .collect();
 
@@ -589,6 +619,10 @@ impl Country {
         // hinges on those. Idempotent across ticks via the cup's own
         // `award_emitted_*` markers, so a no-op on every non-final day.
         CountryResult::process_domestic_cup_winner_awards(self, current_date);
+        // Grouped-competition playoff champions (MLS Cup, Torneo
+        // Apertura/Clausura) + the Supporters' Shield. Same shape: a
+        // daily, idempotent check armed by the playoff's own markers.
+        CountryResult::process_playoff_winner_awards(self, current_date);
 
         // Phase 1c (PARALLEL PER CLUB): drive each ClubResult's
         // sub-processors (finance, board, teams' players/staffs/training/

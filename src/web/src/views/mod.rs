@@ -274,10 +274,36 @@ fn cup_section(p: &MenuParams, cup: (&str, &str)) -> MenuSection {
     }])
 }
 
+/// Build the grouped-competition playoffs menu section (MLS Cup Playoffs,
+/// Torneo Apertura/Clausura, …): one entry per playoff, each linking to
+/// the dedicated `/playoffs/{slug}` bracket page. Kept standalone beside
+/// the cup section for the same reason — the links never hide behind the
+/// "more leagues" toggle. `None` when the country runs no playoffs.
+fn playoffs_section(p: &MenuParams, playoffs: &[(&str, &str)]) -> Option<MenuSection> {
+    if playoffs.is_empty() {
+        return None;
+    }
+    let items: Vec<MenuItem> = playoffs
+        .iter()
+        .map(|(name, slug)| {
+            let url = format!("/{}/playoffs/{}", p.lang, slug);
+            let active = p.current_path == url || p.current_path.starts_with(&format!("{}/", url));
+            MenuItem {
+                active,
+                title: name.to_string(),
+                url,
+                icon: "fa-trophy".to_string(),
+            }
+        })
+        .collect();
+    Some(MenuSection::plain(items))
+}
+
 pub fn league_menu(
     p: &MenuParams,
     country_leagues: &[(&str, &str)],
     cup: Option<(&str, &str)>,
+    playoffs: &[(&str, &str)],
 ) -> Vec<MenuSection> {
     let mut sections = p.home_and_country_sections();
 
@@ -286,6 +312,9 @@ pub fn league_menu(
     }
     if let Some(c) = cup {
         sections.push(cup_section(p, c));
+    }
+    if let Some(s) = playoffs_section(p, playoffs) {
+        sections.push(s);
     }
 
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
@@ -301,6 +330,7 @@ pub fn cup_menu(
     _cup_slug: &str,
     country_leagues: &[(&str, &str)],
     cup_name: &str,
+    playoffs: &[(&str, &str)],
     continent_id: u32,
 ) -> Vec<MenuSection> {
     let mut sections = p.home_and_country_sections();
@@ -308,6 +338,37 @@ pub fn cup_menu(
         sections.push(leagues_section(p, country_leagues));
     }
     sections.push(cup_section(p, (cup_name, _cup_slug)));
+    if let Some(s) = playoffs_section(p, playoffs) {
+        sections.push(s);
+    }
+    if let Some(s) = continental_section(p.i18n, p.lang, p.current_path, continent_id) {
+        sections.push(s);
+    }
+    sections.push(national_section(p.i18n, p.lang, p.current_path));
+    sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
+    sections
+}
+
+/// Left-menu for the playoff bracket/history pages. Same competition
+/// layout as `cup_menu` (league pyramid, domestic cup, the country's
+/// playoffs), with the current playoff marked active via `current_path`.
+pub fn playoff_menu(
+    p: &MenuParams,
+    country_leagues: &[(&str, &str)],
+    cup: Option<(&str, &str)>,
+    playoffs: &[(&str, &str)],
+    continent_id: u32,
+) -> Vec<MenuSection> {
+    let mut sections = p.home_and_country_sections();
+    if !country_leagues.is_empty() {
+        sections.push(leagues_section(p, country_leagues));
+    }
+    if let Some(c) = cup {
+        sections.push(cup_section(p, c));
+    }
+    if let Some(s) = playoffs_section(p, playoffs) {
+        sections.push(s);
+    }
     if let Some(s) = continental_section(p.i18n, p.lang, p.current_path, continent_id) {
         sections.push(s);
     }
@@ -368,6 +429,7 @@ pub fn country_menu(
     p: &MenuParams,
     country_leagues: &[(&str, &str)],
     cup: Option<(&str, &str)>,
+    playoffs: &[(&str, &str)],
     continent_id: u32,
 ) -> Vec<MenuSection> {
     let mut sections = p.home_and_country_sections();
@@ -377,6 +439,9 @@ pub fn country_menu(
     }
     if let Some(c) = cup {
         sections.push(cup_section(p, c));
+    }
+    if let Some(s) = playoffs_section(p, playoffs) {
+        sections.push(s);
     }
 
     if let Some(s) = continental_section(p.i18n, p.lang, p.current_path, continent_id) {

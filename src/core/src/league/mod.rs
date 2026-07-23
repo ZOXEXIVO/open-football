@@ -19,7 +19,10 @@ pub use awards::{
 };
 pub use core::*;
 pub use domestic_cup::{CupHistoryEntry, DomesticCup};
-pub use playoff::{GroupStanding, LeaguePlayoff};
+pub use playoff::{
+    CROSS_BRACKET, GroupStanding, LeaguePlayoff, PlayoffRoundLabel, PlayoffSeries, PlayoffStage,
+    StandingRow,
+};
 pub use result::*;
 pub use rules::*;
 pub use schedule::*;

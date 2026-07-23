@@ -35,6 +35,10 @@ pub struct CountryGetTemplate {
     pub lang: String,
     pub active_tab: &'static str,
     pub country_slug: String,
+    /// Grouped competitions (Primera Division zones, MLS conferences),
+    /// each with its member leagues and playoff links.
+    pub competitions: Vec<CompetitionGroupDto>,
+    /// Ungrouped leagues (plus the domestic cup entry).
     pub leagues: Vec<LeagueDto>,
 }
 
@@ -44,6 +48,20 @@ pub struct LeagueDto {
     /// Domestic cups link to the dedicated `/cups/{slug}` page; leagues to
     /// `/leagues/{slug}`.
     pub is_cup: bool,
+}
+
+/// One grouped competition on the country page: a heading with its
+/// zone/conference leagues underneath, plus the competition's playoff
+/// link(s) (Torneo Apertura/Clausura, MLS Cup Playoffs).
+pub struct CompetitionGroupDto {
+    pub name: String,
+    pub leagues: Vec<LeagueDto>,
+    pub playoffs: Vec<PlayoffLinkDto>,
+}
+
+pub struct PlayoffLinkDto {
+    pub slug: String,
+    pub name: String,
 }
 
 pub async fn country_get_action(
@@ -90,17 +108,44 @@ pub async fn country_get_action(
             ))
         })?;
 
-    let mut leagues: Vec<LeagueDto> = country
-        .leagues
-        .leagues
-        .iter()
-        .filter(|l| !l.friendly)
-        .map(|l| LeagueDto {
+    // Grouped leagues (Primera Division zones, MLS conferences) render
+    // under their competition's heading; the rest stay in the flat list.
+    let mut competitions: Vec<CompetitionGroupDto> = Vec::new();
+    let mut leagues: Vec<LeagueDto> = Vec::new();
+    for l in country.leagues.leagues.iter().filter(|l| !l.friendly) {
+        let dto = LeagueDto {
             slug: l.slug.clone(),
             name: l.name.clone(),
             is_cup: false,
-        })
-        .collect();
+        };
+        match &l.settings.league_group {
+            Some(group) => {
+                match competitions
+                    .iter_mut()
+                    .find(|c| c.name == group.competition)
+                {
+                    Some(competition) => competition.leagues.push(dto),
+                    None => competitions.push(CompetitionGroupDto {
+                        name: group.competition.clone(),
+                        leagues: vec![dto],
+                        playoffs: Vec::new(),
+                    }),
+                }
+            }
+            None => leagues.push(dto),
+        }
+    }
+    for competition in &mut competitions {
+        competition.playoffs = country
+            .playoffs
+            .iter()
+            .filter(|p| p.competition == competition.name)
+            .map(|p| PlayoffLinkDto {
+                slug: p.league.slug.clone(),
+                name: p.league.name.clone(),
+            })
+            .collect();
+    }
     // The domestic cup lives outside `leagues`; surface it on the country
     // page alongside the divisions so it's reachable (links to /cups/).
     if let Some(cup) = &country.domestic_cup {
@@ -137,6 +182,11 @@ pub async fn country_get_action(
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
         menu_sections: {
+            let country_playoffs: Vec<(&str, &str)> = country
+                .playoffs
+                .iter()
+                .map(|p| (p.league.name.as_str(), p.league.slug.as_str()))
+                .collect();
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
@@ -151,6 +201,7 @@ pub async fn country_get_action(
                     .domestic_cup
                     .as_ref()
                     .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
+                &country_playoffs,
                 country.continent_id,
             )
         },
@@ -158,6 +209,7 @@ pub async fn country_get_action(
         i18n,
         active_tab: "leagues",
         country_slug: route_params.country_slug,
+        competitions,
         leagues,
     })
 }

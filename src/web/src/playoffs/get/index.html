@@ -1,0 +1,188 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab{% if active_tab == "bracket" %} active{% endif %}" href="/{{ lang }}/playoffs/{{ playoff_slug }}">{{ i18n.t("cup_bracket") }}</a>
+    <a class="fm-tab{% if active_tab == "history" %} active{% endif %}" href="/{{ lang }}/playoffs/{{ playoff_slug }}/history">{{ i18n.t("history") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-cup-hero">
+            <div class="fm-trophy-badge{% if !is_decided %} live{% endif %}">
+                <i class="fa fa-trophy"></i>
+            </div>
+            <div class="fm-cup-hero-main">
+                {% if is_decided %}
+                <span class="fm-cup-hero-label">{{ i18n.t("champion") }}</span>
+                <span class="fm-cup-hero-name">
+                    <a href="/{{ lang }}/teams/{{ champion_slug }}">{{ champion_name }}</a>
+                </span>
+                <span class="fm-cup-hero-sub">{{ title }}</span>
+                {% else %}
+                <span class="fm-cup-hero-label live">{{ i18n.t("playoffs") }}</span>
+                <span class="fm-cup-hero-name">{% if !stage_label.is_empty() %}{{ stage_label }}{% else %}{{ title }}{% endif %}</span>
+                <span class="fm-cup-hero-sub">{{ sub_title }}</span>
+                {% endif %}
+                {% if has_shield %}
+                <span class="fm-cup-hero-sub fm-shield-line">
+                    <i class="fa fa-shield-halved"></i>
+                    {{ i18n.t("supporters_shield") }}:
+                    <a href="/{{ lang }}/teams/{{ shield_slug }}">{{ shield_name }}</a>
+                </span>
+                {% endif %}
+            </div>
+            <div class="fm-cup-stats">
+                <div class="fm-cup-stat"><b>{{ entrants }}</b><span>{{ i18n.t("entrants") }}</span></div>
+                <div class="fm-cup-stat"><b>{{ rounds_count }}</b><span>{{ i18n.t("rounds") }}</span></div>
+            </div>
+        </div>
+    </section>
+
+    {% if sections.is_empty() %}
+    <section class="fm-panel mt-3">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("cup_bracket") }}</h3>
+        </div>
+        <div class="fm-empty">{{ i18n.t("knockout_competition") }}</div>
+    </section>
+    {% else %}
+    {% for section in sections %}
+    <section class="fm-panel mt-3">
+        <div class="fm-panel-head">
+            <h3>{% if !section.label.is_empty() %}{{ section.label }}{% else %}{{ i18n.t("cup_bracket") }}{% endif %}</h3>
+        </div>
+        <div class="fm-bracket-scroll">
+            <div class="fm-bracket{% if section.centered %} fm-bracket-centered{% endif %}">
+                {% for round in section.rounds %}
+                <div class="fm-round{% if loop.first %} is-first{% endif %}{% if round.is_final %} is-final{% endif %}">
+                    <div class="fm-round-hd">{{ round.label }} <span class="fm-round-cnt">{{ round.series.len() }}</span></div>
+                    <div class="fm-round-body">
+                        {% for tie in round.series %}
+                        <div class="fm-tie{% if !tie.played %} unplayed{% endif %}">
+                            <div class="fm-tie-row{% if tie.home_winner %} winner{% endif %}">
+                                <a class="fm-tie-team" href="/{{ lang }}/teams/{{ tie.home_slug }}">
+                                    {% if !tie.home_seed.is_empty() %}<span class="fm-seed" title="{{ i18n.t("seed") }}">{{ tie.home_seed }}</span>{% endif %}
+                                    <span class="fm-tie-name">{{ tie.home_name }}</span>
+                                    {% if !tie.neutral %}<i class="fa fa-house fm-host-mark"></i>{% endif %}
+                                    {% if round.is_final && tie.home_winner %}<i class="fa fa-crown fm-tie-crown"></i>{% endif %}
+                                </a>
+                                {% if !tie.match_id.is_empty() %}
+                                <a class="fm-tie-score" href="/{{ lang }}/match/{{ tie.match_id }}">{% if let Some(s) = tie.home_score %}{{ s }}{% else %}–{% endif %}{% if let Some(p) = tie.home_pens %} <span class="fm-pen">({{ p }})</span>{% endif %}</a>
+                                {% else %}
+                                <span class="fm-tie-score">{% if let Some(s) = tie.home_score %}{{ s }}{% else %}–{% endif %}</span>
+                                {% endif %}
+                            </div>
+                            <div class="fm-tie-row{% if tie.away_winner %} winner{% endif %}">
+                                <a class="fm-tie-team" href="/{{ lang }}/teams/{{ tie.away_slug }}">
+                                    {% if !tie.away_seed.is_empty() %}<span class="fm-seed" title="{{ i18n.t("seed") }}">{{ tie.away_seed }}</span>{% endif %}
+                                    <span class="fm-tie-name">{{ tie.away_name }}</span>
+                                    {% if round.is_final && tie.away_winner %}<i class="fa fa-crown fm-tie-crown"></i>{% endif %}
+                                </a>
+                                {% if !tie.match_id.is_empty() %}
+                                <a class="fm-tie-score" href="/{{ lang }}/match/{{ tie.match_id }}">{% if let Some(s) = tie.away_score %}{{ s }}{% else %}–{% endif %}{% if let Some(p) = tie.away_pens %} <span class="fm-pen">({{ p }})</span>{% endif %}</a>
+                                {% else %}
+                                <span class="fm-tie-score">{% if let Some(s) = tie.away_score %}{{ s }}{% else %}–{% endif %}</span>
+                                {% endif %}
+                            </div>
+                            {% if !tie.games.is_empty() %}
+                            <div class="fm-series-games">
+                                {% for game in tie.games %}
+                                {% if !game.match_id.is_empty() %}
+                                <a class="fm-game-chip{% if !game.played %} unplayed{% endif %}" href="/{{ lang }}/match/{{ game.match_id }}"><span class="g">{{ game.label }}</span>{{ game.score }}</a>
+                                {% else %}
+                                <span class="fm-game-chip unplayed"><span class="g">{{ game.label }}</span>{{ game.score }}</span>
+                                {% endif %}
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                            {% if tie.neutral %}
+                            <div class="fm-neutral-tag">{{ i18n.t("neutral_venue") }}</div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+    {% endfor %}
+    {% endif %}
+
+    {% if !top_scorers.is_empty() || !top_assisters.is_empty() %}
+    <div class="row g-3 mt-0">
+        <div class="col-lg-6">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ i18n.t("top_scorers") }}</h3>
+                </div>
+                {% if top_scorers.is_empty() %}
+                <div class="fm-empty">{{ i18n.t("no_goals_scored") }}</div>
+                {% else %}
+                <table class="fm-player-stats">
+                    <thead>
+                        <tr>
+                            <th class="ps-pos">#</th>
+                            <th class="ps-name">{{ i18n.t("player") }}</th>
+                            <th class="ps-apps">{{ i18n.t("apps") }}</th>
+                            <th class="ps-val">{{ i18n.t("gls") }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in top_scorers %}
+                        <tr>
+                            <td class="ps-pos">{{ loop.index }}</td>
+                            <td class="ps-name">
+                                <a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a>
+                                <span class="ps-team"><a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a></span>
+                            </td>
+                            <td class="ps-apps">{{ item.played }}</td>
+                            <td class="ps-val">{{ item.stat_value }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+            </section>
+        </div>
+        <div class="col-lg-6">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ i18n.t("top_assisters") }}</h3>
+                </div>
+                {% if top_assisters.is_empty() %}
+                <div class="fm-empty">{{ i18n.t("no_assists_recorded") }}</div>
+                {% else %}
+                <table class="fm-player-stats">
+                    <thead>
+                        <tr>
+                            <th class="ps-pos">#</th>
+                            <th class="ps-name">{{ i18n.t("player") }}</th>
+                            <th class="ps-apps">{{ i18n.t("apps") }}</th>
+                            <th class="ps-val">{{ i18n.t("ast") }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in top_assisters %}
+                        <tr>
+                            <td class="ps-pos">{{ loop.index }}</td>
+                            <td class="ps-name">
+                                <a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a>
+                                <span class="ps-team"><a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a></span>
+                            </td>
+                            <td class="ps-apps">{{ item.played }}</td>
+                            <td class="ps-val">{{ item.stat_value }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+            </section>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -253,6 +253,7 @@ impl CopaLibertadores {
                     opponent_tactic: away_baseline,
                     competition: SelectionCompetition::ContinentalCup,
                     game_model: None,
+                    ..SelectionContext::default()
                 };
                 let mut away_ctx = SelectionContext {
                     is_friendly: false,
@@ -262,6 +263,7 @@ impl CopaLibertadores {
                     opponent_tactic: home_baseline,
                     competition: SelectionCompetition::ContinentalCup,
                     game_model: None,
+                    ..SelectionContext::default()
                 };
 
                 // Fixture-aware game model per side (opponent roster threat

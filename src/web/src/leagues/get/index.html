@@ -14,7 +14,7 @@
         <div class="col-md-12 col-lg-5">
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>{{ i18n.t("league_table") }}</h3>
+                    <h3>{% if split_season %}{{ tournament_label }}{% else %}{{ i18n.t("league_table") }}{% endif %}</h3>
                     <span class="fm-panel-action">{{ i18n.t("stages") }} ›</span>
                 </div>
                 <table class="fm-standings">
@@ -55,6 +55,48 @@
                     <span><i class="legend-dot rel"></i> {{ i18n.t("relegation") }}</span>
                 </div>
             </section>
+            {% if split_season && !annual_table_rows.is_empty() %}
+            <section class="fm-panel mt-3">
+                <div class="fm-panel-head">
+                    <h3>{{ i18n.t("annual_table") }}</h3>
+                </div>
+                <table class="fm-standings">
+                    <thead>
+                        <tr>
+                            <th class="st-pos">#</th>
+                            <th class="st-club">{{ i18n.t("club") }}</th>
+                            <th>{{ i18n.t("p") }}</th>
+                            <th>{{ i18n.t("w") }}</th>
+                            <th>{{ i18n.t("d") }}</th>
+                            <th>{{ i18n.t("l") }}</th>
+                            <th>{{ i18n.t("gd") }}</th>
+                            <th class="st-pts">{{ i18n.t("pts") }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in annual_table_rows %}
+                        <tr class="{% if annual_table_rows.len() > 2 && loop.index > annual_table_rows.len() - 2 %}zone-rel{% endif %}">
+                            <td class="st-pos">{{ loop.index }}</td>
+                            <td class="st-club">
+                                <a href="/{{ lang }}/teams/{{ row.team_slug }}">{{ row.team_name }}</a>
+                            </td>
+                            <td>{{ row.played }}</td>
+                            <td>{{ row.win }}</td>
+                            <td>{{ row.draft }}</td>
+                            <td>{{ row.lost }}</td>
+                            <td class="st-gd">
+                                {% if row.goal_scored - row.goal_concerned > 0 %}+{% endif %}{{ row.goal_scored - row.goal_concerned }}
+                            </td>
+                            <td class="st-pts">{{ row.points }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <div class="fm-legend">
+                    <span><i class="legend-dot rel"></i> {{ i18n.t("relegation") }}</span>
+                </div>
+            </section>
+            {% endif %}
         </div>
         <div class="col-md-7 col-lg-4">
             <section class="fm-panel">

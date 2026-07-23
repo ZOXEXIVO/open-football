@@ -15,6 +15,7 @@ use crate::leagues::league_routes;
 use crate::r#match::routes::match_routes;
 use crate::national_competitions::national_competitions_routes;
 use crate::player::player_routes;
+use crate::playoffs::playoff_routes;
 use crate::search::search_routes;
 use crate::staff::staff_routes;
 use crate::teams::team_routes;
@@ -126,6 +127,7 @@ impl ServerRoutes {
             .merge(national_competitions_routes())
             .merge(country_routes())
             .merge(cup_routes())
+            .merge(playoff_routes())
             .merge(game_routes())
             .merge(league_routes())
             .merge(team_routes())

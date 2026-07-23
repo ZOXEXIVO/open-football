@@ -2703,7 +2703,7 @@ fn bench_goalkeeper_count(result: &PlayerSelectionResult) -> usize {
 fn bench_includes_same_team_backup_goalkeeper_when_available() {
     let staff = generate_test_staff();
     let mut players = gk_outfield(6);
-    players.push(make_cup_player(
+    let mut first_choice = make_cup_player(
         1,
         PlayerPositionType::Goalkeeper,
         16,
@@ -2712,8 +2712,9 @@ fn bench_includes_same_team_backup_goalkeeper_when_available() {
         3,
         25,
         0.0,
-    ));
-    players.push(make_cup_player(
+    );
+    FixtureSkills::stamp(&mut first_choice, 16.0);
+    let mut backup = make_cup_player(
         2,
         PlayerPositionType::Goalkeeper,
         15,
@@ -2722,7 +2723,10 @@ fn bench_includes_same_team_backup_goalkeeper_when_available() {
         10,
         4,
         0.0,
-    ));
+    );
+    FixtureSkills::stamp(&mut backup, 15.0);
+    players.push(first_choice);
+    players.push(backup);
     let team = cup_team(players);
 
     let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
@@ -4095,5 +4099,370 @@ fn high_stakes_youth_fixture_fields_strongest_goalkeeper() {
         starting_goalkeeper_id(&result),
         Some(1),
         "a must-win fixture reverts to the strongest keeper"
+    );
+}
+
+// ========== Development guests (overage match-practice visitors) ==========
+
+/// Development-fixture context carrying one guest id — the shape the
+/// matchday assembler passes when `collect_overage_development_players`
+/// sweeps an idle player down from a fixture-less older squad.
+fn guest_ctx(guest_id: u32) -> SelectionContext {
+    SelectionContext {
+        is_friendly: true,
+        match_importance: 0.1,
+        development_guest_ids: vec![guest_id],
+        ..SelectionContext::default()
+    }
+}
+
+/// Twenty own outfielders (two per T442 slot) + two own keepers, every
+/// one stamped to the same observable level so quality terms stay flat
+/// unless a test deliberately creates a gap. `friendly_played` books the
+/// same appearance count on every outfielder — on plan, ahead, or behind
+/// as the test needs.
+fn guest_test_roster(outfield_played: u16, keeper_played: u16) -> Vec<Player> {
+    let slots = [
+        PlayerPositionType::DefenderLeft,
+        PlayerPositionType::DefenderCenterLeft,
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::MidfielderRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardRight,
+    ];
+    let mut players = Vec::new();
+    let mut id = 100u32;
+    for &pos in slots.iter() {
+        for twin in 0..2u32 {
+            let mut p = make_cup_player(
+                id + twin * 50,
+                pos,
+                13,
+                PlayerSquadStatus::FirstTeamRegular,
+                17,
+                7,
+                0,
+                0.0,
+            );
+            FixtureSkills::stamp(&mut p, 13.0);
+            // Pin assessed upside: the generator's random PA would feed
+            // the plan's ceiling norm and jitter the target shares.
+            p.player_attributes.potential_ability = p.player_attributes.current_ability;
+            p.friendly_statistics.played = outfield_played;
+            players.push(p);
+        }
+        id += 1;
+    }
+    for (gk_id, idle) in [(1u32, 5u16), (2u32, 12u16)] {
+        let mut gk = make_cup_player(
+            gk_id,
+            PlayerPositionType::Goalkeeper,
+            12,
+            PlayerSquadStatus::FirstTeamRegular,
+            17,
+            idle,
+            0,
+            0.0,
+        );
+        FixtureSkills::stamp(&mut gk, 12.0);
+        gk.player_attributes.potential_ability = gk.player_attributes.current_ability;
+        gk.friendly_statistics.played = keeper_played;
+        players.push(gk);
+    }
+    players
+}
+
+fn make_guest(id: u32, position: PlayerPositionType, level: f32) -> Player {
+    let mut guest = make_cup_player(
+        id,
+        position,
+        level as u8,
+        PlayerSquadStatus::NotYetSet,
+        21,
+        40,
+        0,
+        0.0,
+    );
+    FixtureSkills::stamp(&mut guest, level);
+    guest
+}
+
+#[test]
+fn development_guest_outfielder_starts_when_own_squad_is_ahead_of_plan() {
+    // A full 22-man U18 roster (no shortfall borrowing possible) whose
+    // outfielders are all ahead of their planned appearances, offered an
+    // idle U20 visitor: the guest's fixed practice pull must put him in
+    // the XI — the old shortfall-only gate silently dropped him here.
+    let staff = generate_test_staff();
+    let mut team = cup_team(guest_test_roster(8, 4));
+    team.team_type = TeamType::U18;
+
+    let guest = make_guest(999, PlayerPositionType::MidfielderCenterLeft, 15.0);
+    let result =
+        SquadSelector::select_for_rotation_with_context(&team, &staff, &[&guest], &guest_ctx(999));
+
+    assert!(
+        result.main_squad.iter().any(|p| p.id == 999),
+        "an idle guest must crack the XI of a squad running ahead of its minutes plan"
+    );
+}
+
+#[test]
+fn development_guest_outfielder_does_not_displace_underplayed_own_players() {
+    // Same roster, but the team's own outfielders are all behind their
+    // plan (0 appearances into a 10-match season). Their deficits outrank
+    // the guest's fixed pull — the visit never eats the academy's own
+    // development minutes.
+    let staff = generate_test_staff();
+    let mut players = guest_test_roster(0, 5);
+    // One busy player sets the season length the deficits are measured
+    // against without disturbing the others.
+    players[0].friendly_statistics.played = 10;
+    let mut team = cup_team(players);
+    team.team_type = TeamType::U18;
+
+    let guest = make_guest(999, PlayerPositionType::MidfielderCenterLeft, 13.0);
+    let result =
+        SquadSelector::select_for_rotation_with_context(&team, &staff, &[&guest], &guest_ctx(999));
+
+    assert!(
+        !result.main_squad.iter().any(|p| p.id == 999),
+        "a guest must not start over own players who are behind their minutes plan"
+    );
+}
+
+#[test]
+fn development_guest_keeper_gets_run_out_when_gloves_unsettled() {
+    // Both own keepers sit on their planned share and neither holds a
+    // fresh incumbency (a fixture break has passed): the guest's practice
+    // pull takes the gloves — the occasional run-out the sweep exists for.
+    let staff = generate_test_staff();
+    let mut players = guest_test_roster(8, 4);
+    for p in players.iter_mut() {
+        if p.positions.is_goalkeeper() {
+            // Past the incumbency window for both own keepers.
+            p.player_attributes.days_since_last_match = if p.id == 1 { 12 } else { 15 };
+        }
+    }
+    let mut team = cup_team(players);
+    team.team_type = TeamType::U18;
+
+    let guest = make_guest(999, PlayerPositionType::Goalkeeper, 16.0);
+    let result =
+        SquadSelector::select_for_rotation_with_context(&team, &staff, &[&guest], &guest_ctx(999));
+
+    assert_eq!(
+        starting_goalkeeper_id(&result),
+        Some(999),
+        "with own keepers on plan and no settled incumbent, the guest keeper gets a start"
+    );
+}
+
+#[test]
+fn development_guest_keeper_never_displaces_settled_incumbent() {
+    // A settled own incumbent at or behind his plan must keep the gloves
+    // even against a clearly stronger visitor: guest quality is pegged to
+    // the middle of the own hierarchy, so an open-ended supply of strong
+    // idle U20 keepers can't take the U18 gloves week after week.
+    let staff = generate_test_staff();
+    let mut players = guest_test_roster(8, 4);
+    for p in players.iter_mut() {
+        if p.id == 1 {
+            // The incumbent is a touch behind his season share.
+            p.friendly_statistics.played = 2;
+        }
+    }
+    let mut team = cup_team(players);
+    team.team_type = TeamType::U18;
+
+    let guest = make_guest(999, PlayerPositionType::Goalkeeper, 16.0);
+    let result =
+        SquadSelector::select_for_rotation_with_context(&team, &staff, &[&guest], &guest_ctx(999));
+
+    assert_eq!(
+        starting_goalkeeper_id(&result),
+        Some(1),
+        "the settled own incumbent holds the gloves against a stronger guest"
+    );
+}
+
+#[test]
+fn development_guest_outfielder_defers_to_rested_on_plan_squad() {
+    // The whole own squad is on plan and properly rested; the visitor is
+    // stronger, maximally idle, and transfer-listed (keep-sharp bait).
+    // None of those edges may count for a guest — rest is zeroed, quality
+    // is pegged mid-hierarchy, keep-sharp is gated — so the roster's own
+    // players keep their minutes and the guest waits for genuine slack.
+    let staff = generate_test_staff();
+    let mut players = guest_test_roster(4, 3);
+    players[0].friendly_statistics.played = 8; // sets the season length
+    for p in players.iter_mut() {
+        if !p.positions.is_goalkeeper() {
+            p.player_attributes.days_since_last_match = 14;
+        }
+    }
+    let mut team = cup_team(players);
+    team.team_type = TeamType::U18;
+
+    let mut guest = make_guest(999, PlayerPositionType::MidfielderCenterLeft, 16.0);
+    guest
+        .statuses
+        .add(Utc::now().date_naive(), PlayerStatusType::Lst);
+    let result =
+        SquadSelector::select_for_rotation_with_context(&team, &staff, &[&guest], &guest_ctx(999));
+
+    assert!(
+        !result.main_squad.iter().any(|p| p.id == 999),
+        "a guest must not start over a rested, on-plan own squad"
+    );
+}
+
+#[test]
+fn development_guests_take_only_a_minor_share_of_a_season() {
+    // Season-scale regression for the guest over-serving bug: a U20
+    // dead-zone corps (ten keepers, eight stronger outfielders) cycles a
+    // fresh idle visitor into every matchday's guest quota. Over a
+    // 20-round season the U18's own players must keep the large majority
+    // of starts — visitors absorb slack, they don't run the fixture list.
+    let staff = generate_test_staff();
+    let mut team = cup_team(guest_test_roster(0, 0));
+    team.team_type = TeamType::U18;
+
+    let mut visitors: Vec<Player> = Vec::new();
+    for k in 0..10u32 {
+        let mut gk = make_guest(900 + k, PlayerPositionType::Goalkeeper, 15.0);
+        gk.player_attributes.days_since_last_match = 60 + k as u16;
+        visitors.push(gk);
+    }
+    for k in 0..8u32 {
+        let mut of = make_guest(950 + k, PlayerPositionType::MidfielderCenterLeft, 15.0);
+        of.player_attributes.days_since_last_match = 40 + k as u16;
+        visitors.push(of);
+    }
+
+    const ROUNDS: usize = 20;
+    let mut guest_starts = 0usize;
+    let mut guest_gk_starts = 0usize;
+    for round in 0..ROUNDS {
+        // The matchday collector's quota: longest-idle first, one keeper
+        // slot + three outfield slots, 21-day idle floor.
+        let mut idle: Vec<&Player> = visitors
+            .iter()
+            .filter(|p| p.player_attributes.days_since_last_match >= 21)
+            .collect();
+        idle.sort_by(|a, b| {
+            b.player_attributes
+                .days_since_last_match
+                .cmp(&a.player_attributes.days_since_last_match)
+        });
+        let mut offered: Vec<&Player> = Vec::new();
+        let (mut gk_slots, mut of_slots) = (1usize, 3usize);
+        for p in idle {
+            if p.positions.is_goalkeeper() {
+                if gk_slots > 0 {
+                    offered.push(p);
+                    gk_slots -= 1;
+                }
+            } else if of_slots > 0 {
+                offered.push(p);
+                of_slots -= 1;
+            }
+        }
+
+        let ctx = SelectionContext {
+            is_friendly: true,
+            match_importance: 0.1,
+            development_guest_ids: offered.iter().map(|p| p.id).collect(),
+            // The matchday caller supplies the exact table read.
+            season_matches_played: Some(round as f32),
+            ..SelectionContext::default()
+        };
+        let result = SquadSelector::select_for_rotation_with_context(&team, &staff, &offered, &ctx);
+        let starters: Vec<u32> = result.main_squad.iter().map(|p| p.id).collect();
+        let starter_gk = starting_goalkeeper_id(&result);
+
+        for player in team.players.players.iter_mut() {
+            if starters.contains(&player.id) {
+                player.friendly_statistics.played += 1;
+                player.player_attributes.days_since_last_match = 0;
+            }
+            player.player_attributes.days_since_last_match += 7;
+        }
+        for v in visitors.iter_mut() {
+            if starters.contains(&v.id) {
+                guest_starts += 1;
+                if starter_gk == Some(v.id) {
+                    guest_gk_starts += 1;
+                }
+                v.friendly_statistics.played += 1;
+                v.player_attributes.days_since_last_match = 0;
+            }
+            v.player_attributes.days_since_last_match += 7;
+        }
+    }
+
+    let total_starts = ROUNDS * 11;
+    assert!(
+        guest_starts * 4 <= total_starts,
+        "guests took {guest_starts} of {total_starts} starts — visitors must stay a minor share"
+    );
+    assert!(
+        guest_gk_starts * 3 <= ROUNDS,
+        "guest keepers took {guest_gk_starts} of {ROUNDS} gloves — own keepers must keep the large majority"
+    );
+    for keeper_id in [1u32, 2u32] {
+        let starts = team
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == keeper_id)
+            .unwrap()
+            .friendly_statistics
+            .played;
+        assert!(
+            starts >= 4,
+            "own keeper {keeper_id} got only {starts} starts of {ROUNDS} — guests must not eat the gloves"
+        );
+    }
+    for player in team.players.players.iter() {
+        if player.positions.is_goalkeeper() {
+            continue;
+        }
+        let starts = player.friendly_statistics.played;
+        assert!(
+            starts >= 4,
+            "own outfielder {} rotted on {starts} starts of {ROUNDS} with guests visiting",
+            player.id
+        );
+    }
+}
+
+#[test]
+fn development_guest_keeper_yields_to_own_keeper_behind_plan() {
+    // The backup own keeper has been starved (0 starts against a 12-start
+    // season split): his deficit must beat the guest's fixed pull, so the
+    // guest visit never deepens an own keeper's drought.
+    let staff = generate_test_staff();
+    let mut players = guest_test_roster(8, 0);
+    for p in players.iter_mut() {
+        if p.id == 1 {
+            p.friendly_statistics.played = 12; // incumbent, far ahead of plan
+        }
+    }
+    let mut team = cup_team(players);
+    team.team_type = TeamType::U18;
+
+    let guest = make_guest(999, PlayerPositionType::Goalkeeper, 12.0);
+    let result =
+        SquadSelector::select_for_rotation_with_context(&team, &staff, &[&guest], &guest_ctx(999));
+
+    assert_eq!(
+        starting_goalkeeper_id(&result),
+        Some(2),
+        "the starved own keeper reclaims the gloves ahead of the guest"
     );
 }

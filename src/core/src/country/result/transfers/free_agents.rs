@@ -3315,6 +3315,7 @@ mod emergency_fill_tests {
                         promotion_spots: 0,
                         relegation_spots: 0,
                         league_group: None,
+                        split_season: false,
                     },
                     false,
                 )]))
@@ -3406,6 +3407,7 @@ mod emergency_fill_tests {
                         promotion_spots: 0,
                         relegation_spots: 0,
                         league_group: None,
+                        split_season: false,
                     },
                     false,
                 )]))
@@ -6076,6 +6078,7 @@ mod expiry_renewal_tests {
                         promotion_spots: 0,
                         relegation_spots: 0,
                         league_group: None,
+                        split_season: false,
                     },
                     false,
                 )]))

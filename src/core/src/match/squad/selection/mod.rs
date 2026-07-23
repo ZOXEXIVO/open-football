@@ -69,6 +69,25 @@ pub struct SelectionContext {
     /// behave exactly as before; richer match-day callers populate
     /// this with real opponent / weather / registration data.
     pub game_model: Option<MatchSelectionGameModel>,
+    /// Development guests — ids of underutilized players visiting from an
+    /// older club squad that has no fixtures of its own (a league-less U20
+    /// side). Unlike ordinary reserve supplements, which are borrowed only
+    /// when the roster can't fill a matchday squad, guests always join the
+    /// rotation candidate pool: the whole point of the visit is match
+    /// practice. They carry a fixed modest standing in the minutes plan
+    /// instead of a season share (see `DevelopmentPlan`), so they break
+    /// into the XI only when the team's own players are on or ahead of
+    /// their planned appearances. Only the rotation selector reads this.
+    pub development_guest_ids: Vec<u32>,
+    /// The selecting team's actual played-match count this season, read
+    /// from its league table by the matchday caller. The development
+    /// minutes plan measures appearance deficits against the season
+    /// length; when this is absent it falls back to the busiest-player
+    /// estimate, which under-reads in an evenly rotated squad (the
+    /// busiest player starts only about half the fixtures) — and against
+    /// a too-short season own players build deficits too slowly to evict
+    /// visiting guests. Only the rotation selector reads this.
+    pub season_matches_played: Option<f32>,
 }
 
 /// Competition context for squad selection. Replaces inferring the cup
@@ -204,6 +223,8 @@ impl Default for SelectionContext {
             opponent_tactic: None,
             competition: SelectionCompetition::League,
             game_model: None,
+            development_guest_ids: Vec::new(),
+            season_matches_played: None,
         }
     }
 }
@@ -522,6 +543,29 @@ impl SquadSelector {
             }
         }
 
+        // Development guests join the pool unconditionally — the shortfall
+        // gate below exists so a full roster isn't diluted by borrowed
+        // seniors, but a guest is here precisely because his own squad has
+        // no fixtures; withholding him until the roster runs short would
+        // make the visit pointless at any well-stocked academy.
+        let mut guest_ids: Vec<u32> = Vec::with_capacity(ctx.development_guest_ids.len());
+        if !ctx.development_guest_ids.is_empty() {
+            for &rp in reserve_players.iter() {
+                if !ctx.development_guest_ids.contains(&rp.id) {
+                    continue;
+                }
+                if !is_main_team && rp.is_force_match_selection {
+                    continue;
+                }
+                if PlayerAvailability::is_available(rp, ctx.is_friendly)
+                    && available_ids.insert(rp.id)
+                {
+                    available.push(rp);
+                    guest_ids.push(rp.id);
+                }
+            }
+        }
+
         if available.len() < DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE {
             let needed = (DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE) - available.len();
             let mut supplements: Vec<&Player> = reserve_players
@@ -542,9 +586,16 @@ impl SquadSelector {
                     .cmp(&a.player_attributes.days_since_last_match)
             });
 
+            // Shortfall fill-ins hold guest standing too: they are not part
+            // of this team's season plan, and their empty appearance ledgers
+            // would otherwise read as season-scale deficits that start them
+            // over the roster's own players. As guests they complete the
+            // squad when there are holes but never displace an own player
+            // who is on or behind his plan.
             for rp in supplements.into_iter().take(needed) {
                 if available_ids.insert(rp.id) {
                     available.push(rp);
+                    guest_ids.push(rp.id);
                 }
             }
 
@@ -559,18 +610,22 @@ impl SquadSelector {
         }
 
         // Development selector: season minutes plan + keeper rotation
-        // blocks + stakes slider. `team_matches` is estimated from the
-        // team's own roster (not the merged reserve pool) so borrowed
-        // players' senior appearance counts can't inflate the season
-        // length the deficits are measured against.
+        // blocks + stakes slider. The season length prefers the exact
+        // table read supplied by the matchday caller; the fallback is
+        // estimated from the team's own roster (not the merged reserve
+        // pool) so borrowed players' senior appearance counts can't
+        // inflate the season the deficits are measured against.
         let development = DevelopmentSelection {
             team_id: team.id,
             tactics: tactics.borrow(),
             date: ctx.date,
             team_type: team.team_type,
             stakes: DevelopmentStakes::from_context(ctx.match_importance, ctx.is_friendly),
-            team_matches: MatchInvolvement::team_matches_estimate(&team.players.players()),
+            team_matches: ctx.season_matches_played.unwrap_or_else(|| {
+                MatchInvolvement::team_matches_estimate(&team.players.players())
+            }),
             coach: CoachProfile::from_staff(staff),
+            guest_ids: &guest_ids,
         };
 
         let main_squad = development.select_starting_eleven(&available);

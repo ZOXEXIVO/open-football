@@ -55,6 +55,24 @@ impl ScheduleGenerator for RoundSchedule {
 
         let tours_count = (teams_len * teams_len - teams_len) / (teams_len / 2);
 
+        // Split seasons (Apertura/Clausura) restart the mirrored second
+        // round-robin on the second tournament's own opening weekend
+        // instead of running straight through the mid-year break.
+        let second_half_start = if league_settings.split_season {
+            let start_month = league_settings.season_starting_half.from_month;
+            let second = &league_settings.season_ending_half;
+            let year = if second.from_month >= start_month {
+                season_year_start as i32
+            } else {
+                season_year_start as i32 + 1
+            };
+            NaiveDate::from_ymd_opt(year, second.from_month as u32, second.from_day as u32)
+                .map(DateUtils::next_saturday)
+                .map(|d| NaiveDateTime::new(d, NaiveTime::from_hms_opt(0, 0, 0).unwrap()))
+        } else {
+            None
+        };
+
         let mut result = Vec::with_capacity(tours_count);
 
         result.extend(generate_tours(
@@ -63,6 +81,7 @@ impl ScheduleGenerator for RoundSchedule {
             teams,
             tours_count,
             current_date_time,
+            second_half_start,
         ));
 
         Ok(result)
@@ -75,6 +94,7 @@ fn generate_tours(
     teams: &[u32],
     tours_count: usize,
     mut current_date: NaiveDateTime,
+    second_half_start: Option<NaiveDateTime>,
 ) -> Vec<ScheduleTour> {
     if teams.len() < 2 {
         return Vec::new();
@@ -110,6 +130,15 @@ fn generate_tours(
 
     let mut games_offset = 0;
     for tour_idx in 0..rounds_to_emit {
+        // Second tournament of a split season: jump to its own window
+        // (but never backwards, in case the halves overlap in config).
+        if tour_idx == rounds_to_emit / 2 {
+            if let Some(second_start) = second_half_start {
+                if second_start > current_date {
+                    current_date = second_start;
+                }
+            }
+        }
         let mut tour = ScheduleTour::new((tour_idx + 1) as u8, games_per_round);
 
         for game_idx in 0..games_per_round {
@@ -247,6 +276,7 @@ mod tests {
             promotion_spots: 0,
             relegation_spots: 0,
             league_group: None,
+            split_season: false,
         };
         let tours = RoundSchedule::new()
             .generate(1, "t", Season::new(2026), &teams, &settings)
@@ -305,6 +335,7 @@ mod tests {
             promotion_spots: 0,
             relegation_spots: 0,
             league_group: None,
+            split_season: false,
         };
         let tours = RoundSchedule::new()
             .generate(1, "t", Season::new(2026), &teams, &settings)
@@ -362,6 +393,7 @@ mod tests {
             promotion_spots: 0,
             relegation_spots: 0,
             league_group: None,
+            split_season: false,
         };
         let tours = RoundSchedule::new()
             .generate(1, "t", Season::new(2026), &teams, &settings)
@@ -406,6 +438,66 @@ mod tests {
     }
 
     #[test]
+    fn split_season_second_tournament_starts_in_its_own_window() {
+        use std::collections::HashMap;
+        // Argentine shape: 15 teams, Apertura Feb-Jun, Clausura from Jul 15.
+        let teams: Vec<u32> = (1..=15).collect();
+        let settings = LeagueSettings {
+            season_starting_half: DayMonthPeriod::new(1, 2, 30, 6),
+            season_ending_half: DayMonthPeriod::new(15, 7, 15, 12),
+            tier: 1,
+            promotion_spots: 0,
+            relegation_spots: 1,
+            league_group: None,
+            split_season: true,
+        };
+        let tours = RoundSchedule::new()
+            .generate(1, "t", Season::new(2026), &teams, &settings)
+            .unwrap();
+
+        assert_eq!(tours.len(), 30, "two 15-round single round-robins");
+
+        let clausura_start = NaiveDate::from_ymd_opt(2026, 7, 15).unwrap();
+        for (idx, tour) in tours.iter().enumerate() {
+            let date = tour.items.first().map(|i| i.date.date()).unwrap();
+            if idx < 15 {
+                assert!(
+                    date < clausura_start,
+                    "Apertura tour {} on {} leaked into the Clausura window",
+                    idx + 1,
+                    date
+                );
+            } else {
+                assert!(
+                    date >= clausura_start,
+                    "Clausura tour {} on {} starts before July 15",
+                    idx + 1,
+                    date
+                );
+            }
+        }
+
+        // Each half is a full single round-robin: 7 games per team per
+        // half... i.e. every team plays 14 games per half (7 home+away mix)
+        // and meets every opponent once.
+        let mut first_half_games: HashMap<u32, u32> = HashMap::new();
+        for tour in &tours[..15] {
+            for item in &tour.items {
+                *first_half_games.entry(item.home_team_id).or_default() += 1;
+                *first_half_games.entry(item.away_team_id).or_default() += 1;
+            }
+        }
+        for &t in &teams {
+            assert_eq!(
+                first_half_games.get(&t).copied().unwrap_or(0),
+                14,
+                "team {} games in the Apertura",
+                t
+            );
+        }
+    }
+
+    #[test]
     fn generate_schedule_is_correct() {
         let schedule = RoundSchedule::new();
 
@@ -420,6 +512,7 @@ mod tests {
             promotion_spots: 0,
             relegation_spots: 0,
             league_group: None,
+            split_season: false,
         };
 
         let schedule_tours = schedule

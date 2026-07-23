@@ -1054,6 +1054,7 @@ mod trim_surplus_tests {
                     promotion_spots: 0,
                     relegation_spots: 0,
                     league_group: None,
+                    split_season: false,
                 },
                 false,
             );

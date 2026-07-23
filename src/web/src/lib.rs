@@ -15,6 +15,7 @@ mod leagues;
 mod r#match;
 mod national_competitions;
 mod player;
+mod playoffs;
 mod routes;
 mod search;
 pub mod settings;

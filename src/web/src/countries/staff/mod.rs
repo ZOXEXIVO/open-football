@@ -155,6 +155,11 @@ pub async fn country_staff_action(
                     .domestic_cup
                     .as_ref()
                     .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
+                &country
+                    .playoffs
+                    .iter()
+                    .map(|p| (p.league.name.as_str(), p.league.slug.as_str()))
+                    .collect::<Vec<_>>(),
                 country.continent_id,
             )
         },

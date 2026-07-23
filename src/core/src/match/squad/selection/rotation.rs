@@ -51,9 +51,20 @@ pub(crate) struct DevelopmentSelection<'a> {
     /// decides how far the minutes plan chases assessed upside over
     /// observable level — a poor judge backs what he can see today.
     pub coach: CoachProfile,
+    /// Ids of development guests in the candidate pool — underutilized
+    /// visitors from an older, fixture-less club squad. Guests hold no
+    /// season share in the minutes plan: they carry a fixed match-practice
+    /// pull instead, so they collect occasional runs without displacing
+    /// the roster's own development (see `DevelopmentPlan::build` and
+    /// `KeeperRotationPlan::pick`).
+    pub guest_ids: &'a [u32],
 }
 
 impl DevelopmentSelection<'_> {
+    fn is_guest(&self, player_id: u32) -> bool {
+        self.guest_ids.contains(&player_id)
+    }
+
     /// Below this condition percentage a player is scored negative — the
     /// same protective floor the selector has always used.
     const SOFT_CONDITION_FLOOR: f32 = 20.0;
@@ -241,9 +252,19 @@ impl DevelopmentSelection<'_> {
         let profile = plan.profile(player.id);
         let development = (1.0 - self.stakes).max(0.0);
 
-        let days = player.player_attributes.days_since_last_match as f32;
-        let rest = (days / 14.0).min(1.0) * 20.0;
-        let fit = helpers::position_fit_score(player, slot_position, slot_group);
+        let rest = self.rest_points(player);
+        // `position_fit_score` returns a positional level — a quality
+        // grade. Own players compete on it directly (within one squad it
+        // is the real hierarchy); a guest keeps only his familiarity
+        // fraction, re-based onto the own squad's mean grade, so a
+        // stronger visitor slots in as a positional peer, not a superior.
+        let raw_fit = helpers::position_fit_score(player, slot_position, slot_group);
+        let fit = if self.is_guest(player.id) {
+            (raw_fit / DevelopmentPlan::primary_position_level(player))
+                * plan.own_mean_position_level
+        } else {
+            raw_fit
+        };
         let condition_norm = (condition_pct / 100.0).clamp(0.0, 1.0);
 
         fit * Self::FIT_WEIGHT
@@ -254,7 +275,20 @@ impl DevelopmentSelection<'_> {
                 * 20.0
                 * (Self::QUALITY_WEIGHT_BASE + Self::QUALITY_WEIGHT_STAKES * self.stakes)
             + profile.form * development
-            + RotationWantAway::adjustment(player)
+            + RotationWantAway::adjustment(player, self.is_guest(player.id))
+    }
+
+    /// Freshness nudge between otherwise-equal picks. A guest's idle weeks
+    /// are the reason he is visiting at all, not rest earned between
+    /// starts — crediting them would hand every visitor the maximum rest
+    /// edge over the roster's weekly-playing own players, so guests score
+    /// zero here.
+    fn rest_points(&self, player: &Player) -> f32 {
+        if self.is_guest(player.id) {
+            return 0.0;
+        }
+        let days = player.player_attributes.days_since_last_match as f32;
+        (days / 14.0).min(1.0) * 20.0
     }
 
     /// Position-blind score for the fill pass — deficit-led, with the
@@ -269,8 +303,7 @@ impl DevelopmentSelection<'_> {
         let profile = plan.profile(player.id);
         let development = (1.0 - self.stakes).max(0.0);
 
-        let days = player.player_attributes.days_since_last_match as f32;
-        let rest = (days / 14.0).min(1.0) * 20.0;
+        let rest = self.rest_points(player);
         let condition_norm = (condition_pct / 100.0).clamp(0.0, 1.0);
 
         profile.deficit * Self::DEFICIT_WEIGHT * development
@@ -280,7 +313,7 @@ impl DevelopmentSelection<'_> {
                 * 20.0
                 * (Self::QUALITY_WEIGHT_BASE + Self::QUALITY_WEIGHT_STAKES * self.stakes)
             + profile.form * development
-            + RotationWantAway::adjustment(player)
+            + RotationWantAway::adjustment(player, self.is_guest(player.id))
     }
 
     fn bench_score(&self, plan: &DevelopmentPlan, player: &Player) -> f32 {
@@ -293,8 +326,7 @@ impl DevelopmentSelection<'_> {
         let profile = plan.profile(player.id);
         let development = (1.0 - self.stakes).max(0.0);
 
-        let days = player.player_attributes.days_since_last_match as f32;
-        let rest = (days / 14.0).min(1.0) * 20.0;
+        let rest = self.rest_points(player);
         let condition_norm = (condition_pct / 100.0).clamp(0.0, 1.0);
 
         profile.deficit * Self::DEFICIT_WEIGHT * development
@@ -304,7 +336,7 @@ impl DevelopmentSelection<'_> {
                 * 20.0
                 * (Self::BENCH_QUALITY_BASE + Self::BENCH_QUALITY_STAKES * self.stakes)
             + profile.form * development
-            + RotationWantAway::adjustment(player)
+            + RotationWantAway::adjustment(player, self.is_guest(player.id))
     }
 }
 
@@ -376,6 +408,12 @@ impl MatchInvolvement {
 /// has actually been given. Built once per selection pass.
 struct DevelopmentPlan {
     profiles: HashMap<u32, CandidateProfile>,
+    /// Mean primary position level (1-20 grade scale) of the team's own
+    /// candidates. `position_fit_score` doubles as a quality grade — it
+    /// returns the player's positional level — so a guest's fit is
+    /// re-based onto this mean (keeping only his familiarity fraction),
+    /// exactly like [`Self::GUEST_QUALITY`] pegs his quality standing.
+    own_mean_position_level: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -420,18 +458,51 @@ impl DevelopmentPlan {
     const FORM_SCALE: f32 = 0.9;
     const FORM_CAP: f32 = 0.9;
     const FORM_MIN_APPS: u16 = 5;
+    /// Standing deficit granted to a development guest — an underutilized
+    /// visitor from an older, fixture-less club squad (or a shortfall
+    /// fill-in borrowed from another squad). A guest holds no season share
+    /// (his appearance ledger belongs to his own squad's economy, and a
+    /// rotating supply of zero-involvement visitors would otherwise
+    /// accumulate unbounded claims); instead he carries this fixed pull,
+    /// sized under one match of own-player deficit so he loses to any own
+    /// player on or behind plan and collects starts only from genuine
+    /// slack — squads running ahead of plan, or holes the roster can't
+    /// fill itself.
+    const GUEST_PRACTICE_PULL: f32 = 0.6;
+    /// Quality standing of a guest: pegged to the middle of the own-squad
+    /// hierarchy. Visitors from an older squad are usually the strongest
+    /// players in the pool, and letting them top the quality norm would
+    /// have the development side field the visitor for his ability — the
+    /// inverse of what the visit is for.
+    const GUEST_QUALITY: f32 = 0.5;
+    /// Fallback position-level grade when a plan has no own candidates to
+    /// average over.
+    const NEUTRAL_POSITION_LEVEL: f32 = 12.0;
 
     fn build(sel: &DevelopmentSelection<'_>, pool: &[&Player], slots: usize) -> Self {
         let mut profiles: HashMap<u32, CandidateProfile> = HashMap::with_capacity(pool.len());
         if pool.is_empty() {
-            return DevelopmentPlan { profiles };
+            return DevelopmentPlan {
+                profiles,
+                own_mean_position_level: Self::NEUTRAL_POSITION_LEVEL,
+            };
         }
 
-        let ceilings: Vec<f32> = pool
+        // The season plan — shares, quality hierarchy, expected appearances
+        // — is drawn over the team's own members only. Guests neither hold
+        // a share nor dilute the roster's math; they enter the profiles
+        // with fixed pull and mid-pool quality below.
+        let own: Vec<&Player> = pool
+            .iter()
+            .filter(|p| !sel.is_guest(p.id))
+            .copied()
+            .collect();
+
+        let ceilings: Vec<f32> = own
             .iter()
             .map(|p| PotentialEstimator::observable_ceiling(p, sel.date) as f32)
             .collect();
-        let levels: Vec<f32> = pool
+        let levels: Vec<f32> = own
             .iter()
             .map(|p| AbilityEstimator::observable_level(p) as f32)
             .collect();
@@ -441,7 +512,7 @@ impl DevelopmentPlan {
         let age_cap = sel.team_type.development_age_cap();
         let ceiling_share = Self::CEILING_SHARE_FLOOR
             + Self::CEILING_SHARE_SPAN * sel.coach.potential_accuracy.clamp(0.0, 1.0);
-        let weights: Vec<f32> = pool
+        let weights: Vec<f32> = own
             .iter()
             .enumerate()
             .map(|(i, p)| {
@@ -457,10 +528,14 @@ impl DevelopmentPlan {
                 w
             })
             .collect();
-        let mean_weight = weights.iter().sum::<f32>() / weights.len() as f32;
+        let mean_weight = if weights.is_empty() {
+            1.0
+        } else {
+            weights.iter().sum::<f32>() / weights.len() as f32
+        };
 
-        let slot_share = slots as f32 / pool.len() as f32;
-        for (i, p) in pool.iter().enumerate() {
+        let slot_share = slots as f32 / own.len().max(1) as f32;
+        for (i, p) in own.iter().enumerate() {
             let expected_share =
                 (slot_share * weights[i] / mean_weight.max(f32::EPSILON)).min(1.0);
             let deficit = (expected_share * sel.team_matches - MatchInvolvement::involvement(p))
@@ -474,7 +549,41 @@ impl DevelopmentPlan {
                 },
             );
         }
-        DevelopmentPlan { profiles }
+        for p in pool.iter().filter(|p| sel.is_guest(p.id)) {
+            profiles.insert(
+                p.id,
+                CandidateProfile {
+                    deficit: Self::GUEST_PRACTICE_PULL,
+                    quality: Self::GUEST_QUALITY,
+                    form: Self::form_points(p),
+                },
+            );
+        }
+
+        let own_mean_position_level = if own.is_empty() {
+            Self::NEUTRAL_POSITION_LEVEL
+        } else {
+            own.iter()
+                .map(|p| Self::primary_position_level(p))
+                .sum::<f32>()
+                / own.len() as f32
+        };
+
+        DevelopmentPlan {
+            profiles,
+            own_mean_position_level,
+        }
+    }
+
+    fn primary_position_level(player: &Player) -> f32 {
+        player
+            .positions
+            .positions
+            .iter()
+            .map(|p| p.level)
+            .max()
+            .unwrap_or(0)
+            .max(1) as f32
     }
 
     fn profile(&self, id: u32) -> CandidateProfile {
@@ -558,6 +667,20 @@ impl KeeperRotationPlan {
     const QUALITY_WEIGHT_STAKES: f32 = 0.65;
     /// Condition stays a half-point nudge, never the sort key.
     const CONDITION_NUDGE: f32 = 0.5;
+    /// Standing claim of a guest keeper visiting from a fixture-less older
+    /// squad. Deliberately under [`Self::BLOCK_HOLD`]: a settled incumbent
+    /// on his plan keeps the gloves, and an own keeper behind plan always
+    /// reclaims them; the visitor gets his run-out when the gloves are
+    /// unsettled — after a fixture break, or at a block handover. Guests
+    /// hold no target share of their own — one shirt per match against an
+    /// open-ended supply of idle visitors would let the deficit economy
+    /// hand the gloves to a fresh guest every week.
+    const GUEST_PRACTICE_PULL: f32 = 1.6;
+    /// Guest quality is pegged to the middle of the own-keeper hierarchy —
+    /// an older visitor is usually the strongest keeper in the pool, and
+    /// letting him top the quality norm would hand the gloves to whoever
+    /// visits (see `DevelopmentPlan::GUEST_QUALITY`).
+    const GUEST_QUALITY: f32 = 0.5;
 
     fn pick<'p>(
         sel: &DevelopmentSelection<'_>,
@@ -585,38 +708,66 @@ impl KeeperRotationPlan {
             _ => {}
         }
 
-        let ceilings: Vec<f32> = candidates
+        // The share plan — priority weights, quality hierarchy, target
+        // splits — is drawn over the squad's own keepers only. A guest
+        // neither claims a share nor shrinks the residents'; he enters
+        // scoring with fixed pull and mid-hierarchy quality.
+        let own_idx: Vec<usize> = candidates
             .iter()
-            .map(|p| PotentialEstimator::observable_ceiling(p, sel.date) as f32)
+            .enumerate()
+            .filter(|(_, p)| !sel.is_guest(p.id))
+            .map(|(i, _)| i)
             .collect();
-        let levels: Vec<f32> = candidates
+        let own_ceilings: Vec<f32> = own_idx
             .iter()
-            .map(|p| AbilityEstimator::observable_level(p) as f32)
+            .map(|&i| PotentialEstimator::observable_ceiling(candidates[i], sel.date) as f32)
             .collect();
-        let ceiling_norm = RangeNorm::over(&ceilings);
-        let level_norm = RangeNorm::over(&levels);
+        let own_levels: Vec<f32> = own_idx
+            .iter()
+            .map(|&i| AbilityEstimator::observable_level(candidates[i]) as f32)
+            .collect();
+        let ceiling_norm = RangeNorm::over(&own_ceilings);
+        let level_norm = RangeNorm::over(&own_levels);
         let age_cap = sel.team_type.development_age_cap();
         let ceiling_share = Self::CEILING_SHARE_FLOOR
             + Self::CEILING_SHARE_SPAN * sel.coach.potential_accuracy.clamp(0.0, 1.0);
 
-        let weights: Vec<f32> = candidates
+        let own_weights: Vec<f32> = own_idx
             .iter()
             .enumerate()
-            .map(|(i, p)| {
+            .map(|(k, &i)| {
                 let mut w = Self::PRIORITY_FLOOR
                     + Self::PRIORITY_SPAN
-                        * (ceiling_share * ceiling_norm.of(ceilings[i])
-                            + (1.0 - ceiling_share) * level_norm.of(levels[i]));
+                        * (ceiling_share * ceiling_norm.of(own_ceilings[k])
+                            + (1.0 - ceiling_share) * level_norm.of(own_levels[k]));
                 if let Some(cap) = age_cap {
-                    if DateUtils::age(p.birth_date, sel.date) >= cap {
+                    if DateUtils::age(candidates[i].birth_date, sel.date) >= cap {
                         w *= Self::SHOWCASE_BUMP;
                     }
                 }
                 w
             })
             .collect();
-        let weight_sum: f32 = weights.iter().sum();
-        let total_starts: f32 = candidates.iter().map(|p| MatchInvolvement::starts(p)).sum();
+        let weight_sum: f32 = own_weights.iter().sum();
+
+        // Targets are measured against the TEAM's season length, not the
+        // own keepers' start sum. The two were identical before guests
+        // existed (one own keeper per match), but a guest start freezes
+        // the own-start sum — measured against it, the benched own keeper
+        // never builds the deficit that evicts the visitor, and a supply
+        // of fresh guests can chain the gloves indefinitely. Against the
+        // season length, every guest start leaves an own keeper further
+        // behind his target, pulling the gloves back to the roster.
+        let season_starts = sel.team_matches;
+
+        let mut standing = vec![Self::GUEST_PRACTICE_PULL; candidates.len()];
+        let mut quality = vec![Self::GUEST_QUALITY; candidates.len()];
+        for (k, &i) in own_idx.iter().enumerate() {
+            let target_share = own_weights[k] / weight_sum.max(f32::EPSILON);
+            standing[i] = (target_share * season_starts - MatchInvolvement::starts(candidates[i]))
+                .clamp(-Self::DEFICIT_CAP, Self::DEFICIT_CAP);
+            quality[i] = level_norm.of(own_levels[k]);
+        }
 
         let incumbent_id = candidates
             .iter()
@@ -626,9 +777,6 @@ impl KeeperRotationPlan {
 
         let development = (1.0 - sel.stakes).max(0.0);
         let score = |i: usize, p: &Player| -> f32 {
-            let target_share = weights[i] / weight_sum.max(f32::EPSILON);
-            let deficit = (target_share * total_starts - MatchInvolvement::starts(p))
-                .clamp(-Self::DEFICIT_CAP, Self::DEFICIT_CAP);
             let hold = if incumbent_id == Some(p.id) {
                 Self::BLOCK_HOLD
             } else {
@@ -636,8 +784,8 @@ impl KeeperRotationPlan {
             };
             let condition_norm =
                 (p.player_attributes.condition_percentage() as f32 / 100.0).clamp(0.0, 1.0);
-            (deficit + hold) * development
-                + level_norm.of(levels[i])
+            (standing[i] + hold) * development
+                + quality[i]
                     * 20.0
                     * (Self::QUALITY_WEIGHT_BASE + Self::QUALITY_WEIGHT_STAKES * sel.stakes)
                 + condition_norm * Self::CONDITION_NUDGE
@@ -670,10 +818,18 @@ impl RotationWantAway {
     /// development XI whenever there is anyone else to field.
     const PROTECT_NEAR_TRANSFER: f32 = -12.0;
 
-    fn adjustment(player: &Player) -> f32 {
+    fn adjustment(player: &Player, is_guest: bool) -> f32 {
         if player.statuses.has(PlayerStatusType::Trn) || player.statuses.has(PlayerStatusType::Bid)
         {
             return Self::PROTECT_NEAR_TRANSFER;
+        }
+        // A guest's entire standing is his fixed practice pull — the
+        // fixture-less squads that send guests are exactly where listed
+        // players sit, so stacking keep-sharp on top would hand nearly
+        // every visitor a second, larger pull and crowd out the team's
+        // own development. Injury protection above still applies.
+        if is_guest {
+            return 0.0;
         }
         let want_away = player.statuses.has(PlayerStatusType::Lst)
             || player.statuses.has(PlayerStatusType::Req)

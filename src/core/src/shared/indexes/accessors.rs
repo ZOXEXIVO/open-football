@@ -359,11 +359,24 @@ impl SimulatorData {
         // positional `leagues` index, so resolve them by a direct scan.
         // Only the web/global read path reaches here for cups; in-sim cup
         // lookups go through the country-local `CountryProcessCtx`.
-        self.continents
+        if let Some(league) = self
+            .continents
             .iter()
             .flat_map(|c| &c.countries)
             .filter_map(|country| country.domestic_cup.as_ref())
             .map(|cup| &cup.league)
+            .find(|league| league.id == id)
+        {
+            return Some(league);
+        }
+
+        // Grouped-competition playoffs are stored on `Country::playoffs`,
+        // also outside the positional index.
+        self.continents
+            .iter()
+            .flat_map(|c| &c.countries)
+            .flat_map(|country| &country.playoffs)
+            .map(|pf| &pf.league)
             .find(|league| league.id == id)
     }
 
@@ -406,11 +419,18 @@ impl SimulatorData {
         if let Some(idx) = country.leagues.leagues.iter().position(|l| l.id == id) {
             return country.leagues.leagues.get_mut(idx);
         }
-        country
+        if country
             .domestic_cup
-            .as_mut()
-            .filter(|c| c.league.id == id)
-            .map(|c| &mut c.league)
+            .as_ref()
+            .is_some_and(|c| c.league.id == id)
+        {
+            return country.domestic_cup.as_mut().map(|c| &mut c.league);
+        }
+        country
+            .playoffs
+            .iter_mut()
+            .find(|p| p.league.id == id)
+            .map(|p| &mut p.league)
     }
 
     pub fn team_data(&self, id: u32) -> Option<&TeamData> {
@@ -2265,6 +2285,7 @@ mod interested_clubs_tests {
                     promotion_spots: 0,
                     relegation_spots: 0,
                     league_group: None,
+                    split_season: false,
                 },
                 false,
             );

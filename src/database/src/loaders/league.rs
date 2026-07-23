@@ -58,8 +58,20 @@ pub struct LeagueGroupEntity {
 #[derive(Debug, Deserialize, Clone)]
 pub struct PlayoffConfigEntity {
     /// Top N of each group's table that enter the knockout bracket
-    /// (e.g. 8 for MLS: the top eight of each conference).
+    /// (e.g. 9 for MLS: seven direct + the two wild-card sides).
     pub qualifiers_per_group: u8,
+    /// Bracket shape: "mls" (per-conference wild card + best-of-3 round
+    /// one + cross-conference final), "cross_group" (Argentine fixed
+    /// cross-zone bracket), or unset for generic single elimination.
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Display name of the playoff competition (e.g. "MLS Cup Playoffs").
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Split-season tournament names, first then second (e.g.
+    /// ["Torneo Apertura", "Torneo Clausura"]).
+    #[serde(default)]
+    pub stage_names: Vec<String>,
 }
 
 fn default_enabled() -> bool {
@@ -70,6 +82,11 @@ fn default_enabled() -> bool {
 pub struct LeagueSettingsEntity {
     pub season_starting_half: DayMonthPeriodEntity,
     pub season_ending_half: DayMonthPeriodEntity,
+    /// Argentine-style split season: the two halves are separate
+    /// tournaments (Apertura/Clausura), each a single round-robin with
+    /// its own table, playoff and champion.
+    #[serde(default)]
+    pub split_season: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -23,6 +23,10 @@ pub struct League {
     pub matches: MatchStorage,
     pub reputation: u16,
     pub final_table: Option<Vec<LeagueTableRow>>,
+    /// Split-season leagues (Argentine Apertura/Clausura): the first
+    /// tournament's final table, frozen when the second tournament kicks
+    /// off. `None` outside split leagues and during the first tournament.
+    pub split_first_table: Option<Vec<LeagueTableRow>>,
     pub dynamics: LeagueDynamics,
     pub regulations: LeagueRegulations,
     pub statistics: LeagueStatistics,
@@ -87,6 +91,7 @@ impl League {
             settings,
             reputation,
             final_table: None,
+            split_first_table: None,
             dynamics: LeagueDynamics::new(),
             regulations: LeagueRegulations::new(),
             statistics: LeagueStatistics::new(),
@@ -118,6 +123,8 @@ impl League {
 
         self.prepare_matchday(ctx, clubs);
 
+        self.maybe_flip_split_stage(&ctx.simulation);
+
         let table_result = self.table.simulate(ctx);
 
         let league_teams: Vec<u32> = clubs
@@ -141,6 +148,7 @@ impl League {
         if schedule_result.generated {
             self.table = LeagueTable::new(&league_teams);
             self.matches = MatchStorage::new();
+            self.split_first_table = None;
             debug!("📊 League table reset for new season: {}", self.name);
         }
 
@@ -318,6 +326,81 @@ impl League {
 
         if featured { Some(s) } else { None }
     }
+
+    /// Split-season leagues: the number of schedule tours that belong to the
+    /// first tournament (Apertura). The generator always emits two mirrored
+    /// single round-robins for split leagues, so the boundary is the halfway
+    /// point. `None` for regular leagues.
+    pub fn split_stage_tour_boundary(&self) -> Option<usize> {
+        if !self.settings.split_season || self.schedule.tours.is_empty() {
+            return None;
+        }
+        Some(self.schedule.tours.len() / 2)
+    }
+
+    /// True once every fixture of the first (Apertura) tournament has a
+    /// result. Meaningless (always false) for non-split leagues.
+    pub fn first_stage_played(&self) -> bool {
+        match self.split_stage_tour_boundary() {
+            Some(boundary) if boundary > 0 => self.schedule.tours[..boundary]
+                .iter()
+                .all(|t| !t.items.is_empty() && t.items.iter().all(|i| i.result.is_some())),
+            _ => false,
+        }
+    }
+
+    /// On the second tournament's opening day of a split season, freeze the
+    /// first tournament's table into `split_first_table` and restart the
+    /// live table from zero. Idempotent per season — the frozen table is
+    /// only taken once and clears at the next season's schedule reset.
+    fn maybe_flip_split_stage(&mut self, sim: &SimulationContext) {
+        if !self.settings.split_season || self.split_first_table.is_some() {
+            return;
+        }
+        let date = sim.date.date();
+        let second = &self.settings.season_ending_half;
+        if date.day() as u8 != second.from_day || date.month() as u8 != second.from_month {
+            return;
+        }
+        if self.table.rows.iter().all(|r| r.played == 0) {
+            return; // nothing to freeze — first tournament never ran
+        }
+        let team_ids: Vec<u32> = self.table.rows.iter().map(|r| r.team_id).collect();
+        self.split_first_table = Some(self.table.rows.clone());
+        self.table = LeagueTable::new(&team_ids);
+        debug!(
+            "📊 Split season: first-stage table frozen and reset for {}",
+            self.name
+        );
+    }
+
+    /// Annual aggregate rows for this league across both tournaments of a
+    /// split season (first-stage frozen table + live/second table, summed
+    /// per team and re-sorted). For regular leagues this is just the live
+    /// table order. The relegation pipeline and the web's "Tabla Anual"
+    /// both read this.
+    pub fn annual_table_rows(&self) -> Vec<LeagueTableRow> {
+        let mut rows: Vec<LeagueTableRow> = self.table.rows.clone();
+        if let Some(first) = &self.split_first_table {
+            for f in first {
+                if let Some(row) = rows.iter_mut().find(|r| r.team_id == f.team_id) {
+                    row.played = row.played.saturating_add(f.played);
+                    row.win = row.win.saturating_add(f.win);
+                    row.draft = row.draft.saturating_add(f.draft);
+                    row.lost = row.lost.saturating_add(f.lost);
+                    row.goal_scored += f.goal_scored;
+                    row.goal_concerned += f.goal_concerned;
+                    row.points = row.points.saturating_add(f.points);
+                    row.points_deduction = row.points_deduction.saturating_add(f.points_deduction);
+                } else {
+                    rows.push(f.clone());
+                }
+            }
+        }
+        let policy = self.table.tie_break.clone();
+        rows.sort_by(|a, b| policy.compare(a, b));
+        rows
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -347,6 +430,11 @@ pub struct LeagueSettings {
     pub promotion_spots: u8,
     pub relegation_spots: u8,
     pub league_group: Option<LeagueGroup>,
+    /// Argentine-style split season: the two season halves are separate
+    /// tournaments (Apertura in the starting half, Clausura in the ending
+    /// half), each a single round-robin with its own table, playoff and
+    /// champion. Relegation reads the annual aggregate across both.
+    pub split_season: bool,
 }
 
 /// Identifies a league as one group within a larger competition.
@@ -369,6 +457,41 @@ pub struct LeagueGroup {
 pub struct LeaguePlayoffConfig {
     /// Top N of each group's table that enter the knockout bracket.
     pub qualifiers_per_group: u8,
+    /// Bracket shape — see [`PlayoffFormat`].
+    pub format: PlayoffFormat,
+    /// Display name for the playoff competition (e.g. "MLS Cup Playoffs").
+    /// Falls back to "{competition} Playoff" when unset.
+    pub name: Option<String>,
+    /// Split-season tournaments' display names, first then second (e.g.
+    /// ["Torneo Apertura", "Torneo Clausura"]). Only read when the member
+    /// groups run a split season; each stage gets its own playoff.
+    pub stage_names: Vec<String>,
+}
+
+/// Bracket shape for a grouped competition's playoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayoffFormat {
+    /// Generic single-elimination: group seeds interleaved into one field,
+    /// re-paired strongest-vs-weakest each round, byes to top seeds.
+    SingleElimination,
+    /// Argentine Primera: the two zones cross immediately (1°A vs 8°B, …)
+    /// in a fixed bracket tree; the better seed hosts every round and the
+    /// final is at a neutral venue.
+    CrossGroupBracket,
+    /// MLS Cup: per-conference brackets — wild card (8 v 9), best-of-3
+    /// round one, single-game conference semifinal/final — meeting in a
+    /// single final hosted by the better regular-season record.
+    MlsCup,
+}
+
+impl PlayoffFormat {
+    pub fn from_config_str(value: &str) -> Self {
+        match value {
+            "cross_group" => PlayoffFormat::CrossGroupBracket,
+            "mls" => PlayoffFormat::MlsCup,
+            _ => PlayoffFormat::SingleElimination,
+        }
+    }
 }
 
 impl LeagueSettings {
@@ -377,6 +500,77 @@ impl LeagueSettings {
         let date = context.date.date();
         (NaiveDate::day(&date) as u8) == season_starting_date.from_day
             && (date.month() as u8) == season_starting_date.from_month
+    }
+}
+
+#[cfg(test)]
+mod split_season_tests {
+    use super::*;
+    use crate::league::LeagueTable;
+
+    fn split_league() -> League {
+        let settings = LeagueSettings {
+            season_starting_half: DayMonthPeriod::new(1, 2, 30, 6),
+            season_ending_half: DayMonthPeriod::new(15, 7, 15, 12),
+            tier: 1,
+            promotion_spots: 0,
+            relegation_spots: 1,
+            league_group: None,
+            split_season: true,
+        };
+        League::new(
+            1,
+            "Zona A".into(),
+            "zona-a".into(),
+            1,
+            7500,
+            settings,
+            false,
+        )
+    }
+
+    fn row(team_id: u32, points: u8, gs: i32, gc: i32) -> LeagueTableRow {
+        LeagueTableRow {
+            team_id,
+            played: 16,
+            win: points / 3,
+            draft: points % 3,
+            lost: 0,
+            goal_scored: gs,
+            goal_concerned: gc,
+            points,
+            points_deduction: 0,
+        }
+    }
+
+    #[test]
+    fn annual_table_sums_both_tournaments_and_resorts() {
+        let mut league = split_league();
+        // Apertura frozen: team 2 topped it; Clausura live: team 1 in front.
+        league.split_first_table = Some(vec![row(2, 35, 30, 10), row(1, 20, 15, 15)]);
+        league.table = LeagueTable::new(&[1, 2]);
+        league.table.rows = vec![row(1, 30, 25, 8), row(2, 10, 9, 20)];
+
+        let annual = league.annual_table_rows();
+        // Team 1: 50 pts, team 2: 45 pts — annual order flips the live one.
+        assert_eq!(annual[0].team_id, 1);
+        assert_eq!(annual[0].points, 50);
+        assert_eq!(annual[0].played, 32);
+        assert_eq!(annual[0].goal_scored, 40);
+        assert_eq!(annual[1].team_id, 2);
+        assert_eq!(annual[1].points, 45);
+    }
+
+    #[test]
+    fn annual_table_is_live_table_for_regular_leagues() {
+        let mut league = split_league();
+        league.settings.split_season = false;
+        league.table = LeagueTable::new(&[1, 2]);
+        league.table.rows = vec![row(1, 30, 25, 8), row(2, 10, 9, 20)];
+        let annual = league.annual_table_rows();
+        assert_eq!(annual.len(), 2);
+        assert_eq!(annual[0].team_id, 1);
+        assert_eq!(annual[0].points, 30);
     }
 }
 

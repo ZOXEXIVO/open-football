@@ -136,6 +136,16 @@ pub async fn cup_get_action(
     }
 
     let country = simulator_data.country(league.country_id).unwrap();
+
+    // Grouped-competition playoffs also run through cup-flagged leagues but
+    // render on their own bracket page.
+    if country.playoffs.iter().any(|p| p.league.id == league_id) {
+        return Ok(
+            Redirect::to(&format!("/{}/playoffs/{}", route_params.lang, league.slug))
+                .into_response(),
+        );
+    }
+
     let tours = &league.schedule.tours;
 
     // Build one fixture card from a bracket tie. The schedule item's
@@ -357,6 +367,11 @@ pub async fn cup_get_action(
             &league.slug,
             &country_leagues,
             &league.name,
+            &country
+                .playoffs
+                .iter()
+                .map(|p| (p.league.name.as_str(), p.league.slug.as_str()))
+                .collect::<Vec<_>>(),
             country.continent_id,
         )
     };

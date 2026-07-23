@@ -3162,6 +3162,7 @@ mod scan_loan_market_tests {
                     promotion_spots: 0,
                     relegation_spots: 0,
                     league_group: None,
+                    split_season: false,
                 },
                 false,
             );
@@ -3724,6 +3725,7 @@ mod transfer_broadcast_tests {
                     promotion_spots: 0,
                     relegation_spots: 0,
                     league_group: None,
+                    split_season: false,
                 },
                 false,
             );

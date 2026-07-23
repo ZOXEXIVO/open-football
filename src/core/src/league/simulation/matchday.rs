@@ -4,7 +4,9 @@ use crate::league::{League, LeagueDynamics, LeagueMatch, LeagueMatchResultResult
 use crate::r#match::MatchSquad;
 use crate::r#match::squad::selection::model::MatchSelectionGameModel;
 use crate::r#match::{Match, MatchResult, SelectionCompetition, SelectionContext};
-use crate::{Club, ClubPhilosophy, MatchRuntime, Person, Player, PlayerFieldPositionGroup, Team, TeamType};
+use crate::{
+    Club, ClubPhilosophy, MatchRuntime, Person, Player, PlayerFieldPositionGroup, Team, TeamType,
+};
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
@@ -310,6 +312,16 @@ impl League {
         let home_baseline = home_team.tactics.as_ref().map(|t| t.tactic_type);
         let away_baseline = away_team.tactics.as_ref().map(|t| t.tactic_type);
 
+        // Exact season length per side for the development minutes plan —
+        // the busiest-player fallback under-reads in a rotated squad.
+        let played_in_table = |team_id: u32| -> Option<f32> {
+            table
+                .rows
+                .iter()
+                .find(|r| r.team_id == team_id)
+                .map(|r| r.played as f32)
+        };
+
         let mut home_ctx = SelectionContext {
             is_friendly: friendly,
             date,
@@ -318,6 +330,8 @@ impl League {
             opponent_tactic: away_baseline,
             competition: home_competition,
             game_model: None,
+            development_guest_ids: Vec::new(),
+            season_matches_played: played_in_table(home_team.id),
         };
         let mut away_ctx = SelectionContext {
             is_friendly: friendly,
@@ -327,6 +341,8 @@ impl League {
             opponent_tactic: home_baseline,
             competition: away_competition,
             game_model: None,
+            development_guest_ids: Vec::new(),
+            season_matches_played: played_in_table(away_team.id),
         };
 
         // Fixture-aware game model per side: the opponent block reads the
@@ -390,6 +406,11 @@ impl League {
                 &away_team.team_type,
                 ctx.simulation.date.date(),
             );
+            // Flag the overage picks as development guests so the rotation
+            // selector admits them even when the roster is full — they are
+            // here for match practice, not shortfall cover.
+            home_ctx.development_guest_ids = home_overage.iter().map(|p| p.id).collect();
+            away_ctx.development_guest_ids = away_overage.iter().map(|p| p.id).collect();
             home_supplements.extend(home_overage);
             away_supplements.extend(away_overage);
 
@@ -612,9 +633,17 @@ impl League {
             .collect()
     }
 
-    /// Collect up to 3 overage players from higher youth teams who need match practice.
+    /// Collect overage players from higher youth teams who need match practice.
     /// Only applies to U18/U19 teams — allows older youth players (from U20/U21/U23)
     /// who aren't getting matches to gain development time, like real overage rules.
+    ///
+    /// The quota is position-aware: keepers get a dedicated slot instead of
+    /// competing with outfielders in one mixed list. A fixture-less older
+    /// squad can hold a large idle keeper corps, and there is only one
+    /// goalkeeping shirt per match — a keeper who is offered but not picked
+    /// never resets his idle clock, so under a mixed quota the longest-idle
+    /// keepers would permanently occupy every slot while the outfielders
+    /// behind them (and the keepers behind *them*) never rotate in.
     fn collect_overage_development_players<'a>(
         clubs: &'a [Club],
         club_id: u32,
@@ -622,7 +651,8 @@ impl League {
         team_type: &TeamType,
         date: NaiveDate,
     ) -> Vec<&'a Player> {
-        const MAX_OVERAGE_SLOTS: usize = 3;
+        const MAX_OVERAGE_OUTFIELD_SLOTS: usize = 3;
+        const MAX_OVERAGE_KEEPER_SLOTS: usize = 1;
         const MIN_IDLE_DAYS: u16 = 21;
 
         if !matches!(team_type, TeamType::U18 | TeamType::U19) {
@@ -655,8 +685,25 @@ impl League {
                 .cmp(&a.player_attributes.days_since_last_match)
         });
 
-        candidates.truncate(MAX_OVERAGE_SLOTS);
-        candidates
+        let mut picked: Vec<&Player> =
+            Vec::with_capacity(MAX_OVERAGE_OUTFIELD_SLOTS + MAX_OVERAGE_KEEPER_SLOTS);
+        let mut outfield = 0usize;
+        let mut keepers = 0usize;
+        for p in candidates {
+            if p.positions.is_goalkeeper() {
+                if keepers < MAX_OVERAGE_KEEPER_SLOTS {
+                    picked.push(p);
+                    keepers += 1;
+                }
+            } else if outfield < MAX_OVERAGE_OUTFIELD_SLOTS {
+                picked.push(p);
+                outfield += 1;
+            }
+            if outfield == MAX_OVERAGE_OUTFIELD_SLOTS && keepers == MAX_OVERAGE_KEEPER_SLOTS {
+                break;
+            }
+        }
+        picked
     }
 
     /// Lower bound a domestic cup final's importance is clamped to after the
@@ -1129,7 +1176,7 @@ mod tests {
         StaffCollection, Team, TeamBuilder, TeamCollection, TeamReputation, TeamType,
         TrainingSchedule,
     };
-    use chrono::{NaiveTime, Utc};
+    use chrono::{Datelike, NaiveDate, NaiveTime, Utc};
 
     fn gk_names() -> PeopleNameGeneratorData {
         PeopleNameGeneratorData {
@@ -1312,7 +1359,63 @@ mod tests {
         );
     }
 
-    // ========== Youth senior call-ups (U18-U20 → Main matchday pool) ==========
+    // ========== Overage development sweep (U20+ → U18/U19 dev fixtures) ==========
+
+    fn idle_u20_player(id: u32, position: PlayerPositionType, idle_days: u16, date: NaiveDate) -> Player {
+        let mut p = md_player(id, position, 100);
+        p.player_attributes.days_since_last_match = idle_days;
+        p.birth_date = NaiveDate::from_ymd_opt(date.year() - 21, 1, 1).unwrap();
+        p
+    }
+
+    #[test]
+    fn overage_development_sweep_caps_keepers_to_a_dedicated_slot() {
+        // A fixture-less U20 squad holding ten idle keepers and four idle
+        // outfielders. There is one goalkeeping shirt per match and an
+        // offered-but-unpicked keeper never resets his idle clock, so under
+        // a mixed longest-idle quota the keeper corps would permanently
+        // occupy every slot. The sweep must offer exactly one keeper (the
+        // longest-idle) plus three outfielders.
+        let date = Utc::now().date_naive();
+        let u18 = md_team(1, 100, TeamType::U18, Vec::new());
+        let mut u20_players = Vec::new();
+        for i in 0..10u32 {
+            u20_players.push(idle_u20_player(
+                200 + i,
+                PlayerPositionType::Goalkeeper,
+                60 - i as u16,
+                date,
+            ));
+        }
+        for i in 0..4u32 {
+            u20_players.push(idle_u20_player(
+                300 + i,
+                PlayerPositionType::MidfielderCenter,
+                30 + i as u16,
+                date,
+            ));
+        }
+        let u20 = md_team(2, 100, TeamType::U20, u20_players);
+        let clubs = vec![md_club(100, vec![u18, u20])];
+
+        let picked =
+            League::collect_overage_development_players(&clubs, 100, 1, &TeamType::U18, date);
+
+        let keepers = picked
+            .iter()
+            .filter(|p| p.positions.is_goalkeeper())
+            .count();
+        assert_eq!(keepers, 1, "exactly one keeper takes the dedicated slot");
+        assert_eq!(
+            picked.len() - keepers,
+            3,
+            "three outfield slots are filled despite ten longer-idle keepers"
+        );
+        assert!(
+            picked.iter().any(|p| p.id == 200),
+            "the longest-idle keeper is the one offered"
+        );
+    }
 
     #[test]
     fn ready_youth_outfielder_joins_main_reserve_pool() {

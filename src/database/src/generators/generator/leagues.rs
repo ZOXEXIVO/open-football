@@ -1,7 +1,7 @@
 use crate::{CountryEntity, DatabaseEntity};
 use core::league::{
     DayMonthPeriod, DomesticCup, League, LeagueFinancials, LeagueGroup, LeaguePlayoff,
-    LeaguePlayoffConfig, LeagueSettings,
+    LeaguePlayoffConfig, LeagueSettings, PlayoffFormat, PlayoffStage,
 };
 use core::{Club, TeamType};
 use std::str::FromStr;
@@ -77,8 +77,16 @@ impl DatabaseGenerator {
                         total_groups: g.total_groups,
                         playoff: g.playoff.as_ref().map(|p| LeaguePlayoffConfig {
                             qualifiers_per_group: p.qualifiers_per_group,
+                            format: p
+                                .format
+                                .as_deref()
+                                .map(PlayoffFormat::from_config_str)
+                                .unwrap_or(PlayoffFormat::SingleElimination),
+                            name: p.name.clone(),
+                            stage_names: p.stage_names.clone(),
                         }),
                     }),
+                    split_season: league.settings.split_season,
                 };
 
                 let mut l = League::new(
@@ -120,6 +128,7 @@ impl DatabaseGenerator {
             promotion_spots: 0,
             relegation_spots: 0,
             league_group: None,
+            split_season: false,
         };
 
         let (slug, name, configured_rep) = match &country.domestic_cup {
@@ -174,7 +183,8 @@ impl DatabaseGenerator {
         }
 
         let mut playoffs = Vec::new();
-        for (index, (competition, mut members)) in by_competition.into_iter().enumerate() {
+        let mut id_offset: u32 = 0;
+        for (competition, mut members) in by_competition {
             if members.len() < 2 {
                 continue; // a cross-group playoff needs at least two groups
             }
@@ -183,13 +193,20 @@ impl DatabaseGenerator {
             // other winners when byes are handed out), id breaks ties.
             members.sort_by(|a, b| b.reputation.cmp(&a.reputation).then(a.id.cmp(&b.id)));
             let group_ids: Vec<u32> = members.iter().map(|l| l.id).collect();
-            let qualifiers_per_group = members[0]
+            let playoff_cfg = members[0]
                 .settings
                 .league_group
                 .as_ref()
                 .and_then(|g| g.playoff.as_ref())
+                .cloned();
+            let qualifiers_per_group = playoff_cfg
+                .as_ref()
                 .map(|p| p.qualifiers_per_group)
                 .unwrap_or(1);
+            let format = playoff_cfg
+                .as_ref()
+                .map(|p| p.format)
+                .unwrap_or(PlayoffFormat::SingleElimination);
 
             let primary = members[0];
             let settings = LeagueSettings {
@@ -199,22 +216,63 @@ impl DatabaseGenerator {
                 promotion_spots: 0,
                 relegation_spots: 0,
                 league_group: None,
+                split_season: false,
             };
-
-            let id = PLAYOFF_ID_BASE + country.id * 1000 + index as u32;
-            let slug = format!("{}-playoff", slugify(&competition));
-            let name = format!("{} Playoff", competition);
             let reputation = primary.reputation;
 
-            let mut league = League::new(id, name, slug, country.id, reputation, settings, false);
-            league.is_cup = true;
+            // Split-season competitions (Argentine Apertura/Clausura) run
+            // one playoff per tournament; everything else gets a single
+            // end-of-season playoff.
+            let split = primary.settings.split_season;
+            let editions: Vec<(PlayoffStage, String)> = if split {
+                let stage_names = playoff_cfg
+                    .as_ref()
+                    .map(|p| p.stage_names.clone())
+                    .unwrap_or_default();
+                let first = stage_names
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| format!("{} Apertura", competition));
+                let second = stage_names
+                    .get(1)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{} Clausura", competition));
+                vec![
+                    (PlayoffStage::FirstStage, first),
+                    (PlayoffStage::SecondStage, second),
+                ]
+            } else {
+                let name = playoff_cfg
+                    .as_ref()
+                    .and_then(|p| p.name.clone())
+                    .unwrap_or_else(|| format!("{} Playoff", competition));
+                vec![(PlayoffStage::FullSeason, name)]
+            };
 
-            playoffs.push(LeaguePlayoff::new(
-                league,
-                competition,
-                group_ids,
-                qualifiers_per_group,
-            ));
+            for (stage, name) in editions {
+                let id = PLAYOFF_ID_BASE + country.id * 1000 + id_offset;
+                id_offset += 1;
+                let slug = slugify(&name);
+                let mut league = League::new(
+                    id,
+                    name,
+                    slug,
+                    country.id,
+                    reputation,
+                    settings.clone(),
+                    false,
+                );
+                league.is_cup = true;
+
+                playoffs.push(LeaguePlayoff::new(
+                    league,
+                    competition.clone(),
+                    group_ids.clone(),
+                    qualifiers_per_group,
+                    format,
+                    stage,
+                ));
+            }
         }
         playoffs
     }
@@ -302,6 +360,7 @@ impl DatabaseGenerator {
                     promotion_spots: 0,
                     relegation_spots: 0,
                     league_group: None,
+                    split_season: false,
                 };
 
                 let youth_league = League::new(
@@ -381,6 +440,7 @@ mod tests {
                 promotion_spots: 0,
                 relegation_spots: 3,
                 league_group: None,
+                split_season: false,
             },
             false,
         )

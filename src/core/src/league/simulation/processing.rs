@@ -230,7 +230,14 @@ impl League {
         let snapshot = self.snapshot_season_awards(clubs, current_date);
         self.awards.pending_season_awards = Some(snapshot);
 
-        self.final_table = Some(self.table.rows.clone());
+        // Split seasons freeze the ANNUAL aggregate (Apertura + Clausura)
+        // — that's the table that drives prizes, qualification and
+        // relegation in those competitions.
+        self.final_table = Some(if self.settings.split_season {
+            self.annual_table_rows()
+        } else {
+            self.table.rows.clone()
+        });
 
         self.dynamics.reset_for_new_season();
         self.statistics.archive_season_stats();

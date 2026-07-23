@@ -2023,6 +2023,109 @@ a:active {
     border-radius: 4px;
 }
 
+/* ---- Playoffs ----
+   Bracket extensions for the /playoffs pages: seed badges and host marks
+   on the tie rows, per-game chips under a best-of-N series, the neutral-
+   venue tag on the final, and a centered single-card section for the
+   cross-conference final. Everything else reuses the cup bracket. */
+.fm-bracket-centered {
+    justify-content: center;
+}
+
+.fm-seed {
+    flex-shrink: 0;
+    min-width: 16px;
+    padding: 1px 3px;
+    text-align: center;
+    font-size: 9px;
+    font-weight: 700;
+    color: #7c8893;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 4px;
+    font-variant-numeric: tabular-nums;
+}
+
+.fm-tie-row.winner .fm-seed {
+    color: #cfe4d4;
+    background: rgba(74, 157, 91, 0.22);
+}
+
+.fm-host-mark {
+    flex-shrink: 0;
+    font-size: 8px;
+    color: #46535d;
+}
+
+.fm-shield-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.fm-shield-line i {
+    color: #f0cf63;
+    font-size: 11px;
+}
+
+.fm-shield-line a {
+    color: #aab4bd;
+}
+
+.fm-shield-line a:hover {
+    color: #fff;
+}
+
+.fm-series-games {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 9px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(0, 0, 0, 0.18);
+}
+
+.fm-game-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    font-size: 10px;
+    font-weight: 600;
+    color: #828f99;
+    font-variant-numeric: tabular-nums;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.fm-game-chip:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.fm-game-chip .g {
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #566270;
+}
+
+.fm-game-chip.unplayed {
+    color: #46535d;
+}
+
+.fm-neutral-tag {
+    padding: 4px 11px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: #566270;
+    background: rgba(255, 255, 255, 0.02);
+    text-align: center;
+}
+
 /* ---- Responsive ---- */
 @media (max-width: 640px) {
     .fm-cup-hero {
@@ -5277,6 +5380,19 @@ a:active {
 
 .fm-league-list {
     padding: 0;
+}
+
+/* Grouped competitions on the country page (Primera Division zones,
+   MLS conferences): a small heading above each competition's leagues
+   and playoff links. */
+.fm-league-group-hd {
+    padding: 12px 14px 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.9px;
+    text-transform: uppercase;
+    color: #5d6a74;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
 }
 
 .fm-league-item {

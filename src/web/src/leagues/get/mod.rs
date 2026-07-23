@@ -8,7 +8,9 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::Duration;
-use core::league::{ScheduleItem, ScheduleTour};
+use core::league::{
+    LeagueTableRow as CoreTableRow, PlayoffStage, ScheduleItem, ScheduleTour, TieBreakPolicy,
+};
 use core::r#match::GoalDetail;
 use core::r#match::player::statistics::MatchStatisticType;
 use itertools::*;
@@ -40,6 +42,15 @@ pub struct LeagueGetTemplate {
     pub i18n: I18n,
     pub lang: String,
     pub league_slug: String,
+    /// Split-season leagues label their standings with the current
+    /// tournament and append the annual aggregate below.
+    pub split_season: bool,
+    /// Current tournament's display name (Torneo Apertura/Clausura);
+    /// empty for regular leagues.
+    pub tournament_label: String,
+    /// Annual aggregate across every zone of the competition, best-first;
+    /// empty for regular leagues.
+    pub annual_table_rows: Vec<LeagueTableRow>,
     pub table_rows: Vec<LeagueTableRow>,
     pub current_tour_schedule: Vec<TourSchedule>,
     pub competition_reputation: Vec<CompetitionReputationItem>,
@@ -130,17 +141,24 @@ pub async fn league_get_action(
 
     let league = simulator_data.league(league_id).unwrap();
 
-    // Domestic cups have their own bracket page; bounce there so this
-    // handler only ever renders a standings table.
+    let country = simulator_data.country(league.country_id).unwrap();
+
+    // Domestic cups and grouped-competition playoffs have their own
+    // bracket pages; bounce there so this handler only ever renders a
+    // standings table.
     if league.is_cup {
+        let section = if country.playoffs.iter().any(|p| p.league.id == league_id) {
+            "playoffs"
+        } else {
+            "cups"
+        };
         return Ok(axum::response::Redirect::to(&format!(
-            "/{}/cups/{}",
-            route_params.lang, league.slug
+            "/{}/{}/{}",
+            route_params.lang, section, league.slug
         ))
         .into_response());
     }
 
-    let country = simulator_data.country(league.country_id).unwrap();
     let league_table = league.table.get();
 
     let table_rows: Vec<LeagueTableRow> = league_table
@@ -160,6 +178,72 @@ pub async fn league_get_action(
             }
         })
         .collect();
+
+    // Split-season context: label the live standings with the current
+    // tournament (Apertura until the flip, Clausura after) and build the
+    // annual aggregate across every zone of the competition — the same
+    // aggregate the relegation pipeline reads.
+    let split_season = league.settings.split_season;
+    let (tournament_label, annual_table_rows) = if split_season {
+        let second_stage = league.split_first_table.is_some();
+        let stage = if second_stage {
+            PlayoffStage::SecondStage
+        } else {
+            PlayoffStage::FirstStage
+        };
+        let tournament_label = country
+            .playoffs
+            .iter()
+            .find(|p| p.stage == stage && p.group_league_ids.contains(&league_id))
+            .map(|p| p.league.name.clone())
+            .unwrap_or_else(|| {
+                if second_stage {
+                    "Torneo Clausura".to_string()
+                } else {
+                    "Torneo Apertura".to_string()
+                }
+            });
+
+        let competition = league
+            .settings
+            .league_group
+            .as_ref()
+            .map(|g| g.competition.clone());
+        let mut annual: Vec<CoreTableRow> = country
+            .leagues
+            .leagues
+            .iter()
+            .filter(|l| match (&l.settings.league_group, &competition) {
+                (Some(g), Some(c)) => !l.friendly && &g.competition == c,
+                _ => l.id == league_id,
+            })
+            .flat_map(|l| l.annual_table_rows())
+            .collect();
+        let policy = TieBreakPolicy::fifa_default();
+        annual.sort_by(|a, b| policy.compare(a, b));
+
+        let annual_rows: Vec<LeagueTableRow> = annual
+            .iter()
+            .filter_map(|t| {
+                simulator_data
+                    .team_data(t.team_id)
+                    .map(|team_data| LeagueTableRow {
+                        team_name: team_data.name.clone(),
+                        team_slug: team_data.slug.clone(),
+                        played: t.played,
+                        win: t.win,
+                        draft: t.draft,
+                        lost: t.lost,
+                        goal_scored: t.goal_scored,
+                        goal_concerned: t.goal_concerned,
+                        points: t.points,
+                    })
+            })
+            .collect();
+        (tournament_label, annual_rows)
+    } else {
+        (String::new(), Vec::new())
+    };
 
     // Build a single fixture view-item for the current tour.
     let map_item = |item: &ScheduleItem| -> LeagueScheduleItem {
@@ -545,7 +629,8 @@ pub async fn league_get_action(
                 country_name: &country.name,
                 country_slug: &country.slug,
             };
-            // The domestic cup links to its dedicated /cups/ bracket page.
+            // The domestic cup links to its dedicated /cups/ bracket page,
+            // the playoffs to /playoffs/.
             views::league_menu(
                 &mp,
                 &cl_refs,
@@ -553,9 +638,17 @@ pub async fn league_get_action(
                     .domestic_cup
                     .as_ref()
                     .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
+                &country
+                    .playoffs
+                    .iter()
+                    .map(|p| (p.league.name.as_str(), p.league.slug.as_str()))
+                    .collect::<Vec<_>>(),
             )
         },
         league_slug: league.slug.clone(),
+        split_season,
+        tournament_label,
+        annual_table_rows,
         table_rows,
         current_tour_schedule,
         competition_reputation,
