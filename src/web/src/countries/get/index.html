@@ -6,16 +6,18 @@
         <div class="fm-panel-head">
             <h3>{{ i18n.t("leagues") }}</h3>
         </div>
-        {% for competition in competitions %}
-        <div class="fm-league-group-hd">{{ competition.name }}</div>
+        {% for section in sections %}
+        {% if !section.name.is_empty() %}
+        <div class="fm-league-group-hd">{{ section.name }}</div>
+        {% endif %}
         <div class="fm-league-list">
-            {% for league in competition.leagues %}
+            {% for league in section.leagues %}
             <a href="/{{ lang }}/leagues/{{ league.slug }}" class="fm-league-item">
                 <i class="fa fa-trophy"></i>
                 <span>{{ league.name }}</span>
             </a>
             {% endfor %}
-            {% for playoff in competition.playoffs %}
+            {% for playoff in section.playoffs %}
             <a href="/{{ lang }}/playoffs/{{ playoff.slug }}" class="fm-league-item">
                 <i class="fa fa-crown"></i>
                 <span>{{ playoff.name }}</span>
@@ -23,16 +25,6 @@
             {% endfor %}
         </div>
         {% endfor %}
-        <div class="fm-league-list">
-            {% for league in leagues %}
-            {% if !league.is_cup %}
-            <a href="/{{ lang }}/leagues/{{ league.slug }}" class="fm-league-item">
-                <i class="fa fa-trophy"></i>
-                <span>{{ league.name }}</span>
-            </a>
-            {% endif %}
-            {% endfor %}
-        </div>
     </section>
 </div>
 {% endblock %}
