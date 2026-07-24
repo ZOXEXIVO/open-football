@@ -1,6 +1,7 @@
 use chrono::{Datelike, NaiveDate};
 use rustc_hash::FxHashMap;
 
+use crate::club::player::language::LanguageProfile;
 use crate::shared::CurrencyValue;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::pipeline::breakout::{BreakoutPerformanceSignal, LeaguePerformanceLookup};
@@ -347,6 +348,7 @@ impl PipelineProcessor {
             contract_months_remaining,
             salary,
             seller_ctx,
+            language_profile: LanguageProfile::from_languages(&player.languages),
         }
     }
 
@@ -1238,6 +1240,7 @@ mod group_need_tests {
         GroupNeed, NeedKind, SuccessionAudit, compute_group_needs, group_depth_requirement,
     };
     use crate::transfers::pipeline::processor::SquadPlayerInfo;
+    use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
     use crate::{MatchTacticType, PlayerFieldPositionGroup, PlayerPositionType, TACTICS_POSITIONS};
     use std::collections::HashMap;
 
@@ -1650,6 +1653,7 @@ mod group_need_tests {
             has_open_request: open_request,
             has_aging_starter: false,
             form_discovery_mode: false,
+            fit: SquadFitSnapshot::disabled(),
         };
 
         // Mikhailov-class candidate: 14M, CA 130, listed, age 25.
@@ -1698,6 +1702,40 @@ mod group_need_tests {
             v3,
             ListedTargetVerdict::Reject(ListedRejectReason::NotAnUpgrade)
         );
+
+        // Squad-fit gate: the same otherwise-acceptable candidate is
+        // rejected when the buyer's own surplus maths would list him —
+        // well below the squad average (155 avg, gap 20 → bar 135) even
+        // though the position group itself is weak.
+        let mut surplus_buyer = buyer(false, true);
+        surplus_buyer.fit = SquadFitSnapshot {
+            squad_avg_ability: 155,
+            quality_gap: 20,
+            group_size: 0,
+            group_cap: usize::MAX,
+            group_cap_bar: 0,
+        };
+        let v4 = evaluate_listed_target(&mikhailov_class, &surplus_buyer);
+        assert_eq!(
+            v4,
+            ListedTargetVerdict::Reject(ListedRejectReason::WouldBeSurplus)
+        );
+
+        // Depth-cap arm: a full group whose cap-th best (140) outranks the
+        // candidate (130) → he'd be demoted by the weekly rebalance.
+        let mut full_group_buyer = buyer(false, true);
+        full_group_buyer.fit = SquadFitSnapshot {
+            squad_avg_ability: 0,
+            quality_gap: 0,
+            group_size: 6,
+            group_cap: 6,
+            group_cap_bar: 140,
+        };
+        let v5 = evaluate_listed_target(&mikhailov_class, &full_group_buyer);
+        assert_eq!(
+            v5,
+            ListedTargetVerdict::Reject(ListedRejectReason::WouldBeSurplus)
+        );
     }
 
     #[test]
@@ -1720,6 +1758,7 @@ mod group_need_tests {
             has_open_request: true,
             has_aging_starter: false,
             form_discovery_mode: false,
+            fit: SquadFitSnapshot::disabled(),
         };
 
         // Asking 5M when budget allows ~700k → UnaffordableFee
@@ -1773,6 +1812,7 @@ mod group_need_tests {
             has_open_request: true,
             has_aging_starter: false,
             form_discovery_mode: false,
+            fit: SquadFitSnapshot::disabled(),
         };
 
         let in_tier_listed = ListedTargetView {
@@ -1824,6 +1864,7 @@ mod group_need_tests {
             has_open_request: true, // even with explicit demand, world-class is out of reach
             has_aging_starter: false,
             form_discovery_mode: false,
+            fit: SquadFitSnapshot::disabled(),
         };
 
         let world_class = ListedTargetView {
@@ -1881,6 +1922,7 @@ mod group_need_tests {
             has_open_request: false,
             has_aging_starter: false,
             form_discovery_mode: false,
+            fit: SquadFitSnapshot::disabled(),
         };
 
         let modest_listed = ListedTargetView {
@@ -1935,6 +1977,7 @@ mod group_need_tests {
             has_open_request: true,
             has_aging_starter: false,
             form_discovery_mode: false,
+            fit: SquadFitSnapshot::disabled(),
         };
 
         let happy_player = ListedTargetView {
@@ -2019,6 +2062,7 @@ mod group_need_tests {
             has_open_request: false,
             has_aging_starter: false,
             form_discovery_mode: false,
+            fit: SquadFitSnapshot::disabled(),
         };
 
         let mut player = ListedTargetView {
@@ -2089,6 +2133,7 @@ mod group_need_tests {
             has_open_request: true,
             has_aging_starter: false,
             form_discovery_mode: false,
+            fit: SquadFitSnapshot::disabled(),
         };
 
         let mut player = ListedTargetView {
@@ -2151,6 +2196,7 @@ mod breakout_sweep_tests {
         BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
         evaluate_listed_target,
     };
+    use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
 
     /// Fixtures wrapped in a unit struct per the no-free-helpers
     /// convention. Each accessor returns a baseline the test tweaks.
@@ -2172,6 +2218,7 @@ mod breakout_sweep_tests {
                 has_open_request: false,
                 has_aging_starter: false,
                 form_discovery_mode: false,
+                fit: SquadFitSnapshot::disabled(),
             }
         }
 
@@ -2257,6 +2304,7 @@ mod breakout_sweep_tests {
             has_open_request: false,
             has_aging_starter: false,
             form_discovery_mode: false,
+            fit: SquadFitSnapshot::disabled(),
         };
         // In the elite tier window, publicly listed, but a 28-y-o who is no
         // upgrade (135 < 165) and no resale prospect (age > 23).
@@ -2293,6 +2341,7 @@ mod breakout_sweep_tests {
             has_open_request: true,
             has_aging_starter: false,
             form_discovery_mode: false,
+            fit: SquadFitSnapshot::disabled(),
         };
         let mut target = BreakoutFixtures::loan_listed_breakout_striker();
         target.ability = 110; // inside this tier's window

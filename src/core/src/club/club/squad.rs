@@ -201,15 +201,16 @@ impl Club {
         // they can get match practice in reserve/youth. Loan-ins
         // count against the cap (they occupy a slot) but are never
         // demoted — they belong to another club.
-        const MAIN_DEPTH: &[(PlayerFieldPositionGroup, usize)] = &[
-            (PlayerFieldPositionGroup::Goalkeeper, 3),
-            (PlayerFieldPositionGroup::Defender, 9),
-            (PlayerFieldPositionGroup::Midfielder, 9),
-            (PlayerFieldPositionGroup::Forward, 6),
+        const MAIN_GROUPS: &[PlayerFieldPositionGroup] = &[
+            PlayerFieldPositionGroup::Goalkeeper,
+            PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Forward,
         ];
 
         let mut surplus: Vec<(u32, u8)> = Vec::new();
-        for (group, depth) in MAIN_DEPTH {
+        for group in MAIN_GROUPS {
+            let depth = group.main_depth_cap();
             let mut ranked: Vec<(u32, u8, u8, bool, bool)> = self.teams.teams[main_idx]
                 .players
                 .iter()
@@ -220,13 +221,18 @@ impl Club {
                         p.player_attributes.current_ability,
                         p.age(date),
                         p.is_on_loan(),
-                        p.is_force_match_selection,
+                        // Manager-pinned players and signings still inside
+                        // their evaluation window are never the surplus
+                        // body — the club committed to them, so the excess
+                        // has to be somebody else (or the squad simply runs
+                        // deep until the plan is served).
+                        p.is_force_match_selection || p.signing_protection_active(date),
                     )
                 })
                 .collect();
             ranked.sort_by(|a, b| b.1.cmp(&a.1));
-            for (player_id, _, age, is_loan_in, is_locked) in ranked.into_iter().skip(*depth) {
-                if is_loan_in || is_locked {
+            for (player_id, _, age, is_loan_in, is_protected) in ranked.into_iter().skip(depth) {
+                if is_loan_in || is_protected {
                     continue;
                 }
                 surplus.push((player_id, age));
@@ -682,6 +688,13 @@ impl Club {
                     if already_listed {
                         continue;
                     }
+                    // A signing still inside its evaluation window is not
+                    // trimmable surplus — this season-start walk used to
+                    // free-release players bought weeks earlier in the same
+                    // summer window.
+                    if player.signing_protection_active(date) {
+                        continue;
+                    }
                     let market_value = player.value(date, league_reputation_proxy, club_reputation);
                     let termination_cost = player
                         .contract
@@ -912,9 +925,9 @@ mod trim_surplus_tests {
     use crate::shared::fullname::FullName;
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
-        PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills, StaffCollection, TeamBuilder, TeamCollection, TeamReputation,
-        TrainingSchedule,
+        PlayerAttributes, PlayerCollection, PlayerPlan, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder, TeamCollection,
+        TeamReputation, TrainingSchedule,
     };
     use chrono::Duration;
 
@@ -1113,6 +1126,43 @@ mod trim_surplus_tests {
             assert!(keeper.contract.is_some());
             assert!(!keeper.contract.as_ref().unwrap().is_transfer_listed);
         }
+    }
+
+    #[test]
+    fn recent_signing_with_active_plan_is_not_trimmed() {
+        // Same near-level fifth keeper as above, but the club bought him
+        // three weeks ago — his signing plan is still active, so the
+        // season-start trim must leave him alone instead of flagging the
+        // player it just paid for.
+        let mut new_signing = Fixture::goalkeeper(5, 95, 28, 50_000, 12);
+        new_signing.plan = Some(PlayerPlan::from_signing(
+            28,
+            1_000_000.0,
+            Fixture::date() - Duration::days(21),
+        ));
+        let mut club = Fixture::club(vec![
+            Fixture::goalkeeper(1, 100, 28, 50_000, 12),
+            Fixture::goalkeeper(2, 100, 28, 50_000, 12),
+            Fixture::goalkeeper(3, 100, 28, 50_000, 12),
+            Fixture::goalkeeper(4, 100, 28, 50_000, 12),
+            new_signing,
+        ]);
+
+        club.trim_positional_surplus(Fixture::date());
+
+        let protected = Fixture::find_player(&club, 5);
+        let contract = protected
+            .contract
+            .as_ref()
+            .expect("protected signing must keep his contract");
+        assert!(
+            !contract.is_transfer_listed,
+            "a signing inside his evaluation window must not be flagged for sale"
+        );
+        assert!(
+            !protected.statuses.has(PlayerStatusType::Frt),
+            "a signing inside his evaluation window must not be released"
+        );
     }
 
     #[test]
@@ -1322,7 +1372,7 @@ mod promotion_evidence_tests {
         fn main_roster() -> Vec<Player> {
             let mut players = Vec::new();
             let mut id = 100u32;
-            let mut push = |pos: PlayerPositionType, n: usize, id: &mut u32, out: &mut Vec<Player>| {
+            let push = |pos: PlayerPositionType, n: usize, id: &mut u32, out: &mut Vec<Player>| {
                 for _ in 0..n {
                     out.push(Self::player(*id, pos, 120, 27));
                     *id += 1;
@@ -1438,6 +1488,174 @@ mod promotion_evidence_tests {
             "without cameo evidence the promotion bar holds"
         );
         assert!(Fx::on_team(&club, 1, 1), "the prospect stays with the U19s");
+    }
+}
+
+#[cfg(test)]
+mod rebalance_patience_tests {
+    //! The weekly rebalance's positional-surplus demotion (Phase 1b) must
+    //! honour the signing plan: a player the club bought weeks ago is not
+    //! the surplus body, however he ranks against the depth cap — that
+    //! bought-then-loan-listed churn is exactly what the patience gate
+    //! exists to stop.
+
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
+        PlayerCollection, PlayerPlan, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, StaffCollection, TeamBuilder, TeamCollection, TeamReputation,
+        TrainingSchedule,
+    };
+    use chrono::{Datelike, Duration, NaiveTime};
+
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()
+        }
+
+        fn schedule() -> TrainingSchedule {
+            TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            )
+        }
+
+        fn player(id: u32, position: PlayerPositionType, ability: u8, age: u8) -> Player {
+            let date = Self::date();
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ability;
+            attrs.potential_ability = ability;
+            attrs.condition = 10_000;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("T".to_string(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(date.year() - age as i32, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::flat_for_ability(ability))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(PlayerClubContract::new(
+                    20_000,
+                    NaiveDate::from_ymd_opt(2029, 6, 30).unwrap(),
+                )))
+                .build()
+                .unwrap()
+        }
+
+        /// Main roster with TEN central midfielders — one beyond the
+        /// group's depth cap of 9 — where the tenth (id 1, lowest CA) is
+        /// the natural demotion candidate. Other groups stay inside caps.
+        fn overloaded_main(tenth_midfielder: Player) -> Vec<Player> {
+            let mut players = vec![tenth_midfielder];
+            let mut id = 100u32;
+            let push = |pos: PlayerPositionType, n: usize, ca: u8, id: &mut u32, out: &mut Vec<Player>| {
+                for _ in 0..n {
+                    out.push(Self::player(*id, pos, ca, 27));
+                    *id += 1;
+                }
+            };
+            push(PlayerPositionType::Goalkeeper, 2, 120, &mut id, &mut players);
+            push(PlayerPositionType::DefenderCenter, 8, 120, &mut id, &mut players);
+            push(PlayerPositionType::MidfielderCenter, 9, 120, &mut id, &mut players);
+            push(PlayerPositionType::Striker, 5, 120, &mut id, &mut players);
+            players
+        }
+
+        fn club(tenth_midfielder: Player) -> Club {
+            let main = TeamBuilder::new()
+                .id(10)
+                .league_id(Some(1))
+                .club_id(100)
+                .name("Main".to_string())
+                .slug("main".to_string())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(Self::overloaded_main(tenth_midfielder)))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(500, 500, 500))
+                .training_schedule(Self::schedule())
+                .build()
+                .unwrap();
+            let reserve_players: Vec<Player> = (300..312)
+                .map(|id| Self::player(id, PlayerPositionType::MidfielderCenter, 50, 22))
+                .collect();
+            let reserve = TeamBuilder::new()
+                .id(20)
+                .league_id(None)
+                .club_id(100)
+                .name("Reserve".to_string())
+                .slug("reserve".to_string())
+                .team_type(TeamType::Reserve)
+                .players(PlayerCollection::new(reserve_players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(300, 300, 300))
+                .training_schedule(Self::schedule())
+                .build()
+                .unwrap();
+            Club::new(
+                100,
+                "Club".to_string(),
+                Location::new(1),
+                ClubFinances::new(10_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![main, reserve]),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn on_main(club: &Club, id: u32) -> Option<&Player> {
+            club.teams.teams[0].players.players.iter().find(|p| p.id == id)
+        }
+    }
+
+    #[test]
+    fn overdepth_veteran_without_plan_is_demoted_and_loan_listed() {
+        // Control: the tenth midfielder with no signing plan ranks outside
+        // the depth cap and takes the normal surplus route.
+        let mut club = Fx::club(Fx::player(1, PlayerPositionType::MidfielderCenter, 100, 27));
+
+        club.rebalance_squads(Fx::date());
+
+        assert!(
+            Fx::on_main(&club, 1).is_none(),
+            "the unprotected over-depth midfielder is demoted off the main squad"
+        );
+    }
+
+    #[test]
+    fn overdepth_new_signing_with_active_plan_stays_on_main() {
+        // The same tenth midfielder, but signed three weeks ago: his plan
+        // is active, so he is neither demoted nor loan-listed — the squad
+        // simply runs deep until the club has actually evaluated him.
+        let mut signing = Fx::player(1, PlayerPositionType::MidfielderCenter, 100, 27);
+        signing.plan = Some(PlayerPlan::from_signing(
+            27,
+            2_000_000.0,
+            Fx::date() - Duration::days(21),
+        ));
+        let mut club = Fx::club(signing);
+
+        club.rebalance_squads(Fx::date());
+
+        let kept = Fx::on_main(&club, 1)
+            .expect("a signing inside his evaluation window stays on the main squad");
+        assert!(
+            !kept.statuses.has(PlayerStatusType::Loa),
+            "a signing inside his evaluation window must not be loan-listed"
+        );
     }
 }
 

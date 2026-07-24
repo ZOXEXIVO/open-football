@@ -41,6 +41,7 @@ use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::recommendations::{
     BuyerContext, ListedTargetVerdict, ListedTargetView, evaluate_listed_target,
 };
+use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::{Club, Country, Person, PlayerFieldPositionGroup, PlayerStatusType};
 
@@ -81,6 +82,7 @@ pub(in crate::transfers::pipeline) struct BuyerScan {
     best_in_group: HashMap<PlayerFieldPositionGroup, u8>,
     open_request_groups: HashSet<PlayerFieldPositionGroup>,
     aging_groups: HashSet<PlayerFieldPositionGroup>,
+    fit_by_group: HashMap<PlayerFieldPositionGroup, SquadFitSnapshot>,
 }
 
 impl BuyerScan {
@@ -148,6 +150,16 @@ impl BuyerScan {
             }
         }
 
+        let fit_by_group: HashMap<PlayerFieldPositionGroup, SquadFitSnapshot> = [
+            PlayerFieldPositionGroup::Goalkeeper,
+            PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Forward,
+        ]
+        .into_iter()
+        .map(|g| (g, SquadFitSnapshot::build(club, g)))
+        .collect();
+
         Some(BuyerScan {
             rep_score,
             world_rep,
@@ -159,6 +171,7 @@ impl BuyerScan {
             best_in_group,
             open_request_groups,
             aging_groups,
+            fit_by_group,
         })
     }
 
@@ -184,6 +197,11 @@ impl BuyerScan {
             has_open_request: self.open_request_groups.contains(&group),
             has_aging_starter: self.aging_groups.contains(&group),
             form_discovery_mode: form_discovery,
+            fit: self
+                .fit_by_group
+                .get(&group)
+                .copied()
+                .unwrap_or_else(SquadFitSnapshot::disabled),
         }
     }
 }

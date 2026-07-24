@@ -152,6 +152,13 @@ impl Club {
                 {
                     continue;
                 }
+                // The signing plan outlasts the flat grace window: while the
+                // club is still inside the evaluation commitment it made at
+                // the signing (time + appearances), idle days are the club's
+                // own failure to integrate the player, not a listing signal.
+                if player.signing_protection_active(date) {
+                    continue;
+                }
 
                 let days_idle = player.player_attributes.days_since_last_match;
                 let total_games = player.statistics.total_games();

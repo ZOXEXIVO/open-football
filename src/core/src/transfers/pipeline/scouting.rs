@@ -1,6 +1,7 @@
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
+use crate::club::player::language::{Language, LanguageProfile};
 use crate::transfers::ScoutingRegion;
 use crate::transfers::pipeline::breakout::LeaguePerformanceLookup;
 use crate::transfers::pipeline::helpers::ClubGroupRanks;
@@ -903,6 +904,7 @@ impl PipelineProcessor {
                         is_injured: player.player_attributes.is_injured,
                         contract_months_remaining,
                         salary,
+                        language_profile: LanguageProfile::from_languages(&player.languages),
                         seller_ctx: SellerPlausibilityContext {
                             club_reputation_score: seller_club_rep_score,
                             league_reputation: seller_league_rep,
@@ -1080,6 +1082,10 @@ impl PipelineProcessor {
         date: NaiveDate,
     ) -> ClubScoutingStaged {
         let country_id = country.id;
+        // The buying country's language(s) — the data pre-filter nudges the
+        // foreign shortlist toward candidates who could communicate in the
+        // dressing room (local language first, English/Spanish as bridges).
+        let home_language_mask = Language::country_language_mask(&country.code);
         let mut observations: Vec<ScoutingObservationResult> = Vec::new();
         let mut reports: Vec<ScoutingReportResult> = Vec::new();
         let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new();
@@ -1286,7 +1292,20 @@ impl PipelineProcessor {
                         .map(|p| {
                             let score = Self::player_data_score(p, performance_lookup);
                             let jitter = IntegerUtils::random(-noise, noise) as f32;
-                            (*p, score + jitter)
+                            // Language affinity — a graded preference, not a
+                            // gate: a foreign candidate who speaks the club
+                            // country's language (or a football bridge
+                            // language) rises in the eye-test shortlist, one
+                            // with no common language sinks. Domestic
+                            // candidates are unaffected — playing in the
+                            // league already answers the communication
+                            // question.
+                            let language_bonus = if p.country_id != country_id {
+                                (p.language_profile.affinity_for(home_language_mask) - 0.5) * 24.0
+                            } else {
+                                0.0
+                            };
+                            (*p, score + jitter + language_bonus)
                         })
                         .collect();
                     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));

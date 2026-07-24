@@ -291,6 +291,12 @@ pub struct EmergencyCandidateView {
     /// local club. Used both by the score (slight preference for the
     /// in-country option on ties) and by callers tracking pool state.
     pub is_global_pool: bool,
+    /// Language fit with the buying country, 0.0..=1.0 (see
+    /// [`crate::club::player::language::LanguageProfile::affinity_for`]).
+    /// Derived from nationality at the call site — a graded preference
+    /// for foreign candidates who could communicate in the dressing
+    /// room; domestic candidates are covered by the locality bonus.
+    pub language_affinity: f32,
 }
 
 /// Scoring inputs that describe the buying club's emergency context.
@@ -506,7 +512,18 @@ impl EmergencySquadFillStrategy {
         // weight them up slightly to bias selection toward acceptors.
         let pressure_score = candidate.career_pressure.clamp(0.0, 1.0) * 10.0;
 
-        Some(ability_score + age_score + domestic_score + pressure_score)
+        // Language — layered on top of locality: among foreign options
+        // the one who speaks the buying country's language (or a
+        // football bridge language, English/Spanish) integrates faster
+        // and is the more realistic pickup. Domestic candidates already
+        // communicate; the domestic bonus covers them.
+        let language_score = if candidate.same_country_nationality {
+            0.0
+        } else {
+            candidate.language_affinity.clamp(0.0, 1.0) * 6.0
+        };
+
+        Some(ability_score + age_score + domestic_score + pressure_score + language_score)
     }
 
     /// Soft CA ceiling for urgent clubs based on country reputation.
@@ -758,6 +775,7 @@ mod tests {
                 career_pressure: pressure,
                 region_prestige: if same_country { 1.0 } else { 0.5 },
                 is_global_pool: true,
+                language_affinity: 0.0,
             }
         }
     }
@@ -898,6 +916,41 @@ mod tests {
         let s_dom = EmergencySquadFillStrategy::score(&domestic, &b).unwrap();
         let s_for = EmergencySquadFillStrategy::score(&foreign, &b).unwrap();
         assert!(s_dom > s_for, "domestic {s_dom} ≯ foreign {s_for}");
+    }
+
+    #[test]
+    fn foreign_speaker_outscores_equal_non_speaker() {
+        // Two identical foreign candidates; the one who speaks the buying
+        // country's language (or a bridge language) ranks higher. Domestic
+        // candidates are unaffected — their term is folded into locality.
+        let b = ScoringFixtures::buyer(4500, false);
+        let silent = EmergencyCandidateView {
+            same_country_nationality: false,
+            same_continent: true,
+            ..ScoringFixtures::cand(95, 27, false, 3000, 0.3)
+        };
+        let speaker = EmergencyCandidateView {
+            language_affinity: 1.0,
+            ..silent
+        };
+        let s_silent = EmergencySquadFillStrategy::score(&silent, &b).unwrap();
+        let s_speaker = EmergencySquadFillStrategy::score(&speaker, &b).unwrap();
+        assert!(
+            s_speaker > s_silent,
+            "speaker {s_speaker} must outscore non-speaker {s_silent}"
+        );
+
+        let domestic = ScoringFixtures::cand(95, 27, true, 3000, 0.3);
+        let domestic_marked = EmergencyCandidateView {
+            language_affinity: 1.0,
+            ..domestic
+        };
+        let s_dom = EmergencySquadFillStrategy::score(&domestic, &b).unwrap();
+        let s_dom_marked = EmergencySquadFillStrategy::score(&domestic_marked, &b).unwrap();
+        assert_eq!(
+            s_dom, s_dom_marked,
+            "language must not double-count for domestic candidates"
+        );
     }
 
     #[test]

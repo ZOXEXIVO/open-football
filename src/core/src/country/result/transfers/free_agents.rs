@@ -9,6 +9,7 @@ use super::free_agent_market_calc::{
 };
 use super::types::{TransferActivitySummary, can_club_accept_player, find_player_in_country};
 use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
+use crate::club::player::language::LanguageProfile;
 use crate::club::player::mailbox::handlers::contract_proposal::ProcessContractHandler;
 use crate::club::player::transfer::{FreeAgentBlockReason, MarketStage};
 use crate::club::staff::perception::PotentialEstimator;
@@ -2315,6 +2316,10 @@ impl EmergencyCandidatePicker {
                     career_pressure: c.career_pressure,
                     region_prestige: c.nationality_region.league_prestige(),
                     is_global_pool: c.is_global_pool,
+                    language_affinity: LanguageProfile::nationality_affinity(
+                        &c.nationality_country_code,
+                        &buyer_ctx.country_code,
+                    ),
                 };
                 EmergencySquadFillStrategy::score(&view, buyer_ctx).and_then(|score| {
                     if score < EmergencySquadFillStrategy::MIN_ACCEPTABLE_SCORE {

@@ -1,3 +1,4 @@
+use crate::Player;
 use chrono::NaiveDate;
 
 /// The club's strategic intent for a signed player.
@@ -88,5 +89,28 @@ impl PlayerPlan {
         let months_elapsed = (current_date - self.started).num_days() / 30;
         // Double the evaluation period as absolute maximum
         months_elapsed >= (self.evaluation_months as i64) * 2
+    }
+}
+
+impl Player {
+    /// True while the club is still inside the evaluation commitment it made
+    /// when signing this player — the plan window is neither served (time +
+    /// appearances) nor expired. Every automatic surplus mechanism (weekly
+    /// rebalance demotion, season-start positional trim, idle-days audit,
+    /// the country listing sweep) must leave a protected signing alone: a
+    /// club that just bought a player does not turn around and list him
+    /// weeks later because a depth cap or a squad average says so.
+    ///
+    /// Player-initiated exits (formal transfer request, hardened
+    /// unhappiness) and explicit manager decisions are NOT gated here —
+    /// this only restrains the automatic numeric sweeps.
+    pub fn signing_protection_active(&self, date: NaiveDate) -> bool {
+        match &self.plan {
+            Some(plan) => {
+                let appearances = self.statistics.played + self.statistics.played_subs;
+                !plan.is_evaluated(date, appearances) && !plan.is_expired(date)
+            }
+            None => false,
+        }
     }
 }

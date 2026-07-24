@@ -15,6 +15,7 @@ use crate::transfers::pipeline::plausibility::{
     TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::processor::PipelineProcessor;
+use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
 use crate::transfers::pipeline::{
     RecommendationSource, RecommendationType, ShortlistCandidate, ShortlistCandidateStatus,
     StaffRecommendation, TransferNeedPriority, TransferNeedReason, TransferRequest,
@@ -108,6 +109,10 @@ pub(in crate::transfers::pipeline) struct BuyerContext {
     /// advertised availability. Either way the affordability / tier /
     /// reputation / squad-need gates are unchanged.
     pub form_discovery_mode: bool,
+    /// Projection of the buyer's own surplus rules at the target's
+    /// position group — rejects candidates who would classify as surplus
+    /// the day they arrive. [`SquadFitSnapshot::disabled`] opts out.
+    pub fit: SquadFitSnapshot,
 }
 
 /// Outcome of evaluating a listed target. Either rejected with a
@@ -128,6 +133,9 @@ pub(in crate::transfers::pipeline) enum ListedRejectReason {
     ReputationGapTooLarge,
     NoSquadNeed,
     NotAnUpgrade,
+    /// The buyer's own surplus maths (squad-average gap / depth cap)
+    /// would list this player weeks after he arrived — don't buy him.
+    WouldBeSurplus,
 }
 
 /// Pure evaluator for the listed-star / breakout sweep.
@@ -321,6 +329,18 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
     let upgrade = (target.ability as i16) - (ctx.buyer_best_in_group as i16);
     if !ctx.has_open_request && !strong_opportunity && upgrade < 3 {
         return Reject(NotAnUpgrade);
+    }
+
+    // Squad-fit projection — the terminal gate, and deliberately immune to
+    // every bypass above (open request, bargain staleness, breakout form):
+    // however tempting the deal, a club must not buy a player its own
+    // surplus maths (squad-average gap, rebalance depth cap) would list
+    // weeks after he arrived.
+    if ctx
+        .fit
+        .would_be_surplus(target.ability, target.estimated_potential, target.age)
+    {
+        return Reject(WouldBeSurplus);
     }
 
     // ── Soft scoring ──
@@ -980,6 +1000,17 @@ impl PipelineProcessor {
                         .or_else(|| resolved.scouts.first().map(|s| s.id))
                         .unwrap_or(team.staffs.head_coach().id);
 
+                    // Per-group squad-fit projection at the buying club —
+                    // cached so the filter doesn't re-scan the squad N times.
+                    let buyer_fit_by_group: HashMap<PlayerFieldPositionGroup, SquadFitSnapshot> = [
+                        PlayerFieldPositionGroup::Goalkeeper,
+                        PlayerFieldPositionGroup::Defender,
+                        PlayerFieldPositionGroup::Midfielder,
+                        PlayerFieldPositionGroup::Forward,
+                    ]
+                    .into_iter()
+                    .map(|g| (g, SquadFitSnapshot::build(club, g)))
+                    .collect();
                     // Per-group best CA at the buying club — cached so the
                     // filter doesn't re-scan the squad N times.
                     let buyer_best_in_group: HashMap<PlayerFieldPositionGroup, u8> = {
@@ -1083,6 +1114,10 @@ impl PipelineProcessor {
                                 // In-window listed-star sweep: only publicly
                                 // available players (Lst/Req/Unh, or Loa+breakout).
                                 form_discovery_mode: false,
+                                fit: buyer_fit_by_group
+                                    .get(&p.position_group)
+                                    .copied()
+                                    .unwrap_or_else(SquadFitSnapshot::disabled),
                             };
                             match evaluate_listed_target(&view, &ctx) {
                                 ListedTargetVerdict::Accept(score) => Some((p, score)),

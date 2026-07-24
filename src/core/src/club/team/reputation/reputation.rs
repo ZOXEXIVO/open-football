@@ -445,6 +445,24 @@ impl ReputationLevel {
         matches!(self, ReputationLevel::Elite | ReputationLevel::Continental)
     }
 
+    /// Wealth-scaled "well below squad average" gap: a player whose current
+    /// ability sits more than this far under the main-squad average reads
+    /// as surplus at this tier. Richer clubs tolerate a bigger spread (they
+    /// can afford depth); small clubs shed quickly. Consulted by the
+    /// country listing sweep when deciding who to sell — and by the
+    /// transfer pipeline's squad-fit gate when deciding who to buy, so a
+    /// club never signs a player its own listing maths would immediately
+    /// declare surplus.
+    pub fn surplus_quality_gap(&self) -> i16 {
+        match self {
+            ReputationLevel::Elite => 25,
+            ReputationLevel::Continental => 20,
+            ReputationLevel::National => 15,
+            ReputationLevel::Regional => 12,
+            _ => 10,
+        }
+    }
+
     /// The next tier down, saturating at `Amateur`. Drives the staged
     /// loan-availability broadcast: a parent club offers a listed player
     /// to the highest realistic tier first, then widens the net one rung

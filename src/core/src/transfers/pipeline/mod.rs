@@ -13,6 +13,7 @@ mod recruitment_meeting;
 mod scouting;
 pub(crate) mod scouting_config;
 mod shortlists;
+pub(crate) mod squad_fit;
 
 use crate::transfers::ScoutingRegion;
 use crate::{PlayerFieldPositionGroup, PlayerPositionType, ReputationLevel};
@@ -32,6 +33,7 @@ use chrono::Duration;
 use std::cmp::Ordering;
 
 mod processor {
+    use crate::club::player::language::LanguageProfile;
     use crate::club::team::squad::SquadAssetClass;
     use crate::transfers::ScoutingRegion;
     use crate::{PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus};
@@ -172,6 +174,11 @@ mod processor {
         /// country-code string match) for every foreign player on every
         /// scanning country's pass.
         pub region: ScoutingRegion,
+        /// Compact snapshot of the languages the player speaks (native +
+        /// learned abroad). Recruitment reads it against the buying
+        /// country's language mask so clubs lean toward candidates who
+        /// can communicate in the dressing room.
+        pub language_profile: LanguageProfile,
     }
 }
 

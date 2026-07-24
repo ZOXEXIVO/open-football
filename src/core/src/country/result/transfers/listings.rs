@@ -804,12 +804,12 @@ impl CountryResult {
             return ListingDecision::Keep;
         }
 
-        // Club signing plan: the club bought this player with intent.
-        if let Some(ref plan) = player.plan {
-            let total_apps = player.statistics.played + player.statistics.played_subs;
-            if !plan.is_evaluated(date, total_apps) && !plan.is_expired(date) {
-                return ListingDecision::Keep;
-            }
+        // Club signing plan: the club bought this player with intent and is
+        // still inside the evaluation window it committed to. Same helper
+        // the weekly rebalance / season trim / idle-days audit consult, so
+        // every automatic surplus mechanism honours one patience clock.
+        if player.signing_protection_active(date) {
+            return ListingDecision::Keep;
         }
 
         let age = player.age(date);
@@ -961,14 +961,10 @@ impl CountryResult {
 
         let is_promising_youth = age <= 23 && pa > ca + 10;
 
-        // Wealth-aware quality gap threshold
-        let quality_gap_threshold: i16 = match rep_level {
-            ReputationLevel::Elite => 25,
-            ReputationLevel::Continental => 20,
-            ReputationLevel::National => 15,
-            ReputationLevel::Regional => 12,
-            _ => 10,
-        };
+        // Wealth-aware quality gap threshold — shared with the buy-side
+        // squad-fit gate so selling and buying agree on what "too far
+        // below the squad" means.
+        let quality_gap_threshold: i16 = rep_level.surplus_quality_gap();
 
         // Well below squad average
         if analysis.quality_level > 15 && ca_i < avg - quality_gap_threshold && !is_promising_youth

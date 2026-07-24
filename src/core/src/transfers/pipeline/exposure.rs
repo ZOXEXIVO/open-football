@@ -229,6 +229,10 @@ impl MarketDiscoveryDiagnosis {
             ListedRejectReason::ReputationGapTooLarge => AvailabilityBlockReason::ReputationTooHigh,
             ListedRejectReason::NoSquadNeed => AvailabilityBlockReason::NoAffordableSquadNeed,
             ListedRejectReason::NotAnUpgrade => AvailabilityBlockReason::NoAffordableSquadNeed,
+            // The buyer's own surplus projection said the player would be
+            // excess on arrival — from the market's viewpoint that is the
+            // same story as "no squad need at this club".
+            ListedRejectReason::WouldBeSurplus => AvailabilityBlockReason::NoAffordableSquadNeed,
         }
     }
 

@@ -813,6 +813,7 @@ mod tests {
     use crate::PlayerFieldPositionGroup;
     use crate::PlayerPositionType;
     use crate::PlayerSquadStatus;
+    use crate::club::player::language::LanguageProfile;
     use crate::transfers::ScoutingRegion;
     use crate::transfers::pipeline::SellerPlausibilityContext;
 
@@ -889,6 +890,7 @@ mod tests {
                 is_injured: false,
                 contract_months_remaining: self.contract_months,
                 salary: self.salary,
+                language_profile: LanguageProfile::default(),
                 seller_ctx: SellerPlausibilityContext {
                     club_reputation_score: (self.club_world_rep.max(0) as f32 / 10000.0),
                     league_reputation: 5500,

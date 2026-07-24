@@ -325,6 +325,116 @@ impl PlayerLanguage {
     }
 }
 
+impl Language {
+    /// Bit position for the compact language masks below (48 variants,
+    /// so every language fits a `u64`).
+    fn mask_bit(self) -> u64 {
+        1u64 << (self as u64)
+    }
+
+    /// The bridge languages of world football — a dressing room can
+    /// usually run day-to-day communication in English or Spanish even
+    /// where neither is the local language, so speaking one of them
+    /// partially substitutes for the club country's own language.
+    const BRIDGE_LANGUAGES: [Language; 2] = [Language::English, Language::Spanish];
+
+    /// Combined mask of the official/primary language(s) of a country —
+    /// [`Self::from_country_code`] folded into one `u64`.
+    pub fn country_language_mask(code: &str) -> u64 {
+        Self::from_country_code(code)
+            .into_iter()
+            .fold(0u64, |mask, lang| mask | lang.mask_bit())
+    }
+
+    /// Combined mask of [`Self::BRIDGE_LANGUAGES`].
+    pub fn bridge_language_mask() -> u64 {
+        Self::BRIDGE_LANGUAGES
+            .into_iter()
+            .fold(0u64, |mask, lang| mask | lang.mask_bit())
+    }
+}
+
+/// Compact two-tier snapshot of what a player speaks, built once from his
+/// [`PlayerLanguage`] list and cheap to carry on transfer-market summaries
+/// (two `u64`s, `Copy`, no allocation). The tier cutoffs mirror the
+/// adaptation model: `fluent` = native or proficiency ≥ 70, `conversational`
+/// = proficiency ≥ 40 (fluent languages are in both masks).
+///
+/// Recruitment reads it through [`Self::affinity_for`]: clubs lean toward
+/// players who can walk into the dressing room and be understood — the
+/// club country's own language first, the football bridge languages
+/// (English, Spanish) as a partial substitute.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LanguageProfile {
+    pub fluent_mask: u64,
+    pub conversational_mask: u64,
+}
+
+impl LanguageProfile {
+    pub fn from_languages(languages: &[PlayerLanguage]) -> Self {
+        let mut profile = LanguageProfile::default();
+        for entry in languages {
+            let bit = entry.language.mask_bit();
+            if entry.is_native || entry.proficiency >= 70 {
+                profile.fluent_mask |= bit;
+                profile.conversational_mask |= bit;
+            } else if entry.proficiency >= 40 {
+                profile.conversational_mask |= bit;
+            }
+        }
+        profile
+    }
+
+    /// How well this player fits a club whose country speaks
+    /// `club_language_mask` (see [`Language::country_language_mask`]),
+    /// 0.0..=1.0. Graded, never a hard gate:
+    ///
+    /// - fluent in a club-country language → 1.0
+    /// - conversational in one → 0.65
+    /// - fluent in a bridge language (English/Spanish) → 0.45
+    /// - conversational in a bridge language → 0.25
+    /// - no common language → 0.0
+    ///
+    /// An empty club mask or an empty profile reads as neutral (1.0) —
+    /// missing data must never penalise a candidate.
+    pub fn affinity_for(&self, club_language_mask: u64) -> f32 {
+        if club_language_mask == 0 {
+            return 1.0;
+        }
+        if self.fluent_mask == 0 && self.conversational_mask == 0 {
+            return 1.0;
+        }
+        if self.fluent_mask & club_language_mask != 0 {
+            return 1.0;
+        }
+        if self.conversational_mask & club_language_mask != 0 {
+            return 0.65;
+        }
+        let bridge = Language::bridge_language_mask();
+        if self.fluent_mask & bridge != 0 {
+            return 0.45;
+        }
+        if self.conversational_mask & bridge != 0 {
+            return 0.25;
+        }
+        0.0
+    }
+
+    /// Affinity approximated from nationality alone — for call sites that
+    /// only carry country codes (free-agent snapshots). The player is
+    /// assumed fluent in his home country's language(s); languages learned
+    /// abroad are invisible here, so this under- rather than over-states
+    /// the fit.
+    pub fn nationality_affinity(player_country_code: &str, club_country_code: &str) -> f32 {
+        let native = Language::country_language_mask(player_country_code);
+        LanguageProfile {
+            fluent_mask: native,
+            conversational_mask: native,
+        }
+        .affinity_for(Language::country_language_mask(club_country_code))
+    }
+}
+
 /// Weekly language learning processing.
 ///
 /// When a player plays in a foreign country, they gradually learn the local
@@ -405,4 +515,63 @@ pub fn weekly_language_progress(
 
     // Clamp so we don't exceed 100
     gain.min(100 - current_proficiency)
+}
+
+#[cfg(test)]
+mod affinity_tests {
+    use super::*;
+
+    #[test]
+    fn fluent_local_language_is_full_affinity() {
+        let profile = LanguageProfile::from_languages(&[PlayerLanguage::native(Language::Spanish)]);
+        assert_eq!(profile.affinity_for(Language::country_language_mask("es")), 1.0);
+    }
+
+    #[test]
+    fn conversational_local_language_is_partial() {
+        let profile =
+            LanguageProfile::from_languages(&[PlayerLanguage::learning(Language::German, 50)]);
+        assert_eq!(profile.affinity_for(Language::country_language_mask("de")), 0.65);
+    }
+
+    #[test]
+    fn bridge_language_substitutes_partially() {
+        // Fluent English going to Germany: no local language, but the
+        // dressing room can run in English.
+        let profile = LanguageProfile::from_languages(&[PlayerLanguage::native(Language::English)]);
+        assert_eq!(profile.affinity_for(Language::country_language_mask("de")), 0.45);
+    }
+
+    #[test]
+    fn no_common_language_is_zero() {
+        let profile =
+            LanguageProfile::from_languages(&[PlayerLanguage::native(Language::Japanese)]);
+        assert_eq!(profile.affinity_for(Language::country_language_mask("es")), 0.0);
+    }
+
+    #[test]
+    fn missing_data_reads_neutral() {
+        // Empty profile (no language data) and empty club mask both must
+        // never penalise a candidate.
+        let empty = LanguageProfile::default();
+        assert_eq!(empty.affinity_for(Language::country_language_mask("es")), 1.0);
+        let profile =
+            LanguageProfile::from_languages(&[PlayerLanguage::native(Language::Japanese)]);
+        assert_eq!(profile.affinity_for(0), 1.0);
+    }
+
+    #[test]
+    fn nationality_affinity_follows_country_languages() {
+        // Portuguese-speaking nation to Portugal: full fit.
+        assert_eq!(LanguageProfile::nationality_affinity("br", "pt"), 1.0);
+        // English nationality to Germany: bridge-language fit.
+        assert_eq!(LanguageProfile::nationality_affinity("gb", "de"), 0.45);
+    }
+
+    #[test]
+    fn multilingual_country_matches_any_official_language() {
+        // Belgium speaks Dutch and French — a French speaker fits.
+        let profile = LanguageProfile::from_languages(&[PlayerLanguage::native(Language::French)]);
+        assert_eq!(profile.affinity_for(Language::country_language_mask("be")), 1.0);
+    }
 }

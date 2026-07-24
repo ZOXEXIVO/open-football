@@ -595,6 +595,21 @@ impl PlayerFieldPositionGroup {
         }
     }
 
+    /// Main-team depth cap per group enforced by the weekly squad rebalance:
+    /// players ranked beyond it are demoted/loan-listed as positional
+    /// surplus. Slightly looser than [`Self::ideal_squad_depth`] — the cap
+    /// is where the club starts shedding bodies, not the roster it aims
+    /// for. The transfer pipeline's squad-fit gate reads the same cap so a
+    /// club never buys a player its own rebalance would immediately demote.
+    pub fn main_depth_cap(&self) -> usize {
+        match self {
+            PlayerFieldPositionGroup::Goalkeeper => 3,
+            PlayerFieldPositionGroup::Defender => 9,
+            PlayerFieldPositionGroup::Midfielder => 9,
+            PlayerFieldPositionGroup::Forward => 6,
+        }
+    }
+
     /// How many of this group start a typical match — the number of
     /// "regular" slots the position offers. A keeper has exactly one, which
     /// is why a keeper's number two is a backup rather than a rotation

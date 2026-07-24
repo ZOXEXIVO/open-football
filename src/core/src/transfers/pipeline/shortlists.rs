@@ -13,6 +13,7 @@ use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::processor::PipelineProcessor;
+use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
 use crate::transfers::pipeline::{
     DetailedScoutingReport, ReportRiskFlag, ScoutingAssignment, ScoutingRecommendation,
     ShortlistCandidate, ShortlistCandidateStatus, TransferRequestStatus, TransferShortlist,
@@ -182,6 +183,8 @@ impl PipelineProcessor {
                 }
 
                 let depth = position_depth_for(club, assignment.target_position.position_group());
+                let fit =
+                    SquadFitSnapshot::build(club, assignment.target_position.position_group());
 
                 let mut candidates: Vec<ShortlistCandidate> = reports
                     .iter()
@@ -191,6 +194,22 @@ impl PipelineProcessor {
                         // before scoring so they never become shortlist
                         // entries. Soft Allow adjustments dampen score.
                         let summary = player_lookup.find_summary(country, r.player_id, date);
+                        // Squad-fit veto — the scout's own assessed numbers
+                        // say this player would classify as surplus the day
+                        // he arrived (below the squad-average gap, or ranked
+                        // outside the rebalance depth cap in a full group).
+                        // Foreign candidates have no domestic summary; the
+                        // young-age fallback keeps the promising-youth
+                        // exemption available so an unknown-age prospect is
+                        // judged by his assessed upside, not over-rejected.
+                        let candidate_age = summary.as_ref().map(|p| p.age).unwrap_or(21);
+                        if fit.would_be_surplus(
+                            r.assessed_ability,
+                            r.assessed_potential,
+                            candidate_age,
+                        ) {
+                            return None;
+                        }
                         let plausibility = summary.as_ref().and_then(|p| {
                             TransferPlausibilityBuilder::evaluate_summary(
                                 &buyer_ctx, p, false, true, date,
@@ -327,6 +346,7 @@ impl PipelineProcessor {
                     continue;
                 }
 
+                let market_fit = SquadFitSnapshot::build(club, request.position.position_group());
                 let mut market_candidates: Vec<ShortlistCandidate> = country
                     .transfer_market
                     .get_available_listings()
@@ -341,6 +361,26 @@ impl PipelineProcessor {
                         player_lookup
                             .find_summary(country, l.player_id, date)
                             .and_then(|p| {
+                                // Squad-fit veto — same surplus-on-arrival
+                                // projection as the scouted path, with the
+                                // ceiling read the way scouts do (observable
+                                // growth estimate, never hidden PA).
+                                let growth = PipelineProcessor::estimate_growth_potential(
+                                    p.age,
+                                    p.determination,
+                                    p.work_rate,
+                                    p.composure,
+                                    p.anticipation,
+                                    p.skill_ability,
+                                );
+                                let est_potential = p.skill_ability.saturating_add(growth);
+                                if market_fit.would_be_surplus(
+                                    p.skill_ability,
+                                    est_potential,
+                                    p.age,
+                                ) {
+                                    return None;
+                                }
                                 // The request's age band is part of the
                                 // recruitment brief — a DevelopmentSigning
                                 // request must not shortlist a veteran just
