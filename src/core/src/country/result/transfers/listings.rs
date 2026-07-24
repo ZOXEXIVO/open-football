@@ -719,45 +719,43 @@ impl CountryResult {
         let avg_ability = (total_ability / players.len() as u32) as u8;
         let avg_age = total_age as f32 / players.len() as f32;
 
-        let gk = *group_counts
-            .get(&PlayerFieldPositionGroup::Goalkeeper)
-            .unwrap_or(&0);
-        let def = *group_counts
-            .get(&PlayerFieldPositionGroup::Defender)
-            .unwrap_or(&0);
-        let mid = *group_counts
-            .get(&PlayerFieldPositionGroup::Midfielder)
-            .unwrap_or(&0);
-        let fwd = *group_counts
-            .get(&PlayerFieldPositionGroup::Forward)
-            .unwrap_or(&0);
-
         let mut surplus = Vec::new();
         let mut needed = Vec::new();
 
-        if gk > 2 {
-            surplus.push(PlayerPositionType::Goalkeeper);
-        }
-        if gk < 2 {
-            needed.push(PlayerPositionType::Goalkeeper);
-        }
-        if def > 7 {
-            surplus.push(PlayerPositionType::DefenderCenter);
-        }
-        if def < 4 {
-            needed.push(PlayerPositionType::DefenderCenter);
-        }
-        if mid > 7 {
-            surplus.push(PlayerPositionType::MidfielderCenter);
-        }
-        if mid < 4 {
-            needed.push(PlayerPositionType::MidfielderCenter);
-        }
-        if fwd > 5 {
-            surplus.push(PlayerPositionType::Striker);
-        }
-        if fwd < 2 {
-            needed.push(PlayerPositionType::Striker);
+        // Over-/under-stocked is the same judgement the weekly squad
+        // rebalance and the buy-side squad-fit gate already make, so ask the
+        // position group itself rather than keep a private, stricter copy of
+        // the table. The old local numbers (GK > 2, DEF > 7) called a
+        // perfectly normal three-keeper squad surplus at goalkeeper, and —
+        // because `DefensiveMidfielder` counts in the Defender group —
+        // flagged practically every senior squad in the world as surplus at
+        // the back, which is the trigger that then lists anyone sitting a
+        // point below the squad average.
+        for (group, representative) in [
+            (
+                PlayerFieldPositionGroup::Goalkeeper,
+                PlayerPositionType::Goalkeeper,
+            ),
+            (
+                PlayerFieldPositionGroup::Defender,
+                PlayerPositionType::DefenderCenter,
+            ),
+            (
+                PlayerFieldPositionGroup::Midfielder,
+                PlayerPositionType::MidfielderCenter,
+            ),
+            (
+                PlayerFieldPositionGroup::Forward,
+                PlayerPositionType::Striker,
+            ),
+        ] {
+            let count = *group_counts.get(&group).unwrap_or(&0) as usize;
+            if group.is_over_stocked(count) {
+                surplus.push(representative);
+            }
+            if group.is_under_stocked(count) {
+                needed.push(representative);
+            }
         }
 
         SquadAnalysis {
@@ -1318,15 +1316,15 @@ mod tests {
     use super::*;
     use crate::academy::ClubAcademy;
     use crate::club::player::core::builder::PlayerBuilder;
-    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings, Season};
     use crate::transfers::pipeline::{LoanOutCandidate, LoanOutStatus};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
         PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills, StaffCollection, Team, TeamBuilder, TeamCollection, TeamReputation, TeamType,
-        TrainingSchedule,
+        PlayerSkills, PlayerStatistics, PlayerStatisticsHistoryItem, StaffCollection, Team,
+        TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::{NaiveDate, NaiveTime};
 
@@ -2197,6 +2195,165 @@ mod tests {
             matches!(decision, ListingDecision::Transfer { ref reason } if reason == "dec_reason_player_requested"),
             "a formal transfer request must still list — saw {:?}",
             decision
+        );
+    }
+
+    /// Fixtures reproducing the squad shape that sent a top-flight regular
+    /// out on loan: a deep, top-heavy senior squad where the "Defender" group
+    /// also holds the club's holding midfielders.
+    struct TopFlightSquad;
+
+    impl TopFlightSquad {
+        /// A senior with the given ability, age and position. Skills carry the
+        /// ability so the observable-level classifiers read him correctly;
+        /// `current_ability` is stamped to match for the CA-based sweeps.
+        fn player(id: u32, ca: u8, age: u8, position: PlayerPositionType) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ca;
+            attrs.potential_ability = ca;
+            attrs.current_reputation = 3000;
+            attrs.home_reputation = 3000;
+            let mut contract = PlayerClubContract::new(500_000, Fixture::date(2029, 6, 30));
+            contract.squad_status = PlayerSquadStatus::NotYetSet;
+            contract.started = Some(Fixture::date(2025, 7, 1));
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("P".into(), format!("{id}")))
+                .birth_date(Fixture::date(2026 - age as i32, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::flat_for_ability(ca))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(contract))
+                .build()
+                .unwrap()
+        }
+
+        /// The roster, mirroring a real top-flight senior squad: five of the
+        /// "defenders" are actually holding midfielders, which is what buries
+        /// a genuine centre-back down the position group's ability ranking.
+        fn roster() -> Vec<Player> {
+            use PlayerPositionType as P;
+            [
+                (1u32, 136u8, 27u8, P::MidfielderCenter),
+                (2, 136, 27, P::DefensiveMidfielder),
+                (3, 132, 30, P::MidfielderRight),
+                (4, 130, 24, P::Striker),
+                (5, 130, 28, P::Striker),
+                (6, 128, 25, P::MidfielderRight),
+                (7, 128, 29, P::DefensiveMidfielder),
+                (8, 128, 26, P::MidfielderLeft),
+                (9, 128, 31, P::DefenderCenter),
+                (10, 126, 26, P::DefensiveMidfielder),
+                (11, 126, 30, P::DefenderCenter),
+                (12, 124, 28, P::Goalkeeper),
+                (13, 122, 24, P::DefenderCenter),
+                (14, 122, 28, P::DefenderRight),
+                (16, 120, 26, P::DefensiveMidfielder),
+                (17, 120, 32, P::DefenderRight),
+                (18, 120, 30, P::MidfielderLeft),
+                (19, 120, 23, P::DefenderRight),
+                (20, 120, 28, P::DefenderLeft),
+                (21, 118, 35, P::Striker),
+                (22, 118, 29, P::Goalkeeper),
+                (23, 116, 22, P::WingbackRight),
+                (24, 116, 30, P::DefenderCenter),
+                (25, 114, 25, P::DefenderRight),
+                (26, 100, 22, P::MidfielderCenter),
+                (27, 94, 39, P::Goalkeeper),
+            ]
+            .into_iter()
+            .map(|(id, ca, age, position)| Self::player(id, ca, age, position))
+            .collect()
+        }
+
+        /// The squad plus one centre-back who started 22 league games last
+        /// season and whom the monthly pass has just labelled `status`. His
+        /// ability sits a single point under the squad mean — the razor-thin
+        /// margin the numeric surplus trigger reads.
+        fn club_with_regular(status: PlayerSquadStatus, ca: u8) -> Club {
+            let mut players = Self::roster();
+            let mut regular = Self::player(99, ca, 24, PlayerPositionType::DefenderCenter);
+            regular.contract.as_mut().unwrap().squad_status = status;
+            let mut stats = PlayerStatistics::default();
+            stats.played = 22;
+            regular
+                .statistics_history
+                .items
+                .push(PlayerStatisticsHistoryItem {
+                    season: Season::new(2025),
+                    team_name: "Main".into(),
+                    team_slug: "main".into(),
+                    team_reputation: 7600,
+                    league_name: "L".into(),
+                    league_slug: "l".into(),
+                    is_loan: false,
+                    transfer_fee: None,
+                    statistics: stats,
+                    seq_id: 2025,
+                });
+            players.push(regular);
+
+            let mut team = Fixture::team(10, "main", TeamType::Main, players);
+            team.reputation = TeamReputation::new(7600, 7600, 7600);
+            Fixture::club(vec![team])
+        }
+    }
+
+    /// The Litvinov regression, end to end. A centre-back who started 22
+    /// league games last season, one ability point below his squad's mean,
+    /// freshly relabelled rotation by the monthly CA-rank pass, must not be
+    /// loan-listed by the numeric surplus sweep three weeks into the new
+    /// season. Before the fix this returned
+    /// `Loan { "dec_reason_blocked_top_club" }` — the decision that sent a
+    /// Premier League regular to a second-division club.
+    #[test]
+    fn top_flight_regular_is_not_loan_listed_as_positional_surplus() {
+        let today = Fixture::date(2026, 8, 2);
+        for status in [
+            PlayerSquadStatus::NotYetSet,
+            PlayerSquadStatus::FirstTeamSquadRotation,
+            PlayerSquadStatus::MainBackupPlayer,
+        ] {
+            let club = TopFlightSquad::club_with_regular(status.clone(), 119);
+            let analysis = CountryResult::analyze_squad_needs(&club, today);
+            let player = club.teams.teams[0]
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == 99)
+                .unwrap();
+            let decision =
+                CountryResult::evaluate_player_listing(player, &analysis, &club, today, None);
+            assert!(
+                matches!(decision, ListingDecision::Keep),
+                "last season's regular must be kept under {:?} — saw {:?}",
+                status,
+                decision
+            );
+        }
+    }
+
+    /// A three-keeper squad is a normal squad. The old local threshold
+    /// (`gk > 2`) called every one of them surplus at goalkeeper, which then
+    /// listed any keeper sitting below the squad average.
+    #[test]
+    fn three_keepers_are_not_a_surplus_position() {
+        let today = Fixture::date(2026, 8, 2);
+        let club = TopFlightSquad::club_with_regular(PlayerSquadStatus::NotYetSet, 122);
+        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        assert!(
+            !analysis
+                .surplus_positions
+                .contains(&PlayerPositionType::Goalkeeper),
+            "three keepers is normal depth, not surplus — saw {:?}",
+            analysis.surplus_positions
         );
     }
 }

@@ -498,6 +498,13 @@ mod thresholds {
     pub const DOMESTIC_STEP_DOWN_DROP: f32 = 0.12;
     pub const LOAN_IMPORTANCE_BLOCK: f32 = 0.65;
     pub const LOAN_REP_GAP_BLOCK: f32 = 0.10;
+    /// Reputation gap at which a loan stops being a step down and becomes a
+    /// different level of football altogether. A listing says the parent is
+    /// willing to loan the player out; it does not say it is willing to send
+    /// a first-team contributor anywhere at all, so a gap this wide stays
+    /// blocked even with the door open. Only a forced route (a negotiated
+    /// clause) still passes.
+    pub const LOAN_HUGE_REP_GAP_BLOCK: f32 = 0.30;
     /// Emergency one-off fee a club can cover when its declared transfer
     /// budget is ~zero, expressed as a fraction of its annual wage bill.
     /// Scales with club size and the country's price level, so it floors
@@ -854,11 +861,19 @@ impl TransferMovePlausibility {
 
         // Loan from a bigger club down to a smaller one for an important
         // player — the parent wouldn't risk a key contributor at a sub-tier
-        // suitor.
+        // suitor. A loan listing (Real availability) opens the ordinary case:
+        // the parent has said it wants him out on loan, so a step down is now
+        // credible. It does NOT open an arbitrarily large one — a listing is
+        // consent to a loan, not consent to *any* destination — so a gap wide
+        // enough to be a different level of football stays blocked unless the
+        // route is forced.
+        let loan_rep_gap = inputs.seller_rep - inputs.buyer_rep;
+        let loan_gap_beyond_consent = loan_rep_gap > thresholds::LOAN_HUGE_REP_GAP_BLOCK
+            && !matches!(strength, AvailabilityStrength::Forced);
         if inputs.is_loan
-            && !hard_gate_open
+            && (!hard_gate_open || loan_gap_beyond_consent)
             && importance >= thresholds::LOAN_IMPORTANCE_BLOCK
-            && (inputs.seller_rep - inputs.buyer_rep) > thresholds::LOAN_REP_GAP_BLOCK
+            && loan_rep_gap > thresholds::LOAN_REP_GAP_BLOCK
         {
             return make(
                 TransferMoveStage::CanShortlistInternally,
@@ -1835,10 +1850,64 @@ mod tests {
 
     #[test]
     fn allows_loan_listed_player_for_loan_move() {
+        // The parent has loan-listed him, so an ordinary step down to a
+        // smaller club is credible even for a first-choice player.
         let mut inputs = base_inputs();
         inputs.is_loan = true;
         inputs.is_loan_listed = true;
         inputs.is_unsolicited = false;
+        inputs.buyer_rep = 0.62;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn loan_listing_does_not_unlock_an_extreme_drop() {
+        // Same loan-listed first-choice player, but the suitor is a whole
+        // level of football below (0.80 → 0.45). A listing is the parent's
+        // consent to a loan, not to any destination: without it the move was
+        // blocked as not credible, and the badge alone must not turn a
+        // sub-tier suitor into a plausible one. This is the Litvinov shape —
+        // a top-flight regular waved through to a second-division club purely
+        // because his parent had put him on the loan list.
+        let mut inputs = base_inputs();
+        inputs.is_loan = true;
+        inputs.is_loan_listed = true;
+        inputs.is_unsolicited = false;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(
+                v,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::LoanNotCredible
+                )
+            ),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn loan_listing_still_unlocks_an_extreme_drop_for_a_fringe_player() {
+        // The extreme-gap block is scoped to first-team contributors. A
+        // fringe squad player loan-listed by a giant may still drop a long
+        // way — that is the ordinary "go and play somewhere" loan the
+        // development pathway depends on.
+        let mut inputs = base_inputs();
+        inputs.is_loan = true;
+        inputs.is_loan_listed = true;
+        inputs.is_unsolicited = false;
+        inputs.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        inputs.seller_position_rank = 3;
+        inputs.player_appearances = 2;
+        inputs.player_ca = 110;
+        inputs.player_world_rep = 2000;
+        inputs.player_current_rep = 2000;
+        inputs.player_home_rep = 2000;
         let v = TransferPlausibilityEvaluator::evaluate(&inputs);
         assert!(
             matches!(v, TransferPlausibilityVerdict::Allow(_)),

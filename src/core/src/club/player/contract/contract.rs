@@ -860,6 +860,33 @@ mod squad_status_calc_tests {
         );
     }
 
+    /// The `Defender` group also holds the club's holding midfielders
+    /// (`DefensiveMidfielder` maps into it), so it fields six starters, not
+    /// four. Ranked against four the group's sixth-best body was relabelled
+    /// rotation depth — which is how a top-flight club's third-choice
+    /// centre-back, sitting behind two better centre-backs *and three
+    /// defensive midfielders*, became loanable surplus.
+    #[test]
+    fn defender_group_ladder_accounts_for_the_holding_midfielders() {
+        // Two better centre-backs and three better holding midfielders above
+        // him: rank 5 in a group that starts six.
+        let defenders = [136u8, 128, 128, 126, 126, 122, 120, 120, 116, 114];
+        let def = PlayerFieldPositionGroup::Defender;
+        assert_eq!(
+            PlayerSquadStatus::calculate(122, 24, def, &defenders),
+            PlayerSquadStatus::FirstTeamRegular,
+            "a starter in a two-line group is a regular, not rotation depth"
+        );
+        assert_eq!(
+            PlayerSquadStatus::calculate(120, 24, def, &defenders),
+            PlayerSquadStatus::FirstTeamSquadRotation
+        );
+        assert_eq!(
+            PlayerSquadStatus::calculate(114, 24, def, &defenders),
+            PlayerSquadStatus::MainBackupPlayer
+        );
+    }
+
     #[test]
     fn young_players_still_get_youth_labels() {
         let mids = [180u8, 120, 100];

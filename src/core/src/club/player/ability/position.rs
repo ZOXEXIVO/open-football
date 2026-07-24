@@ -601,26 +601,70 @@ impl PlayerFieldPositionGroup {
     /// is where the club starts shedding bodies, not the roster it aims
     /// for. The transfer pipeline's squad-fit gate reads the same cap so a
     /// club never buys a player its own rebalance would immediately demote.
+    ///
+    /// The `Defender` gap over the ideal is deliberately the widest: that
+    /// group covers two lines of the pitch, since `DefensiveMidfielder`
+    /// maps into it (see [`Self::typical_starters`]). At the old cap of 9 a
+    /// club carrying an ordinary eight defenders plus four holding
+    /// midfielders was permanently three bodies "over", and the rebalance
+    /// answered by demoting and loan-listing genuine first-team defenders
+    /// every week.
     pub fn main_depth_cap(&self) -> usize {
         match self {
             PlayerFieldPositionGroup::Goalkeeper => 3,
-            PlayerFieldPositionGroup::Defender => 9,
+            PlayerFieldPositionGroup::Defender => 12,
             PlayerFieldPositionGroup::Midfielder => 9,
             PlayerFieldPositionGroup::Forward => 6,
         }
     }
 
+    /// Fewest players of this group a senior squad can function with — below
+    /// it the club cannot field a balanced matchday side and the position
+    /// reads as a genuine need. The counterpart to [`Self::main_depth_cap`],
+    /// which is where a squad starts reading as over-stocked.
+    pub fn minimum_viable_depth(&self) -> usize {
+        match self {
+            PlayerFieldPositionGroup::Goalkeeper => 2,
+            PlayerFieldPositionGroup::Defender => 4,
+            PlayerFieldPositionGroup::Midfielder => 4,
+            PlayerFieldPositionGroup::Forward => 2,
+        }
+    }
+
+    /// Does a squad carrying `count` players of this group have more than it
+    /// can use? The one shared answer for every "is this position surplus?"
+    /// question, so the listing sweep, the weekly rebalance and the buy-side
+    /// squad-fit gate can never disagree about it.
+    pub fn is_over_stocked(&self, count: usize) -> bool {
+        count > self.main_depth_cap()
+    }
+
+    /// Does a squad carrying `count` players of this group need another?
+    pub fn is_under_stocked(&self, count: usize) -> bool {
+        count < self.minimum_viable_depth()
+    }
+
     /// How many of this group start a typical match — the number of
     /// "regular" slots the position offers. A keeper has exactly one, which
     /// is why a keeper's number two is a backup rather than a rotation
-    /// regular; the outfield figures track a conventional 4-4-2 shape.
-    /// Used by [`crate::PlayerSquadStatus::calculate`] to judge a player's
-    /// role against the slots available at his position instead of a flat
-    /// percentile of the group.
+    /// regular. Used by [`crate::PlayerSquadStatus::calculate`] to judge a
+    /// player's role against the slots available at his position instead of
+    /// a flat percentile of the group.
+    ///
+    /// The figures must track what each group actually *contains* (see
+    /// [`PlayerPositionType::position_group`]), not the shirt names: the
+    /// `Defender` group holds the back four **plus** the holding midfield
+    /// slots, because `DefensiveMidfielder` maps into it. Counting it as
+    /// four starters ranked a top-flight centre-back behind his club's
+    /// holding midfielders and relabelled last season's starter as rotation
+    /// depth — which the disposal sweeps then read as loanable.
     pub fn typical_starters(&self) -> usize {
         match self {
             PlayerFieldPositionGroup::Goalkeeper => 1,
-            PlayerFieldPositionGroup::Defender => 4,
+            // Back four + the one or two holding slots that map here.
+            PlayerFieldPositionGroup::Defender => 6,
+            // Wide and central midfield plus the attacking-midfield and
+            // wingback slots that map here.
             PlayerFieldPositionGroup::Midfielder => 4,
             PlayerFieldPositionGroup::Forward => 2,
         }

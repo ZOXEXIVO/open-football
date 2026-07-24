@@ -39,6 +39,14 @@
 //!     suppress themselves while the sample is small.
 //!   * `KeyPlayer` / `FirstTeamRegular` (and their inferred equivalents)
 //!     are always protected from loan and free transfer.
+//!   * A **proven regular outranks a fresh label**. The monthly squad-status
+//!     pass re-ranks the whole position group on hidden CA, so last season's
+//!     ever-present can be relabelled rotation depth in one tick — and the
+//!     disposal sweeps then read only the label. Until the new season has
+//!     produced a sample that contradicts it, a genuine regular in the last
+//!     *completed* season stays [`SquadAssetClass::FirstTeamUseful`]
+//!     regardless of the label. A deliberate `NotNeeded` decision still
+//!     overrides: the club can always choose to move a regular on.
 //!
 //! Everything is a method on a struct (no free functions) and every type
 //! is reached through a `use` at the file header (no inline paths), per
@@ -49,6 +57,7 @@ use std::collections::HashMap;
 use chrono::NaiveDate;
 
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
+use crate::league::Season;
 use crate::{Club, Person, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus};
 
 /// What a player is to his club, derived from observable signals. Ordered
@@ -339,7 +348,22 @@ impl SquadAssetContext {
         match contract.squad_status {
             PlayerSquadStatus::KeyPlayer => return SquadAssetClass::CorePlayer,
             PlayerSquadStatus::FirstTeamRegular => return SquadAssetClass::FirstTeamUseful,
-            PlayerSquadStatus::FirstTeamSquadRotation => return SquadAssetClass::RotationUseful,
+            // A rotation label is the monthly CA-rank pass's verdict, not a
+            // considered decision — and it is recomputed against the whole
+            // position group, so a starter can be relabelled the moment a
+            // pricier squad-mate is ranked above him. Until the new season
+            // has produced a sample that actually contradicts it, last
+            // season's record outranks the label: a player who was a genuine
+            // regular is still a first-team asset, not loanable depth. Once
+            // real evidence exists (see [`SquadEvidenceContext`]) the label
+            // stands on its own and he can be moved on.
+            PlayerSquadStatus::FirstTeamSquadRotation => {
+                return if self.is_proven_regular(player, date) {
+                    SquadAssetClass::FirstTeamUseful
+                } else {
+                    SquadAssetClass::RotationUseful
+                };
+            }
             PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster => {
                 return SquadAssetClass::ProspectDevelopment;
             }
@@ -404,7 +428,7 @@ impl SquadAssetContext {
 
         // Was a genuine regular last completed season → first-team useful
         // regardless of how few games this (new) season has produced.
-        if Self::was_recent_regular(player) {
+        if Self::was_recent_regular(player, date) {
             return SquadAssetClass::FirstTeamUseful;
         }
 
@@ -505,14 +529,32 @@ impl SquadAssetContext {
         reputations[idx]
     }
 
+    /// Objective recent evidence that outranks a freshly-recomputed label:
+    /// a genuine regular last season, with nothing this season yet to say
+    /// otherwise. Deliberately bounded by the season sample — once the club
+    /// has played a real number of matches, how much he is actually playing
+    /// is the better evidence and the label speaks for itself.
+    fn is_proven_regular(&self, player: &Player, date: NaiveDate) -> bool {
+        self.evidence.is_early_season() && Self::was_recent_regular(player, date)
+    }
+
     /// True when the player logged a regular's worth of official games in
-    /// his most-recent completed season (parent + loan spells summed).
-    fn was_recent_regular(player: &Player) -> bool {
+    /// his most-recent **completed** season (parent + loan spells summed).
+    ///
+    /// The completed-season filter is load-bearing: the season rollover
+    /// opens a carried-forward row for the new season, so reading the
+    /// highest season in the history would read the *in-progress* one — a
+    /// 30-game ever-present looked like a 1-game bit-part player from the
+    /// first matchday, and every protection keyed on this silently lapsed
+    /// exactly when the summer disposal sweeps run.
+    fn was_recent_regular(player: &Player, date: NaiveDate) -> bool {
+        let current_season = Season::from_date(date).start_year;
         let latest = player
             .statistics_history
             .items
             .iter()
             .map(|h| h.season.start_year)
+            .filter(|&year| year < current_season)
             .max();
         let Some(year) = latest else {
             return false;
@@ -967,6 +1009,145 @@ mod tests {
         let class = ctx.classify(r, Fx::date());
         assert_ne!(class, SquadAssetClass::TrueSurplus);
         assert!(class.is_free_transfer_protected());
+    }
+
+    // ── a proven regular outranks a fresh label ─────────────────────────
+
+    /// The Litvinov case. A player who started 22 league games last season
+    /// is relabelled `FirstTeamSquadRotation` by the monthly CA-rank pass —
+    /// which ranks him against a position group that includes his club's
+    /// holding midfielders. Three weeks into the new season the club has no
+    /// evidence he has fallen out of favour, so the record has to outrank
+    /// the label: he stays first-team protected and the automatic loan /
+    /// listing sweeps leave him alone.
+    #[test]
+    fn rotation_label_does_not_erase_last_seasons_regular() {
+        let mut regular = Fx::player(
+            61,
+            PlayerPositionType::MidfielderCenter,
+            112,
+            24,
+            1000,
+            PlayerSquadStatus::FirstTeamSquadRotation,
+        );
+        regular
+            .statistics_history
+            .items
+            .push(Fx::season_row(2025, 22));
+        let club = Fx::club(Fx::squad_with(vec![regular]));
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let r = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 61)
+            .unwrap();
+        let class = ctx.classify(r, Fx::date());
+        assert_eq!(class, SquadAssetClass::FirstTeamUseful);
+        assert!(
+            class.is_first_team_protected(),
+            "last season's regular must not be loanable depth on day one of the new season"
+        );
+    }
+
+    /// The protection is evidence-bounded, not a permanent shield. Once the
+    /// season has produced a real sample the label speaks for itself and the
+    /// club may move him on.
+    #[test]
+    fn rotation_label_stands_once_the_season_has_a_real_sample() {
+        let mut regular = Fx::player(
+            62,
+            PlayerPositionType::MidfielderCenter,
+            112,
+            24,
+            1000,
+            PlayerSquadStatus::FirstTeamSquadRotation,
+        );
+        regular
+            .statistics_history
+            .items
+            .push(Fx::season_row(2025, 22));
+        let mut players = Fx::squad_with(vec![regular]);
+        // The club is deep into the season now.
+        players[0].statistics.played = 20;
+        let club = Fx::club(players);
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let r = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 62)
+            .unwrap();
+        assert_eq!(
+            ctx.classify(r, Fx::date()),
+            SquadAssetClass::RotationUseful,
+            "with a real sample behind it the label is the club's live verdict"
+        );
+    }
+
+    /// Regression: the season rollover opens a carried-forward row for the
+    /// new season, so reading the highest season in the history read the
+    /// *in-progress* one — and an ever-present looked like a 1-game bit-part
+    /// player from the first matchday, exactly when the summer sweeps run.
+    #[test]
+    fn current_season_row_does_not_hide_last_seasons_record() {
+        let mut regular = Fx::player(
+            63,
+            PlayerPositionType::MidfielderCenter,
+            112,
+            26,
+            1000,
+            PlayerSquadStatus::NotYetSet,
+        );
+        regular
+            .statistics_history
+            .items
+            .push(Fx::season_row(2025, 30));
+        // The new season has opened its row with one appearance in it.
+        regular
+            .statistics_history
+            .items
+            .push(Fx::season_row(2026, 1));
+        let club = Fx::club(Fx::squad_with(vec![regular]));
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let r = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 63)
+            .unwrap();
+        assert_eq!(
+            ctx.classify(r, Fx::date()),
+            SquadAssetClass::FirstTeamUseful,
+            "a 30-game season must not be hidden by the new season's own row"
+        );
+    }
+
+    /// A deliberate `NotNeeded` decision still overrides the record — the
+    /// club can always choose to move a regular on.
+    #[test]
+    fn not_needed_still_overrides_a_proven_regular() {
+        let mut regular = Fx::player(
+            64,
+            PlayerPositionType::MidfielderCenter,
+            112,
+            29,
+            1000,
+            PlayerSquadStatus::NotNeeded,
+        );
+        regular
+            .statistics_history
+            .items
+            .push(Fx::season_row(2025, 25));
+        let club = Fx::club(Fx::squad_with(vec![regular]));
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let r = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 64)
+            .unwrap();
+        assert_eq!(ctx.classify(r, Fx::date()), SquadAssetClass::TrueSurplus);
     }
 
     // ── observable level, not the CA digit ──────────────────────────────
