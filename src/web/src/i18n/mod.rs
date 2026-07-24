@@ -286,3 +286,160 @@ pub fn detect_language(accept_language: &str) -> String {
         .map(|(code, _)| code.to_string())
         .unwrap_or_else(|| DEFAULT_LANGUAGE.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_LANGUAGE, detect_language};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// Every shipped bundle, paired with its language code. `en.json` is the
+    /// reference the others are measured against.
+    const BUNDLES: &[(&str, &[u8])] = &[
+        ("en", include_bytes!("../../assets/i18n/en.json")),
+        ("de", include_bytes!("../../assets/i18n/de.json")),
+        ("es", include_bytes!("../../assets/i18n/es.json")),
+        ("fr", include_bytes!("../../assets/i18n/fr.json")),
+        ("ja", include_bytes!("../../assets/i18n/ja.json")),
+        ("pt", include_bytes!("../../assets/i18n/pt.json")),
+        ("ru", include_bytes!("../../assets/i18n/ru.json")),
+        ("tr", include_bytes!("../../assets/i18n/tr.json")),
+        ("zh", include_bytes!("../../assets/i18n/zh.json")),
+    ];
+
+    /// A value is treated as prose — and therefore must be localised — once it
+    /// is long enough to be a phrase rather than a code. Short labels ("Pts",
+    /// "GK", "Final", "Port") legitimately coincide with English in several
+    /// languages, so they are exempt by construction rather than by list.
+    const PROSE_MIN_LEN: usize = 12;
+
+    /// Prose-length values that are proper nouns: competition brands and
+    /// coaching-licence tiers that are written the same way in every language.
+    const PROSE_EXEMPT: &[&str] = &[
+        "supporters_shield",
+        "champions_league",
+        "europa_league",
+        "conference_league",
+        "copa_libertadores",
+        "license_continental_a",
+        "license_continental_b",
+        "license_continental_c",
+        "license_continental_pro",
+    ];
+
+    fn bundle(lang: &str) -> BTreeMap<String, String> {
+        let (_, bytes) = BUNDLES
+            .iter()
+            .find(|(code, _)| *code == lang)
+            .unwrap_or_else(|| panic!("no bundle for {}", lang));
+        let text =
+            std::str::from_utf8(bytes).unwrap_or_else(|_| panic!("{}.json is not UTF-8", lang));
+        assert!(
+            !text.starts_with('\u{feff}'),
+            "{}.json starts with a UTF-8 BOM — strip it, Windows editors add it back on save",
+            lang
+        );
+        serde_json::from_str(text)
+            .unwrap_or_else(|e| panic!("{}.json is not valid JSON: {}", lang, e))
+    }
+
+    #[test]
+    fn every_locale_carries_the_full_english_key_set() {
+        // A key missing from a locale silently falls back to English, so the
+        // page renders half-translated instead of failing loudly. Key parity
+        // is what keeps that from happening unnoticed.
+        let en = bundle(DEFAULT_LANGUAGE);
+        for (lang, _) in BUNDLES.iter().filter(|(c, _)| *c != DEFAULT_LANGUAGE) {
+            let loc = bundle(lang);
+            let missing: Vec<&str> = en
+                .keys()
+                .filter(|k| !loc.contains_key(*k))
+                .map(String::as_str)
+                .collect();
+            let extra: Vec<&str> = loc
+                .keys()
+                .filter(|k| !en.contains_key(*k))
+                .map(String::as_str)
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "{}.json is missing {} key(s) present in en.json: {:?}",
+                lang,
+                missing.len(),
+                missing
+            );
+            assert!(
+                extra.is_empty(),
+                "{}.json has {} key(s) absent from en.json: {:?}",
+                lang,
+                extra.len(),
+                extra
+            );
+        }
+    }
+
+    #[test]
+    fn locale_prose_is_actually_translated() {
+        // Presence alone is not translation: a key can be added to a locale
+        // with the English sentence pasted in to satisfy a key-coverage test,
+        // and the reader then sees English inside an otherwise localised page.
+        let en = bundle(DEFAULT_LANGUAGE);
+        for (lang, _) in BUNDLES.iter().filter(|(c, _)| *c != DEFAULT_LANGUAGE) {
+            let loc = bundle(lang);
+            let untranslated: Vec<&str> = en
+                .iter()
+                .filter(|(key, value)| {
+                    value.chars().count() >= PROSE_MIN_LEN
+                        && value.contains(char::is_whitespace)
+                        && !PROSE_EXEMPT.contains(&key.as_str())
+                        && loc.get(*key) == Some(*value)
+                })
+                .map(|(key, _)| key.as_str())
+                .collect();
+            assert!(
+                untranslated.is_empty(),
+                "{}.json still carries the English text for {} key(s): {:?}",
+                lang,
+                untranslated.len(),
+                untranslated
+            );
+        }
+    }
+
+    #[test]
+    fn locale_placeholders_match_english() {
+        // `{min}` / `{rating}` are substituted by the renderer. A translation
+        // that drops or renames one leaves a literal brace on the page.
+        // Compared as a set, not a count: English strings that carry a
+        // `singular|plural` pair repeat their placeholder, and languages
+        // without a plural form legitimately name it once.
+        let placeholders = |s: &str| -> BTreeSet<String> {
+            s.split('{')
+                .skip(1)
+                .filter_map(|part| part.split_once('}'))
+                .map(|(name, _)| name.to_string())
+                .collect()
+        };
+        let en = bundle(DEFAULT_LANGUAGE);
+        for (lang, _) in BUNDLES.iter().filter(|(c, _)| *c != DEFAULT_LANGUAGE) {
+            for (key, value) in bundle(lang) {
+                let Some(reference) = en.get(&key) else {
+                    continue;
+                };
+                assert_eq!(
+                    placeholders(&value),
+                    placeholders(reference),
+                    "{}.json key {} has different placeholders than en.json",
+                    lang,
+                    key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn accept_language_header_picks_the_highest_quality_supported_tag() {
+        assert_eq!(detect_language("fr-FR,fr;q=0.9,en;q=0.8"), "fr");
+        assert_eq!(detect_language("en;q=0.5, de;q=0.8, fr;q=0.9"), "fr");
+        assert_eq!(detect_language("kl-GL,kl"), DEFAULT_LANGUAGE);
+    }
+}
