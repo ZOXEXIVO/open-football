@@ -1,4 +1,12 @@
 # Multi-platform release builder
+#
+# All four build stages run concurrently, so each one gets its OWN cargo
+# registry cache id. Cargo's package lock lives at $CARGO_HOME/.package-cache,
+# outside the mounted registry/ dir — a shared cache mount therefore gives the
+# stages no mutual exclusion and two of them racing to unpack the same crate
+# fail with ".cargo-ok: File exists". Distinct ids cost a little disk and some
+# repeat downloads; `sharing=locked` would be the alternative but it holds the
+# lock for the whole RUN, serialising every platform build end to end.
 ARG RUST_VERSION=1.97
 # osxcross + macOS SDK + Rust, prebuilt. Tags track Rust releases, so pin this
 # to the closest available tag once you know it exists in the registry.
@@ -16,7 +24,7 @@ RUN sed -i 's|http://deb.debian.org/debian|https://mirror.yandex.ru/debian|g' \
     && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup target add x86_64-pc-windows-gnu
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,id=cargo-registry-windows,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target/x86_64-pc-windows-gnu \
     cargo build --release --target x86_64-pc-windows-gnu && \
     mkdir -p /dist && \
@@ -28,7 +36,7 @@ FROM rust:${RUST_VERSION} AS build-linux
 WORKDIR /src
 COPY ./ ./
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,id=cargo-registry-linux,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target/release \
     cargo build --release && \
     mkdir -p /dist && \
@@ -42,9 +50,9 @@ COPY ./ ./
 
 # `sysinfo` (IOKit) and `chrono`→`iana-time-zone` (CoreFoundation) link real
 # Apple frameworks, so these builds go through the image's osxcross clang.
+# CARGO_HOME is /root/.cargo in this image, not /usr/local/cargo.
 ENV CC=o64-clang CXX=o64-clang++
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/root/.cargo/registry \
+RUN --mount=type=cache,id=cargo-registry-mac-intel,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target/x86_64-apple-darwin \
     cargo build --release --target x86_64-apple-darwin && \
     mkdir -p /dist && \
@@ -57,8 +65,7 @@ WORKDIR /src
 COPY ./ ./
 
 ENV CC=oa64-clang CXX=oa64-clang++
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/root/.cargo/registry \
+RUN --mount=type=cache,id=cargo-registry-mac-m-series,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target/aarch64-apple-darwin \
     cargo build --release --target aarch64-apple-darwin && \
     mkdir -p /dist && \
