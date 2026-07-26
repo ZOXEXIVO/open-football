@@ -8,22 +8,27 @@
 # repeat downloads; `sharing=locked` would be the alternative but it holds the
 # lock for the whole RUN, serialising every platform build end to end.
 ARG RUST_VERSION=1.97
-# osxcross + macOS SDK + Rust, prebuilt. Tags track Rust releases, so pin this
-# to the closest available tag once you know it exists in the registry.
+# osxcross + macOS SDK + Rust, prebuilt. Only the osxcross half is used: the
+# image's own Rust lags well behind (latest shipped 1.89, and `sysinfo` needs
+# 1.95+), so the mac stages install RUST_VERSION over the top of it.
 ARG DARWIN_BUILDER_VERSION=latest
 
 # ── Windows x86_64 ────────────────────────────────────────────────────
 
 FROM rust:${RUST_VERSION} AS build-windows
 WORKDIR /src
-COPY ./ ./
 
+# Toolchain before the source copy — otherwise every commit re-runs the ~45s
+# mingw install.
 RUN sed -i 's|http://deb.debian.org/debian|https://mirror.yandex.ru/debian|g' \
     /etc/apt/sources.list.d/debian.sources \
     && apt-get -o Acquire::Retries=5 update \
     && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup target add x86_64-pc-windows-gnu
+
+COPY ./ ./
+
 RUN --mount=type=cache,id=cargo-registry-windows,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target/x86_64-pc-windows-gnu \
     cargo build --release --target x86_64-pc-windows-gnu && \
@@ -45,7 +50,16 @@ RUN --mount=type=cache,id=cargo-registry-linux,target=/usr/local/cargo/registry 
 # ── macOS x86_64 (Intel) ──────────────────────────────────────────────
 
 FROM joseluisq/rust-linux-darwin-builder:${DARWIN_BUILDER_VERSION} AS build-mac-intel
+ARG RUST_VERSION
 WORKDIR /src
+
+# Toolchain first, so a source-only change does not re-run it. `rustup target`
+# is per-toolchain, hence after the default switch. The image's osxcross linker
+# wiring lives in /root/.cargo/config and is unaffected by the Rust bump.
+RUN rustup toolchain install ${RUST_VERSION} --profile minimal \
+    && rustup default ${RUST_VERSION} \
+    && rustup target add x86_64-apple-darwin
+
 COPY ./ ./
 
 # `sysinfo` (IOKit) and `chrono`→`iana-time-zone` (CoreFoundation) link real
@@ -61,7 +75,13 @@ RUN --mount=type=cache,id=cargo-registry-mac-intel,target=/root/.cargo/registry 
 # ── macOS aarch64 (M series) ──────────────────────────────────────────
 
 FROM joseluisq/rust-linux-darwin-builder:${DARWIN_BUILDER_VERSION} AS build-mac-m-series
+ARG RUST_VERSION
 WORKDIR /src
+
+RUN rustup toolchain install ${RUST_VERSION} --profile minimal \
+    && rustup default ${RUST_VERSION} \
+    && rustup target add aarch64-apple-darwin
+
 COPY ./ ./
 
 ENV CC=oa64-clang CXX=oa64-clang++
