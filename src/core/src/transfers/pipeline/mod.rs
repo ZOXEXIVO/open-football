@@ -115,6 +115,16 @@ mod processor {
         /// Selling club is running a negative balance — a soft distress
         /// availability signal.
         pub in_debt: bool,
+        /// Days the player has carried a market-availability status
+        /// (`Lst`/`Req`/`Unh`/`Loa`) in the current sit; 0 when he is not
+        /// on the market. Drives the staleness widening of the scouting
+        /// realism band.
+        pub days_on_market: i16,
+        /// Continuous 0..1 market resignation of a listed / requested
+        /// player ([`crate::club::player::transfer::MarketResignation`]).
+        /// Snapshotted at pool-build time so foreign buyers read the same
+        /// curve a domestic live lookup would.
+        pub market_resignation: f32,
     }
 
     #[allow(dead_code)]

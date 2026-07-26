@@ -345,6 +345,13 @@ pub struct TransferPlausibilityInputs {
     pub seller_in_debt: bool,
     pub release_clause_triggered: bool,
 
+    /// Continuous 0..1 market resignation of a listed / transfer-requested
+    /// player — [`crate::club::player::transfer::MarketResignation`]. 0 for
+    /// a fresh listing or a player not on the permanent market. Widens the
+    /// level band he will accept, erodes his market-read importance, and
+    /// lifts his personal-terms willingness as the unsold weeks accumulate.
+    pub listing_resignation: f32,
+
     pub same_country: bool,
     pub same_league_or_division: bool,
     /// True when the (buyer-country, seller-country) pair is on the
@@ -535,6 +542,19 @@ mod thresholds {
     /// Effective player reputation this far above the buyer's reach reads
     /// as a reputation step-down the player resists in his own market.
     pub const REP_STEP_DOWN_GAP: i16 = 1500;
+
+    /// Sporting drop at which even a FULLY resigned listed player stops
+    /// endorsing a permanent step-down — beyond this the level gap is a
+    /// different sport, and only his own request / a forced clause opens
+    /// it. Between `HUGE_SPORTING_DROP` and this value the resignation
+    /// needed to endorse the drop ramps linearly from 0 to 1, so the
+    /// acceptable band widens continuously with time on the market.
+    pub const RESIGNATION_FULL_DROP: f32 = 0.85;
+    /// Fraction of the headline valuation a fully-stale listing sheds when
+    /// the fee gate judges buyer affordability — mirrors the listing's own
+    /// asking-price decay (−5%/week to a 60% floor) plus the seller-floor
+    /// erosion, so the gate prices the market reality, not the fresh tag.
+    pub const RESIGNATION_VALUE_SOFTENING: f64 = 0.40;
 }
 
 /// Per-axis importance scoring plus the objective-evidence floor. Wrapped
@@ -648,7 +668,11 @@ impl TransferPlausibilityEvaluator {
         };
         // Low appearances are never enough on their own: a key man by
         // status / rank / ability / renown keeps a high importance floor
-        // even on a thin early-season sample.
+        // even on a thin early-season sample. Deliberately NOT eroded by
+        // market resignation: the graded huge-drop endorsement and the
+        // personal-terms lifts carry the "unsold months lower his sights"
+        // story, and tapering importance here would flip the important /
+        // very-important gate thresholds far earlier than that ramp allows.
         raw.max(ImportanceFactors::evidence_floor(inputs))
             .clamp(0.0, 1.0)
     }
@@ -791,13 +815,22 @@ impl TransferMovePlausibility {
         // top-flight first-teamer, and the fee gate that would otherwise filter
         // it sits *above* the public-interest stage — so without this an
         // available giant's first-choice keeper still surfaces 4th-tier sides
-        // under "interested clubs". Only the player's *own* declared exit — a
-        // transfer request — or a pre-negotiated escape (a triggered release
-        // clause) carries his endorsement of so large a drop and reopens it
-        // (the move then still dies at the fee / willingness gates). Loans are
-        // governed by their own credibility gate below.
-        let huge_drop_self_unlocked =
-            inputs.is_transfer_requested || inputs.release_clause_triggered;
+        // under "interested clubs". The player's endorsement of so large a
+        // drop comes from his *own* declared exit — a transfer request — a
+        // pre-negotiated escape (a triggered release clause), or, for a
+        // LISTED player, his accumulated market resignation: a fresh listing
+        // endorses nothing beyond the huge-drop line, but each unsold month
+        // widens the drop he accepts (deeper drops need more resignation),
+        // until the only alternative left is the year-unsold free exit. The
+        // move still dies at the fee / willingness gates. Loans are governed
+        // by their own credibility gate below.
+        let resignation = inputs.listing_resignation.clamp(0.0, 1.0);
+        let resignation_endorsed = inputs.is_listed
+            && !inputs.is_loan
+            && resignation >= Self::resignation_needed_for_drop(drop);
+        let huge_drop_self_unlocked = inputs.is_transfer_requested
+            || inputs.release_clause_triggered
+            || resignation_endorsed;
         let level_gate_open = if huge_drop && !inputs.is_loan {
             huge_drop_self_unlocked
         } else {
@@ -901,8 +934,14 @@ impl TransferMovePlausibility {
         // ── Negotiation gate: fee affordability ──────────────────────
         // Public interest is plausible, but if the club can't fund the fee
         // it can't actually open club-to-club talks. Release clauses and
-        // loans bypass the fee gate.
-        if !inputs.release_clause_triggered && !inputs.is_loan && inputs.estimated_value > max_fee {
+        // loans bypass the fee gate. A long-stale listing is judged on its
+        // market-proven price, not the headline valuation: the listing
+        // itself decays toward its floor and the seller's fee floor erodes
+        // on the same clock the player's resignation runs on, so the gate
+        // softens the value continuously with that shared clock.
+        let market_value = inputs.estimated_value
+            * (1.0 - thresholds::RESIGNATION_VALUE_SOFTENING * resignation as f64);
+        if !inputs.release_clause_triggered && !inputs.is_loan && market_value > max_fee {
             return make(
                 TransferMoveStage::CanShowPublicInterest,
                 Some(TransferPlausibilityReason::UnaffordableFee),
@@ -928,6 +967,18 @@ impl TransferMovePlausibility {
         } else {
             make(TransferMoveStage::CanCompleteMove, None)
         }
+    }
+
+    /// Resignation a listed player needs before he endorses a permanent
+    /// sporting drop of the given size. 0 at the huge-drop line (a Real
+    /// listing already opens anything up to there), ramping linearly to
+    /// 1.0 at [`thresholds::RESIGNATION_FULL_DROP`] — deeper drops demand
+    /// more time watching the market decline him. Above the full-drop
+    /// line the requirement exceeds any reachable resignation, so the
+    /// gate stays closed to everything but a request / forced clause.
+    fn resignation_needed_for_drop(drop: f32) -> f32 {
+        let span = thresholds::RESIGNATION_FULL_DROP - thresholds::HUGE_SPORTING_DROP;
+        ((drop - thresholds::HUGE_SPORTING_DROP) / span).max(0.0)
     }
 
     /// Player-side willingness hard floor for the personal-terms phase. A
@@ -987,11 +1038,15 @@ impl TransferMovePlausibility {
         strength: AvailabilityStrength,
     ) -> TransferPlausibilityAdjustment {
         let mut adj = TransferPlausibilityAdjustment::neutral();
+        let resignation = inputs.listing_resignation.clamp(0.0, 1.0);
 
         if drop > 0.0 {
             adj.shortlist_score_multiplier *= (1.0_f32 - drop * 1.8).clamp(0.35, 1.0);
             adj.seller_acceptance_delta -= drop * 35.0;
-            adj.player_terms_delta -= drop * 45.0;
+            // The step-down resistance a player brings to personal terms
+            // fades with his market resignation — after months unsold he
+            // has already re-read what level actually wants him.
+            adj.player_terms_delta -= drop * 45.0 * (1.0 - 0.55 * resignation);
             adj.minimum_fee_multiplier += drop as f64 * 0.9;
         }
 
@@ -1038,6 +1093,16 @@ impl TransferMovePlausibility {
                 adj.player_terms_delta += 25.0;
                 adj.minimum_fee_multiplier = 1.0;
             }
+        }
+
+        // Market resignation lifts both sides continuously on top of the
+        // discrete availability tier: the player increasingly says yes to
+        // the clubs that actually come (approaching the +25 a formal
+        // request grants), and the seller increasingly just wants the deal
+        // done — the fee floors still guard against a giveaway.
+        if resignation > 0.0 {
+            adj.player_terms_delta += resignation * 20.0;
+            adj.seller_acceptance_delta += resignation * 10.0;
         }
 
         // Upward / lateral move floor: a bigger or peer club should not
@@ -1213,6 +1278,7 @@ impl TransferPlausibilityBuilder {
             is_unsolicited,
             seller_in_debt: seller.in_debt,
             release_clause_triggered: false,
+            listing_resignation: seller.market_resignation,
             same_country,
             same_league_or_division,
             country_pair_blocked,
@@ -1380,6 +1446,7 @@ impl TransferPlausibilityBuilder {
             is_unsolicited,
             seller_in_debt: selling_club.finance.balance.balance < 0,
             release_clause_triggered,
+            listing_resignation: player.market_resignation(date),
             same_country,
             same_league_or_division,
             country_pair_blocked,
@@ -1456,6 +1523,7 @@ mod tests {
             is_unsolicited: true,
             seller_in_debt: false,
             release_clause_triggered: false,
+            listing_resignation: 0.0,
             same_country: true,
             same_league_or_division: true,
             buyer_transfer_budget: 10_000_000.0,
@@ -1499,6 +1567,7 @@ mod tests {
             is_unsolicited: true,
             seller_in_debt: false,
             release_clause_triggered: false,
+            listing_resignation: 0.0,
             same_country: true,
             same_league_or_division: true,
             buyer_transfer_budget: 15_000_000.0,
@@ -2136,6 +2205,120 @@ mod tests {
         );
     }
 
+    // ── Market resignation: a LISTED player's acceptable level band widens
+    //    continuously with time unsold. Fresh listing → the huge-drop gate
+    //    stays closed (the June "interested clubs" contract); months of
+    //    silence → he endorses the step-down himself and the gate opens —
+    //    the deal then still runs the fee / willingness gauntlet. Deeper
+    //    drops need more resignation, and resignation never substitutes for
+    //    a listing (an unhappy or loan-listed player keeps his sights). ──
+    #[test]
+    fn resignation_progressively_opens_huge_drop_for_listed_player() {
+        let mut huge = base_inputs();
+        huge.position_group = PlayerFieldPositionGroup::Goalkeeper;
+        huge.seller_rep = 0.86;
+        huge.buyer_rep = 0.26;
+        huge.seller_world_rep = 7600;
+        huge.buyer_world_rep = 1400;
+        huge.seller_league_rep = 6200;
+        huge.buyer_league_rep = 1500;
+        huge.seller_position_rank = 0;
+        huge.player_ca = 150;
+        huge.best_group_ca_at_seller = 150;
+        huge.is_listed = true;
+
+        let drop = TransferPlausibilityEvaluator::sporting_drop(&huge);
+        assert!(drop >= thresholds::HUGE_SPORTING_DROP);
+
+        // Fresh listing (resignation 0) — gate closed, as the base spec pins.
+        assert!(
+            !TransferMovePlausibility::assess(&huge)
+                .reaches(TransferMoveStage::CanShowPublicInterest)
+        );
+
+        // Not yet resigned enough for THIS depth of drop — still closed.
+        let mut early = huge.clone();
+        early.listing_resignation = 0.25;
+        assert!(
+            !TransferMovePlausibility::assess(&early)
+                .reaches(TransferMoveStage::CanShowPublicInterest),
+            "a quarter-resigned player does not yet endorse a drop of {drop}"
+        );
+
+        // Months unsold — he endorses the drop and the level gate opens.
+        let mut resigned = huge.clone();
+        resigned.listing_resignation = 0.60;
+        let a = TransferMovePlausibility::assess(&resigned);
+        assert!(
+            a.reaches(TransferMoveStage::CanShowPublicInterest),
+            "a long-unsold listed player accepts the step-down; got {:?} ({:?})",
+            a.stage,
+            a.blocking_reason
+        );
+
+        // A still-deeper drop needs MORE resignation than this one did.
+        let mut deeper = resigned.clone();
+        deeper.buyer_rep = 0.10;
+        deeper.buyer_world_rep = 300;
+        deeper.buyer_league_rep = 400;
+        let deeper_drop = TransferPlausibilityEvaluator::sporting_drop(&deeper);
+        assert!(deeper_drop > drop);
+        assert!(
+            !TransferMovePlausibility::assess(&deeper)
+                .reaches(TransferMoveStage::CanShowPublicInterest),
+            "the same resignation must not endorse a much deeper drop of {deeper_drop}"
+        );
+
+        // Resignation without a listing endorses nothing — the widened band
+        // belongs to the player the club actually put on the market.
+        let mut unlisted = resigned.clone();
+        unlisted.is_listed = false;
+        unlisted.is_unhappy = true;
+        assert!(
+            !TransferMovePlausibility::assess(&unlisted)
+                .reaches(TransferMoveStage::CanShowPublicInterest),
+            "resignation must not open the huge-drop gate without a genuine listing"
+        );
+    }
+
+    // ── Market resignation lifts both sides' willingness continuously —
+    //    never a cliff — while leaving the importance model (and thus the
+    //    gate thresholds) to the graded endorsement ramp alone. ──
+    #[test]
+    fn resignation_lifts_terms_and_seller_deltas_continuously() {
+        let mut listed = base_inputs();
+        listed.is_listed = true;
+
+        let fresh_adj = TransferMovePlausibility::assess(&listed).adjustment;
+
+        let mut mid = listed.clone();
+        mid.listing_resignation = 0.4;
+        let mid_adj = TransferMovePlausibility::assess(&mid).adjustment;
+
+        let mut stale = listed.clone();
+        stale.listing_resignation = 0.8;
+        let stale_adj = TransferMovePlausibility::assess(&stale).adjustment;
+
+        assert!(
+            fresh_adj.player_terms_delta < mid_adj.player_terms_delta
+                && mid_adj.player_terms_delta < stale_adj.player_terms_delta,
+            "personal-terms willingness must rise monotonically with resignation: {} {} {}",
+            fresh_adj.player_terms_delta,
+            mid_adj.player_terms_delta,
+            stale_adj.player_terms_delta
+        );
+        assert!(
+            fresh_adj.seller_acceptance_delta < stale_adj.seller_acceptance_delta,
+            "the seller increasingly wants the deal done"
+        );
+        // Importance itself is untouched by resignation — the level gates
+        // open via the endorsement ramp, not by demoting the player.
+        assert_eq!(
+            TransferPlausibilityEvaluator::player_importance(&listed),
+            TransferPlausibilityEvaluator::player_importance(&stale),
+        );
+    }
+
     #[test]
     fn transfer_request_still_needs_affordable_wages() {
         // Spec acceptance criterion: even with `Req`, the deal blocks
@@ -2371,6 +2554,7 @@ mod tests {
             is_unsolicited: true,
             seller_in_debt: false,
             release_clause_triggered: false,
+            listing_resignation: 0.0,
             same_country: false,
             same_league_or_division: false,
             buyer_transfer_budget: 2_000_000.0,

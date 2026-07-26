@@ -18,8 +18,8 @@
 
 use chrono::{Duration, NaiveDate};
 
-use crate::PlayerStatusType;
 use crate::club::player::player::Player;
+use crate::{PlayerSquadStatus, PlayerStatusType};
 
 /// Statuses that advertise a signed player as available to the market.
 /// A player carrying any of these is "on the market" for the purposes of
@@ -119,6 +119,70 @@ impl AvailabilityBlockReason {
             self,
             AvailabilityBlockReason::WageTooHigh | AvailabilityBlockReason::PlayerWontStepDown
         )
+    }
+}
+
+/// Continuous "market resignation" of a contracted player stuck on the
+/// permanent-transfer market — the signed-side mirror of the free-agent
+/// `career_pressure` curve. 0.0 = fresh listing, full expectations;
+/// 1.0 = fully resigned, he will consider any club that offers regular
+/// football. It is the player's own reading of the situation: weeks of
+/// silence after his club put him up for sale (or he asked to go), no
+/// place in the plans, scans that found no taker. The plausibility
+/// level gates, the personal-terms resistance, and the scouting realism
+/// band all consume it, so a benched player at a big club *gradually*
+/// lowers his sights toward clubs where he would actually play instead
+/// of sitting listed for a year and walking on a free.
+///
+/// Pure policy struct (no free functions): [`Player::market_resignation`]
+/// is the live read, [`MarketResignation::compute`] the testable core.
+pub struct MarketResignation;
+
+impl MarketResignation {
+    /// Days on the market before resignation starts building — aligned
+    /// with the transfer-broadcast grace, i.e. the moment the player
+    /// formally asks the club to arrange a move (the
+    /// `AskedClubToArrangeTransfer` beat). Before that he still believes
+    /// a peer club will come.
+    pub const GRACE_DAYS: f32 = 21.0;
+    /// Days (past the grace) to reach full resignation — the same clock
+    /// the seller's fee-floor erosion runs on, so the player's sights and
+    /// the club's price drop together.
+    pub const RAMP_DAYS: f32 = 180.0;
+
+    /// How urgently the player's declared role at his club pushes him to
+    /// re-read the market. A player the club openly does not need resigns
+    /// fastest; a listed key man clings to his level far longer.
+    fn role_urgency(status: Option<&PlayerSquadStatus>) -> f32 {
+        match status {
+            Some(PlayerSquadStatus::NotNeeded) => 1.0,
+            Some(PlayerSquadStatus::MainBackupPlayer) => 0.85,
+            Some(PlayerSquadStatus::DecentYoungster) => 0.75,
+            Some(PlayerSquadStatus::HotProspectForTheFuture) => 0.65,
+            Some(PlayerSquadStatus::FirstTeamSquadRotation) => 0.55,
+            Some(PlayerSquadStatus::FirstTeamRegular) => 0.35,
+            Some(PlayerSquadStatus::KeyPlayer) => 0.25,
+            _ => 0.70,
+        }
+    }
+
+    /// Pure resignation curve. `days_on_market` is time under an active
+    /// availability status; `failed_scans` is the consecutive dry
+    /// circulation scans from [`AvailabilityMarketState`]. Continuous in
+    /// every axis — no cliffs.
+    pub fn compute(
+        days_on_market: i64,
+        squad_status: Option<&PlayerSquadStatus>,
+        failed_scans: u16,
+    ) -> f32 {
+        let time =
+            ((days_on_market as f32 - Self::GRACE_DAYS) / Self::RAMP_DAYS).clamp(0.0, 1.0);
+        if time <= 0.0 {
+            return 0.0;
+        }
+        let urgency = Self::role_urgency(squad_status);
+        let scans = (failed_scans as f32 / 12.0).clamp(0.0, 1.0);
+        (time * (0.55 + 0.35 * urgency + 0.10 * scans)).clamp(0.0, 1.0)
     }
 }
 
@@ -243,6 +307,30 @@ impl Player {
             state.failed_scans = 0;
             state.last_block = None;
         }
+    }
+
+    /// Live read of the player's [`MarketResignation`] curve. Non-zero
+    /// only while he is genuinely on the permanent market — listed (`Lst`)
+    /// or formally requesting out (`Req`); a merely unhappy or loan-listed
+    /// player keeps his full expectations for a permanent move. The days
+    /// anchor is his earliest active availability status, so a long-
+    /// unsettled player who is then listed resigns from where his sit
+    /// actually began, not from the paperwork date.
+    pub fn market_resignation(&self, today: NaiveDate) -> f32 {
+        let listed = self.statuses.has(PlayerStatusType::Lst);
+        let requested = self.statuses.has(PlayerStatusType::Req);
+        if !listed && !requested {
+            return 0.0;
+        }
+        let failed_scans = self
+            .availability_market_state()
+            .map(|s| s.failed_scans)
+            .unwrap_or(0);
+        MarketResignation::compute(
+            self.days_available(today),
+            self.contract.as_ref().map(|c| &c.squad_status),
+            failed_scans,
+        )
     }
 
     /// Record that a circulation scan found no plausible taker, stamping
@@ -396,6 +484,54 @@ mod tests {
         assert!(p.is_market_available());
         p.statuses.remove(PlayerStatusType::Unh);
         assert!(!p.is_market_available());
+    }
+
+    #[test]
+    fn resignation_zero_without_market_status_and_within_grace() {
+        let today = AvailabilityFixtures::d(2026, 6, 15);
+        let mut p = AvailabilityFixtures::player(today);
+        // No availability status at all → no resignation.
+        assert_eq!(p.market_resignation(today), 0.0);
+        // Unhappy alone is not a permanent-market signal.
+        p.statuses
+            .add(today - Duration::days(200), PlayerStatusType::Unh);
+        assert_eq!(p.market_resignation(today), 0.0);
+        // Freshly listed (inside the grace) → still zero.
+        p.statuses.remove(PlayerStatusType::Unh);
+        p.statuses
+            .add(today - Duration::days(10), PlayerStatusType::Lst);
+        assert_eq!(p.market_resignation(today), 0.0);
+    }
+
+    #[test]
+    fn resignation_builds_continuously_with_time_listed() {
+        let today = AvailabilityFixtures::d(2026, 6, 15);
+        let mut p = AvailabilityFixtures::player(today);
+        p.statuses
+            .add(today - Duration::days(80), PlayerStatusType::Lst);
+        let mid = p.market_resignation(today);
+        assert!(mid > 0.0 && mid < 1.0, "mid-sit resignation in (0,1): {mid}");
+        // Same player, much longer sit → strictly more resigned.
+        let mut long = AvailabilityFixtures::player(today);
+        long.statuses
+            .add(today - Duration::days(250), PlayerStatusType::Lst);
+        assert!(long.market_resignation(today) > mid);
+    }
+
+    #[test]
+    fn resignation_scales_with_role_urgency_and_dry_scans() {
+        // Pure-core check: an unwanted player resigns faster than a listed
+        // key man on the same clock, and dry scans accelerate both.
+        let unwanted =
+            MarketResignation::compute(200, Some(&PlayerSquadStatus::NotNeeded), 0);
+        let key_man =
+            MarketResignation::compute(200, Some(&PlayerSquadStatus::KeyPlayer), 0);
+        assert!(unwanted > key_man);
+        let scanned =
+            MarketResignation::compute(200, Some(&PlayerSquadStatus::NotNeeded), 12);
+        assert!(scanned > unwanted);
+        // Fully saturated case stays bounded.
+        assert!(MarketResignation::compute(2000, Some(&PlayerSquadStatus::NotNeeded), 30) <= 1.0);
     }
 
     #[test]

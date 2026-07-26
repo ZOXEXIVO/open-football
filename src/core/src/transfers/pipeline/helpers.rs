@@ -301,6 +301,8 @@ impl PipelineProcessor {
             is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
             is_unhappy: player.statuses.has(PlayerStatusType::Unh),
             in_debt: club.finance.balance.balance < 0,
+            days_on_market: player.days_available(date).min(i16::MAX as i64) as i16,
+            market_resignation: player.market_resignation(date),
         };
         PlayerSummary {
             player_id: player.id,
@@ -1676,6 +1678,7 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            last_block: None,
             is_loan_listed: false,
             breakout_score: 0.0,
         };
@@ -1781,6 +1784,7 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            last_block: None,
             is_loan_listed: false,
             breakout_score: 0.0,
         };
@@ -1834,6 +1838,7 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            last_block: None,
             is_loan_listed: false,
             breakout_score: 0.0,
         };
@@ -1886,6 +1891,7 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            last_block: None,
             is_loan_listed: false,
             breakout_score: 0.0,
         };
@@ -1944,6 +1950,7 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            last_block: None,
             is_loan_listed: false,
             breakout_score: 0.0,
         };
@@ -1999,6 +2006,7 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            last_block: None,
             is_loan_listed: false,
             breakout_score: 0.0,
         };
@@ -2084,6 +2092,7 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            last_block: None,
             is_loan_listed: false,
             breakout_score: 0.0,
         };
@@ -2155,6 +2164,7 @@ mod group_need_tests {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
+            last_block: None,
             is_loan_listed: false,
             breakout_score: 0.0,
         };
@@ -2247,6 +2257,7 @@ mod breakout_sweep_tests {
                 low_usage: false,
                 recent_interest_count: 0,
                 failed_scans: 0,
+                last_block: None,
             }
         }
     }

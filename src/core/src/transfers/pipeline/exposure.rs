@@ -94,6 +94,11 @@ pub(in crate::transfers::pipeline) struct AvailabilitySignals {
     pub recent_interest_count: u8,
     /// Consecutive circulation scans that found no taker.
     pub failed_scans: u16,
+    /// The circulation pass's most recent diagnosis of WHY the market
+    /// stalled. Steers which softening arm accelerates: a price-shaped
+    /// block pushes the seller's discount, a wage/level-shaped block
+    /// pushes the player's own softening.
+    pub last_block: Option<AvailabilityBlockReason>,
 }
 
 /// The exposure verdict — a discoverability score plus the staleness
@@ -188,16 +193,33 @@ impl AvailabilityExposure {
         // ── Softening curves ──
         let stale_frac = (s.days_available as f32 / 365.0).clamp(0.0, 1.0);
         let scan_frac = (s.failed_scans as f32 / 12.0).clamp(0.0, 1.0);
+        // The recorded diagnosis aims the feedback at the side that can
+        // act on it: "asking too high / no affordable need" is the
+        // seller's to fix, "wage too high / won't step down" the player's.
+        let seller_block_nudge = match s.last_block {
+            Some(b) if b.seller_should_discount() => 0.05,
+            _ => 0.0,
+        };
+        let player_block_nudge = match s.last_block {
+            Some(b) if b.player_should_soften() => 0.05,
+            _ => 0.0,
+        };
         // Seller drops the price the longer it sits — more so when the tag
         // sits above the player's value.
         let overpriced = (s.asking_to_value_ratio - 1.0).clamp(0.0, 0.6);
-        let price_softening =
-            (stale_frac * 0.18 + scan_frac * 0.08 + overpriced * 0.10).clamp(0.0, 0.30);
+        let price_softening = (stale_frac * 0.18
+            + scan_frac * 0.08
+            + overpriced * 0.10
+            + seller_block_nudge)
+            .clamp(0.0, 0.30);
         // The player relaxes his wage / level demand over a dry spell; a
         // player who actually handed in a request softens a touch faster.
         let request_bonus = if s.is_transfer_requested { 0.03 } else { 0.0 };
-        let wage_softening =
-            (stale_frac * 0.14 + scan_frac * 0.07 + request_bonus).clamp(0.0, 0.25);
+        let wage_softening = (stale_frac * 0.14
+            + scan_frac * 0.07
+            + request_bonus
+            + player_block_nudge)
+            .clamp(0.0, 0.25);
 
         AvailabilityExposure {
             score,
@@ -395,6 +417,7 @@ mod tests {
                 low_usage_despite_ability: false,
                 recent_interest_count: 0,
                 failed_scans: 0,
+                last_block: None,
             }
         }
     }
@@ -495,6 +518,39 @@ mod tests {
         let long = AvailabilityExposure::compute(&year);
         assert!(long.price_softening > mid.price_softening);
         assert!(long.price_softening <= 0.30 && long.wage_softening <= 0.25);
+    }
+
+    #[test]
+    fn block_diagnosis_steers_the_matching_softening_arm() {
+        // The recorded market diagnosis aims the feedback at the side that
+        // can act on it — previously `seller_should_discount` /
+        // `player_should_soften` were documented but consumed by nothing.
+        let mut base = ExposureFixtures::fresh_listed();
+        base.days_available = 90;
+        base.failed_scans = 4;
+
+        let neutral = AvailabilityExposure::compute(&base);
+
+        let mut price_blocked = base;
+        price_blocked.last_block = Some(AvailabilityBlockReason::AskingPriceTooHigh);
+        let pb = AvailabilityExposure::compute(&price_blocked);
+        assert!(
+            pb.price_softening > neutral.price_softening,
+            "a price-shaped block accelerates the seller's discount"
+        );
+        assert_eq!(
+            pb.wage_softening, neutral.wage_softening,
+            "…and leaves the player's arm alone"
+        );
+
+        let mut level_blocked = base;
+        level_blocked.last_block = Some(AvailabilityBlockReason::PlayerWontStepDown);
+        let lb = AvailabilityExposure::compute(&level_blocked);
+        assert!(
+            lb.wage_softening > neutral.wage_softening,
+            "a level/wage-shaped block accelerates the player's softening"
+        );
+        assert_eq!(lb.price_softening, neutral.price_softening);
     }
 
     #[test]

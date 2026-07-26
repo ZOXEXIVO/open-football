@@ -655,6 +655,19 @@ impl CountryResult {
             }
         }
 
+        // A long-unsold genuine listing erodes the seller's stance on the
+        // same clock as `SellerFeeFloor::erode_for_listing_age`: with every
+        // unsold month the club wants the wage off the books more than it
+        // wants a premium, so its acceptance band walks down toward the
+        // (itself eroding) absolute fee floor instead of holding a price
+        // the market has already refused for half a season.
+        if !neg_data.is_loan {
+            if let Some(days_listed) = Self::seller_listing_age_days(country, neg_data, date) {
+                let t = (days_listed as f64 / SellerFeeFloor::FLOOR_EROSION_DAYS).clamp(0.0, 1.0);
+                seller_reservation -= t * 0.20;
+            }
+        }
+
         let urgency = Self::deadline_urgency_for(country, date) as f64;
         if urgency > 0.0 && importance < 0.75 {
             seller_reservation -= urgency * 0.10;
@@ -1107,6 +1120,16 @@ impl CountryResult {
                     chance += 25.0; // Wants out — will accept more
                 } else if player.statuses.has(PlayerStatusType::Unh) {
                     chance += 20.0; // Unhappy — willing to move
+                }
+
+                // Market-reality reset: a long-unsold listed player has
+                // watched the market decline him at his level, and the
+                // prestige / age / ambition resistance above fades as his
+                // resignation builds (the same clock the seller's fee-floor
+                // erosion runs on). Only for a step-down — an upward move
+                // needs no such help.
+                if rep_diff < 0.0 {
+                    chance += player.market_resignation(date) * 30.0;
                 }
             } else if neg_data.selling_club_id == 0 {
                 // Global-pool free agent — he lives in the simulator-level
@@ -1794,6 +1817,33 @@ impl CountryResult {
         contract
             .release_clause_triggered(neg_data.offer_amount, buyer_is_foreign)
             .is_some()
+    }
+
+    /// Age in days of the seller's own genuine permanent listing for this
+    /// negotiation's player — `None` when the club never advertised him.
+    /// Reads `Available` and `InNegotiation` rows alike: the clock is the
+    /// listing, not the bid currently riding on it.
+    fn seller_listing_age_days(
+        country: &Country,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+    ) -> Option<i64> {
+        country
+            .transfer_market
+            .listings
+            .iter()
+            .filter(|l| {
+                l.player_id == neg_data.player_id
+                    && l.club_id == neg_data.selling_club_id
+                    && l.listing_type == TransferListingType::Transfer
+                    && l.origin == TransferListingOrigin::SellerListed
+                    && matches!(
+                        l.status,
+                        TransferListingStatus::Available | TransferListingStatus::InNegotiation
+                    )
+            })
+            .map(|l| (date - l.listed_date).num_days().max(0))
+            .max()
     }
 
     /// Build the plausibility verdict for the current negotiation.

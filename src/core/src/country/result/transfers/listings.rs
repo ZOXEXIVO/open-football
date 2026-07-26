@@ -11,7 +11,8 @@ use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::{
-    TransferListing, TransferListingOrigin, TransferListingStatus, TransferListingType,
+    NegotiationStatus, TransferListing, TransferListingOrigin, TransferListingStatus,
+    TransferListingType,
 };
 use crate::{
     Club, Country, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
@@ -456,10 +457,20 @@ impl CountryResult {
         // dump every stranded player into the free-agent pool in one tick.
         const MAX_EXITS_PER_CLUB_PER_PASS: usize = 2;
 
+        // LIVE negotiations only: resolved rows are retained ~30 days for
+        // diagnostics, and a status-blind check let a bid rejected weeks
+        // ago keep deferring the valve (and, worse, mis-ordered a player's
+        // exit against a genuinely pending deal).
         let in_negotiation: HashSet<u32> = country
             .transfer_market
             .negotiations
             .values()
+            .filter(|n| {
+                matches!(
+                    n.status,
+                    NegotiationStatus::Pending | NegotiationStatus::Countered
+                )
+            })
             .map(|n| n.player_id)
             .collect();
 

@@ -1,6 +1,7 @@
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
+use crate::club::player::transfer::AvailabilityBlockReason;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::ScoutMonitoringSource;
 use crate::transfers::pipeline::ScoutPlayerMonitoring;
@@ -76,6 +77,9 @@ pub(in crate::transfers::pipeline) struct ListedTargetView {
     pub recent_interest_count: u8,
     /// Consecutive weekly circulation scans that found no taker.
     pub failed_scans: u16,
+    /// Most recent circulation diagnosis of why the market stalled —
+    /// steers which exposure softening arm accelerates.
+    pub last_block: Option<AvailabilityBlockReason>,
 }
 
 /// Buyer-side context the filter consults. One struct, one place to
@@ -247,6 +251,7 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
         low_usage_despite_ability: target.low_usage,
         recent_interest_count: target.recent_interest_count,
         failed_scans: target.failed_scans,
+        last_block: target.last_block,
     });
 
     // Affordability — fee. The asking price softens the longer the player
@@ -469,6 +474,8 @@ impl PipelineProcessor {
             recent_interest_count: u8,
             /// Consecutive weekly circulation scans that found no taker.
             failed_scans: u16,
+            /// Most recent circulation diagnosis of why the market stalled.
+            last_block: Option<AvailabilityBlockReason>,
             /// Performance-breakout discovery score (0..100), computed once
             /// here from the league performance lookup so the listed-star
             /// sweep and the scout-network scorer share one number.
@@ -594,6 +601,9 @@ impl PipelineProcessor {
                                     .availability_market_state()
                                     .map(|s| s.failed_scans)
                                     .unwrap_or(0),
+                                last_block: player
+                                    .availability_market_state()
+                                    .and_then(|s| s.last_block.map(|(_, reason)| reason)),
                                 breakout_score,
                             });
                         }
@@ -1096,6 +1106,7 @@ impl PipelineProcessor {
                                 low_usage: p.appearances < 8,
                                 recent_interest_count: p.recent_interest_count,
                                 failed_scans: p.failed_scans,
+                                last_block: p.last_block,
                             };
                             let ctx = BuyerContext {
                                 buyer_rep_score: club_rep_score,

@@ -15,6 +15,7 @@
 //! call sites.
 
 use crate::PlayerSquadStatus;
+use crate::club::player::transfer::MarketResignation;
 use crate::transfers::ReportRiskFlag;
 use crate::transfers::pipeline::plausibility::EffectivePlayerReputation;
 use crate::transfers::pipeline::{PlayerSummary, ScoutingRecommendation};
@@ -390,6 +391,9 @@ pub struct RealismTarget {
     /// is attainable from a much bigger club; a first-team regular or key
     /// player is not.
     pub squad_status: PlayerSquadStatus,
+    /// Days the player has carried a market-availability status; 0 when not
+    /// on the market. Drives [`Self::market_staleness`].
+    pub days_on_market: i16,
 }
 
 impl RealismTarget {
@@ -403,6 +407,25 @@ impl RealismTarget {
             self.squad_status,
             PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::NotNeeded
         )
+    }
+
+    /// How stale the player's PERMANENT-market availability is, 0..1 — the
+    /// same grace-then-ramp clock the seller's fee-floor erosion and the
+    /// player's own resignation run on ([`MarketResignation`]). Non-zero
+    /// only for a transfer-listed player: it widens the attainability band
+    /// and the affordability read below, because a long-unsold listing is
+    /// precisely the cut-price, lowered-sights target a smaller club can
+    /// realistically land. A loan-only listing never widens — loan
+    /// destinations are governed by their own division-level gates, and a
+    /// parent shopping a loan has conceded nothing about the player's
+    /// permanent level.
+    fn market_staleness(&self) -> f32 {
+        if !self.is_listed {
+            return 0.0;
+        }
+        ((self.days_on_market as f32 - MarketResignation::GRACE_DAYS)
+            / MarketResignation::RAMP_DAYS)
+            .clamp(0.0, 1.0)
     }
 }
 
@@ -679,6 +702,7 @@ impl ScoutingConfig {
                 is_listed: target.is_listed,
                 is_loan_listed: target.is_loan_listed,
                 squad_status: target.seller_ctx.squad_status.clone(),
+                days_on_market: target.seller_ctx.days_on_market,
             },
             buyer_fee_capacity,
         )
@@ -715,9 +739,16 @@ impl ScoutingConfig {
         // Affordable — but he must also be *attainable* from the bigger club.
 
         // 1. Explicitly on the market, within a sane tier band (even a listed
-        //    player will not drop several divisions).
+        //    player will not drop several divisions — at first). The band
+        //    widens continuously with staleness: every unsold month is the
+        //    market telling both sides the tag was set a level too high, so
+        //    a long-listed player becomes reachable from progressively
+        //    further down (up to double the fresh band), mirroring his own
+        //    resignation curve on the plausibility side.
+        let listed_band = r.listed_exemption_gap_blocking
+            + (target.market_staleness() * r.listed_exemption_gap_blocking as f32).round() as i16;
         if (target.is_listed || target.is_loan_listed)
-            && target.club_world_reputation <= buyer_world_rep + r.listed_exemption_gap_blocking
+            && target.club_world_reputation <= buyer_world_rep + listed_band
         {
             return true;
         }
@@ -791,10 +822,18 @@ impl ScoutingConfig {
         let buyer_tier = buyer_world_rep.max(0) as f64;
         let max_salary = buyer_tier * r.salary_per_rep_point;
         let max_value = buyer_tier * r.value_per_rep_point;
-        let rep_affordable =
-            (target.salary as f64) <= max_salary && target.estimated_value <= max_value;
-        let budget_affordable =
-            buyer_fee_capacity > 0.0 && target.estimated_value <= buyer_fee_capacity;
+        // A stale listing's REAL price is the market-decayed one, not the
+        // headline valuation: the listing itself decays −5%/week toward a
+        // 60% floor and the seller's fee floor erodes on the same clock —
+        // and his wage ask collapses toward the buyer's tier in actual
+        // negotiation. Judge affordability on that market reality so the
+        // scouting gate stops excluding buyers the negotiation layer
+        // would happily close with.
+        let staleness = target.market_staleness() as f64;
+        let effective_value = target.estimated_value * (1.0 - 0.40 * staleness);
+        let effective_salary = target.salary as f64 * (1.0 - 0.35 * staleness);
+        let rep_affordable = effective_salary <= max_salary && effective_value <= max_value;
+        let budget_affordable = buyer_fee_capacity > 0.0 && effective_value <= buyer_fee_capacity;
         rep_affordable || budget_affordable
     }
 
@@ -833,6 +872,7 @@ mod tests {
         salary: u32,
         estimated_value: f64,
         squad_status: PlayerSquadStatus,
+        days_on_market: i16,
     }
 
     impl Default for Target {
@@ -848,6 +888,7 @@ mod tests {
                 salary: 500_000,
                 estimated_value: 1_500_000.0,
                 squad_status: PlayerSquadStatus::FirstTeamRegular,
+                days_on_market: 0,
             }
         }
     }
@@ -900,6 +941,8 @@ mod tests {
                     is_transfer_requested: false,
                     is_unhappy: false,
                     in_debt: false,
+                    days_on_market: self.days_on_market,
+                    market_resignation: 0.0,
                 },
             }
         }
@@ -1162,8 +1205,9 @@ mod tests {
     #[test]
     fn realism_blocks_transfer_listed_top_club_regular_for_vastly_lower_buyer() {
         let c = ScoutingConfig::default();
-        // Same level gap, permanent listing: a transfer-listed prominent
-        // first-teamer at a giant club is still out of a 4th-tier side's reach.
+        // Same level gap, permanent listing: a FRESHLY transfer-listed
+        // prominent first-teamer at a giant club is still out of a 4th-tier
+        // side's reach — staleness hasn't widened anything yet.
         let listed_regular = Target {
             world_rep: 6000,
             is_listed: true,
@@ -1171,6 +1215,87 @@ mod tests {
         }
         .build();
         assert!(!c.is_target_realistic(FOURTH_TIER_BUYER, &listed_regular, 0.0));
+    }
+
+    // ── Staleness: every unsold month widens who a listed player is
+    //    realistic for — continuously, on the same clock the seller's fee
+    //    floor erodes and the player's own resignation builds. A fresh
+    //    listing keeps the June level-gap contract; a listing nobody
+    //    touched for half a season becomes reachable from much further
+    //    down, and its affordability is judged on the market-decayed
+    //    price, not the headline tag. ──
+
+    #[test]
+    fn stale_listing_progressively_widens_realism_band() {
+        let c = ScoutingConfig::default();
+        let listed = |days: i16| {
+            Target {
+                world_rep: 4000,
+                is_listed: true,
+                days_on_market: days,
+                ..Target::default() // club 7500, FTR, 32 apps
+            }
+            .build()
+        };
+        // Buyer at 2000: the fresh band (4500) clearly misses the 7500
+        // seller, and the day-60 widening (~+975) still falls just short.
+        let buyer = 2000;
+        assert!(
+            !c.is_target_realistic(buyer, &listed(0), 0.0),
+            "fresh listing: out of band"
+        );
+        assert!(
+            !c.is_target_realistic(buyer, &listed(60), 0.0),
+            "a few weeks in: the band has widened, but not this far yet"
+        );
+        assert!(
+            c.is_target_realistic(buyer, &listed(210), 0.0),
+            "half a season unsold: the widened band reaches this buyer"
+        );
+        // A loan-only listing never widens with staleness — loan reach is
+        // governed by the loan division gates, not the permanent market.
+        let loan_only = Target {
+            world_rep: 4000,
+            is_loan_listed: true,
+            days_on_market: 210,
+            ..Target::default()
+        }
+        .build();
+        assert!(
+            !c.is_target_realistic(buyer, &loan_only, 0.0),
+            "loan-only staleness must not widen the permanent realism band"
+        );
+    }
+
+    #[test]
+    fn stale_listing_affordability_reads_decayed_price() {
+        let c = ScoutingConfig::default();
+        // Salary/value sit just above a small buyer's reputation ceilings at
+        // list time — and inside them once the market has decayed the price
+        // and the wage ask has sagged with half a season of staleness.
+        let priced = |days: i16| {
+            Target {
+                world_rep: 1800,
+                is_listed: true,
+                days_on_market: days,
+                appearances: 3, // fringe → attainability via the fringe path
+                salary: 600_000,
+                estimated_value: 4_000_000.0,
+                club_world_rep: 4400,
+                ..Target::default()
+            }
+            .build()
+        };
+        // Buyer 1000: max salary 500k < 600k → unaffordable while fresh.
+        let buyer = 1000;
+        assert!(
+            !c.is_target_realistic(buyer, &priced(0), 0.0),
+            "fresh: headline wage/value exceed the small buyer's ceilings"
+        );
+        assert!(
+            c.is_target_realistic(buyer, &priced(210), 0.0),
+            "stale: the decayed price and sagging wage ask fit the buyer"
+        );
     }
 
     #[test]

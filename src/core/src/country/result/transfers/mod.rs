@@ -261,11 +261,11 @@ impl CountryResult {
             // so prospects are never starved of takers (no scan deferral).
             PipelineProcessor::broadcast_listed_loans(country, current_date);
             // Stale permanent listings get the same push, permanent
-            // flavor: a player unsold 90+ days asks the club to find him
-            // a move and the scouts offer him around, tier-cascading
-            // downward until a buyer responds. Paired with the
-            // year-unsold free-exit valve below, no listing lingers for
-            // seasons.
+            // flavor: a player unsold past the grace weeks asks the club
+            // to find him a move and the scouts offer him around, the
+            // tier reach widening cumulatively downward until a buyer
+            // responds. Paired with the year-unsold free-exit valve
+            // below, no listing lingers for seasons.
             PipelineProcessor::broadcast_listed_transfers(country, current_date);
             PipelineProcessor::scan_loan_market(country, current_date);
             PipelineProcessor::scan_foreign_loan_market(country, &foreign_players, current_date);

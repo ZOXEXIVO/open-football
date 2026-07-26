@@ -262,6 +262,7 @@ impl PipelineProcessor {
                         low_usage: s.appearances < 8,
                         recent_interest_count: c.recent_interest_count,
                         failed_scans: c.failed_scans,
+                        last_block: None,
                     };
                     // Form-discovery mode: a not-yet-listed breakout is
                     // admitted, but the affordability / tier / reputation /

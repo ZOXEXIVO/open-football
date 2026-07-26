@@ -1,7 +1,8 @@
-use chrono::{Datelike, NaiveDate, Weekday};
+use chrono::{Datelike, Duration, NaiveDate, Weekday};
 use log::debug;
 
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::transfer::MarketResignation;
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutingRegion;
@@ -953,9 +954,18 @@ impl PipelineProcessor {
         }
 
         let mut broadcastable: Vec<Broadcastable> = Vec::new();
+        // Anchors that must survive this pass although the player can't be
+        // pushed right now — his listing is riding a live negotiation.
+        // Pruning them made every failed loan bid restart the cascade at
+        // the parent's own tier, contradicting the preserved-entry
+        // contract documented above.
+        let mut keep_ids: Vec<u32> = Vec::new();
         for listing in &country.transfer_market.listings {
             if listing.listing_type != TransferListingType::Loan
-                || listing.status != TransferListingStatus::Available
+                || !matches!(
+                    listing.status,
+                    TransferListingStatus::Available | TransferListingStatus::InNegotiation
+                )
             {
                 continue;
             }
@@ -992,6 +1002,10 @@ impl PipelineProcessor {
             if player.age(date) > MAX_LOAN_TARGET_AGE {
                 continue;
             }
+            keep_ids.push(listing.player_id);
+            if listing.status != TransferListingStatus::Available {
+                continue;
+            }
             let group = player.position().position_group();
             let parent_best_in_group = parent_team
                 .players
@@ -1025,9 +1039,10 @@ impl PipelineProcessor {
 
         // Prune broadcasts whose player is no longer broadcastable (sold,
         // recalled, loan agreed, parent fell below the resource tier). Runs
-        // even when the list is empty so the map never accumulates.
-        let live_ids: Vec<u32> = broadcastable.iter().map(|b| b.player_id).collect();
-        Self::prune_loan_broadcasts(country, &live_ids);
+        // even when the list is empty so the map never accumulates. Players
+        // whose listing is riding a live negotiation stay in the keep-set —
+        // their cascade resumes where it left off if the bid collapses.
+        Self::prune_loan_broadcasts(country, &keep_ids);
         if broadcastable.is_empty() {
             return;
         }
@@ -1267,16 +1282,19 @@ impl PipelineProcessor {
     /// Seller-side placement for STALE permanent listings — the
     /// permanent-transfer mirror of [`Self::broadcast_listed_loans`],
     /// kept alongside it so the two cascades share every helper. A
-    /// transfer-listed player the pull-side market has ignored for three
-    /// months asks the club to find him a new team (a visible note on
-    /// his events feed), and the club's scouts respond by offering him
-    /// to other clubs: opening at the club's own reputation tier and
-    /// widening one tier down every unanswered response window, until a
-    /// club opens a normal purchase negotiation. Unlike the loan push
-    /// there is no National+ resource gate — a stranded listing is a
-    /// wage problem for any club. Together with the year-unsold
-    /// free-exit valve this guarantees a listing RESOLVES: sold via the
-    /// push, or the player leaves on a free.
+    /// transfer-listed player the pull-side market has ignored past the
+    /// grace weeks asks the club to find him a new team (a visible note
+    /// on his events feed), and the club's scouts respond by offering
+    /// him to other clubs: opening at the club's own reputation tier
+    /// and widening one tier down every unanswered response window —
+    /// cumulatively, so every level from the club's own down to the
+    /// cascade's reach stays in the running — until a club opens a
+    /// normal purchase negotiation. Unlike the loan push there is no
+    /// National+ resource gate — a stranded listing is a wage problem
+    /// for any club. Together with the year-unsold free-exit valve this
+    /// guarantees a listing RESOLVES: sold via the push, or — rarely,
+    /// when even the widened market wants no part of him — the player
+    /// leaves on a free.
     pub fn broadcast_listed_transfers(country: &mut Country, date: NaiveDate) {
         // Weekly cadence, mirroring the loan push.
         if date.weekday() != Weekday::Mon {
@@ -1284,11 +1302,20 @@ impl PipelineProcessor {
         }
 
         // In-flight negotiations already carry a pending response — don't
-        // widen their net or open a competing approach.
+        // widen their net or open a competing approach. LIVE negotiations
+        // only, mirroring the loan push: resolved rows are retained ~30
+        // days for diagnostics, and a status-blind set froze a player's
+        // cascade for weeks after every rejected bid.
         let in_negotiation: HashSet<u32> = country
             .transfer_market
             .negotiations
             .values()
+            .filter(|n| {
+                matches!(
+                    n.status,
+                    NegotiationStatus::Pending | NegotiationStatus::Countered
+                )
+            })
             .map(|n| n.player_id)
             .collect();
 
@@ -1303,13 +1330,23 @@ impl PipelineProcessor {
             group: PlayerFieldPositionGroup,
             ability: u8,
             asking: f64,
+            listed_date: NaiveDate,
         }
 
         let mut sellable: Vec<Sellable> = Vec::new();
+        // Broadcast anchors that must SURVIVE this pass even though the
+        // player can't be pushed right now — his listing is riding a live
+        // negotiation. Pruning them lost the cascade's `since` anchor, so
+        // every failed bid restarted the tier walk at the seller's own
+        // level (contradicting the resume-where-it-left-off contract).
+        let mut keep_ids: Vec<u32> = Vec::new();
         for listing in &country.transfer_market.listings {
             if listing.listing_type != TransferListingType::Transfer
                 || listing.origin != TransferListingOrigin::SellerListed
-                || listing.status != TransferListingStatus::Available
+                || !matches!(
+                    listing.status,
+                    TransferListingStatus::Available | TransferListingStatus::InNegotiation
+                )
             {
                 continue;
             }
@@ -1332,6 +1369,10 @@ impl PipelineProcessor {
             if player.is_on_loan() {
                 continue;
             }
+            keep_ids.push(listing.player_id);
+            if listing.status != TransferListingStatus::Available {
+                continue;
+            }
             sellable.push(Sellable {
                 player_id: listing.player_id,
                 parent_club_id: listing.club_id,
@@ -1339,11 +1380,11 @@ impl PipelineProcessor {
                 group: player.position().position_group(),
                 ability: player.player_attributes.current_ability,
                 asking: listing.asking_price.amount,
+                listed_date: listing.listed_date,
             });
         }
 
-        let live_ids: Vec<u32> = sellable.iter().map(|s| s.player_id).collect();
-        Self::prune_transfer_broadcasts(country, &live_ids);
+        Self::prune_transfer_broadcasts(country, &keep_ids);
         if sellable.is_empty() {
             return;
         }
@@ -1359,20 +1400,22 @@ impl PipelineProcessor {
             let Some(club) = country.clubs.iter_mut().find(|c| c.id == s.parent_club_id) else {
                 continue;
             };
-            // Anchor the cascade on when the broadcast FIRST opened (stable —
-            // never reset), so the tier reach widens continuously with time on
-            // the market: it opens at the club's own tier for a freshly-shopped
-            // player and drops one rung per response window from there.
-            // Deriving the reach from the stable anchor each tick — rather than
-            // accumulating one rung per weekly visit — removes the old cadence
-            // lag without teleporting a long-listed player straight to the
-            // bottom tier the moment the push first opens.
+            // Anchor the cascade on when the LISTING cleared its grace —
+            // stable, never reset — so the tier reach widens continuously
+            // with real time on the market. A save loaded with an old
+            // unsold listing resumes the cascade at the depth its age has
+            // already earned instead of politely re-opening at the
+            // seller's own tier; the eligible-tier band below is
+            // cumulative (own tier down to the cascade tier), so a deep
+            // resume never skips the levels in between.
+            let opened =
+                s.listed_date + Duration::days(Self::TRANSFER_BROADCAST_GRACE_DAYS);
             let first_since = club
                 .transfer_plan
                 .transfer_broadcasts
                 .get(&s.player_id)
                 .map(|b| b.since)
-                .unwrap_or(date);
+                .unwrap_or(opened);
             if !club
                 .transfer_plan
                 .transfer_broadcasts
@@ -1449,15 +1492,32 @@ impl PipelineProcessor {
                 continue;
             };
 
-            // A modest push discount: three months unsold already proved
-            // the headline asking wrong; the responding club opens just
-            // under it and the normal negotiation resolves the rest (the
-            // seller-side fee floors still protect against a giveaway).
+            // A modest push discount: the unsold weeks already proved the
+            // headline asking wrong; the responding club opens just under
+            // the (already market-decayed) asking and the normal
+            // negotiation resolves the rest (the seller-side fee floors
+            // still protect against a giveaway).
             let offer_amount = FormattingUtils::round_fee(s.asking * 0.85);
 
-            // Highest world reputation among qualifying clubs at the
-            // current tier wins — the best home that would actually take
-            // him.
+            // Weeks unsold past the grace, 0..1 across the same ~half
+            // season the seller's fee floor and the player's resignation
+            // run on. It relaxes the buyer-side CA ceiling below: a
+            // stale listing IS the bargain-above-your-level that a lower
+            // club stretches for in real markets.
+            let staleness = (((date - s.listed_date).num_days()
+                - Self::TRANSFER_BROADCAST_GRACE_DAYS) as f32
+                / MarketResignation::RAMP_DAYS)
+                .clamp(0.0, 1.0);
+            let ceiling_relax = (staleness * 35.0).round() as u8;
+
+            // Highest world reputation among qualifying clubs wins — the
+            // best home that would actually take him. Eligibility is the
+            // CUMULATIVE band from the seller's own tier down to the
+            // cascade's current reach: a tier already offered stays in
+            // the running while the net widens (the old exact-tier match
+            // silently un-offered every level the cascade had passed, so
+            // once it saturated at the bottom tier a decent player could
+            // never be bought by anyone at all).
             let mut best: Option<(u32, u16)> = None;
             for club in &country.clubs {
                 if club.id == s.parent_club_id || club.is_rival(s.parent_club_id) {
@@ -1466,7 +1526,7 @@ impl PipelineProcessor {
                 let Some(team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
                     continue;
                 };
-                if team.reputation.level() != tier {
+                if !(tier..=s.parent_tier).contains(&team.reputation.level()) {
                     continue;
                 }
                 if country
@@ -1488,13 +1548,24 @@ impl PipelineProcessor {
                 // Tier-window realism: the player must be a plausible
                 // squad member at the buyer's level — neither so weak
                 // he'd never play (the cascade will reach a lower tier)
-                // nor above the buyer's target ceiling.
+                // nor too far above the buyer's target ceiling. The
+                // ceiling relaxes continuously with staleness: nobody at
+                // his own level wanted him, so the market's real price
+                // is a level below the tag, and an ambitious lower club
+                // punches up for exactly this kind of deal.
                 let rep_score = team.reputation.overall_score();
                 let floor = Self::tier_starter_ca_score(rep_score, s.group).saturating_sub(20);
-                let ceiling = Self::tier_target_ceiling_score(rep_score, s.group);
+                let ceiling = Self::tier_target_ceiling_score(rep_score, s.group)
+                    .saturating_add(ceiling_relax);
                 if s.ability < floor || s.ability > ceiling {
                     continue;
                 }
+                // Wages are deliberately NOT gated here: plausibility
+                // waives its wage floor for a genuinely listed player
+                // (availability opens the door; the wage question is
+                // settled at personal terms, where his reservation
+                // collapses to the buyer's tier), and the broadcast
+                // holds to the same contract.
                 // Depth: no point buying into a full position line.
                 let depth = BorrowerPositionDepth::snapshot(team);
                 if !depth.has_room_for(s.group, s.ability, false) {
@@ -4094,6 +4165,107 @@ mod transfer_broadcast_tests {
                 .iter()
                 .any(|e| e.event_type == HappinessEventType::AskedClubToArrangeTransfer),
             "three months unsold — the player asks the club to find him a new team"
+        );
+    }
+
+    #[test]
+    fn broadcast_anchor_derives_from_listing_age() {
+        let date = Fx::monday();
+        let mut country = Fx::market(100, TransferListingOrigin::SellerListed);
+
+        PipelineProcessor::broadcast_listed_transfers(&mut country, date);
+
+        // The cascade clock starts when the LISTING cleared its grace, not
+        // when the push first visited it — a save loaded with an old unsold
+        // listing resumes at the depth its age has earned.
+        let broadcast = country.clubs[0]
+            .transfer_plan
+            .transfer_broadcasts
+            .get(&400)
+            .expect("broadcast state must exist");
+        assert_eq!(
+            broadcast.since,
+            date - Duration::days(100 - 21),
+            "anchor = listed_date + grace, independent of when the push first ran"
+        );
+    }
+
+    #[test]
+    fn stale_listing_reaches_lower_tier_buyer_with_relaxed_ceiling() {
+        let date = Fx::monday();
+        const SELLER_WORLD: u16 = 5_000;
+        const BUYER_WORLD: u16 = 2_000;
+        let ca = Fx::at_tier_ca(SELLER_WORLD);
+
+        // Premise: the seller-tier starter really is above the lower-tier
+        // buyer's normal target ceiling (otherwise this exercises nothing),
+        // and within it once the full staleness relaxation (+35) applies.
+        let buyer_score = TeamReputation::new(BUYER_WORLD, BUYER_WORLD, BUYER_WORLD)
+            .overall_score();
+        let buyer_ceiling = PipelineProcessor::tier_target_ceiling_score(
+            buyer_score,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        assert!(
+            ca > buyer_ceiling,
+            "fixture premise: at-tier CA {ca} must exceed the lower-tier ceiling {buyer_ceiling}"
+        );
+        assert!(
+            ca <= buyer_ceiling.saturating_add(35),
+            "fixture premise: the relaxed ceiling must reach the player ({ca} vs {buyer_ceiling}+35)"
+        );
+
+        let build = |listed_days_ago: i64| {
+            let seller_main = Fx::team(
+                10,
+                1,
+                SELLER_WORLD,
+                vec![Fx::player(400, PlayerPositionType::MidfielderCenter, ca, 26)],
+            );
+            let seller = Fx::club(1, vec![seller_main], 1_000_000.0);
+            let buyer_main = Fx::team(
+                20,
+                2,
+                BUYER_WORLD,
+                vec![Fx::player(401, PlayerPositionType::Goalkeeper, ca, 27)],
+            );
+            let buyer = Fx::club(2, vec![buyer_main], 5_000_000.0);
+            let mut country = Fx::country(vec![seller, buyer]);
+            country
+                .transfer_market
+                .add_listing(TransferListing::new_with_origin(
+                    400,
+                    1,
+                    10,
+                    CurrencyValue {
+                        amount: 1_000_000.0,
+                        currency: Currency::Usd,
+                    },
+                    Fx::monday() - Duration::days(listed_days_ago),
+                    TransferListingType::Transfer,
+                    TransferListingOrigin::SellerListed,
+                ));
+            country
+        };
+
+        // A month in: the cascade still sits near the seller's own tier and
+        // the ceiling has barely relaxed — the lower-tier club is not yet a
+        // taker for a player this good.
+        let mut early = build(30);
+        PipelineProcessor::broadcast_listed_transfers(&mut early, date);
+        assert!(
+            !early.transfer_market.has_active_negotiation_for(400, 2),
+            "a month-old listing must not yet reach a much lower tier"
+        );
+
+        // Half a season unsold: the cumulative tier band has walked down to
+        // (and past) the buyer's level and the staleness-relaxed ceiling
+        // admits the player — the bargain-above-your-level signing.
+        let mut stale = build(250);
+        PipelineProcessor::broadcast_listed_transfers(&mut stale, date);
+        assert!(
+            stale.transfer_market.has_active_negotiation_for(400, 2),
+            "a half-season-stale listing must reach the lower-tier buyer"
         );
     }
 

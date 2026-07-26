@@ -374,6 +374,9 @@ impl PipelineProcessor {
                         low_usage: player.statistics.total_games() < 8,
                         recent_interest_count: interest_30d,
                         failed_scans,
+                        last_block: player
+                            .availability_market_state()
+                            .and_then(|s| s.last_block.map(|(_, reason)| reason)),
                     };
 
                     // ── Scan plausible domestic buyers. ──
