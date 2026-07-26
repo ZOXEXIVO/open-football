@@ -6,6 +6,7 @@ use super::TeamBehaviour;
 use crate::PlayerHappiness;
 use crate::club::person::Person;
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::staff::perception::AbilityEstimator;
 use crate::club::player::calculators::{
     ContractValuation, ValuationContext, expected_annual_value, package_inputs_from_contract,
 };
@@ -1191,6 +1192,18 @@ impl TeamBehaviour {
             if ambition < 8.0 && age >= 29 {
                 continue;
             }
+            // Past the position-adjusted prime the breakthrough dream
+            // fades on a continuous slope — every year it takes more
+            // ambition to still believe in it, and at the late-career
+            // line nobody does. A veteran seeing out his career in the
+            // reserves is the veteran systems' story (retirement,
+            // coaching interest), not an ambition dream.
+            let (_, prime_end, fade_end) =
+                BackupCareerAnxiety::career_phases(player.position().is_goalkeeper());
+            let faded = ((age as f32 - prime_end) / (fade_end - prime_end)).clamp(0.0, 1.0);
+            if faded > 0.0 && ambition / 20.0 <= faded {
+                continue;
+            }
 
             let days_at_club = player
                 .days_since_transfer(today)
@@ -1262,8 +1275,25 @@ impl TeamBehaviour {
             return;
         }
 
+        // Squad keeper picture for the third-keeper reality check: how
+        // many keepers in this squad read observably ahead of each one.
+        let keeper_levels: Vec<u8> = players
+            .players
+            .iter()
+            .filter(|p| p.position().is_goalkeeper())
+            .map(|p| AbilityEstimator::observable_level(p))
+            .collect();
+
         for player in players.players.iter_mut() {
-            let Some(anxiety) = BackupCareerAnxiety::evaluate(player, today, ctx) else {
+            let keepers_clearly_ahead = if player.position().is_goalkeeper() {
+                let own = AbilityEstimator::observable_level(player);
+                keeper_levels.iter().filter(|&&l| l > own).count()
+            } else {
+                0
+            };
+            let Some(anxiety) =
+                BackupCareerAnxiety::evaluate(player, today, ctx, keepers_clearly_ahead)
+            else {
                 continue;
             };
 
@@ -2556,10 +2586,23 @@ impl BackupCareerAnxiety {
     /// Post-transfer settling window before a stuck-career story exists.
     const SETTLED_DAYS: i64 = 540;
 
+    /// Position-adjusted career phases: (prime_start, prime_end,
+    /// fade_end). Goalkeeper careers run ~3 years later. Shared by the
+    /// backup-anxiety score and the reserve-ambition fade so both
+    /// breakthrough dreams extinguish on the same line.
+    fn career_phases(is_goalkeeper: bool) -> (f32, f32, f32) {
+        if is_goalkeeper {
+            (27.0, 33.0, 37.0)
+        } else {
+            (26.0, 31.0, 34.0)
+        }
+    }
+
     fn evaluate(
         player: &Player,
         today: NaiveDate,
         ctx: &GlobalContext<'_>,
+        keepers_clearly_ahead: usize,
     ) -> Option<BackupCareerAnxiety> {
         // Loanees belong to their parent club; a manager-pinned player
         // IS first-team by definition.
@@ -2586,6 +2629,17 @@ impl BackupCareerAnxiety {
         // 36-year-old #2 keeper seeing out his career is real life.
         let late_career_age = if is_goalkeeper { 37 } else { 34 };
         if age < 24 || age >= late_career_age {
+            return None;
+        }
+
+        // A third-choice keeper knows exactly what he is: with two men
+        // observably ahead of him, a veteran past his prime is not
+        // nursing a breakthrough dream — "one last number-one shirt" is
+        // the career #2's story, never the #3's (the Pinsoglio case). A
+        // younger third keeper still dreams; the reserve / prospect
+        // pathways own his route out.
+        let (_, prime_end, _) = Self::career_phases(is_goalkeeper);
+        if is_goalkeeper && keepers_clearly_ahead >= 2 && (age as f32) > prime_end {
             return None;
         }
 
@@ -2639,12 +2693,7 @@ impl BackupCareerAnxiety {
         // Age urgency: ramps in from 24, saturates through the prime
         // ("the years are slipping away"), then eases toward the
         // late-career line as the veteran makes peace with the role.
-        // Goalkeeper careers run ~3 years later.
-        let (prime_start, prime_end, fade_end) = if is_goalkeeper {
-            (27.0_f32, 33.0_f32, 37.0_f32)
-        } else {
-            (26.0_f32, 31.0_f32, 34.0_f32)
-        };
+        let (prime_start, prime_end, fade_end) = Self::career_phases(is_goalkeeper);
         let a = age as f32;
         let age_urgency = if a < prime_start {
             0.35 + 0.65 * ((a - 23.0) / (prime_start - 23.0)).clamp(0.0, 1.0)
@@ -3644,6 +3693,116 @@ mod tests {
             ),
             1,
             "the loan carousel counts as years without a first-team place at the parent club"
+        );
+    }
+
+    /// Re-pose a fixture player as a goalkeeper (build_player makes a
+    /// striker).
+    fn as_goalkeeper(mut p: Player) -> Player {
+        p.positions = PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: PlayerPositionType::Goalkeeper,
+                level: 20,
+            }],
+        };
+        p
+    }
+
+    /// The Pinsoglio complaint: a 36-year-old THIRD keeper — two men
+    /// observably ahead of him — does not "dream of genuine first-team
+    /// football", however ambitious. "One last number-one shirt" is the
+    /// career #2's story (see `keeper_at_35_still_dreams_...`), never
+    /// the veteran #3's.
+    #[test]
+    fn veteran_third_keeper_does_not_dream_of_a_breakthrough() {
+        let today = first_of_month(2026, 6);
+        let mut veteran = as_goalkeeper(with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1990, 3, 1).unwrap(), // 36 years old
+                90,
+                500,
+                17.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        ));
+        veteran.skills = PlayerSkills::flat_for_ability(90);
+        veteran.skills.mental.determination = 12.0;
+        veteran
+            .statistics_history
+            .season_ledger
+            .push(ledger_row(2024, 3, false));
+        veteran
+            .statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 2, false));
+        // Two clearly better keepers ahead of him in the same squad.
+        let mut first_choice = as_goalkeeper(with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(1998, 1, 1).unwrap(),
+                140,
+                3_000,
+                10.0,
+            ),
+            PlayerSquadStatus::KeyPlayer,
+        ));
+        first_choice.skills = PlayerSkills::flat_for_ability(140);
+        let mut second_choice = as_goalkeeper(with_contract(
+            build_player(
+                3,
+                NaiveDate::from_ymd_opt(1996, 1, 1).unwrap(),
+                125,
+                2_000,
+                10.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        ));
+        second_choice.skills = PlayerSkills::flat_for_ability(125);
+
+        let mut players = PlayerCollection::new(vec![veteran, first_choice, second_choice]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "a 36-year-old third keeper seeing out his career must not dream of a breakthrough"
+        );
+    }
+
+    /// Same story in a senior reserve squad: past the position-adjusted
+    /// prime the dream demands ever more ambition, so an ordinary
+    /// veteran keeper parked in the reserves stays quiet.
+    #[test]
+    fn veteran_reserve_keeper_does_not_dream_of_first_team() {
+        let today = first_of_month(2026, 6);
+        let veteran = as_goalkeeper(with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1990, 3, 1).unwrap(), // 36 years old
+                90,
+                500,
+                12.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        ));
+        let mut players = PlayerCollection::new(vec![veteran]);
+        TeamBehaviour::process_reserve_ambition_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Second),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "an ordinary-ambition 36-year-old keeper in the reserves does not dream of a breakthrough"
         );
     }
 
