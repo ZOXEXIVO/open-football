@@ -166,6 +166,24 @@ impl ProcessContractHandler {
         now: NaiveDate,
         result: &mut PlayerResult,
     ) {
+        // A listing withdraws any renewal offer still sitting in the
+        // mailbox. The renewal manager never offers to a listed player,
+        // but both passes can run on the same day — the offer lands
+        // first, the board lists the player, and the acceptance a day
+        // later produced the contradictory "listed on the 1st, extended
+        // on the 2nd" paperwork. Renewals only: a free agent (no
+        // contract) is a signing, not a renewal, and carries no listing.
+        if player.contract.is_some()
+            && (player.statuses.has(PlayerStatusType::Lst)
+                || player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.is_transfer_listed)
+                    .unwrap_or(false))
+        {
+            return;
+        }
+
         let min_acceptable_years = Self::player_minimum_years(player, now);
         if proposal.years < min_acceptable_years {
             result.contract.contract_rejected = true;
@@ -783,8 +801,8 @@ mod tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills,
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills,
     };
     use chrono::NaiveDate;
 
@@ -883,6 +901,39 @@ mod tests {
 
     fn make_proposal(salary: u32, years: u8) -> PlayerContractProposal {
         PlayerContractProposal::basic(salary, years, 10, 0, 0, None)
+    }
+
+    /// A renewal offer still in the mailbox when the board lists the player
+    /// is withdrawn, not evaluated — otherwise the same-day ordering of the
+    /// renewal pass and the listing audit produced "listed on the 1st,
+    /// extended on the 2nd" paperwork.
+    #[test]
+    fn listing_withdraws_an_in_flight_renewal_offer() {
+        let now = d(2026, 8, 2);
+        let mut p = build(10.0, 15.0, 2_000);
+        let mut contract = PlayerClubContract::new(400_000, d(2027, 6, 30));
+        contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        p.contract = Some(contract);
+        p.statuses.add(now, PlayerStatusType::Lst);
+
+        // A lavish raise the player would otherwise accept on the spot.
+        let proposal = make_proposal(600_000, 2);
+        let mut result = PlayerResult::new(p.id);
+        ProcessContractHandler::process(&mut p, proposal, now, &mut result);
+
+        assert_eq!(
+            p.contract.as_ref().unwrap().salary,
+            400_000,
+            "the withdrawn offer must not be signed — the old deal stands"
+        );
+        assert!(
+            !result.contract.contract_rejected,
+            "a withdrawn offer is not a player-side rejection"
+        );
+        assert!(
+            p.decision_history.items.is_empty(),
+            "no renewal paperwork is recorded for a listed player"
+        );
     }
 
     #[test]

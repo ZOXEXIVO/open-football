@@ -39,6 +39,16 @@
 //!     suppress themselves while the sample is small.
 //!   * `KeyPlayer` / `FirstTeamRegular` (and their inferred equivalents)
 //!     are always protected from loan and free transfer.
+//!   * A **veteran back-up keeper filling the normal complement is a squad
+//!     fixture, not deadwood**. Every club deliberately carries a third
+//!     keeper; measured against an outfield-dominated squad average an
+//!     experienced #3 always reads 25+ below "team level", so the raw
+//!     surplus gaps branded the Pinsoglio profile `TrueSurplus` at every
+//!     big club on day one. A content (no `Unh`/`Req`), professional or
+//!     club-loyal veteran keeper inside the keeper complement is
+//!     `RotationUseful` — kept, mentoring the young keepers. A keeper
+//!     glut (more keepers than the complement), an agitating veteran, or
+//!     a deliberate `NotNeeded` decision still dispose normally.
 //!   * A **proven regular outranks a fresh label**. The monthly squad-status
 //!     pass re-ranks the whole position group on hidden CA, so last season's
 //!     ever-present can be relabelled rotation depth in one tick — and the
@@ -58,7 +68,10 @@ use chrono::NaiveDate;
 
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::league::Season;
-use crate::{Club, Person, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus};
+use crate::{
+    Club, Person, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus,
+    PlayerStatusType,
+};
 
 /// What a player is to his club, derived from observable signals. Ordered
 /// loosely from most to least protected. The disposal paths read the
@@ -256,6 +269,13 @@ impl SquadAssetContext {
     /// Softer surplus gap for an old, clearly-declining player.
     const VETERAN_AGE: u8 = 35;
     const VETERAN_SURPLUS_GAP: i16 = 15;
+    /// Age from which a back-up keeper reads as the experienced #2/#3
+    /// profile rather than a development case that should circulate.
+    const VETERAN_KEEPER_AGE: u8 = 30;
+    /// Character bar (professionalism OR club loyalty, 0-20) for the
+    /// veteran-keeper rescue — the club keeps the model professional /
+    /// club servant who sets standards, not any warm body.
+    const VETERAN_KEEPER_CHARACTER_FLOOR: f32 = 10.0;
     /// Official games in the most-recent completed season at or above which
     /// the player was a genuine regular and is first-team useful regardless
     /// of his current sample.
@@ -478,6 +498,16 @@ impl SquadAssetContext {
             return SquadAssetClass::RotationUseful;
         }
 
+        // Veteran back-up keeper filling the club's normal complement — the
+        // Pinsoglio profile. His level is inevitably far below an outfield-
+        // dominated squad average (and below two better keepers), but the
+        // club carries him on purpose: he accepts the role and mentors the
+        // young keepers. Rescue him from the raw surplus gaps below; he is
+        // rotation depth, never the first name on a disposal list.
+        if self.is_veteran_backup_keeper(player, group, age) {
+            return SquadAssetClass::RotationUseful;
+        }
+
         // Clearly below team level with no upside, or an undistinguished
         // declining veteran → genuine surplus. Mirrors the release gate's
         // quality gaps (in observable-level units) so the two agree.
@@ -513,6 +543,36 @@ impl SquadAssetContext {
         }
         let sum: u32 = levels.iter().map(|&l| l as u32).sum();
         Some((sum / levels.len() as u32) as u8)
+    }
+
+    /// The experienced back-up keeper the club keeps on purpose: within the
+    /// normal keeper complement ([`PlayerFieldPositionGroup::main_depth_cap`]
+    /// — a glut's extras are real surplus), settled in the role (no `Unh` /
+    /// `Req` agitation), and the professional or club-loyal character that
+    /// makes him worth a locker. Goalkeeper-only: an outfield veteran has no
+    /// equivalent never-plays-but-completes-the-unit role.
+    fn is_veteran_backup_keeper(
+        &self,
+        player: &Player,
+        group: PlayerFieldPositionGroup,
+        age: u8,
+    ) -> bool {
+        if group != PlayerFieldPositionGroup::Goalkeeper || age < Self::VETERAN_KEEPER_AGE {
+            return false;
+        }
+        if self.group_size(group) > group.main_depth_cap() {
+            return false;
+        }
+        if player.statuses.has(PlayerStatusType::Unh)
+            || player.statuses.has(PlayerStatusType::Req)
+        {
+            return false;
+        }
+        player
+            .attributes
+            .professionalism
+            .max(player.attributes.loyalty)
+            >= Self::VETERAN_KEEPER_CHARACTER_FLOOR
     }
 
     /// True when the player's reputation sits in the squad's top quartile —
@@ -999,6 +1059,118 @@ mod tests {
         let class = ctx.classify(f, Fx::date());
         assert_eq!(class, SquadAssetClass::TrueSurplus);
         assert!(!class.is_free_transfer_protected());
+    }
+
+    // ── veteran back-up keeper (the Pinsoglio profile) ──────────────────
+
+    /// A 36-year-old third keeper in a normal three-man complement:
+    /// far below the outfield-dominated squad average (and both better
+    /// keepers), but content in the role and a model professional. He is
+    /// the club's deliberate #3 — rotation depth, never `TrueSurplus`,
+    /// so the size-trim / free-transfer sweeps leave him alone.
+    #[test]
+    fn content_veteran_third_keeper_is_rotation_not_surplus() {
+        let second_gk = Fx::player(
+            95,
+            PlayerPositionType::Goalkeeper,
+            112,
+            27,
+            1000,
+            PlayerSquadStatus::NotYetSet,
+        );
+        let mut veteran = Fx::player(
+            96,
+            PlayerPositionType::Goalkeeper,
+            85,
+            36,
+            1000,
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        veteran.attributes.professionalism = 14.0;
+        let club = Fx::club(Fx::squad_with(vec![second_gk, veteran]));
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let v = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 96)
+            .unwrap();
+        let class = ctx.classify(v, Fx::date());
+        assert_eq!(class, SquadAssetClass::RotationUseful);
+        assert!(class.is_free_transfer_protected());
+    }
+
+    /// The rescue is for a keeper who accepts the role — one agitating for
+    /// a move (or unhappy) is disposed of normally.
+    #[test]
+    fn unsettled_veteran_third_keeper_is_not_rescued() {
+        let second_gk = Fx::player(
+            95,
+            PlayerPositionType::Goalkeeper,
+            112,
+            27,
+            1000,
+            PlayerSquadStatus::NotYetSet,
+        );
+        let mut veteran = Fx::player(
+            96,
+            PlayerPositionType::Goalkeeper,
+            85,
+            36,
+            1000,
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        veteran.attributes.professionalism = 14.0;
+        veteran.statuses.add(Fx::date(), PlayerStatusType::Unh);
+        let club = Fx::club(Fx::squad_with(vec![second_gk, veteran]));
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let v = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 96)
+            .unwrap();
+        assert_eq!(ctx.classify(v, Fx::date()), SquadAssetClass::TrueSurplus);
+    }
+
+    /// With a genuine keeper glut (more than the normal complement) the
+    /// rescue stands down — the extras really are surplus.
+    #[test]
+    fn veteran_keeper_in_a_glut_stays_surplus() {
+        let second_gk = Fx::player(
+            95,
+            PlayerPositionType::Goalkeeper,
+            112,
+            27,
+            1000,
+            PlayerSquadStatus::NotYetSet,
+        );
+        let third_gk = Fx::player(
+            97,
+            PlayerPositionType::Goalkeeper,
+            100,
+            31,
+            1000,
+            PlayerSquadStatus::NotYetSet,
+        );
+        let mut veteran = Fx::player(
+            96,
+            PlayerPositionType::Goalkeeper,
+            85,
+            36,
+            1000,
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        veteran.attributes.professionalism = 14.0;
+        let club = Fx::club(Fx::squad_with(vec![second_gk, third_gk, veteran]));
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let v = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 96)
+            .unwrap();
+        assert_eq!(ctx.classify(v, Fx::date()), SquadAssetClass::TrueSurplus);
     }
 
     #[test]

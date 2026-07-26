@@ -11,7 +11,7 @@ use crate::{
 };
 use chrono::NaiveDate;
 use log::debug;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Days after a permanent / loan move during which a player's idle days are
 /// not yet read as underutilization — he hasn't had a fair chance to break
@@ -255,15 +255,29 @@ impl Club {
                 .map(|(_, id, _)| *id)
                 .collect();
             let excess = total_squad - max_squad;
+            // Main-team position-group headcounts. A group at (or below) its
+            // normal complement is not where the excess lives — trimming its
+            // weakest body (classically the third keeper) just forces the
+            // depth sweeps to re-buy the same profile next window.
+            let mut main_group_counts: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
+            for p in self.teams.teams[main_idx].players.iter() {
+                *main_group_counts
+                    .entry(p.position().position_group())
+                    .or_insert(0) += 1;
+            }
             // (team_idx, id, observable level, age) — rank lowest assessed
             // level first, then older first, so the weakest genuine surplus
             // goes before anyone the coach still rates.
             let mut surplus: Vec<(usize, u32, u8, u8)> = Vec::new();
             for (ti, team) in self.teams.iter().enumerate() {
                 for player in team.players.iter() {
+                    // `Lst` matters as much as the contract flag here: this
+                    // very pass lists via the status only, so without it the
+                    // same player was re-picked and re-listed every month.
                     if already.contains(&player.id)
                         || player.is_on_loan()
                         || player.is_force_match_selection
+                        || player.statuses.has(PlayerStatusType::Lst)
                         || player
                             .contract
                             .as_ref()
@@ -271,6 +285,14 @@ impl Club {
                             .unwrap_or(true)
                     {
                         continue;
+                    }
+                    if ti == main_idx {
+                        let group = player.position().position_group();
+                        if main_group_counts.get(&group).copied().unwrap_or(0)
+                            <= group.main_depth_cap()
+                        {
+                            continue;
+                        }
                     }
                     if !matches!(
                         asset_ctx.classify(player, date),
@@ -670,6 +692,7 @@ impl YouthDevelopmentLoanPolicy {
 mod tests {
     use super::*;
     use crate::academy::ClubAcademy;
+    use crate::club::board::SeasonTargets;
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
@@ -934,6 +957,102 @@ mod tests {
         assert!(
             !Fx::listed(&club, 203),
             "an injured player must not be transfer-listed off idle days"
+        );
+    }
+
+    /// The size trim lists a player via the `Lst` status only, so its
+    /// already-listed guard must read that status too — without it the same
+    /// player was re-picked and got a duplicate "board transfer-listed"
+    /// decision row every month (the Pinsoglio Aug-1 / Sep-1 double entry).
+    #[test]
+    fn size_trim_does_not_relist_a_listed_player() {
+        let deadwood = Fx::player(300, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        let mut club = Fx::club(vec![deadwood]);
+        club.board.season_targets = Some(SeasonTargets {
+            transfer_budget: 0,
+            wage_budget: 0,
+            max_squad_size: 0,
+            min_squad_size: 0,
+            expected_position: 5,
+            min_acceptable_position: 10,
+        });
+
+        club.audit_squad_utilization(Fx::date());
+        assert!(
+            Fx::has(&club, 300, PlayerStatusType::Lst),
+            "over the squad ceiling, the worst genuine surplus is trimmed"
+        );
+
+        // A month later the audit runs again — the listing must not repeat.
+        club.audit_squad_utilization(Fx::date());
+        let rows = club
+            .teams
+            .teams
+            .iter()
+            .flat_map(|t| t.players.players.iter())
+            .find(|p| p.id == 300)
+            .unwrap()
+            .decision_history
+            .items
+            .iter()
+            .filter(|d| d.movement == "dec_board_transfer_listed")
+            .count();
+        assert_eq!(rows, 1, "an already-listed player is never re-listed");
+    }
+
+    /// The size trim never breaks up a main-team position group at (or
+    /// below) its normal complement: a club over its headcount ceiling
+    /// still keeps its third keeper — trimming him only forces the depth
+    /// sweeps to re-buy the same profile. The excess is taken from where
+    /// it actually lives instead.
+    #[test]
+    fn size_trim_keeps_the_third_keeper_of_a_normal_complement() {
+        let mut main: Vec<Player> = (1..=5)
+            .map(|i| Fx::player(i, 130, 130, 27, PlayerSquadStatus::FirstTeamRegular, 20, 0))
+            .collect();
+        main.push(Fx::gk(201, 130, 28));
+        main.push(Fx::gk(202, 120, 27));
+        // The veteran third keeper: far below the squad level, no rescue
+        // from character (defaults are 0) — TrueSurplus to the classifier,
+        // so only the complement guard keeps him off the trim list.
+        main.push(Fx::gk(300, 55, 35));
+        // Genuine excess on the reserve roster.
+        let deadwood = Fx::player(301, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        let mut club = Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![
+                Fx::team(10, TeamType::Main, main),
+                Fx::team(11, TeamType::Reserve, vec![
+                    Fx::player(90, 100, 100, 24, PlayerSquadStatus::FirstTeamSquadRotation, 12, 0),
+                    deadwood,
+                ]),
+            ]),
+            ClubFacilities::default(),
+        );
+        club.board.season_targets = Some(SeasonTargets {
+            transfer_budget: 0,
+            wage_budget: 0,
+            max_squad_size: 0,
+            min_squad_size: 0,
+            expected_position: 5,
+            min_acceptable_position: 10,
+        });
+
+        club.audit_squad_utilization(Fx::date());
+
+        assert!(
+            !Fx::listed(&club, 300),
+            "the third keeper of a three-man complement must never be size-trimmed"
+        );
+        assert!(
+            Fx::has(&club, 301, PlayerStatusType::Lst),
+            "the trim still clears genuine excess elsewhere"
         );
     }
 

@@ -41,7 +41,13 @@ impl SquadManager {
     ) {
         let coach_name = teams[main_idx].staffs.head_coach_name();
         let demotions = Self::identify_administrative_demotions(&teams[main_idx], date);
-        let max_age = teams[reserve_idx].team_type.max_age();
+        // Age-gate on `development_age_cap`, NOT `max_age` — the latter
+        // bounds only U18/U19, so a club whose sole non-main squad is a
+        // U20..U23 side had no gate at all and a listed 36-year-old was
+        // "administratively demoted" into its U20 squad. With no
+        // age-eligible destination the listed veteran simply stays on the
+        // Main roster while the market works.
+        let max_age = teams[reserve_idx].team_type.development_age_cap();
         let mut demotions = filter_by_age(demotions, &teams[main_idx], max_age, date);
 
         // Guard: never let the first team drop below minimum squad size
@@ -687,6 +693,58 @@ mod execute_moves_tests {
         assert!(
             teams[1].players.contains(2),
             "listed surplus player must land in the reserves"
+        );
+    }
+
+    /// A club whose only non-main squad is a U20..U23 side: the destination
+    /// gate must read `development_age_cap` (U20 → 20), not `max_age`
+    /// (which bounds only U18/U19 and returned None here) — a listed
+    /// 36-year-old was "administratively demoted" into the U20 squad. He
+    /// stays on the Main roster while the market works; an age-eligible
+    /// listed surplus youngster is still demoted normally.
+    #[test]
+    fn veteran_is_never_administratively_demoted_into_a_youth_squad() {
+        let date = d(2026, 6, 15);
+        let mut players = Vec::new();
+        let mut veteran = make_contracted(
+            1,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::NotNeeded,
+        );
+        veteran.birth_date = d(1990, 3, 1); // 36 years old
+        list_for_transfer(&mut veteran, date);
+        players.push(veteran);
+        let mut young_surplus = make_contracted(
+            2,
+            PlayerPositionType::MidfielderCenter,
+            PlayerSquadStatus::NotNeeded,
+        );
+        young_surplus.birth_date = d(2007, 1, 1); // 19 years old
+        list_for_transfer(&mut young_surplus, date);
+        players.push(young_surplus);
+        // Fillers (same group → both have cover) to clear MIN_FIRST_TEAM_SQUAD.
+        for id in 3..=28u32 {
+            players.push(make_contracted(
+                id,
+                PlayerPositionType::MidfielderCenter,
+                PlayerSquadStatus::FirstTeamSquadRotation,
+            ));
+        }
+        let mut teams = vec![
+            make_team(10, "Main", "main", TeamType::Main, players),
+            make_team(11, "U20", "u20", TeamType::U20, vec![]),
+        ];
+
+        let mut coach_state = None;
+        SquadManager::manage_critical_moves(&mut teams, &mut coach_state, 0, 1, date);
+
+        assert!(
+            teams[0].players.contains(1),
+            "a listed veteran must never be parked in a youth squad — he stays on Main"
+        );
+        assert!(
+            teams[1].players.contains(2),
+            "an age-eligible listed surplus youngster is still demoted normally"
         );
     }
 
