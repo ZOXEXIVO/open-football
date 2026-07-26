@@ -184,7 +184,7 @@ impl PipelineProcessor {
 
                 let depth = position_depth_for(club, assignment.target_position.position_group());
                 let fit =
-                    SquadFitSnapshot::build(club, assignment.target_position.position_group());
+                    SquadFitSnapshot::build(club, assignment.target_position.position_group(), date);
 
                 let mut candidates: Vec<ShortlistCandidate> = reports
                     .iter()
@@ -346,7 +346,8 @@ impl PipelineProcessor {
                     continue;
                 }
 
-                let market_fit = SquadFitSnapshot::build(club, request.position.position_group());
+                let market_fit =
+                    SquadFitSnapshot::build(club, request.position.position_group(), date);
                 let mut market_candidates: Vec<ShortlistCandidate> = country
                     .transfer_market
                     .get_available_listings()

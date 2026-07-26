@@ -157,7 +157,7 @@ impl BuyerScan {
             PlayerFieldPositionGroup::Forward,
         ]
         .into_iter()
-        .map(|g| (g, SquadFitSnapshot::build(club, g)))
+        .map(|g| (g, SquadFitSnapshot::build(club, g, date)))
         .collect();
 
         Some(BuyerScan {

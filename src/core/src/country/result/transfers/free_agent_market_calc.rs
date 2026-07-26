@@ -145,9 +145,14 @@ impl FreeAgentMarketCalculator {
         } else {
             1200
         };
-        let quality_bonus: i32 = if ca >= 130 {
-            -500
-        } else if ca >= 100 {
+        // Quality only ever WIDENS the buyer-side tolerance. Whether a
+        // star is willing to step down belongs to the player-acceptance
+        // side (the prestige term in `acceptance_score`); the old −500
+        // for CA ≥ 130 double-counted that reluctance as a hard country
+        // gate and helped strand high-quality free agents for years —
+        // from the club's perspective a strong free body is MORE
+        // attractive, never less.
+        let quality_bonus: i32 = if ca >= 100 {
             0
         } else if ca >= 70 {
             500
@@ -156,6 +161,47 @@ impl FreeAgentMarketCalculator {
         };
         let base = 400.0 + 2800.0 * cp;
         base.round() as i32 + age_bonus + quality_bonus
+    }
+
+    /// Market memory fades: a player's reference reputation — the
+    /// prestige of the league he USED to play in — decays continuously
+    /// with time out of the game, down to 55% after ~18 months. An
+    /// ex-Premier-League free agent is priced (and gated) as an
+    /// ex-Premier-League player in month two, but as "a good player
+    /// nobody signed" by year two. Without this, the country/region
+    /// gates keyed to reference reputation never widened no matter how
+    /// long the player sat.
+    pub fn decayed_reference_reputation(reference_reputation: u16, days_free: i64) -> u16 {
+        const FULL_FADE_DAYS: f32 = 540.0;
+        const MAX_FADE: f32 = 0.45;
+        let fade = MAX_FADE * ((days_free.max(0) as f32) / FULL_FADE_DAYS).clamp(0.0, 1.0);
+        ((reference_reputation as f32) * (1.0 - fade)).round() as u16
+    }
+
+    /// Queue-ordering score for the market-clearing tiers. Pressure
+    /// still leads — the clearing pass exists for the desperate long
+    /// tail — but an unsigned QUALITY player becomes increasingly
+    /// conspicuous the longer he sits: real clubs jump on the market
+    /// anomaly of a good free body. Ordering by raw pressure alone
+    /// starved exactly those players, because `career_pressure`
+    /// deliberately runs LOW for high-ability prime-age players — they
+    /// sat behind thousands of journeymen and a 1-2/day country cap
+    /// forever.
+    pub fn clearing_queue_score(career_pressure: f32, ca: u8, days_free: i64) -> f32 {
+        let quality_norm = (ca as f32 / 200.0).clamp(0.0, 1.0);
+        let spotlight_ramp = ((days_free.max(0) as f32) / 90.0).clamp(0.0, 1.0);
+        career_pressure + quality_norm * quality_norm * spotlight_ramp * 0.9
+    }
+
+    /// Days-free floor for clearing-tier eligibility, scaled by quality:
+    /// the better the player, the sooner opportunistic buyers circle. A
+    /// CA-100 journeyman waits the full floor; a CA-170 name reaches the
+    /// market-clearing outlet in roughly a third of it. Continuous — no
+    /// ability cliff.
+    pub fn quality_scaled_min_days(min_days_free: i64, ca: u8) -> i64 {
+        let quality_over = ((ca.saturating_sub(100)) as f32 / 100.0).clamp(0.0, 1.0);
+        let scale = 1.0 - 0.7 * quality_over;
+        ((min_days_free as f32) * scale).ceil() as i64
     }
 
     /// Sliding region-prestige tolerance. Player's home region can be

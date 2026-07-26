@@ -1,4 +1,4 @@
-use crate::{Club, PlayerFieldPositionGroup, TeamType};
+use crate::{Club, Person, PlayerFieldPositionGroup, TeamType};
 
 /// Buy-side mirror of the club's own surplus machinery.
 ///
@@ -31,10 +31,37 @@ pub(crate) struct SquadFitSnapshot {
     /// a full group would rank outside the cap and be demoted within
     /// weeks of arriving.
     pub group_cap_bar: u8,
+    /// The club already holds its fill of development-band prospects at
+    /// this position group (counted across EVERY team, not just the
+    /// main roster). When true, the promising-youth exemption below no
+    /// longer applies: a high-ceiling teenager still lands as surplus
+    /// when the club's prospect desk at his position is full. Keepers
+    /// bind first (one plays; two groomed young keepers is already a
+    /// generous succession pool) — this is what stops the elite-club
+    /// loop of re-buying a teenage keeper every window while the last
+    /// three sit in a league-less U20.
+    pub prospect_desk_full: bool,
 }
 
 impl SquadFitSnapshot {
-    pub fn build(club: &Club, group: PlayerFieldPositionGroup) -> Self {
+    /// Development-band age ceiling — mirrors the DevelopmentSigning
+    /// request band (16, 21).
+    const PROSPECT_BAND_AGE_MAX: u8 = 21;
+
+    /// How many development-band prospects a club plausibly grooms per
+    /// group before one more is warehouse stock, not a pipeline. Outfield
+    /// numbers are deliberately roomy (big clubs really do hold six-plus
+    /// young defenders); the keeper number is the binding one.
+    fn prospect_stock_allowance(group: PlayerFieldPositionGroup) -> usize {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 2,
+            PlayerFieldPositionGroup::Defender => 6,
+            PlayerFieldPositionGroup::Midfielder => 6,
+            PlayerFieldPositionGroup::Forward => 4,
+        }
+    }
+
+    pub fn build(club: &Club, group: PlayerFieldPositionGroup, date: chrono::NaiveDate) -> Self {
         let main = club.teams.iter().find(|t| t.team_type == TeamType::Main);
         let (squad_avg_ability, quality_gap) = match main {
             Some(team) => (
@@ -63,12 +90,29 @@ impl SquadFitSnapshot {
             0
         };
 
+        // Development-band bodies at this group anywhere in the club —
+        // main, reserve or youth rosters alike. Loan-ins belong to another
+        // club and don't stock the desk.
+        let prospect_stock = club
+            .teams
+            .teams
+            .iter()
+            .flat_map(|t| t.players.players.iter())
+            .filter(|p| {
+                !p.is_on_loan()
+                    && p.position().position_group() == group
+                    && p.age(date) <= Self::PROSPECT_BAND_AGE_MAX
+            })
+            .count();
+        let prospect_desk_full = prospect_stock >= Self::prospect_stock_allowance(group);
+
         SquadFitSnapshot {
             squad_avg_ability,
             quality_gap,
             group_size,
             group_cap,
             group_cap_bar,
+            prospect_desk_full,
         }
     }
 
@@ -81,6 +125,7 @@ impl SquadFitSnapshot {
             group_size: 0,
             group_cap: usize::MAX,
             group_cap_bar: 0,
+            prospect_desk_full: false,
         }
     }
 
@@ -100,8 +145,13 @@ impl SquadFitSnapshot {
         assessed_potential: u8,
         age: u8,
     ) -> bool {
+        // A high-ceiling youngster is exempt from both surplus rules —
+        // but only while the club still has room on its prospect desk at
+        // his position. Once the desk is stocked, one more teenager is
+        // warehouse inventory: he arrives, the rebalance parks him in a
+        // youth squad, and the club is straight back in the market.
         let promising_youth = age <= 23 && assessed_potential > assessed_ability.saturating_add(10);
-        if promising_youth {
+        if promising_youth && !self.prospect_desk_full {
             return false;
         }
 
@@ -126,6 +176,7 @@ mod tests {
             group_size: size,
             group_cap: cap,
             group_cap_bar: bar,
+            prospect_desk_full: false,
         }
     }
 
@@ -142,6 +193,19 @@ mod tests {
         assert!(!fit.would_be_surplus(100, 130, 20));
         // Same numbers past the youth cutoff → surplus.
         assert!(fit.would_be_surplus(100, 130, 24));
+    }
+
+    #[test]
+    fn full_prospect_desk_ends_the_promising_youth_exemption() {
+        let mut fit = snapshot(120, 15, 5, 9, 0);
+        fit.prospect_desk_full = true;
+        // Identical promising-youth profile as above, but the club already
+        // grooms its fill at this position → surplus on arrival after all.
+        assert!(fit.would_be_surplus(100, 130, 20));
+        // A youngster who clears the squad bars on his own numbers is
+        // still fine — the desk gate only removes the exemption, it never
+        // vetoes on its own.
+        assert!(!fit.would_be_surplus(118, 140, 19));
     }
 
     #[test]

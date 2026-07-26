@@ -1184,15 +1184,28 @@ impl PipelineProcessor {
             // — the Chelsea / Man City model of buying a teenage keeper years
             // before he's needed. Keepers were previously omitted from the
             // prospect pipeline entirely, so big clubs never scouted young
-            // goalkeepers at all. First-team count (not youth squads) is used
-            // on purpose: the club's existing U18 academy keeper is a separate,
-            // earlier pipeline stage and must not suppress the first-team
-            // succession project.
-            let young_keepers = squad
+            // goalkeepers at all. The count spans EVERY club team, not just
+            // the first team: only one keeper plays, so a prospect keeper
+            // bought last window and rebalanced into the U20 the same month
+            // still IS the succession project. Counting the main roster only
+            // created a closed re-buy loop (buy → weekly rebalance demotes
+            // him → count back to zero → buy again next window) that
+            // warehoused dozens of keepers in league-less youth squads.
+            // Academy-stage keepers are naturally excluded — they live in
+            // `club.academy`, not on any team roster. The band tops out at
+            // the DevelopmentSigning request's own age ceiling so a groomed
+            // 20-year-old still suppresses the next purchase.
+            const DEVELOPMENT_KEEPER_AGE_MAX: u8 = 21; // DevelopmentSigning band (16, 21)
+            let keeper_prospect_age_max = youth_age_max.max(DEVELOPMENT_KEEPER_AGE_MAX);
+            let young_keepers = club
+                .teams
+                .teams
                 .iter()
+                .flat_map(|t| t.players.players.iter())
                 .filter(|p| {
-                    p.primary_position.position_group() == PlayerFieldPositionGroup::Goalkeeper
-                        && p.age <= youth_age_max
+                    !p.is_on_loan()
+                        && p.position().position_group() == PlayerFieldPositionGroup::Goalkeeper
+                        && p.age(date) <= keeper_prospect_age_max
                 })
                 .count();
             // Aggressive developers keep a small keeper pool on the books;

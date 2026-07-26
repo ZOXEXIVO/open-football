@@ -226,14 +226,32 @@ impl ClubAcademy {
             return;
         }
 
-        let needed = min_players - current_count;
+        // Recruitment pacing. A near-empty academy (fresh save, newly
+        // opened academy) bootstraps to its floor at once — but routine
+        // attrition is replaced at a trickle: a couple of trialists on the
+        // first of the month. This ran DAILY with no cap, so every player
+        // who graduated, aged out or was culled was regenerated the same
+        // day — an infinite-source pump that decoupled academy throughput
+        // from any real recruitment rhythm and kept the world's player
+        // population climbing without bound.
+        const MONTHLY_TRIALIST_CAP: usize = 2;
+        let bootstrap = current_count * 2 < min_players;
+        let date = ctx.simulation.date.date();
+        if !bootstrap && date.day() != 1 {
+            return;
+        }
+
+        let needed = (min_players - current_count).min(if bootstrap {
+            usize::MAX
+        } else {
+            MONTHLY_TRIALIST_CAP
+        });
         let country_ctx = ctx.country.as_ref();
         let country_id = country_ctx.map(|c| c.id).unwrap_or(1);
         let people_names = match country_ctx.and_then(|c| c.people_names.as_ref()) {
             Some(names) => names.as_ref(),
             None => return,
         };
-        let date = ctx.simulation.date.date();
 
         let gen_ctx = AcademyGenerationContext::from_components(
             self.level,

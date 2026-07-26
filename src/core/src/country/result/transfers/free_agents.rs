@@ -551,10 +551,14 @@ impl CountryResult {
 
             // Pre-compute the buyer's tier anchors. Used for role
             // inference and the quality-fit band — the same numbers
-            // every rolling-CA gate in the project relies on.
+            // every rolling-CA gate in the project relies on. The tier
+            // anchor curves are calibrated for `overall_score()` (home /
+            // national / world blend); reading raw `world` — usually the
+            // lowest of the three — understated every buyer's band and
+            // biased the whole pool toward `AboveMaximumAbility`.
             let main_team = club.teams.main().or_else(|| club.teams.teams.first());
             let buyer_club_score = main_team
-                .map(|t| (t.reputation.world as f32 / 10_000.0).clamp(0.0, 1.0))
+                .map(|t| t.reputation.overall_score().clamp(0.0, 1.0))
                 .unwrap_or(0.0);
             let buyer_league_reputation = main_team
                 .and_then(|t| t.league_id)
@@ -765,7 +769,7 @@ impl CountryResult {
                                 .iter()
                                 .find(|c| c.id == best.club_id)
                                 .and_then(|c| c.teams.teams.first())
-                                .map(|t| (t.reputation.world as f32 / 10_000.0).clamp(0.0, 1.0))
+                                .map(|t| t.reputation.overall_score().clamp(0.0, 1.0))
                                 .unwrap_or(0.3)
                         };
                         let player_ambition = if best.is_global_pool {
@@ -1465,10 +1469,11 @@ impl CountryResult {
 
             // Tier anchors for wage / role inference — match the
             // request-driven path so emergency deals fit on the same
-            // market scale as the rest of the pipeline.
+            // market scale as the rest of the pipeline (overall_score,
+            // the unit the tier anchor curves are calibrated for).
             let main_team = club.teams.main().or_else(|| club.teams.teams.first());
             let buyer_club_score = main_team
-                .map(|t| (t.reputation.world as f32 / 10_000.0).clamp(0.0, 1.0))
+                .map(|t| t.reputation.overall_score().clamp(0.0, 1.0))
                 .unwrap_or(0.0);
             let buyer_league_reputation = main_team
                 .and_then(|t| t.league_id)
@@ -1794,7 +1799,18 @@ impl CountryResult {
         let mut eligible: Vec<&FreeAgentCandidate> = candidates
             .iter()
             .filter(|c| c.is_global_pool)
-            .filter(|c| c.career_pressure >= tier.min_pressure || c.days_free >= tier.min_days_free)
+            .filter(|c| {
+                // The days-free floor shrinks with quality: a strong free
+                // body reaches the opportunistic outlet in weeks, not
+                // months — clubs don't wait a quarter to notice a CA-140
+                // player sitting on the market.
+                c.career_pressure >= tier.min_pressure
+                    || c.days_free
+                        >= FreeAgentMarketCalculator::quality_scaled_min_days(
+                            tier.min_days_free,
+                            c.ability,
+                        )
+            })
             .filter(|c| {
                 !tier.locality_restricted
                     || c.nationality_country_code
@@ -1804,9 +1820,22 @@ impl CountryResult {
             .filter(|c| !signings.iter().any(|s| s.player_id == c.player_id))
             .filter(|c| !staged_ids.contains(&c.player_id))
             .collect();
+        // Pressure-led, quality-spotlit ordering — see
+        // `clearing_queue_score` for why raw pressure alone starves
+        // good players behind the per-day cap.
         eligible.sort_by(|a, b| {
-            b.career_pressure
-                .partial_cmp(&a.career_pressure)
+            let score_a = FreeAgentMarketCalculator::clearing_queue_score(
+                a.career_pressure,
+                a.ability,
+                a.days_free,
+            );
+            let score_b = FreeAgentMarketCalculator::clearing_queue_score(
+                b.career_pressure,
+                b.ability,
+                b.days_free,
+            );
+            score_b
+                .partial_cmp(&score_a)
                 .unwrap_or(Ordering::Equal)
                 .then_with(|| b.days_free.cmp(&a.days_free))
         });
@@ -2826,8 +2855,9 @@ impl MarketClearingBuyer {
             .filter(|club| !club.teams.teams.is_empty() && can_club_accept_player(club))
             .map(|club| {
                 let main_team = club.teams.main().or_else(|| club.teams.teams.first());
+                // overall_score — the unit the tier anchor curves expect.
                 let club_score = main_team
-                    .map(|t| (t.reputation.world as f32 / 10_000.0).clamp(0.0, 1.0))
+                    .map(|t| t.reputation.overall_score().clamp(0.0, 1.0))
                     .unwrap_or(0.0);
                 let league_reputation = main_team
                     .and_then(|t| t.league_id)
@@ -2880,14 +2910,28 @@ impl MarketClearingBuyer {
     }
 
     /// How badly the buyer needs another body in `group`, in [0,1].
-    /// Thin groups (a club with one keeper) score high; well-stocked
-    /// ones score low. Feeds the opportunistic fit score's depth term.
+    /// Thin groups score high; well-stocked ones score low. Measured
+    /// against the group's real minimum viable depth (2 keepers, 7
+    /// defenders, 7 midfielders, 4 forwards — the same floors the
+    /// squad-needs analysis uses), not absolute head-counts: with the
+    /// old 0-3 buckets every outfield group at a normal club read
+    /// "fully stocked" (0.15) because real squads carry 7+ per line, so
+    /// the largest term of the opportunistic fit score was a constant
+    /// and the soft clearing tier could hardly ever fire. Feeds the
+    /// opportunistic fit score's depth term.
     fn position_depth_need(&self, group: PlayerFieldPositionGroup) -> f32 {
-        match self.group_count(group) {
-            0 | 1 => 1.0,
-            2 => 0.6,
-            3 => 0.35,
-            _ => 0.15,
+        let min_viable: i16 = match group {
+            PlayerFieldPositionGroup::Goalkeeper => 2,
+            PlayerFieldPositionGroup::Defender => 7,
+            PlayerFieldPositionGroup::Midfielder => 7,
+            PlayerFieldPositionGroup::Forward => 4,
+        };
+        let have = self.group_count(group) as i16;
+        match have - min_viable {
+            i16::MIN..=-1 => 1.0, // below the viable floor — a real hole
+            0 => 0.6,             // at the bare floor — one injury from a hole
+            1 => 0.35,            // floor + 1 — useful cover still welcome
+            _ => 0.15,            // genuinely stocked
         }
     }
 }
@@ -2974,7 +3018,6 @@ pub(crate) fn snapshot_global_free_agents(
             }
 
             let career_pressure = player.career_pressure(date);
-            let reference_reputation = player.reference_reputation(nationality_rep);
             let (last_salary, last_country_reputation, last_league_reputation, days_free) = player
                 .free_agent_state()
                 .map(|s| {
@@ -2991,6 +3034,15 @@ pub(crate) fn snapshot_global_free_agents(
                     ((nationality_rep as f32) * 0.75) as u16,
                     0,
                 ));
+            // Time on the market erodes the old-league prestige the
+            // country/region gates key on — see
+            // `decayed_reference_reputation`. (The unknown-nationality
+            // u16::MAX sentinel survives the decay: 55% of MAX still
+            // out-reps every buyer, so the fail-closed block holds.)
+            let reference_reputation = FreeAgentMarketCalculator::decayed_reference_reputation(
+                player.reference_reputation(nationality_rep),
+                days_free,
+            );
             let failed_approach_streak = player
                 .free_agent_state()
                 .map(|s| s.failed_approach_streak)
@@ -3270,7 +3322,7 @@ mod emergency_fill_tests {
                 .team_type(TeamType::Main)
                 .players(PlayerCollection::new(players))
                 .staffs(StaffCollection::new(Vec::new()))
-                .reputation(TeamReputation::new(2000, 2000, 4000))
+                .reputation(TeamReputation::new(4000, 4000, 4000))
                 .training_schedule(TrainingSchedule::new(
                     NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
                     NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
@@ -6039,7 +6091,7 @@ mod expiry_renewal_tests {
                 .team_type(TeamType::Main)
                 .players(PlayerCollection::new(players))
                 .staffs(StaffCollection::new(Vec::new()))
-                .reputation(TeamReputation::new(2000, 2000, 4000))
+                .reputation(TeamReputation::new(4000, 4000, 4000))
                 .training_schedule(TrainingSchedule::new(
                     NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
                     NaiveTime::from_hms_opt(15, 0, 0).unwrap(),

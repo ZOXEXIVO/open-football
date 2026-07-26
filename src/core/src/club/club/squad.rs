@@ -167,11 +167,17 @@ impl Club {
                 // Overage → move to next team in progression (or main)
                 if overage {
                     let next = self.find_next_youth_team(team.team_type, age);
-                    // Listed players: only move within youth progression, not to main
+                    // Listed players: never parked on the main bench, but a
+                    // senior reserve (Reserve / B / Second) is fine — they
+                    // keep playing while the market works. Clubs whose only
+                    // non-main squads are league-less youth teams (no U21+,
+                    // no reserve) leave the player where he is; his exit is
+                    // the market listing itself, which the country listing
+                    // pass keeps live from any squad.
                     let dest = if listed {
-                        match next {
+                        match next.or_else(|| self.find_demotion_target(age)) {
                             Some(idx) => idx,
-                            None => continue, // no youth team available, skip
+                            None => continue, // no youth/reserve team available
                         }
                     } else {
                         // Too old for any youth tier → a senior reserve
@@ -663,8 +669,21 @@ impl Club {
             // Sort by observable level ascending — move the worst out first
             players_at_pos.sort_by_key(|&(_, _, level)| level);
 
+            // Walk worst-first until enough players are actually on the
+            // market to close the overshoot. A protected candidate (youth
+            // squad at minimum size, signing still in its evaluation
+            // window) must NOT consume a trim slot — with `.take(to_trim)`
+            // every protected skip silently shrank the enforcement, so a
+            // club whose surplus sat in protected pockets never trimmed
+            // at all. Already-listed players DO count: they are actioned
+            // surplus awaiting a buyer, and counting them keeps the walk
+            // from marching past the genuine overshoot into useful players.
             let to_trim = players_at_pos.len() - max_count;
-            for &(team_idx, player_id, _) in players_at_pos.iter().take(to_trim) {
+            let mut actioned = 0usize;
+            for &(team_idx, player_id, _) in players_at_pos.iter() {
+                if actioned >= to_trim {
+                    break;
+                }
                 if self.teams.teams[team_idx].team_type.max_age().is_some()
                     && self.teams.teams[team_idx].players.players.len() <= MIN_YOUTH_SQUAD
                 {
@@ -678,7 +697,8 @@ impl Club {
                     .find(|p| p.id == player_id)
                 {
                     // Already on the market from an earlier pass — the
-                    // transfer pipeline owns this player now.
+                    // transfer pipeline owns this player now. Counts as
+                    // actioned surplus (see the walk comment above).
                     let already_listed = player.statuses.has(PlayerStatusType::Lst)
                         || player
                             .contract
@@ -686,6 +706,7 @@ impl Club {
                             .map(|c| c.is_transfer_listed)
                             .unwrap_or(false);
                     if already_listed {
+                        actioned += 1;
                         continue;
                     }
                     // A signing still inside its evaluation window is not
@@ -773,6 +794,7 @@ impl Club {
                             );
                         }
                     }
+                    actioned += 1;
                 }
             }
         }

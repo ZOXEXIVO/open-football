@@ -238,7 +238,7 @@ impl FreeAgentMarketAuditor {
                         .teams
                         .main()
                         .or_else(|| club.teams.teams.first())
-                        .map(|t| (t.reputation.world as f32 / 10_000.0).clamp(0.0, 1.0))
+                        .map(|t| t.reputation.overall_score().clamp(0.0, 1.0))
                         .unwrap_or(0.0);
                     let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
                         club_score,

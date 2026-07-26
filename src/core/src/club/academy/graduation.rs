@@ -74,24 +74,40 @@ impl ClubAcademy {
         graduated
     }
 
-    /// Graduate every academy player at or above `min_age` into the youth
+    /// Graduate academy players at or above `min_age` into the youth
     /// pathway, bypassing the normal readiness-ranked, throughput-capped
     /// selection. These prospects are within a year of the academy's
     /// 18-year-old age-out release (`release_aged_out_players`); a 17-year-
     /// old belongs in the senior youth setup, not the kids' academy. Moving
     /// them to a youth team gives them a real development window — youth
-    /// minutes or a development loan (the youth squad-utilization surplus
-    /// pass, which is contract-agnostic, loans the overflow) — instead of
-    /// being released unused. Without this, a prospect who never makes the
-    /// readiness cut is simply deleted at 18, never having had a loan.
-    pub fn graduate_age_overdue(&mut self, date: NaiveDate, min_age: u8) -> Vec<Player> {
-        let ids: Vec<u32> = self
+    /// minutes or a development loan — instead of being released unused.
+    ///
+    /// Bounded by `max_count` — the caller passes the room left under the
+    /// youth soft-max. This net used to be uncapped and ran AFTER the
+    /// capped normal round, so a full youth team still absorbed the whole
+    /// 17-year-old cohort every July and the soft-max meant nothing. The
+    /// overdue prospects who don't fit stay in the academy and are
+    /// released at 18 — the ordinary fate of most real academy players —
+    /// with readiness ranking deciding who gets the remaining slots.
+    pub fn graduate_age_overdue(
+        &mut self,
+        date: NaiveDate,
+        min_age: u8,
+        max_count: usize,
+    ) -> Vec<Player> {
+        if max_count == 0 {
+            return Vec::new();
+        }
+        let mut overdue: Vec<(u32, i16)> = self
             .players
             .players
             .iter()
             .filter(|p| p.age(date) >= min_age)
-            .map(|p| p.id)
+            .map(|p| (p.id, self.pathway_readiness_score(p, date)))
             .collect();
+        overdue.sort_by(|a, b| b.1.cmp(&a.1));
+        overdue.truncate(max_count);
+        let ids: Vec<u32> = overdue.into_iter().map(|(id, _)| id).collect();
 
         let mut graduated = Vec::with_capacity(ids.len());
         for id in ids {
@@ -130,22 +146,34 @@ impl ClubAcademy {
             .min(2)
     }
 
+    /// Youth-team soft maximum every graduation path must respect — the
+    /// readiness-ranked normal round, the elite overshoot AND the
+    /// age-overdue safety net. One constant so no path can quietly
+    /// bypass the cap again.
+    pub const SOFT_MAX_YOUTH_SIZE: usize = 30;
+
     /// Recommended normal graduation count for the resident youth team.
     ///
-    /// Tuned for *annual throughput*, not just topping the squad up: a
-    /// healthy academy should ship a steady stream of graduates each
-    /// season rather than stalling once the youth team is nominally full.
-    ///   * minimum   5  (graduate all eligible if fewer than 5 exist)
-    ///   * preferred 8
-    ///   * maximum  12
+    /// Sized against demographic replacement, not raw throughput: a
+    /// senior game that retires ~2-3 players per club per season only
+    /// absorbs a handful of new professionals per club per season. The
+    /// previous 5/8/12 ladder shipped 3-4× that and — combined with the
+    /// age-overdue net below and prospect release protection — grew the
+    /// world's roster population ~65% in ten years. Prospects who miss
+    /// the cut still get their chance via the age-overdue net while
+    /// room exists; the rest are released by the academy at 18 into the
+    /// free-agent pool, which is exactly what happens to the large
+    /// majority of real academy intakes.
+    ///   * minimum   3  (graduate all eligible if fewer than 3 exist)
+    ///   * preferred 5
+    ///   * maximum   8
     /// always capped by the room left under the youth soft-max of 30.
     pub fn recommended_graduates(&self, youth_count: usize, eligible_count: usize) -> usize {
-        const MIN: usize = 5;
-        const PREFERRED: usize = 8;
-        const MAX: usize = 12;
-        const SOFT_MAX_YOUTH_SIZE: usize = 30;
+        const MIN: usize = 3;
+        const PREFERRED: usize = 5;
+        const MAX: usize = 8;
 
-        let room = SOFT_MAX_YOUTH_SIZE.saturating_sub(youth_count);
+        let room = Self::SOFT_MAX_YOUTH_SIZE.saturating_sub(youth_count);
         eligible_count
             .min(PREFERRED)
             .max(eligible_count.min(MIN))
@@ -162,9 +190,8 @@ impl ClubAcademy {
         normal_graduates: usize,
         elite_overshoot: usize,
     ) -> usize {
-        let soft_max = 30usize;
         let proposed = normal_graduates + elite_overshoot;
-        let max_room = soft_max.saturating_sub(youth_count);
+        let max_room = Self::SOFT_MAX_YOUTH_SIZE.saturating_sub(youth_count);
         proposed.min(max_room)
     }
 
@@ -266,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn graduation_produces_minimum_five_when_candidates_exist() {
+    fn graduation_produces_preferred_count_when_candidates_exist() {
         let date = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
         let mut academy = ClubAcademy::new(8);
         // Seven fit, age-eligible teenagers of mostly modest ability.
@@ -283,13 +310,14 @@ mod tests {
         }
         let eligible = academy.graduation_candidates(date).len();
         assert_eq!(eligible, 7, "all seven teens are eligible");
-        // Youth team nearly empty → ample room; throughput floor is 5.
+        // Youth team nearly empty → ample room; preferred throughput is 5.
         let count = academy.recommended_graduates(10, eligible);
-        assert!(count >= 5, "seasonal floor is 5, got {count}");
+        assert_eq!(count, 5, "preferred seasonal throughput is 5, got {count}");
         let graduated = academy.graduate_to_youth(date, count);
-        assert!(
-            graduated.len() >= 5,
-            "at least five academy players graduate: {}",
+        assert_eq!(
+            graduated.len(),
+            5,
+            "five academy players graduate: {}",
             graduated.len()
         );
     }
@@ -353,12 +381,12 @@ mod tests {
     #[test]
     fn recommended_graduates_targets_seasonal_throughput() {
         let academy = ClubAcademy::new(8);
-        // Plenty eligible, empty youth → preferred 8.
-        assert_eq!(academy.recommended_graduates(0, 20), 8);
+        // Plenty eligible, empty youth → preferred 5.
+        assert_eq!(academy.recommended_graduates(0, 20), 5);
         // Fewer than the floor eligible → graduate all of them.
-        assert_eq!(academy.recommended_graduates(0, 3), 3);
-        // Enough to clear the floor → at least the minimum.
-        assert_eq!(academy.recommended_graduates(0, 6), 6);
+        assert_eq!(academy.recommended_graduates(0, 2), 2);
+        // More than preferred eligible still caps at preferred.
+        assert_eq!(academy.recommended_graduates(0, 6), 5);
         // Room under the soft-max caps the count.
         assert_eq!(academy.recommended_graduates(27, 20), 3);
     }
@@ -389,7 +417,7 @@ mod tests {
         let young_id = young.id;
         academy.players.add(young);
 
-        let graduated = academy.graduate_age_overdue(date, 17);
+        let graduated = academy.graduate_age_overdue(date, 17, usize::MAX);
 
         assert_eq!(graduated.len(), 1, "only the 17-year-old is pulled up");
         assert_eq!(graduated[0].id, overdue_id);
@@ -405,6 +433,33 @@ mod tests {
             !academy.players.players.iter().any(|p| p.id == overdue_id),
             "the age-overdue prospect has left the academy"
         );
+    }
+
+    #[test]
+    fn age_overdue_net_respects_room_and_ranks_by_readiness() {
+        // Two overdue 17-year-olds but room for only one: the readier
+        // prospect takes the slot; the other stays in the academy for the
+        // 18-year-old age-out release — a full youth squad no longer
+        // absorbs the whole overdue cohort.
+        let date = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
+        let mut academy = ClubAcademy::new(8);
+        let strong = prospect(17, 70, 130, 16.0, 9000, date);
+        let strong_id = strong.id;
+        academy.players.add(strong);
+        let weak = prospect(17, 45, 50, 6.0, 7600, date);
+        let weak_id = weak.id;
+        academy.players.add(weak);
+
+        let graduated = academy.graduate_age_overdue(date, 17, 1);
+        assert_eq!(graduated.len(), 1, "room bounds the overdue net");
+        assert_eq!(graduated[0].id, strong_id, "readiness ranks the slot");
+        assert!(
+            academy.players.players.iter().any(|p| p.id == weak_id),
+            "the prospect who missed the cut stays for the age-out release"
+        );
+
+        // No room at all → nobody is pulled up.
+        assert!(academy.graduate_age_overdue(date, 17, 0).is_empty());
     }
 
     #[test]

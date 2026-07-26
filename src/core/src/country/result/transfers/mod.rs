@@ -608,7 +608,7 @@ impl CountryResult {
                     player.on_offer_received(current_date);
                 }
                 if rejected.contains(&player.id) {
-                    player.on_offer_rejected();
+                    player.on_offer_rejected(current_date);
                 }
             }
         }

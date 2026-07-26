@@ -137,6 +137,11 @@ pub struct FreeAgentMarketState {
     /// Bounded log of dates when offers landed; used to recompute the
     /// 30-day window without storing a separate stale counter.
     pub recent_offer_dates: Vec<NaiveDate>,
+    /// Bounded log of dates when the player turned an offer down. Lets
+    /// the pressure model tell "fielding interest" apart from "fielding
+    /// interest and refusing it" inside the same 30-day window — a
+    /// rejected lowball must not read as reassuring as a live offer.
+    pub recent_rejected_offer_dates: Vec<NaiveDate>,
     pub offers_rejected_total: u16,
 
     /// Most recent date any club made the player a concrete offer,
@@ -173,6 +178,16 @@ impl FreeAgentMarketState {
     pub fn offers_received_30d(&self, today: NaiveDate) -> u8 {
         let cutoff = today - Duration::days(30);
         self.recent_offer_dates
+            .iter()
+            .filter(|d| **d >= cutoff)
+            .count()
+            .min(255) as u8
+    }
+
+    /// Number of offers the player turned down in the last 30 days.
+    pub fn offers_rejected_30d(&self, today: NaiveDate) -> u8 {
+        let cutoff = today - Duration::days(30);
+        self.recent_rejected_offer_dates
             .iter()
             .filter(|d| **d >= cutoff)
             .count()
@@ -429,6 +444,7 @@ impl Player {
             last_salary: ctx.last_salary,
             last_squad_status: ctx.last_squad_status,
             recent_offer_dates: Vec::new(),
+            recent_rejected_offer_dates: Vec::new(),
             offers_rejected_total: 0,
             last_offer_date: None,
             last_block: None,
@@ -473,6 +489,7 @@ impl Player {
             last_salary: inferred_salary,
             last_squad_status: PlayerSquadStatus::FirstTeamSquadRotation,
             recent_offer_dates: Vec::new(),
+            recent_rejected_offer_dates: Vec::new(),
             offers_rejected_total: 0,
             last_offer_date: None,
             last_block: None,
@@ -502,10 +519,15 @@ impl Player {
 
     /// The player turned down an offer they received. Bumps the
     /// running rejected counter (one signal that they're being too
-    /// picky). No-op if not a free agent.
-    pub fn on_offer_rejected(&mut self) {
+    /// picky) and stamps the rolling 30-day rejection window so the
+    /// pressure model can discount the interest a refused offer
+    /// represents. No-op if not a free agent.
+    pub fn on_offer_rejected(&mut self, date: NaiveDate) {
         if let Some(state) = self.free_agent_state.as_mut() {
             state.offers_rejected_total = state.offers_rejected_total.saturating_add(1);
+            let cutoff = date - Duration::days(30);
+            state.recent_rejected_offer_dates.retain(|d| *d >= cutoff);
+            state.recent_rejected_offer_dates.push(date);
         }
     }
 
@@ -605,6 +627,16 @@ impl Player {
             0.0
         };
 
+        // A refused offer must not read as reassuring as a live one.
+        // `interest_pressure` relaxes by −0.15 and the drought clock
+        // resets the moment ANY offer lands — so one rejected lowball a
+        // month used to pin a picky player's pressure low forever, which
+        // in turn kept every wage-relief and step-down gate shut (the
+        // trap that held quality free agents in the pool for years).
+        // Recent rejections claw most of that relief back: saying "no"
+        // doesn't stop the clock ticking.
+        let rejection_sting = (state.offers_rejected_30d(today) as f32 * 0.10).min(0.20);
+
         // 0.03/month + 0.18/window: a journeyman with no offers sits
         // around 0.55-0.60 by month six and 0.90+ by month twelve, so
         // the rep/region step-down gates open on the timeline the
@@ -613,6 +645,7 @@ impl Player {
         let raw = 0.03 * months_free
             + 0.18 * windows_missed
             + 0.04 * offers_rejected
+            + rejection_sting
             + age_pressure
             + quality_pressure
             + interest_pressure
@@ -925,7 +958,7 @@ mod tests {
         let mut picky = make_player(85, 28, today);
         release_into_market(&mut picky, release, 300_000, 4000);
         for _ in 0..4 {
-            picky.on_offer_rejected();
+            picky.on_offer_rejected(today);
         }
         assert!(
             picky.career_pressure(today) > patient.career_pressure(today),
@@ -1002,8 +1035,8 @@ mod tests {
         let today = release + chrono::Duration::days(120);
         let mut p = make_player(90, 28, today);
         release_into_market(&mut p, release, 500_000, 5000);
-        p.on_offer_rejected();
-        p.on_offer_rejected();
+        p.on_offer_rejected(today);
+        p.on_offer_rejected(today);
 
         let exp = p
             .market_explanation(today)

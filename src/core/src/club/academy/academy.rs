@@ -831,8 +831,11 @@ mod tests {
         // Youth already at the soft-max → no graduates regardless of pool.
         let cap = academy.graduation_ceiling(30, 10, 2);
         assert_eq!(cap, 0, "ceiling violated soft-max");
-        // Youth at 24 with 10 eligible → only 6 slots of room are usable.
-        assert_eq!(academy.recommended_graduates(24, 10), 6);
+        // Youth at 24 with 10 eligible → 6 slots of room, but preferred
+        // throughput (5) binds first.
+        assert_eq!(academy.recommended_graduates(24, 10), 5);
+        // Youth at 26 → only 4 slots of room are usable.
+        assert_eq!(academy.recommended_graduates(26, 10), 4);
     }
 
     #[test]

@@ -238,6 +238,14 @@ impl SquadAssetContext {
     const PROSPECT_MAX_AGE: u8 = 23;
     /// Believed-ceiling gap over current ability marking a genuine prospect.
     const CEILING_GAP: u8 = 8;
+    /// Through this age a raw youngster is protected on nothing more than
+    /// being clearly below his group ("room to grow"). Older prospects
+    /// must show a believed ceiling.
+    const PROSPECT_DOUBT_AGE: u8 = 19;
+    /// Extra believed-ceiling margin demanded per year of age past
+    /// [`Self::PROSPECT_DOUBT_AGE`] — the older the prospect, the more
+    /// convincing the upside has to be before it blocks disposal.
+    const CEILING_MARGIN_PER_YEAR: u8 = 4;
     /// A player within this much of the group/squad level is useful
     /// rotation depth rather than surplus.
     const ROTATION_GAP: i16 = 15;
@@ -441,18 +449,26 @@ impl SquadAssetContext {
         }
 
         // Young and below his group's level — the development-loan profile.
-        // A believed-high ceiling confirms it; failing that, being clearly
-        // below the group is itself room to grow for a young player. Both
-        // routes mean the same thing for disposal: loanable for development,
-        // never the free-transfer scrapheap.
-        let believed_upside = PotentialEstimator::observable_ceiling(player, date)
-            > level.saturating_add(Self::CEILING_GAP);
+        // The protection decays with age: a teenager gets the full benefit
+        // of the doubt (a believed ceiling OR simply being raw both read as
+        // room to grow), but past 19 only a believed ceiling protects, and
+        // the margin the staff must believe in grows every year. A 22-year-
+        // old still clearly below his group with an ordinary ceiling is not
+        // a prospect — he is a stalled development case, and classifying
+        // him ProspectDevelopment forever made every academy graduate
+        // structurally un-releasable until 24, one of the two pumps behind
+        // unbounded squad growth.
+        let ceiling = PotentialEstimator::observable_ceiling(player, date);
         let clearly_below_group = (level as i16) <= group_avg - Self::NEAR_GROUP_GAP;
-        if age <= Self::PROSPECT_MAX_AGE
-            && (level as i16) < group_avg
-            && (believed_upside || clearly_below_group)
-        {
-            return SquadAssetClass::ProspectDevelopment;
+        if age <= Self::PROSPECT_MAX_AGE && (level as i16) < group_avg {
+            let extra_margin = age.saturating_sub(Self::PROSPECT_DOUBT_AGE) as u8
+                * Self::CEILING_MARGIN_PER_YEAR;
+            let believed_upside =
+                ceiling > level.saturating_add(Self::CEILING_GAP).saturating_add(extra_margin);
+            let raw_benefit_of_doubt = age <= Self::PROSPECT_DOUBT_AGE && clearly_below_group;
+            if believed_upside || raw_benefit_of_doubt {
+                return SquadAssetClass::ProspectDevelopment;
+            }
         }
 
         // Near the group or squad level → useful rotation depth.

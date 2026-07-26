@@ -1717,6 +1717,7 @@ mod group_need_tests {
             group_size: 0,
             group_cap: usize::MAX,
             group_cap_bar: 0,
+            prospect_desk_full: false,
         };
         let v4 = evaluate_listed_target(&mikhailov_class, &surplus_buyer);
         assert_eq!(
@@ -1733,6 +1734,7 @@ mod group_need_tests {
             group_size: 6,
             group_cap: 6,
             group_cap_bar: 140,
+            prospect_desk_full: false,
         };
         let v5 = evaluate_listed_target(&mikhailov_class, &full_group_buyer);
         assert_eq!(

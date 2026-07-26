@@ -1019,7 +1019,7 @@ impl PipelineProcessor {
                         PlayerFieldPositionGroup::Forward,
                     ]
                     .into_iter()
-                    .map(|g| (g, SquadFitSnapshot::build(club, g)))
+                    .map(|g| (g, SquadFitSnapshot::build(club, g, date)))
                     .collect();
                     // Per-group best CA at the buying club — cached so the
                     // filter doesn't re-scan the squad N times.

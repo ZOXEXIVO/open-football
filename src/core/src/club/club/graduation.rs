@@ -1,5 +1,6 @@
 use super::Club;
 use crate::Player;
+use crate::club::academy::ClubAcademy;
 use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::language::{Language, PlayerLanguage};
 use crate::shared::{Currency, CurrencyValue};
@@ -39,7 +40,7 @@ impl Club {
         }
     }
 
-    /// Graduate best academy players to U18 team (8-12 per year).
+    /// Graduate best academy players to U18 team (3-8 per year).
     /// Move overage youth players to main team.
     /// Aged-out academy players are released onto the global free-agent
     /// pool. Returns completed transfer records and the released
@@ -95,17 +96,22 @@ impl Club {
 
             let youth_team_type = self.teams.teams[idx].team_type;
             let mut graduated = self.academy.graduate_to_youth(date, to_graduate);
-            // Loan-ready-age safety net: also pull up any prospect within a
+            // Loan-ready-age safety net: also pull up prospects within a
             // year of the 18-year-old age-out release who didn't make the
-            // readiness-ranked cut. A 17-year-old belongs in the youth setup
-            // (where the squad-utilization surplus pass can send him out on a
-            // development loan), not waiting in the academy to be deleted at
-            // 18 without ever having played senior football.
+            // readiness-ranked cut — but ONLY into genuine remaining room
+            // under the youth soft-max. Uncapped, this net re-absorbed the
+            // whole 17-year-old cohort into an already-full youth squad
+            // every July, defeating the graduation ceiling entirely. The
+            // overdue prospects who don't fit stay in the academy and are
+            // released at 18 into the free-agent pool below.
             const LOAN_READY_ACADEMY_AGE: u8 = 17;
-            graduated.extend(
-                self.academy
-                    .graduate_age_overdue(date, LOAN_READY_ACADEMY_AGE),
-            );
+            let overdue_room = ClubAcademy::SOFT_MAX_YOUTH_SIZE
+                .saturating_sub(youth_count + graduated.len());
+            graduated.extend(self.academy.graduate_age_overdue(
+                date,
+                LOAN_READY_ACADEMY_AGE,
+                overdue_room,
+            ));
             if !graduated.is_empty() {
                 debug!(
                     "academy {}: {} players graduated (contract: {}, assigned: {:?}, was {})",

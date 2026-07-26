@@ -48,6 +48,11 @@ impl CountryResult {
         summary: &mut TransferActivitySummary,
     ) {
         let mut listings_to_add: Vec<PendingListing> = Vec::new();
+        // Loan listings that have been shopped for months with no borrower
+        // while the club has separately flagged the player for sale
+        // (`contract.is_transfer_listed`) — upgraded in place to permanent
+        // listings so the unsold-exit valve can finally reach them.
+        let mut listings_to_upgrade: Vec<(u32, CurrencyValue)> = Vec::new();
         let price_level = country.settings.pricing.price_level;
         let window_mgr = TransferWindowManager::for_country(country, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
@@ -156,25 +161,60 @@ impl CountryResult {
                     // suppresses a duplicate. Fee mirrors the main-squad
                     // board loan listing (zero — the borrower-side scan sets
                     // the actual terms), keeping the path consistent.
-                    if player.statuses.has(PlayerStatusType::Loa)
-                        && player.contract.is_some()
-                        && country
-                            .transfer_market
-                            .get_listing_by_player(player.id)
-                            .is_none()
-                    {
-                        listings_to_add.push(PendingListing {
-                            player_id: player.id,
-                            club_id: club.id,
-                            team_id: team.id,
-                            asking_price: CurrencyValue {
-                                amount: 0.0,
-                                currency: Currency::Usd,
-                            },
-                            listing_type: TransferListingType::Loan,
-                            reason: "dec_reason_club_listed".to_string(),
-                            decided_by: decided_by.clone(),
-                        });
+                    if player.statuses.has(PlayerStatusType::Loa) && player.contract.is_some() {
+                        match country.transfer_market.get_listing_by_player(player.id) {
+                            None => {
+                                listings_to_add.push(PendingListing {
+                                    player_id: player.id,
+                                    club_id: club.id,
+                                    team_id: team.id,
+                                    asking_price: CurrencyValue {
+                                        amount: 0.0,
+                                        currency: Currency::Usd,
+                                    },
+                                    listing_type: TransferListingType::Loan,
+                                    reason: "dec_reason_club_listed".to_string(),
+                                    decided_by: decided_by.clone(),
+                                });
+                            }
+                            Some(existing) => {
+                                // A loan listing that found no borrower for
+                                // half a year, on a player the club has ALSO
+                                // flagged for permanent sale, upgrades to a
+                                // real transfer listing. Without this the
+                                // `Loa` badge was a life sentence: the loan
+                                // row never expires, the flagged-for-sale
+                                // branch below skips loan-listed players, and
+                                // the unsold-exit valve only reads permanent
+                                // listings — so a warehoused reserve (the
+                                // 29-keeper U20 case) could never leave by
+                                // any route. The original listed date is
+                                // kept, so a long-stranded player reaches the
+                                // valve's one-year clock immediately instead
+                                // of restarting it.
+                                const LOAN_UNSOLD_UPGRADE_DAYS: i64 = 180;
+                                let flagged_for_sale = player
+                                    .contract
+                                    .as_ref()
+                                    .map(|c| c.is_transfer_listed)
+                                    .unwrap_or(false);
+                                if existing.listing_type == TransferListingType::Loan
+                                    && flagged_for_sale
+                                    && (date - existing.listed_date).num_days()
+                                        >= LOAN_UNSOLD_UPGRADE_DAYS
+                                {
+                                    let asking_price = Self::calculate_asking_price(
+                                        player,
+                                        club,
+                                        date,
+                                        price_level,
+                                        league_reputation,
+                                        club_reputation,
+                                    );
+                                    listings_to_upgrade.push((player.id, asking_price));
+                                }
+                            }
+                        }
                         continue;
                     }
 
@@ -318,6 +358,44 @@ impl CountryResult {
                                 180,
                             );
                         }
+                    }
+                }
+            }
+        }
+
+        // Upgrade stale loan listings to permanent listings (see the
+        // collection above). In-place: same row, same `listed_date` — only
+        // the type, origin and asking price change, so the unsold-exit
+        // valve's clock keeps the time already served on the loan list.
+        for (player_id, asking_price) in listings_to_upgrade {
+            let Some(listing) = country
+                .transfer_market
+                .listings
+                .iter_mut()
+                .find(|l| {
+                    l.player_id == player_id
+                        && l.listing_type == TransferListingType::Loan
+                        && l.status == TransferListingStatus::Available
+                })
+            else {
+                continue;
+            };
+            listing.listing_type = TransferListingType::Transfer;
+            listing.origin = TransferListingOrigin::SellerListed;
+            listing.asking_price = asking_price.clone();
+            listing.original_asking_price = asking_price;
+            summary.total_listings += 1;
+            for club in &mut country.clubs {
+                for team in &mut club.teams.teams {
+                    if let Some(player) =
+                        team.players.players.iter_mut().find(|p| p.id == player_id)
+                    {
+                        if !player.statuses.has(PlayerStatusType::Lst) {
+                            player.statuses.add(date, PlayerStatusType::Lst);
+                        }
+                        // No decision-history entry: the flag-setter (surplus
+                        // trim / salary fallback) already recorded the listing
+                        // decision when it stamped `is_transfer_listed`.
                     }
                 }
             }

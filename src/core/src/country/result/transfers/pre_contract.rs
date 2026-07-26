@@ -240,7 +240,7 @@ impl PreContractManager {
             let Some(main_team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
                 continue;
             };
-            let club_score = (main_team.reputation.world as f32 / 10_000.0).clamp(0.0, 1.0);
+            let club_score = main_team.reputation.overall_score().clamp(0.0, 1.0);
             // Low pressure: the player is employed and weighing a
             // considered move, not a desperate one — the quality band
             // stays tight so a club only pre-signs a player who fits its
