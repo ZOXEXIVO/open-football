@@ -2552,6 +2552,8 @@ impl TeamBehaviour {
             }
             CareerStageDetector::maybe_consider_retirement(player, today);
             CareerStageDetector::maybe_show_coaching_interest(player, today);
+            CareerStageDetector::maybe_celebrate_club_service(player, today);
+            CareerStageDetector::maybe_retire_from_international_football(player, today);
         }
     }
 }

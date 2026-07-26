@@ -237,6 +237,11 @@ pub struct Player {
     /// Mutation is internal (set by end-of-season retirement processing).
     pub(crate) retired: bool,
 
+    /// The player has announced retirement from INTERNATIONAL football —
+    /// he keeps playing club football, but the national-team callup pass
+    /// no longer considers him. Set once by the career-stage detector.
+    pub international_retired: bool,
+
     /// Durable market-state snapshot kept while the player is a free
     /// agent. Read via `Player::free_agent_state()`. Mutation is owner-
     /// side via `on_release` / `on_offer_received` / `clear_free_agent_state`

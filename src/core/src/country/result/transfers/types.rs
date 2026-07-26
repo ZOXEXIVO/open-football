@@ -1,7 +1,10 @@
+use crate::club::player::events::transfer_social::TransferContinentalPath;
 use crate::transfers::market::TransferListingOrigin;
 use crate::transfers::negotiation::NegotiationPhase;
 use crate::transfers::offer::{PersonalTermsOffer, TransferClause};
-use crate::{Club, Country, Player, PlayerPositionType};
+use crate::{
+    Club, Country, Player, PlayerPositionType, TransferInterestSource, TransferInterestStage,
+};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -197,4 +200,32 @@ pub(crate) fn find_player_in_country_mut(
         }
     }
     None
+}
+
+/// A player-visible saga beat that could not be delivered inside the
+/// country borrow: the negotiation is processed by the BUYING country's
+/// parallel Phase-A pass, but the player lives in the selling country's
+/// partition. Carries every buyer-side ingredient of a
+/// [`TransferInterestSignal`](crate::TransferInterestSignal); the
+/// player-dependent facts (former club, homecoming, seller rivalry) are
+/// resolved at delivery in the serial Phase-C drain, where the whole
+/// world is addressable. Events only — roster statuses stay domestic,
+/// where every negotiation death path can reliably clear them.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingPlayerSignal {
+    pub(crate) player_id: u32,
+    pub(crate) selling_country_id: u32,
+    pub(crate) selling_club_id: u32,
+    pub(crate) stage: TransferInterestStage,
+    pub(crate) source: TransferInterestSource,
+    pub(crate) repeated_attention: bool,
+    pub(crate) interested_club_id: u32,
+    pub(crate) interested_league_id: Option<u32>,
+    pub(crate) buyer_rep: f32,
+    pub(crate) seller_rep: f32,
+    pub(crate) buyer_league_rep: u16,
+    pub(crate) buyer_country_id: u32,
+    pub(crate) buyer_continent_id: u32,
+    pub(crate) buyer_has_continental_path: bool,
+    pub(crate) buyer_competition_path: Option<TransferContinentalPath>,
 }

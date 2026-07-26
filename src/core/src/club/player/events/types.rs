@@ -72,6 +72,10 @@ pub struct MatchOutcome<'a> {
     /// Opponent team id, when known. Used by the relationship-arc
     /// emit path to name the rival in the headline / detail row.
     pub opponent_team_id: Option<u32>,
+    /// Opponent CLUB id, when the result pipeline could resolve it.
+    /// Drives the scored-against-former-club beat — `Player::sold_from`
+    /// records the selling CLUB, so the team id alone can't match it.
+    pub opponent_club_id: Option<u32>,
     /// The team this player was actually fielded for. `None` when the
     /// caller doesn't resolve it; only the league-result pipeline
     /// populates it. Drives per-team league attribution so a borrowed

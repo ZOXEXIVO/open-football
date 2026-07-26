@@ -11,6 +11,8 @@
 //! the matchday-result pipeline calls for every banned player whose
 //! team played without them.
 
+use crate::HappinessEventType;
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
 
 /// Yellow-card accumulation threshold that triggers a 1-match
@@ -66,6 +68,14 @@ impl Player {
             // Roll the running tally past the threshold so subsequent
             // yellows continue to accumulate naturally.
             self.player_attributes.yellow_card_running = new - threshold;
+            // The avoidable, self-inflicted ban — the red-card route is
+            // narrated by RedCardFallout; this covers the bookings tally
+            // tipping over.
+            let mag = HappinessConfig::default()
+                .catalog
+                .magnitude(HappinessEventType::BannedThroughAccumulation);
+            self.happiness
+                .add_event(HappinessEventType::BannedThroughAccumulation, mag);
         } else {
             self.player_attributes.yellow_card_running = new;
         }
@@ -84,6 +94,13 @@ impl Player {
         self.player_attributes.suspension_matches -= 1;
         if self.player_attributes.suspension_matches == 0 {
             self.player_attributes.is_banned = false;
+            // Available again — the relief beat that closes the ban
+            // story the feed opened when the suspension began.
+            let mag = HappinessConfig::default()
+                .catalog
+                .magnitude(HappinessEventType::SuspensionServed);
+            self.happiness
+                .add_event(HappinessEventType::SuspensionServed, mag);
         }
     }
 

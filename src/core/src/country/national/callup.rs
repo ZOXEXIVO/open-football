@@ -165,6 +165,7 @@ impl NationalTeam {
                             || player.player_attributes.is_banned
                             || player.statuses.has(PlayerStatusType::Loa)
                             || player.player_attributes.condition < min_condition
+                            || player.international_retired
                         {
                             continue;
                         }

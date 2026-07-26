@@ -18,7 +18,10 @@ use crate::transfers::pipeline::{
     DetailedScoutingReport, ReportRiskFlag, ScoutingAssignment, ScoutingRecommendation,
     ShortlistCandidate, ShortlistCandidateStatus, TransferRequestStatus, TransferShortlist,
 };
-use crate::{Club, Country, Person, PlayerFieldPositionGroup, StaffPosition, TeamType};
+use crate::{
+    Club, Country, Person, PlayerFieldPositionGroup, StaffPosition, TeamType,
+    TransferInterestSource, TransferInterestStage,
+};
 use std::cmp::Ordering;
 
 struct ShortlistResult {
@@ -694,6 +697,19 @@ impl PipelineProcessor {
             }
         }
 
+        // Board-approved pursuits go public in the rumour mill after the
+        // drain below — collected first because the drain holds a mutable
+        // borrow on the buying club while the target lives elsewhere.
+        let mut approved_targets: Vec<(u32, u32)> = Vec::new();
+
+        for d in &decisions {
+            if d.approved {
+                if let Some(player_id) = d.named_target {
+                    approved_targets.push((d.club_id, player_id));
+                }
+            }
+        }
+
         for d in decisions {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == d.club_id) {
                 if let Some(req) = club
@@ -758,6 +774,43 @@ impl PipelineProcessor {
                             {
                                 m.status = ScoutMonitoringStatus::Active;
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        // The rumour mill: a board-approved pursuit leaks. With the
+        // target's contract running down the story is the agent drumming
+        // up the move (leverage); otherwise the press pick up the
+        // shortlisting. Domestic targets only — a foreign target's beat
+        // arrives with the concrete cross-border approach.
+        for (buyer_club_id, player_id) in approved_targets {
+            let months_remaining = PipelineProcessor::find_player_in_country(country, player_id)
+                .and_then(|p| p.contract.as_ref())
+                .map(|c| ((c.expiration - date).num_days() / 30) as i32);
+            let (stage, source) = match months_remaining {
+                Some(m) if m <= 12 => (
+                    TransferInterestStage::AgentSoundingOut,
+                    TransferInterestSource::AgentLeak,
+                ),
+                _ => (
+                    TransferInterestStage::Shortlisted,
+                    TransferInterestSource::LocalPress,
+                ),
+            };
+            let signal = PipelineProcessor::local_interest_signal(
+                country,
+                buyer_club_id,
+                player_id,
+                stage,
+                source,
+            );
+            if let Some(sig) = signal {
+                for club in &mut country.clubs {
+                    for team in club.teams.iter_mut() {
+                        if let Some(player) = team.players.find_mut(player_id) {
+                            player.on_transfer_interest_signal(&sig);
                         }
                     }
                 }

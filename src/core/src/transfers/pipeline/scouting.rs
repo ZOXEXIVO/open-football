@@ -23,7 +23,8 @@ use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;
 use crate::{
     Club, ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerSquadStatus,
-    PlayerStatusType, StaffEventType, StaffPosition, TeamType,
+    PlayerStatusType, StaffEventType, StaffPosition, TeamType, TransferInterestSource,
+    TransferInterestStage,
 };
 use chrono::Weekday;
 use rayon::prelude::*;
@@ -75,7 +76,10 @@ struct ClubScoutingStaged {
     staff_events: Vec<(u32, u32, StaffEventType)>,
     familiarity_events: Vec<(u32, u32, ScoutingRegion)>,
     rejected_events: Vec<(u32, u32)>,
-    wanted_player_ids: Vec<u32>,
+    /// `(scouting_club_id, player_id)` — the club identity travels with
+    /// the target so the apply pass can emit the ScoutWatched beat with
+    /// the interested club attached, not just stamp an anonymous `Wnt`.
+    wanted_targets: Vec<(u32, u32)>,
     monitoring_updates: Vec<MonitoringUpdate>,
 }
 
@@ -1042,7 +1046,7 @@ impl PipelineProcessor {
         let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new();
         let mut familiarity_events: Vec<(u32, u32, ScoutingRegion)> = Vec::new();
         let mut rejected_events: Vec<(u32, u32)> = Vec::new(); // (club_id, player_id)
-        let mut wanted_player_ids: Vec<u32> = Vec::new();
+        let mut wanted_targets: Vec<(u32, u32)> = Vec::new();
         let mut monitoring_updates: Vec<MonitoringUpdate> = Vec::new();
         for staged in staged_per_club {
             observations.extend(staged.observations);
@@ -1052,9 +1056,9 @@ impl PipelineProcessor {
             rejected_events.extend(staged.rejected_events);
             // Wnt dedup used to happen across clubs mid-scan; replicate
             // it at merge time so the applied vec stays duplicate-free.
-            for player_id in staged.wanted_player_ids {
-                if !wanted_player_ids.contains(&player_id) {
-                    wanted_player_ids.push(player_id);
+            for target in staged.wanted_targets {
+                if !wanted_targets.contains(&target) {
+                    wanted_targets.push(target);
                 }
             }
             monitoring_updates.extend(staged.monitoring_updates);
@@ -1067,7 +1071,7 @@ impl PipelineProcessor {
             staff_events,
             familiarity_events,
             rejected_events,
-            wanted_player_ids,
+            wanted_targets,
             monitoring_updates,
             &config,
             date,
@@ -1097,7 +1101,7 @@ impl PipelineProcessor {
         let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new();
         let mut familiarity_events: Vec<(u32, u32, ScoutingRegion)> = Vec::new();
         let mut rejected_events: Vec<(u32, u32)> = Vec::new();
-        let mut wanted_player_ids: Vec<u32> = Vec::new();
+        let mut wanted_targets: Vec<(u32, u32)> = Vec::new();
         let mut monitoring_updates: Vec<MonitoringUpdate> = Vec::new();
         {
             let plan = &club.transfer_plan;
@@ -1525,8 +1529,8 @@ impl PipelineProcessor {
                                 .unwrap_or(false);
 
                         if public_interest_ok {
-                            if !wanted_player_ids.contains(&target.player_id) {
-                                wanted_player_ids.push(target.player_id);
+                            if !wanted_targets.contains(&(club.id, target.player_id)) {
+                                wanted_targets.push((club.id, target.player_id));
                             }
                         } else if buyable {
                             // The scout rates him a buy, but the move can't
@@ -1567,7 +1571,7 @@ impl PipelineProcessor {
             staff_events,
             familiarity_events,
             rejected_events,
-            wanted_player_ids,
+            wanted_targets,
             monitoring_updates,
         }
     }
@@ -1582,7 +1586,7 @@ impl PipelineProcessor {
         staff_events: Vec<(u32, u32, StaffEventType)>,
         familiarity_events: Vec<(u32, u32, ScoutingRegion)>,
         rejected_events: Vec<(u32, u32)>,
-        wanted_player_ids: Vec<u32>,
+        wanted_targets: Vec<(u32, u32)>,
         monitoring_updates: Vec<MonitoringUpdate>,
         config: &ScoutingConfig,
         date: NaiveDate,
@@ -1644,8 +1648,21 @@ impl PipelineProcessor {
             }
         }
 
-        // Set Wnt status on newly scouted players
-        for player_id in &wanted_player_ids {
+        // Newly scouted players: stamp the market badges and let the
+        // player hear about it. `Wnt` (wanted) and `Sct` (being watched)
+        // were formerly anonymous; the ScoutWatched beat goes through
+        // the structured interest funnel, whose surfacing gate keeps
+        // everyday scout attendance out of the feed unless the club gap
+        // or an emotional link (former / favourite / rival club) makes
+        // it news to the player.
+        for (scout_club_id, player_id) in &wanted_targets {
+            let signal = Self::local_interest_signal(
+                country,
+                *scout_club_id,
+                *player_id,
+                TransferInterestStage::ScoutWatched,
+                TransferInterestSource::ScoutAttendance,
+            );
             for club in &mut country.clubs {
                 for team in &mut club.teams.teams {
                     if let Some(player) =
@@ -1653,6 +1670,12 @@ impl PipelineProcessor {
                     {
                         if !player.statuses.has(PlayerStatusType::Wnt) {
                             player.statuses.add(date, PlayerStatusType::Wnt);
+                        }
+                        if !player.statuses.has(PlayerStatusType::Sct) {
+                            player.statuses.add(date, PlayerStatusType::Sct);
+                        }
+                        if let Some(sig) = signal.as_ref() {
+                            player.on_transfer_interest_signal(sig);
                         }
                     }
                 }

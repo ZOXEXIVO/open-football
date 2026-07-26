@@ -11,7 +11,7 @@
 
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::player::Player;
-use crate::{Person, PlayerSquadStatus};
+use crate::{Person, PlayerSquadStatus, PlayerStatusType};
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 
@@ -414,14 +414,20 @@ impl Player {
 
     /// Stage (or replace) a pre-contract. The player keeps playing under
     /// his current deal; the expiry pass executes the move when it lapses.
-    pub fn stage_pre_contract(&mut self, agreement: PreContractAgreement) {
+    /// Stamps the `Trn` badge — the player has agreed a move that
+    /// executes later, which is exactly that status's meaning (and match
+    /// selection protects a near-departed asset accordingly).
+    pub fn stage_pre_contract(&mut self, agreement: PreContractAgreement, date: NaiveDate) {
         self.pending_pre_contract = Some(agreement);
+        self.statuses.add(date, PlayerStatusType::Trn);
     }
 
     /// Drop a staged pre-contract — the player renewed, was sold, or the
-    /// agreement could no longer be honoured.
+    /// agreement could no longer be honoured. The badge travels with the
+    /// agreement.
     pub fn clear_pre_contract(&mut self) {
         self.pending_pre_contract = None;
+        self.statuses.remove(PlayerStatusType::Trn);
     }
 
     /// Stamp the player as just-released and seed their market-state

@@ -1,5 +1,7 @@
 use super::config::TransferConfig;
-use super::execution::{DevelopmentLoanPathway, TransferExecution};
+use super::execution::{
+    ArrivalThreatProfile, DevelopmentLoanPathway, SquadReactionPass, TransferExecution,
+};
 use super::free_agent_depth::{
     DepthNegotiationAction, EmergencyDepthRequestIntent, EmergencyDepthRequestPlanner,
     FreeAgentNegotiationStager,
@@ -307,9 +309,14 @@ impl CountryResult {
                     // (signed now, effective at contract end) would need
                     // their own deferred-execution flow, not this path.
                     if days_left <= 0 {
-                        // Skip if already in negotiation
-                        if player.statuses.has(PlayerStatusType::Trn)
-                            || player.statuses.has(PlayerStatusType::Bid)
+                        // Skip if already mid-negotiation — but a staged
+                        // pre-contract also wears the `Trn` badge, and
+                        // for him THIS scan is the execution path (the
+                        // expiry routing honours the agreed club), so he
+                        // must pass through.
+                        if (player.statuses.has(PlayerStatusType::Trn)
+                            || player.statuses.has(PlayerStatusType::Bid))
+                            && player.pending_pre_contract().is_none()
                         {
                             continue;
                         }
@@ -3215,11 +3222,32 @@ pub(crate) fn execute_global_free_agent_signing(
 
     let buying_club_name = buying_country.clubs[buying_club_idx].name.clone();
 
+    // Reception ingredients — captured before `player` moves into the
+    // roster and before the club goes mutably borrowed.
+    let arrival_country_id = player.country_id;
+    let club_country_id = buying_country.id;
+    let club_country_code = buying_country.code.clone();
+    let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
+
     // Main team by TYPE — `teams[0]` is not guaranteed to be the Main
     // squad, and the contract/history identity and squad-cap check above
     // were already keyed to it. The historical first-team insert rostered
     // pool signings on whatever squad happened to sit first.
     TransferExecution::add_to_main_team(&mut buying_country.clubs[buying_club_idx], player);
+
+    // A pool signing walks into a dressing room like any other arrival —
+    // this path used to install him with no compatriot / competition /
+    // investment reaction at all.
+    SquadReactionPass::arrival_reception(
+        &mut buying_country.clubs[buying_club_idx],
+        signing.player_id,
+        arrival_country_id,
+        club_country_id,
+        &club_country_code,
+        &arrival_threat,
+        0.0,
+        date,
+    );
 
     // Country-level market log (separate from the player's career history
     // populated above by `complete_free_agent_signing`).

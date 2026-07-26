@@ -1,6 +1,7 @@
 use chrono::{Datelike, NaiveDate};
 use rustc_hash::FxHashMap;
 
+use crate::club::player::events::transfer_social::TransferInterestSignal;
 use crate::club::player::language::LanguageProfile;
 use crate::shared::CurrencyValue;
 use crate::transfers::ScoutingRegion;
@@ -16,7 +17,7 @@ use crate::transfers::window::{PlayerValuationCalculator, TransferCalendar};
 use crate::utils::FormattingUtils;
 use crate::{
     Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType,
-    ReputationLevel, StaffPosition, TeamType,
+    ReputationLevel, StaffPosition, TeamType, TransferInterestSource, TransferInterestStage,
 };
 use chrono::Weekday;
 
@@ -180,6 +181,75 @@ impl PipelineProcessor {
             }
         }
         None
+    }
+
+    /// Build the structured interest signal for a DOMESTIC rumour-tier
+    /// beat: `buyer_club_id` (this country) is sniffing around a player
+    /// at another club in the same country. Pre-bid stages only — the
+    /// negotiation resolvers own the concrete stages with their richer
+    /// `NegotiationData` context. Returns `None` when either club can't
+    /// be resolved or the "target" already plays for the buyer.
+    pub(crate) fn local_interest_signal(
+        country: &Country,
+        buyer_club_id: u32,
+        player_id: u32,
+        stage: TransferInterestStage,
+        source: TransferInterestSource,
+    ) -> Option<TransferInterestSignal> {
+        let (seller_club, player) = country.clubs.iter().find_map(|c| {
+            c.teams
+                .teams
+                .iter()
+                .find_map(|t| t.players.find(player_id))
+                .map(|p| (c, p))
+        })?;
+        if seller_club.id == buyer_club_id {
+            return None;
+        }
+        let buyer_club = country.clubs.iter().find(|c| c.id == buyer_club_id)?;
+
+        let rep01 = |club: &Club| -> f32 {
+            club.teams
+                .main()
+                .map(|t| t.reputation.world)
+                .unwrap_or(0) as f32
+                / 10_000.0
+        };
+        let league_rep = |club: &Club| -> u16 {
+            club.teams
+                .teams
+                .first()
+                .and_then(|t| t.league_id)
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| l.reputation)
+                .unwrap_or(0)
+        };
+
+        Some(TransferInterestSignal {
+            interested_club_id: buyer_club_id,
+            interested_league_id: buyer_club.teams.teams.first().and_then(|t| t.league_id),
+            buyer_rep: rep01(buyer_club),
+            seller_rep: rep01(seller_club),
+            buyer_league_rep: league_rep(buyer_club),
+            seller_league_rep: league_rep(seller_club),
+            stage,
+            source,
+            repeated_attention: false,
+            is_rival: seller_club.is_rival(buyer_club_id),
+            is_home_country: player.country_id == country.id,
+            is_seller_in_home_country: player.country_id == country.id,
+            is_former_club: player
+                .sold_from
+                .as_ref()
+                .map(|(cid, _)| *cid == buyer_club_id)
+                .unwrap_or(false),
+            buyer_country_id: country.id,
+            buyer_continent_id: country.continent_id,
+            // Rumour-tier beats stay narratively modest — the continental
+            // opportunity framing belongs to concrete approaches.
+            buyer_has_continental_path: false,
+            buyer_competition_path: None,
+        })
     }
 
     /// Resolve player full name and selling club name from the country data.

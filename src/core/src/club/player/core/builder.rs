@@ -255,6 +255,7 @@ impl PlayerBuilder {
             pending_signing: None,
             generated: self.generated.unwrap_or(false),
             retired: false,
+            international_retired: false,
             load: PlayerLoad::new(),
             pending_contract_ask: None,
             pending_pre_contract: None,

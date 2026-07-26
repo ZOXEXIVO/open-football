@@ -19,8 +19,8 @@ use crate::club::player::player::Player;
 use crate::{
     ContractEventContext, ContractEventKind, HappinessEventCause, HappinessEventContext,
     HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
-    HappinessEventType, MediaFanEventContext, MediaFanEventKind, MediaFanSource, PlayerStatusType,
-    TransferInterestContext, TransferInterestEvidence, TransferInterestKind,
+    HappinessEventType, MediaFanEventContext, MediaFanEventKind, MediaFanSource, PlayerSquadStatus,
+    PlayerStatusType, TransferInterestContext, TransferInterestEvidence, TransferInterestKind,
     TransferInterestReaction, TransferInterestSource, TransferInterestStage, TransferSportingFit,
 };
 
@@ -464,13 +464,81 @@ impl Player {
             ctx = ctx.with_follow_up(fu);
         }
 
-        self.happiness.add_event_with_context_and_cooldown(
+        let surfaced = self.happiness.add_event_with_context_and_cooldown(
             event_type,
             magnitude,
             None,
             ctx,
             cooldown_days,
+        );
+        if surfaced {
+            self.maybe_emit_fans_react_to_rumour(sig, kind);
+        }
+        surfaced
+    }
+
+    /// Supporters stir when one of THEIR first-team fixtures is publicly
+    /// linked away — a bigger club calling, a continental stage, or a
+    /// rival sniffing splits the terraces. Routine lateral interest and
+    /// fringe players don't make terrace conversation. Fires only on a
+    /// rumour-tier stage that actually surfaced to the player, so the
+    /// fans' beat can never outnumber the story it reacts to.
+    fn maybe_emit_fans_react_to_rumour(
+        &mut self,
+        sig: &TransferInterestSignal,
+        kind: TransferInterestKind,
+    ) {
+        let rumour_tier = matches!(
+            sig.stage,
+            TransferInterestStage::ScoutWatched
+                | TransferInterestStage::Shortlisted
+                | TransferInterestStage::AgentSoundingOut
+                | TransferInterestStage::LooseRumour
+                | TransferInterestStage::ConcreteInterest
+                | TransferInterestStage::BidExpected
+                | TransferInterestStage::BidSubmitted
+        );
+        if !rumour_tier {
+            return;
+        }
+        let is_first_team_fixture = matches!(
+            self.contract.as_ref().map(|c| c.squad_status.clone()),
+            Some(PlayerSquadStatus::KeyPlayer) | Some(PlayerSquadStatus::FirstTeamRegular)
+        );
+        if !is_first_team_fixture {
+            return;
+        }
+        let charged = matches!(
+            kind,
+            TransferInterestKind::StepUp
+                | TransferInterestKind::BigLeagueOpportunity
+                | TransferInterestKind::RivalMove
+                | TransferInterestKind::EuropeanCompetitionOpportunity
+                | TransferInterestKind::CopaLibertadoresOpportunity
+        );
+        if !charged {
+            return;
+        }
+        let cfg = HappinessConfig::default();
+        let mag = cfg.catalog.fans_react_to_transfer_rumour;
+        let mut media_ctx = MediaFanEventContext::new(
+            MediaFanEventKind::FansSplitOverPlayer,
+            MediaFanSource::LocalPress,
+        );
+        media_ctx.trigger_due_to_transfer = true;
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::MediaPressure,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Media,
         )
+        .with_media_fan_context(media_ctx);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::FansReactToTransferRumour,
+            mag,
+            None,
+            ctx,
+            45,
+        );
     }
 
     /// Stage a `HomeReturnOpportunity` event when a concrete approach

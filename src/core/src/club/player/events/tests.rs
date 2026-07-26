@@ -128,6 +128,7 @@ fn outcome<'a>(
         team_lost: lost,
         is_continental: is_cup,
         opponent_team_id: Some(999),
+        opponent_club_id: None,
         played_for: None,
         match_season_year: 0,
         date: d(2026, 9, 1),
@@ -183,6 +184,7 @@ fn borrowed_appearance_books_to_secondary_team_not_home() {
         team_lost: false,
         is_continental: false,
         opponent_team_id: Some(999),
+        opponent_club_id: None,
         played_for: Some(MatchTeamRef {
             slug: "zenit",
             name: "Zenit",
@@ -235,6 +237,7 @@ fn home_appearance_books_to_player_statistics() {
         team_lost: false,
         is_continental: false,
         opponent_team_id: Some(999),
+        opponent_club_id: None,
         played_for: Some(MatchTeamRef {
             slug: "zenit-2",
             name: "Zenit 2",
@@ -6256,5 +6259,188 @@ fn first_official_appearance_of_an_established_senior_is_not_a_debut() {
         count_events(&p, &HappinessEventType::YouthBreakthrough),
         0,
         "an established senior's season opener is not a debut"
+    );
+}
+
+// ── Rumour-mill stage tests (ScoutWatched / Shortlisted / Agent) ─────
+
+#[test]
+fn scout_watched_surfaces_for_big_club_but_not_for_peer() {
+    // A clearly bigger club's scouts in the stand are news to the player.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let sig = make_signal(TransferInterestStage::ScoutWatched);
+    assert!(p.on_transfer_interest_signal(&sig), "big-club scouting must surface");
+    assert_eq!(count_events(&p, &HappinessEventType::ScoutedByClub), 1);
+
+    // A peer club's scout is everyday noise — the gate keeps it quiet.
+    let mut q = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let mut peer = make_signal(TransferInterestStage::ScoutWatched);
+    peer.buyer_rep = 0.52;
+    peer.buyer_league_rep = 5000;
+    assert!(!q.on_transfer_interest_signal(&peer), "peer-club scouting is not news");
+    assert_eq!(count_events(&q, &HappinessEventType::ScoutedByClub), 0);
+}
+
+#[test]
+fn shortlist_beat_maps_to_transfer_rumour() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let sig = make_signal(TransferInterestStage::Shortlisted);
+    assert!(p.on_transfer_interest_signal(&sig));
+    assert_eq!(count_events(&p, &HappinessEventType::TransferRumour), 1);
+}
+
+#[test]
+fn agent_sounding_out_always_surfaces() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let mut sig = make_signal(TransferInterestStage::AgentSoundingOut);
+    // Even a modest club — the agent made it the player's business.
+    sig.buyer_rep = 0.52;
+    sig.buyer_league_rep = 5000;
+    assert!(p.on_transfer_interest_signal(&sig));
+    assert_eq!(count_events(&p, &HappinessEventType::AgentStirsInterest), 1);
+}
+
+// ── Fans react to a first-team fixture being linked away ─────────────
+
+#[test]
+fn fans_react_when_a_first_team_fixture_is_linked_away() {
+    let mut p = build_player_with_status(PlayerSquadStatus::KeyPlayer);
+    let sig = make_signal(TransferInterestStage::ConcreteInterest);
+    assert!(p.on_transfer_interest_signal(&sig));
+    assert_eq!(
+        count_events(&p, &HappinessEventType::FansReactToTransferRumour),
+        1,
+        "supporters must stir when a key player is linked to a bigger club"
+    );
+}
+
+#[test]
+fn fans_stay_quiet_over_a_backup_being_linked() {
+    let mut p = build_player_with_status(PlayerSquadStatus::MainBackupPlayer);
+    let sig = make_signal(TransferInterestStage::ConcreteInterest);
+    p.on_transfer_interest_signal(&sig);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::FansReactToTransferRumour),
+        0,
+        "a fringe player being linked away is not terrace conversation"
+    );
+}
+
+// ── Phase 4: discipline lifecycle, former-club goal (event side) ─────
+
+#[test]
+fn accumulation_ban_and_serving_it_both_reach_the_feed() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    for _ in 0..5 {
+        p.on_match_disciplinary_result(1, 0, 5);
+    }
+    assert!(p.player_attributes.is_banned);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::BannedThroughAccumulation),
+        1,
+        "the fifth booking must narrate the accumulation ban"
+    );
+    p.serve_suspension_match();
+    assert!(!p.player_attributes.is_banned);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::SuspensionServed),
+        1,
+        "serving out the ban must close the story"
+    );
+}
+
+#[test]
+fn red_card_ban_does_not_double_narrate() {
+    // The red-card moment is RedCardFallout's story — the accumulation
+    // event must not fire on the red route.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.on_match_disciplinary_result(0, 1, 5);
+    assert!(p.player_attributes.is_banned);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::BannedThroughAccumulation),
+        0
+    );
+}
+
+#[test]
+fn goal_against_former_club_is_a_story_beat() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.sold_from = Some((777, 2_000_000.0));
+    let st = stats(7.2, 1, 0, 0, PlayerFieldPositionGroup::Forward);
+    let mut o = outcome(&st, 7.2, false, false, false, false, 2, 0, MatchParticipation::Starter);
+    o.opponent_club_id = Some(777);
+    p.on_match_played(&o);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::ScoredAgainstFormerClub),
+        1,
+        "scoring on the club that sold him must reach the feed"
+    );
+
+    // Same goal against an unrelated club: no beat.
+    let mut q = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    q.sold_from = Some((777, 2_000_000.0));
+    let mut o2 = outcome(&st, 7.2, false, false, false, false, 2, 0, MatchParticipation::Starter);
+    o2.opponent_club_id = Some(555);
+    q.on_match_played(&o2);
+    assert_eq!(
+        count_events(&q, &HappinessEventType::ScoredAgainstFormerClub),
+        0
+    );
+}
+
+// ── Phase 4: career-stage detectors ──────────────────────────────────
+
+#[test]
+fn decade_of_service_is_celebrated_once() {
+    use crate::club::player::lifecycle::CareerStageDetector;
+    let today = d(2026, 7, 1);
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.contract = Some(crate::PlayerClubContract::new(50_000, d(2028, 6, 30)));
+    p.last_transfer_date = Some(d(2016, 6, 1)); // ten years at the club
+    CareerStageDetector::maybe_celebrate_club_service(&mut p, today);
+    CareerStageDetector::maybe_celebrate_club_service(&mut p, today);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::ClubServantMilestone),
+        1,
+        "ten unbroken years must be celebrated exactly once"
+    );
+
+    let mut fresh = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    fresh.contract = Some(crate::PlayerClubContract::new(50_000, d(2028, 6, 30)));
+    fresh.last_transfer_date = Some(d(2024, 6, 1));
+    CareerStageDetector::maybe_celebrate_club_service(&mut fresh, today);
+    assert_eq!(
+        count_events(&fresh, &HappinessEventType::ClubServantMilestone),
+        0
+    );
+}
+
+#[test]
+fn capped_veteran_retires_from_international_football_once() {
+    use crate::club::player::lifecycle::CareerStageDetector;
+    let today = d(2026, 7, 1);
+    // build_player is born 2000 → 26; too young. Re-age him to 35.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.birth_date = d(1991, 1, 1);
+    p.player_attributes.international_apps = 45;
+    assert!(CareerStageDetector::maybe_retire_from_international_football(
+        &mut p, today
+    ));
+    assert!(p.international_retired);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::InternationalRetirement),
+        1
+    );
+    // Announced once — never again.
+    assert!(!CareerStageDetector::maybe_retire_from_international_football(&mut p, today));
+
+    // A lightly-capped 35-year-old just fades, no announcement.
+    let mut fringe = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    fringe.birth_date = d(1991, 1, 1);
+    fringe.player_attributes.international_apps = 3;
+    assert!(!CareerStageDetector::maybe_retire_from_international_football(&mut fringe, today));
+    assert_eq!(
+        count_events(&fringe, &HappinessEventType::InternationalRetirement),
+        0
     );
 }

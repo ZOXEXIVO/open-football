@@ -720,4 +720,22 @@ pub enum HappinessEventType {
     /// club investing in them; emitted negative when a role change is
     /// resented.
     PersonalTrainingPlanSet,
+    /// A fifth booking (or the league's accumulation threshold) tipped
+    /// into a one-match ban — the avoidable kind of suspension, and the
+    /// player knows it. The red-card ban moment is narrated by
+    /// [`Self::RedCardFallout`]; this covers the accumulation route.
+    BannedThroughAccumulation,
+    /// The suspension is over — available for selection again. Small
+    /// relief beat that closes the ban story the feed opened.
+    SuspensionServed,
+    /// Scored against the club that sold him — one of football's
+    /// permanent story beats, equal parts vindication and old love.
+    ScoredAgainstFormerClub,
+    /// A decade of service at one club — the club-servant milestone the
+    /// tenure machinery only ever used against the player (restlessness).
+    ClubServantMilestone,
+    /// The player announced his retirement from international football
+    /// to focus on his club career — the callup pass stops considering
+    /// him from this day.
+    InternationalRetirement,
 }

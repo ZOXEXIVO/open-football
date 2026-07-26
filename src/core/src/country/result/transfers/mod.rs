@@ -11,10 +11,11 @@ pub(crate) mod settlement;
 pub(crate) mod types;
 
 use super::CountryResult;
-use crate::Country;
 use crate::club::player::transfer::FreeAgentBlockReason;
 use crate::simulator::SimulatorData;
+use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferWindowManager;
+use crate::{Country, PlayerStatusType};
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use chrono::NaiveDate;
 use config::TransferConfig;
@@ -24,9 +25,11 @@ pub(crate) use free_agents::{GlobalFreeAgentSummary, snapshot_global_free_agents
 use log::debug;
 use pre_contract::PreContractManager;
 use settlement::TransferClauseSettler;
+use crate::club::player::events::transfer_social::TransferInterestSignal;
 use std::collections::{HashMap, HashSet};
 use types::DeferredTransfer;
 use types::TransferActivitySummary;
+use types::{PendingPlayerSignal, find_player_in_country_mut};
 
 /// Cross-country tail of the transfer market — populated by
 /// `simulate_transfer_market_local` running on `&mut Country` inside
@@ -75,9 +78,14 @@ pub struct DeferredTransferOps {
     /// Clause payouts owed to sellers that don't live in this country —
     /// `(club_id, amount)` pairs the settler couldn't route locally.
     /// Drained serially in Phase C via `credit_club_globally` so a
-    /// cross-border performance add-on actually reaches the foreign
+    /// cross-country performance add-on actually reaches the foreign
     /// seller instead of vanishing (the buyer was already debited).
     pub cross_country_clause_credits: Vec<(u32, f64)>,
+    /// Saga beats for players in OTHER countries — the negotiation runs
+    /// in this (buying) country's parallel pass, the player lives in the
+    /// seller's partition. Delivered serially in Phase C; without this
+    /// every cross-border move was silent to the player at every stage.
+    pub(crate) player_signals: Vec<PendingPlayerSignal>,
 }
 
 impl DeferredTransferOps {
@@ -95,6 +103,7 @@ impl DeferredTransferOps {
             completed_after: 0,
             pre_contract_signed: 0,
             cross_country_clause_credits: Vec::new(),
+            player_signals: Vec::new(),
         }
     }
 }
@@ -192,11 +201,27 @@ impl CountryResult {
         ops.deferred_transfers = outcomes.deferred;
         ops.global_signings = outcomes.free_agent_signings;
         ops.global_rejected_ids = outcomes.free_agent_rejected_ids;
+        ops.player_signals = outcomes.player_signals;
 
-        // Expire stale negotiations
+        // Expire stale negotiations. A dead saga must also surrender the
+        // player's Bid/Trn badges — a leaked `Trn` would quietly bench a
+        // domestic player forever (selection rests near-sold assets).
         let expired = country.transfer_market.update(current_date);
         for (buying_club_id, player_id) in expired {
             PipelineProcessor::on_negotiation_resolved(country, buying_club_id, player_id, false);
+            let saga_still_live = country.transfer_market.negotiations.values().any(|n| {
+                n.player_id == player_id
+                    && matches!(
+                        n.status,
+                        NegotiationStatus::Pending | NegotiationStatus::Countered
+                    )
+            });
+            if !saga_still_live {
+                if let Some(player) = find_player_in_country_mut(country, player_id) {
+                    player.statuses.remove(PlayerStatusType::Bid);
+                    player.statuses.remove(PlayerStatusType::Trn);
+                }
+            }
         }
 
         // Settle any installment tranches that came due today and any
@@ -331,6 +356,14 @@ impl CountryResult {
             TransferExecution::credit_club_globally(data, *club_id, *amount);
         }
 
+        // Deliver saga beats to foreign players — the buying country's
+        // parallel pass couldn't reach them. Player-dependent facts
+        // (former club, homecoming, seller rivalry) resolve here where
+        // the seller's country is addressable. Delivered BEFORE the
+        // deferred executions below so a player whose deal collapsed
+        // hears about it before any unrelated roster churn.
+        Self::deliver_pending_player_signals(data, &ops.player_signals);
+
         // Execute global free-agent signings (Move-on-Free players from
         // `data.free_agents`).
         let mut completed = ops.completed_after;
@@ -385,6 +418,63 @@ impl CountryResult {
         // Phase 3: Foreign negotiation initiation (domestic priority).
         if ops.window_open {
             PipelineProcessor::initiate_foreign_negotiations(data, ops.country_id, current_date);
+        }
+    }
+
+    /// Serial Phase-C delivery of cross-border saga beats. Each pending
+    /// signal names the country the player lives in; the seller-side
+    /// facts the parallel pass couldn't read (league reputation,
+    /// rivalry) and the player-dependent facts (former club, homecoming)
+    /// are resolved here before the structured signal is handed to the
+    /// player exactly as a domestic beat would be.
+    fn deliver_pending_player_signals(data: &mut SimulatorData, signals: &[PendingPlayerSignal]) {
+        for pending in signals {
+            let Some(country) = data.country_mut(pending.selling_country_id) else {
+                continue;
+            };
+            let (is_rival, seller_league_rep) = country
+                .clubs
+                .iter()
+                .find(|c| c.id == pending.selling_club_id)
+                .map(|club| {
+                    let league_rep = club
+                        .teams
+                        .teams
+                        .first()
+                        .and_then(|t| t.league_id)
+                        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                        .map(|l| l.reputation)
+                        .unwrap_or(0);
+                    (club.is_rival(pending.interested_club_id), league_rep)
+                })
+                .unwrap_or((false, 0));
+            let Some(player) = find_player_in_country_mut(country, pending.player_id) else {
+                continue;
+            };
+            let sig = TransferInterestSignal {
+                interested_club_id: pending.interested_club_id,
+                interested_league_id: pending.interested_league_id,
+                buyer_rep: pending.buyer_rep,
+                seller_rep: pending.seller_rep,
+                buyer_league_rep: pending.buyer_league_rep,
+                seller_league_rep,
+                stage: pending.stage,
+                source: pending.source,
+                repeated_attention: pending.repeated_attention,
+                is_rival,
+                is_home_country: player.country_id == pending.buyer_country_id,
+                is_seller_in_home_country: player.country_id == pending.selling_country_id,
+                is_former_club: player
+                    .sold_from
+                    .as_ref()
+                    .map(|(cid, _)| *cid == pending.interested_club_id)
+                    .unwrap_or(false),
+                buyer_country_id: pending.buyer_country_id,
+                buyer_continent_id: pending.buyer_continent_id,
+                buyer_has_continental_path: pending.buyer_has_continental_path,
+                buyer_competition_path: pending.buyer_competition_path,
+            };
+            player.on_transfer_interest_signal(&sig);
         }
     }
 
@@ -809,6 +899,158 @@ mod side_channel_tests {
         assert_eq!(
             state.offers_rejected_total, 1,
             "repeated same-day rejections must count once"
+        );
+    }
+}
+
+#[cfg(test)]
+mod pending_signal_delivery_tests {
+    //! Phase-C delivery of cross-border saga beats: the buying country's
+    //! parallel pass queued the signal; the serial drain must find the
+    //! player in the SELLING country and hand him the structured event.
+
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::continent::Continent;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::fullname::FullName;
+    use crate::shared::Location;
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, HappinessEventType,
+        PersonAttributes, Player, PlayerAttributes, PlayerCollection, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection, Team, TeamCollection,
+        TeamReputation, TeamType, TrainingSchedule, TransferInterestSource, TransferInterestStage,
+    };
+    use chrono::NaiveTime;
+
+    fn d(y: i32, m: u32, day: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn seller_player(id: u32) -> Player {
+        let mut attrs = PlayerAttributes::default();
+        attrs.current_ability = 120;
+        attrs.current_reputation = 2000;
+        let mut contract = crate::PlayerClubContract::new(50_000, d(2029, 6, 30));
+        contract.squad_status = crate::PlayerSquadStatus::FirstTeamRegular;
+        PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("Foreign".to_string(), format!("P{id}")))
+            .birth_date(d(2000, 1, 1))
+            .country_id(2)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::flat_for_ability(120))
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 18,
+                }],
+            })
+            .player_attributes(attrs)
+            .contract(Some(contract))
+            .build()
+            .unwrap()
+    }
+
+    fn seller_country(players: Vec<Player>) -> Country {
+        let team = Team::builder()
+            .id(10)
+            .league_id(Some(1))
+            .club_id(1)
+            .name("Seller".to_string())
+            .slug("seller".to_string())
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(5000, 5000, 5000))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap();
+        let club = Club::new(
+            1,
+            "Seller".to_string(),
+            Location::new(2),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![team]),
+            ClubFacilities::default(),
+        );
+        Country::builder()
+            .id(2)
+            .code("it".to_string())
+            .slug("italy".to_string())
+            .name("Italy".to_string())
+            .continent_id(1)
+            .leagues(LeagueCollection::new(vec![League::new(
+                1,
+                "Serie A".to_string(),
+                "serie-a".to_string(),
+                2,
+                7000,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                    split_season: false,
+                },
+                false,
+            )]))
+            .clubs(vec![club])
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn cross_border_collapse_reaches_the_foreign_player() {
+        let country = seller_country(vec![seller_player(500)]);
+        let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+        let mut data = SimulatorData::new(
+            d(2026, 7, 10).and_hms_opt(12, 0, 0).unwrap(),
+            vec![continent],
+            GlobalCompetitions::new(Vec::new()),
+        );
+
+        let signal = PendingPlayerSignal {
+            player_id: 500,
+            selling_country_id: 2,
+            selling_club_id: 1,
+            stage: TransferInterestStage::MoveCollapsed,
+            source: TransferInterestSource::ConfirmedApproach,
+            repeated_attention: false,
+            interested_club_id: 77,
+            interested_league_id: Some(9),
+            buyer_rep: 0.9,
+            seller_rep: 0.5,
+            buyer_league_rep: 8000,
+            buyer_country_id: 3,
+            buyer_continent_id: 1,
+            buyer_has_continental_path: false,
+            buyer_competition_path: None,
+        };
+
+        CountryResult::deliver_pending_player_signals(&mut data, &[signal]);
+
+        let player = data
+            .country(2)
+            .and_then(|c| c.clubs[0].teams.teams[0].players.find(500))
+            .expect("player still at the seller");
+        assert!(
+            player
+                .happiness
+                .recent_events
+                .iter()
+                .any(|e| e.event_type == HappinessEventType::DreamMoveCollapsed),
+            "the cross-border collapse must reach the foreign player's feed"
         );
     }
 }

@@ -394,6 +394,12 @@ pub struct MoraleEventCatalog {
     pub interest_cooled: f32,
     pub used_interest_for_contract_leverage: f32,
     pub fans_react_to_transfer_rumour: f32,
+    // Discipline lifecycle / career story beats
+    pub banned_through_accumulation: f32,
+    pub suspension_served: f32,
+    pub scored_against_former_club: f32,
+    pub club_servant_milestone: f32,
+    pub international_retirement: f32,
     // Social / culture
     pub close_friend_sold: f32,
     pub compatriot_joined: f32,
@@ -715,6 +721,17 @@ impl Default for MoraleEventCatalog {
             interest_cooled: -1.0,
             used_interest_for_contract_leverage: 1.0,
             fans_react_to_transfer_rumour: 0.0,
+            // Discipline lifecycle / career story beats. The
+            // accumulation ban is the avoidable, self-inflicted kind;
+            // serving it out is a small relief. Scoring on a former
+            // club and the decade-of-service milestone are big personal
+            // moments; announcing international retirement is a
+            // considered, mostly-neutral decision.
+            banned_through_accumulation: -3.0,
+            suspension_served: 2.0,
+            scored_against_former_club: 6.0,
+            club_servant_milestone: 6.0,
+            international_retirement: 1.0,
             // Social / culture — quiet ongoing events. Friend sold and
             // mentor departed are felt; compatriot/language are gentle
             // integration helpers.
@@ -1119,6 +1136,11 @@ impl MoraleEventCatalog {
             ResiliencePraised => self.resilience_praised,
             ToldNotInPlans => self.told_not_in_plans,
             PersonalTrainingPlanSet => self.personal_training_plan_set,
+            BannedThroughAccumulation => self.banned_through_accumulation,
+            SuspensionServed => self.suspension_served,
+            ScoredAgainstFormerClub => self.scored_against_former_club,
+            ClubServantMilestone => self.club_servant_milestone,
+            InternationalRetirement => self.international_retirement,
         }
     }
 }

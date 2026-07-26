@@ -581,6 +581,11 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::ResiliencePraised => "event_resilience_praised",
         HappinessEventType::ToldNotInPlans => "event_told_not_in_plans",
         HappinessEventType::PersonalTrainingPlanSet => "event_personal_training_plan_set",
+        HappinessEventType::BannedThroughAccumulation => "event_banned_through_accumulation",
+        HappinessEventType::SuspensionServed => "event_suspension_served",
+        HappinessEventType::ScoredAgainstFormerClub => "event_scored_against_former_club",
+        HappinessEventType::ClubServantMilestone => "event_club_servant_milestone",
+        HappinessEventType::InternationalRetirement => "event_international_retirement",
     }
 }
 

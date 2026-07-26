@@ -2,8 +2,8 @@ use super::execution::TransferExecution;
 use super::free_agent_market_calc::BuyerRoleFit;
 use super::free_agents::{EmergencySignedTerms, GlobalFreeAgentSigning};
 use super::types::{
-    DeferredTransfer, NegotiationData, TransferActivitySummary, find_player_in_country,
-    find_player_in_country_mut,
+    DeferredTransfer, NegotiationData, PendingPlayerSignal, TransferActivitySummary,
+    find_player_in_country, find_player_in_country_mut,
 };
 use crate::club::player::agent::PlayerAgent;
 use crate::club::player::calculators::{
@@ -53,6 +53,11 @@ pub(crate) struct NegotiationOutcomes {
     /// Pool free agents who turned down personal terms today — bumps
     /// their `FreeAgentMarketState` rejected counter in Phase C.
     pub(crate) free_agent_rejected_ids: Vec<u32>,
+    /// Saga beats for players who live in ANOTHER country — this pass
+    /// runs inside the buying country's borrow, so the event is carried
+    /// up and delivered in the serial Phase-C drain. Cross-border moves
+    /// used to be silent to the player at every stage.
+    pub(crate) player_signals: Vec<PendingPlayerSignal>,
 }
 
 /// Maps the negotiated `PersonalTermsOffer` back into the
@@ -94,6 +99,7 @@ impl CountryResult {
             deferred: Vec::new(),
             free_agent_signings: Vec::new(),
             free_agent_rejected_ids: Vec::new(),
+            player_signals: Vec::new(),
         };
         let country_id = country.id;
 
@@ -215,10 +221,17 @@ impl CountryResult {
 
             match neg_data.phase {
                 NegotiationPhase::InitialApproach { .. } => {
-                    Self::resolve_initial_approach(country, neg_id, &neg_data, date);
+                    Self::resolve_initial_approach(country, neg_id, &neg_data, date, &mut outcomes);
                 }
                 NegotiationPhase::ClubNegotiation { round, .. } => {
-                    Self::resolve_club_negotiation(country, neg_id, &neg_data, round, date);
+                    Self::resolve_club_negotiation(
+                        country,
+                        neg_id,
+                        &neg_data,
+                        round,
+                        date,
+                        &mut outcomes,
+                    );
                 }
                 NegotiationPhase::PersonalTerms { round, .. } => {
                     Self::resolve_personal_terms(
@@ -321,6 +334,114 @@ impl CountryResult {
         Some(sig)
     }
 
+    /// Deliver one saga beat to the player, wherever he lives. A
+    /// domestic player gets the full structured signal immediately; a
+    /// foreign player's beat rides up on `outcomes.player_signals` and
+    /// is delivered in the serial Phase-C drain (the player-dependent
+    /// facts are resolved there). Pool free agents (selling_club_id 0)
+    /// are skipped — their market state has its own machinery.
+    fn notify_player_stage(
+        country: &mut Country,
+        outcomes: &mut NegotiationOutcomes,
+        neg_data: &NegotiationData,
+        stage: TransferInterestStage,
+        source: TransferInterestSource,
+        repeated_attention: bool,
+    ) {
+        match neg_data.selling_country_id {
+            None => {
+                if neg_data.selling_club_id == 0 {
+                    return;
+                }
+                let signal =
+                    Self::build_interest_signal(country, neg_data, stage, source, repeated_attention);
+                if let Some(sig) = signal {
+                    if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
+                        player.on_transfer_interest_signal(&sig);
+                    }
+                }
+            }
+            Some(selling_country_id) => {
+                let interested_league_id = country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == neg_data.buying_club_id)
+                    .and_then(|c| c.teams.teams.first().and_then(|t| t.league_id));
+                let hint = BuyerContinentalPathHint {
+                    league_reputation: neg_data.buying_league_reputation,
+                };
+                outcomes.player_signals.push(PendingPlayerSignal {
+                    player_id: neg_data.player_id,
+                    selling_country_id,
+                    selling_club_id: neg_data.selling_club_id,
+                    stage,
+                    source,
+                    repeated_attention,
+                    interested_club_id: neg_data.buying_club_id,
+                    interested_league_id,
+                    buyer_rep: neg_data.buying_rep,
+                    seller_rep: neg_data.selling_rep,
+                    buyer_league_rep: neg_data.buying_league_reputation,
+                    buyer_country_id: country.id,
+                    buyer_continent_id: country.continent_id,
+                    buyer_has_continental_path: hint.is_on_path(),
+                    buyer_competition_path: hint.competition_path(country.continent_id),
+                });
+            }
+        }
+    }
+
+    /// Stamp the saga status the stage implies: `Bid` when the clubs
+    /// agree a fee, `Trn` (replacing `Bid`) when the player agrees
+    /// personal terms. Domestic players only — a foreign player's
+    /// statuses cannot be reliably cleared from this country's borrow
+    /// when the deal later dies, and a leaked `Trn` would quietly bench
+    /// him forever (match selection rests near-sold players).
+    fn set_saga_status(
+        country: &mut Country,
+        neg_data: &NegotiationData,
+        status: PlayerStatusType,
+        date: NaiveDate,
+    ) {
+        if neg_data.selling_country_id.is_some() || neg_data.selling_club_id == 0 {
+            return;
+        }
+        if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
+            if status == PlayerStatusType::Trn {
+                player.statuses.remove(PlayerStatusType::Bid);
+            }
+            player.statuses.add(date, status);
+        }
+    }
+
+    /// Clear the saga statuses when a negotiation dies — unless another
+    /// live negotiation for the same player is still past the fee-agreed
+    /// line (two buyers can court one player; the survivor's saga keeps
+    /// the badge). Pass `neg_id: 0` when the dying negotiation is
+    /// already out of the market map (the expiry sweep).
+    fn clear_saga_statuses(country: &mut Country, neg_id: u32, player_id: u32) {
+        let another_live = country.transfer_market.negotiations.values().any(|n| {
+            n.id != neg_id
+                && n.player_id == player_id
+                && matches!(
+                    n.status,
+                    NegotiationStatus::Pending | NegotiationStatus::Countered
+                )
+                && matches!(
+                    n.phase,
+                    NegotiationPhase::PersonalTerms { .. }
+                        | NegotiationPhase::MedicalAndFinalization { .. }
+                )
+        });
+        if another_live {
+            return;
+        }
+        if let Some(player) = find_player_in_country_mut(country, player_id) {
+            player.statuses.remove(PlayerStatusType::Bid);
+            player.statuses.remove(PlayerStatusType::Trn);
+        }
+    }
+
     /// True when the selling club has the buying club flagged as a rival.
     /// Rivalry is an acceptance-chance friction (stronger at seller's end),
     /// not a hard block — a big enough bid or a player who forces the move
@@ -343,6 +464,7 @@ impl CountryResult {
         neg_id: u32,
         neg_data: &NegotiationData,
         date: NaiveDate,
+        outcomes: &mut NegotiationOutcomes,
     ) {
         // Selling club refuses to negotiate for recently signed players —
         // they bought this player with a plan and won't sell immediately.
@@ -527,44 +649,33 @@ impl CountryResult {
             // signal so the player owner can pick the right reaction
             // (flattered / focused / unsettled / loyal) and attach the
             // interested club, sporting fit, evidence and follow-up.
-            if neg_data.selling_country_id.is_none() {
-                let signal = Self::build_interest_signal(
-                    country,
-                    neg_data,
-                    TransferInterestStage::ConcreteInterest,
-                    TransferInterestSource::ConfirmedApproach,
-                    false,
-                );
-                if let Some(sig) = signal {
-                    if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
-                        player.on_transfer_interest_signal(&sig);
-                    }
-                }
-            }
+            // Foreign players get the same beat via the Phase-C drain.
+            Self::notify_player_stage(
+                country,
+                outcomes,
+                neg_data,
+                TransferInterestStage::ConcreteInterest,
+                TransferInterestSource::ConfirmedApproach,
+                false,
+            );
         } else {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation
                     .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
-            // Domestic targets feel the rejection if it was a real chance.
+            // The target feels the rejection if it was a real chance.
             // Routed through the structured interest funnel so the
             // headline carries who rejected what and the player's reaction
             // (frustration / leverage / loyalty) lands with context.
-            if neg_data.selling_country_id.is_none() {
-                let signal = Self::build_interest_signal(
-                    country,
-                    neg_data,
-                    TransferInterestStage::BidRejected,
-                    TransferInterestSource::RejectedBid,
-                    false,
-                );
-                if let Some(sig) = signal {
-                    if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
-                        player.on_transfer_interest_signal(&sig);
-                    }
-                }
-            }
+            Self::notify_player_stage(
+                country,
+                outcomes,
+                neg_data,
+                TransferInterestStage::BidRejected,
+                TransferInterestSource::RejectedBid,
+                false,
+            );
             PipelineProcessor::on_negotiation_resolved(
                 country,
                 neg_data.buying_club_id,
@@ -580,6 +691,7 @@ impl CountryResult {
         neg_data: &NegotiationData,
         round: u8,
         date: NaiveDate,
+        outcomes: &mut NegotiationOutcomes,
     ) {
         // Release clauses bypass the normal acceptance calculation entirely:
         // if a matching clause is triggered, the selling club has no choice
@@ -590,6 +702,18 @@ impl CountryResult {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation.advance_to_personal_terms(date);
             }
+            // The clause fixes the fee — the clubs have effectively
+            // agreed and talks with the player are next. Same beat as a
+            // negotiated fee agreement below.
+            Self::notify_player_stage(
+                country,
+                outcomes,
+                neg_data,
+                TransferInterestStage::NegotiationsOpened,
+                TransferInterestSource::ClubBriefing,
+                false,
+            );
+            Self::set_saga_status(country, neg_data, PlayerStatusType::Bid, date);
             return;
         }
 
@@ -732,6 +856,19 @@ impl CountryResult {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation.advance_to_personal_terms(date);
             }
+            // Fee agreed — the single biggest formerly-silent beat: the
+            // clubs have shaken hands and personal terms open. The `Bid`
+            // badge makes the accepted bid visible AND lets match
+            // selection start protecting a near-sold asset.
+            Self::notify_player_stage(
+                country,
+                outcomes,
+                neg_data,
+                TransferInterestStage::NegotiationsOpened,
+                TransferInterestSource::ClubBriefing,
+                false,
+            );
+            Self::set_saga_status(country, neg_data, PlayerStatusType::Bid, date);
         } else if round < 3 {
             // Buyer escalation closes 45% of the remaining gap per round at
             // the start of the window, up to ~70% in the final panic days.
@@ -825,6 +962,16 @@ impl CountryResult {
                     negotiation.reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
                 }
                 Self::reopen_listing_for_player(country, neg_data.player_id);
+                // The suitor priced himself out and walked — the rumour
+                // the player had been hearing goes quiet.
+                Self::notify_player_stage(
+                    country,
+                    outcomes,
+                    neg_data,
+                    TransferInterestStage::InterestCooled,
+                    TransferInterestSource::ClubBriefing,
+                    false,
+                );
                 PipelineProcessor::on_negotiation_resolved(
                     country,
                     neg_data.buying_club_id,
@@ -850,20 +997,14 @@ impl CountryResult {
             // structured interest funnel so the headline can name the
             // interested club and surface the player's reaction
             // (frustrated / contract-leverage / loyal).
-            if neg_data.selling_country_id.is_none() {
-                let signal = Self::build_interest_signal(
-                    country,
-                    neg_data,
-                    TransferInterestStage::BidRejected,
-                    TransferInterestSource::RejectedBid,
-                    true,
-                );
-                if let Some(sig) = signal {
-                    if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
-                        player.on_transfer_interest_signal(&sig);
-                    }
-                }
-            }
+            Self::notify_player_stage(
+                country,
+                outcomes,
+                neg_data,
+                TransferInterestStage::BidRejected,
+                TransferInterestSource::RejectedBid,
+                true,
+            );
             PipelineProcessor::on_negotiation_resolved(
                 country,
                 neg_data.buying_club_id,
@@ -916,6 +1057,7 @@ impl CountryResult {
                     .reject_with_reason(NegotiationRejectionReason::PlayerRejectedPersonalTerms);
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
+            Self::clear_saga_statuses(country, neg_id, neg_data.player_id);
             PipelineProcessor::on_negotiation_resolved(
                 country,
                 neg_data.buying_club_id,
@@ -1255,6 +1397,11 @@ impl CountryResult {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation.advance_to_medical(date);
             }
+            // Personal terms agreed — the player has said yes and only
+            // the medical stands between him and the move. `Trn`
+            // replaces `Bid`: match selection now treats him as a
+            // near-sold asset (protected in routine games).
+            Self::set_saga_status(country, neg_data, PlayerStatusType::Trn, date);
             return;
         }
 
@@ -1291,6 +1438,7 @@ impl CountryResult {
             negotiation.reject_with_reason(NegotiationRejectionReason::PlayerRejectedPersonalTerms);
         }
         Self::reopen_listing_for_player(country, neg_data.player_id);
+        Self::clear_saga_statuses(country, neg_id, neg_data.player_id);
         // A pool free agent (selling_club_id == 0) who declined the terms gets
         // it counted against his market state — the "player actually rejected
         // a negotiated offer" moment, not the candidate scan.
@@ -1333,6 +1481,16 @@ impl CountryResult {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation.reject_with_reason(NegotiationRejectionReason::CountryPairRouteBlocked);
             }
+            // An agreed move refused at the registration desk — the
+            // player had said yes; the collapse is a real story beat.
+            Self::notify_player_stage(
+                country,
+                outcomes,
+                neg_data,
+                TransferInterestStage::MoveCollapsed,
+                TransferInterestSource::ClubBriefing,
+                false,
+            );
             PipelineProcessor::on_negotiation_resolved(
                 country,
                 neg_data.buying_club_id,
@@ -1512,6 +1670,17 @@ impl CountryResult {
                         negotiation.reject_with_reason(NegotiationRejectionReason::WindowClosed);
                     }
                     Self::reopen_listing_for_player(country, neg_data.player_id);
+                    // A fully-agreed deal died at the deadline — the
+                    // classic deadline-day heartbreak beat.
+                    Self::notify_player_stage(
+                        country,
+                        outcomes,
+                        neg_data,
+                        TransferInterestStage::MoveCollapsed,
+                        TransferInterestSource::ClubBriefing,
+                        false,
+                    );
+                    Self::clear_saga_statuses(country, neg_id, neg_data.player_id);
                     PipelineProcessor::on_negotiation_resolved(
                         country,
                         neg_data.buying_club_id,
@@ -1579,6 +1748,17 @@ impl CountryResult {
                             .reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
                     }
                     Self::reopen_listing_for_player(country, neg_data.player_id);
+                    // The buyer's money wasn't there at the finish line —
+                    // an agreed move collapsing on funds.
+                    Self::notify_player_stage(
+                        country,
+                        outcomes,
+                        neg_data,
+                        TransferInterestStage::MoveCollapsed,
+                        TransferInterestSource::ClubBriefing,
+                        false,
+                    );
+                    Self::clear_saga_statuses(country, neg_id, neg_data.player_id);
                     PipelineProcessor::on_negotiation_resolved(
                         country,
                         neg_data.buying_club_id,
@@ -1704,20 +1884,15 @@ impl CountryResult {
             // structured signal so the rendered event can name the
             // interested club and the player's reaction (excited /
             // frustrated / contract-leverage).
-            if neg_data.selling_country_id.is_none() {
-                let signal = Self::build_interest_signal(
-                    country,
-                    neg_data,
-                    TransferInterestStage::MoveCollapsed,
-                    TransferInterestSource::ConfirmedApproach,
-                    false,
-                );
-                if let Some(sig) = signal {
-                    if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
-                        player.on_transfer_interest_signal(&sig);
-                    }
-                }
-            }
+            Self::notify_player_stage(
+                country,
+                outcomes,
+                neg_data,
+                TransferInterestStage::MoveCollapsed,
+                TransferInterestSource::ConfirmedApproach,
+                false,
+            );
+            Self::clear_saga_statuses(country, neg_id, neg_data.player_id);
             PipelineProcessor::on_negotiation_resolved(
                 country,
                 neg_data.buying_club_id,
@@ -2677,11 +2852,18 @@ mod development_pathway_protection_tests {
         let mut country = ProtectionFixtures::world(false);
         let neg_data = ProtectionFixtures::neg_data(&country);
 
+        let mut outcomes = NegotiationOutcomes {
+            deferred: Vec::new(),
+            free_agent_signings: Vec::new(),
+            free_agent_rejected_ids: Vec::new(),
+            player_signals: Vec::new(),
+        };
         CountryResult::resolve_initial_approach(
             &mut country,
             ProtectionFixtures::NEG_ID,
             &neg_data,
             ProtectionFixtures::date(),
+            &mut outcomes,
         );
 
         let neg = &country.transfer_market.negotiations[&ProtectionFixtures::NEG_ID];
@@ -2701,11 +2883,18 @@ mod development_pathway_protection_tests {
         let mut country = ProtectionFixtures::world(true);
         let neg_data = ProtectionFixtures::neg_data(&country);
 
+        let mut outcomes = NegotiationOutcomes {
+            deferred: Vec::new(),
+            free_agent_signings: Vec::new(),
+            free_agent_rejected_ids: Vec::new(),
+            player_signals: Vec::new(),
+        };
         CountryResult::resolve_initial_approach(
             &mut country,
             ProtectionFixtures::NEG_ID,
             &neg_data,
             ProtectionFixtures::date(),
+            &mut outcomes,
         );
 
         let neg = &country.transfer_market.negotiations[&ProtectionFixtures::NEG_ID];
@@ -3043,7 +3232,20 @@ mod seller_fee_floor_tests {
         // Synthetic-style asking (offer × 1.2) — the exact laundering that
         // made the bug's ratio look healthy. The floor ignores it.
         let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
-        CountryResult::resolve_club_negotiation(&mut country, Ff::NEG_ID, &nd, 1, Ff::date());
+        let mut outcomes = NegotiationOutcomes {
+            deferred: Vec::new(),
+            free_agent_signings: Vec::new(),
+            free_agent_rejected_ids: Vec::new(),
+            player_signals: Vec::new(),
+        };
+        CountryResult::resolve_club_negotiation(
+            &mut country,
+            Ff::NEG_ID,
+            &nd,
+            1,
+            Ff::date(),
+            &mut outcomes,
+        );
 
         let neg = &country.transfer_market.negotiations[&Ff::NEG_ID];
         assert_eq!(
@@ -3069,7 +3271,20 @@ mod seller_fee_floor_tests {
         Ff::insert_negotiation(&mut country, 340_000.0);
 
         let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
-        CountryResult::resolve_club_negotiation(&mut country, Ff::NEG_ID, &nd, 3, Ff::date());
+        let mut outcomes = NegotiationOutcomes {
+            deferred: Vec::new(),
+            free_agent_signings: Vec::new(),
+            free_agent_rejected_ids: Vec::new(),
+            player_signals: Vec::new(),
+        };
+        CountryResult::resolve_club_negotiation(
+            &mut country,
+            Ff::NEG_ID,
+            &nd,
+            3,
+            Ff::date(),
+            &mut outcomes,
+        );
 
         let neg = &country.transfer_market.negotiations[&Ff::NEG_ID];
         assert_eq!(
@@ -3125,7 +3340,19 @@ mod seller_fee_floor_tests {
         );
         country.transfer_market.negotiations.insert(Ff::NEG_ID, neg);
         let nd = Ff::neg_data(100, 50_000_000.0, 50_000_000.0);
-        CountryResult::resolve_initial_approach(&mut country, Ff::NEG_ID, &nd, Ff::date());
+        let mut outcomes = NegotiationOutcomes {
+            deferred: Vec::new(),
+            free_agent_signings: Vec::new(),
+            free_agent_rejected_ids: Vec::new(),
+            player_signals: Vec::new(),
+        };
+        CountryResult::resolve_initial_approach(
+            &mut country,
+            Ff::NEG_ID,
+            &nd,
+            Ff::date(),
+            &mut outcomes,
+        );
 
         let neg = &country.transfer_market.negotiations[&Ff::NEG_ID];
         assert_ne!(
@@ -3284,6 +3511,358 @@ mod seller_fee_floor_tests {
              core fee floor ({})",
             deepest_decay_bid,
             v.min_fee
+        );
+    }
+}
+
+#[cfg(test)]
+mod saga_visibility_tests {
+    //! The formerly-silent middle of the transfer saga: fee agreed →
+    //! `TransferTalksExpected` + `Bid`, personal terms agreed → `Trn`,
+    //! any death of the deal surrenders the badges, and a foreign
+    //! player's beat rides up on `outcomes.player_signals` instead of
+    //! being dropped.
+
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::fullname::FullName;
+    use crate::shared::{Currency, CurrencyValue, Location};
+    use crate::transfers::negotiation::TransferNegotiation;
+    use crate::transfers::offer::TransferOffer;
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, HappinessEventType,
+        PersonAttributes, Player, PlayerAttributes, PlayerClubContract, PlayerCollection,
+        PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection, Team,
+        TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    struct Sv;
+
+    impl Sv {
+        const SELLER_ID: u32 = 1;
+        const BUYER_ID: u32 = 2;
+        const PLAYER_ID: u32 = 100;
+
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 7, 10).unwrap()
+        }
+
+        fn player(id: u32) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = 120;
+            attrs.potential_ability = 120;
+            attrs.current_reputation = 2000;
+            let mut contract =
+                PlayerClubContract::new(50_000, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
+            contract.squad_status = crate::PlayerSquadStatus::FirstTeamRegular;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Saga".to_string(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::flat_for_ability(120))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(contract))
+                .build()
+                .unwrap()
+        }
+
+        fn club(id: u32, players: Vec<Player>) -> Club {
+            let team = Team::builder()
+                .id(id * 10)
+                .league_id(Some(1))
+                .club_id(id)
+                .name(format!("club-{id}"))
+                .slug(format!("club-{id}"))
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(6000, 6000, 6000))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap();
+            Club::new(
+                id,
+                format!("Club {id}"),
+                Location::new(1),
+                ClubFinances::new(10_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![team]),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn country(seller_players: Vec<Player>) -> Country {
+            let league = League::new(
+                1,
+                "L".to_string(),
+                "l".to_string(),
+                1,
+                6000,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                    split_season: false,
+                },
+                false,
+            );
+            Country::builder()
+                .id(1)
+                .code("ru".to_string())
+                .slug("russia".to_string())
+                .name("Russia".to_string())
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(vec![
+                    Self::club(Self::SELLER_ID, seller_players),
+                    Self::club(Self::BUYER_ID, Vec::new()),
+                ])
+                .build()
+                .unwrap()
+        }
+
+        fn neg_data(selling_country_id: Option<u32>) -> NegotiationData {
+            let offer = TransferOffer::new(
+                CurrencyValue::new(1_000_000.0, Currency::Usd),
+                2,
+                Self::date(),
+            );
+            let phase = TransferNegotiation::new(
+                1,
+                Self::PLAYER_ID,
+                0,
+                1,
+                2,
+                offer,
+                Self::date(),
+                0.5,
+                0.9,
+                26,
+                0.5,
+            )
+            .phase
+            .clone();
+            NegotiationData {
+                player_id: Self::PLAYER_ID,
+                selling_club_id: Self::SELLER_ID,
+                buying_club_id: Self::BUYER_ID,
+                offer_amount: 1_000_000.0,
+                is_loan: false,
+                has_option_to_buy: false,
+                is_unsolicited: true,
+                phase,
+                selling_rep: 0.50,
+                buying_rep: 0.90,
+                player_age: 26,
+                player_ambition: 0.5,
+                asking_price: 1_000_000.0,
+                has_market_listing: true,
+                player_is_available: true,
+                listing_origin: None,
+                selling_country_id,
+                selling_continent_id: None,
+                selling_country_code: String::new(),
+                player_sold_from: None,
+                player_name: "Saga Target".to_string(),
+                selling_club_name: "Club 1".to_string(),
+                offered_annual_wage: Some(60_000),
+                staged_reservation_wage: None,
+                buying_league_reputation: 6000,
+                sell_on_percentage: None,
+                loan_future_fee: None,
+                personal_terms: None,
+                foreign_terms_floor_blocked: false,
+                foreign_seller_importance: None,
+            }
+        }
+
+        fn outcomes() -> NegotiationOutcomes {
+            NegotiationOutcomes {
+                deferred: Vec::new(),
+                free_agent_signings: Vec::new(),
+                free_agent_rejected_ids: Vec::new(),
+                player_signals: Vec::new(),
+            }
+        }
+
+        fn target(country: &Country) -> &Player {
+            find_player_in_country(country, Self::PLAYER_ID).expect("target present")
+        }
+
+        fn has_event(player: &Player, kind: HappinessEventType) -> bool {
+            player
+                .happiness
+                .recent_events
+                .iter()
+                .any(|e| e.event_type == kind)
+        }
+    }
+
+    #[test]
+    fn fee_agreed_beat_sets_bid_and_fires_talks_expected() {
+        let mut country = Sv::country(vec![Sv::player(Sv::PLAYER_ID)]);
+        let mut outcomes = Sv::outcomes();
+        let nd = Sv::neg_data(None);
+
+        CountryResult::notify_player_stage(
+            &mut country,
+            &mut outcomes,
+            &nd,
+            TransferInterestStage::NegotiationsOpened,
+            TransferInterestSource::ClubBriefing,
+            false,
+        );
+        CountryResult::set_saga_status(&mut country, &nd, PlayerStatusType::Bid, Sv::date());
+
+        let p = Sv::target(&country);
+        assert!(
+            Sv::has_event(p, HappinessEventType::TransferTalksExpected),
+            "the fee-agreed beat must surface as TransferTalksExpected"
+        );
+        assert!(
+            p.statuses.has(PlayerStatusType::Bid),
+            "an accepted bid must stamp the Bid badge"
+        );
+        assert!(
+            outcomes.player_signals.is_empty(),
+            "domestic beats deliver inline"
+        );
+    }
+
+    #[test]
+    fn terms_agreed_swaps_bid_for_trn() {
+        let mut country = Sv::country(vec![Sv::player(Sv::PLAYER_ID)]);
+        let nd = Sv::neg_data(None);
+
+        CountryResult::set_saga_status(&mut country, &nd, PlayerStatusType::Bid, Sv::date());
+        CountryResult::set_saga_status(&mut country, &nd, PlayerStatusType::Trn, Sv::date());
+
+        let p = Sv::target(&country);
+        assert!(
+            !p.statuses.has(PlayerStatusType::Bid),
+            "Trn replaces Bid — the deal has moved past the fee stage"
+        );
+        assert!(
+            p.statuses.has(PlayerStatusType::Trn),
+            "agreed personal terms must stamp the Trn badge"
+        );
+    }
+
+    #[test]
+    fn dead_saga_clears_the_badges() {
+        let mut country = Sv::country(vec![Sv::player(Sv::PLAYER_ID)]);
+        let nd = Sv::neg_data(None);
+        CountryResult::set_saga_status(&mut country, &nd, PlayerStatusType::Trn, Sv::date());
+
+        CountryResult::clear_saga_statuses(&mut country, 1, Sv::PLAYER_ID);
+
+        let p = Sv::target(&country);
+        assert!(
+            !p.statuses.has(PlayerStatusType::Bid) && !p.statuses.has(PlayerStatusType::Trn),
+            "a dead deal must surrender both saga badges"
+        );
+    }
+
+    #[test]
+    fn surviving_second_bidder_keeps_the_badge() {
+        let mut country = Sv::country(vec![Sv::player(Sv::PLAYER_ID)]);
+        let nd = Sv::neg_data(None);
+        CountryResult::set_saga_status(&mut country, &nd, PlayerStatusType::Bid, Sv::date());
+
+        // A SECOND buyer's negotiation for the same player is already past
+        // the fee-agreed line — the dying first deal must not strip the
+        // badge the survivor still justifies.
+        let offer = TransferOffer::new(
+            CurrencyValue::new(2_000_000.0, Currency::Usd),
+            2,
+            Sv::date(),
+        );
+        let mut survivor = TransferNegotiation::new(
+            99,
+            Sv::PLAYER_ID,
+            0,
+            Sv::SELLER_ID,
+            7,
+            offer,
+            Sv::date(),
+            0.5,
+            0.9,
+            26,
+            0.5,
+        );
+        survivor.advance_to_personal_terms(Sv::date());
+        country.transfer_market.negotiations.insert(99, survivor);
+
+        CountryResult::clear_saga_statuses(&mut country, 1, Sv::PLAYER_ID);
+
+        let p = Sv::target(&country);
+        assert!(
+            p.statuses.has(PlayerStatusType::Bid),
+            "a live second bid past the fee line keeps the badge alive"
+        );
+    }
+
+    #[test]
+    fn foreign_beat_is_deferred_not_dropped() {
+        let mut country = Sv::country(Vec::new());
+        let mut outcomes = Sv::outcomes();
+        let nd = Sv::neg_data(Some(42));
+
+        CountryResult::notify_player_stage(
+            &mut country,
+            &mut outcomes,
+            &nd,
+            TransferInterestStage::MoveCollapsed,
+            TransferInterestSource::ConfirmedApproach,
+            false,
+        );
+
+        assert_eq!(
+            outcomes.player_signals.len(),
+            1,
+            "the beat must ride up for Phase C"
+        );
+        let s = &outcomes.player_signals[0];
+        assert_eq!(s.player_id, Sv::PLAYER_ID);
+        assert_eq!(s.selling_country_id, 42);
+        assert_eq!(s.interested_club_id, Sv::BUYER_ID);
+        assert_eq!(s.stage, TransferInterestStage::MoveCollapsed);
+        assert_eq!(
+            s.buyer_country_id, 1,
+            "buyer country is the processing country"
+        );
+    }
+
+    #[test]
+    fn pool_free_agent_gets_no_saga_badges() {
+        let mut country = Sv::country(vec![Sv::player(Sv::PLAYER_ID)]);
+        let mut nd = Sv::neg_data(None);
+        nd.selling_club_id = 0; // global-pool free agent
+
+        CountryResult::set_saga_status(&mut country, &nd, PlayerStatusType::Bid, Sv::date());
+        let p = Sv::target(&country);
+        assert!(
+            !p.statuses.has(PlayerStatusType::Bid),
+            "pool free agents have their own market-state machinery"
         );
     }
 }

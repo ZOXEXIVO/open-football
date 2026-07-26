@@ -1166,6 +1166,7 @@ impl PlayerGenerator {
             pending_signing: None,
             generated: true,
             retired: false,
+            international_retired: false,
             load: PlayerLoad::new(),
             pending_contract_ask: None,
             pending_pre_contract: None,

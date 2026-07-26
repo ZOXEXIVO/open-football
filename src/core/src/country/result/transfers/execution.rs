@@ -138,7 +138,7 @@ struct DepartingPlayerInfo {
 /// the cross-country and within-country paths share one detection /
 /// emit shape.
 #[derive(Debug, Clone)]
-struct ArrivalThreatProfile {
+pub(super) struct ArrivalThreatProfile {
     player_id: u32,
     position_group: PlayerFieldPositionGroup,
     ability: u8,
@@ -148,7 +148,7 @@ struct ArrivalThreatProfile {
 }
 
 impl ArrivalThreatProfile {
-    fn from_player(player: &Player, date: NaiveDate) -> Self {
+    pub(super) fn from_player(player: &Player, date: NaiveDate) -> Self {
         Self {
             player_id: player.id,
             position_group: player.position().position_group(),
@@ -168,9 +168,71 @@ impl ArrivalThreatProfile {
 /// buying squad reads the arrival (threat / investment), the selling
 /// squad reads the departure (direction concern). Grouped on a unit
 /// struct per project convention.
-struct SquadReactionPass;
+pub(super) struct SquadReactionPass;
 
 impl SquadReactionPass {
+    /// Full dressing-room reception for ANY arrival — permanent buy,
+    /// loan-in, or free-agent signing: compatriot integration in both
+    /// directions, the direct-competition threat pass, and the
+    /// squad-investment signal. The permanent-transfer paths always ran
+    /// these; loan-ins and global free-agent signings used to install
+    /// the player into a dressing room that never reacted.
+    pub(super) fn arrival_reception(
+        buying_club: &mut Club,
+        player_id: u32,
+        arrival_country_id: u32,
+        club_country_id: u32,
+        club_country_code: &str,
+        arrival_threat: &ArrivalThreatProfile,
+        fee: f64,
+        date: NaiveDate,
+    ) {
+        // Compatriot pass on the buying club's existing roster: any
+        // same-nationality teammate gets the integration boost, and the
+        // arrival fires the reverse event when at least one compatriot
+        // exists. Domestic moves where everyone shares the local
+        // nationality are gated out inside `on_compatriot_joined`.
+        let mut compatriot_present = false;
+        for team in &mut buying_club.teams.teams {
+            for existing in team.players.iter_mut() {
+                if existing.id == player_id {
+                    continue;
+                }
+                if existing.country_id != arrival_country_id {
+                    continue;
+                }
+                compatriot_present = true;
+                let lacks_lang = !speaks_local_language(existing, club_country_code);
+                existing.on_compatriot_joined(player_id, club_country_id, lacks_lang);
+            }
+        }
+        if compatriot_present {
+            let mut a_compatriot_id: Option<u32> = None;
+            for team in &buying_club.teams.teams {
+                if let Some(found) = team
+                    .players
+                    .players
+                    .iter()
+                    .find(|p| p.id != player_id && p.country_id == arrival_country_id)
+                {
+                    a_compatriot_id = Some(found.id);
+                    break;
+                }
+            }
+            if let Some(compatriot_id) = a_compatriot_id {
+                for team in &mut buying_club.teams.teams {
+                    if let Some(arrival) = team.players.iter_mut().find(|p| p.id == player_id) {
+                        let lacks_lang = !speaks_local_language(arrival, club_country_code);
+                        arrival.on_compatriot_joined(compatriot_id, club_country_id, lacks_lang);
+                        break;
+                    }
+                }
+            }
+        }
+
+        Self::new_signing_threats(buying_club, arrival_threat, date);
+        Self::squad_investment_signal(buying_club, arrival_threat, fee);
+    }
     /// Walk the buying club's roster and fire `ThreatenedByNewSigning` for
     /// every same-position existing player who reads the new arrival as
     /// direct competition. Gated to avoid noise — only same positional
@@ -819,71 +881,16 @@ pub(crate) fn execute_transfer_within_country(
             }
             TransferExecution::add_to_main_team(buying_club, player);
 
-            // Compatriot pass on the buying club's existing roster: any
-            // same-nationality teammate gets the integration boost. Skip
-            // the new arrival themselves (they're at the front of the list
-            // we just pushed onto). The check `id != player_id` is enough.
-            //
-            // We also count whether at least one same-nationality teammate
-            // exists, so the arriving player can fire `CompatriotJoined`
-            // themselves — the integration goes both ways. Domestic moves
-            // where everyone already shares the local nationality are
-            // gated out by `on_compatriot_joined` itself
-            // (`country_id == club_country_id` early-returns).
-            let mut compatriot_present = false;
-            for team in &mut buying_club.teams.teams {
-                for existing in team.players.iter_mut() {
-                    if existing.id == player_id {
-                        continue;
-                    }
-                    if existing.country_id != arrival_country_id {
-                        continue;
-                    }
-                    compatriot_present = true;
-                    let lacks_lang = !speaks_local_language(existing, &club_country_code);
-                    existing.on_compatriot_joined(player_id, club_country_id, lacks_lang);
-                }
-            }
-            // Reverse pass: fire on the arrival if compatriots exist.
-            // Tag with one of the existing compatriot ids so the link
-            // points at a real teammate; pick the first one we find.
-            if compatriot_present {
-                let mut a_compatriot_id: Option<u32> = None;
-                for team in &buying_club.teams.teams {
-                    if let Some(found) = team
-                        .players
-                        .players
-                        .iter()
-                        .find(|p| p.id != player_id && p.country_id == arrival_country_id)
-                    {
-                        a_compatriot_id = Some(found.id);
-                        break;
-                    }
-                }
-                if let Some(compatriot_id) = a_compatriot_id {
-                    for team in &mut buying_club.teams.teams {
-                        if let Some(arrival) = team.players.iter_mut().find(|p| p.id == player_id) {
-                            let lacks_lang = !speaks_local_language(arrival, &club_country_code);
-                            arrival.on_compatriot_joined(
-                                compatriot_id,
-                                club_country_id,
-                                lacks_lang,
-                            );
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Direct-competition pass: any existing player in the same
-            // positional group AND a sharp threat axis (status overlap,
-            // ability bump, wage shock, fringe status) hears the
-            // signing as competition. Shared with the cross-country
-            // path via `SquadReactionPass`.
-            SquadReactionPass::new_signing_threats(buying_club, &arrival_threat, date);
-            // Squad-investment signal: ambitious / senior teammates
-            // feel encouraged when a high-quality signing lands.
-            SquadReactionPass::squad_investment_signal(buying_club, &arrival_threat, fee);
+            SquadReactionPass::arrival_reception(
+                buying_club,
+                player_id,
+                arrival_country_id,
+                club_country_id,
+                &club_country_code,
+                &arrival_threat,
+                fee,
+                date,
+            );
         }
 
         country
@@ -1085,9 +1092,25 @@ fn execute_loan_within_country(
             parent_league_reputation,
         });
 
+        let arrival_country_id = player.country_id;
+        let club_country_id = country.id;
+        let club_country_code = country.code.clone();
+        let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             buying_club.finance.pay_loan_fee(loan_fee);
             TransferExecution::add_to_main_team(buying_club, player);
+            // The borrowing dressing room reacts to a loan arrival like
+            // any other signing — this path used to install him silently.
+            SquadReactionPass::arrival_reception(
+                buying_club,
+                player_id,
+                arrival_country_id,
+                club_country_id,
+                &club_country_code,
+                &arrival_threat,
+                0.0,
+                date,
+            );
         }
 
         // Remove listing and loan-out candidate so the player can't be loaned again
@@ -1654,6 +1677,10 @@ fn execute_loan_across_countries(
         parent_league_reputation,
     });
 
+    let arrival_country_id = player.country_id;
+    let club_country_id = buying_country.id;
+    let club_country_code = buying_country.code.clone();
+    let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
     if let Some(buying_club) = buying_country
         .clubs
         .iter_mut()
@@ -1661,6 +1688,18 @@ fn execute_loan_across_countries(
     {
         buying_club.finance.pay_loan_fee(loan_fee);
         TransferExecution::add_to_main_team(buying_club, player);
+        // A foreign loanee's new dressing room reacts too — compatriot
+        // integration matters MOST on a cross-border loan.
+        SquadReactionPass::arrival_reception(
+            buying_club,
+            player_id,
+            arrival_country_id,
+            club_country_id,
+            &club_country_code,
+            &arrival_threat,
+            0.0,
+            date,
+        );
     }
 
     // Loan add-ons live on the borrower's (buying) market; the parent

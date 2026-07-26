@@ -2227,6 +2227,12 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
     };
     let match_season_year = Season::from_date(today_date).start_year;
 
+    // The opponent's CLUB — `sold_from` records the selling club, so the
+    // scored-against-former-club beat can only match on it.
+    let opponent_club_id = opponent_team_id
+        .and_then(|tid| data.team(tid))
+        .map(|t| t.club_id);
+
     for (pid, participation) in all_ids {
         let stats = match details.player_stats.get(&pid) {
             Some(s) => s,
@@ -2262,6 +2268,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
                 team_lost,
                 is_continental,
                 opponent_team_id,
+                opponent_club_id,
                 played_for: played_for_team.as_ref().map(
                     |(slug, name, reputation, league_slug, league_name)| MatchTeamRef {
                         slug,
@@ -2329,6 +2336,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
             team_lost,
             is_continental,
             opponent_team_id,
+            opponent_club_id: None,
             played_for: None,
             match_season_year: 0,
             date: today_date,

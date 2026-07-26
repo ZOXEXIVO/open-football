@@ -256,6 +256,61 @@ impl CareerStageDetector {
         true
     }
 
+    /// A decade of unbroken service at one club — the club-servant
+    /// milestone. Tenure is anchored on the player's LAST transfer
+    /// (nothing to celebrate mid-carousel); players whose whole career
+    /// predates the sim (no transfer anchor) accrue the milestone from
+    /// their first in-sim move onward. The ten-year cooldown makes the
+    /// twenty-year celebration land too.
+    pub fn maybe_celebrate_club_service(player: &mut Player, today: NaiveDate) {
+        const DECADE_DAYS: i64 = 3652;
+        if player.is_retired() || player.contract.is_none() {
+            return;
+        }
+        let Some(joined) = player.last_transfer_date else {
+            return;
+        };
+        if (today - joined).num_days() < DECADE_DAYS {
+            return;
+        }
+        let mag = HappinessConfig::default()
+            .catalog
+            .magnitude(HappinessEventType::ClubServantMilestone);
+        player.happiness.add_event_with_cooldown(
+            HappinessEventType::ClubServantMilestone,
+            mag,
+            3650,
+        );
+    }
+
+    /// A capped veteran steps away from international football to
+    /// prolong his club career. One-way and announced once; the callup
+    /// pass stops considering him the same day. Goalkeeper careers (and
+    /// so their international careers) run ~2 years longer.
+    pub fn maybe_retire_from_international_football(player: &mut Player, today: NaiveDate) -> bool {
+        if player.international_retired || player.is_retired() {
+            return false;
+        }
+        // Only a real international career gets an announcement — the
+        // never-capped simply stop being scouted for the shirt.
+        if player.player_attributes.international_apps < 20 {
+            return false;
+        }
+        let is_goalkeeper = player.position().is_goalkeeper();
+        let line = if is_goalkeeper { 36 } else { 34 };
+        if player.age(today) < line {
+            return false;
+        }
+        player.international_retired = true;
+        let mag = HappinessConfig::default()
+            .catalog
+            .magnitude(HappinessEventType::InternationalRetirement);
+        player
+            .happiness
+            .add_event(HappinessEventType::InternationalRetirement, mag);
+        true
+    }
+
     /// Monthly coaching-interest audit for a veteran leader. Surfaces
     /// players with the temperament (professionalism / determination) and
     /// standing (leadership, captaincy, mentorship) to make future

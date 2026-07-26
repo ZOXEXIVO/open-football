@@ -576,6 +576,17 @@ impl SimulatorData {
                                         last_squad_status,
                                     });
                                 }
+                                // The register's side of the exit: the day a
+                                // career spell ends and the player becomes a
+                                // free agent used to leave no row at all —
+                                // his page jumped from old club to new club
+                                // with the months in between unexplained.
+                                p.decision_history.add(
+                                    date,
+                                    format!("{team_name} →"),
+                                    "dec_contract_expired_free_agent".to_string(),
+                                    String::new(),
+                                );
                                 // The spell at the old club is over —
                                 // strip transfer statuses and the
                                 // unhappiness they were attached to,

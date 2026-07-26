@@ -357,6 +357,27 @@ impl Player {
             }
         }
 
+        // Scored against the club that sold him — one of football's
+        // permanent story beats. Competitive matches only; keyed on the
+        // opponent CLUB id against `sold_from` (the selling club), which
+        // the result pipeline resolves from the opponent team.
+        if o.stats.goals > 0 && !o.is_friendly {
+            let former_club_opponent = match (o.opponent_club_id, self.sold_from.as_ref()) {
+                (Some(opponent), Some((sold_from_club, _))) => opponent == *sold_from_club,
+                _ => false,
+            };
+            if former_club_opponent {
+                let mag = HappinessConfig::default()
+                    .catalog
+                    .magnitude(HappinessEventType::ScoredAgainstFormerClub);
+                self.happiness.add_event_with_cooldown(
+                    HappinessEventType::ScoredAgainstFormerClub,
+                    mag,
+                    60,
+                );
+            }
+        }
+
         // Substitute impact: came on and made it count. Skip if already
         // tagged POM — no point double-firing for the same standout shift.
         if !o.is_motm

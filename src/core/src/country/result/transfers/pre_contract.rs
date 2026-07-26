@@ -33,6 +33,7 @@ use crate::{
 };
 use chrono::NaiveDate;
 use log::debug;
+use std::collections::HashMap;
 
 /// A staged pre-contract decision produced by the read phase, applied to
 /// the player in the write phase. Split so the matcher can scan clubs
@@ -98,8 +99,20 @@ impl PreContractManager {
             return;
         }
 
+        // Destination names for the decision register — resolved before
+        // the write loop takes its mutable borrow on the rosters.
+        let club_names: HashMap<u32, String> = country
+            .clubs
+            .iter()
+            .map(|c| (c.id, c.name.clone()))
+            .collect();
+
         // Phase B (write): stamp the agreement onto each chosen player.
         for decision in staged {
+            let to_name = club_names
+                .get(&decision.to_club_id)
+                .cloned()
+                .unwrap_or_default();
             let Some(player) = country
                 .clubs
                 .iter_mut()
@@ -123,7 +136,16 @@ impl PreContractManager {
                 decision.agreement.annual_wage,
                 decision.agreement.contract_years,
             );
-            player.stage_pre_contract(decision.agreement);
+            player.stage_pre_contract(decision.agreement, date);
+            // A Bosman agreed in advance is one of the register's most
+            // consequential rows — it used to be completely invisible
+            // until an ordinary-looking free move months later.
+            player.decision_history.add(
+                date,
+                format!("→ {to_name}"),
+                "dec_pre_contract_agreed".to_string(),
+                String::new(),
+            );
         }
     }
 
@@ -561,14 +583,17 @@ mod tests {
         // The leaving player's contract lapses TODAY, with a pre-contract
         // already agreed with the domestic buyer (200).
         let mut leaver = PreContractFixtures::leaving_player(1, today, 0);
-        leaver.stage_pre_contract(PreContractAgreement {
-            to_club_id: 200,
-            to_country_id: 1,
-            annual_wage: 70_000,
-            contract_years: 2,
-            promised_status: Some(PlayerSquadStatus::FirstTeamRegular),
-            agreed_on: PreContractFixtures::d(2026, 3, 1),
-        });
+        leaver.stage_pre_contract(
+            PreContractAgreement {
+                to_club_id: 200,
+                to_country_id: 1,
+                annual_wage: 70_000,
+                contract_years: 2,
+                promised_status: Some(PlayerSquadStatus::FirstTeamRegular),
+                agreed_on: PreContractFixtures::d(2026, 3, 1),
+            },
+            today,
+        );
         let club_b =
             PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![leaver]));
         let club_a = PreContractFixtures::buyer_club(200);
@@ -698,7 +723,7 @@ mod tests {
     fn accepting_a_renewal_clears_a_staged_pre_contract() {
         let today = PreContractFixtures::d(2026, 3, 1);
         let mut player = PreContractFixtures::leaving_player(1, today, 120);
-        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today));
+        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today), today);
         assert!(player.pending_pre_contract().is_some());
 
         // The current club's renewal offer is accepted through the shared
@@ -718,7 +743,7 @@ mod tests {
     fn a_club_change_clears_a_staged_pre_contract() {
         let today = PreContractFixtures::d(2026, 3, 1);
         let mut player = PreContractFixtures::leaving_player(1, today, 120);
-        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today));
+        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today), today);
         assert!(player.pending_pre_contract().is_some());
 
         player.reset_on_club_change();
@@ -735,7 +760,7 @@ mod tests {
     fn a_renewed_player_is_not_moved_by_his_stale_pre_contract_on_expiry() {
         let today = PreContractFixtures::d(2026, 6, 30);
         let mut player = PreContractFixtures::leaving_player(1, today, 120);
-        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today));
+        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today), today);
 
         // Renew, then prove the agreement is gone.
         let proposal = PlayerContractProposal::basic(70_000, 3, 10, 0, 0, None);
@@ -764,7 +789,7 @@ mod tests {
     fn pre_contract_is_binding_when_buyer_has_room_but_no_open_request() {
         let today = PreContractFixtures::d(2026, 6, 30);
         let mut player = PreContractFixtures::leaving_player(1, today, 0);
-        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today));
+        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today), today);
         let club_b =
             PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![player]));
         let club_a = PreContractFixtures::plain_buyer(200);
@@ -788,7 +813,7 @@ mod tests {
     fn pre_contract_does_not_fire_when_the_buyer_is_full_at_expiry() {
         let today = PreContractFixtures::d(2026, 6, 30);
         let mut player = PreContractFixtures::leaving_player(1, today, 0);
-        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today));
+        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today), today);
         let club_b =
             PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![player]));
         let club_a = PreContractFixtures::full_buyer(200);
@@ -812,7 +837,7 @@ mod tests {
         let today = PreContractFixtures::d(2026, 6, 30);
         let mut player = PreContractFixtures::leaving_player(1, today, 0);
         // Agreement points back at his current club (100).
-        player.stage_pre_contract(PreContractFixtures::agreement_to(100, today));
+        player.stage_pre_contract(PreContractFixtures::agreement_to(100, today), today);
         let club_b =
             PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![player]));
         let mut country = PreContractFixtures::country(vec![club_b]);
@@ -841,7 +866,7 @@ mod tests {
         // Parent contract lapsed, but he is physically out on loan.
         player.contract = None;
         player.contract_loan = Some(PlayerClubContract::new(40_000, today));
-        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today));
+        player.stage_pre_contract(PreContractFixtures::agreement_to(200, today), today);
         let club_b =
             PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![player]));
         let club_a = PreContractFixtures::plain_buyer(200);
@@ -856,5 +881,69 @@ mod tests {
             "a loaned player must be skipped by the pre-contract pass"
         );
         assert!(!PreContractFixtures::pre_contract_move_to(&country, 200));
+    }
+}
+
+#[cfg(test)]
+mod pre_contract_badge_tests {
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatusType,
+    };
+
+    use super::*;
+
+    fn player_with_contract(expiry: NaiveDate) -> Player {
+        let mut contract = PlayerClubContract::new(60_000, expiry);
+        contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+        PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("Bosman".to_string(), "Target".to_string()))
+            .birth_date(NaiveDate::from_ymd_opt(1998, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 18,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .contract(Some(contract))
+            .build()
+            .unwrap()
+    }
+
+    /// The `Trn` badge travels with the agreement: stamped at staging
+    /// (the player has agreed a move that executes at expiry — match
+    /// selection protects him accordingly), dropped when the agreement
+    /// dies (renewal at his own club, or unhonourable at expiry).
+    #[test]
+    fn trn_badge_travels_with_the_pre_contract() {
+        let today = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        let mut player = player_with_contract(NaiveDate::from_ymd_opt(2026, 6, 30).unwrap());
+        player.stage_pre_contract(
+            crate::club::player::transfer::PreContractAgreement {
+                to_club_id: 200,
+                to_country_id: 1,
+                annual_wage: 70_000,
+                contract_years: 2,
+                promised_status: Some(PlayerSquadStatus::FirstTeamRegular),
+                agreed_on: today,
+            },
+            today,
+        );
+        assert!(
+            player.statuses.has(PlayerStatusType::Trn),
+            "an agreed Bosman must stamp the Trn badge"
+        );
+        player.clear_pre_contract();
+        assert!(
+            !player.statuses.has(PlayerStatusType::Trn),
+            "dropping the agreement must surrender the badge"
+        );
     }
 }
