@@ -19,12 +19,26 @@
  *     confirmText: 'Clear',
  *     onConfirm: () => { ... },
  *   });
+ *
+ * An autocomplete field can remember what was picked last time. Give it a
+ * recents store and the field grows a row of recent values between its label
+ * and its input — one click fills the field, no menu in between:
+ *
+ *   { name: 'to_club_id', type: 'autocomplete', url: '/api/clubs',
+ *     recents: { key: 'destination-club', label: 'Recent', exclude: '42' } }
+ *
+ * Fields sharing a `key` share one list, so the transfer and loan dialogs
+ * offer the same destination clubs. `exclude` drops one value from the row
+ * (the club the player is already at). Entries are written on confirm.
  */
 (function () {
     'use strict';
 
     let backdrop = null;
     let dialog = null;
+
+    const RECENTS_PREFIX = 'of.recents.';
+    const RECENTS_LIMIT = 4;
 
     function ensureDOM() {
         if (backdrop) return;
@@ -39,6 +53,53 @@
         dialog.className = 'fm-dlg';
         backdrop.appendChild(dialog);
         document.body.appendChild(backdrop);
+    }
+
+    /** Recently picked values for one store key, most recent first. */
+    function readRecents(key) {
+        try {
+            var raw = window.localStorage.getItem(RECENTS_PREFIX + key);
+            var items = raw ? JSON.parse(raw) : [];
+            if (!Array.isArray(items)) return [];
+            return items.filter(function (i) {
+                return i && i.value !== undefined && i.value !== '' && i.label;
+            });
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function writeRecent(key, entry) {
+        try {
+            var kept = readRecents(key).filter(function (i) {
+                return String(i.value) !== String(entry.value);
+            });
+            kept.unshift(entry);
+            window.localStorage.setItem(
+                RECENTS_PREFIX + key,
+                JSON.stringify(kept.slice(0, RECENTS_LIMIT))
+            );
+        } catch (e) {
+            // Storage can be full or blocked. Recents are a shortcut, not state.
+        }
+    }
+
+    function fieldRecents(f) {
+        if (!f.recents || !f.recents.key) return [];
+        var exclude = f.recents.exclude === undefined || f.recents.exclude === null
+            ? null
+            : String(f.recents.exclude);
+        return readRecents(f.recents.key).filter(function (i) {
+            return String(i.value) !== exclude;
+        });
+    }
+
+    /** Drop the applied state once the field no longer holds that value. */
+    function clearRecentSelection(row) {
+        if (!row) return;
+        Array.prototype.forEach.call(row.querySelectorAll('.fm-ac-recent-chip'), function (c) {
+            c.setAttribute('aria-pressed', 'false');
+        });
     }
 
     function close() {
@@ -56,7 +117,9 @@
     function escapeHtml(str) {
         var d = document.createElement('div');
         d.textContent = str;
-        return d.innerHTML;
+        // Quotes too: several call sites drop the result into an attribute,
+        // and textContent alone leaves those intact.
+        return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     function buildField(f) {
@@ -65,6 +128,7 @@
         html += '<label for="' + id + '">' + escapeHtml(f.label) + '</label>';
 
         if (f.type === 'autocomplete') {
+            html += buildRecents(f, id);
             html += '<div class="fm-ac-wrap">';
             html += '<input id="' + id + '" type="text" autocomplete="off"'
                 + (f.placeholder ? ' placeholder="' + escapeHtml(f.placeholder) + '"' : '')
@@ -96,6 +160,33 @@
         return html;
     }
 
+    /**
+     * Recent picks for an autocomplete field, most recent first. Each one is a
+     * button that fills the input below it. Nothing renders until there is
+     * something to remember.
+     */
+    function buildRecents(f, id) {
+        var items = fieldRecents(f);
+        if (!items.length) return '';
+
+        var html = '<div class="fm-ac-recent-row" id="' + id + '-recent">';
+        if (f.recents.label) {
+            html += '<span class="fm-ac-recent-tag">' + escapeHtml(f.recents.label) + '</span>';
+        }
+        items.forEach(function (item) {
+            // The chip stays short — bare club name — while the field takes the
+            // full "Name (Country)" the search results would have put there.
+            html += '<button type="button" class="fm-ac-recent-chip" aria-pressed="false"'
+                + ' data-value="' + escapeHtml(String(item.value)) + '"'
+                + ' data-label="' + escapeHtml(item.label) + '"'
+                + ' data-name="' + escapeHtml(item.name || item.label) + '"'
+                + ' title="' + escapeHtml(item.label) + '">'
+                + escapeHtml(item.name || item.label) + '</button>';
+        });
+        html += '</div>';
+        return html;
+    }
+
     function gatherData(fields) {
         var data = {};
         (fields || []).forEach(function (f) {
@@ -108,6 +199,42 @@
             }
         });
         return data;
+    }
+
+    /**
+     * A recent chip applies straight to the field: one click, value set,
+     * search results put away.
+     */
+    function wireRecents(fieldId, input, hidden, list) {
+        var row = document.getElementById(fieldId + '-recent');
+        if (!row) return;
+
+        row.addEventListener('click', function (e) {
+            var chip = e.target.closest('.fm-ac-recent-chip');
+            if (!chip) return;
+            hidden.value = chip.dataset.value;
+            hidden.dataset.label = chip.dataset.label;
+            hidden.dataset.name = chip.dataset.name;
+            input.value = chip.dataset.label;
+            list.innerHTML = '';
+            list.style.display = 'none';
+            clearRecentSelection(row);
+            chip.setAttribute('aria-pressed', 'true');
+        });
+    }
+
+    /** Persist what was picked, so the next dialog can offer it back. */
+    function rememberPicks(fields) {
+        (fields || []).forEach(function (f) {
+            if (f.type !== 'autocomplete' || !f.recents || !f.recents.key) return;
+            var hid = document.getElementById('fm-dlg-f-' + f.name + '-val');
+            if (!hid || !hid.value || !hid.dataset.label) return;
+            writeRecent(f.recents.key, {
+                value: hid.value,
+                label: hid.dataset.label,
+                name: hid.dataset.name || hid.dataset.label,
+            });
+        });
     }
 
     /**
@@ -142,10 +269,17 @@
             var list = document.getElementById(fieldId + '-list');
             if (!input || !hidden || !list) return;
 
+            wireRecents(fieldId, input, hidden, list);
+
+            var recentRow = document.getElementById(fieldId + '-recent');
+
             var timer = null;
             input.addEventListener('input', function () {
                 clearTimeout(timer);
+                clearRecentSelection(recentRow);
                 hidden.value = '';
+                delete hidden.dataset.label;
+                delete hidden.dataset.name;
                 var q = input.value.trim();
                 if (q.length < 1) { list.innerHTML = ''; list.style.display = 'none'; return; }
                 timer = setTimeout(function () {
@@ -171,15 +305,19 @@
                 var item = e.target.closest('.fm-ac-item');
                 if (!item) return;
                 hidden.value = item.dataset.value;
-                input.value = item.textContent; // shows "Name (Country)"
+                hidden.dataset.label = item.textContent; // shows "Name (Country)"
+                hidden.dataset.name = item.dataset.name;
+                input.value = item.textContent;
                 list.innerHTML = '';
                 list.style.display = 'none';
+                clearRecentSelection(recentRow);
             });
         });
 
         dialog.querySelector('.fm-dlg-cancel').addEventListener('click', close);
         dialog.querySelector('.fm-dlg-confirm').addEventListener('click', function () {
             var data = gatherData(opts.fields);
+            rememberPicks(opts.fields);
             if (opts.onConfirm) opts.onConfirm(data);
             close();
         });

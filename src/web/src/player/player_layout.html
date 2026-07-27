@@ -206,14 +206,20 @@
         });
     };
 
+    // Transfer and loan both send a player somewhere, so they read and write
+    // one recent-destinations list — pick a club in either dialog and it is
+    // offered back in both.
+    function destinationClubField() {
+        return {
+            name: 'to_club_id', label: '{{ i18n.t("destination_club") }}', type: 'autocomplete',
+            placeholder: '{{ i18n.t("search_club") }}', url: '/api/clubs?exclude=' + clubId,
+            recents: { key: 'destination-club', label: '{{ i18n.t("recent") }}', exclude: clubId }
+        };
+    }
+
     window.playerTransfer = function(pid) {
         dd.classList.remove('fm-dd-open');
-        var fields = [
-            {
-                name: 'to_club_id', label: '{{ i18n.t("destination_club") }}', type: 'autocomplete',
-                placeholder: '{{ i18n.t("search_club") }}', url: '/api/clubs?exclude=' + clubId
-            }
-        ];
+        var fields = [destinationClubField()];
         if (!isFreeAgent) {
             fields.push({ name: 'fee', label: '{{ i18n.t("transfer_fee") }}', type: 'number', placeholder: '0', value: '0' });
         }
@@ -238,10 +244,7 @@
         OpenFootballDialog.open({
             title: '{{ i18n.t("loan_player") }}',
             fields: [
-                {
-                    name: 'to_club_id', label: '{{ i18n.t("destination_club") }}', type: 'autocomplete',
-                    placeholder: '{{ i18n.t("search_club") }}', url: '/api/clubs?exclude=' + clubId
-                },
+                destinationClubField(),
                 {
                     name: 'seasons', label: '{{ i18n.t("duration") }}', type: 'select',
                     options: [

@@ -8145,6 +8145,69 @@ a:active {
     background: #1e2830;
 }
 
+/* Recently picked values for an autocomplete field. Sits between the field
+   label and its input: one click fills the input below. */
+.fm-ac-recent-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 6px;
+}
+
+.fm-ac-recent-tag {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: #62727e;
+}
+
+.fm-ac-recent-chip {
+    max-width: 100%;
+    padding: 3px 9px;
+    background: transparent;
+    border: 1px solid #2a3640;
+    border-radius: 10px;
+    color: #8a9aa6;
+    font-family: inherit;
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    transition:
+        border-color 0.15s,
+        color 0.15s,
+        background 0.15s;
+}
+
+.fm-ac-recent-chip:hover {
+    border-color: #3d5265;
+    color: #d0d6dc;
+}
+
+.fm-ac-recent-chip:focus-visible {
+    outline: none;
+    border-color: #4a9eff;
+    color: #d0d6dc;
+}
+
+/* Applied: the field below now holds this club. Borrows the confirm-button
+   green so "chosen" reads the same everywhere in the dialog. */
+.fm-ac-recent-chip[aria-pressed="true"] {
+    background: rgba(42, 125, 63, 0.18);
+    border-color: #2f6d45;
+    color: #cfe6d6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fm-ac-recent-chip {
+        transition: none;
+    }
+}
+
 .fm-dlg-actions {
     display: flex;
     justify-content: flex-end;
