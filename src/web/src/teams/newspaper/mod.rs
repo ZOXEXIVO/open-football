@@ -12,7 +12,6 @@ use core::shared::fullname::FullName;
 use core::utils::FormattingUtils;
 use core::{Club, SimulatorData, TeamType};
 use serde::Deserialize;
-use std::iter;
 
 #[derive(Deserialize)]
 pub struct TeamNewspaperRequest {
@@ -62,8 +61,6 @@ pub struct IssueView {
     pub briefs: Vec<StoryView>,
     pub results: Vec<ResultView>,
     pub portrait: Option<PortraitView>,
-    /// Headlines only — what a back issue shows before it is opened.
-    pub summary: String,
 }
 
 pub struct StoryView {
@@ -220,13 +217,6 @@ impl PressDesk {
 
         let portrait = Self::portrait(data, club, issue, i18n);
 
-        let summary = iter::once(lead.as_ref())
-            .chain(secondary.iter().map(Some))
-            .flatten()
-            .map(|story| story.headline.as_str())
-            .collect::<Vec<_>>()
-            .join(" · ");
-
         IssueView {
             number: issue.number,
             masthead: masthead.to_string(),
@@ -243,7 +233,6 @@ impl PressDesk {
                 .map(|result| Self::result(data, result))
                 .collect(),
             portrait,
-            summary,
         }
     }
 
@@ -758,7 +747,6 @@ mod render_tests {
                     player_generated: true,
                     caption: "Three goals for Diego Mora".to_string(),
                 }),
-                summary: "Córdoba tear Sevilla apart · Three goals for Diego Mora".to_string(),
             }
         }
 
@@ -783,7 +771,6 @@ mod render_tests {
                 briefs: Vec::new(),
                 results: Vec::new(),
                 portrait: None,
-                summary: "Córdoba board back the manager".to_string(),
             }
         }
     }
@@ -809,10 +796,23 @@ mod render_tests {
         assert!(html.contains("np-result np-result-w"));
         assert!(html.contains("/en/teams/sevilla"));
         assert!(html.contains("np-brief-link"));
-        // The older edition is filed behind the front page, not printed
-        // over it.
-        assert!(html.contains("np-archive"));
+    }
+
+    /// Back issues are set exactly like today's paper — same nameplate,
+    /// same folio, same columns — with a labelled rule between them.
+    #[test]
+    fn a_back_issue_is_printed_as_a_full_edition() {
+        let html = Page::template(vec![Page::full_issue(), Page::bare_issue()])
+            .render()
+            .unwrap();
+
+        assert_eq!(html.matches("np-sheet").count(), 2);
+        assert_eq!(html.matches("np-masthead").count(), 2);
+        assert_eq!(html.matches("np-folio\"").count(), 2);
+        assert_eq!(html.matches("np-archive-rule").count(), 1);
         assert!(html.contains("Córdoba board back the manager"));
+        // The rule separates the two, so it cannot precede the front page.
+        assert!(html.find("np-sheet").unwrap() < html.find("np-archive-rule").unwrap());
     }
 
     #[test]

@@ -11679,6 +11679,7 @@ html:has(.fm-workers-page) {
 
 .np-sheet {
     position: relative;
+    padding: 26px 30px 30px;
     color: var(--np-ink);
     background-color: var(--np-paper);
     /* Woven fibre: two hairline weaves plus a light fall across the
@@ -11705,8 +11706,8 @@ html:has(.fm-workers-page) {
         0 10px 26px rgba(0, 0, 0, 0.45);
 }
 
-.np-front {
-    padding: 26px 30px 30px;
+.np-sheet + .np-sheet {
+    margin-top: 18px;
 }
 
 /* Nameplate */
@@ -12122,14 +12123,17 @@ html:has(.fm-workers-page) {
     border-bottom-color: var(--np-spot);
 }
 
-/* Back issues */
+/* Back issues.
 
-.np-archive {
-    margin-top: 26px;
-}
+   A labelled rule, then the older editions set exactly like today's.
+   The archive is a stack of the same paper — summarising it in a folded
+   strip made the back catalogue look like a different product. */
 
-.np-archive-title {
-    margin: 0 0 10px;
+.np-archive-rule {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 30px 0 16px;
     font-family: var(--np-furniture);
     font-size: 10px;
     font-weight: 600;
@@ -12138,89 +12142,12 @@ html:has(.fm-workers-page) {
     color: #7f8b93;
 }
 
-.np-back {
-    margin-bottom: 10px;
-    color: var(--np-ink);
-    background-color: var(--np-paper-edge);
-    background-image: repeating-linear-gradient(
-        0deg,
-        rgba(120, 108, 82, 0.03) 0 1px,
-        transparent 1px 3px
-    );
-    border: 1px solid var(--np-paper-deep);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
-}
-
-.np-back-summary {
-    display: grid;
-    grid-template-columns: minmax(0, auto) minmax(0, auto) minmax(0, 1fr);
-    align-items: baseline;
-    gap: 14px;
-    padding: 11px 16px;
-    cursor: pointer;
-    list-style: none;
-}
-
-.np-back-summary::-webkit-details-marker {
-    display: none;
-}
-
-.np-back-summary:focus-visible {
-    outline: 2px solid var(--np-spot);
-    outline-offset: -2px;
-}
-
-.np-back-plate {
-    font-family: var(--np-serif);
-    font-size: 14px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-    white-space: nowrap;
-}
-
-.np-back-meta {
-    font-family: var(--np-furniture);
-    font-size: 9.5px;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--np-ink-faint);
-    white-space: nowrap;
-}
-
-.np-back-headlines {
-    overflow: hidden;
-    font-family: var(--np-serif);
-    font-size: 12.5px;
-    font-style: italic;
-    color: var(--np-ink-soft);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.np-back[open] .np-back-summary {
-    border-bottom: 2px solid var(--np-ink);
-}
-
-.np-back-body {
-    padding: 16px;
-}
-
-.np-back-lead {
-    margin-bottom: 16px;
-}
-
-.np-back-rail {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 0 22px;
-    margin-top: 18px;
-    padding-top: 14px;
-    border-top: 1px solid var(--np-rule);
-}
-
-.np-back-rail .np-box + .np-box {
-    margin-top: 0;
+.np-archive-rule::before,
+.np-archive-rule::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: #34424b;
 }
 
 /* Nothing to print yet */
@@ -12262,14 +12189,12 @@ html:has(.fm-workers-page) {
 /* Mood tints: a bad week yellows the paper a shade and a good one
    brightens it. The same sheet, printed on a different morning. */
 
-.np-sheet.np-mood-crisis,
-.np-back.np-mood-crisis {
+.np-sheet.np-mood-crisis {
     --np-paper: #e6ded0;
     --np-paper-edge: #d9d0be;
 }
 
-.np-sheet.np-mood-triumph,
-.np-back.np-mood-triumph {
+.np-sheet.np-mood-triumph {
     --np-paper: #ece8dd;
     --np-paper-edge: #e2ddcf;
 }
@@ -12292,19 +12217,10 @@ html:has(.fm-workers-page) {
         padding-left: 0;
         border-top: 2px solid var(--np-ink);
     }
-
-    .np-back-summary {
-        grid-template-columns: minmax(0, 1fr);
-        gap: 3px;
-    }
-
-    .np-back-headlines {
-        white-space: normal;
-    }
 }
 
 @media (max-width: 640px) {
-    .np-front {
+    .np-sheet {
         padding: 18px 16px 22px;
     }
 
@@ -12329,8 +12245,7 @@ html:has(.fm-workers-page) {
         margin: 0 auto 16px;
     }
 
-    .np-splits,
-    .np-back-rail {
+    .np-splits {
         grid-template-columns: minmax(0, 1fr);
         gap: 18px;
     }

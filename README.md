@@ -2,6 +2,8 @@
 
 # Open Football
 
+https://open-football.org
+
 Football world simulator built for people who want to watch the game
 evolve by itself.
 
@@ -19,10 +21,10 @@ stay familiar while the simulation logic, mechanics, and football intelligence k
 improving.
 
 <a href="https://open-football.org">
-  <img src=".docs/images/live-simulator-cta.svg" alt="Open Football Live Demo" width="520">
-</a>
+  TRY </a> or <a href="https://github.com/ZOXEXIVO/open-football/releases">
+   download
+</a> for run it on your PC / Server
 
-or download [single binary file](https://github.com/ZOXEXIVO/open-football/releases) to run on your PC / Server
 
 ## What Makes It Different
 
@@ -92,6 +94,7 @@ finances, and match engine can turn it into success.
 
 ![Club page](.docs/images/club.jpg "Club page")
 
+![Club page](.docs/images/newspaper.jpg "Club page")
 
 ![League awards page](.docs/images/awards.jpg "League awards page")
 

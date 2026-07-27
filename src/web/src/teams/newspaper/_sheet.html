@@ -1,0 +1,91 @@
+{# One printed edition. Every issue on the page — today's and every back
+   issue — is set through this partial, so the archive reads as a stack of
+   the same paper rather than a summary of it. Expects `issue`. #}
+<article class="np-sheet np-mood-{{ issue.mood_slug }}">
+    <header class="np-nameplate">
+        <div class="np-ear np-ear-left">{{ i18n.t("newspaper_edition") }} {{ issue.number }}</div>
+        <h2 class="np-masthead">{{ issue.masthead }}</h2>
+        <div class="np-ear np-ear-right">{{ issue.date }}</div>
+    </header>
+    <div class="np-folio">
+        <span>{{ i18n.t("newspaper_our_correspondent") }}</span>
+        <span class="np-folio-mood np-folio-mood-{{ issue.mood_slug }}{% if issue.mood_stamped %} np-stamp{% endif %}">{{ issue.mood_label }}</span>
+    </div>
+
+    <div class="np-body{% if issue.results.is_empty() && issue.portrait.is_none() %} np-body-full{% endif %}">
+        <div class="np-main">
+            {% if let Some(lead) = issue.lead %}
+            <section class="np-lead">
+                <p class="np-kicker">{{ lead.kicker }}<span class="np-dateline">{{ lead.date }}</span></p>
+                <h3 class="np-headline">{{ lead.headline }}</h3>
+                <p class="np-lead-body">{{ lead.body }}</p>
+            </section>
+            {% endif %}
+
+            {% if !issue.secondary.is_empty() %}
+            <div class="np-splits">
+                {% for story in issue.secondary %}
+                <section class="np-split">
+                    <p class="np-kicker">{{ story.kicker }}<span class="np-dateline">{{ story.date }}</span></p>
+                    <h4 class="np-subhead">{{ story.headline }}</h4>
+                    <p class="np-split-body">{{ story.body }}</p>
+                </section>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+
+        <aside class="np-rail">
+            {% if let Some(portrait) = issue.portrait %}
+            <figure class="np-figure">
+                <a class="np-photo" href="/{{ lang }}/players/{{ portrait.player_slug }}">
+                    {% if portrait.player_generated %}
+                    <img src="/api/players/{{ portrait.player_id }}/face.svg?v={{ crate::face::FACE_VERSION }}" alt="{{ portrait.player_name }}" loading="lazy">
+                    {% else %}
+                    <img src="https://open-football.org/player/{{ portrait.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ portrait.player_id }}/face.svg?v={{ crate::face::FACE_VERSION }}';" alt="{{ portrait.player_name }}" loading="lazy">
+                    {% endif %}
+                    <span class="np-screen" aria-hidden="true"></span>
+                </a>
+                <figcaption class="np-caption">
+                    <strong>{{ portrait.player_name }}</strong>
+                    <span>{{ portrait.caption }}</span>
+                </figcaption>
+            </figure>
+            {% endif %}
+
+            {% if !issue.results.is_empty() %}
+            <section class="np-box">
+                <h4 class="np-box-title">{{ i18n.t("newspaper_results") }}</h4>
+                <ul class="np-results">
+                    {% for result in issue.results %}
+                    <li class="np-result np-result-{{ result.outcome }}">
+                        <span class="np-result-mark" aria-hidden="true"></span>
+                        <span class="np-result-date">{{ result.date }}</span>
+                        <a class="np-result-club" href="/{{ lang }}/teams/{{ result.opponent_slug }}">{{ result.opponent_name }}</a>
+                        <span class="np-result-score">{{ result.score }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </section>
+            {% endif %}
+        </aside>
+    </div>
+
+    {% if !issue.briefs.is_empty() %}
+    <section class="np-band">
+        <h4 class="np-box-title">{{ i18n.t("newspaper_in_brief") }}</h4>
+        <ul class="np-briefs np-briefs-band">
+            {% for story in issue.briefs %}
+            <li class="np-brief">
+                <span class="np-brief-kicker">{{ story.kicker }}</span>
+                {% if story.player_slug.is_empty() %}
+                <span class="np-brief-text">{{ story.headline }}</span>
+                {% else %}
+                <a class="np-brief-text np-brief-link" href="/{{ lang }}/players/{{ story.player_slug }}" title="{{ story.player_name }}">{{ story.headline }}</a>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </section>
+    {% endif %}
+</article>
