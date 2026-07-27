@@ -59,6 +59,8 @@ pub struct TeamFinancesTemplate {
     pub income_prize_money: String,
     pub income_cup_prize: String,
     pub income_continental_prize: String,
+    pub income_parachute: String,
+    pub income_owner_investment: String,
     pub income_loan_fees: String,
     // Expense breakdown
     pub expense_player_wages: String,
@@ -182,6 +184,8 @@ pub async fn team_finances_get_action(
     let income_prize_money = format_currency(other_prize);
     let income_cup_prize = format_currency(latest_bal.income_cup_prize);
     let income_continental_prize = format_currency(latest_bal.income_continental_prize);
+    let income_parachute = format_currency(latest_bal.income_parachute);
+    let income_owner_investment = format_currency(latest_bal.income_owner_investment);
     let income_loan_fees = format_currency(latest_bal.income_loan_fees);
     let expense_player_wages = format_currency(latest_bal.expense_player_wages);
     let expense_staff_wages = format_currency(latest_bal.expense_staff_wages);
@@ -306,6 +310,8 @@ pub async fn team_finances_get_action(
         income_prize_money,
         income_cup_prize,
         income_continental_prize,
+        income_parachute,
+        income_owner_investment,
         income_loan_fees,
         expense_player_wages,
         expense_staff_wages,

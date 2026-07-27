@@ -81,15 +81,34 @@ impl DatabaseGenerator {
                     }
                 };
 
+                // Ground capacity: the data carries a typical gate, not a
+                // capacity, so gross it up. Falls back to a reputation
+                // estimate for clubs with no attendance record — never zero,
+                // or the club earns no matchday revenue at all.
+                let average_attendance = club.average_attendance.unwrap_or(0);
+                let club_reputation_score = club
+                    .teams
+                    .iter()
+                    .find(|t| t.team_type.eq_ignore_ascii_case("main"))
+                    .map(|t| t.reputation.world as f32 / 10_000.0)
+                    .unwrap_or(0.0);
+                let stadium_capacity =
+                    ClubFacilities::seed_capacity(average_attendance, club_reputation_score);
+
                 let facilities = match &club.facilities {
                     Some(f) => ClubFacilities {
                         training: FacilityLevel::from_str(&f.training),
                         youth: FacilityLevel::from_str(&f.youth),
                         academy: FacilityLevel::from_str(&f.academy),
                         recruitment: FacilityLevel::from_str(&f.recruitment),
-                        average_attendance: club.average_attendance.unwrap_or(0),
+                        average_attendance,
+                        stadium_capacity,
                     },
-                    None => ClubFacilities::default(),
+                    None => ClubFacilities {
+                        average_attendance,
+                        stadium_capacity,
+                        ..ClubFacilities::default()
+                    },
                 };
 
                 // Extract facility values for youth generation before facilities is moved

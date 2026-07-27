@@ -39,33 +39,40 @@ impl ClubFinanceResult {
         }
 
         if self.is_in_distress {
-            // Tighten budgets in proportion to distress severity. Even at
-            // mild distress we cap the transfer chest; at severe/insolvency
-            // we drag the wage budget too so the auto-renewal AI doesn't
-            // keep handing out raises while the club is bleeding cash.
-            let (transfer_factor, wage_factor) = match self.distress_level {
-                DistressLevel::Distress => (0.40, 0.95),
-                DistressLevel::Severe => (0.10, 0.85),
-                DistressLevel::Insolvency => (0.0, 0.70),
-                DistressLevel::None => (1.0, 1.0),
-            };
-
+            // Record the severity and let the board's seasonal recompute
+            // size the budgets from revenue.
+            //
+            // This used to apply the throttle by *multiplying* the stored
+            // budgets every month:
+            //
+            //     budget.amount *= transfer_factor;  // 0.0 at insolvency
+            //     budget.amount *= wage_factor;      // 0.70 at insolvency
+            //
+            // Both bugs were fatal. The factors compounded — 0.70^12 ≈ 0.01,
+            // so a season under distress erased the wage budget regardless of
+            // how the club was actually trading — and a transfer factor of
+            // exactly 0.0 zeroed the chest permanently, because no later
+            // multiplication can lift a value off zero. Every club in the
+            // world ended up showing a $0 transfer budget, which meant no
+            // club could sign anyone, squads decayed, results decayed, and
+            // the distress that triggered it deepened. The throttle was the
+            // trap, not the cure.
+            //
+            // Worse, it never reduced a single actual wage: contracts kept
+            // paying in full. Budget pressure now flows through
+            // `Club::recompute_budgets`, which reads the distress level and
+            // the debt standing and derives fresh figures from revenue.
             let club = match data.club_mut(self.club_id) {
                 Some(c) => c,
                 None => return,
             };
 
             debug!(
-                "Financial distress at {} — level={:?}, throttling budgets",
+                "Financial distress at {} — level={:?}, budgets will be resized from revenue",
                 club.name, self.distress_level
             );
 
-            if let Some(ref mut budget) = club.finance.transfer_budget {
-                budget.amount *= transfer_factor;
-            }
-            if let Some(ref mut budget) = club.finance.wage_budget {
-                budget.amount *= wage_factor;
-            }
+            club.finance.distress_level = self.distress_level;
         }
 
         if self.is_month_start {

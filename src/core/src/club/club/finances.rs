@@ -1,103 +1,22 @@
 use super::Club;
-use crate::club::{DistressLevel, classify_distress};
+use crate::ContractBonusType;
+use crate::club::DistressLevel;
+use crate::club::finance::{
+    AdministrationState, DebtProfile, DebtStanding, RevenueInputs, RevenueModel,
+};
+use crate::club::classify_distress;
 use crate::context::GlobalContext;
-use crate::{ContractBonusType, ReputationLevel};
 use chrono::Datelike;
 use chrono::NaiveDate;
 use log::debug;
 
-/// Country price level: scales ticket prices, merchandising etc. by local economy.
-/// England 1.5, Colombia 0.4, default 1.0.
+/// Country price level: scales ticket prices and commercial income by the
+/// local economy. England 1.5, Colombia 0.4, default 1.0.
 fn get_price_level(ctx: &GlobalContext<'_>) -> f64 {
     ctx.country
         .as_ref()
         .map(|c| c.price_level as f64)
         .unwrap_or(1.0)
-}
-
-/// Tier-1 monthly TV base by reputation tier — sized to look right at a
-/// market multiplier of 1.0 (a top-five league country) before the league
-/// tier and league-position fan-out runs on top of it.
-fn tv_revenue_base(rep: ReputationLevel) -> i64 {
-    match rep {
-        ReputationLevel::Elite => 8_000_000,
-        ReputationLevel::Continental => 3_200_000,
-        ReputationLevel::National => 900_000,
-        ReputationLevel::Regional => 180_000,
-        ReputationLevel::Local => 35_000,
-        ReputationLevel::Amateur => 5_000,
-    }
-}
-
-fn ticket_base_price(rep: ReputationLevel) -> f64 {
-    match rep {
-        ReputationLevel::Elite => 55.0,
-        ReputationLevel::Continental => 40.0,
-        ReputationLevel::National => 28.0,
-        ReputationLevel::Regional => 15.0,
-        ReputationLevel::Local => 8.0,
-        ReputationLevel::Amateur => 4.0,
-    }
-}
-
-/// Stadium-capacity ceiling derived from reputation tier. Used to cap
-/// dynamic attendance so an in-form National-tier club isn't projected to
-/// pull Premier League gates. Replace with per-club capacity once the
-/// `ClubFacilities` ground-capacity field is plumbed in.
-fn stadium_capacity_for(rep: ReputationLevel) -> u32 {
-    match rep {
-        ReputationLevel::Elite => 55_000,
-        ReputationLevel::Continental => 38_000,
-        ReputationLevel::National => 22_000,
-        ReputationLevel::Regional => 9_000,
-        ReputationLevel::Local => 3_500,
-        ReputationLevel::Amateur => 1_000,
-    }
-}
-
-fn league_tier_of(ctx: &GlobalContext<'_>, _league_id: Option<u32>) -> u8 {
-    ctx.club
-        .as_ref()
-        .map(|c| c.main_league_tier.max(1))
-        .unwrap_or(1)
-}
-
-fn league_tier_multiplier(tier: u8) -> f64 {
-    // Smoothed so a promotion isn't a 3.5x TV windfall overnight. The
-    // old 0.28 step from tier-2 to tier-1 turned a Championship-style
-    // promotion into an instant revenue shock that compounded with the
-    // reputation tier-hop into runaway balance growth. Real broadcast
-    // ladders gap by ~2x between tiers, not 3-5x.
-    match tier {
-        1 => 1.00,
-        2 => 0.45,
-        3 => 0.20,
-        _ => 0.08,
-    }
-}
-
-/// Position-based TV bonus. Champion: 1.20; top-4: 1.10; top half: 1.00;
-/// bottom half: 0.90; relegation zone (bottom three or bottom 15%): 0.80.
-/// Mid-table is the neutral baseline.
-fn placement_multiplier(position: u16, total_teams: u16) -> f64 {
-    if position == 0 || total_teams == 0 {
-        return 1.0;
-    }
-    if position == 1 {
-        return 1.20;
-    }
-    let n = total_teams as f64;
-    let p = position as f64;
-    let rel = p / n; // 0 (top) → 1 (bottom)
-    if p <= 4.0 {
-        1.10
-    } else if rel <= 0.5 {
-        1.00
-    } else if p > n - 3.5 || rel >= 0.85 {
-        0.80
-    } else {
-        0.90
-    }
 }
 
 impl Club {
@@ -164,73 +83,75 @@ impl Club {
                 .push_income_sponsorship(sponsorship_income);
         }
 
-        // 4. TV, matchday, merchandising, facility costs — from main team reputation
-        let main_team = self.teams.main();
-        if let Some(team) = main_team {
-            let rep = team.reputation.level();
-            let league_id = team.league_id;
+        // 4. Broadcast, matchday and commercial income.
+        //
+        // Every line is continuous in the club's own inputs — see
+        // `finance::revenue`. The old model looked each one up from a
+        // six-bucket reputation ladder, so a single tier slip cut broadcast
+        // income 60% and commercial income 70% overnight while the wage
+        // bill, fixed by contracts already signed, didn't move at all.
+        let reputation_score = self
+            .teams
+            .main()
+            .map(|t| t.reputation.overall_score())
+            .unwrap_or(0.0);
+        let has_main_team = self.teams.main().is_some();
+
+        if has_main_team {
             let (recent_wins_ratio, league_pos, total_teams) =
                 self.compute_team_form_and_position(&ctx);
+            let league_tier = ctx
+                .club
+                .as_ref()
+                .map(|c| c.main_league_tier.max(1))
+                .unwrap_or(1);
 
-            // TV: reputation base × country market × league tier × placement.
-            // The reputation base is what a tier-1 club earns in a "world-
-            // average" market with mid-table placement; tier and placement
-            // multipliers fan that out to give relegation strugglers and
-            // tier-2 clubs realistic-looking numbers.
-            let tv_base = tv_revenue_base(rep);
-            let league_tier = league_tier_of(&ctx, league_id);
-            let tier_mult = league_tier_multiplier(league_tier);
-            let placement_mult = placement_multiplier(league_pos, total_teams);
-            let tv_revenue =
-                (tv_base as f64 * tv_multiplier as f64 * tier_mult * placement_mult) as i64;
-            self.finance.balance.push_income_tv(tv_revenue);
-            // Decompose so the UI can show base vs placement separately.
-            // The placement bonus is the slice that wouldn't have been paid
-            // at neutral mid-table — clamped to non-negative to keep the
-            // base/placement story coherent for relegation-band clubs.
-            let placement_premium = ((placement_mult - 1.0).max(0.0)
-                * tv_base as f64
-                * tv_multiplier as f64
-                * tier_mult) as i64;
-            if placement_premium > 0 {
-                self.finance
-                    .balance
-                    .push_income_tv_placement(placement_premium);
-                // Avoid double-counting against `income_tv` total.
-                self.finance.balance.income_tv -= placement_premium;
-            }
+            let inputs = RevenueInputs {
+                reputation_score,
+                league_tier,
+                league_position: league_pos,
+                league_size: total_teams,
+                tv_market: tv_multiplier,
+                sponsorship_market: sponsorship_strength,
+                attendance_factor,
+                price_level: get_price_level(&ctx) as f32,
+                stadium_capacity: self.facilities.capacity_or_estimate(reputation_score),
+                recent_wins_ratio,
+                home_matches: self.finance.take_home_match_count(),
+                parachute: self.finance.parachute,
+            };
 
-            // Matchday: actual home matches this month × per-match gate.
-            let price_level = get_price_level(&ctx);
-            let base_attendance = self.facilities.average_attendance as f64;
+            // Supporters turning up is the only part of the gate that moves
+            // with results; the ground itself does not shrink.
             let form_mult = self.facilities.dynamic_attendance_multiplier(
                 recent_wins_ratio,
                 league_pos,
                 total_teams,
-            ) as f64;
-            let stadium_capacity = stadium_capacity_for(rep) as f64;
-            let raw_attendance = base_attendance * attendance_factor as f64 * form_mult;
-            let attendance = raw_attendance.min(stadium_capacity).max(0.0) as i64;
-            let ticket_price = (ticket_base_price(rep) * price_level) as i64;
-            let home_matches = self.finance.take_home_match_count() as i64;
-            let matchday_revenue = attendance * ticket_price * home_matches;
-            if matchday_revenue > 0 {
-                self.finance.balance.push_income_matchday(matchday_revenue);
-            }
+            );
+            let revenue = RevenueModel::monthly(&inputs, form_mult);
 
-            // Merchandising scales with rep, country market, and price level.
-            let merch_base: f64 = match rep {
-                ReputationLevel::Elite => 500_000.0,
-                ReputationLevel::Continental => 150_000.0,
-                ReputationLevel::National => 50_000.0,
-                ReputationLevel::Regional => 10_000.0,
-                ReputationLevel::Local => 2_000.0,
-                ReputationLevel::Amateur => 500.0,
-            };
-            let merch_revenue = (merch_base * sponsorship_strength as f64 * price_level) as i64;
-            self.finance
-                .balance
-                .push_income_merchandising(merch_revenue);
+            if revenue.broadcast_base > 0 {
+                self.finance.balance.push_income_tv(revenue.broadcast_base);
+            }
+            if revenue.broadcast_merit > 0 {
+                self.finance
+                    .balance
+                    .push_income_tv_placement(revenue.broadcast_merit);
+            }
+            if revenue.parachute > 0 {
+                self.finance.balance.push_income_parachute(revenue.parachute);
+            }
+            if revenue.matchday > 0 {
+                self.finance.balance.push_income_matchday(revenue.matchday);
+                // Keep the club's observed average gate honest — it feeds
+                // the board's expansion case and the UI.
+                self.facilities.average_attendance = revenue.attendance;
+            }
+            if revenue.commercial > 0 {
+                self.finance
+                    .balance
+                    .push_income_merchandising(revenue.commercial);
+            }
         }
 
         // 5. Amortization: each outstanding transfer purchase contributes
@@ -247,51 +168,55 @@ impl Club {
         self.finance.balance.push_expense_facilities(facility_cost);
 
         // 7. Operating overhead: administration, taxes, community,
-        // marketing, infrastructure. Modelled as a fraction of monthly
-        // revenue (the way real-world football clubs' SG&A actually
-        // scales) plus a reputation-tier fixed-cost floor for the
-        // institutional infrastructure that doesn't shrink in a lean
-        // year. The earlier `balance × 0.3%` tax was a wealth check
-        // that barely bit at $20M+ balances ($60K/mo on a $3M/mo
-        // revenue stream), so income outpaced expenses and balances
-        // compounded into rocket-shape growth across the board.
+        // marketing, infrastructure. A share of revenue (the way real
+        // clubs' SG&A actually scales) plus a fixed institutional floor
+        // that doesn't shrink in a lean year. The floor is continuous in
+        // reputation rather than a tier lookup, so a club sliding down the
+        // table doesn't get an overnight cost cut it hasn't earned.
         let monthly_income = self.finance.balance.income;
-        let revenue_overhead = ((monthly_income.max(0) as f64) * 0.15) as i64;
-        let tier_overhead: i64 = if let Some(team) = main_team {
-            match team.reputation.level() {
-                ReputationLevel::Elite => 800_000,
-                ReputationLevel::Continental => 350_000,
-                ReputationLevel::National => 140_000,
-                ReputationLevel::Regional => 50_000,
-                ReputationLevel::Local => 15_000,
-                ReputationLevel::Amateur => 5_000,
-            }
+        let overhead = if has_main_team {
+            RevenueModel::operating_overhead(monthly_income, reputation_score)
         } else {
             0
         };
-        let overhead = revenue_overhead + tier_overhead;
         if overhead > 0 {
             self.finance.balance.push_expense_facilities(overhead);
         }
 
-        // 8. Debt interest: only when the club is genuinely in the red.
-        // Scales with distress severity — a club drowning in long-term
-        // debt pays more than one with a short cash-flow dip.
-        let post_balance = self.finance.balance.balance;
-        if post_balance < 0 {
-            let avg_wages = self.finance.trailing_avg_monthly_wages(date);
-            let level = classify_distress(post_balance, avg_wages);
-            let rate = match level {
-                DistressLevel::None => 0.006,
-                DistressLevel::Distress => 0.006,
-                DistressLevel::Severe => 0.010,
-                DistressLevel::Insolvency => 0.015,
-            };
-            let interest = ((-post_balance) as f64 * rate) as i64;
-            if interest > 0 {
-                self.finance.balance.push_expense_debt_interest(interest);
-            }
-        }
+        // 8. Debt service and resolution.
+        //
+        // Interest is charged only on borrowing inside the club's agreed
+        // facility, at a single-digit annual rate. The old model charged
+        // 0.6-1.5% *per month* on the entire negative balance and added it
+        // straight back onto that balance — an uncapped compounding term
+        // that drove clubs to nine-figure and then ten-figure debts with no
+        // mechanism anywhere to stop or resolve it.
+        let funded_months = self.finance.monthly_history_depth(date);
+        // Sizing the club's borrowing facility off a trailing year it hasn't
+        // lived yet would read every DB-seeded debt as a bankruptcy on the
+        // first tick of a new world. Fall back to annualising the month just
+        // billed until a real year of history exists.
+        let trailing_income = self
+            .finance
+            .trailing_annual_income(date)
+            .max(monthly_income.max(0).saturating_mul(12));
+        let avg_wages = self.finance.trailing_avg_monthly_wages(date);
+        let distress = classify_distress(self.finance.balance.balance, avg_wages);
+        self.finance.distress_level = distress;
+
+        let league_tier = ctx
+            .club
+            .as_ref()
+            .map(|c| c.main_league_tier.max(1))
+            .unwrap_or(1);
+        self.resolve_debt(
+            club_name,
+            trailing_income,
+            avg_wages,
+            distress,
+            league_tier,
+            funded_months,
+        );
 
         // 9. Excess-cash deployment. Nothing else in the sim scales with
         // accumulated wealth — budgets come from trailing free cash flow,
@@ -303,7 +228,6 @@ impl Club {
         // Booked as a pure cash outflow (like the upfront leg of a
         // transfer purchase): capital deployment is not an operating
         // expense, so P&L, FFP maths and budget projections stay clean.
-        let trailing_income = self.finance.trailing_annual_income(date);
         let funded_months = self.finance.monthly_history_depth(date);
         let deployment = ExcessCashDeployment::amount(
             self.finance.balance.balance,
@@ -319,6 +243,106 @@ impl Club {
         }
 
         let _ = club_name;
+    }
+
+    /// Service and, where necessary, resolve the club's debt.
+    ///
+    /// Walks the escalation ladder a real club meets: ordinary borrowing
+    /// inside a facility, then owner funding, then emergency trading, then
+    /// administration. The last rung is what guarantees termination — it
+    /// writes the unpayable balance down to something the club can service
+    /// in exchange for a points deduction and a year of embargo. Without a
+    /// terminal state the balance is a pure divergent series.
+    fn resolve_debt(
+        &mut self,
+        club_name: &str,
+        trailing_income: i64,
+        avg_monthly_wages: i64,
+        distress: DistressLevel,
+        league_tier: u8,
+        funded_months: usize,
+    ) {
+        let administration = self.finance.debt.administration;
+        let balance = self.finance.balance.balance;
+        let standing =
+            DebtProfile::classify(balance, trailing_income, distress, administration);
+        self.finance.debt.standing = standing;
+
+        // Interest on serviced borrowing only.
+        let interest = self
+            .finance
+            .debt
+            .monthly_interest(balance, trailing_income);
+        if interest > 0 {
+            self.finance.balance.push_expense_debt_interest(interest);
+        }
+
+        // The owner covers what he's willing to of the shortfall past the
+        // facility. Booked as funding, not revenue — it must not flatter
+        // the P&L or inflate next season's revenue-derived budgets.
+        let appetite = self.board.ownership.injection_appetite();
+        let injection = DebtProfile::owner_injection(
+            self.finance.balance.balance,
+            trailing_income,
+            appetite,
+            standing,
+        );
+        if injection > 0 {
+            self.finance.balance.push_owner_investment(injection);
+            debug!(
+                "club: {}, finance: owner injected {} to cover a shortfall",
+                club_name, injection
+            );
+        }
+
+        // Tick down an administration already in force, or enter one.
+        if let Some(mut state) = self.finance.debt.administration {
+            if state.tick() {
+                self.finance.debt.administration = None;
+                self.finance.debt.standing = DebtProfile::classify(
+                    self.finance.balance.balance,
+                    trailing_income,
+                    distress,
+                    None,
+                );
+                debug!("club: {}, finance: exited administration", club_name);
+            } else {
+                self.finance.debt.administration = Some(state);
+            }
+            return;
+        }
+
+        // Administration is a judgement about a club's trading record, so
+        // it needs a real trading record. A world that has just been
+        // generated must never put its indebted clubs straight into
+        // administration on the strength of a seeded opening balance.
+        const MIN_MONTHS_BEFORE_ADMINISTRATION: usize = 12;
+        if funded_months < MIN_MONTHS_BEFORE_ADMINISTRATION {
+            return;
+        }
+
+        let trailing_wages = avg_monthly_wages.saturating_mul(12);
+        if DebtProfile::should_enter_administration(
+            self.finance.balance.balance,
+            trailing_income,
+            trailing_wages,
+            standing,
+        ) {
+            let written = DebtProfile::administration_write_down(
+                self.finance.balance.balance,
+                trailing_income,
+            );
+            if written > 0 {
+                self.finance.balance.push_debt_write_down(written);
+            }
+            let state = AdministrationState::enter(league_tier);
+            debug!(
+                "club: {}, finance: entered administration — {} points deducted, {} written down",
+                club_name, state.points_deduction, written
+            );
+            self.finance.debt.administration = Some(state);
+            self.finance.debt.standing = DebtStanding::Administration;
+        }
     }
 
     /// Returns (recent_wins_ratio, league_position, total_teams) for the
@@ -592,53 +616,37 @@ mod excess_cash_tests {
 
 #[cfg(test)]
 mod helpers_tests {
-    use super::{
-        league_tier_multiplier, placement_multiplier, stadium_capacity_for, tv_revenue_base,
-    };
-    use crate::ReputationLevel;
+    use crate::club::ClubFacilities;
 
     #[test]
-    fn tv_revenue_base_scales_with_reputation() {
+    fn capacity_is_grossed_up_from_the_recorded_gate() {
+        // The database records a typical attendance, not a capacity, so a
+        // ground that averages 60,000 must model as bigger than that.
+        let capacity = ClubFacilities::seed_capacity(60_000, 0.85);
         assert!(
-            tv_revenue_base(ReputationLevel::Elite) > tv_revenue_base(ReputationLevel::Continental)
+            capacity > 60_000 && capacity < 80_000,
+            "implausible capacity {capacity} from a 60,000 gate"
         );
-        assert!(
-            tv_revenue_base(ReputationLevel::Continental)
-                > tv_revenue_base(ReputationLevel::National)
-        );
-        assert!(tv_revenue_base(ReputationLevel::Amateur) > 0);
     }
 
     #[test]
-    fn league_tier_mult_decays_below_top_flight() {
-        assert_eq!(league_tier_multiplier(1), 1.00);
-        assert!((league_tier_multiplier(2) - 0.45).abs() < 1e-6);
-        assert!((league_tier_multiplier(3) - 0.20).abs() < 1e-6);
-        assert!((league_tier_multiplier(4) - 0.08).abs() < 1e-6);
-        // Each step down is roughly 2x, not 3-5x — promotion shouldn't
-        // be a TV windfall on its own; the reputation tier-hop alone
-        // does most of the lifting.
-        assert!(league_tier_multiplier(1) > league_tier_multiplier(2));
-        assert!(league_tier_multiplier(2) > league_tier_multiplier(3));
-        assert!(league_tier_multiplier(3) > league_tier_multiplier(4));
+    fn capacity_falls_back_to_reputation_without_attendance_data() {
+        let big = ClubFacilities::seed_capacity(0, 0.85);
+        let small = ClubFacilities::seed_capacity(0, 0.20);
+        assert!(big > small);
+        // Never zero — a zero capacity silently erases matchday income.
+        assert!(small > 0);
     }
 
     #[test]
-    fn placement_multiplier_handles_table_extremes() {
-        assert_eq!(placement_multiplier(0, 0), 1.00); // unknown
-        assert_eq!(placement_multiplier(1, 20), 1.20); // champion
-        assert_eq!(placement_multiplier(3, 20), 1.10); // top-4
-        assert_eq!(placement_multiplier(10, 20), 1.00); // top half
-        assert_eq!(placement_multiplier(13, 20), 0.90); // bottom half
-        assert_eq!(placement_multiplier(19, 20), 0.80); // relegation zone
-    }
-
-    #[test]
-    fn stadium_capacity_grows_with_reputation() {
-        assert!(
-            stadium_capacity_for(ReputationLevel::Elite)
-                > stadium_capacity_for(ReputationLevel::Regional)
-        );
-        assert!(stadium_capacity_for(ReputationLevel::Amateur) >= 100);
+    fn capacity_does_not_track_current_reputation() {
+        // Anfield does not shrink when the team gets relegated. Once a club
+        // carries a real capacity, the reputation argument is ignored.
+        let facilities = ClubFacilities {
+            stadium_capacity: 61_000,
+            ..ClubFacilities::default()
+        };
+        assert_eq!(facilities.capacity_or_estimate(0.85), 61_000);
+        assert_eq!(facilities.capacity_or_estimate(0.30), 61_000);
     }
 }

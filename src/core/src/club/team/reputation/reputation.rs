@@ -19,18 +19,43 @@ pub struct TeamReputation {
 
     /// Factors affecting reputation
     factors: ReputationFactors,
+
+    /// Slow-moving structural standing the club reverts toward.
+    ///
+    /// Reputation used to be a pure ratchet: monthly decay applied to every
+    /// club that wasn't actively surging, the decay rate got *faster* at
+    /// each tier it dropped through, and the per-week gains were truncated
+    /// to integers so anything below +0.01 of total factor rounded to zero.
+    /// A club that merely finished 5th every year therefore bled reputation
+    /// forever with no restoring force. The baseline is that force: it is a
+    /// club's institutional standing — history, stadium, support — which
+    /// moves over decades, not seasons.
+    baseline: ReputationBaseline,
+
+    /// Sub-unit reputation change carried between weekly updates so small
+    /// but genuine gains accumulate instead of truncating to zero.
+    residue: ReputationResidue,
 }
 
 impl TeamReputation {
     /// Create a new TeamReputation with initial values
     pub fn new(home: u16, national: u16, world: u16) -> Self {
+        let home = home.min(10000);
+        let national = national.min(10000);
+        let world = world.min(10000);
         TeamReputation {
-            home: home.min(10000),
-            national: national.min(10000),
-            world: world.min(10000),
+            home,
+            national,
+            world,
             momentum: ReputationMomentum::default(),
             history: ReputationHistory::new(),
             factors: ReputationFactors::default(),
+            baseline: ReputationBaseline {
+                home,
+                national,
+                world,
+            },
+            residue: ReputationResidue::default(),
         }
     }
 
@@ -148,25 +173,74 @@ impl TeamReputation {
         }
     }
 
-    /// Apply gradual reputation decay (called monthly)
+    /// Monthly drift: decay for clubs that are genuinely going backwards,
+    /// and reversion toward the club's structural baseline for everyone.
+    ///
+    /// Two faults made the old version a one-way ratchet. It decayed any
+    /// club whose momentum sat below +0.1 — which includes a side winning
+    /// its league comfortably, since momentum for a dominant team settles
+    /// around +0.04 — and it decayed *faster* at each lower tier, so every
+    /// step down accelerated the next. Decay now requires actually negative
+    /// momentum, and the baseline pull below gives a club something to fall
+    /// back toward instead of toward zero.
     pub fn apply_monthly_decay(&mut self) {
-        // Reputation slowly decays without achievements
-        let decay_rate = match self.level() {
-            ReputationLevel::Elite => 0.995, // Slower decay for elite teams
-            ReputationLevel::Continental => 0.993,
-            ReputationLevel::National => 0.990,
-            _ => 0.988, // Faster decay for lower reputation
-        };
-
         if self.momentum.current < 0.0 {
-            // Accelerated decay if momentum is negative
-            let adjusted_decay = decay_rate - (self.momentum.current.abs() * 0.01);
-            self.apply_decay(adjusted_decay.max(0.95));
-        } else if self.momentum.current < 0.1 {
-            // Normal decay if momentum is low
-            self.apply_decay(decay_rate);
+            // Sustained poor form erodes standing. The rate no longer
+            // steepens as the club falls; a slide should not self-amplify.
+            let decay_rate = 0.994 - (self.momentum.current.abs() * 0.008);
+            self.apply_decay(decay_rate.max(0.985));
         }
-        // No decay if momentum is high (team is performing well)
+
+        self.revert_toward_baseline();
+    }
+
+    /// Pull reputation toward the structural baseline, and drag the
+    /// baseline slowly toward sustained reality.
+    ///
+    /// The asymmetry is deliberate and is what makes the system stable:
+    /// current reputation moves toward the baseline roughly twenty times
+    /// faster than the baseline moves toward current reputation. A club has
+    /// to be genuinely, durably diminished for a decade before its
+    /// institutional standing follows — which is how football actually
+    /// behaves. A club can still rise or fall; it just can't free-fall.
+    fn revert_toward_baseline(&mut self) {
+        const PULL: f32 = 0.020;
+        const BASELINE_DRIFT: f32 = 0.001;
+
+        self.home = Self::lerp_u16(self.home, self.baseline.home, PULL);
+        self.national = Self::lerp_u16(self.national, self.baseline.national, PULL);
+        self.world = Self::lerp_u16(self.world, self.baseline.world, PULL);
+
+        self.baseline.home = Self::lerp_u16(self.baseline.home, self.home, BASELINE_DRIFT);
+        self.baseline.national =
+            Self::lerp_u16(self.baseline.national, self.national, BASELINE_DRIFT);
+        self.baseline.world = Self::lerp_u16(self.baseline.world, self.world, BASELINE_DRIFT);
+    }
+
+    /// Move `from` a fraction `t` of the way to `to`, rounding away from
+    /// zero so a small gap still closes instead of stalling on truncation.
+    fn lerp_u16(from: u16, to: u16, t: f32) -> u16 {
+        let delta = (to as f32 - from as f32) * t;
+        if delta.abs() < 1.0 {
+            // Below one unit the integer step would round to zero and the
+            // club would sit fractionally off its baseline forever.
+            return if delta > 0.05 {
+                (from + 1).min(10000)
+            } else if delta < -0.05 {
+                from.saturating_sub(1)
+            } else {
+                from
+            };
+        }
+        ((from as f32 + delta).round().clamp(0.0, 10000.0)) as u16
+    }
+
+    /// The club's structural standing — the level it reverts toward.
+    pub fn baseline_score(&self) -> f32 {
+        (self.baseline.home as f32 * 0.2
+            + self.baseline.national as f32 * 0.3
+            + self.baseline.world as f32 * 0.5)
+            / 10000.0
     }
 
     /// Calculate reputation factor from match results.
@@ -191,21 +265,27 @@ impl TeamReputation {
 
         for result in results {
             let opponent_score = (result.opponent_reputation as f32 / 10_000.0).max(0.05);
+            // The two clamps used to be wildly asymmetric: a win over a
+            // weaker side was scaled *down* toward 0.25x while a loss to one
+            // was scaled *up* to 4x. A strong club in a league it mostly
+            // outclasses therefore lost reputation on an ordinary season —
+            // it needed a ~60% win rate merely to break even. Both
+            // directions now share the same bounded band.
             let result_value = match result.outcome {
                 MatchOutcome::Win => {
                     // Beating a stronger side pays more.
-                    let opponent_factor = (opponent_score / self_score).clamp(0.25, 4.0);
+                    let opponent_factor = (opponent_score / self_score).clamp(0.5, 2.5);
                     0.03 * opponent_factor
                 }
                 MatchOutcome::Draw => {
                     // Draw vs a stronger side: slight gain; vs a weaker
                     // side: slight loss.
-                    let opponent_factor = (opponent_score / self_score).clamp(0.25, 4.0);
+                    let opponent_factor = (opponent_score / self_score).clamp(0.5, 2.5);
                     0.01 * opponent_factor - 0.005
                 }
                 MatchOutcome::Loss => {
                     // Losing to a weaker side costs more.
-                    let opponent_factor = (self_score / opponent_score).clamp(0.25, 4.0);
+                    let opponent_factor = (self_score / opponent_score).clamp(0.5, 2.5);
                     -0.02 * opponent_factor
                 }
             };
@@ -237,18 +317,28 @@ impl TeamReputation {
         }
     }
 
-    /// Apply calculated reputation changes
+    /// Apply calculated reputation changes.
+    ///
+    /// Changes are accumulated as floats and only the whole-unit part is
+    /// spent each week, with the remainder carried. The old version cast
+    /// straight to `i16`: a club with a total factor of 0.005 produced a
+    /// world change of `0.5 as i16` = 0, so a solid-but-unspectacular side
+    /// gained *nothing* week after week while multiplicative decay took
+    /// away continuously. That truncation, not any modelled decline, is why
+    /// established clubs bled out of the top tier.
     fn apply_reputation_changes(&mut self, match_factor: f32, position_factor: f32) {
         let total_factor = (match_factor + position_factor) * (1.0 + self.momentum.current);
 
         // Different scopes affected differently
-        let home_change = (total_factor * 200.0) as i16;
-        let national_change = (total_factor * 150.0) as i16;
-        let world_change = (total_factor * 100.0) as i16;
+        let (home_change, national_change, world_change) = self.residue.take(
+            total_factor * 200.0,
+            total_factor * 150.0,
+            total_factor * 100.0,
+        );
 
-        self.home = ((self.home as i16 + home_change).max(0) as u16).min(10000);
-        self.national = ((self.national as i16 + national_change).max(0) as u16).min(10000);
-        self.world = ((self.world as i16 + world_change).max(0) as u16).min(10000);
+        self.home = ((self.home as i32 + home_change as i32).max(0) as u16).min(10000);
+        self.national = ((self.national as i32 + national_change as i32).max(0) as u16).min(10000);
+        self.world = ((self.world as i32 + world_change as i32).max(0) as u16).min(10000);
 
         // Ensure logical ordering (world <= national <= home)
         if self.world > self.national {
@@ -285,6 +375,50 @@ impl TeamReputation {
         let achievement_bonus = (self.factors.achievements.len() as f32 * 0.02).min(0.2);
 
         (base + momentum_bonus + achievement_bonus).min(1.0)
+    }
+}
+
+/// A club's slow-moving structural standing — what it reverts toward.
+#[derive(Debug, Clone, Copy)]
+struct ReputationBaseline {
+    home: u16,
+    national: u16,
+    world: u16,
+}
+
+/// Fractional reputation change carried between weekly updates.
+///
+/// Without this, every change smaller than one unit was silently discarded
+/// by the cast to an integer, so gains had a hard floor at zero while decay
+/// — being multiplicative — had none.
+#[derive(Debug, Clone, Copy, Default)]
+struct ReputationResidue {
+    home: f32,
+    national: f32,
+    world: f32,
+}
+
+impl ReputationResidue {
+    /// Bank the incoming fractional changes and return the whole units to
+    /// spend now, keeping the remainder for next week.
+    fn take(&mut self, home: f32, national: f32, world: f32) -> (i16, i16, i16) {
+        self.home += home;
+        self.national += national;
+        self.world += world;
+
+        let home_units = self.home.trunc();
+        let national_units = self.national.trunc();
+        let world_units = self.world.trunc();
+
+        self.home -= home_units;
+        self.national -= national_units;
+        self.world -= world_units;
+
+        (
+            home_units as i16,
+            national_units as i16,
+            world_units as i16,
+        )
     }
 }
 
@@ -794,11 +928,166 @@ mod tests {
 
     #[test]
     fn test_reputation_decay() {
+        // Decay now requires genuinely negative momentum. Drive the club
+        // through a run of losses first, then confirm it erodes.
         let mut rep = TeamReputation::new(5000, 5000, 5000);
-        let initial_home = rep.home;
+        for week in 1..=6u32 {
+            rep.process_weekly_update(
+                &[MatchResultInfo {
+                    outcome: MatchOutcome::Loss,
+                    opponent_reputation: 3000,
+                    competition_type: CompetitionType::League,
+                }],
+                19,
+                20,
+                NaiveDate::from_ymd_opt(2024, 1, 1)
+                    .unwrap()
+                    .checked_add_signed(chrono::Duration::days(week as i64 * 7))
+                    .unwrap(),
+            );
+        }
+        assert!(rep.momentum.current < 0.0, "losing run must sour momentum");
 
+        let before = rep.home;
         rep.apply_monthly_decay();
+        assert!(rep.home < before);
+    }
 
-        assert!(rep.home < initial_home);
+    #[test]
+    fn established_club_holding_its_level_does_not_bleed_out() {
+        // The headline regression. A club that finishes comfortably in the
+        // top half every season, without winning the league, must not slide
+        // out of its reputation tier. Under the old model monthly decay ran
+        // regardless of results and per-week gains truncated to zero, so
+        // this club lost roughly 6% of its reputation a year, compounding —
+        // Elite to National inside a decade, taking 90% of its revenue with
+        // it.
+        let mut rep = TeamReputation::new(8600, 8500, 8400);
+        let start_level = rep.level();
+        let start_score = rep.overall_score();
+        let mut date = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+
+        // Ten seasons of 38 weeks: a solid 4th-place side — more wins than
+        // losses against a league it mostly outclasses.
+        for _season in 0..10 {
+            for week in 0..38 {
+                let outcome = match week % 5 {
+                    0 | 1 | 2 => MatchOutcome::Win,
+                    3 => MatchOutcome::Draw,
+                    _ => MatchOutcome::Loss,
+                };
+                rep.process_weekly_update(
+                    &[MatchResultInfo {
+                        outcome,
+                        opponent_reputation: 5200,
+                        competition_type: CompetitionType::League,
+                    }],
+                    4,
+                    20,
+                    date,
+                );
+                date += chrono::Duration::days(7);
+                if week % 4 == 0 {
+                    rep.apply_monthly_decay();
+                }
+            }
+        }
+
+        assert_eq!(
+            rep.level(),
+            start_level,
+            "a consistent top-four club dropped from {:?} to {:?} ({:.3} → {:.3})",
+            start_level,
+            rep.level(),
+            start_score,
+            rep.overall_score()
+        );
+    }
+
+    #[test]
+    fn small_weekly_gains_are_not_truncated_away() {
+        // A total factor of ~0.005 yields a world change of 0.5 per week,
+        // which the old integer cast threw away entirely. Over a season
+        // those halves must add up to something.
+        let mut rep = TeamReputation::new(5000, 5000, 5000);
+        let start = rep.world;
+        let mut date = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+
+        for _ in 0..38 {
+            // Draws against marginally stronger opposition: a small but
+            // real positive factor.
+            rep.process_weekly_update(
+                &[MatchResultInfo {
+                    outcome: MatchOutcome::Draw,
+                    opponent_reputation: 6000,
+                    competition_type: CompetitionType::League,
+                }],
+                9,
+                20,
+                date,
+            );
+            date += chrono::Duration::days(7);
+        }
+
+        assert!(
+            rep.world > start,
+            "sub-unit weekly gains vanished: {start} → {}",
+            rep.world
+        );
+    }
+
+    #[test]
+    fn reputation_reverts_toward_its_structural_baseline() {
+        // A collapse should be recoverable, not terminal: an idle club
+        // knocked below its institutional standing drifts back up.
+        let mut rep = TeamReputation::new(8000, 8000, 8000);
+        rep.home = 5000;
+        rep.national = 5000;
+        rep.world = 5000;
+
+        for _ in 0..24 {
+            rep.apply_monthly_decay();
+        }
+
+        assert!(
+            rep.world > 5000,
+            "reputation did not revert toward baseline: {}",
+            rep.world
+        );
+        assert!(rep.world <= 8000);
+    }
+
+    #[test]
+    fn baseline_follows_a_genuinely_sustained_decline() {
+        // Reversion must not make a club immortal. Two decades of relegation
+        // form has to move the institution itself.
+        let mut rep = TeamReputation::new(8000, 8000, 8000);
+        let start_baseline = rep.baseline_score();
+        let mut date = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+
+        for _ in 0..20 {
+            for week in 0..38 {
+                rep.process_weekly_update(
+                    &[MatchResultInfo {
+                        outcome: MatchOutcome::Loss,
+                        opponent_reputation: 4000,
+                        competition_type: CompetitionType::League,
+                    }],
+                    20,
+                    20,
+                    date,
+                );
+                date += chrono::Duration::days(7);
+                if week % 4 == 0 {
+                    rep.apply_monthly_decay();
+                }
+            }
+        }
+
+        assert!(
+            rep.baseline_score() < start_baseline,
+            "twenty years of failure left the baseline untouched"
+        );
+        assert!(rep.overall_score() < 0.8);
     }
 }

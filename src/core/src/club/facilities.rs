@@ -113,6 +113,15 @@ pub struct ClubFacilities {
     pub recruitment: FacilityLevel,
     /// Average match attendance
     pub average_attendance: u32,
+    /// Ground capacity — a physical property of the club, seeded from the
+    /// database and only ever changed by a board-sanctioned expansion.
+    ///
+    /// Revenue used to size the gate from a reputation-tier lookup, which
+    /// meant a club that slipped a tier had its stadium shrink underneath
+    /// it: Liverpool relegated read as a 22,000-seat ground and matchday
+    /// income fell 60% overnight for reasons no groundsman would recognise.
+    /// Capacity is now permanent, and only utilisation responds to form.
+    pub stadium_capacity: u32,
 }
 
 impl Default for ClubFacilities {
@@ -123,11 +132,44 @@ impl Default for ClubFacilities {
             academy: FacilityLevel::Average,
             recruitment: FacilityLevel::Average,
             average_attendance: 0,
+            stadium_capacity: 0,
         }
     }
 }
 
 impl ClubFacilities {
+    /// Typical league-match utilisation of a ground. The database gives an
+    /// *average attendance*, not a capacity; dividing by this recovers a
+    /// plausible capacity — grounds are neither routinely full nor empty.
+    const TYPICAL_UTILISATION: f32 = 0.82;
+
+    /// Seed [`Self::stadium_capacity`] for a club that has no explicit
+    /// capacity in the database.
+    ///
+    /// Preference order: the recorded average gate grossed up to a capacity,
+    /// else a reputation-derived estimate. `reputation_score` is the club's
+    /// blended 0..1 standing. The reputation fallback is quadratic so the
+    /// gap between a Regional ground and an Elite one is wide without the
+    /// six-step cliff a tier lookup produces.
+    pub fn seed_capacity(average_attendance: u32, reputation_score: f32) -> u32 {
+        if average_attendance > 0 {
+            return (average_attendance as f32 / Self::TYPICAL_UTILISATION).round() as u32;
+        }
+        let rep = reputation_score.clamp(0.0, 1.0);
+        (2_000.0 + rep * rep * 92_000.0).round() as u32
+    }
+
+    /// Ground capacity, falling back to the reputation estimate when the
+    /// club was built without one (legacy saves, procedurally generated
+    /// clubs). Never returns zero, so matchday revenue can't silently
+    /// vanish.
+    pub fn capacity_or_estimate(&self, reputation_score: f32) -> u32 {
+        if self.stadium_capacity > 0 {
+            return self.stadium_capacity;
+        }
+        Self::seed_capacity(self.average_attendance, reputation_score)
+    }
+
     /// Training quality multiplier (affects player development speed)
     pub fn training_multiplier(&self) -> f32 {
         self.training.multiplier()

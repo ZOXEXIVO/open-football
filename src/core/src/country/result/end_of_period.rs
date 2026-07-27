@@ -2,6 +2,7 @@ use super::CountryResult;
 use super::transfers::settlement::TransferClauseSettler;
 use crate::ContractBonusType;
 use crate::PlayerContractProposal;
+use crate::club::finance::ParachuteEntitlement;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::events::TransferCompletion;
 use crate::club::team::reputation::{Achievement, AchievementType};
@@ -153,6 +154,10 @@ impl CountryResult {
             latest_end_month + 1
         };
         if DateUtils::is_month_beginning(date) && date.month() as u8 == promo_month {
+            // Age parachute entitlements before the swap runs: a club
+            // relegated *this* season is then stamped back to season zero
+            // below, and one whose three seasons are up drops off.
+            Self::age_parachute_entitlements(country);
             Self::process_promotion_relegation(country, date);
         }
 
@@ -161,6 +166,7 @@ impl CountryResult {
         // in the bottom (relegation_spots + 1) of the live table feel it.
         if DateUtils::is_month_beginning(date) {
             Self::process_relegation_fear_audit(country, date);
+            Self::process_administration_sanctions(country);
         }
 
         if date.month() == 12 && date.day() == 31 {
@@ -1932,6 +1938,76 @@ impl CountryResult {
         Some((first.id, first.settings.promotion_spots))
     }
 
+    /// Hand the league the points deduction owed by any club that has just
+    /// entered administration.
+    ///
+    /// The deduction is what makes administration a real sanction rather
+    /// than a free debt write-off — without it, running up an unpayable
+    /// wage bill and then having it cancelled would be a dominant strategy.
+    /// Applied exactly once per administration via the `deduction_applied`
+    /// memo on the club's state.
+    fn process_administration_sanctions(country: &mut Country) {
+        // Collect first: applying the deduction needs a mutable borrow of
+        // the league table while the club is also borrowed mutably.
+        let mut pending: Vec<(u32, u32, u8)> = Vec::new();
+        for club in &country.clubs {
+            let Some(state) = club.finance.debt.administration else {
+                continue;
+            };
+            if state.deduction_applied {
+                continue;
+            }
+            let Some(team) = club.teams.main() else {
+                continue;
+            };
+            let Some(league_id) = team.league_id else {
+                continue;
+            };
+            pending.push((club.id, league_id, state.points_deduction));
+        }
+
+        for (club_id, league_id, points) in pending {
+            let team_id = country
+                .clubs
+                .iter()
+                .find(|c| c.id == club_id)
+                .and_then(|c| c.teams.main())
+                .map(|t| t.id);
+            let Some(team_id) = team_id else {
+                continue;
+            };
+            if let Some(league) = country
+                .leagues
+                .leagues
+                .iter_mut()
+                .find(|l| l.id == league_id && !l.friendly)
+            {
+                league.table.apply_points_deduction(team_id, points);
+                info!(
+                    "⚖️ Administration: club {} docked {} points in league {}",
+                    club_id, points, league_id
+                );
+            }
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
+                if let Some(state) = club.finance.debt.administration.as_mut() {
+                    state.deduction_applied = true;
+                }
+            }
+        }
+    }
+
+    /// Step every parachute entitlement on by one season, dropping those
+    /// that have run their three years. Runs immediately before the
+    /// promotion/relegation swap, which then re-stamps this season's
+    /// relegated clubs at season zero.
+    fn age_parachute_entitlements(country: &mut Country) {
+        for club in &mut country.clubs {
+            if let Some(entitlement) = club.finance.parachute {
+                club.finance.parachute = entitlement.advanced();
+            }
+        }
+    }
+
     fn process_promotion_relegation(country: &mut Country, date: NaiveDate) {
         // Collect league info: (league_id, tier, relegation_spots, promotion_spots)
         let league_info: Vec<(u32, u8, u8, u8)> = country
@@ -2247,6 +2323,16 @@ impl CountryResult {
                 })
                 .unwrap_or_default();
 
+            // Division the relegated clubs are falling out of — the pool
+            // their parachute payments are a share of.
+            let vacated_tier: u8 = country
+                .leagues
+                .leagues
+                .iter()
+                .find(|l| l.id == tier1_id)
+                .map(|l| l.settings.tier.max(1))
+                .unwrap_or(1);
+
             // Swap league_ids on teams and move sub-teams to matching friendly league
             for club in &mut country.clubs {
                 let mut new_main_league_id: Option<u32> = None;
@@ -2378,6 +2464,27 @@ impl CountryResult {
 
                 if bonus_total > 0 {
                     club.finance.balance.push_expense_player_wages(bonus_total);
+                }
+
+                // Parachute payments. A relegated club keeps a declining
+                // share of the division it left for three seasons; a
+                // promoted club's entitlement ends the moment it goes back
+                // up. Without this, dropping a division is a ~90% revenue
+                // cut against a wage bill fixed by contracts already signed
+                // — arithmetically unsurvivable, and the reason relegated
+                // clubs used to spiral straight to insolvency.
+                let club_was_relegated = club
+                    .teams
+                    .teams
+                    .iter()
+                    .any(|t| relegated_team_ids.contains(&t.id));
+                if club_was_relegated {
+                    club.finance.parachute = Some(ParachuteEntitlement {
+                        from_tier: vacated_tier,
+                        seasons_elapsed: 0,
+                    });
+                } else if club_was_promoted {
+                    club.finance.parachute = None;
                 }
 
                 // Move sub-teams to the matching youth league of the new main league

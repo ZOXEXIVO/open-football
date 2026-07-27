@@ -1,5 +1,6 @@
 use crate::MatchTacticType;
 use crate::club::facilities::FacilityLevel;
+use crate::club::finance::DebtStanding;
 
 /// FFP status from the board's perspective. Drives the budget multiplier
 /// so a club teetering on a breach can't sign its way deeper into one.
@@ -27,6 +28,9 @@ pub struct BoardContext {
     pub trailing_annual_outcome: i64,
     /// FFP standing. Throttles transfer budget when breached/watchlisted.
     pub ffp_status: FfpStatus,
+    /// Where the club sits on the debt ladder. Caps the wage mandate and,
+    /// past emergency, forbids transfer spending outright.
+    pub debt_standing: DebtStanding,
 
     // Performance tracking
     /// Current league position (1-based, 0 = unknown)
@@ -128,6 +132,7 @@ impl BoardContext {
             trailing_annual_income: 0,
             trailing_annual_outcome: 0,
             ffp_status: FfpStatus::Clean,
+            debt_standing: DebtStanding::Solvent,
             league_position: 0,
             league_size: 0,
             recent_wins: 0,

@@ -1,4 +1,5 @@
 use super::Club;
+use super::WageReliefSale;
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
 use crate::shared::{Currency, CurrencyValue};
@@ -314,7 +315,90 @@ impl Club {
             }
         }
 
+        // Wage-relief sales. Every branch above lists for *sporting* reasons;
+        // this is the only one that reads the bank balance.
+        self.collect_wage_relief_sales(date, &asset_ctx, &mut transfer_players);
+
         self.process_underutilized_players(date, main_idx, &loan_players, &transfer_players);
+    }
+
+    /// Put players on the market because the club cannot afford its wage bill.
+    ///
+    /// Ranked least-essential-first, then biggest-earner-first, so the club
+    /// sheds the most wage for the least sporting damage — and stops as soon
+    /// as the projected saving clears the target, rather than emptying the
+    /// squad. Which classes are eligible escalates with severity; see
+    /// [`WageReliefSale`].
+    fn collect_wage_relief_sales(
+        &self,
+        date: NaiveDate,
+        asset_ctx: &SquadAssetContext,
+        transfer_players: &mut Vec<(usize, u32, String)>,
+    ) {
+        let total_annual_wages: i64 = self
+            .teams
+            .iter()
+            .map(|t| t.get_annual_salary() as i64)
+            .sum();
+        let wage_budget = self
+            .finance
+            .wage_budget
+            .as_ref()
+            .map(|b| b.amount.max(0.0) as i64)
+            .unwrap_or(0);
+        let standing = self.finance.debt.standing;
+        let distress = self.finance.distress_level;
+
+        let mut remaining =
+            WageReliefSale::target_reduction(total_annual_wages, wage_budget, standing, distress);
+        if remaining <= 0 {
+            return;
+        }
+
+        let already: HashSet<u32> = transfer_players.iter().map(|(_, id, _)| *id).collect();
+        let ignore_patience = WageReliefSale::overrides_signing_protection(standing, distress);
+
+        // (team_idx, player_id, sale priority, annual salary)
+        let mut candidates: Vec<(usize, u32, u8, i64)> = Vec::new();
+        for (ti, team) in self.teams.iter().enumerate() {
+            for player in team.players.iter() {
+                if already.contains(&player.id)
+                    || player.is_on_loan()
+                    || player.is_force_match_selection
+                    || player.statuses.has(PlayerStatusType::Lst)
+                    || player
+                        .contract
+                        .as_ref()
+                        .map(|c| c.is_transfer_listed || c.contract_type == ContractType::Youth)
+                        .unwrap_or(true)
+                {
+                    continue;
+                }
+                if !ignore_patience && player.signing_protection_active(date) {
+                    continue;
+                }
+                let class = asset_ctx.classify(player, date);
+                if !WageReliefSale::sellable(standing, distress, class) {
+                    continue;
+                }
+                let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0) as i64;
+                if salary <= 0 {
+                    continue;
+                }
+                candidates.push((ti, player.id, WageReliefSale::sale_priority(class), salary));
+            }
+        }
+
+        // Fringe before spine; within a tier, the biggest earner first.
+        candidates.sort_by(|a, b| a.2.cmp(&b.2).then(b.3.cmp(&a.3)));
+
+        for (ti, id, _, salary) in candidates {
+            if remaining <= 0 {
+                break;
+            }
+            transfer_players.push((ti, id, "dec_reason_wage_relief".to_string()));
+            remaining -= salary;
+        }
     }
 
     fn process_underutilized_players(

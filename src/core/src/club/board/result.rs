@@ -340,14 +340,24 @@ impl BoardResult {
             BoardFacility::Academy => Self::step_up(&mut club.facilities.academy),
             BoardFacility::Recruitment => Self::step_up(&mut club.facilities.recruitment),
             BoardFacility::Stadium => {
-                match Self::expanded_attendance(club.facilities.average_attendance) {
+                // Expansion now grows the ground itself. Capacity is the
+                // permanent property; average attendance is an observed
+                // outcome the revenue model rewrites each month, so bumping
+                // it here would be overwritten within a tick.
+                let rep = club
+                    .teams
+                    .main()
+                    .map(|t| t.reputation.overall_score())
+                    .unwrap_or(0.0);
+                let current = club.facilities.capacity_or_estimate(rep);
+                match Self::expanded_capacity(current) {
                     Some(next) => {
-                        club.facilities.average_attendance = next;
+                        club.facilities.stadium_capacity = next;
                         true
                     }
-                    // No real stadium/attendance model for this club — the
-                    // expansion is a news-only announcement, so we must NOT
-                    // debit cash for a change nothing can see.
+                    // No stadium model to change — the expansion is a
+                    // news-only announcement, so we must NOT debit cash for
+                    // a change nothing can see.
                     None => false,
                 }
             }
@@ -370,14 +380,11 @@ impl BoardResult {
         }
     }
 
-    /// Post-expansion average attendance for a stadium upgrade (~+15%), or
-    /// `None` when there's no stadium model to change. `average_attendance`
-    /// of 0 means "unmodelled" — expanding it would change nothing visible,
-    /// so the caller must not debit cash for it.
-    ///
-    /// TODO: when real stadium capacity is modelled, key this off capacity
-    /// rather than the average-attendance proxy.
-    fn expanded_attendance(current: u32) -> Option<u32> {
+    /// Post-expansion ground capacity for a stadium upgrade (~+15%), or
+    /// `None` when there's no stadium to expand. A capacity of 0 means
+    /// "unmodelled" — expanding it would change nothing visible, so the
+    /// caller must not debit cash for it.
+    fn expanded_capacity(current: u32) -> Option<u32> {
         if current == 0 {
             None
         } else {
@@ -392,16 +399,13 @@ mod tests {
 
     #[test]
     fn stadium_expansion_is_news_only_when_unmodelled() {
-        // No attendance model (0) → no state change → caller must not debit.
-        assert_eq!(BoardResult::expanded_attendance(0), None);
+        // No stadium model (0) → no state change → caller must not debit.
+        assert_eq!(BoardResult::expanded_capacity(0), None);
     }
 
     #[test]
-    fn stadium_expansion_grows_a_real_attendance() {
-        let next = BoardResult::expanded_attendance(28_000).expect("modelled stadium expands");
-        assert!(
-            next > 28_000,
-            "expansion should raise attendance, got {next}"
-        );
+    fn stadium_expansion_grows_a_real_capacity() {
+        let next = BoardResult::expanded_capacity(28_000).expect("modelled stadium expands");
+        assert!(next > 28_000, "expansion should raise capacity, got {next}");
     }
 }

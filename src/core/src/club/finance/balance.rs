@@ -1,3 +1,5 @@
+use super::debt::DebtProfile;
+use super::revenue::ParachuteEntitlement;
 use crate::context::GlobalContext;
 use crate::shared::Currency;
 use crate::shared::CurrencyValue;
@@ -21,6 +23,21 @@ pub struct ClubFinances {
     /// Home matches played this month — drives matchday revenue. Reset by
     /// the monthly tick, incremented when a home match concludes.
     pub home_matches_this_month: u32,
+    /// Where the club sits on the debt ladder, and any administration in
+    /// force. Recomputed every monthly tick.
+    pub debt: DebtProfile,
+    /// Parachute entitlement from a recent relegation, stepped down at each
+    /// season boundary.
+    pub parachute: Option<ParachuteEntitlement>,
+    /// Distress classification from the last monthly tick.
+    ///
+    /// Stored rather than applied directly: the result-stage used to
+    /// *multiply* the stored budgets by a severity factor each month, which
+    /// compounded (0.70^12 ≈ 0.01) and, at insolvency's 0.0 factor,
+    /// permanently zeroed the transfer budget — every club in the world
+    /// showed a $0 chest. The board now reads this and recomputes budgets
+    /// from revenue instead.
+    pub distress_level: DistressLevel,
 }
 
 /// One amortization stream: a transfer fee spread across the contract
@@ -41,6 +58,28 @@ pub enum DistressLevel {
     Insolvency,
 }
 
+impl DistressLevel {
+    /// `(transfer, wage)` multipliers applied to the board's seasonal
+    /// budget mandate.
+    ///
+    /// The transfer factor is deliberately never zero. These used to be
+    /// applied by multiplying the *stored* budget every month, and the
+    /// insolvency entry was `0.0` — which latched the transfer budget at
+    /// zero forever, because nothing can multiply its way back off zero.
+    /// The result was a world in which no club had a transfer budget, so
+    /// no club could sign anyone, so no club could recover. They are now
+    /// applied to the mandate on each recompute, and the floor keeps even
+    /// a stricken club able to do modest business.
+    pub fn budget_factors(self) -> (f64, f64) {
+        match self {
+            DistressLevel::None => (1.00, 1.00),
+            DistressLevel::Distress => (0.60, 1.00),
+            DistressLevel::Severe => (0.25, 0.95),
+            DistressLevel::Insolvency => (0.08, 0.90),
+        }
+    }
+}
+
 impl ClubFinances {
     pub fn new(amount: i64, sponsorship_contract: Vec<ClubSponsorshipContract>) -> Self {
         ClubFinances {
@@ -51,6 +90,9 @@ impl ClubFinances {
             wage_budget: None,
             transfer_obligations: Vec::new(),
             home_matches_this_month: 0,
+            debt: DebtProfile::default(),
+            parachute: None,
+            distress_level: DistressLevel::None,
         }
     }
 
@@ -68,6 +110,9 @@ impl ClubFinances {
             wage_budget,
             transfer_obligations: Vec::new(),
             home_matches_this_month: 0,
+            debt: DebtProfile::default(),
+            parachute: None,
+            distress_level: DistressLevel::None,
         }
     }
 
@@ -87,6 +132,10 @@ impl ClubFinances {
             let level = classify_distress(self.balance.balance, avg_wages);
             result.is_in_distress = !matches!(level, DistressLevel::None);
             result.distress_level = level;
+            // Persist for the board's budget recompute. See the field docs
+            // on `distress_level` for why this is stored rather than applied
+            // to the budgets in place.
+            self.distress_level = level;
 
             self.start_new_month(club_name, ctx.simulation.date.date());
 
@@ -491,12 +540,19 @@ pub struct ClubFinancialBalance {
     pub income_sponsorship: i64,
     pub income_merchandising: i64,
     pub income_prize_money: i64,
-    /// Placement-based TV bonus layered on top of the reputation TV base.
+    /// Merit slice of the broadcast pool earned above a bottom-of-the-table
+    /// finish.
     pub income_tv_placement: i64,
     /// Domestic cup prize money earned this period.
     pub income_cup_prize: i64,
     /// Continental (UCL/UEL) prize money earned this period.
     pub income_continental_prize: i64,
+    /// Parachute payment carried down from a recent relegation.
+    pub income_parachute: i64,
+    /// Cash the owner put into the club to cover a shortfall. Not operating
+    /// revenue — kept out of `income` so it can't flatter the P&L, FFP
+    /// maths, or next season's budget.
+    pub income_owner_investment: i64,
 
     // Expense categories
     pub expense_player_wages: i64,
@@ -526,6 +582,8 @@ impl ClubFinancialBalance {
             income_tv_placement: 0,
             income_cup_prize: 0,
             income_continental_prize: 0,
+            income_parachute: 0,
+            income_owner_investment: 0,
             expense_player_wages: 0,
             expense_staff_wages: 0,
             expense_facilities: 0,
@@ -579,10 +637,31 @@ impl ClubFinancialBalance {
         self.push_income(amount);
     }
 
-    /// Placement bonus layered on top of the reputation-based TV base.
+    /// Merit slice of the broadcast pool, layered on top of the base award.
     pub fn push_income_tv_placement(&mut self, amount: i64) {
         self.income_tv_placement += amount;
         self.push_income(amount);
+    }
+
+    /// Parachute payment following relegation.
+    pub fn push_income_parachute(&mut self, amount: i64) {
+        self.income_parachute += amount;
+        self.push_income(amount);
+    }
+
+    /// Owner cash injected to cover a shortfall. Credits the bank balance
+    /// only — this is funding, not revenue, so it must never appear in
+    /// `income`, where it would inflate the FFP calculation and next
+    /// season's revenue-derived budgets.
+    pub fn push_owner_investment(&mut self, amount: i64) {
+        self.income_owner_investment += amount;
+        self.balance += amount;
+    }
+
+    /// Credit from an administration debt write-down. Like an injection,
+    /// this is a balance-sheet event, not revenue.
+    pub fn push_debt_write_down(&mut self, amount: i64) {
+        self.balance += amount;
     }
 
     /// Domestic cup prize money — per round.
@@ -653,6 +732,8 @@ impl ClubFinancialBalance {
         self.income_tv_placement = 0;
         self.income_cup_prize = 0;
         self.income_continental_prize = 0;
+        self.income_parachute = 0;
+        self.income_owner_investment = 0;
         self.expense_player_wages = 0;
         self.expense_staff_wages = 0;
         self.expense_facilities = 0;
@@ -834,6 +915,72 @@ mod finance_tests {
         let f = ClubFinances::new(0, vec![]);
         let avg = f.trailing_avg_monthly_wages(d(2026, 4));
         assert_eq!(avg, 1);
+    }
+
+    #[test]
+    fn budget_throttle_never_latches_at_zero() {
+        // The regression that gave every club in the world a $0 transfer
+        // budget: an insolvency factor of exactly 0.0, applied by
+        // multiplying the stored budget, is absorbing — no later
+        // multiplication recovers from it.
+        for level in [
+            DistressLevel::None,
+            DistressLevel::Distress,
+            DistressLevel::Severe,
+            DistressLevel::Insolvency,
+        ] {
+            let (transfer, wage) = level.budget_factors();
+            assert!(
+                transfer > 0.0,
+                "{level:?} zeroes the transfer budget — a club can never trade back out"
+            );
+            assert!(wage > 0.0, "{level:?} zeroes the wage budget");
+            assert!(transfer <= 1.0 && wage <= 1.0);
+        }
+    }
+
+    #[test]
+    fn budget_throttle_is_applied_to_the_mandate_not_compounded() {
+        // Applying the factor to the board's mandate is idempotent; the old
+        // code multiplied the previous month's value, so a season under
+        // insolvency compounded 0.70^12 to roughly 1% of the mandate.
+        let mandate = 100_000_000.0;
+        let (transfer, wage) = DistressLevel::Insolvency.budget_factors();
+
+        let mut recomputed_wage = 0.0;
+        let mut compounded_wage = mandate;
+        let mut compounded_transfer = mandate;
+        for _ in 0..12 {
+            recomputed_wage = mandate * wage;
+            compounded_wage *= wage;
+            compounded_transfer *= transfer;
+        }
+
+        // Recomputing is stable: a year of distress leaves the mandate
+        // scaled exactly once, not twelve times.
+        assert!((recomputed_wage - mandate * wage).abs() < 1.0);
+        assert!(recomputed_wage > mandate * 0.85);
+
+        // Compounding, by contrast, erodes the wage mandate to a fraction
+        // and annihilates the transfer chest entirely.
+        assert!(
+            compounded_wage < mandate * 0.35,
+            "compounding should have eroded the wage mandate, got {compounded_wage}"
+        );
+        assert!(
+            compounded_transfer < 1.0,
+            "compounding should have annihilated the chest, got {compounded_transfer}"
+        );
+    }
+
+    #[test]
+    fn distress_tightens_monotonically() {
+        let (t_none, w_none) = DistressLevel::None.budget_factors();
+        let (t_mild, w_mild) = DistressLevel::Distress.budget_factors();
+        let (t_severe, w_severe) = DistressLevel::Severe.budget_factors();
+        let (t_insolvent, w_insolvent) = DistressLevel::Insolvency.budget_factors();
+        assert!(t_none > t_mild && t_mild > t_severe && t_severe > t_insolvent);
+        assert!(w_none >= w_mild && w_mild >= w_severe && w_severe >= w_insolvent);
     }
 
     #[test]

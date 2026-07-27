@@ -987,17 +987,49 @@ impl ClubBoard {
             _ => 0.2,
         };
         let budget_ceiling = price_ceiling.min(eco_ceiling) * tier_factor;
-        let transfer_budget = raw_budget.min(budget_ceiling) as i32;
+        let mut transfer_budget = raw_budget.min(budget_ceiling) as i32;
+
+        // A club trading in emergency measures or administration cannot buy
+        // players for a fee, whatever its revenue says.
+        if board_ctx.debt_standing.blocks_transfer_spending() {
+            transfer_budget = 0;
+        }
 
         // Wage budget: target wage/revenue ratio. Healthy clubs run
         // 55–65% wages on revenue; distressed clubs squeeze that down to
-        // 45–50%; reckless elite owners are allowed to push to 70%.
+        // 45–50%; reckless elite owners are allowed to push to 70%. The
+        // debt standing supplies a hard ceiling on top.
         let target_ratio = (wage_revenue_target(board_ctx.ffp_status, self.chairman.ambition, rep)
             + self.ownership.wage_ratio_bonus())
-        .clamp(0.30, 0.80);
-        let revenue_floor = projected_income.max(board_ctx.total_annual_wages as f64);
-        let wage_budget =
-            (revenue_floor * target_ratio).max(board_ctx.total_annual_wages as f64 * 0.95) as i32;
+        .clamp(0.30, 0.80)
+        .min(board_ctx.debt_standing.wage_ratio_ceiling());
+
+        let current_wages = board_ctx.total_annual_wages as f64;
+        let wage_budget = if projected_income < 1.0 {
+            // No revenue evidence yet (a freshly created club): hold the
+            // mandate at the existing bill rather than inventing a cut.
+            current_wages
+        } else {
+            // Size the mandate off *revenue*, not off the wage bill.
+            //
+            // The old line was:
+            //
+            //     let revenue_floor = projected_income.max(total_annual_wages);
+            //     (revenue_floor * target_ratio).max(total_annual_wages * 0.95)
+            //
+            // Both halves ratcheted upward. Taking `max` with the wage bill
+            // meant that once wages passed revenue the budget was computed
+            // from the wages themselves, so overspending justified itself;
+            // and the closing floor of 95% of the current bill made it
+            // arithmetically impossible for the board to ever mandate a
+            // reduction. A club whose income had collapsed kept authorising
+            // the wages that were bankrupting it.
+            //
+            // The mandate can now fall — but by at most 15% per recompute,
+            // because squads unwind through expiries and sales, not
+            // overnight.
+            (projected_income * target_ratio).max(current_wages * 0.85)
+        } as i32;
 
         // Squad size limits based on reputation
         let (min_squad, max_squad) = if rep >= 0.8 {
