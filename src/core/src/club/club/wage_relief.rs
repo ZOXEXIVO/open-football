@@ -55,9 +55,20 @@ impl WageReliefSale {
     ///
     /// Zero when the club is inside its mandate *and* not in debt trouble —
     /// a solvent club with room does not sell anyone for money.
+    ///
+    /// `already_listed_wages` is the salary already sitting on the transfer
+    /// market awaiting a buyer, and it is credited in full against the
+    /// target. This pass runs monthly, but the wage bill does not fall when
+    /// a player is *listed* — only when he actually leaves, which can take
+    /// windows. Without this credit the club would re-derive the same
+    /// overrun every month and list a fresh batch on top of the unsold one,
+    /// cascading until the entire sellable squad was on the market. Listing
+    /// is a commitment already made; the club waits for it to clear before
+    /// committing more.
     pub fn target_reduction(
         total_annual_wages: i64,
         wage_budget: i64,
+        already_listed_wages: i64,
         standing: DebtStanding,
         distress: DistressLevel,
     ) -> i64 {
@@ -93,7 +104,8 @@ impl WageReliefSale {
         };
 
         let forced = total_annual_wages as f64 * forced_cut.max(distress_cut);
-        budget_overrun.max(forced).max(0.0) as i64
+        let gross = budget_overrun.max(forced);
+        (gross - already_listed_wages.max(0) as f64).max(0.0) as i64
     }
 
     /// Whether a player of this class may be sold for financial reasons at
@@ -174,6 +186,7 @@ mod tests {
             WageReliefSale::target_reduction(
                 50_000_000,
                 60_000_000,
+                0,
                 DebtStanding::Solvent,
                 DistressLevel::None
             ),
@@ -188,6 +201,7 @@ mod tests {
             WageReliefSale::target_reduction(
                 51_000_000,
                 50_000_000,
+                0,
                 DebtStanding::Solvent,
                 DistressLevel::None
             ),
@@ -201,6 +215,7 @@ mod tests {
         let target = WageReliefSale::target_reduction(
             140_000_000,
             60_000_000,
+            0,
             DebtStanding::Leveraged,
             DistressLevel::Distress,
         );
@@ -214,10 +229,75 @@ mod tests {
         let target = WageReliefSale::target_reduction(
             100_000_000,
             0,
+            0,
             DebtStanding::Emergency,
             DistressLevel::Insolvency,
         );
         assert!(target >= 15_000_000, "expected a forced cut, got {target}");
+    }
+
+    #[test]
+    fn wages_already_on_the_market_are_credited_against_the_target() {
+        // The listing cascade. This pass runs monthly and the wage bill does
+        // not fall when a player is listed — only when he leaves. If prior
+        // listings weren't credited, the club would re-derive the same
+        // overrun every month and stack a new batch on top of the unsold
+        // one until the whole squad was for sale.
+        let gross = WageReliefSale::target_reduction(
+            140_000_000,
+            60_000_000,
+            0,
+            DebtStanding::Leveraged,
+            DistressLevel::Distress,
+        );
+        assert_eq!(gross, 40_000_000);
+
+        // Half the target already listed → only the remainder is sought.
+        let partial = WageReliefSale::target_reduction(
+            140_000_000,
+            60_000_000,
+            20_000_000,
+            DebtStanding::Leveraged,
+            DistressLevel::Distress,
+        );
+        assert_eq!(partial, 20_000_000);
+
+        // Target fully covered → nobody else goes on the market.
+        let covered = WageReliefSale::target_reduction(
+            140_000_000,
+            60_000_000,
+            40_000_000,
+            DebtStanding::Leveraged,
+            DistressLevel::Distress,
+        );
+        assert_eq!(covered, 0);
+    }
+
+    #[test]
+    fn a_month_of_repeated_passes_converges_instead_of_listing_everyone() {
+        // Simulate the monthly re-run with nothing selling: the wage bill
+        // stays put and listed wages accumulate. The club must stop adding
+        // to the market, not keep going until the squad is empty.
+        let wages: i64 = 140_000_000;
+        let budget: i64 = 60_000_000;
+        let mut listed: i64 = 0;
+
+        for month in 0..12 {
+            let target = WageReliefSale::target_reduction(
+                wages,
+                budget,
+                listed,
+                DebtStanding::Leveraged,
+                DistressLevel::Distress,
+            );
+            // Whatever it asks for this month goes onto the market.
+            listed += target;
+            assert!(
+                listed <= 40_000_000,
+                "month {month}: listed wages ran away to {listed}"
+            );
+        }
+        assert_eq!(listed, 40_000_000);
     }
 
     #[test]

@@ -349,13 +349,39 @@ impl Club {
         let standing = self.finance.debt.standing;
         let distress = self.finance.distress_level;
 
-        let mut remaining =
-            WageReliefSale::target_reduction(total_annual_wages, wage_budget, standing, distress);
+        let already: HashSet<u32> = transfer_players.iter().map(|(_, id, _)| *id).collect();
+
+        // Wages already committed to leaving: players on the market from a
+        // previous pass, plus anyone the sporting sweeps listed earlier in
+        // this same tick. Credited against the target so the club doesn't
+        // stack a fresh batch on top of an unsold one every month.
+        let already_listed_wages: i64 = self
+            .teams
+            .iter()
+            .flat_map(|t| t.players.iter())
+            .filter(|p| {
+                !p.is_on_loan()
+                    && (already.contains(&p.id)
+                        || p.statuses.has(PlayerStatusType::Lst)
+                        || p.contract
+                            .as_ref()
+                            .map(|c| c.is_transfer_listed)
+                            .unwrap_or(false))
+            })
+            .filter_map(|p| p.contract.as_ref())
+            .map(|c| c.salary as i64)
+            .sum();
+
+        let mut remaining = WageReliefSale::target_reduction(
+            total_annual_wages,
+            wage_budget,
+            already_listed_wages,
+            standing,
+            distress,
+        );
         if remaining <= 0 {
             return;
         }
-
-        let already: HashSet<u32> = transfer_players.iter().map(|(_, id, _)| *id).collect();
         let ignore_patience = WageReliefSale::overrides_signing_protection(standing, distress);
 
         // (team_idx, player_id, sale priority, annual salary)
