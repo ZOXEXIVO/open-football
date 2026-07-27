@@ -4253,6 +4253,118 @@ mod tests {
             desc
         );
     }
+
+    #[test]
+    fn loan_return_between_two_loans_does_not_freeze_a_season_early() {
+        // Luciano Sokolić repro (transfers page dates). River Plate (Argentina,
+        // calendar-year league) loaned him to Inter (Italy, Aug–Jul) on
+        // 02.08.2026 for three years; he was recalled mid-final-season to River
+        // (0 apps at the parent) and immediately loaned again to Palermo on
+        // 11.11.2029. The History page showed:
+        //
+        //   2029/30 Palermo (Loan)
+        //   2028/29 Inter (Loan)          <- the 3rd loan year
+        //   2028/29 River Plate (0)       <- the return, frozen a season early
+        //   2027/28 Inter (Loan)          <-   and rendered BELOW the loan it
+        //   2026/27 Inter (Loan)              followed
+        //   2026/27 River Plate (0)
+        //
+        // Root cause: when the Palermo loan opened, `flush_stale_entries` froze
+        // the River return (joined 15.01.2029, a 2029 campaign) under 2028
+        // because `Season::from_date`'s Aug boundary maps a Jan–Jul join to the
+        // prior season and the frozen floor hadn't yet risen past the still-
+        // unfrozen Inter loan year. The return must land under its true 2029/30
+        // campaign, where it collapses as a 0-app parent registration during
+        // the Palermo loan-out — leaving the Inter loan years consecutive.
+        use crate::club::player::statistics::projection::PlayerStatisticsProjection;
+
+        let river = TeamInfo {
+            name: "River Plate".to_string(),
+            slug: "river-plate".to_string(),
+            reputation: 8_000,
+            league_name: "Primera Division".to_string(),
+            league_slug: "primera".to_string(),
+        };
+        let inter = TeamInfo {
+            name: "Inter".to_string(),
+            slug: "inter".to_string(),
+            reputation: 9_000,
+            league_name: "Serie A".to_string(),
+            league_slug: "serie-a".to_string(),
+        };
+        let palermo = TeamInfo {
+            name: "Palermo".to_string(),
+            slug: "palermo".to_string(),
+            reputation: 6_000,
+            league_name: "Serie A".to_string(),
+            league_slug: "serie-a".to_string(),
+        };
+
+        let mut player = make_player();
+        player
+            .statistics_history
+            .seed_initial_team(&river, make_date(2026, 8, 1), false);
+
+        // River -> Inter free loan on 02.08.2026, three-year loan.
+        player.statistics = make_stats(0, 0);
+        player.on_manual_loan(&river, &river, &inter, make_date(2026, 8, 2));
+
+        // Inter 2026/27 (40 apps), 2027/28 (34) completed on loan.
+        player.statistics = make_stats(40, 0);
+        player.on_season_end(Season::new(2026), &inter, make_date(2027, 6, 15));
+        player.statistics = make_stats(34, 0);
+        player.on_season_end(Season::new(2027), &inter, make_date(2028, 6, 15));
+
+        // Inter 2028/29 (20 apps), mid-season recall to River on 15.01.2029.
+        player.statistics = make_stats(20, 0);
+        player.on_loan_return(&inter, &river, make_date(2029, 1, 15));
+
+        // River -> Palermo free loan on 11.11.2029 (0 River apps in between).
+        player.statistics = make_stats(0, 0);
+        player.on_manual_loan(&river, &river, &palermo, make_date(2029, 11, 11));
+
+        // Palermo 2029/30 in progress: 17 apps (live counter).
+        let live = make_stats(17, 0);
+        let empty = PlayerStatistics::default();
+        let live_input = crate::PlayerLiveStatsInput {
+            league: &live,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let rows = PlayerStatisticsProjection::player_history_rows(
+            &player.statistics_history,
+            &live_input,
+            make_date(2029, 12, 1),
+        );
+        let order: Vec<(String, u16, bool)> = rows
+            .iter()
+            .map(|r| (r.team_slug.clone(), r.season.start_year, r.is_loan))
+            .collect();
+
+        // The Inter loan's last year is 2028/29 and stays consecutive with the
+        // earlier loan years; the 0-app River return does NOT appear a season
+        // early alongside it.
+        assert!(
+            !order
+                .iter()
+                .any(|(slug, year, _)| slug == "river-plate" && *year == 2028),
+            "the River Plate return must not be frozen under 2028/29 (the Inter \
+             loan's own season); got {order:?}"
+        );
+        assert_eq!(
+            order,
+            vec![
+                ("palermo".to_string(), 2029, true),
+                ("inter".to_string(), 2028, true),
+                ("inter".to_string(), 2027, true),
+                ("inter".to_string(), 2026, true),
+                ("river-plate".to_string(), 2026, false),
+            ],
+            "clean career thread: Palermo loan on top, three consecutive Inter \
+             loan years, River Plate origin at the foot"
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

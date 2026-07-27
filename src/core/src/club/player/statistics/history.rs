@@ -582,19 +582,57 @@ impl PlayerStatisticsHistory {
     fn flush_stale_entries(&mut self, current_date: NaiveDate) {
         let current_season = Season::from_date(current_date);
 
-        let mut stale = Vec::new();
+        // `Season::from_date` hardcodes an Aug boundary, so a calendar-year
+        // league's spell joined Jan–Jul maps to the PRIOR season even though
+        // its campaign is the current one. A raw-year comparison then flags
+        // such a spell as stale and the freeze below stamps it a season early.
+        // Two corrections keep a mid-season loan return under its true
+        // campaign — the reported Sokolić case, where a River Plate return
+        // between an Inter loan and a Palermo loan was frozen 2028/29 (BELOW
+        // the Inter loan it followed) instead of 2029/30 (where it collapses
+        // as a 0-app parent registration during the Palermo loan-out):
+        //
+        //   1. Freeze candidates in JOIN ORDER with a running floor, so the
+        //      just-ended loan spell freezes first and lifts the floor for the
+        //      later-joined return.
+        //   2. Clamp each candidate's season up to one past the last frozen
+        //      League season (the same correction `spell_season_anchor` and
+        //      the projection apply). A candidate that clamps up to the
+        //      current campaign is NOT stale after all — restore it to
+        //      `current` so the projection labels and collapses it, rather
+        //      than freezing a phantom row into the season in progress.
+        let mut candidates: Vec<CurrentSeasonEntry> = Vec::new();
         self.current.retain(|e| {
-            let entry_season = Season::from_date(e.joined_date);
-            if entry_season.start_year < current_season.start_year {
-                stale.push(e.clone());
+            if Season::from_date(e.joined_date).start_year < current_season.start_year {
+                candidates.push(e.clone());
                 false
             } else {
                 true
             }
         });
+        candidates.sort_by_key(|e| (e.joined_date, e.seq_id));
+
+        // Decide freeze-vs-restore in join order. A frozen row at year Y lifts
+        // the running floor to Y+1 for the entries that follow.
+        let mut running_floor = self.frozen_league_season_floor();
+        let mut stale: Vec<(CurrentSeasonEntry, u16)> = Vec::new();
+        for e in candidates {
+            let year = Season::from_date(e.joined_date)
+                .start_year
+                .max(running_floor);
+            if year < current_season.start_year {
+                running_floor = running_floor.max(year.saturating_add(1));
+                stale.push((e, year));
+            } else {
+                // Current-campaign after the clamp — keep it live so the
+                // projection, not this freeze, decides its season and whether
+                // it collapses.
+                self.current.push(e);
+            }
+        }
 
         let is_first_season = self.items.is_empty();
-        let first_seq = stale.iter().map(|e| e.seq_id).min();
+        let first_seq = stale.iter().map(|(e, _)| e.seq_id).min();
 
         // Years where another stale entry has real content (loan or
         // otherwise). Used for the sole-record carve-out so a U18..U23
@@ -602,13 +640,12 @@ impl PlayerStatisticsHistory {
         // a trivial stint.
         let years_with_any_content: HashSet<u16> = stale
             .iter()
-            .filter(|e| e.statistics.total_games() > 0 || e.transfer_fee.is_some())
-            .map(|e| Season::from_date(e.joined_date).start_year)
+            .filter(|(e, _)| e.statistics.total_games() > 0 || e.transfer_fee.is_some())
+            .map(|(_, year)| *year)
             .collect();
 
-        for entry in stale {
-            let entry_season = Season::from_date(entry.joined_date);
-            let entry_year = entry_season.start_year;
+        for (entry, entry_year) in stale {
+            let entry_season = Season::new(entry_year);
             let season_end = entry_season.end_date();
 
             // Canonical-ledger mirror under the entry's own season —
