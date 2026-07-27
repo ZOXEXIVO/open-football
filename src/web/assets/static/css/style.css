@@ -11650,3 +11650,701 @@ html:has(.fm-workers-page) {
         grid-template-columns: repeat(2, 1fr);
     }
 }
+
+/* ============================================================
+   NEWSPAPER TAB
+   A club's local weekly, set as it would have come off a rotary
+   press: cool aged newsprint, soft blue-black ink that never
+   reaches true black, one cheap spot red, and photographs
+   screened into halftone dots. The sheets sit on the app's dark
+   chrome like clippings left on a desk.
+   ============================================================ */
+
+.np-desk {
+    --np-paper: #e9e4d8;
+    --np-paper-edge: #ddd6c6;
+    --np-paper-deep: #d3cbb7;
+    --np-ink: #22201c;
+    --np-ink-soft: #575043;
+    --np-ink-faint: #7d7565;
+    --np-rule: #b4aa94;
+    --np-rule-soft: #c8bfa9;
+    --np-spot: #9c2f20;
+    --np-serif: Georgia, "Times New Roman", "Liberation Serif", "Nimbus Roman",
+        "Songti SC", "Hiragino Mincho ProN", serif;
+    --np-furniture: "Outfit", "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+/* The sheet */
+
+.np-sheet {
+    position: relative;
+    color: var(--np-ink);
+    background-color: var(--np-paper);
+    /* Woven fibre: two hairline weaves plus a light fall across the
+       top-left corner, as if the sheet were lying under a window. */
+    background-image:
+        repeating-linear-gradient(
+            0deg,
+            rgba(120, 108, 82, 0.035) 0 1px,
+            transparent 1px 3px
+        ),
+        repeating-linear-gradient(
+            90deg,
+            rgba(120, 108, 82, 0.028) 0 1px,
+            transparent 1px 4px
+        ),
+        radial-gradient(
+            ellipse at 18% -10%,
+            rgba(255, 253, 246, 0.55),
+            transparent 62%
+        );
+    border: 1px solid var(--np-paper-deep);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.35) inset,
+        0 10px 26px rgba(0, 0, 0, 0.45);
+}
+
+.np-front {
+    padding: 26px 30px 30px;
+}
+
+/* Nameplate */
+
+.np-nameplate {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 16px;
+    padding-bottom: 10px;
+    border-bottom: 3px solid var(--np-ink);
+}
+
+.np-masthead {
+    margin: 0;
+    font-family: var(--np-serif);
+    font-weight: 700;
+    font-size: clamp(26px, 5vw, 50px);
+    line-height: 1;
+    letter-spacing: 0.015em;
+    text-align: center;
+    text-transform: uppercase;
+    text-shadow: 0.5px 0 0 rgba(34, 32, 28, 0.35);
+}
+
+.np-ear {
+    font-family: var(--np-furniture);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--np-ink-soft);
+}
+
+.np-ear-right {
+    text-align: right;
+}
+
+.np-folio {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-top: 3px;
+    padding: 5px 0 7px;
+    border-bottom: 1px solid var(--np-ink);
+    font-family: var(--np-furniture);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--np-ink-faint);
+}
+
+.np-folio-mood {
+    color: var(--np-ink-soft);
+    white-space: nowrap;
+}
+
+.np-folio-mood-crisis,
+.np-folio-mood-uneasy {
+    color: var(--np-spot);
+}
+
+/* The week's stamp.
+
+   Set in the folio line rather than floated over the page: an overlay
+   had to guess where the text below it ended, and guessed wrong the
+   moment a headline ran long. Here it is furniture, like the 'LATE
+   EDITION' ear a real masthead carries, and can never collide. */
+
+.np-stamp {
+    position: relative;
+    top: 2px;
+    padding: 3px 8px 2px 12px;
+    border: 2px solid var(--np-spot);
+    transform: rotate(-3deg);
+    transform-origin: right center;
+    font-weight: 600;
+    color: var(--np-spot) !important;
+    /* Letterpress never inks evenly, so the stamp sits slightly light. */
+    opacity: 0.85;
+}
+
+/* Page grid */
+
+.np-body {
+    display: grid;
+    grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr);
+    gap: 0;
+    margin-top: 18px;
+}
+
+.np-main {
+    min-width: 0;
+    padding-right: 24px;
+    border-right: 1px solid var(--np-rule);
+}
+
+/* A week with no fixtures and no briefs has no rail to rule off
+   against, so the text runs the full measure instead of leaving a
+   hairline down an empty column. */
+.np-body-full {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.np-body-full .np-main {
+    padding-right: 0;
+    border-right: 0;
+}
+
+.np-body-full .np-rail {
+    display: none;
+}
+
+.np-rail {
+    min-width: 0;
+    padding-left: 22px;
+}
+
+/* Stories */
+
+.np-kicker {
+    margin: 0 0 6px;
+    font-family: var(--np-furniture);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--np-spot);
+}
+
+.np-dateline {
+    margin-left: 8px;
+    padding-left: 8px;
+    border-left: 1px solid var(--np-rule);
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    color: var(--np-ink-faint);
+}
+
+.np-headline {
+    margin: 0 0 12px;
+    font-family: var(--np-serif);
+    font-weight: 700;
+    font-size: clamp(23px, 3.4vw, 38px);
+    line-height: 1.03;
+    letter-spacing: -0.012em;
+}
+
+.np-subhead {
+    margin: 0 0 8px;
+    font-family: var(--np-serif);
+    font-weight: 700;
+    font-size: 17px;
+    line-height: 1.15;
+}
+
+.np-lead-body {
+    /* Newsprint is set in columns for a reason: past roughly seventy
+       characters the eye loses the line on the way back. The lead runs
+       to a real measure even when the page is wide. */
+    max-width: 62ch;
+    margin: 0;
+    font-family: var(--np-serif);
+    font-size: 15px;
+    line-height: 1.62;
+    color: var(--np-ink);
+    text-align: justify;
+    hyphens: auto;
+}
+
+.np-lead-body::first-letter {
+    float: left;
+    margin: 6px 8px 0 0;
+    font-size: 47px;
+    font-weight: 700;
+    line-height: 0.78;
+    color: var(--np-ink);
+}
+
+/* The photograph */
+
+.np-figure {
+    /* A single-column press photo. The source portrait is 200x250, so
+       anything wider is upscaling a small picture into a poster. */
+    max-width: 210px;
+    margin: 0 0 18px;
+}
+
+.np-photo {
+    position: relative;
+    display: block;
+    overflow: hidden;
+    border: 1px solid var(--np-ink);
+    /* Warm monochrome, lifted off pure black: newsprint ink physically
+       cannot reach it, and pretending otherwise reads as a screenshot. */
+    filter: grayscale(1) sepia(0.32) saturate(0.75) contrast(1.12)
+        brightness(1.14);
+}
+
+.np-photo img {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+/* The dot screen. Small enough to read as texture at a glance,
+   coarse enough to be visible, which is the whole point. */
+.np-screen {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: radial-gradient(
+        circle at 50% 50%,
+        rgba(28, 26, 22, 0.62) 0.85px,
+        transparent 1.15px
+    );
+    background-size: 3px 3px;
+    mix-blend-mode: multiply;
+    opacity: 0.5;
+}
+
+.np-caption {
+    margin-top: 6px;
+    padding-top: 5px;
+    border-top: 1px solid var(--np-rule);
+    font-family: var(--np-furniture);
+    font-size: 10.5px;
+    line-height: 1.45;
+    color: var(--np-ink-soft);
+}
+
+.np-caption strong {
+    display: block;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--np-ink);
+}
+
+/* Secondary pieces */
+
+.np-splits {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 22px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--np-ink);
+}
+
+.np-split + .np-split {
+    margin-left: -22px;
+    padding-left: 22px;
+    border-left: 1px solid var(--np-rule);
+}
+
+.np-split-body {
+    margin: 0;
+    font-family: var(--np-serif);
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--np-ink-soft);
+    text-align: justify;
+    hyphens: auto;
+}
+
+/* Rail boxes */
+
+.np-box + .np-box {
+    margin-top: 20px;
+}
+
+.np-box-title {
+    margin: 0 0 8px;
+    padding-bottom: 5px;
+    border-bottom: 2px solid var(--np-ink);
+    font-family: var(--np-furniture);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--np-ink);
+}
+
+.np-results,
+.np-briefs {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.np-result {
+    display: grid;
+    grid-template-columns: 8px auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--np-rule-soft);
+    font-family: var(--np-serif);
+    font-size: 13px;
+}
+
+.np-result-mark {
+    width: 8px;
+    height: 8px;
+    border: 1px solid var(--np-ink);
+}
+
+.np-result-w .np-result-mark {
+    background: var(--np-ink);
+}
+
+.np-result-d .np-result-mark {
+    background: repeating-linear-gradient(
+        45deg,
+        var(--np-ink) 0 1px,
+        transparent 1px 3px
+    );
+}
+
+.np-result-l .np-result-mark {
+    border-color: var(--np-spot);
+}
+
+.np-result-date {
+    font-family: var(--np-furniture);
+    font-size: 9.5px;
+    letter-spacing: 0.06em;
+    color: var(--np-ink-faint);
+    font-variant-numeric: tabular-nums;
+}
+
+.np-result-club {
+    overflow: hidden;
+    color: var(--np-ink) !important;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.np-result-club:hover {
+    color: var(--np-spot) !important;
+}
+
+.np-result-score {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+}
+
+.np-result-l .np-result-score {
+    color: var(--np-spot);
+}
+
+/* Briefs run as a ruled band across the foot of the page rather than
+   down the rail. A weekly club paper prints six or seven of them; in a
+   narrow column they tower over the lead and leave the main text sitting
+   beside a void, which is exactly what a broadsheet foot band exists to
+   solve. */
+.np-band {
+    margin-top: 22px;
+    padding-top: 14px;
+    border-top: 3px double var(--np-ink);
+}
+
+.np-briefs-band {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 0 22px;
+}
+
+.np-briefs-band .np-brief {
+    border-bottom: 0;
+    border-top: 1px solid var(--np-rule-soft);
+}
+
+.np-brief {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--np-rule-soft);
+}
+
+.np-brief:last-child {
+    border-bottom: 0;
+}
+
+.np-brief-kicker {
+    display: block;
+    margin-bottom: 2px;
+    font-family: var(--np-furniture);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--np-ink-faint);
+}
+
+.np-brief-text {
+    font-family: var(--np-serif);
+    font-size: 13px;
+    line-height: 1.42;
+}
+
+.np-brief-link {
+    color: var(--np-ink) !important;
+    /* A brief that leads somewhere says so with a rule under the text,
+       the way a printed cross-reference is underscored. */
+    border-bottom: 1px solid var(--np-rule);
+}
+
+.np-brief-link:hover,
+.np-brief-link:focus-visible {
+    color: var(--np-spot) !important;
+    border-bottom-color: var(--np-spot);
+}
+
+/* Back issues */
+
+.np-archive {
+    margin-top: 26px;
+}
+
+.np-archive-title {
+    margin: 0 0 10px;
+    font-family: var(--np-furniture);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: #7f8b93;
+}
+
+.np-back {
+    margin-bottom: 10px;
+    color: var(--np-ink);
+    background-color: var(--np-paper-edge);
+    background-image: repeating-linear-gradient(
+        0deg,
+        rgba(120, 108, 82, 0.03) 0 1px,
+        transparent 1px 3px
+    );
+    border: 1px solid var(--np-paper-deep);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.np-back-summary {
+    display: grid;
+    grid-template-columns: minmax(0, auto) minmax(0, auto) minmax(0, 1fr);
+    align-items: baseline;
+    gap: 14px;
+    padding: 11px 16px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.np-back-summary::-webkit-details-marker {
+    display: none;
+}
+
+.np-back-summary:focus-visible {
+    outline: 2px solid var(--np-spot);
+    outline-offset: -2px;
+}
+
+.np-back-plate {
+    font-family: var(--np-serif);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.np-back-meta {
+    font-family: var(--np-furniture);
+    font-size: 9.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--np-ink-faint);
+    white-space: nowrap;
+}
+
+.np-back-headlines {
+    overflow: hidden;
+    font-family: var(--np-serif);
+    font-size: 12.5px;
+    font-style: italic;
+    color: var(--np-ink-soft);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.np-back[open] .np-back-summary {
+    border-bottom: 2px solid var(--np-ink);
+}
+
+.np-back-body {
+    padding: 16px;
+}
+
+.np-back-lead {
+    margin-bottom: 16px;
+}
+
+.np-back-rail {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0 22px;
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--np-rule);
+}
+
+.np-back-rail .np-box + .np-box {
+    margin-top: 0;
+}
+
+/* Nothing to print yet */
+
+.np-empty {
+    max-width: 520px;
+    margin: 40px auto;
+    padding: 30px 34px;
+    text-align: center;
+    color: var(--np-ink);
+    background-color: var(--np-paper);
+    border: 1px solid var(--np-paper-deep);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+}
+
+.np-empty-rule {
+    height: 3px;
+    margin-bottom: 18px;
+    background: var(--np-ink);
+}
+
+.np-empty-title {
+    margin: 0 0 8px;
+    font-family: var(--np-serif);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.np-empty-body {
+    margin: 0;
+    font-family: var(--np-serif);
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--np-ink-soft);
+}
+
+/* Mood tints: a bad week yellows the paper a shade and a good one
+   brightens it. The same sheet, printed on a different morning. */
+
+.np-sheet.np-mood-crisis,
+.np-back.np-mood-crisis {
+    --np-paper: #e6ded0;
+    --np-paper-edge: #d9d0be;
+}
+
+.np-sheet.np-mood-triumph,
+.np-back.np-mood-triumph {
+    --np-paper: #ece8dd;
+    --np-paper-edge: #e2ddcf;
+}
+
+/* Narrower screens */
+
+@media (max-width: 1100px) {
+    .np-body {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .np-main {
+        padding-right: 0;
+        border-right: 0;
+    }
+
+    .np-rail {
+        margin-top: 20px;
+        padding-top: 16px;
+        padding-left: 0;
+        border-top: 2px solid var(--np-ink);
+    }
+
+    .np-back-summary {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 3px;
+    }
+
+    .np-back-headlines {
+        white-space: normal;
+    }
+}
+
+@media (max-width: 640px) {
+    .np-front {
+        padding: 18px 16px 22px;
+    }
+
+    .np-nameplate {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+        text-align: center;
+    }
+
+    .np-folio {
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .np-ear-right {
+        text-align: center;
+    }
+
+    .np-figure {
+        max-width: 240px;
+        margin: 0 auto 16px;
+    }
+
+    .np-splits,
+    .np-back-rail {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 18px;
+    }
+
+    .np-split + .np-split {
+        margin-left: 0;
+        padding-top: 14px;
+        padding-left: 0;
+        border-top: 1px solid var(--np-rule);
+        border-left: 0;
+    }
+
+    .np-lead-body,
+    .np-split-body {
+        text-align: left;
+    }
+}

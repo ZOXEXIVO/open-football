@@ -1,6 +1,7 @@
 pub mod academy;
 pub mod finances;
 pub mod get;
+pub mod newspaper;
 pub mod relations;
 pub mod schedule;
 pub mod scouting;
@@ -15,6 +16,7 @@ use axum::Router;
 pub fn team_routes() -> Router<GameAppData> {
     Router::new()
         .merge(get::routes::routes())
+        .merge(newspaper::routes::routes())
         .merge(staff::routes::routes())
         .merge(tactics::routes::routes())
         .merge(finances::routes::routes())

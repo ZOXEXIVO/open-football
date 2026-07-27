@@ -3,6 +3,7 @@ use crate::generators::{PlayerGenerator, StaffGenerator};
 use crate::loaders::OdbPlayer;
 use chrono::{Datelike, Utc};
 use core::club::academy::ClubAcademy;
+use core::club::news::ClubNewsroom;
 use core::context::NaiveTime;
 use core::shared::Location;
 use core::transfers::pipeline::ClubTransferPlan;
@@ -237,6 +238,7 @@ impl DatabaseGenerator {
                     facilities,
                     rivals: club.rivals.clone(),
                     teams,
+                    newsroom: ClubNewsroom::for_club(club.id),
                 }
             })
             .collect()

@@ -3,6 +3,7 @@ mod country_info;
 mod data;
 mod loan_wages;
 mod matchday;
+mod newsroom;
 mod result;
 mod seeding;
 
@@ -31,6 +32,7 @@ use awards::{
     WeeklyAwardsTick, WorldPlayerOfYearTick, YoungTeamOfTheWeekTick, YoungWeeklyAwardsTick,
 };
 use chrono::{Datelike, Duration, Weekday};
+use newsroom::NewsroomTick;
 use rayon::prelude::*;
 use std::any::Any;
 use std::collections::HashSet;
@@ -430,6 +432,9 @@ impl FootballSimulator {
                 YoungTeamOfTheWeekTick::run(data, &cache);
                 // Team of the Week — one XI per league, every Monday.
                 TeamOfTheWeekTick::run(data, &cache);
+                // The club press goes out last, so this morning's award
+                // winners can make their own local front pages.
+                NewsroomTick::run(data, week_start, week_end);
             }
             // Monthly awards — first day of each month, awarding the previous
             // calendar month.

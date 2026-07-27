@@ -5,6 +5,7 @@ pub mod context;
 pub mod facilities;
 pub mod finance;
 pub mod mood;
+pub mod news;
 pub mod person;
 pub mod player;
 pub mod relations;
@@ -33,6 +34,13 @@ pub use finance::{
     ClubFinanceContext, ClubFinanceResult, ClubFinances, ClubFinancialBalance,
     ClubFinancialBalanceHistory, ClubSponsorship, ClubSponsorshipContract, DistressLevel,
     SponsorPerformance, SponsorRenewalContext, TransferObligation, classify_distress,
+};
+
+// Club press exports
+pub use news::{
+    BoardroomDesk, CareerRecord, ClubNewsroom, ClubTransferWeek, IssueResult, MarketDesk,
+    MatchDesk, NewsDesk, NewsEditor, NewsRecurrence, NewsStory, NewsStoryKind, NewspaperIssue,
+    PressMood, SquadDesk, StandingSnapshot, TableDesk, WeeklyMatchFacts,
 };
 
 // Relations exports
@@ -125,7 +133,6 @@ pub use player::{
     NegativeHappiness,
     NewSigningThreatContext,
     NewSigningThreatReason,
-    RivalThreatResponse,
     PersonalAdaptationEventContext,
     PersonalAdaptationKind,
     Physical,
@@ -188,6 +195,7 @@ pub use player::{
     RegulationOutcomeKind,
     RegulationSlotKind,
     RetirementReason,
+    RivalThreatResponse,
     RoleStatusEventContext,
     RoleStatusKind,
     SeasonOutcomeContext,
