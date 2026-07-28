@@ -96,7 +96,7 @@ finances, and match engine can turn it into success.
 
 [Club newspaper page example](https://open-football.org/en/teams/juventus/newspaper)
 
-![Newspaper page](.docs/images/newspaper.jpg "Newspaper page")
+![Newspaper page](.docs/images/newspaper_juventus.jpg "Newspaper page")
 
 [Awards page](https://open-football.org/en/leagues/italian-serie-a/awards)
 
