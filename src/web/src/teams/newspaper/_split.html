@@ -2,15 +2,23 @@
    sheet use it: the pair beside the rail and the wider run below the
    front block are the same piece of typesetting at different measures,
    and keeping one copy of the markup is what stops them drifting apart
-   the first time the headline link changes. Expects `story`. #}
+   the first time the headline link changes. Expects `story`.
+
+   The rule goes under each NAME, not under the sentence: a headline is
+   not a link to an article here, it is a line of type with people and
+   clubs in it. Copy that is about a player without ever naming him falls
+   back to underscoring the whole line, because the alternative is a
+   story with no route to its subject at all. #}
 <section class="np-split">
     <p class="np-kicker">{{ story.kicker }}<span class="np-dateline">{{ story.date }}</span></p>
     <h4 class="np-subhead">
-        {%- if story.player_slug.is_empty() -%}
-        {{ story.headline }}
+        {%- if story.headline.has_links() -%}
+        {% let prose = story.headline %}{% let link_class = "np-story-link" %}{% include "teams/newspaper/_prose.html" %}
+        {%- else if story.player_slug.is_empty() -%}
+        {{ story.headline.text() }}
         {%- else -%}
-        <a class="np-story-link" href="/{{ lang }}/players/{{ story.player_slug }}" title="{{ story.player_name }}">{{ story.headline }}</a>
+        <a class="np-story-link" href="/{{ lang }}/players/{{ story.player_slug }}" title="{{ story.player_name }}">{{ story.headline.text() }}</a>
         {%- endif -%}
     </h4>
-    <p class="np-split-body{% if story.is_quote %} np-quote{% endif %}">{{ story.body }}</p>
+    <p class="np-split-body{% if story.is_quote %} np-quote{% endif %}">{% let prose = story.body %}{% let link_class = "np-prose-link" %}{% include "teams/newspaper/_prose.html" %}</p>
 </section>

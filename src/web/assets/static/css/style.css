@@ -11960,6 +11960,28 @@ a.np-story-link:focus-visible {
     text-decoration-color: var(--np-ink) !important;
 }
 
+/* The same cross-reference, made in the middle of a paragraph. Body
+   copy carries several of them in a sentence — a player, his club, the
+   club that wants him — so the rule is quieter than the headline's and
+   only firms up under the cursor. Drawn with a background gradient
+   rather than `text-decoration` on purpose: see the note above the
+   briefs column, whose reset this shares. */
+a.np-prose-link:link,
+a.np-prose-link:visited {
+    color: var(--np-ink) !important;
+    background-image: linear-gradient(var(--np-rule), var(--np-rule));
+    background-repeat: no-repeat;
+    background-position: 0 100%;
+    background-size: 100% 1px;
+    transition: background-size 0.15s ease;
+}
+
+a.np-prose-link:hover,
+a.np-prose-link:focus-visible {
+    background-image: linear-gradient(var(--np-ink), var(--np-ink));
+    background-size: 100% 2px;
+}
+
 .np-lead-body {
     /* Newsprint is set in columns for a reason: past roughly seventy
        characters the eye loses the line on the way back. */
@@ -12567,7 +12589,9 @@ a.np-story-link:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .np-brief-link {
+    .np-brief-link,
+    a.np-prose-link:link,
+    a.np-prose-link:visited {
         transition: none;
     }
 }

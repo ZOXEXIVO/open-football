@@ -304,7 +304,7 @@ impl PressCuttings {
 mod tests {
     use super::{PlayerNewspaperTemplate, PlayerPress};
     use crate::I18n;
-    use crate::teams::newspaper::{IssueView, StoryView};
+    use crate::teams::newspaper::{IssueView, Prose, Span, StoryView};
     use askama::Template;
     use chrono::NaiveDate;
     use core::club::news::{NewsStory, NewsStoryKind, NewspaperIssue, PressMood};
@@ -339,22 +339,38 @@ mod tests {
             .collect()
         }
 
-        fn story(headline: &str, player: bool) -> StoryView {
+        /// One story, with the headline already split into the plain
+        /// type and the name the page underscores — the shape the
+        /// composer hands the templates.
+        fn story(before: &str, name: &str, after: &str) -> StoryView {
+            let mut spans = Vec::new();
+            if !before.is_empty() {
+                spans.push(Span::text(before.to_string()));
+            }
+            if !name.is_empty() {
+                spans.push(Span::link(
+                    name.to_string(),
+                    "players",
+                    "17-diego-mora".to_string(),
+                ));
+            }
+            if !after.is_empty() {
+                spans.push(Span::text(after.to_string()));
+            }
+
             StoryView {
                 kicker: "Squad".to_string(),
-                headline: headline.to_string(),
-                body: "Body copy.".to_string(),
+                headline: Prose { spans },
+                body: Prose {
+                    spans: vec![Span::text("Body copy.".to_string())],
+                },
                 date: "2 March 2026".to_string(),
-                player_slug: if player {
+                player_slug: if name.is_empty() {
+                    String::new()
+                } else {
                     "17-diego-mora".to_string()
-                } else {
-                    String::new()
                 },
-                player_name: if player {
-                    "Diego Mora".to_string()
-                } else {
-                    String::new()
-                },
+                player_name: name.to_string(),
                 is_quote: false,
                 drop_cap: true,
             }
@@ -372,10 +388,10 @@ mod tests {
                 mood_label: "Steady".to_string(),
                 mood_slug: "steady",
                 mood_stamped: false,
-                lead: Some(Self::story("Three goals for Diego Mora", true)),
-                secondary: vec![Self::story("Córdoba board back the manager", false)],
-                run: vec![Self::story("Scouts sent to watch Diego Mora", true)],
-                briefs: vec![Self::story("Nico Reyes out for 42 days", true)],
+                lead: Some(Self::story("Three goals for ", "Diego Mora", "")),
+                secondary: vec![Self::story("Córdoba board back the manager", "", "")],
+                run: vec![Self::story("Scouts sent to watch ", "Diego Mora", "")],
+                briefs: vec![Self::story("", "Nico Reyes", " out for 42 days")],
                 results: Vec::new(),
                 portrait: None,
             }
@@ -426,7 +442,7 @@ mod tests {
         let html = Page::template(vec![Page::issue(12)]).render().unwrap();
 
         assert!(html.contains("The Córdoba Chronicle"));
-        assert!(html.contains("Three goals for Diego Mora"));
+        assert!(html.contains("Three goals for <a class=\"np-story-link\""));
         assert!(
             html.contains("Córdoba board back the manager"),
             "a story about somebody else still belongs in the edition he was in"

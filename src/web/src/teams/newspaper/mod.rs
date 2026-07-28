@@ -88,8 +88,8 @@ struct Tiers {
 
 pub struct StoryView {
     pub kicker: String,
-    pub headline: String,
-    pub body: String,
+    pub headline: Prose,
+    pub body: Prose,
     pub date: String,
     pub player_slug: String,
     pub player_name: String,
@@ -106,6 +106,74 @@ pub struct StoryView {
     /// from the composed text rather than asking every writer in every
     /// language to avoid it.
     pub drop_cap: bool,
+}
+
+/// One run of composed copy, kept as the alternating plain type and
+/// proper names it was written as instead of as one flat string.
+///
+/// A name in a newspaper is a cross-reference, and the rule belongs
+/// under the NAME. Underscoring a whole headline says "this line opens
+/// an article", and there is no article to open — the only things behind
+/// a story here are the people and the clubs it names. Holding the copy
+/// as spans is what lets every one of them be underscored and nothing
+/// else, in a headline and in the middle of a paragraph alike, without
+/// the composer ever emitting markup a translator could break.
+pub struct Prose {
+    pub spans: Vec<Span>,
+}
+
+impl Prose {
+    /// The copy as one string, for the places that set it as plain type
+    /// — the photograph's caption above all.
+    pub fn text(&self) -> String {
+        self.spans.iter().map(|span| span.text.as_str()).collect()
+    }
+
+    /// Whether anything in this run is a cross-reference. A headline
+    /// that names nobody is the one case the page still underscores
+    /// whole: see [`StoryView::player_slug`].
+    pub fn has_links(&self) -> bool {
+        self.spans.iter().any(Span::is_link)
+    }
+
+}
+
+/// A stretch of one run of copy: either plain type, or a name the page
+/// sets as a link. `section` and `slug` are held apart from the URL so
+/// the language the reader is on — which the composer has no business
+/// knowing — is put in by the template.
+pub struct Span {
+    pub text: String,
+    /// `players`, `teams` or `staff`; empty for plain type.
+    pub section: &'static str,
+    /// Empty for plain type, and for a name whose subject could not be
+    /// resolved — a dead link is worse than plain type.
+    pub slug: String,
+}
+
+impl Span {
+    pub(crate) fn text(text: String) -> Self {
+        Span {
+            text,
+            section: "",
+            slug: String::new(),
+        }
+    }
+
+    pub(crate) fn link(text: String, section: &'static str, slug: String) -> Self {
+        if slug.is_empty() {
+            return Self::text(text);
+        }
+        Span {
+            text,
+            section,
+            slug,
+        }
+    }
+
+    pub fn is_link(&self) -> bool {
+        !self.slug.is_empty()
+    }
 }
 
 /// The photograph on the front page, with the caption set under it.
@@ -311,6 +379,7 @@ impl PressDesk {
     ) -> IssueView {
         let paper = Paper {
             name: &team.name,
+            slug: &team.slug,
             club_id: team.club_id,
         };
         let stories = issue
@@ -422,9 +491,11 @@ impl PressDesk {
                 i18n,
                 Paper {
                     name: &team.name,
+                    slug: &team.slug,
                     club_id: team.club_id,
                 },
-            ),
+            )
+            .text(),
         })
     }
 
@@ -447,7 +518,11 @@ impl PressDesk {
             // filled: whether a body opens with a letter depends on the
             // scoreline and the club name of this particular story, not
             // on the template it came from.
-            drop_cap: body.chars().next().is_some_and(char::is_alphabetic),
+            drop_cap: body
+                .text()
+                .chars()
+                .next()
+                .is_some_and(char::is_alphabetic),
             body,
             date: i18n.format_date(story.date),
             player_slug,
@@ -482,14 +557,33 @@ impl PressDesk {
 /// The edition a story ran in, as the composer needs it.
 ///
 /// `name` is the side the paper belongs to and fills the `{club}` slot;
+/// `slug` is where that name points when the page sets it as a link;
 /// `club_id` is the club behind it, which is where a `{manager}` is
-/// looked for first. Carried together because the two always travel
+/// looked for first. Carried together because the three always travel
 /// together and a story lifted onto a player's page has to keep
 /// crediting the newsroom that printed it.
 #[derive(Clone, Copy)]
 pub(crate) struct Paper<'a> {
     pub name: &'a str,
+    pub slug: &'a str,
     pub club_id: u32,
+}
+
+/// What a `{slot}` in a piece of copy turns into: a figure the page sets
+/// as type, a proper name the page sets as a cross-reference, or a token
+/// no desk knows about.
+enum Slot {
+    Text(String),
+    Name {
+        text: String,
+        section: &'static str,
+        /// Empty when the subject could not be resolved. The name is
+        /// still printed — a story that says "the manager" is worse than
+        /// one that says his name without linking it, and both beat a
+        /// link to nowhere.
+        slug: String,
+    },
+    Unknown,
 }
 
 /// Fills the blanks in a translated headline or body with the real
@@ -501,7 +595,7 @@ impl StoryComposer {
     /// `_v6` for any stem without touching code.
     const MAX_VARIANTS: usize = 6;
 
-    fn headline(data: &SimulatorData, story: &NewsStory, i18n: &I18n, paper: Paper<'_>) -> String {
+    fn headline(data: &SimulatorData, story: &NewsStory, i18n: &I18n, paper: Paper<'_>) -> Prose {
         Self::compose(
             i18n.t(&Self::phrasing_key("h", story, i18n)),
             data,
@@ -511,7 +605,7 @@ impl StoryComposer {
         )
     }
 
-    fn body(data: &SimulatorData, story: &NewsStory, i18n: &I18n, paper: Paper<'_>) -> String {
+    fn body(data: &SimulatorData, story: &NewsStory, i18n: &I18n, paper: Paper<'_>) -> Prose {
         Self::compose(
             i18n.t(&Self::phrasing_key("b", story, i18n)),
             data,
@@ -590,74 +684,137 @@ impl StoryComposer {
         (hash % count as u32) as usize
     }
 
+    /// Walks a translated string once, filling each `{slot}` as it comes
+    /// and keeping the proper names apart from the type around them.
+    ///
+    /// One pass rather than a stack of `replace` calls because the
+    /// output is no longer one string: a name has to come out as its own
+    /// span so the page can underscore it alone, and a chain of
+    /// replacements would have lost track of where the names ended up
+    /// the moment a club was called something that also reads as a word.
+    /// An unrecognised slot is copied through verbatim — a literal
+    /// `{foo}` on the page is a bug report, and swallowing it is not.
     fn compose(
         template: &str,
         data: &SimulatorData,
         story: &NewsStory,
         i18n: &I18n,
         paper: Paper<'_>,
-    ) -> String {
-        let mut text = template.to_string();
+    ) -> Prose {
+        let mut spans: Vec<Span> = Vec::new();
+        let mut plain = String::new();
+        let mut rest = template;
 
-        if text.contains("{club}") {
-            text = text.replace("{club}", paper.name);
-        }
-        if text.contains("{player}") {
-            let (name, _) = PlayerName::resolve(data, story.player_id);
-            let name = if name.is_empty() {
-                i18n.t("newspaper_unnamed_player").to_string()
-            } else {
-                name
+        while let Some(open) = rest.find('{') {
+            let Some(close) = rest[open..].find('}').map(|at| open + at) else {
+                break;
             };
-            text = text.replace("{player}", &name);
-        }
-        // The man in the dugout. A paper that writes "the manager" where
-        // it could write his name is a paper nobody believes was written
-        // by anybody, and a sacking is the one story a town discusses by
-        // name for a decade.
-        if text.contains("{manager}") {
-            let mut name = ManagerName::resolve(data, paper.club_id, story.staff_id);
-            if name.is_empty() {
-                name = i18n.t("newspaper_unnamed_manager").to_string();
+
+            plain.push_str(&rest[..open]);
+
+            match Self::slot(&rest[open + 1..close], data, story, i18n, paper) {
+                Slot::Text(text) => plain.push_str(&text),
+                Slot::Name {
+                    text,
+                    section,
+                    slug,
+                } => {
+                    let span = Span::link(text, section, slug);
+                    if span.is_link() {
+                        if !plain.is_empty() {
+                            spans.push(Span::text(std::mem::take(&mut plain)));
+                        }
+                        spans.push(span);
+                    } else {
+                        plain.push_str(&span.text);
+                    }
+                }
+                Slot::Unknown => plain.push_str(&rest[open..=close]),
             }
-            text = text.replace("{manager}", &name);
-        }
-        // `{opponent}` names the other team in a match report, `{other}`
-        // the other club in a transfer. Both come from the same slot.
-        if text.contains("{opponent}") || text.contains("{other}") {
-            let mut name = Self::other_party(data, story);
-            if name.is_empty() {
-                name = i18n.t("newspaper_another_club").to_string();
-            }
-            text = text.replace("{opponent}", &name).replace("{other}", &name);
-        }
-        if text.contains("{score}") {
-            text = text.replace("{score}", &format!("{}-{}", story.a, story.b));
-        }
-        if text.contains("{fee}") {
-            text = text.replace(
-                "{fee}",
-                &format!("${}", FormattingUtils::format_money(story.money as f64)),
-            );
-        }
-        if text.contains("{rating}") {
-            text = text.replace("{rating}", &format!("{:.2}", story.b as f32 / 100.0));
-        }
-        if text.contains("{n}") {
-            text = text.replace("{n}", &story.a.to_string());
-        }
-        // `{pts}` and `{m}` are the same slot under two names: the table
-        // stories were written around points long before the squad and
-        // loan desks needed a plain second number, and renaming the key
-        // in nine bundles would buy nothing.
-        if text.contains("{pts}") {
-            text = text.replace("{pts}", &story.b.to_string());
-        }
-        if text.contains("{m}") {
-            text = text.replace("{m}", &story.b.to_string());
+
+            rest = &rest[close + 1..];
         }
 
-        text
+        plain.push_str(rest);
+        if !plain.is_empty() {
+            spans.push(Span::text(plain));
+        }
+
+        Prose { spans }
+    }
+
+    /// What one `{slot}` in a piece of copy resolves to.
+    fn slot(
+        name: &str,
+        data: &SimulatorData,
+        story: &NewsStory,
+        i18n: &I18n,
+        paper: Paper<'_>,
+    ) -> Slot {
+        match name {
+            // The side whose paper this is. It is a name in the copy like
+            // any other, so it leads where the name leads — the club's
+            // own page, which is a different page from the one carrying
+            // the paper.
+            "club" => Slot::Name {
+                text: paper.name.to_string(),
+                section: "teams",
+                slug: paper.slug.to_string(),
+            },
+            "player" => {
+                let (name, slug) = PlayerName::resolve(data, story.player_id);
+                if name.is_empty() {
+                    return Slot::Text(i18n.t("newspaper_unnamed_player").to_string());
+                }
+                Slot::Name {
+                    text: name,
+                    section: "players",
+                    slug,
+                }
+            }
+            // The man in the dugout. A paper that writes "the manager"
+            // where it could write his name is a paper nobody believes
+            // was written by anybody, and a sacking is the one story a
+            // town discusses by name for a decade.
+            "manager" => {
+                let name = ManagerName::resolve(data, paper.club_id, story.staff_id);
+                if name.is_empty() {
+                    return Slot::Text(i18n.t("newspaper_unnamed_manager").to_string());
+                }
+                Slot::Name {
+                    text: name,
+                    section: "staff",
+                    slug: story.staff_id.to_string(),
+                }
+            }
+            // `{opponent}` names the other team in a match report,
+            // `{other}` the other club in a transfer. Both come from the
+            // same slot.
+            "opponent" | "other" => {
+                let (name, slug) = Self::other_party(data, story);
+                if name.is_empty() {
+                    return Slot::Text(i18n.t("newspaper_another_club").to_string());
+                }
+                Slot::Name {
+                    text: name,
+                    section: "teams",
+                    slug,
+                }
+            }
+            "score" => Slot::Text(format!("{}-{}", story.a, story.b)),
+            "fee" => Slot::Text(format!(
+                "${}",
+                FormattingUtils::format_money(story.money as f64)
+            )),
+            "rating" => Slot::Text(format!("{:.2}", story.b as f32 / 100.0)),
+            "n" => Slot::Text(story.a.to_string()),
+            // `{pts}` and `{m}` are the same slot under two names: the
+            // table stories were written around points long before the
+            // squad and loan desks needed a plain second number, and
+            // renaming the key in nine bundles would buy nothing.
+            "pts" | "m" => Slot::Text(story.b.to_string()),
+            _ => Slot::Unknown,
+        }
     }
 
     /// Match reports name a team; every other desk names a club. Both
@@ -665,20 +822,32 @@ impl StoryComposer {
     /// keyed off the desk rather than a list of kinds, so a new story
     /// kind resolves its counterparty without anyone remembering to add
     /// it here.
-    fn other_party(data: &SimulatorData, story: &NewsStory) -> String {
+    ///
+    /// A club is read about through its flagship — the club itself has
+    /// no page — so a club with no main side resolves to a name without
+    /// a link rather than to a URL that goes nowhere.
+    fn other_party(data: &SimulatorData, story: &NewsStory) -> (String, String) {
         if story.other_id == 0 {
-            return String::new();
+            return (String::new(), String::new());
         }
 
         if story.kind.desk() == NewsDesk::Match {
             return data
                 .team_data(story.other_id)
-                .map(|team| team.name.clone())
+                .map(|team| (team.name.clone(), team.slug.clone()))
                 .unwrap_or_default();
         }
 
         data.club(story.other_id)
-            .map(|club| club.name.clone())
+            .map(|club| {
+                (
+                    club.name.clone(),
+                    club.teams
+                        .main()
+                        .map(|team| team.slug.clone())
+                        .unwrap_or_default(),
+                )
+            })
             .unwrap_or_default()
     }
 }
@@ -1226,15 +1395,19 @@ mod tests {
 /// can produce.
 #[cfg(test)]
 mod tier_tests {
-    use super::{PressDesk, StoryView};
+    use super::{PressDesk, Prose, Span, StoryView};
     use core::club::TeamNewsroom;
 
     fn stories(count: usize) -> Vec<StoryView> {
         (0..count)
             .map(|index| StoryView {
                 kicker: "Squad".to_string(),
-                headline: format!("Story {}", index),
-                body: "Body.".to_string(),
+                headline: Prose {
+                    spans: vec![Span::text(format!("Story {}", index))],
+                },
+                body: Prose {
+                    spans: vec![Span::text("Body.".to_string())],
+                },
                 date: "2 March 2026".to_string(),
                 player_slug: String::new(),
                 player_name: String::new(),
@@ -1294,8 +1467,8 @@ mod tier_tests {
 
         // The order the editor ranked them in survives the share-out:
         // the band under the fold holds the last of them and nothing else.
-        assert_eq!(tiers.briefs[0].headline, "Story 9");
-        assert_eq!(tiers.briefs[2].headline, "Story 11");
+        assert_eq!(tiers.briefs[0].headline.text(), "Story 9");
+        assert_eq!(tiers.briefs[2].headline.text(), "Story 11");
     }
 
     /// The page never ends on a part-built row. Whatever the edition
@@ -1319,10 +1492,49 @@ mod tier_tests {
 
 #[cfg(test)]
 mod render_tests {
-    use super::{IssueView, PortraitView, ResultView, StoryView, TeamNewspaperTemplate};
+    use super::{IssueView, PortraitView, Prose, ResultView, Span, StoryView, TeamNewspaperTemplate};
     use crate::I18n;
     use askama::Template;
     use std::collections::HashMap;
+
+    /// Fixture copy with the page's cross-references written into it.
+    /// `{player}` and `{club}` come out as the link spans the composer
+    /// emits, everything else as plain type — so the templates are
+    /// exercised on the shape they really receive, without a world
+    /// behind them.
+    struct Set;
+
+    impl Set {
+        fn prose(text: &str, player: &str) -> Prose {
+            let mut spans: Vec<Span> = Vec::new();
+            let mut rest = text;
+
+            while let Some(open) = rest.find('{') {
+                let close = open + rest[open..].find('}').expect("unclosed slot in fixture copy");
+                if open > 0 {
+                    spans.push(Span::text(rest[..open].to_string()));
+                }
+                spans.push(match &rest[open + 1..close] {
+                    "player" => Span::link(
+                        player.to_string(),
+                        "players",
+                        "17-diego-mora".to_string(),
+                    ),
+                    "club" => {
+                        Span::link("Córdoba".to_string(), "teams", "cordoba".to_string())
+                    }
+                    other => panic!("fixture copy uses an unknown slot {{{}}}", other),
+                });
+                rest = &rest[close + 1..];
+            }
+
+            if !rest.is_empty() {
+                spans.push(Span::text(rest.to_string()));
+            }
+
+            Prose { spans }
+        }
+    }
 
     /// Builds a page the way the handler would, so the template itself
     /// is exercised — the app can render a front page without anyone
@@ -1384,31 +1596,31 @@ mod render_tests {
             }
         }
 
-        fn story(kicker: &str, headline: &str, body: &str, player: bool) -> StoryView {
+        /// `player` is the man the story is about, empty for a story
+        /// about the club. Headline copy that leaves `{player}` out of
+        /// it while still naming a subject exercises the fall-back path
+        /// on purpose — that is real copy, not an oversight.
+        fn story(kicker: &str, headline: &str, body: &str, player: &str) -> StoryView {
             StoryView {
                 kicker: kicker.to_string(),
-                headline: headline.to_string(),
-                body: body.to_string(),
+                headline: Set::prose(headline, player),
+                body: Set::prose(body, player),
                 date: "2 March 2026".to_string(),
-                player_slug: if player {
+                player_slug: if player.is_empty() {
+                    String::new()
+                } else {
                     "17-diego-mora".to_string()
-                } else {
-                    String::new()
                 },
-                player_name: if player {
-                    "Diego Mora".to_string()
-                } else {
-                    String::new()
-                },
+                player_name: player.to_string(),
                 is_quote: false,
                 drop_cap: true,
             }
         }
 
-        fn quote(kicker: &str, headline: &str, body: &str) -> StoryView {
+        fn quote(kicker: &str, headline: &str, body: &str, player: &str) -> StoryView {
             StoryView {
                 is_quote: true,
-                ..Self::story(kicker, headline, body, true)
+                ..Self::story(kicker, headline, body, player)
             }
         }
 
@@ -1423,74 +1635,78 @@ mod render_tests {
                 mood_stamped: true,
                 lead: Some(Self::story(
                     "Match",
-                    "Córdoba tear Sevilla apart",
+                    "{club} tear Sevilla apart",
                     "Rarely has this fixture seen a display like it: 4-1 against Sevilla, \
                      and it could have been more.",
-                    false,
+                    "",
                 )),
                 secondary: vec![
                     Self::story(
                         "Squad",
-                        "Three goals for Diego Mora",
-                        "The match ball belongs to Diego Mora, whose 3 goals turned a \
+                        "Three goals for {player}",
+                        "The match ball belongs to {player}, whose 3 goals turned a \
                          difficult afternoon into a procession.",
-                        true,
+                        "Diego Mora",
                     ),
                     Self::quote(
                         "Loan watch",
-                        "Diego Mora wants to come home",
+                        "{player} wants to come home",
                         "\u{201c}I did not go there to sit and watch. I want to come back \
-                         and fight for my place at Córdoba.\u{201d}",
+                         and fight for my place at {club}.\u{201d}",
+                        "Diego Mora",
                     ),
                 ],
                 run: vec![
                     Self::story(
                         "Match",
-                        "Córdoba make it 4 in a row",
+                        "{club} make it 4 in a row",
                         "Four wins on the run, and the table now reads better than it has \
                          at any point this season.",
-                        false,
+                        "",
                     ),
                     Self::story(
                         "Market",
-                        "Rubén Ortega placed on the list",
+                        "{player} placed on the list",
                         "A month of training with the reserves ends the only way it was \
                          ever going to end.",
-                        true,
+                        "Rubén Ortega",
                     ),
                     Self::story(
                         "Boardroom",
-                        "Córdoba board back the manager",
+                        "{club} board back the manager",
                         "A public word of support and, more usefully, an understanding \
                          about what the next window will look like.",
-                        false,
+                        "",
                     ),
                     Self::story(
                         "Squad",
-                        "180 appearances for Andrés Vidal",
+                        "180 appearances for {player}",
                         "Eight seasons, one club, and a milestone the dressing room made \
                          rather more of than he did.",
-                        true,
+                        "Andrés Vidal",
                     ),
                     Self::story(
                         "Loan watch",
-                        "4 goals on loan for Pau Ferrer",
+                        "4 goals on loan for {player}",
                         "The reports coming back are good enough that his return is now a \
                          question of when rather than whether.",
-                        true,
+                        "Pau Ferrer",
                     ),
+                    // Real copy that never names its subject. There is
+                    // nothing in the line to underscore, so this one — and
+                    // only this one — keeps the whole-headline rule.
                     Self::story(
                         "Market",
-                        "Sevilla circle for Iván Salas",
+                        "A new admirer in the stands",
                         "Nothing has been put in writing yet, which is not the same thing \
                          as nothing having been said.",
-                        true,
+                        "Iván Salas",
                     ),
                 ],
                 briefs: vec![
-                    Self::story("Squad", "Diego Mora back in training", "", true),
-                    Self::story("Squad", "Nico Reyes out for 42 days", "", true),
-                    Self::story("The terraces", "The crowd stays with them", "", false),
+                    Self::story("Squad", "{player} back in training", "", "Diego Mora"),
+                    Self::story("Squad", "{player} out for 42 days", "", "Nico Reyes"),
+                    Self::story("The terraces", "The crowd stays with them", "", ""),
                 ],
                 results: vec![
                     ResultView {
@@ -1533,17 +1749,22 @@ mod render_tests {
                 mood_stamped: false,
                 lead: Some(Self::story(
                     "Squad",
-                    "Diego Mora is the real thing at 18",
+                    "{player} is the real thing at 18",
                     "A season average of 7.34 at an age when most of his year group are \
-                     still in the youth team. Córdoba know what they have, and so, by now, \
+                     still in the youth team. {club} know what they have, and so, by now, \
                      does everybody else.",
-                    true,
+                    "Diego Mora",
                 )),
                 secondary: Vec::new(),
                 run: Vec::new(),
                 briefs: vec![
-                    Self::story("Squad", "Diego Mora called up by his country", "", true),
-                    Self::story("Market", "Scouts sent to watch Diego Mora", "", true),
+                    Self::story(
+                        "Squad",
+                        "{player} called up by his country",
+                        "",
+                        "Diego Mora",
+                    ),
+                    Self::story("Market", "Scouts sent to watch {player}", "", "Diego Mora"),
                 ],
                 results: Vec::new(),
                 portrait: None,
@@ -1563,10 +1784,10 @@ mod render_tests {
                 mood_stamped: false,
                 lead: Some(Self::story(
                     "Boardroom",
-                    "Córdoba board back the manager",
+                    "{club} board back the manager",
                     "A public word of support from the board and, more usefully, an \
                      understanding about what the next window will look like.",
-                    false,
+                    "",
                 )),
                 secondary: Vec::new(),
                 run: Vec::new(),
@@ -1592,7 +1813,9 @@ mod render_tests {
             .unwrap();
 
         assert!(html.contains("The Córdoba Chronicle"));
-        assert!(html.contains("Córdoba tear Sevilla apart"));
+        // The club's name is a cross-reference, so the headline arrives
+        // in two pieces with the anchor between them.
+        assert!(html.contains("cordoba\" title=\"Córdoba\">Córdoba</a> tear Sevilla apart"));
         assert!(html.contains("np-folio-mood-triumph np-stamp"));
         assert!(html.contains("/api/players/17/face.svg"));
         assert!(html.contains("np-result np-result-w"));
@@ -1672,9 +1895,13 @@ mod render_tests {
     fn a_lead_that_opens_on_a_number_stands_the_drop_cap_down() {
         let numeric = IssueView {
             lead: Some(StoryView {
-                body: "4-1 against Sevilla, and it could have been more.".to_string(),
                 drop_cap: false,
-                ..Page::story("Match", "Córdoba tear Sevilla apart", "", false)
+                ..Page::story(
+                    "Match",
+                    "{club} tear Sevilla apart",
+                    "4-1 against Sevilla, and it could have been more.",
+                    "",
+                )
             }),
             ..Page::full_issue()
         };
@@ -1706,21 +1933,82 @@ mod render_tests {
         assert_eq!(html.matches("np-result-cup").count(), 1);
     }
 
-    /// Every headline about a person leads to that person. A reader who
-    /// wants to know who "Diego Mora" is should not have to go back to
-    /// the squad list and find him by hand.
+    /// The rule goes under the name and stops there. A headline is a
+    /// line of type with people and clubs in it, not a link to an
+    /// article — there is no article — so "Three goals for Diego Mora"
+    /// underscores three words, not five.
     #[test]
-    fn a_headline_about_a_player_links_to_him() {
+    fn a_headline_underscores_the_name_and_not_the_sentence() {
         let html = Page::template(vec![Page::full_issue()]).render().unwrap();
 
-        // Both secondaries, four of the six stories in the run and the
-        // portrait caption are about a player; the lead is a match report
-        // and correctly carries no link.
-        assert_eq!(html.matches("np-story-link").count(), 7);
+        assert!(html.contains(
+            "Three goals for <a class=\"np-story-link\" href=\"/en/players/17-diego-mora\" \
+             title=\"Diego Mora\">Diego Mora</a>"
+        ));
+        assert!(
+            !html.contains(">Three goals for Diego Mora</a>"),
+            "the whole headline was wrapped in the link again"
+        );
+    }
+
+    /// …and the same rule applies to a club named anywhere in the copy,
+    /// headline or body. A reader who meets a club in the middle of a
+    /// paragraph can go and look at it.
+    #[test]
+    fn a_club_named_in_the_copy_leads_to_the_club() {
+        let html = Page::template(vec![Page::full_issue()]).render().unwrap();
+
+        // Three headlines name the club; the pull-quote names it in the
+        // body, where the rule is the quieter one.
+        assert_eq!(
+            html.matches("<a class=\"np-story-link\" href=\"/en/teams/cordoba\"")
+                .count(),
+            3
+        );
+        assert!(html.contains(
+            "fight for my place at <a class=\"np-prose-link\" href=\"/en/teams/cordoba\" \
+             title=\"Córdoba\">Córdoba</a>."
+        ));
+    }
+
+    /// A player named in the body is a cross-reference too, set with the
+    /// quieter rule so a paragraph carrying three of them still reads as
+    /// a paragraph.
+    #[test]
+    fn a_body_names_its_people_as_links() {
+        let html = Page::template(vec![Page::full_issue()]).render().unwrap();
+
+        assert!(html.contains(
+            "The match ball belongs to <a class=\"np-prose-link\" \
+             href=\"/en/players/17-diego-mora\" title=\"Diego Mora\">Diego Mora</a>, whose"
+        ));
+    }
+
+    /// The one case that still underscores a whole headline: real copy
+    /// that is about a player without ever naming him. There is nothing
+    /// in the line to mark, and dropping the link would leave the story
+    /// with no route to its subject at all.
+    #[test]
+    fn a_headline_that_names_nobody_keeps_the_whole_line_as_the_link() {
+        let html = Page::template(vec![Page::full_issue()]).render().unwrap();
+
         assert!(html.contains(
             "<a class=\"np-story-link\" href=\"/en/players/17-diego-mora\" \
-             title=\"Diego Mora\">Three goals for Diego Mora</a>"
+             title=\"Iván Salas\">A new admirer in the stands</a>"
         ));
+    }
+
+    /// A brief marks the name in its line, and a brief about nobody
+    /// stays plain type — a dead link on a one-liner is worse than none.
+    #[test]
+    fn a_brief_underscores_the_name_in_its_line() {
+        let html = Page::template(vec![Page::full_issue()]).render().unwrap();
+
+        assert!(html.contains(
+            "<a class=\"np-brief-link\" href=\"/en/players/17-diego-mora\" \
+             title=\"Nico Reyes\">Nico Reyes</a> out for 42 days"
+        ));
+        assert!(html.contains("<span class=\"np-brief-text\">The crowd stays with them</span>"));
     }
 
     /// A headline with nobody behind it must stay plain text — wrapping
@@ -1730,8 +2018,11 @@ mod render_tests {
     fn a_club_headline_carries_no_player_link() {
         let html = Page::template(vec![Page::bare_issue()]).render().unwrap();
 
-        assert!(!html.contains("np-story-link"));
-        assert!(html.contains("Córdoba board back the manager"));
+        assert!(
+            !html.contains("/en/players/"),
+            "a story about the board was given a link to a player"
+        );
+        assert!(html.contains(">Córdoba</a> board back the manager"));
     }
 
     /// Back issues are set exactly like today's paper — same nameplate,
@@ -1746,7 +2037,7 @@ mod render_tests {
         assert_eq!(html.matches("np-masthead").count(), 2);
         assert_eq!(html.matches("np-folio\"").count(), 2);
         assert_eq!(html.matches("np-archive-rule").count(), 1);
-        assert!(html.contains("Córdoba board back the manager"));
+        assert!(html.contains(">Córdoba</a> board back the manager"));
         // The rule separates the two, so it cannot precede the front page.
         assert!(html.find("np-sheet").unwrap() < html.find("np-archive-rule").unwrap());
     }

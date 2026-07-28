@@ -1,0 +1,16 @@
+{# One run of composed copy — a headline or a body — set as the plain
+   type and proper names it was written as. Every name in a newspaper is
+   a cross-reference: the rule goes under the NAME and stops there, so a
+   reader can get from "{player} leaves {club} for {other}" to any of the
+   three without the whole sentence pretending to be a link.
+
+   Expects `prose` (a `Prose`) and `link_class`. Whitespace is deliberately
+   squeezed out of this partial: a newline between two spans would print
+   as a space in the middle of somebody's name. #}
+{%- for span in prose.spans -%}
+{%- if span.is_link() -%}
+<a class="{{ link_class }}" href="/{{ lang }}/{{ span.section }}/{{ span.slug }}" title="{{ span.text }}">{{ span.text }}</a>
+{%- else -%}
+{{ span.text }}
+{%- endif -%}
+{%- endfor -%}

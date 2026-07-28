@@ -30,17 +30,21 @@
             {% if let Some(lead) = issue.lead %}
             <section class="np-lead">
                 <p class="np-kicker">{{ lead.kicker }}<span class="np-dateline">{{ lead.date }}</span></p>
-                {# A headline about a person carries a link to him, set as a rule
+                {# Every name in the headline carries a link to it, set as a rule
                    under the type rather than as a coloured word — the page has one
-                   plate and a cross-reference is underscored, not tinted. #}
+                   plate and a cross-reference is underscored, not tinted. The rule
+                   goes under the NAME and stops there; only a headline that names
+                   nobody at all is underscored whole. #}
                 <h3 class="np-headline">
-                    {%- if lead.player_slug.is_empty() -%}
-                    {{ lead.headline }}
+                    {%- if lead.headline.has_links() -%}
+                    {% let prose = lead.headline %}{% let link_class = "np-story-link" %}{% include "teams/newspaper/_prose.html" %}
+                    {%- else if lead.player_slug.is_empty() -%}
+                    {{ lead.headline.text() }}
                     {%- else -%}
-                    <a class="np-story-link" href="/{{ lang }}/players/{{ lead.player_slug }}" title="{{ lead.player_name }}">{{ lead.headline }}</a>
+                    <a class="np-story-link" href="/{{ lang }}/players/{{ lead.player_slug }}" title="{{ lead.player_name }}">{{ lead.headline.text() }}</a>
                     {%- endif -%}
                 </h3>
-                <p class="np-lead-body{% if lead.is_quote %} np-quote{% endif %}{% if !lead.drop_cap %} np-no-cap{% endif %}">{{ lead.body }}</p>
+                <p class="np-lead-body{% if lead.is_quote %} np-quote{% endif %}{% if !lead.drop_cap %} np-no-cap{% endif %}">{% let prose = lead.body %}{% let link_class = "np-prose-link" %}{% include "teams/newspaper/_prose.html" %}</p>
             </section>
             {% endif %}
 
@@ -110,10 +114,12 @@
             {% for story in issue.briefs %}
             <li class="np-brief">
                 <span class="np-brief-kicker">{{ story.kicker }}</span>
-                {% if story.player_slug.is_empty() %}
-                <span class="np-brief-text">{{ story.headline }}</span>
+                {% if story.headline.has_links() %}
+                <span class="np-brief-text">{% let prose = story.headline %}{% let link_class = "np-brief-link" %}{% include "teams/newspaper/_prose.html" %}</span>
+                {% else if story.player_slug.is_empty() %}
+                <span class="np-brief-text">{{ story.headline.text() }}</span>
                 {% else %}
-                <a class="np-brief-text np-brief-link" href="/{{ lang }}/players/{{ story.player_slug }}" title="{{ story.player_name }}">{{ story.headline }}</a>
+                <a class="np-brief-text np-brief-link" href="/{{ lang }}/players/{{ story.player_slug }}" title="{{ story.player_name }}">{{ story.headline.text() }}</a>
                 {% endif %}
             </li>
             {% endfor %}

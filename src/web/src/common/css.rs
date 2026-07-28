@@ -177,6 +177,38 @@ mod tests {
         );
     }
 
+    /// The same wall, hit by the rule that marks a name in the middle of
+    /// a paragraph. That one cannot use `text-decoration` at all — the
+    /// global reset would swallow it — so it draws its rule with a
+    /// background gradient, exactly as the briefs column does. A
+    /// "tidy-up" that swaps it back to `text-decoration: underline`
+    /// leaves every club and player named in body copy silently
+    /// unmarked.
+    #[test]
+    fn a_newspaper_prose_link_draws_its_rule_without_text_decoration() {
+        let css = Bundle::without_comments(&Bundle::text());
+
+        let anchored = css
+            .find("a.np-prose-link:link")
+            .expect("the in-copy link rule must be anchored on `a…:link`");
+        let body = css[anchored..]
+            .split_once('}')
+            .map(|(head, _)| head)
+            .unwrap_or_default();
+        let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+
+        assert!(
+            flat.contains("background-image:linear-gradient"),
+            "the in-copy link draws no rule at all: {}",
+            body
+        );
+        assert!(
+            !flat.contains("text-decoration:underline"),
+            "the global reset out-specifies this and the rule will not render: {}",
+            body
+        );
+    }
+
     /// The masthead is the same wall from the other side. On a player's
     /// page the nameplate links to the club's own paper, and it must
     /// stay plain type: a rule under a masthead reads as a printing
