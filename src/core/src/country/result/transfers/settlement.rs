@@ -129,10 +129,7 @@ impl TransferClauseSettler {
     /// buyer's market); the seller may not — a cross-border deal's seller
     /// is returned as `Some((club_id, amount))` for the caller to credit
     /// globally after the country borrow ends.
-    fn route_payout(
-        country: &mut Country,
-        clause: &PendingTransferClause,
-    ) -> Option<(u32, f64)> {
+    fn route_payout(country: &mut Country, clause: &PendingTransferClause) -> Option<(u32, f64)> {
         let amount = clause.amount.max(0.0);
         if amount <= 0.0 {
             return None;

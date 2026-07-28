@@ -487,9 +487,9 @@ impl TransferMarket {
                     l.listing_type != TransferListingType::Loan
                 }
         });
-        if let Some(listing_index) = type_matched.or_else(|| {
-            self.listings.iter().position(open_listing)
-        }) {
+        if let Some(listing_index) =
+            type_matched.or_else(|| self.listings.iter().position(open_listing))
+        {
             let listing = &mut self.listings[listing_index];
 
             // Never negotiate with yourself

@@ -924,7 +924,13 @@ mod free_agent_source_aware_tests {
         let from = MoveFixtures::team("Old FC");
         let to = MoveFixtures::team("New FC");
         let date = FreeAgentFixtures::d(2026, 7, 1);
-        p.complete_transfer(MoveFixtures::completion(&from, &to, 2_500_000.0, date, true));
+        p.complete_transfer(MoveFixtures::completion(
+            &from,
+            &to,
+            2_500_000.0,
+            date,
+            true,
+        ));
 
         assert_eq!(MoveFixtures::dec_count(&p, "dec_transfer_completed"), 1);
         let row = p
@@ -933,8 +939,16 @@ mod free_agent_source_aware_tests {
             .iter()
             .find(|d| d.decision == "dec_transfer_completed")
             .unwrap();
-        assert!(row.movement.contains("Old FC"), "movement: {}", row.movement);
-        assert!(row.movement.contains("New FC"), "movement: {}", row.movement);
+        assert!(
+            row.movement.contains("Old FC"),
+            "movement: {}",
+            row.movement
+        );
+        assert!(
+            row.movement.contains("New FC"),
+            "movement: {}",
+            row.movement
+        );
         assert!(row.movement.contains('→'), "movement: {}", row.movement);
     }
 
@@ -948,7 +962,10 @@ mod free_agent_source_aware_tests {
         let date = FreeAgentFixtures::d(2026, 7, 1);
         p.complete_transfer(MoveFixtures::completion(&from, &to, 0.0, date, true));
 
-        assert_eq!(MoveFixtures::dec_count(&p, "dec_free_transfer_completed"), 1);
+        assert_eq!(
+            MoveFixtures::dec_count(&p, "dec_free_transfer_completed"),
+            1
+        );
         assert_eq!(MoveFixtures::dec_count(&p, "dec_transfer_completed"), 0);
     }
 
@@ -961,10 +978,19 @@ mod free_agent_source_aware_tests {
         let from = MoveFixtures::team("Old FC");
         let to = MoveFixtures::team("New FC");
         let date = FreeAgentFixtures::d(2026, 7, 1);
-        p.complete_transfer(MoveFixtures::completion(&from, &to, 1_000_000.0, date, false));
+        p.complete_transfer(MoveFixtures::completion(
+            &from,
+            &to,
+            1_000_000.0,
+            date,
+            false,
+        ));
 
         assert_eq!(MoveFixtures::dec_count(&p, "dec_transfer_completed"), 0);
-        assert_eq!(MoveFixtures::dec_count(&p, "dec_free_transfer_completed"), 0);
+        assert_eq!(
+            MoveFixtures::dec_count(&p, "dec_free_transfer_completed"),
+            0
+        );
     }
 
     /// A free-agent capture is a genuine recruitment decision — one

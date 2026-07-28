@@ -132,7 +132,11 @@ impl PlayerTrainingResult {
             s.agility = raise(s.agility, g.agility, SkillKey::Agility);
             s.balance = raise(s.balance, g.balance, SkillKey::Balance);
             s.jumping = raise(s.jumping, g.jumping, SkillKey::Jumping);
-            s.natural_fitness = raise(s.natural_fitness, g.natural_fitness, SkillKey::NaturalFitness);
+            s.natural_fitness = raise(
+                s.natural_fitness,
+                g.natural_fitness,
+                SkillKey::NaturalFitness,
+            );
 
             let g = &self.effects.technical_gains;
             let s = &mut player.skills.technical;
@@ -170,8 +174,11 @@ impl PlayerTrainingResult {
             s.reflexes = raise(s.reflexes, g.reflexes, SkillKey::GkReflexes);
             s.one_on_ones = raise(s.one_on_ones, g.one_on_ones, SkillKey::GkOneOnOnes);
             s.aerial_reach = raise(s.aerial_reach, g.aerial_reach, SkillKey::GkAerialReach);
-            s.command_of_area =
-                raise(s.command_of_area, g.command_of_area, SkillKey::GkCommandOfArea);
+            s.command_of_area = raise(
+                s.command_of_area,
+                g.command_of_area,
+                SkillKey::GkCommandOfArea,
+            );
             s.communication = raise(s.communication, g.communication, SkillKey::GkCommunication);
             s.rushing_out = raise(s.rushing_out, g.rushing_out, SkillKey::GkRushingOut);
             s.punching = raise(s.punching, g.punching, SkillKey::GkPunching);

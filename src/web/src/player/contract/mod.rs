@@ -4,6 +4,7 @@ use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VE
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::decisions::PlayerDecisionsCounter;
 use crate::player::events::PlayerEventsCounter;
+use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -53,6 +54,7 @@ pub struct PlayerContractTemplate {
     pub decisions_count: usize,
     pub interested_clubs_count: usize,
     pub awards_count: u32,
+    pub news_count: usize,
     pub contract: Option<ContractDetailDto>,
     pub loan_contract: Option<LoanDetailDto>,
     pub bonuses: Vec<BonusDto>,
@@ -214,6 +216,7 @@ pub async fn player_contract_action(
         decisions_count: PlayerDecisionsCounter::count_recent(player, simulator_data.date.date()),
         interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
         awards_count: player.awards_count.total(),
+        news_count: PlayerNewsCounter::count(simulator_data, player),
         contract,
         loan_contract,
         bonuses,

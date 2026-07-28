@@ -320,9 +320,7 @@ impl Player {
         let new_jad = self.player_attributes.jadedness as i32 + jad_gain;
         self.player_attributes.jadedness = new_jad.clamp(0, 10_000) as i16;
 
-        if self.player_attributes.jadedness > 7000
-            && !self.statuses.has(PlayerStatusType::Rst)
-        {
+        if self.player_attributes.jadedness > 7000 && !self.statuses.has(PlayerStatusType::Rst) {
             self.statuses.add(now, PlayerStatusType::Rst);
         }
 

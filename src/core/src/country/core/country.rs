@@ -28,11 +28,11 @@ use crate::country::{
     InternationalCompetition, MediaCoverage,
 };
 use crate::league::DomesticCup;
-use crate::league::playoff::{GroupStanding, LeaguePlayoff, StandingRow};
 use crate::league::League;
 use crate::league::LeagueResult;
 use crate::league::LeagueTableResult;
 use crate::league::LeagueTableRow;
+use crate::league::playoff::{GroupStanding, LeaguePlayoff, StandingRow};
 use std::collections::HashMap;
 
 /// State stashed between [`Country::simulate_build`] and
@@ -401,8 +401,12 @@ impl Country {
                 .collect();
 
             for playoff in &mut self.playoffs {
-                let pf_ctx =
-                    ctx.with_league(playoff.league.id, playoff.league.slug.clone(), &[], playoff.league.reputation);
+                let pf_ctx = ctx.with_league(
+                    playoff.league.id,
+                    playoff.league.slug.clone(),
+                    &[],
+                    playoff.league.reputation,
+                );
                 let output = playoff.simulate_build(&self.clubs, &group_snaps, &pf_ctx);
                 all_matches.extend(output.matches);
                 playoff_pending.push(output.pending);

@@ -4,12 +4,12 @@ use crate::country::Country;
 use crate::league::League;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::negotiation::NegotiationStatus;
-use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::pipeline::plausibility::{
     TransferMovePlausibility, TransferMoveStage, TransferPlausibilityBuilder,
 };
 use crate::transfers::pipeline::scouting_config::{RealismTarget, ScoutingConfig};
 use crate::transfers::pipeline::{ClubTransferPlan, ScoutPlayerMonitoring};
+use crate::transfers::window::PlayerValuationCalculator;
 use crate::{
     Club, Person, Player, PlayerSquadStatus, PlayerStatusType, SimulatorData, Staff, Team,
 };

@@ -1147,7 +1147,11 @@ mod talk_feed_gate_tests {
             false,
             0.0
         ));
-        assert!(TalkFeedGate::feed_worthy(&ManagerTalkType::Praise, true, 5.0));
+        assert!(TalkFeedGate::feed_worthy(
+            &ManagerTalkType::Praise,
+            true,
+            5.0
+        ));
     }
 }
 

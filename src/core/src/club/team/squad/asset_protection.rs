@@ -321,7 +321,10 @@ impl SquadAssetContext {
             reputations.push(Self::display_reputation(player));
         }
 
-        let squad_avg_level = level_sum.checked_div(count).map(|avg| avg as u8).unwrap_or(0);
+        let squad_avg_level = level_sum
+            .checked_div(count)
+            .map(|avg| avg as u8)
+            .unwrap_or(0);
         let squad_avg_ability = ca_sum.checked_div(count).map(|avg| avg as u8).unwrap_or(0);
         let top_quartile_reputation = Self::top_quartile(&mut reputations);
         let evidence = SquadEvidenceContext::from_squad(players);
@@ -481,10 +484,12 @@ impl SquadAssetContext {
         let ceiling = PotentialEstimator::observable_ceiling(player, date);
         let clearly_below_group = (level as i16) <= group_avg - Self::NEAR_GROUP_GAP;
         if age <= Self::PROSPECT_MAX_AGE && (level as i16) < group_avg {
-            let extra_margin = age.saturating_sub(Self::PROSPECT_DOUBT_AGE) as u8
-                * Self::CEILING_MARGIN_PER_YEAR;
-            let believed_upside =
-                ceiling > level.saturating_add(Self::CEILING_GAP).saturating_add(extra_margin);
+            let extra_margin =
+                age.saturating_sub(Self::PROSPECT_DOUBT_AGE) as u8 * Self::CEILING_MARGIN_PER_YEAR;
+            let believed_upside = ceiling
+                > level
+                    .saturating_add(Self::CEILING_GAP)
+                    .saturating_add(extra_margin);
             let raw_benefit_of_doubt = age <= Self::PROSPECT_DOUBT_AGE && clearly_below_group;
             if believed_upside || raw_benefit_of_doubt {
                 return SquadAssetClass::ProspectDevelopment;
@@ -563,8 +568,7 @@ impl SquadAssetContext {
         if self.group_size(group) > group.main_depth_cap() {
             return false;
         }
-        if player.statuses.has(PlayerStatusType::Unh)
-            || player.statuses.has(PlayerStatusType::Req)
+        if player.statuses.has(PlayerStatusType::Unh) || player.statuses.has(PlayerStatusType::Req)
         {
             return false;
         }

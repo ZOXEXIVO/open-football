@@ -35,21 +35,17 @@ impl TeamBehaviour {
         official(official_captain)
             .or_else(|| official(official_vice))
             .or_else(|| {
-                players
-                    .players
-                    .iter()
-                    .filter(|p| bar(p))
-                    .max_by(|a, b| {
-                        let sa = a.skills.mental.leadership * 1.0
-                            + a.attributes.professionalism * 0.6
-                            + a.attributes.loyalty * 0.4;
-                        let sb = b.skills.mental.leadership * 1.0
-                            + b.attributes.professionalism * 0.6
-                            + b.attributes.loyalty * 0.4;
-                        sa.partial_cmp(&sb)
-                            .unwrap_or(Ordering::Equal)
-                            .then_with(|| b.id.cmp(&a.id))
-                    })
+                players.players.iter().filter(|p| bar(p)).max_by(|a, b| {
+                    let sa = a.skills.mental.leadership * 1.0
+                        + a.attributes.professionalism * 0.6
+                        + a.attributes.loyalty * 0.4;
+                    let sb = b.skills.mental.leadership * 1.0
+                        + b.attributes.professionalism * 0.6
+                        + b.attributes.loyalty * 0.4;
+                    sa.partial_cmp(&sb)
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| b.id.cmp(&a.id))
+                })
             })
     }
 
@@ -438,8 +434,7 @@ mod tests {
         let official_captain = Fixture::player(2, 12.0, 90.0);
         let bystander = Fixture::player(3, 5.0, 50.0);
 
-        let mut players =
-            PlayerCollection::new(vec![sulking_leader, official_captain, bystander]);
+        let mut players = PlayerCollection::new(vec![sulking_leader, official_captain, bystander]);
 
         TeamBehaviour::process_captain_morale_propagation(&mut players, Some(2), None);
 

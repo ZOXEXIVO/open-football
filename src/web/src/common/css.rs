@@ -20,6 +20,26 @@ mod tests {
             String::from_utf8(file.data.to_vec()).expect("stylesheet is UTF-8")
         }
 
+        /// The sheet with `/* … */` stripped. Tests that look for a
+        /// selector must not match the prose in a comment explaining
+        /// that selector — and the dev bundle keeps comments while the
+        /// release one drops them, so a test that skipped this would
+        /// pass and fail depending on the profile.
+        fn without_comments(css: &str) -> String {
+            let mut out = String::with_capacity(css.len());
+            let mut rest = css;
+
+            while let Some(start) = rest.find("/*") {
+                out.push_str(&rest[..start]);
+                match rest[start..].find("*/") {
+                    Some(end) => rest = &rest[start + end + 2..],
+                    None => return out,
+                }
+            }
+            out.push_str(rest);
+            out
+        }
+
         /// Every `calc(…)` span in the sheet, innermost parens included.
         fn calc_spans(css: &str) -> Vec<String> {
             let mut spans = Vec::new();
@@ -100,5 +120,94 @@ mod tests {
 
         assert!(css.contains(".np-sheet"), "newspaper styles are missing");
         assert!(css.contains("--np-pad"), "newspaper tokens are missing");
+    }
+
+    /// The newspaper's column gutters — the hairline rules between the
+    /// stories set side by side — are drawn by nth-child rules that a
+    /// `:not()` lifts to (0,3,0). A media query adds nothing to
+    /// specificity, so the narrow-screen blocks that clear those gutters
+    /// have to carry a pseudo-class of their own to reach the same
+    /// weight and win on source order. A plain `.np-run > .np-split`
+    /// there is (0,2,0) and loses to the wide-screen rule however late
+    /// it is set, which leaves a vertical rule down the middle of a
+    /// page that has only one column left.
+    #[test]
+    fn the_newspaper_column_gutters_can_be_cleared_on_a_narrow_screen() {
+        let css = Bundle::without_comments(&Bundle::text());
+        let flat: String = css.chars().filter(|c| !c.is_whitespace()).collect();
+
+        for reset in [
+            ".np-splits>.np-split:nth-child(n)",
+            ".np-run>.np-split:nth-child(n)",
+        ] {
+            assert!(
+                flat.contains(reset),
+                "`{}` is gone: the responsive reset can no longer out-rank the \
+                 gutter rules it exists to undo",
+                reset
+            );
+        }
+    }
+
+    /// A global `a:link, a:visited, a:hover, a:active { text-decoration:
+    /// none !important }` sits near the top of the sheet. Its specificity
+    /// is (0,1,1), so a bare `.np-story-link { … !important }` — (0,1,0) —
+    /// loses to it and the newspaper's player links render as plain type.
+    /// Both halves of the escape hatch have to survive edits: the rule
+    /// must be anchored on `a…:link` to out-specify the reset, AND carry
+    /// its own `!important` to answer it.
+    #[test]
+    fn a_newspaper_player_link_outranks_the_global_underline_reset() {
+        let css = Bundle::without_comments(&Bundle::text());
+
+        let anchored = css
+            .find("a.np-story-link:link")
+            .expect("the player-link rule must be anchored on `a…:link` to beat `a:link`");
+        let body = css[anchored..]
+            .split_once('}')
+            .map(|(head, _)| head)
+            .unwrap_or_default();
+        let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+
+        assert!(
+            flat.contains("text-decoration:underline!important"),
+            "the player link's underline is not marked important and the global \
+             reset will swallow it: {}",
+            body
+        );
+    }
+
+    /// The masthead is the same wall from the other side. On a player's
+    /// page the nameplate links to the club's own paper, and it must
+    /// stay plain type: a rule under a masthead reads as a printing
+    /// fault, not as a cross-reference. Two things can break it — the
+    /// link picking up Bootstrap's colour, or somebody "fixing" the
+    /// missing underline by borrowing `np-story-link`. This pins the
+    /// first; `the_nameplate_opens_the_clubs_own_paper_without_an_underline`
+    /// (player newspaper) pins the second.
+    #[test]
+    fn a_newspaper_masthead_link_never_draws_a_rule() {
+        let css = Bundle::without_comments(&Bundle::text());
+
+        let anchored = css
+            .find("a.np-masthead-link:link")
+            .expect("the masthead-link rule must be anchored on `a…:link`");
+        let body = css[anchored..]
+            .split_once('}')
+            .map(|(head, _)| head)
+            .unwrap_or_default();
+        let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+
+        assert!(
+            flat.contains("text-decoration:none!important"),
+            "the masthead link must state its lack of underline: {}",
+            body
+        );
+        assert!(
+            flat.contains("color:inherit!important"),
+            "without this the nameplate takes Bootstrap's link colour on a \
+             page whose whole design is one black plate: {}",
+            body
+        );
     }
 }

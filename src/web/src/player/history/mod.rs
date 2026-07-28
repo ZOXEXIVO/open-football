@@ -5,6 +5,7 @@ use crate::common::friendly_source::FriendlySourceSlug;
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::decisions::PlayerDecisionsCounter;
 use crate::player::events::PlayerEventsCounter;
+use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -57,6 +58,7 @@ pub struct PlayerHistoryTemplate {
     pub decisions_count: usize,
     pub interested_clubs_count: usize,
     pub awards_count: u32,
+    pub news_count: usize,
 }
 
 pub struct PlayerHistorySeasonItem {
@@ -454,6 +456,7 @@ pub async fn player_history_action(
             ),
             interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
             awards_count: player.awards_count.total(),
+            news_count: PlayerNewsCounter::count(simulator_data, player),
         }
         .into_response())
     } else {
@@ -511,6 +514,7 @@ pub async fn player_history_action(
             ),
             interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
             awards_count: player.awards_count.total(),
+            news_count: PlayerNewsCounter::count(simulator_data, player),
         }
         .into_response())
     }

@@ -1,10 +1,10 @@
 use super::Club;
 use crate::ContractBonusType;
 use crate::club::DistressLevel;
+use crate::club::classify_distress;
 use crate::club::finance::{
     AdministrationState, DebtProfile, DebtStanding, RevenueInputs, RevenueModel,
 };
-use crate::club::classify_distress;
 use crate::context::GlobalContext;
 use chrono::Datelike;
 use chrono::NaiveDate;
@@ -139,7 +139,9 @@ impl Club {
                     .push_income_tv_placement(revenue.broadcast_merit);
             }
             if revenue.parachute > 0 {
-                self.finance.balance.push_income_parachute(revenue.parachute);
+                self.finance
+                    .balance
+                    .push_income_parachute(revenue.parachute);
             }
             if revenue.matchday > 0 {
                 self.finance.balance.push_income_matchday(revenue.matchday);
@@ -264,15 +266,11 @@ impl Club {
     ) {
         let administration = self.finance.debt.administration;
         let balance = self.finance.balance.balance;
-        let standing =
-            DebtProfile::classify(balance, trailing_income, distress, administration);
+        let standing = DebtProfile::classify(balance, trailing_income, distress, administration);
         self.finance.debt.standing = standing;
 
         // Interest on serviced borrowing only.
-        let interest = self
-            .finance
-            .debt
-            .monthly_interest(balance, trailing_income);
+        let interest = self.finance.debt.monthly_interest(balance, trailing_income);
         if interest > 0 {
             self.finance.balance.push_expense_debt_interest(interest);
         }

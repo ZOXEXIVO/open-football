@@ -12,7 +12,6 @@ use super::types::{MatchOutcome, MatchParticipation};
 use crate::Person;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
-use chrono::NaiveDate;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
     HappinessEventScope, HappinessEventSeverity, HappinessEventType, ManagerCriticismReason,
@@ -23,6 +22,7 @@ use crate::{
     SelectionOmissionReason, SelectionRole, SupportEventContext, SupportSetting, SupportSource,
     SupportTrigger,
 };
+use chrono::NaiveDate;
 
 impl Player {
     /// React to finishing a match: stats bookkeeping, morale events,

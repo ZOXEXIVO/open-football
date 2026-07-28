@@ -4,6 +4,7 @@ pub mod routes;
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::potential_stars::{PotentialStarsView, StarRating};
 use crate::player::PlayerStatusDto;
+use crate::teams::newspaper::NewspaperCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -50,6 +51,8 @@ pub struct TeamGetTemplate {
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
+    /// Printed items waiting on the newspaper tab, for the tabbar badge.
+    pub newspaper_count: usize,
     pub players: Vec<TeamPlayer>,
 }
 
@@ -313,8 +316,7 @@ pub async fn team_get_action(
     let club_id = team.club_id;
     // The AI team report is a club-level feature surfaced once, on the Main
     // team page only — not on B / reserve / youth (U18…) squads.
-    let ai_enabled =
-        team.team_type == TeamType::Main && state.ai.is_configured().await;
+    let ai_enabled = team.team_type == TeamType::Main && state.ai.is_configured().await;
 
     Ok(TeamGetTemplate {
         css_version: CSS_VERSION,
@@ -345,8 +347,8 @@ pub async fn team_get_action(
         ai_enabled,
         active_tab: "squad",
         show_finances_tab: team.team_type.is_own_team(),
-        show_academy_tab: team.team_type == TeamType::Main
-            || team.team_type == TeamType::U18,
+        show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
+        newspaper_count: NewspaperCounter::count(simulator_data, team),
         players,
     })
 }

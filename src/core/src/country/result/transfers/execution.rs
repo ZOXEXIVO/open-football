@@ -1852,6 +1852,12 @@ fn build_loan_contract(
         parent_team_id,
         buying_club_id,
     )
+    // Stamp the day the spell began. Everything that judges a loan
+    // reasons from elapsed time — the monthly playing-time audit gates
+    // on `started` being present and silently skipped every real loan
+    // while this was left `None`, and the club paper's loan column has
+    // no way to say "two appearances in fourteen fixtures" without it.
+    .starting_on(signing_date)
     .with_loan_match_fee(match_fee)
     .with_loan_wage_contribution(contribution_pct)
     .with_loan_recall(
@@ -1961,8 +1967,7 @@ impl TransferClauseScheduler {
                     // market and can't route a tranche to a foreign
                     // seller), so only schedule deferred tranches for
                     // domestic permanent deals.
-                    if transfer.is_loan
-                        || transfer.selling_country_id != transfer.buying_country_id
+                    if transfer.is_loan || transfer.selling_country_id != transfer.buying_country_id
                     {
                         continue;
                     }

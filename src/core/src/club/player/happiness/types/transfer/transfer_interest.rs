@@ -16,6 +16,15 @@ pub enum TransferInterestStage {
     BidRejected,
     NegotiationsOpened,
     NegotiationsStalled,
+    /// He has agreed personal terms. The clubs are done, the player is
+    /// done, and only the medical stands between him and the move — the
+    /// one rung of the ladder that says a deal is going to happen. Every
+    /// other terminal stage below is a way for it not to.
+    TermsAgreed,
+    /// He turned the move down himself. Distinct from `BidRejected`,
+    /// which is his club refusing to sell: this one is his own answer,
+    /// and it lands very differently in a dressing room.
+    TermsRejected,
     MoveCollapsed,
     InterestCooled,
 }
@@ -37,6 +46,8 @@ impl TransferInterestStage {
             TransferInterestStage::NegotiationsStalled => {
                 "transfer_interest_stage_negotiations_stalled"
             }
+            TransferInterestStage::TermsAgreed => "transfer_interest_stage_terms_agreed",
+            TransferInterestStage::TermsRejected => "transfer_interest_stage_terms_rejected",
             TransferInterestStage::MoveCollapsed => "transfer_interest_stage_move_collapsed",
             TransferInterestStage::InterestCooled => "transfer_interest_stage_interest_cooled",
         }

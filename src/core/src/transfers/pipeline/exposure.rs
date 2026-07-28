@@ -207,19 +207,15 @@ impl AvailabilityExposure {
         // Seller drops the price the longer it sits — more so when the tag
         // sits above the player's value.
         let overpriced = (s.asking_to_value_ratio - 1.0).clamp(0.0, 0.6);
-        let price_softening = (stale_frac * 0.18
-            + scan_frac * 0.08
-            + overpriced * 0.10
-            + seller_block_nudge)
-            .clamp(0.0, 0.30);
+        let price_softening =
+            (stale_frac * 0.18 + scan_frac * 0.08 + overpriced * 0.10 + seller_block_nudge)
+                .clamp(0.0, 0.30);
         // The player relaxes his wage / level demand over a dry spell; a
         // player who actually handed in a request softens a touch faster.
         let request_bonus = if s.is_transfer_requested { 0.03 } else { 0.0 };
-        let wage_softening = (stale_frac * 0.14
-            + scan_frac * 0.07
-            + request_bonus
-            + player_block_nudge)
-            .clamp(0.0, 0.25);
+        let wage_softening =
+            (stale_frac * 0.14 + scan_frac * 0.07 + request_bonus + player_block_nudge)
+                .clamp(0.0, 0.25);
 
         AvailabilityExposure {
             score,

@@ -3195,6 +3195,59 @@ fn transfer_interest_bid_rejected_signal_emits_with_rejected_evidence() {
     );
 }
 
+/// The saga ladder used to have a rung for every way a move can die and
+/// none for it going through. A player who has agreed his wages and is
+/// waiting on a medical is the furthest a transfer gets while it is
+/// still about him, and it now says so.
+#[test]
+fn agreeing_personal_terms_is_a_beat_of_its_own() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.attributes.ambition = 16.0;
+
+    let landed = p.on_transfer_interest_signal(&make_signal(TransferInterestStage::TermsAgreed));
+
+    assert!(landed, "a deal this far along always reaches the player");
+    let event = p
+        .happiness
+        .recent_events
+        .iter()
+        .find(|e| e.event_type == HappinessEventType::AgreedPersonalTerms)
+        .expect("agreeing terms must fire its own event");
+    assert!(
+        event.magnitude > 0.0,
+        "the move he wants is finally happening"
+    );
+    let tic = event
+        .context
+        .as_ref()
+        .and_then(|c| c.transfer_interest_context.as_ref())
+        .expect("context attached for agreed terms");
+    assert_eq!(tic.interest_stage, TransferInterestStage::TermsAgreed);
+    assert_eq!(tic.interested_club_id, Some(9001));
+}
+
+/// His refusal and his club's refusal are two different stories, and
+/// they used to arrive as the same one. `BidRejected` is the selling
+/// club saying no; this is the player.
+#[test]
+fn a_player_turning_a_move_down_is_not_the_same_beat_as_his_club_refusing() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.attributes.ambition = 12.0;
+
+    let landed = p.on_transfer_interest_signal(&make_signal(TransferInterestStage::TermsRejected));
+
+    assert!(landed);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::RejectedMoveOnPersonalTerms),
+        1
+    );
+    assert_eq!(
+        count_events(&p, &HappinessEventType::TransferBidRejected),
+        0,
+        "a move he refused must not read as a bid his club refused"
+    );
+}
+
 #[test]
 fn transfer_interest_already_home_domestic_move_is_not_homecoming() {
     // Russian player at a Russian club linked with another Russian club:
@@ -6269,7 +6322,10 @@ fn scout_watched_surfaces_for_big_club_but_not_for_peer() {
     // A clearly bigger club's scouts in the stand are news to the player.
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     let sig = make_signal(TransferInterestStage::ScoutWatched);
-    assert!(p.on_transfer_interest_signal(&sig), "big-club scouting must surface");
+    assert!(
+        p.on_transfer_interest_signal(&sig),
+        "big-club scouting must surface"
+    );
     assert_eq!(count_events(&p, &HappinessEventType::ScoutedByClub), 1);
 
     // A peer club's scout is everyday noise — the gate keeps it quiet.
@@ -6277,7 +6333,10 @@ fn scout_watched_surfaces_for_big_club_but_not_for_peer() {
     let mut peer = make_signal(TransferInterestStage::ScoutWatched);
     peer.buyer_rep = 0.52;
     peer.buyer_league_rep = 5000;
-    assert!(!q.on_transfer_interest_signal(&peer), "peer-club scouting is not news");
+    assert!(
+        !q.on_transfer_interest_signal(&peer),
+        "peer-club scouting is not news"
+    );
     assert_eq!(count_events(&q, &HappinessEventType::ScoutedByClub), 0);
 }
 
@@ -6367,7 +6426,17 @@ fn goal_against_former_club_is_a_story_beat() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     p.sold_from = Some((777, 2_000_000.0));
     let st = stats(7.2, 1, 0, 0, PlayerFieldPositionGroup::Forward);
-    let mut o = outcome(&st, 7.2, false, false, false, false, 2, 0, MatchParticipation::Starter);
+    let mut o = outcome(
+        &st,
+        7.2,
+        false,
+        false,
+        false,
+        false,
+        2,
+        0,
+        MatchParticipation::Starter,
+    );
     o.opponent_club_id = Some(777);
     p.on_match_played(&o);
     assert_eq!(
@@ -6379,7 +6448,17 @@ fn goal_against_former_club_is_a_story_beat() {
     // Same goal against an unrelated club: no beat.
     let mut q = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     q.sold_from = Some((777, 2_000_000.0));
-    let mut o2 = outcome(&st, 7.2, false, false, false, false, 2, 0, MatchParticipation::Starter);
+    let mut o2 = outcome(
+        &st,
+        7.2,
+        false,
+        false,
+        false,
+        false,
+        2,
+        0,
+        MatchParticipation::Starter,
+    );
     o2.opponent_club_id = Some(555);
     q.on_match_played(&o2);
     assert_eq!(
@@ -6423,9 +6502,7 @@ fn capped_veteran_retires_from_international_football_once() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     p.birth_date = d(1991, 1, 1);
     p.player_attributes.international_apps = 45;
-    assert!(CareerStageDetector::maybe_retire_from_international_football(
-        &mut p, today
-    ));
+    assert!(CareerStageDetector::maybe_retire_from_international_football(&mut p, today));
     assert!(p.international_retired);
     assert_eq!(
         count_events(&p, &HappinessEventType::InternationalRetirement),

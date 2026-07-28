@@ -124,8 +124,9 @@ impl AiJobHandle {
 
     /// Record a tool call the model just made (streamed to the dialog).
     pub fn push_tool(&self, name: String, arguments: String) {
-        self.jobs
-            .mutate(self.id, |job| job.tool_calls.push(ToolTrace { name, arguments }));
+        self.jobs.mutate(self.id, |job| {
+            job.tool_calls.push(ToolTrace { name, arguments })
+        });
     }
 
     pub fn finish(&self, text: String) {

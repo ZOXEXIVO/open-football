@@ -36,6 +36,13 @@ pub enum CareerDesireKind {
     /// instead of sending him back to the parent's fringe. Drives
     /// `WantsLoanMadePermanent`.
     LoanToPermanentAmbition,
+    /// The loanee who has had enough of being lent out and wants the
+    /// chance he has never been given at the club that owns him — back
+    /// in pre-season, in the squad, fighting for the shirt. The same
+    /// fatigue as `LoanToPermanentAmbition` pointed the other way: home
+    /// rather than the borrowing club. Drives
+    /// `WantsToProveHimselfAtParent`.
+    ParentClubProvingGround,
 }
 
 impl CareerDesireKind {
@@ -57,6 +64,7 @@ impl CareerDesireKind {
             }
             CareerDesireKind::PostRelegationAmbition => "career_desire_kind_post_relegation",
             CareerDesireKind::LoanToPermanentAmbition => "career_desire_kind_loan_permanent",
+            CareerDesireKind::ParentClubProvingGround => "career_desire_kind_prove_at_parent",
         }
     }
 }
@@ -116,8 +124,10 @@ pub enum CareerDesireEvidence {
     /// classic case is the career #2 goalkeeper.
     PerennialBackupRole,
     /// Player keeps being sent out on loan season after season and never
-    /// gets a first-team chance at the parent club — he wants a permanent
-    /// home where he actually belongs, even a step down.
+    /// gets a first-team chance at the parent club. Which way that
+    /// pushes him is the emitting audit's business: a permanent home
+    /// where he actually belongs, even a step down, or one real shot at
+    /// the club that owns him.
     SerialLoanSpells,
     /// The club has just been relegated a division.
     RelegatedWithClub,

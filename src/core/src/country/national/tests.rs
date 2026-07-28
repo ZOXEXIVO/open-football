@@ -1046,7 +1046,10 @@ fn make_match_player(
         })
         .contract(None)
         .positions(PlayerPositions {
-            positions: vec![PlayerPosition { position, level: 18 }],
+            positions: vec![PlayerPosition {
+                position,
+                level: 18,
+            }],
         })
         .statistics(PlayerStatistics::default())
         .statistics_history(PlayerStatisticsHistory::from_items(vec![]))
@@ -1063,11 +1066,8 @@ fn tired_regular_yields_to_fresh_deputy_in_competitive() {
     let regular = make_match_player(1, 150, 60, 3, 10, 27, PlayerPositionType::MidfielderCenter);
     let deputy = make_match_player(2, 146, 100, 3, 10, 27, PlayerPositionType::MidfielderCenter);
     let date = comp_date();
-    let reg = NationalTeam::matchday_overall_score(
-        &regular,
-        NationalMatchImportance::Competitive,
-        date,
-    );
+    let reg =
+        NationalTeam::matchday_overall_score(&regular, NationalMatchImportance::Competitive, date);
     let dep =
         NationalTeam::matchday_overall_score(&deputy, NationalMatchImportance::Competitive, date);
     assert!(

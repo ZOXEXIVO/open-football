@@ -392,6 +392,14 @@ pub struct MoraleEventCatalog {
     pub transfer_interest_dismissed: f32,
     pub transfer_talks_expected: f32,
     pub interest_cooled: f32,
+    /// Personal terms agreed — the move is happening, and the last
+    /// thing standing in its way is a medical. A step up from the
+    /// talks-expected anticipation it follows.
+    pub agreed_personal_terms: f32,
+    /// He turned the move down himself. Mildly positive for him — it
+    /// was his call and he made it — and the fallout that matters lands
+    /// on the club, not on his mood.
+    pub rejected_move_on_personal_terms: f32,
     pub used_interest_for_contract_leverage: f32,
     pub fans_react_to_transfer_rumour: f32,
     // Discipline lifecycle / career story beats
@@ -506,6 +514,10 @@ pub struct MoraleEventCatalog {
     /// Thriving loanee wants the borrower to sign him permanently —
     /// mild longing, not a grievance.
     pub wants_loan_made_permanent: f32,
+    /// Loanee who has had enough of the carousel and wants to go back
+    /// and fight for a place at his own club. A real grievance, unlike
+    /// the permanence longing — the years are the complaint.
+    pub wants_to_prove_himself_at_parent: f32,
     /// Back from a loan where he was first-choice, straight into a
     /// fringe role at the parent club.
     pub unsettled_after_loan_return: f32,
@@ -517,6 +529,11 @@ pub struct MoraleEventCatalog {
     pub returned_from_loan_deflated: f32,
     /// The club looked at the loan record and committed to a real role.
     pub backed_after_loan_return: f32,
+    /// The loan report itself. Zero on purpose: the record is a fact
+    /// about the season, not a mood about it, and the return triptych
+    /// beside it already moves morale. Giving the same event a
+    /// magnitude would double-count every spell.
+    pub loan_spell_reviewed: f32,
     /// A returning loanee with a starter's record is coming for this
     /// player's shirt. Same rivalry band as `threatened_by_new_signing`.
     pub threatened_by_returning_loanee: f32,
@@ -719,6 +736,11 @@ impl Default for MoraleEventCatalog {
             transfer_interest_dismissed: 0.5,
             transfer_talks_expected: 1.5,
             interest_cooled: -1.0,
+            // Bigger than the anticipation of talks: the wages are
+            // agreed and the move is real.
+            agreed_personal_terms: 2.5,
+            // His own decision, taken on his own terms.
+            rejected_move_on_personal_terms: 0.5,
             used_interest_for_contract_leverage: 1.0,
             fans_react_to_transfer_rumour: 0.0,
             // Discipline lifecycle / career story beats. The
@@ -841,6 +863,10 @@ impl Default for MoraleEventCatalog {
             // Longing, not a grievance — he's playing and happy where he
             // is; he just doesn't want it to end.
             wants_loan_made_permanent: -1.0,
+            // The carousel itch bites deeper than the permanence longing
+            // and just under the reserve-squad dream: he is playing, but
+            // the seasons are going by at somebody else's club.
+            wants_to_prove_himself_at_parent: -2.5,
             // Back from real football to a bench he didn't choose.
             unsettled_after_loan_return: -3.5,
             // Came back a footballer — quiet confidence, not euphoria;
@@ -852,6 +878,9 @@ impl Default for MoraleEventCatalog {
             // Being backed with a real role lands as strongly as the
             // proven-return confidence — the club said it out loud.
             backed_after_loan_return: 3.5,
+            // The report carries the record, the triptych carries the
+            // mood. See the field doc for why this one is silent.
+            loan_spell_reviewed: 0.0,
             // Same band as the new-signing threat: the shirt is the
             // shirt, whoever comes for it.
             threatened_by_returning_loanee: -3.0,
@@ -1058,6 +1087,8 @@ impl MoraleEventCatalog {
             TransferInterestDismissed => self.transfer_interest_dismissed,
             TransferTalksExpected => self.transfer_talks_expected,
             InterestCooled => self.interest_cooled,
+            AgreedPersonalTerms => self.agreed_personal_terms,
+            RejectedMoveOnPersonalTerms => self.rejected_move_on_personal_terms,
             UsedInterestForContractLeverage => self.used_interest_for_contract_leverage,
             FansReactToTransferRumour => self.fans_react_to_transfer_rumour,
             WantsReturnHome => self.wants_return_home,
@@ -1093,10 +1124,12 @@ impl MoraleEventCatalog {
             LoanRecallRequested => self.loan_recall_requested,
             LoanFormConcern => self.loan_form_concern,
             WantsLoanMadePermanent => self.wants_loan_made_permanent,
+            WantsToProveHimselfAtParent => self.wants_to_prove_himself_at_parent,
             UnsettledAfterLoanReturn => self.unsettled_after_loan_return,
             ReturnedFromLoanProven => self.returned_from_loan_proven,
             ReturnedFromLoanDeflated => self.returned_from_loan_deflated,
             BackedAfterLoanReturn => self.backed_after_loan_return,
+            LoanSpellReviewed => self.loan_spell_reviewed,
             ThreatenedByReturningLoanee => self.threatened_by_returning_loanee,
             AdmiredForBigClubSpell => self.admired_for_big_club_spell,
             BigClubAuraFaded => self.big_club_aura_faded,

@@ -224,6 +224,18 @@ pub enum HappinessEventType {
     /// Previously concrete interest has cooled — the buying club has
     /// moved on without a bid. Mild disappointment for the player.
     InterestCooled,
+    /// He has agreed personal terms with the buying club. The last beat
+    /// of the saga that is still about him rather than about paperwork:
+    /// the clubs have settled the fee, he has settled his wages, and
+    /// only the medical is left. The counterweight to a ladder that
+    /// otherwise only had rungs for a deal falling over.
+    AgreedPersonalTerms,
+    /// He said no. The clubs had agreed a fee and he turned the move
+    /// down over terms, the destination, or the step it asked him to
+    /// take. Not a grievance — a decision — but it is a decision the
+    /// selling club now has to live with, and his own club's plans for
+    /// the money go with it.
+    RejectedMoveOnPersonalTerms,
     /// Player used external interest as leverage during contract
     /// renewal — produces a small confidence effect plus a follow-up
     /// risk flag.
@@ -526,6 +538,20 @@ pub enum HappinessEventType {
     /// returning to the parent's bench or the loan carousel. Longing,
     /// not a grievance; carries a `CareerDesireEventContext`.
     WantsLoanMadePermanent,
+    /// The other conclusion a loanee can reach, and the one the parent
+    /// club hears about: he has had enough of being lent out. Season
+    /// after season away, a record of real football behind him, and a
+    /// club that has still never given him a competitive minute — so he
+    /// wants to come back and fight for the shirt rather than be
+    /// circulated again. Distinct from `WantsLoanMadePermanent`, which
+    /// is the same fatigue pointed at the borrowing club instead.
+    ///
+    /// The mood is a claim on the parent's next pre-season, and it has
+    /// teeth: it stays on the record into the return, where the
+    /// returnee-breakthrough audit reads it as a declaration already
+    /// made and gives the club a shorter fuse before the dream turns
+    /// into a transfer request. Carries a `CareerDesireEventContext`.
+    WantsToProveHimselfAtParent,
     /// The player has come back from a loan where he was first-choice
     /// and walked straight into a fringe role at the parent club — the
     /// return he didn't choose. Emitted at loan-return time, after the
@@ -555,6 +581,14 @@ pub enum HappinessEventType {
     /// breach rather than a relabel. The positive mirror of coming home
     /// to silence.
     BackedAfterLoanReturn,
+    /// The loan report: the spell is over, and this is what it came to
+    /// — games played, goals in them, how he rated, and the club's
+    /// verdict on the lot. Emitted on every return, including the ones
+    /// none of the three moods above fit, so a spell is never summarised
+    /// by silence. Informational rather than a mood: it carries the
+    /// record, and the triptych above carries how he feels about it.
+    /// Reads its numbers off the `LoanEventContext`'s spell record.
+    LoanSpellReviewed,
 
     // ── Contract negotiation tension ─────────────────────────────
     /// Player / agent explicitly demands a release clause in the next

@@ -231,7 +231,6 @@ impl PlayerPositions {
             .map(|p| p.position)
     }
 
-
     pub fn display_positions(&self) -> Vec<&str> {
         self.positions()
             .iter()

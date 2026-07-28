@@ -73,7 +73,11 @@ pub struct MonthlyRevenue {
 
 impl MonthlyRevenue {
     pub fn total(&self) -> i64 {
-        self.broadcast_base + self.broadcast_merit + self.parachute + self.matchday + self.commercial
+        self.broadcast_base
+            + self.broadcast_merit
+            + self.parachute
+            + self.matchday
+            + self.commercial
     }
 }
 
@@ -243,8 +247,7 @@ impl RevenueModel {
         .clamp(0.20, 1.0);
 
         let attendance = (inputs.stadium_capacity as f32 * utilisation).round() as u32;
-        let per_head =
-            Self::revenue_per_attendee(inputs.reputation_score, inputs.price_level);
+        let per_head = Self::revenue_per_attendee(inputs.reputation_score, inputs.price_level);
         let revenue = attendance as f64 * per_head * inputs.home_matches as f64;
 
         (revenue as i64, attendance)
@@ -407,7 +410,10 @@ mod tests {
             ent = e.advanced();
             seasons += 1;
         }
-        assert_eq!(seasons, 3, "parachutes should run for exactly three seasons");
+        assert_eq!(
+            seasons, 3,
+            "parachutes should run for exactly three seasons"
+        );
     }
 
     #[test]
@@ -459,7 +465,10 @@ mod tests {
         tier2.league_tier = 2;
         tier2.reputation_score = 0.40;
         let (b, m) = RevenueModel::broadcast(&tier2);
-        assert!(b + m > 0, "a second-tier club must still earn broadcast money");
+        assert!(
+            b + m > 0,
+            "a second-tier club must still earn broadcast money"
+        );
 
         let mut tier1 = tier2.clone();
         tier1.league_tier = 1;
@@ -600,4 +609,3 @@ mod tests {
         assert!(large < 30_000_000 / 2);
     }
 }
-

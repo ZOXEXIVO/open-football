@@ -1138,10 +1138,22 @@ mod tests {
             ClubColors::default(),
             TeamCollection::new(vec![
                 Fx::team(10, TeamType::Main, main),
-                Fx::team(11, TeamType::Reserve, vec![
-                    Fx::player(90, 100, 100, 24, PlayerSquadStatus::FirstTeamSquadRotation, 12, 0),
-                    deadwood,
-                ]),
+                Fx::team(
+                    11,
+                    TeamType::Reserve,
+                    vec![
+                        Fx::player(
+                            90,
+                            100,
+                            100,
+                            24,
+                            PlayerSquadStatus::FirstTeamSquadRotation,
+                            12,
+                            0,
+                        ),
+                        deadwood,
+                    ],
+                ),
             ]),
             ClubFacilities::default(),
         );

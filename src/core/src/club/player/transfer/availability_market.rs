@@ -175,8 +175,7 @@ impl MarketResignation {
         squad_status: Option<&PlayerSquadStatus>,
         failed_scans: u16,
     ) -> f32 {
-        let time =
-            ((days_on_market as f32 - Self::GRACE_DAYS) / Self::RAMP_DAYS).clamp(0.0, 1.0);
+        let time = ((days_on_market as f32 - Self::GRACE_DAYS) / Self::RAMP_DAYS).clamp(0.0, 1.0);
         if time <= 0.0 {
             return 0.0;
         }
@@ -510,7 +509,10 @@ mod tests {
         p.statuses
             .add(today - Duration::days(80), PlayerStatusType::Lst);
         let mid = p.market_resignation(today);
-        assert!(mid > 0.0 && mid < 1.0, "mid-sit resignation in (0,1): {mid}");
+        assert!(
+            mid > 0.0 && mid < 1.0,
+            "mid-sit resignation in (0,1): {mid}"
+        );
         // Same player, much longer sit → strictly more resigned.
         let mut long = AvailabilityFixtures::player(today);
         long.statuses
@@ -522,13 +524,10 @@ mod tests {
     fn resignation_scales_with_role_urgency_and_dry_scans() {
         // Pure-core check: an unwanted player resigns faster than a listed
         // key man on the same clock, and dry scans accelerate both.
-        let unwanted =
-            MarketResignation::compute(200, Some(&PlayerSquadStatus::NotNeeded), 0);
-        let key_man =
-            MarketResignation::compute(200, Some(&PlayerSquadStatus::KeyPlayer), 0);
+        let unwanted = MarketResignation::compute(200, Some(&PlayerSquadStatus::NotNeeded), 0);
+        let key_man = MarketResignation::compute(200, Some(&PlayerSquadStatus::KeyPlayer), 0);
         assert!(unwanted > key_man);
-        let scanned =
-            MarketResignation::compute(200, Some(&PlayerSquadStatus::NotNeeded), 12);
+        let scanned = MarketResignation::compute(200, Some(&PlayerSquadStatus::NotNeeded), 12);
         assert!(scanned > unwanted);
         // Fully saturated case stays bounded.
         assert!(MarketResignation::compute(2000, Some(&PlayerSquadStatus::NotNeeded), 30) <= 1.0);

@@ -223,8 +223,7 @@ impl<'a> RatingContext<'a> {
         let own_box = z.dangerous_turnovers_own_box.saturating_sub(errors);
         let spill = errors.saturating_sub(z.dangerous_turnovers_own_box);
         let own_third = z.dangerous_turnovers_own_third.saturating_sub(spill);
-        let turnovers =
-            RatingMath::sat(own_third as f32 * 0.5 + own_box as f32, 4.0) * 0.55;
+        let turnovers = RatingMath::sat(own_third as f32 * 0.5 + own_box as f32, 4.0) * 0.55;
         // `errors_to_goal_own_box` is intentionally NOT re-penalised here.
         // The engine sets it on the very same play that already bumped
         // `errors_leading_to_goal` (an own-box giveaway that became a goal),

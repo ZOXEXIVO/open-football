@@ -35,9 +35,8 @@ use crate::{
     ManagerInteractionEventContext, ManagerInteractionTone, ManagerInteractionTopic,
     MatchSelectionContext, NewSigningThreatContext, NewSigningThreatReason, PlayerAcceptance,
     PlayerSquadStatus, PrivateTalkReason, PrivateTalkRequestContext, RivalThreatResponse,
-    RoleStatusEventContext,
-    RoleStatusKind, SelectionDecisionScope, SelectionOmissionReason, SelectionRole,
-    SubstitutionFrustrationContext, SubstitutionFrustrationKind,
+    RoleStatusEventContext, RoleStatusKind, SelectionDecisionScope, SelectionOmissionReason,
+    SelectionRole, SubstitutionFrustrationContext, SubstitutionFrustrationKind,
 };
 
 /// Result of a private-talk detection pass. The driver is "what's the
@@ -398,7 +397,9 @@ impl Player {
         let young_rival = matches!(ctx.rival_age, Some(a) if a <= 23);
         if aging_pro && young_rival && self.attributes.professionalism >= 15.0 {
             let rival_id = ctx.rival_player_id;
-            let magnitude = HappinessConfig::default().catalog.takes_replacement_under_wing;
+            let magnitude = HappinessConfig::default()
+                .catalog
+                .takes_replacement_under_wing;
             let happiness_ctx = HappinessEventContext::new(
                 HappinessEventCause::TrainingPartnership,
                 HappinessEventSeverity::from_magnitude(magnitude),
@@ -416,7 +417,9 @@ impl Player {
         }
 
         let rival_id = ctx.rival_player_id;
-        let base = HappinessConfig::default().catalog.magnitude(event_type.clone());
+        let base = HappinessConfig::default()
+            .catalog
+            .magnitude(event_type.clone());
         let age_mul = match ctx.player_age {
             Some(a) if a >= 32 => 1.35,
             Some(a) if a >= 28 => 1.15,

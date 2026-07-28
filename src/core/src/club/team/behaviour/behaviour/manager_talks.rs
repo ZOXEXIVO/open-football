@@ -29,6 +29,12 @@ use log::debug;
 use std::collections::{HashMap, HashSet};
 
 impl TeamBehaviour {
+    /// How long a "no more loans" declaration keeps steering the
+    /// stuck-career escalation after the player has come home. Matches
+    /// the window the returnee audit reads it over, so the two halves of
+    /// the same arc agree about when the sentence stops counting.
+    const DONE_WITH_LOANS_WINDOW_DAYS: u16 = 180;
+
     /// Date-aware. The interaction-log cooldown gate needs the
     /// simulation date so re-asking the same player about the same topic
     /// is throttled; pass `None` only from contexts where date isn't
@@ -460,8 +466,26 @@ impl TeamBehaviour {
             // successful "be patient" chat from being re-litigated
             // weekly. Main-squad dreamers are 24+ by construction — the
             // perennial-backup audit does not emit below that age.
-            if (reserve_team && age >= 20) || (main_team && age >= 24) {
-                let settled = opp.days_since_join >= 365;
+            //
+            // The third case is the returnee who spent his loan saying
+            // he had been lent out enough. Two things follow from that
+            // sentence and both are handled here: another loan is the
+            // one answer he has already refused, so he never asks for
+            // one whatever his age; and the year-long settling window
+            // belongs to a player who has just walked in, not to one
+            // who has been on the club's books for seasons and merely
+            // came back from somewhere. What he gets instead is a
+            // quarter of a season at home to be proved right or wrong.
+            let done_with_loans = player.happiness.has_recent_event(
+                &HappinessEventType::WantsToProveHimselfAtParent,
+                Self::DONE_WITH_LOANS_WINDOW_DAYS,
+            );
+
+            if (reserve_team && age >= 20)
+                || (main_team && age >= 24)
+                || (done_with_loans && age >= 21)
+            {
+                let settled = opp.days_since_join >= if done_with_loans { 90 } else { 365 };
                 let dreaming = player
                     .happiness
                     .has_recent_event(&HappinessEventType::WantsFirstTeamFootball, 90);
@@ -471,7 +495,7 @@ impl TeamBehaviour {
                     .map(|c| c.is_transfer_listed)
                     .unwrap_or(false);
                 if settled && dreaming && !already_listed {
-                    let talk_type = if age < 23 {
+                    let talk_type = if age < 23 && !done_with_loans {
                         ManagerTalkType::LoanRequest
                     } else {
                         ManagerTalkType::PlayingTimeRequest
@@ -1900,6 +1924,33 @@ mod reserve_escalation_tests {
             result.manager_talks[0].talk_type,
             ManagerTalkType::PlayingTimeRequest,
             "a mid-20s stuck reserve asks for the move, not a loan"
+        );
+    }
+
+    /// The end of the carousel arc. A 22-year-old back from a loan he
+    /// spent telling anyone who would listen that he had been lent out
+    /// enough is not on the prospect pathway any more, and the one
+    /// answer he has already refused is another loan.
+    #[test]
+    fn a_returnee_done_with_loans_asks_for_the_move_not_another_one() {
+        // 22, ambitious — the profile the carousel audit emits on in the
+        // first place.
+        let mut player = Fx::reserve_player(22, 18.0, true);
+        player
+            .happiness
+            .add_event(HappinessEventType::WantsToProveHimselfAtParent, -2.5);
+        let players = PlayerCollection::new(vec![player]);
+        let result = Fx::run(&players, TeamType::Main);
+
+        assert_eq!(
+            result.manager_talks.len(),
+            1,
+            "a returnee who said it out loud on loan must be heard at home"
+        );
+        assert_eq!(
+            result.manager_talks[0].talk_type,
+            ManagerTalkType::PlayingTimeRequest,
+            "sending him out again is the answer he already refused"
         );
     }
 

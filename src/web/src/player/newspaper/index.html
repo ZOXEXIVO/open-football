@@ -1,0 +1,28 @@
+{% extends "player/player_layout.html" %}
+
+{% block html_title %}{{ title }} - {{ i18n.t("newspaper") }} | {{ i18n.t("site_name") }}{% endblock %}
+
+{% block content %}
+<div class="fm-page np-desk">
+    {% if issues.is_empty() %}
+    <div class="np-empty">
+        <div class="np-empty-rule"></div>
+        <p class="np-empty-title">{{ i18n.t("newspaper_presses_idle") }}</p>
+        <p class="np-empty-body">{{ i18n.t("newspaper_no_player_news") }}</p>
+    </div>
+    {% else %}
+
+    {% for issue in issues %}
+    {% if loop.index0 == 1 %}
+    <div class="np-archive-rule">
+        <span>{{ i18n.t("newspaper_back_issues") }}</span>
+    </div>
+    {% endif %}
+    {# The club's own sheet, whole and uncut — a player's press page shows
+       the paper he was in, not a digest of it. #}
+    {% include "teams/newspaper/_sheet.html" %}
+    {% endfor %}
+
+    {% endif %}
+</div>
+{% endblock %}

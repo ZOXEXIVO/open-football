@@ -4,6 +4,7 @@ use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VE
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::decisions::PlayerDecisionsCounter;
 use crate::player::events::PlayerEventsCounter;
+use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -53,6 +54,7 @@ pub struct PlayerTransfersTemplate {
     pub decisions_count: usize,
     pub interested_clubs_count: usize,
     pub awards_count: u32,
+    pub news_count: usize,
     pub transfer_status: PlayerTransferStatusDto,
     pub listing: Option<PlayerListingDto>,
     pub interested_clubs: Vec<PlayerInterestedClubDto>,
@@ -464,6 +466,7 @@ pub async fn player_transfers_action(
         decisions_count: PlayerDecisionsCounter::count_recent(player, simulator_data.date.date()),
         interested_clubs_count: interested_clubs.len(),
         awards_count: player.awards_count.total(),
+        news_count: PlayerNewsCounter::count(simulator_data, player),
         transfer_status,
         listing,
         interested_clubs,

@@ -1361,7 +1361,12 @@ mod tests {
 
     // ========== Overage development sweep (U20+ → U18/U19 dev fixtures) ==========
 
-    fn idle_u20_player(id: u32, position: PlayerPositionType, idle_days: u16, date: NaiveDate) -> Player {
+    fn idle_u20_player(
+        id: u32,
+        position: PlayerPositionType,
+        idle_days: u16,
+        date: NaiveDate,
+    ) -> Player {
         let mut p = md_player(id, position, 100);
         p.player_attributes.days_since_last_match = idle_days;
         p.birth_date = NaiveDate::from_ymd_opt(date.year() - 21, 1, 1).unwrap();

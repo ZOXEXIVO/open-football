@@ -524,14 +524,20 @@ mod affinity_tests {
     #[test]
     fn fluent_local_language_is_full_affinity() {
         let profile = LanguageProfile::from_languages(&[PlayerLanguage::native(Language::Spanish)]);
-        assert_eq!(profile.affinity_for(Language::country_language_mask("es")), 1.0);
+        assert_eq!(
+            profile.affinity_for(Language::country_language_mask("es")),
+            1.0
+        );
     }
 
     #[test]
     fn conversational_local_language_is_partial() {
         let profile =
             LanguageProfile::from_languages(&[PlayerLanguage::learning(Language::German, 50)]);
-        assert_eq!(profile.affinity_for(Language::country_language_mask("de")), 0.65);
+        assert_eq!(
+            profile.affinity_for(Language::country_language_mask("de")),
+            0.65
+        );
     }
 
     #[test]
@@ -539,14 +545,20 @@ mod affinity_tests {
         // Fluent English going to Germany: no local language, but the
         // dressing room can run in English.
         let profile = LanguageProfile::from_languages(&[PlayerLanguage::native(Language::English)]);
-        assert_eq!(profile.affinity_for(Language::country_language_mask("de")), 0.45);
+        assert_eq!(
+            profile.affinity_for(Language::country_language_mask("de")),
+            0.45
+        );
     }
 
     #[test]
     fn no_common_language_is_zero() {
         let profile =
             LanguageProfile::from_languages(&[PlayerLanguage::native(Language::Japanese)]);
-        assert_eq!(profile.affinity_for(Language::country_language_mask("es")), 0.0);
+        assert_eq!(
+            profile.affinity_for(Language::country_language_mask("es")),
+            0.0
+        );
     }
 
     #[test]
@@ -554,7 +566,10 @@ mod affinity_tests {
         // Empty profile (no language data) and empty club mask both must
         // never penalise a candidate.
         let empty = LanguageProfile::default();
-        assert_eq!(empty.affinity_for(Language::country_language_mask("es")), 1.0);
+        assert_eq!(
+            empty.affinity_for(Language::country_language_mask("es")),
+            1.0
+        );
         let profile =
             LanguageProfile::from_languages(&[PlayerLanguage::native(Language::Japanese)]);
         assert_eq!(profile.affinity_for(0), 1.0);
@@ -572,6 +587,9 @@ mod affinity_tests {
     fn multilingual_country_matches_any_official_language() {
         // Belgium speaks Dutch and French — a French speaker fits.
         let profile = LanguageProfile::from_languages(&[PlayerLanguage::native(Language::French)]);
-        assert_eq!(profile.affinity_for(Language::country_language_mask("be")), 1.0);
+        assert_eq!(
+            profile.affinity_for(Language::country_language_mask("be")),
+            1.0
+        );
     }
 }

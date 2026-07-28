@@ -889,8 +889,8 @@ mod pre_contract_badge_tests {
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatusType,
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, PlayerStatusType,
     };
 
     use super::*;

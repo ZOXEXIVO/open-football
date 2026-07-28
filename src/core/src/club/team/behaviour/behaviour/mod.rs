@@ -231,6 +231,12 @@ impl TeamBehaviour {
         // return to the parent's fringe.
         Self::process_loanee_permanence_audit(players, &ctx);
 
+        // Monthly loan-fatigue audit: the same spell read the other way
+        // — a player on his second, third, fourth loan whose own club
+        // has never played him wants to come back and fight for the
+        // shirt rather than be circulated again.
+        Self::process_loan_fatigue_audit(players, &ctx);
+
         // Monthly returnee-breakthrough audit: an under-24 back from a
         // loan he owned — real official starts in the record, none at
         // the parent since — wants to play or go where he plays. The

@@ -11,7 +11,6 @@ use graduation::graduation_salary;
 use crate::club::academy::ClubAcademy;
 use crate::club::board::{BoardContext, ClubBoard, FfpStatus};
 use crate::club::facilities::ClubFacilities;
-use crate::club::news::ClubNewsroom;
 use crate::club::status::ClubStatus;
 use crate::club::{ClubFinances, ClubResult, StaffPosition};
 use crate::context::GlobalContext;
@@ -74,10 +73,6 @@ pub struct Club {
     pub facilities: ClubFacilities,
 
     pub rivals: Vec<u32>,
-
-    /// The local paper that covers this club. Holds the last handful of
-    /// printed editions; filled once a week by the world newsroom pass.
-    pub newsroom: ClubNewsroom,
 }
 
 /// Aggregated best staff attribute scores across all teams at the club.
@@ -125,7 +120,6 @@ impl Club {
             philosophy,
             facilities,
             rivals: Vec::new(),
-            newsroom: ClubNewsroom::for_club(id),
         }
     }
 

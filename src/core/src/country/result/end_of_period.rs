@@ -10,11 +10,12 @@ use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::simulator::SimulatorData;
 use crate::utils::{DateUtils, FormattingUtils, IntegerUtils};
 use crate::{
-    AwardReputationInput, AwardReputationKind, Club, ClubResult, Country, HappinessEventType,
-    Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerHappiness, PlayerMessage,
-    PlayerMessageType, PlayerSquadStatus, PlayerStatCompetitionKind, PlayerStatusType,
-    SeasonOutcomeContext, SeasonOutcomeKind, StaffPosition, Team, TeamInfo, TeamType,
-    TrophyEventContext, TrophyKind,
+    AwardReputationInput, AwardReputationKind, Club, ClubResult, Country, HappinessEventCause,
+    HappinessEventContext, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
+    LoanEventContext, LoanEventKind, LoanSpellRecord, Person, Player, PlayerClubContract,
+    PlayerFieldPositionGroup, PlayerHappiness, PlayerMessage, PlayerMessageType, PlayerSquadStatus,
+    PlayerStatCompetitionKind, PlayerStatusType, SeasonOutcomeContext, SeasonOutcomeKind,
+    StaffPosition, Team, TeamInfo, TeamType, TrophyEventContext, TrophyKind,
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
@@ -94,6 +95,12 @@ impl WarehousedLoans {
 }
 
 impl CountryResult {
+    /// How recently a loanee must have said he wants his chance at the
+    /// parent club for the claim to survive the return. A season's worth
+    /// of window: he said it during the spell that has just ended, not
+    /// during some earlier one he has long since stopped thinking about.
+    const DECLARED_INTENT_CARRY_DAYS: u16 = 240;
+
     pub(crate) fn process_end_of_period(
         country: &mut Country,
         date: NaiveDate,
@@ -1358,6 +1365,28 @@ impl CountryResult {
             .and_then(|l| l.started)
             .map(|s| (date - s).num_days())
             .unwrap_or(0);
+        // The record the club reads on the way home, captured here for
+        // the same reason as the numbers above it: `on_loan_return`
+        // freezes and resets the borrower season, and nothing downstream
+        // can recover what he did while he was away.
+        let spell = LoanSpellRecord::new(
+            loan_starts,
+            loan_apps,
+            player.statistics.goals,
+            player.statistics.assists,
+            loan_rating,
+            loan_spell_days,
+        );
+
+        // What he said while he was away, read before the slate is
+        // wiped. A player who spent the spell asking for a chance at his
+        // own club did not stop wanting it on the drive home, and the
+        // monthly returnee audit reads the carried mood as notice the
+        // club has already had.
+        let declared_intent = player.happiness.has_recent_event(
+            &HappinessEventType::WantsToProveHimselfAtParent,
+            Self::DECLARED_INTENT_CARRY_DAYS,
+        );
 
         player.on_loan_return(&event.borrowing_info, &parent_info, date);
         player.contract_loan = None;
@@ -1383,6 +1412,11 @@ impl CountryResult {
             })
             .unwrap_or(false);
         let age = DateUtils::age(player.birth_date, date);
+        let written_off = player
+            .contract
+            .as_ref()
+            .map(|c| matches!(c.squad_status, PlayerSquadStatus::NotNeeded))
+            .unwrap_or(false);
         if fringe_at_parent && age >= 21 && loan_starts >= 12 && loan_rating >= 6.6 {
             let magnitude = HappinessConfig::default()
                 .catalog
@@ -1420,7 +1454,54 @@ impl CountryResult {
             player
                 .happiness
                 .add_event(HappinessEventType::ReturnedFromLoanDeflated, magnitude);
+        } else if declared_intent && !written_off {
+            // He spent the spell saying he wanted this chance, and here
+            // he is. The claim outlives the loan it was made on — it is
+            // the first thing he says in the building, and the returnee
+            // audit treats it as notice the club has already had.
+            //
+            // Last of the branches on purpose. A returnee shoved
+            // straight to the fringe is already carrying the deeper
+            // version of this grievance, one who owned his loan gets the
+            // confidence beat he earned, and one whose spell collapsed
+            // has a different problem — the carried claim is for
+            // everyone else who said it out loud and came home anyway.
+            let magnitude = HappinessConfig::default()
+                .catalog
+                .wants_to_prove_himself_at_parent;
+            player
+                .happiness
+                .add_event(HappinessEventType::WantsToProveHimselfAtParent, magnitude);
         }
+
+        // The loan report. Every return files one, including the ones
+        // none of the mood branches above fit — a spell that ended in a
+        // shrug is still a season of a player's career, and reading it
+        // back is how the parent club decides what he is now. Carries
+        // the whole record, so the feed can say "34 games, 9 goals,
+        // 7.12" instead of "returned from loan".
+        let review = LoanEventContext::new(LoanEventKind::LoanSpellReviewed)
+            .with_parent_club(event.parent_club_id)
+            .with_loan_club(event.borrowing_club_id)
+            .with_loan_days_elapsed(spell.days)
+            .with_actual_apps(spell.appearances)
+            .with_spell(spell);
+        // Cause/scope follow the other loan events: the judgement is the
+        // club's, not a dressing-room incident, and the loan renderer
+        // intercepts on the loan context before the generic cause line
+        // is ever consulted.
+        let review_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Minor,
+            HappinessEventScope::Boardroom,
+        )
+        .with_loan_context(review);
+        player.happiness.add_event_with_context(
+            HappinessEventType::LoanSpellReviewed,
+            HappinessConfig::default().catalog.loan_spell_reviewed,
+            None,
+            review_ctx,
+        );
 
         // A loan running its course is a club decision too — the player
         // comes home. Only genuine returns stamp this; an early recall
@@ -1889,9 +1970,7 @@ impl CountryResult {
         let mut candidates: Vec<&crate::league::League> = leagues
             .iter()
             .filter(|l| {
-                l.id != tier1_id
-                    && l.settings.tier == lower_tier
-                    && l.settings.promotion_spots > 0
+                l.id != tier1_id && l.settings.tier == lower_tier && l.settings.promotion_spots > 0
             })
             .collect();
         if candidates.is_empty() {
@@ -1908,8 +1987,7 @@ impl CountryResult {
                 .iter()
                 .filter(|l| {
                     l.settings.tier == tier1_tier
-                        && l
-                            .settings
+                        && l.settings
                             .league_group
                             .as_ref()
                             .is_some_and(|g| g.competition == tier1_group.competition)
@@ -2235,7 +2313,13 @@ impl CountryResult {
                 if promoted.is_empty() {
                     continue;
                 }
-                pairs.push((rel_zone, group_id, promotion_spots, vec![rel_team], promoted));
+                pairs.push((
+                    rel_zone,
+                    group_id,
+                    promotion_spots,
+                    vec![rel_team],
+                    promoted,
+                ));
             }
             for z in &zones {
                 handled.insert(z.id);
@@ -2306,204 +2390,204 @@ impl CountryResult {
             })
             .unwrap_or_default();
 
-            // Build a tier-2 club expectation map: clubs that finished
-            // inside the promotion window (top promotion_spots + a couple
-            // of playoff places) "expected" promotion. NonPromotionRelease
-            // only activates for those — finishing 18th in the second tier
-            // shouldn't trigger any player's escape clause.
-            let promotion_window_team_ids: Vec<u32> = country
-                .leagues
-                .leagues
-                .iter()
-                .find(|l| l.id == tier2_id)
-                .and_then(|l| l.final_table.as_ref())
-                .map(|t| {
-                    let window = (promotion_spots as usize + 2).min(t.len());
-                    t.iter().take(window).map(|r| r.team_id).collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+        // Build a tier-2 club expectation map: clubs that finished
+        // inside the promotion window (top promotion_spots + a couple
+        // of playoff places) "expected" promotion. NonPromotionRelease
+        // only activates for those — finishing 18th in the second tier
+        // shouldn't trigger any player's escape clause.
+        let promotion_window_team_ids: Vec<u32> = country
+            .leagues
+            .leagues
+            .iter()
+            .find(|l| l.id == tier2_id)
+            .and_then(|l| l.final_table.as_ref())
+            .map(|t| {
+                let window = (promotion_spots as usize + 2).min(t.len());
+                t.iter().take(window).map(|r| r.team_id).collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
-            // Division the relegated clubs are falling out of — the pool
-            // their parachute payments are a share of.
-            let vacated_tier: u8 = country
-                .leagues
-                .leagues
-                .iter()
-                .find(|l| l.id == tier1_id)
-                .map(|l| l.settings.tier.max(1))
-                .unwrap_or(1);
+        // Division the relegated clubs are falling out of — the pool
+        // their parachute payments are a share of.
+        let vacated_tier: u8 = country
+            .leagues
+            .leagues
+            .iter()
+            .find(|l| l.id == tier1_id)
+            .map(|l| l.settings.tier.max(1))
+            .unwrap_or(1);
 
-            // Swap league_ids on teams and move sub-teams to matching friendly league
-            for club in &mut country.clubs {
-                let mut new_main_league_id: Option<u32> = None;
-                // Aggregate one-shot bonus payouts owed for this season's
-                // outcome. Charged to the club after the team loops so we
-                // only hold a single mut borrow at a time.
-                let mut bonus_total: i64 = 0;
+        // Swap league_ids on teams and move sub-teams to matching friendly league
+        for club in &mut country.clubs {
+            let mut new_main_league_id: Option<u32> = None;
+            // Aggregate one-shot bonus payouts owed for this season's
+            // outcome. Charged to the club after the team loops so we
+            // only hold a single mut borrow at a time.
+            let mut bonus_total: i64 = 0;
 
-                for team in &mut club.teams.teams {
-                    if relegated_team_ids.contains(&team.id) {
-                        info!(
-                            "⬇️ Relegation: team {} ({}) moves to league {}",
-                            team.name, team.id, tier2_id
+            for team in &mut club.teams.teams {
+                if relegated_team_ids.contains(&team.id) {
+                    info!(
+                        "⬇️ Relegation: team {} ({}) moves to league {}",
+                        team.name, team.id, tier2_id
+                    );
+                    team.league_id = Some(tier2_id);
+                    new_main_league_id = Some(tier2_id);
+                    // Year-defining wound — emit per player. The promo
+                    // counterpart already ran in season_awards via the
+                    // PromotionCelebration emit; we don't duplicate the
+                    // upward case here.
+                    // Inline emit (we hold &mut to team here, so the
+                    // Self::apply_team_squad_event helper which takes
+                    // &mut country would conflict).
+                    let outcome = relegation_outcome_by_team.get(&team.id).copied();
+                    for player in team.players.iter_mut() {
+                        let mut ctx = SeasonOutcomeContext::new(SeasonOutcomeKind::Relegated)
+                            .with_league(tier1_id);
+                        if let Some((pos, pts, gap)) = outcome {
+                            ctx = ctx
+                                .with_final_position(pos)
+                                .with_points(pts)
+                                .with_points_to_safety(gap);
+                        }
+                        player.on_season_outcome(
+                            HappinessEventType::Relegated,
+                            365,
+                            1.0,
+                            date,
+                            ctx,
                         );
-                        team.league_id = Some(tier2_id);
-                        new_main_league_id = Some(tier2_id);
-                        // Year-defining wound — emit per player. The promo
-                        // counterpart already ran in season_awards via the
-                        // PromotionCelebration emit; we don't duplicate the
-                        // upward case here.
-                        // Inline emit (we hold &mut to team here, so the
-                        // Self::apply_team_squad_event helper which takes
-                        // &mut country would conflict).
-                        let outcome = relegation_outcome_by_team.get(&team.id).copied();
-                        for player in team.players.iter_mut() {
-                            let mut ctx = SeasonOutcomeContext::new(SeasonOutcomeKind::Relegated)
-                                .with_league(tier1_id);
-                            if let Some((pos, pts, gap)) = outcome {
-                                ctx = ctx
-                                    .with_final_position(pos)
-                                    .with_points(pts)
-                                    .with_points_to_safety(gap);
-                            }
-                            player.on_season_outcome(
-                                HappinessEventType::Relegated,
-                                365,
-                                1.0,
-                                date,
-                                ctx,
-                            );
-                            // Activate any RelegationWageDecrease and
-                            // RelegationFeeRelease clauses on the player's
-                            // contract. Each helper consumes the matching
-                            // clause so subsequent relegations don't double-apply.
-                            if let Some(c) = player.contract.as_mut() {
-                                let _ = c.apply_relegation_wage_decrease();
-                                let _ = c.take_relegation_release();
+                        // Activate any RelegationWageDecrease and
+                        // RelegationFeeRelease clauses on the player's
+                        // contract. Each helper consumes the matching
+                        // clause so subsequent relegations don't double-apply.
+                        if let Some(c) = player.contract.as_mut() {
+                            let _ = c.apply_relegation_wage_decrease();
+                            let _ = c.take_relegation_release();
+                        }
+                    }
+                } else if promoted_team_ids.contains(&team.id) {
+                    info!(
+                        "⬆️ Promotion: team {} ({}) moves to league {}",
+                        team.name, team.id, tier1_id
+                    );
+                    team.league_id = Some(tier1_id);
+                    new_main_league_id = Some(tier1_id);
+                    // Symmetric to the relegation hooks above —
+                    // PromotionWageIncrease bumps salary; players
+                    // also keep their existing contracts (no clause
+                    // for "release on promotion").
+                    for player in team.players.iter_mut() {
+                        if let Some(c) = player.contract.as_mut() {
+                            let _ = c.apply_promotion_wage_increase();
+                            // PromotionFee bonus is paid out as a
+                            // one-shot lump sum to every player on
+                            // the promoted team who has the bonus.
+                            for bonus in &c.bonuses {
+                                if matches!(bonus.bonus_type, ContractBonusType::PromotionFee)
+                                    && bonus.value > 0
+                                {
+                                    bonus_total += bonus.value as i64;
+                                }
                             }
                         }
-                    } else if promoted_team_ids.contains(&team.id) {
-                        info!(
-                            "⬆️ Promotion: team {} ({}) moves to league {}",
-                            team.name, team.id, tier1_id
-                        );
-                        team.league_id = Some(tier1_id);
-                        new_main_league_id = Some(tier1_id);
-                        // Symmetric to the relegation hooks above —
-                        // PromotionWageIncrease bumps salary; players
-                        // also keep their existing contracts (no clause
-                        // for "release on promotion").
+                    }
+                } else {
+                    // Survival in a tier-1 league with relegation
+                    // places: pay AvoidRelegationFee bonuses if the
+                    // team was at risk this season. Approximated by
+                    // "team carries the clause" — the bonus is only
+                    // installed on contracts when the club expected
+                    // a relegation battle.
+                    let in_tier1_with_relegation = team.league_id == Some(tier1_id);
+                    if in_tier1_with_relegation {
                         for player in team.players.iter_mut() {
                             if let Some(c) = player.contract.as_mut() {
-                                let _ = c.apply_promotion_wage_increase();
-                                // PromotionFee bonus is paid out as a
-                                // one-shot lump sum to every player on
-                                // the promoted team who has the bonus.
                                 for bonus in &c.bonuses {
-                                    if matches!(bonus.bonus_type, ContractBonusType::PromotionFee)
-                                        && bonus.value > 0
+                                    if matches!(
+                                        bonus.bonus_type,
+                                        ContractBonusType::AvoidRelegationFee
+                                    ) && bonus.value > 0
                                     {
                                         bonus_total += bonus.value as i64;
                                     }
                                 }
                             }
                         }
-                    } else {
-                        // Survival in a tier-1 league with relegation
-                        // places: pay AvoidRelegationFee bonuses if the
-                        // team was at risk this season. Approximated by
-                        // "team carries the clause" — the bonus is only
-                        // installed on contracts when the club expected
-                        // a relegation battle.
-                        let in_tier1_with_relegation = team.league_id == Some(tier1_id);
-                        if in_tier1_with_relegation {
-                            for player in team.players.iter_mut() {
-                                if let Some(c) = player.contract.as_mut() {
-                                    for bonus in &c.bonuses {
-                                        if matches!(
-                                            bonus.bonus_type,
-                                            ContractBonusType::AvoidRelegationFee
-                                        ) && bonus.value > 0
-                                        {
-                                            bonus_total += bonus.value as i64;
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
+            }
 
-                // NonPromotionRelease activates only for clubs that
-                // genuinely expected to go up — finished inside the
-                // promotion window — and didn't. Mid-table and
-                // bottom-of-tier-2 clubs are excluded so a player's
-                // escape clause doesn't fire just because the club is
-                // in the wrong league.
-                let club_was_in_window = club
-                    .teams
-                    .teams
-                    .iter()
-                    .any(|t| promotion_window_team_ids.contains(&t.id));
-                let club_was_promoted = club
-                    .teams
-                    .teams
-                    .iter()
-                    .any(|t| promoted_team_ids.contains(&t.id));
-                if club_was_in_window && !club_was_promoted {
-                    for team in &mut club.teams.teams {
-                        if team.league_id == Some(tier2_id) {
-                            for player in team.players.iter_mut() {
-                                if let Some(c) = player.contract.as_mut() {
-                                    let _ = c.take_non_promotion_release();
-                                }
+            // NonPromotionRelease activates only for clubs that
+            // genuinely expected to go up — finished inside the
+            // promotion window — and didn't. Mid-table and
+            // bottom-of-tier-2 clubs are excluded so a player's
+            // escape clause doesn't fire just because the club is
+            // in the wrong league.
+            let club_was_in_window = club
+                .teams
+                .teams
+                .iter()
+                .any(|t| promotion_window_team_ids.contains(&t.id));
+            let club_was_promoted = club
+                .teams
+                .teams
+                .iter()
+                .any(|t| promoted_team_ids.contains(&t.id));
+            if club_was_in_window && !club_was_promoted {
+                for team in &mut club.teams.teams {
+                    if team.league_id == Some(tier2_id) {
+                        for player in team.players.iter_mut() {
+                            if let Some(c) = player.contract.as_mut() {
+                                let _ = c.take_non_promotion_release();
                             }
-                        }
-                    }
-                }
-
-                if bonus_total > 0 {
-                    club.finance.balance.push_expense_player_wages(bonus_total);
-                }
-
-                // Parachute payments. A relegated club keeps a declining
-                // share of the division it left for three seasons; a
-                // promoted club's entitlement ends the moment it goes back
-                // up. Without this, dropping a division is a ~90% revenue
-                // cut against a wage bill fixed by contracts already signed
-                // — arithmetically unsurvivable, and the reason relegated
-                // clubs used to spiral straight to insolvency.
-                let club_was_relegated = club
-                    .teams
-                    .teams
-                    .iter()
-                    .any(|t| relegated_team_ids.contains(&t.id));
-                if club_was_relegated {
-                    club.finance.parachute = Some(ParachuteEntitlement {
-                        from_tier: vacated_tier,
-                        seasons_elapsed: 0,
-                    });
-                } else if club_was_promoted {
-                    club.finance.parachute = None;
-                }
-
-                // Move sub-teams to the matching youth league of the new main league
-                if let Some(new_league_id) = new_main_league_id {
-                    for team in &mut club.teams.teams {
-                        if team.team_type != TeamType::Main {
-                            let type_offset = match team.team_type {
-                                TeamType::U18 => 100000,
-                                TeamType::U19 => 110000,
-                                TeamType::U20 => 120000,
-                                TeamType::U21 => 130000,
-                                TeamType::U23 => 140000,
-                                _ => 200000, // B/Reserve teams use generic friendly league
-                            };
-                            team.league_id = Some(new_league_id + type_offset);
                         }
                     }
                 }
             }
+
+            if bonus_total > 0 {
+                club.finance.balance.push_expense_player_wages(bonus_total);
+            }
+
+            // Parachute payments. A relegated club keeps a declining
+            // share of the division it left for three seasons; a
+            // promoted club's entitlement ends the moment it goes back
+            // up. Without this, dropping a division is a ~90% revenue
+            // cut against a wage bill fixed by contracts already signed
+            // — arithmetically unsurvivable, and the reason relegated
+            // clubs used to spiral straight to insolvency.
+            let club_was_relegated = club
+                .teams
+                .teams
+                .iter()
+                .any(|t| relegated_team_ids.contains(&t.id));
+            if club_was_relegated {
+                club.finance.parachute = Some(ParachuteEntitlement {
+                    from_tier: vacated_tier,
+                    seasons_elapsed: 0,
+                });
+            } else if club_was_promoted {
+                club.finance.parachute = None;
+            }
+
+            // Move sub-teams to the matching youth league of the new main league
+            if let Some(new_league_id) = new_main_league_id {
+                for team in &mut club.teams.teams {
+                    if team.team_type != TeamType::Main {
+                        let type_offset = match team.team_type {
+                            TeamType::U18 => 100000,
+                            TeamType::U19 => 110000,
+                            TeamType::U20 => 120000,
+                            TeamType::U21 => 130000,
+                            TeamType::U23 => 140000,
+                            _ => 200000, // B/Reserve teams use generic friendly league
+                        };
+                        team.league_id = Some(new_league_id + type_offset);
+                    }
+                }
+            }
+        }
     }
 
     /// Monthly late-season audit: surface ambient relegation dread for
@@ -2610,9 +2694,10 @@ mod tests {
     use crate::r#match::{Score, TeamScore};
     use crate::shared::Location;
     use crate::{
-        Club, ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
-        PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
-        StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+        Club, ClubColors, ClubFinances, ClubStatus, LoanSpellVerdict, PersonAttributes,
+        PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TeamType,
+        TrainingSchedule,
     };
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -3585,6 +3670,127 @@ mod tests {
         assert_eq!(parent.salary, pre_salary);
         assert_eq!(parent.expiration, pre_expiration);
         assert!(!loanee.is_on_loan());
+    }
+
+    /// Every player who comes home brings his record with him. The
+    /// spell is read off the borrower-season statistics, which
+    /// `on_loan_return` freezes and resets moments later — if the report
+    /// were filed any later than it is, the numbers would already be
+    /// gone and the feed would say "returned from loan" and nothing else.
+    #[test]
+    fn a_returning_loanee_brings_the_record_of_his_spell_home() {
+        let mut data = recall_world(None);
+        // A season of it: in the team every week, and playing well.
+        {
+            let country = data.continents[0].countries.get_mut(0).unwrap();
+            let borrower = country.clubs.iter_mut().find(|c| c.id == 200).unwrap();
+            let loanee = borrower.teams.teams[0]
+                .players
+                .players
+                .iter_mut()
+                .find(|p| p.id == 55)
+                .unwrap();
+            loanee.statistics.played = 28;
+            loanee.statistics.played_subs = 3;
+            loanee.statistics.goals = 9;
+            loanee.statistics.assists = 4;
+            // Raw 7.45 over a full season's weight; the sample-size
+            // regression the record reads through lands it near 7.2.
+            loanee.statistics.rating_points = 7.45 * 31.0;
+            loanee.statistics.rating_weight = 31.0;
+            let loan = loanee.contract_loan.as_mut().unwrap();
+            // A season of it, not the three months the recall fixture
+            // defaults to: 28 starts inside 92 days is not a loan, it is
+            // a fixture list nobody plays.
+            loan.started = Some(d(2025, 8, 1));
+            // Expired on the day the return sweep runs.
+            loan.expiration = d(2026, 6, 1);
+        }
+
+        CountryResult::process_loan_returns(&mut data, 1, d(2026, 6, 1));
+
+        let country = data.country(1).unwrap();
+        let parent = country.clubs.iter().find(|c| c.id == 100).unwrap();
+        let returnee = parent.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 55)
+            .expect("the loanee must be home");
+
+        let review = returnee
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::LoanSpellReviewed)
+            .expect("a finished spell files a report");
+        let spell = review
+            .context
+            .as_ref()
+            .and_then(|c| c.loan_context.as_ref())
+            .and_then(|l| l.spell)
+            .expect("the report carries the record it is a report of");
+
+        assert_eq!(spell.appearances, 31);
+        assert_eq!(spell.starts, 28);
+        assert_eq!(spell.goals, 9);
+        assert_eq!(spell.assists, 4);
+        assert_eq!(spell.verdict, LoanSpellVerdict::Standout);
+        assert_eq!(
+            review.magnitude, 0.0,
+            "the report states the record; the return moods carry the feeling"
+        );
+    }
+
+    /// A spell nobody would write home about still gets written up. The
+    /// verdict is what changes, not whether there is one — a return that
+    /// produced no mood event used to leave no trace at all.
+    #[test]
+    fn a_loanee_who_never_played_still_gets_a_verdict() {
+        let mut data = recall_world(None);
+        {
+            let country = data.continents[0].countries.get_mut(0).unwrap();
+            let borrower = country.clubs.iter_mut().find(|c| c.id == 200).unwrap();
+            let loanee = borrower.teams.teams[0]
+                .players
+                .players
+                .iter_mut()
+                .find(|p| p.id == 55)
+                .unwrap();
+            // Three months of it (started 1 March), two substitute
+            // appearances to show for the trip.
+            loanee.statistics.played = 0;
+            loanee.statistics.played_subs = 2;
+            loanee.contract_loan.as_mut().unwrap().expiration = d(2026, 6, 1);
+        }
+
+        CountryResult::process_loan_returns(&mut data, 1, d(2026, 6, 1));
+
+        let country = data.country(1).unwrap();
+        let parent = country.clubs.iter().find(|c| c.id == 100).unwrap();
+        let returnee = parent.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 55)
+            .expect("the loanee must be home");
+
+        let spell = returnee
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::LoanSpellReviewed)
+            .and_then(|e| e.context.as_ref())
+            .and_then(|c| c.loan_context.as_ref())
+            .and_then(|l| l.spell)
+            .expect("a spell with nothing in it is still a spell");
+
+        assert_eq!(spell.verdict, LoanSpellVerdict::Peripheral);
+        assert_eq!(spell.appearances, 2);
+        assert!(
+            spell.average_rating.is_none(),
+            "nobody rated him, which is not the same as rating him 0.00"
+        );
     }
 
     #[test]

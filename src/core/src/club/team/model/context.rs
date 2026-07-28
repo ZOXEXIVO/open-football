@@ -108,11 +108,7 @@ impl TeamContext {
         self
     }
 
-    pub fn with_captaincy(
-        mut self,
-        captain_id: Option<u32>,
-        vice_captain_id: Option<u32>,
-    ) -> Self {
+    pub fn with_captaincy(mut self, captain_id: Option<u32>, vice_captain_id: Option<u32>) -> Self {
         self.captain_id = captain_id;
         self.vice_captain_id = vice_captain_id;
         self

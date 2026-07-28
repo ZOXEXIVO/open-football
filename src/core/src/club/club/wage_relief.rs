@@ -116,7 +116,11 @@ impl WageReliefSale {
     /// same protection list would either freeze distressed clubs (they can
     /// never sell enough) or gut healthy ones (they sell their captain over a
     /// rounding error).
-    pub fn sellable(standing: DebtStanding, distress: DistressLevel, class: SquadAssetClass) -> bool {
+    pub fn sellable(
+        standing: DebtStanding,
+        distress: DistressLevel,
+        class: SquadAssetClass,
+    ) -> bool {
         // Prospects are never sold for wage relief: they are the cheapest
         // players at the club, so selling them raises almost nothing while
         // costing the entire future squad.
@@ -307,17 +311,33 @@ mod tests {
         // Healthy club over budget: fringe only.
         let healthy = (DebtStanding::Solvent, DistressLevel::None);
         assert!(WageReliefSale::sellable(healthy.0, healthy.1, TrueSurplus));
-        assert!(!WageReliefSale::sellable(healthy.0, healthy.1, RotationUseful));
+        assert!(!WageReliefSale::sellable(
+            healthy.0,
+            healthy.1,
+            RotationUseful
+        ));
         assert!(!WageReliefSale::sellable(healthy.0, healthy.1, CorePlayer));
 
         // Leveraged: rotation depth becomes available.
         let leveraged = (DebtStanding::Leveraged, DistressLevel::None);
-        assert!(WageReliefSale::sellable(leveraged.0, leveraged.1, RotationUseful));
-        assert!(!WageReliefSale::sellable(leveraged.0, leveraged.1, FirstTeamUseful));
+        assert!(WageReliefSale::sellable(
+            leveraged.0,
+            leveraged.1,
+            RotationUseful
+        ));
+        assert!(!WageReliefSale::sellable(
+            leveraged.0,
+            leveraged.1,
+            FirstTeamUseful
+        ));
 
         // Owner-funded: cash in on a first-teamer.
         let funded = (DebtStanding::OwnerFunded, DistressLevel::None);
-        assert!(WageReliefSale::sellable(funded.0, funded.1, FirstTeamUseful));
+        assert!(WageReliefSale::sellable(
+            funded.0,
+            funded.1,
+            FirstTeamUseful
+        ));
         assert!(!WageReliefSale::sellable(funded.0, funded.1, CorePlayer));
 
         // Administration: everyone has a price.
@@ -379,7 +399,10 @@ mod tests {
     #[test]
     fn sale_order_sheds_the_fringe_before_the_spine() {
         use SquadAssetClass::*;
-        assert!(WageReliefSale::sale_priority(TrueSurplus) < WageReliefSale::sale_priority(RotationUseful));
+        assert!(
+            WageReliefSale::sale_priority(TrueSurplus)
+                < WageReliefSale::sale_priority(RotationUseful)
+        );
         assert!(
             WageReliefSale::sale_priority(RotationUseful)
                 < WageReliefSale::sale_priority(FirstTeamUseful)

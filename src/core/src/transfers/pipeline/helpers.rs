@@ -59,7 +59,9 @@ impl PipelineProcessor {
     /// market) and never reset MLS-style calendars at their real
     /// openings at all.
     pub(super) fn is_window_start_for(country: &Country, date: NaiveDate) -> bool {
-        let tomorrow = date.checked_add_signed(chrono::Duration::days(1)).unwrap_or(date);
+        let tomorrow = date
+            .checked_add_signed(chrono::Duration::days(1))
+            .unwrap_or(date);
         // Anchor the calendar on both dates: a window opening Jan 1
         // belongs to next year's anchor when today is Dec 31.
         let today_cal = TransferCalendar::for_country(&country.code, date);
@@ -209,11 +211,7 @@ impl PipelineProcessor {
         let buyer_club = country.clubs.iter().find(|c| c.id == buyer_club_id)?;
 
         let rep01 = |club: &Club| -> f32 {
-            club.teams
-                .main()
-                .map(|t| t.reputation.world)
-                .unwrap_or(0) as f32
-                / 10_000.0
+            club.teams.main().map(|t| t.reputation.world).unwrap_or(0) as f32 / 10_000.0
         };
         let league_rep = |club: &Club| -> u16 {
             club.teams

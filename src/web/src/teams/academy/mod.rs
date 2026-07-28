@@ -2,6 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::potential_stars::{PotentialStarsView, StarRating};
+use crate::teams::newspaper::NewspaperCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -45,6 +46,8 @@ pub struct TeamAcademyTemplate {
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
+    /// Printed items waiting on the newspaper tab, for the tabbar badge.
+    pub newspaper_count: usize,
     pub academy_level: u8,
     pub academy_tier: u8,
     pub pathway_reputation: u8,
@@ -161,7 +164,9 @@ pub async fn team_academy_action(
                 country_name: country.name.clone(),
                 age,
                 current_ability: PotentialStarsView::current(p),
-                potential_ability: PotentialStarsView::potential_by_staff(p, head_coach, false, now),
+                potential_ability: PotentialStarsView::potential_by_staff(
+                    p, head_coach, false, now,
+                ),
                 potential_sort: PotentialEstimator::observable_ceiling(p, now),
                 conditions: (100f32 * (p.player_attributes.condition as f32 / 10000.0)) as u8,
                 phase_key: phase_i18n_key(phase),
@@ -260,6 +265,7 @@ pub async fn team_academy_action(
         active_tab: "academy",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: true,
+        newspaper_count: NewspaperCounter::count(simulator_data, team),
         academy_level: club.academy.level(),
         academy_tier: AcademyTier::from_level(club.academy.level()).value(),
         pathway_reputation: club.academy.pathway_reputation,

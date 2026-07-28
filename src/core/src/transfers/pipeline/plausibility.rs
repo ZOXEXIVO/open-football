@@ -828,9 +828,8 @@ impl TransferMovePlausibility {
         let resignation_endorsed = inputs.is_listed
             && !inputs.is_loan
             && resignation >= Self::resignation_needed_for_drop(drop);
-        let huge_drop_self_unlocked = inputs.is_transfer_requested
-            || inputs.release_clause_triggered
-            || resignation_endorsed;
+        let huge_drop_self_unlocked =
+            inputs.is_transfer_requested || inputs.release_clause_triggered || resignation_endorsed;
         let level_gate_open = if huge_drop && !inputs.is_loan {
             huge_drop_self_unlocked
         } else {

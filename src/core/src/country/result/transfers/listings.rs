@@ -368,16 +368,11 @@ impl CountryResult {
         // the type, origin and asking price change, so the unsold-exit
         // valve's clock keeps the time already served on the loan list.
         for (player_id, asking_price) in listings_to_upgrade {
-            let Some(listing) = country
-                .transfer_market
-                .listings
-                .iter_mut()
-                .find(|l| {
-                    l.player_id == player_id
-                        && l.listing_type == TransferListingType::Loan
-                        && l.status == TransferListingStatus::Available
-                })
-            else {
+            let Some(listing) = country.transfer_market.listings.iter_mut().find(|l| {
+                l.player_id == player_id
+                    && l.listing_type == TransferListingType::Loan
+                    && l.status == TransferListingStatus::Available
+            }) else {
                 continue;
             };
             listing.listing_type = TransferListingType::Transfer;
@@ -1406,9 +1401,9 @@ mod tests {
     use crate::academy::ClubAcademy;
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings, Season};
-    use crate::transfers::pipeline::{LoanOutCandidate, LoanOutStatus};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
+    use crate::transfers::pipeline::{LoanOutCandidate, LoanOutStatus};
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
         PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
@@ -1596,12 +1591,14 @@ mod tests {
             TeamType::Main,
             vec![stale, candidate, listed],
         )]);
-        club.transfer_plan.loan_out_candidates.push(LoanOutCandidate {
-            player_id: 202,
-            reason: LoanOutReason::LackOfPlayingTime,
-            status: LoanOutStatus::Listed,
-            loan_fee: 0.0,
-        });
+        club.transfer_plan
+            .loan_out_candidates
+            .push(LoanOutCandidate {
+                player_id: 202,
+                reason: LoanOutReason::LackOfPlayingTime,
+                status: LoanOutStatus::Listed,
+                loan_fee: 0.0,
+            });
         let mut country = Fixture::country(club);
         country.transfer_market.add_listing(TransferListing::new(
             203,

@@ -11,12 +11,13 @@ pub(crate) mod settlement;
 pub(crate) mod types;
 
 use super::CountryResult;
+use crate::club::player::events::transfer_social::TransferInterestSignal;
 use crate::club::player::transfer::FreeAgentBlockReason;
 use crate::simulator::SimulatorData;
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferWindowManager;
-use crate::{Country, PlayerStatusType};
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
+use crate::{Country, PlayerStatusType};
 use chrono::NaiveDate;
 use config::TransferConfig;
 use execution::TransferExecution;
@@ -25,7 +26,6 @@ pub(crate) use free_agents::{GlobalFreeAgentSummary, snapshot_global_free_agents
 use log::debug;
 use pre_contract::PreContractManager;
 use settlement::TransferClauseSettler;
-use crate::club::player::events::transfer_social::TransferInterestSignal;
 use std::collections::{HashMap, HashSet};
 use types::DeferredTransfer;
 use types::TransferActivitySummary;
@@ -231,8 +231,7 @@ impl CountryResult {
         // actually lands on the books over time. Credits owed to
         // foreign sellers can't be applied inside this country borrow —
         // they ride up on `ops` and drain globally in Phase C.
-        ops.cross_country_clause_credits =
-            TransferClauseSettler::settle_due(country, current_date);
+        ops.cross_country_clause_credits = TransferClauseSettler::settle_due(country, current_date);
 
         // Free agents and contract expirations. Returns deferred
         // signings sourced from the global pool (`data.free_agents`),
@@ -591,8 +590,7 @@ impl CountryResult {
             // triggers have crossed. Keeps the legacy path aligned
             // with the parallel Phase-A path above. Foreign-seller
             // credits are drained right after the borrow ends below.
-            cross_country_clause_credits =
-                TransferClauseSettler::settle_due(country, current_date);
+            cross_country_clause_credits = TransferClauseSettler::settle_due(country, current_date);
 
             // Free agents and contract expirations. Returns deferred
             // signings sourced from the global pool (`sim.free_agents`),
@@ -915,8 +913,8 @@ mod pending_signal_delivery_tests {
     use crate::competitions::global::GlobalCompetitions;
     use crate::continent::Continent;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
-    use crate::shared::fullname::FullName;
     use crate::shared::Location;
+    use crate::shared::fullname::FullName;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, HappinessEventType,
         PersonAttributes, Player, PlayerAttributes, PlayerCollection, PlayerPosition,

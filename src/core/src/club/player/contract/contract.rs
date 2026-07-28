@@ -306,6 +306,15 @@ impl PlayerClubContract {
         }
     }
 
+    /// Stamp the day the agreement began. Loan machinery reasons from
+    /// elapsed time — how many fixtures the borrowing club has played
+    /// since the player walked in — so a spell without a start date is
+    /// invisible to every audit that looks at it.
+    pub fn starting_on(mut self, date: NaiveDate) -> Self {
+        self.started = Some(date);
+        self
+    }
+
     pub fn with_loan_match_fee(mut self, fee: u32) -> Self {
         self.loan_match_fee = Some(fee);
         self

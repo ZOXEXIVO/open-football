@@ -524,9 +524,8 @@ impl PipelineProcessor {
                             .as_ref()
                             .map(|c| c.squad_status.clone())
                             .unwrap_or(PlayerSquadStatus::NotYetSet),
-                        days_on_market: player
-                            .days_available(current_date)
-                            .min(i16::MAX as i64) as i16,
+                        days_on_market: player.days_available(current_date).min(i16::MAX as i64)
+                            as i16,
                     };
                     // Real fee headroom (transfer budget × the negotiation
                     // fee-gate multiplier), so a funded club can scout up to
@@ -921,8 +920,7 @@ impl PipelineProcessor {
                             is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
                             is_unhappy: player.statuses.has(PlayerStatusType::Unh),
                             in_debt: seller_in_debt,
-                            days_on_market: player.days_available(date).min(i16::MAX as i64)
-                                as i16,
+                            days_on_market: player.days_available(date).min(i16::MAX as i64) as i16,
                             market_resignation: player.market_resignation(date),
                         },
                     });

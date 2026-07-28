@@ -7,7 +7,17 @@
             <span class="np-ear-figure">{{ issue.number }}</span>
             <span>{{ i18n.t("newspaper_edition") }}</span>
         </div>
-        <h2 class="np-masthead">{{ issue.masthead }}</h2>
+        {# On a player's page the nameplate opens the club's own paper.
+           Deliberately NOT `np-story-link`: that class draws a rule
+           under the type, and a masthead with a line under it reads as
+           a mistake rather than as a cross-reference. #}
+        <h2 class="np-masthead">
+            {%- if issue.paper_slug.is_empty() -%}
+            {{ issue.masthead }}
+            {%- else -%}
+            <a class="np-masthead-link" href="/{{ lang }}/teams/{{ issue.paper_slug }}/newspaper">{{ issue.masthead }}</a>
+            {%- endif -%}
+        </h2>
         <div class="np-ear np-ear-right">{{ issue.date }}</div>
     </header>
     <div class="np-folio">
@@ -20,19 +30,24 @@
             {% if let Some(lead) = issue.lead %}
             <section class="np-lead">
                 <p class="np-kicker">{{ lead.kicker }}<span class="np-dateline">{{ lead.date }}</span></p>
-                <h3 class="np-headline">{{ lead.headline }}</h3>
-                <p class="np-lead-body">{{ lead.body }}</p>
+                {# A headline about a person carries a link to him, set as a rule
+                   under the type rather than as a coloured word — the page has one
+                   plate and a cross-reference is underscored, not tinted. #}
+                <h3 class="np-headline">
+                    {%- if lead.player_slug.is_empty() -%}
+                    {{ lead.headline }}
+                    {%- else -%}
+                    <a class="np-story-link" href="/{{ lang }}/players/{{ lead.player_slug }}" title="{{ lead.player_name }}">{{ lead.headline }}</a>
+                    {%- endif -%}
+                </h3>
+                <p class="np-lead-body{% if lead.is_quote %} np-quote{% endif %}{% if !lead.drop_cap %} np-no-cap{% endif %}">{{ lead.body }}</p>
             </section>
             {% endif %}
 
             {% if !issue.secondary.is_empty() %}
             <div class="np-splits">
                 {% for story in issue.secondary %}
-                <section class="np-split">
-                    <p class="np-kicker">{{ story.kicker }}<span class="np-dateline">{{ story.date }}</span></p>
-                    <h4 class="np-subhead">{{ story.headline }}</h4>
-                    <p class="np-split-body">{{ story.body }}</p>
-                </section>
+                {% include "teams/newspaper/_split.html" %}
                 {% endfor %}
             </div>
             {% endif %}
@@ -50,7 +65,7 @@
                     <span class="np-screen" aria-hidden="true"></span>
                 </a>
                 <figcaption class="np-caption">
-                    <strong>{{ portrait.player_name }}</strong>
+                    <strong><a class="np-story-link" href="/{{ lang }}/players/{{ portrait.player_slug }}">{{ portrait.player_name }}</a></strong>
                     <span>{{ portrait.caption }}</span>
                 </figcaption>
             </figure>
@@ -64,6 +79,7 @@
                     <li class="np-result np-result-{{ result.outcome }}">
                         <span class="np-result-date">{{ result.date }}</span>
                         <a class="np-result-club" href="/{{ lang }}/teams/{{ result.opponent_slug }}">{{ result.opponent_name }}</a>
+                        {% if result.is_cup %}<span class="np-result-cup">{{ i18n.t("newspaper_cup_tie") }}</span>{% endif %}
                         <span class="np-result-score">{{ result.score }}</span>
                     </li>
                     {% endfor %}
@@ -72,6 +88,19 @@
             {% endif %}
         </aside>
     </div>
+
+    {# The rest of the week, set across the whole measure once the
+       photograph and the results column have run out. The stories get the
+       same treatment as the two upstairs — a paper does not print its
+       fourth story as a list item — only in narrower columns, which is
+       what tells a reader they are below the front block. #}
+    {% if !issue.run.is_empty() %}
+    <div class="np-run">
+        {% for story in issue.run %}
+        {% include "teams/newspaper/_split.html" %}
+        {% endfor %}
+    </div>
+    {% endif %}
 
     {% if !issue.briefs.is_empty() %}
     <section class="np-band">

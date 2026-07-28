@@ -38,9 +38,9 @@ pub use finance::{
 
 // Club press exports
 pub use news::{
-    BoardroomDesk, CareerRecord, ClubNewsroom, ClubTransferWeek, IssueResult, MarketDesk,
-    MatchDesk, NewsDesk, NewsEditor, NewsRecurrence, NewsStory, NewsStoryKind, NewspaperIssue,
-    PressMood, SquadDesk, StandingSnapshot, TableDesk, WeeklyMatchFacts,
+    BoardroomDesk, CareerRecord, ClubTransferWeek, IssueResult, MarketDesk, MatchDesk, NewsDesk,
+    NewsEditor, NewsRecurrence, NewsStory, NewsStoryKind, NewspaperIssue, PressMood, SquadDesk,
+    StandingSnapshot, TableDesk, TeamNewsroom, WeeklyMatchFacts,
 };
 
 // Relations exports
@@ -115,6 +115,8 @@ pub use player::{
     LoanDevelopmentConcernReason,
     LoanEventContext,
     LoanEventKind,
+    LoanSpellRecord,
+    LoanSpellVerdict,
     ManagerCriticismReason,
     ManagerInteractionEventContext,
     ManagerInteractionTone,

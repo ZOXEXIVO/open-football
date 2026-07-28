@@ -1,3 +1,4 @@
+use crate::club::news::TeamNewsroom;
 use crate::club::team::TeamFixtureWindow;
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::squad_life::social_snapshot::TeamSocialSnapshot;
@@ -100,8 +101,10 @@ impl TeamBuilder {
     }
 
     pub fn build(self) -> Result<Team, String> {
+        let id = self.id.ok_or("id is required")?;
+
         Ok(Team {
-            id: self.id.ok_or("id is required")?,
+            id,
             league_id: self.league_id.ok_or("league_id is required")?, // Option<Option<u32>> → Option<u32>
             club_id: self.club_id.ok_or("club_id is required")?,
             name: self.name.ok_or("name is required")?,
@@ -121,6 +124,10 @@ impl TeamBuilder {
             captain_id: None,
             vice_captain_id: None,
             social_snapshot: TeamSocialSnapshot::default(),
+            // Seeded from the team id, so the same world always prints
+            // the same nameplate and two sides of one club rarely share
+            // it. Stays empty until the side's first press run.
+            newsroom: TeamNewsroom::for_team(id),
             league_reputation: 0,
         })
     }

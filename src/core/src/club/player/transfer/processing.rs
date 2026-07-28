@@ -773,10 +773,9 @@ impl Player {
                 } else {
                     0.0
                 };
-                let effective_min_ca = (cfg_stronger_league.base_min_ca as f32
-                    - gap_relax
-                    - iso_ca)
-                    .max(cfg_stronger_league.min_ca_floor as f32);
+                let effective_min_ca =
+                    (cfg_stronger_league.base_min_ca as f32 - gap_relax - iso_ca)
+                        .max(cfg_stronger_league.min_ca_floor as f32);
                 let iso_amb = if isolated {
                     cfg_stronger_league.isolation_ambition_relief
                 } else {

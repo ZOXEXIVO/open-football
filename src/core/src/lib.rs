@@ -32,10 +32,10 @@ pub use country::{
     CountryGeneratorData, CountryPricing, CountryRegulations, CountryResult, CountrySettings,
     InternationalCompetition, MediaCoverage, MediaStory, NationalCallupConstraints,
     NationalEligibilityIssue, NationalMatchImportance, NationalSelectionPolicy,
-    NationalSquadPlayer, NationalSquadStage,
-    NationalTeam, NationalTeamFixture, NationalTeamLevel, NationalTeamMatchResult,
-    NationalTeamStaffMember, NationalTeamStaffRole, NationalTournamentRequirements,
-    PeopleNameGeneratorData, SkinColorDistribution, SquadPick, StoryType,
+    NationalSquadPlayer, NationalSquadStage, NationalTeam, NationalTeamFixture, NationalTeamLevel,
+    NationalTeamMatchResult, NationalTeamStaffMember, NationalTeamStaffRole,
+    NationalTournamentRequirements, PeopleNameGeneratorData, SkinColorDistribution, SquadPick,
+    StoryType,
 };
 pub use nalgebra::*;
 pub use simulator::*;
@@ -143,6 +143,8 @@ pub use club::{
     LoanDevelopmentConcernReason,
     LoanEventContext,
     LoanEventKind,
+    LoanSpellRecord,
+    LoanSpellVerdict,
     ManagerCriticismReason,
     ManagerInteractionEventContext,
     ManagerInteractionTone,
@@ -172,7 +174,6 @@ pub use club::{
     NegotiationPolicy,
     NewSigningThreatContext,
     NewSigningThreatReason,
-    RivalThreatResponse,
     OutgoingTransfersResponsibility,
     PeriodizationPhase,
     // Person exports
@@ -263,6 +264,7 @@ pub use club::{
     ReputationTrend,
     ResignationReason,
     RetirementReason,
+    RivalThreatResponse,
     RoleStatusEventContext,
     RoleStatusKind,
     RotationPreference,

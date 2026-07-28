@@ -353,8 +353,13 @@ impl CountryResult {
                 if neg_data.selling_club_id == 0 {
                     return;
                 }
-                let signal =
-                    Self::build_interest_signal(country, neg_data, stage, source, repeated_attention);
+                let signal = Self::build_interest_signal(
+                    country,
+                    neg_data,
+                    stage,
+                    source,
+                    repeated_attention,
+                );
                 if let Some(sig) = signal {
                     if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
                         player.on_transfer_interest_signal(&sig);
@@ -1402,6 +1407,18 @@ impl CountryResult {
             // replaces `Bid`: match selection now treats him as a
             // near-sold asset (protected in routine games).
             Self::set_saga_status(country, neg_data, PlayerStatusType::Trn, date);
+            // …and the saga says so. Every other rung of this ladder
+            // files a beat; without this one the feed followed a move
+            // from the first scout report to the fee agreement and then
+            // went silent on the day it was actually agreed.
+            Self::notify_player_stage(
+                country,
+                outcomes,
+                neg_data,
+                TransferInterestStage::TermsAgreed,
+                TransferInterestSource::ClubBriefing,
+                false,
+            );
             return;
         }
 
@@ -1439,6 +1456,18 @@ impl CountryResult {
         }
         Self::reopen_listing_for_player(country, neg_data.player_id);
         Self::clear_saga_statuses(country, neg_id, neg_data.player_id);
+        // He said no. His own answer, not his club's — the ladder
+        // already had a rung for the selling club refusing to sell, and
+        // reading both as the same "the move died" beat lost the one
+        // fact a reader most wants: whose decision it was.
+        Self::notify_player_stage(
+            country,
+            outcomes,
+            neg_data,
+            TransferInterestStage::TermsRejected,
+            TransferInterestSource::ClubBriefing,
+            false,
+        );
         // A pool free agent (selling_club_id == 0) who declined the terms gets
         // it counted against his market state — the "player actually rejected
         // a negotiated offer" moment, not the candidate scan.

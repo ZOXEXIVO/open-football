@@ -536,8 +536,7 @@ impl DevelopmentPlan {
 
         let slot_share = slots as f32 / own.len().max(1) as f32;
         for (i, p) in own.iter().enumerate() {
-            let expected_share =
-                (slot_share * weights[i] / mean_weight.max(f32::EPSILON)).min(1.0);
+            let expected_share = (slot_share * weights[i] / mean_weight.max(f32::EPSILON)).min(1.0);
             let deficit = (expected_share * sel.team_matches - MatchInvolvement::involvement(p))
                 .clamp(-Self::DEFICIT_CAP, Self::DEFICIT_CAP);
             profiles.insert(
@@ -619,7 +618,10 @@ impl RangeNorm {
     fn over(values: &[f32]) -> RangeNorm {
         let min = values.iter().copied().fold(f32::INFINITY, f32::min);
         let max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        RangeNorm { min, span: max - min }
+        RangeNorm {
+            min,
+            span: max - min,
+        }
     }
 
     fn of(&self, value: f32) -> f32 {

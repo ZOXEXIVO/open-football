@@ -4,23 +4,34 @@
 //! |-----------|-------------------------------------------------------------|
 //! | [`types`] | The printed artefacts — stories, editions, the newsroom      |
 //! | [`desk`]  | Detectors that read club state and file candidate stories   |
-//! | [`editor`]| Ranks, de-duplicates and lays out one edition                |
+//! | [`editor`]| Ranks, de-duplicates, balances and lays out one edition      |
 //!
 //! Stories carry identifiers and numbers only. Names, money formats and
 //! translated prose are resolved by the web layer at render time, so an
 //! edition costs the same handful of bytes in every language and the
 //! whole world's back catalogue stays cheap to keep in memory.
+//!
+//! A paper belongs to a TEAM, not to a club. Every side that competes
+//! under its own brand — the first team, the B team, the "{Club} 2"
+//! reserve side — plays its own season in its own league, and a page
+//! that reported only the first team's Saturday was no use to anybody
+//! reading about the other two. Squads with no brand of their own
+//! (Reserve, U18..U23) have no paper and are covered by the first
+//! team's, which is also where the club-wide desks (boardroom,
+//! accounts, the loan column, the transfer market) file.
 
 pub mod desk;
 pub mod editor;
 pub mod types;
 
 pub use desk::{
-    BoardroomDesk, CareerRecord, ClubTransferWeek, MarketDesk, MatchDesk, SquadDesk,
-    StandingSnapshot, TableDesk, WeeklyMatchFacts,
+    BoardroomDesk, CareerRecord, ClubLoanWatch, ClubTransferWeek, CupTie, DugoutDesk, FansDesk,
+    KeeperMatchFacts, LoanDesk, LoanWatchEntry, MarketDesk, MatchDesk, PlayerStanding,
+    RecentEvents, RumourDesk, SquadDesk, SquadPulse, StandingSnapshot, TableDesk, TransferMove,
+    TransferMoveKind, WeeklyMatchFacts,
 };
 pub use editor::NewsEditor;
 pub use types::{
-    ClubNewsroom, IssueResult, NewsDesk, NewsRecurrence, NewsStory, NewsStoryKind, NewspaperIssue,
-    PressMood,
+    IssueResult, NewsDesk, NewsRecurrence, NewsStory, NewsStoryKind, NewspaperIssue, PressMood,
+    ResultCompetition, TeamNewsroom,
 };

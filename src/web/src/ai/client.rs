@@ -70,7 +70,10 @@ impl AiClient {
     }
 
     fn endpoint(&self) -> String {
-        format!("{}/chat/completions", self.settings.base_url.trim_end_matches('/'))
+        format!(
+            "{}/chat/completions",
+            self.settings.base_url.trim_end_matches('/')
+        )
     }
 
     /// Send the running message list (plus tool schemas) and return the

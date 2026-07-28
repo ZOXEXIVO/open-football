@@ -156,45 +156,45 @@ impl MatchExperienceBackground {
         // Recent window: the latest season-year in the record plus the one
         // before it, weighted toward the latest.
         let latest_year = slices.iter().map(|s| s.season_year).max();
-        let (recent_start_share, recent_loan_starts, recent_record_reputation) =
-            match latest_year {
-                None => (0.0, 0, 0),
-                Some(latest) => {
-                    let share_of = |year: u16| -> Option<f32> {
-                        let starts: u16 = slices
-                            .iter()
-                            .filter(|s| s.season_year == year)
-                            .map(|s| s.starts)
-                            .sum();
-                        let any = slices.iter().any(|s| s.season_year == year);
-                        any.then(|| (starts as f32 / Self::SEASON_MATCHES).clamp(0.0, 1.0))
-                    };
-                    let last = share_of(latest).unwrap_or(0.0);
-                    let share = match latest.checked_sub(1).and_then(share_of) {
-                        Some(prev) => 0.65 * last + 0.35 * prev,
-                        None => last,
-                    };
-                    let recent = |s: &&SpellSlice| s.season_year + 1 >= latest;
-                    let loan_starts: u16 = slices
+        let (recent_start_share, recent_loan_starts, recent_record_reputation) = match latest_year {
+            None => (0.0, 0, 0),
+            Some(latest) => {
+                let share_of = |year: u16| -> Option<f32> {
+                    let starts: u16 = slices
                         .iter()
-                        .filter(recent)
-                        .filter(|s| s.is_loan)
+                        .filter(|s| s.season_year == year)
                         .map(|s| s.starts)
                         .sum();
-                    let (rep_weighted, weight): (u32, u32) = slices
-                        .iter()
-                        .filter(recent)
-                        .fold((0, 0), |(rw, w), s| {
-                            (rw + s.team_reputation as u32 * s.apps as u32, w + s.apps as u32)
-                        });
-                    let record_rep = if weight > 0 {
-                        (rep_weighted / weight) as u16
-                    } else {
-                        0
-                    };
-                    (share, loan_starts, record_rep)
-                }
-            };
+                    let any = slices.iter().any(|s| s.season_year == year);
+                    any.then(|| (starts as f32 / Self::SEASON_MATCHES).clamp(0.0, 1.0))
+                };
+                let last = share_of(latest).unwrap_or(0.0);
+                let share = match latest.checked_sub(1).and_then(share_of) {
+                    Some(prev) => 0.65 * last + 0.35 * prev,
+                    None => last,
+                };
+                let recent = |s: &&SpellSlice| s.season_year + 1 >= latest;
+                let loan_starts: u16 = slices
+                    .iter()
+                    .filter(recent)
+                    .filter(|s| s.is_loan)
+                    .map(|s| s.starts)
+                    .sum();
+                let (rep_weighted, weight): (u32, u32) =
+                    slices.iter().filter(recent).fold((0, 0), |(rw, w), s| {
+                        (
+                            rw + s.team_reputation as u32 * s.apps as u32,
+                            w + s.apps as u32,
+                        )
+                    });
+                let record_rep = if weight > 0 {
+                    (rep_weighted / weight) as u16
+                } else {
+                    0
+                };
+                (share, loan_starts, record_rep)
+            }
+        };
 
         MatchExperienceBackground {
             career_official_apps,

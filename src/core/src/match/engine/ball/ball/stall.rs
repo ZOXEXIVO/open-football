@@ -107,8 +107,12 @@ impl Ball {
         let _ = write!(
             out,
             "  ball pos=({:.1}, {:.1}, {:.1}) velocity=({:.2}, {:.2}, {:.2}) in_flight={} previous_owner={:?}",
-            self.position.x, self.position.y, self.position.z,
-            self.velocity.x, self.velocity.y, self.velocity.z,
+            self.position.x,
+            self.position.y,
+            self.position.z,
+            self.velocity.x,
+            self.velocity.y,
+            self.velocity.z,
             self.flags.in_flight_state,
             self.previous_owner,
         );

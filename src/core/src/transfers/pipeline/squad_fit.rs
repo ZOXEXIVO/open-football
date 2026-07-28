@@ -85,7 +85,10 @@ impl SquadFitSnapshot {
 
         let group_size = group_abilities.len();
         let group_cap_bar = if group_size >= group_cap {
-            group_abilities.get(group_cap.saturating_sub(1)).copied().unwrap_or(0)
+            group_abilities
+                .get(group_cap.saturating_sub(1))
+                .copied()
+                .unwrap_or(0)
         } else {
             0
         };
@@ -139,12 +142,7 @@ impl SquadFitSnapshot {
     ///   the candidate would rank strictly outside the cap. Displacing an
     ///   incumbent (equal or better rank) is normal squad upgrading and
     ///   stays allowed; the incumbent becomes the surplus body instead.
-    pub fn would_be_surplus(
-        &self,
-        assessed_ability: u8,
-        assessed_potential: u8,
-        age: u8,
-    ) -> bool {
+    pub fn would_be_surplus(&self, assessed_ability: u8, assessed_potential: u8, age: u8) -> bool {
         // A high-ceiling youngster is exempt from both surplus rules —
         // but only while the club still has room on its prospect desk at
         // his position. Once the desk is stocked, one more teenager is

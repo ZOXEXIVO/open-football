@@ -1,6 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::teams::newspaper::NewspaperCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -44,6 +45,8 @@ pub struct TeamRelationsTemplate {
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
+    /// Printed items waiting on the newspaper tab, for the tabbar badge.
+    pub newspaper_count: usize,
     /// Player nodes that take part in at least one good/hate edge.
     pub nodes: Vec<RelNode>,
     /// Edges serialised for the client-side force layout
@@ -179,6 +182,7 @@ pub async fn team_relations_get_action(
         active_tab: "relations",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
+        newspaper_count: NewspaperCounter::count(simulator_data, team),
         edges_json: serde_json::to_string(&graph.edges).unwrap_or_else(|_| "[]".to_string()),
         bond_count: graph.bond_count,
         friendly_count: graph.friendly_count,

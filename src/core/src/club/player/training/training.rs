@@ -2,9 +2,9 @@ use crate::HappinessEventType;
 use crate::club::player::training::result::{PlayerTrainingResult, TrainingOutcomeBreakdown};
 use crate::utils::DateUtils;
 use crate::{
-    GoalkeepingGains, MentalGains, Person, PhysicalGains, Player, SkillType, Staff,
-    TechnicalGains, TrainingEffects, TrainingEventEvidence, TrainingEventReason, TrainingFocus,
-    TrainingIntensity, TrainingSession, TrainingType,
+    GoalkeepingGains, MentalGains, Person, PhysicalGains, Player, SkillType, Staff, TechnicalGains,
+    TrainingEffects, TrainingEventEvidence, TrainingEventReason, TrainingFocus, TrainingIntensity,
+    TrainingSession, TrainingType,
 };
 use chrono::NaiveDate;
 use chrono::{Datelike, NaiveDateTime};
@@ -418,8 +418,7 @@ impl PlayerTraining {
                         }
                         TrainingFocus::FitnessBuilding => {
                             effects.physical_gains.stamina += focus_gain * 0.6 * age_factor;
-                            effects.physical_gains.natural_fitness +=
-                                focus_gain * 0.4 * age_factor;
+                            effects.physical_gains.natural_fitness += focus_gain * 0.4 * age_factor;
                         }
                         TrainingFocus::MentalDevelopment => {
                             effects.mental_gains.composure += focus_gain * 0.5;

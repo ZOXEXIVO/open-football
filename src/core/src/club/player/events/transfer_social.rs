@@ -761,6 +761,8 @@ impl Player {
             | TransferInterestStage::BidRejected
             | TransferInterestStage::NegotiationsOpened
             | TransferInterestStage::NegotiationsStalled
+            | TransferInterestStage::TermsAgreed
+            | TransferInterestStage::TermsRejected
             | TransferInterestStage::MoveCollapsed
             | TransferInterestStage::InterestCooled => true,
         }
@@ -837,6 +839,19 @@ impl Player {
             (TransferInterestStage::BidRejected, _) => (
                 HappinessEventType::TransferBidRejected,
                 cat.transfer_bid_rejected,
+                21,
+            ),
+            // The two rungs where the saga stops being speculation. One
+            // of them is the only rung on the whole ladder where the
+            // answer is yes.
+            (TransferInterestStage::TermsAgreed, _) => (
+                HappinessEventType::AgreedPersonalTerms,
+                cat.agreed_personal_terms,
+                14,
+            ),
+            (TransferInterestStage::TermsRejected, _) => (
+                HappinessEventType::RejectedMoveOnPersonalTerms,
+                cat.rejected_move_on_personal_terms,
                 21,
             ),
             (TransferInterestStage::MoveCollapsed, _) => (
@@ -1022,6 +1037,13 @@ impl Player {
             TransferInterestStage::BidRejected => 1.0,
             TransferInterestStage::NegotiationsOpened => 1.0,
             TransferInterestStage::NegotiationsStalled => 0.8,
+            // The furthest a move gets before it is a move: everything
+            // is signed but the medical, and it lands harder than the
+            // anticipation that preceded it.
+            TransferInterestStage::TermsAgreed => 1.25,
+            // His own answer, given deliberately. It carries less charge
+            // than a decision taken about him over his head.
+            TransferInterestStage::TermsRejected => 0.9,
             TransferInterestStage::MoveCollapsed => 1.0,
             TransferInterestStage::InterestCooled => 0.8,
         };
@@ -1137,9 +1159,7 @@ impl Player {
             // listed/unhappy state hints contract pressure.
             let _ = expiry;
         }
-        if self.statuses.has(PlayerStatusType::Unh)
-            || self.statuses.has(PlayerStatusType::Req)
-        {
+        if self.statuses.has(PlayerStatusType::Unh) || self.statuses.has(PlayerStatusType::Req) {
             out.push(TransferInterestEvidence::CurrentClubAmbitionMismatch);
         }
         // Career-desire alignment — when the player is carrying a

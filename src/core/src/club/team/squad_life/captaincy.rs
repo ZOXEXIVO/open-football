@@ -1371,7 +1371,10 @@ mod tests {
             .name("Test Reserve".to_string())
             .slug("test-res".to_string())
             .team_type(TeamType::Reserve)
-            .players(PlayerCollection::new(vec![strong(1, 16.0), strong(2, 14.0)]))
+            .players(PlayerCollection::new(vec![
+                strong(1, 16.0),
+                strong(2, 14.0),
+            ]))
             .staffs(StaffCollection::new(Vec::new()))
             .reputation(TeamReputation::new(100, 100, 200))
             .training_schedule(training())

@@ -1408,8 +1408,7 @@ impl PipelineProcessor {
             // seller's own tier; the eligible-tier band below is
             // cumulative (own tier down to the cascade tier), so a deep
             // resume never skips the levels in between.
-            let opened =
-                s.listed_date + Duration::days(Self::TRANSFER_BROADCAST_GRACE_DAYS);
+            let opened = s.listed_date + Duration::days(Self::TRANSFER_BROADCAST_GRACE_DAYS);
             let first_since = club
                 .transfer_plan
                 .transfer_broadcasts
@@ -4200,8 +4199,8 @@ mod transfer_broadcast_tests {
         // Premise: the seller-tier starter really is above the lower-tier
         // buyer's normal target ceiling (otherwise this exercises nothing),
         // and within it once the full staleness relaxation (+35) applies.
-        let buyer_score = TeamReputation::new(BUYER_WORLD, BUYER_WORLD, BUYER_WORLD)
-            .overall_score();
+        let buyer_score =
+            TeamReputation::new(BUYER_WORLD, BUYER_WORLD, BUYER_WORLD).overall_score();
         let buyer_ceiling = PipelineProcessor::tier_target_ceiling_score(
             buyer_score,
             PlayerFieldPositionGroup::Midfielder,
@@ -4220,7 +4219,12 @@ mod transfer_broadcast_tests {
                 10,
                 1,
                 SELLER_WORLD,
-                vec![Fx::player(400, PlayerPositionType::MidfielderCenter, ca, 26)],
+                vec![Fx::player(
+                    400,
+                    PlayerPositionType::MidfielderCenter,
+                    ca,
+                    26,
+                )],
             );
             let seller = Fx::club(1, vec![seller_main], 1_000_000.0);
             let buyer_main = Fx::team(

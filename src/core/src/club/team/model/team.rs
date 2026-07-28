@@ -1,3 +1,4 @@
+use crate::club::news::TeamNewsroom;
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::{
     Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
@@ -58,6 +59,14 @@ pub struct Team {
     /// board mood) read [`Team::team_chemistry`] instead of averaging
     /// per-player chemistry numbers.
     pub social_snapshot: TeamSocialSnapshot,
+
+    /// The local paper that covers THIS side. Holds the last handful of
+    /// printed editions; filled once a week by the world newsroom pass.
+    /// Only sides competing under their own brand
+    /// ([`TeamType::is_own_team`]) ever go to print — a Reserve or U18
+    /// squad keeps an empty newsroom and is read about in the first
+    /// team's paper.
+    pub newsroom: TeamNewsroom,
 
     /// Reputation (0..10000) of the league THIS team competes in, stamped
     /// each tick by the country pipeline for teams present in a league

@@ -1,0 +1,16 @@
+{# One story set as a column — kicker, headline, body. Both runs on the
+   sheet use it: the pair beside the rail and the wider run below the
+   front block are the same piece of typesetting at different measures,
+   and keeping one copy of the markup is what stops them drifting apart
+   the first time the headline link changes. Expects `story`. #}
+<section class="np-split">
+    <p class="np-kicker">{{ story.kicker }}<span class="np-dateline">{{ story.date }}</span></p>
+    <h4 class="np-subhead">
+        {%- if story.player_slug.is_empty() -%}
+        {{ story.headline }}
+        {%- else -%}
+        <a class="np-story-link" href="/{{ lang }}/players/{{ story.player_slug }}" title="{{ story.player_name }}">{{ story.headline }}</a>
+        {%- endif -%}
+    </h4>
+    <p class="np-split-body{% if story.is_quote %} np-quote{% endif %}">{{ story.body }}</p>
+</section>

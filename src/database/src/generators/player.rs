@@ -6,13 +6,13 @@ use core::league::Season;
 use core::next_player_id;
 use core::shared::FullName;
 use core::utils::IntegerUtils;
-use log::warn;
 use core::{
     ContractType, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
     PlayerAttributes, PlayerClubContract, PlayerFoots, PlayerPosition, PlayerPositionType,
     PlayerPositions, PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
     PlayerStatisticsHistoryItem, PositionWeights, TeamType, Technical, WageCalculator,
 };
+use log::warn;
 
 // ── Skill index constants (flat array order) ────────────────────────────
 // Technical (0..14)
@@ -161,11 +161,19 @@ impl SkillGroup {
 pub struct RoleArchetype;
 
 impl RoleArchetype {
-    pub fn apply(weights: &mut [f32; SKILL_COUNT], position: &PositionType, rng: &mut HydrationRng) {
+    pub fn apply(
+        weights: &mut [f32; SKILL_COUNT],
+        position: &PositionType,
+        rng: &mut HydrationRng,
+    ) {
         Self::apply_inner(weights, position, rng);
     }
 
-    fn apply_inner(weights: &mut [f32; SKILL_COUNT], position: &PositionType, rng: &mut HydrationRng) {
+    fn apply_inner(
+        weights: &mut [f32; SKILL_COUNT],
+        position: &PositionType,
+        rng: &mut HydrationRng,
+    ) {
         let roll = rng.f32();
         match position {
             PositionType::Goalkeeper => {
@@ -708,7 +716,12 @@ impl AbilityTarget {
 
     /// Build the (CA, PA) pair for a generated player. Same continuous
     /// formula across every TeamType — squad role + age curve modulate it.
-    pub fn for_role(rep_factor: f32, age: u32, role: SquadRole, rng: &mut HydrationRng) -> AbilityTarget {
+    pub fn for_role(
+        rep_factor: f32,
+        age: u32,
+        role: SquadRole,
+        rng: &mut HydrationRng,
+    ) -> AbilityTarget {
         let current = Self::current_for(rep_factor, age, role, rng);
         let potential = Self::potential_from(current, age, role, rng);
         AbilityTarget { current, potential }
@@ -2237,8 +2250,7 @@ fn build_player_attributes(
     // every missing field falls back to an ability-curve derivation so
     // partial overrides (e.g. a scraper that only captured world fame)
     // still produce coherent home/current numbers.
-    let (derived_current, derived_home, derived_world) =
-        derive_reputation_from_ability(record_ca);
+    let (derived_current, derived_home, derived_world) = derive_reputation_from_ability(record_ca);
     let (current_rep, home_rep, world_rep) = match record.reputation.as_ref() {
         Some(r) => (
             r.current.unwrap_or(derived_current),
@@ -3517,7 +3529,11 @@ mod potential_ability_tests {
         assert_eq!(PotentialAbility::resolve(1, &mut rng), 1);
         assert_eq!(PotentialAbility::resolve(130, &mut rng), 130);
         assert_eq!(PotentialAbility::resolve(200, &mut rng), 200);
-        assert_eq!(PotentialAbility::resolve(250, &mut rng), 200, "capped at 200");
+        assert_eq!(
+            PotentialAbility::resolve(250, &mut rng),
+            200,
+            "capped at 200"
+        );
     }
 
     #[test]

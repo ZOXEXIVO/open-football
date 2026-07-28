@@ -414,11 +414,7 @@ impl ReputationResidue {
         self.national -= national_units;
         self.world -= world_units;
 
-        (
-            home_units as i16,
-            national_units as i16,
-            world_units as i16,
-        )
+        (home_units as i16, national_units as i16, world_units as i16)
     }
 }
 

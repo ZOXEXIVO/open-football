@@ -105,8 +105,8 @@ impl Club {
             // overdue prospects who don't fit stay in the academy and are
             // released at 18 into the free-agent pool below.
             const LOAN_READY_ACADEMY_AGE: u8 = 17;
-            let overdue_room = ClubAcademy::SOFT_MAX_YOUTH_SIZE
-                .saturating_sub(youth_count + graduated.len());
+            let overdue_room =
+                ClubAcademy::SOFT_MAX_YOUTH_SIZE.saturating_sub(youth_count + graduated.len());
             graduated.extend(self.academy.graduate_age_overdue(
                 date,
                 LOAN_READY_ACADEMY_AGE,

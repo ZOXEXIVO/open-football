@@ -1,6 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::teams::newspaper::NewspaperCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -44,6 +45,8 @@ pub struct TeamTacticsTemplate {
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
+    /// Printed items waiting on the newspaper tab, for the tabbar badge.
+    pub newspaper_count: usize,
     pub formation_name: String,
     pub formation_players: Vec<FormationPlayer>,
     /// Most recent in-match shapes the team actually used. Lets the
@@ -168,6 +171,7 @@ pub async fn team_tactics_get_action(
         active_tab: "tactics",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
+        newspaper_count: NewspaperCounter::count(simulator_data, team),
         formation_name,
         formation_players,
         recent_used_shapes,

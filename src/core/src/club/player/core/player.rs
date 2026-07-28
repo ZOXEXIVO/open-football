@@ -1164,7 +1164,10 @@ impl Player {
                         eff(team_coaching.map(|t| t.technical), c.coach_best_technical),
                         eff(team_coaching.map(|t| t.mental), c.coach_best_mental),
                         eff(team_coaching.map(|t| t.fitness), c.coach_best_fitness),
-                        eff(team_coaching.map(|t| t.goalkeeping), c.coach_best_goalkeeping),
+                        eff(
+                            team_coaching.map(|t| t.goalkeeping),
+                            c.coach_best_goalkeeping,
+                        ),
                         c.youth_coaching_quality,
                     )
                 })

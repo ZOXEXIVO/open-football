@@ -1,9 +1,9 @@
 use super::Club;
 use super::graduation_salary;
+use crate::club::ClubPhilosophy;
 use crate::club::player::calculators::{
     AutomaticReleaseEligibility, FreeAgentReleaseReason, ReleaseEligibilityContext,
 };
-use crate::club::ClubPhilosophy;
 use crate::club::staff::perception::{AbilityEstimator, CoachProfile, DevelopmentFormEvidence};
 use crate::club::team::squad::SquadAssetContext;
 use crate::{
@@ -1402,7 +1402,12 @@ mod promotion_evidence_tests {
             };
             push(PlayerPositionType::Goalkeeper, 2, &mut id, &mut players);
             push(PlayerPositionType::DefenderCenter, 8, &mut id, &mut players);
-            push(PlayerPositionType::MidfielderCenter, 6, &mut id, &mut players);
+            push(
+                PlayerPositionType::MidfielderCenter,
+                6,
+                &mut id,
+                &mut players,
+            );
             push(PlayerPositionType::Striker, 6, &mut id, &mut players);
             players
         }
@@ -1417,7 +1422,12 @@ mod promotion_evidence_tests {
                 id += 1;
             }
             for _ in 0..4 {
-                players.push(Self::player(id, PlayerPositionType::MidfielderCenter, 50, 17));
+                players.push(Self::player(
+                    id,
+                    PlayerPositionType::MidfielderCenter,
+                    50,
+                    17,
+                ));
                 id += 1;
             }
             for _ in 0..3 {
@@ -1582,15 +1592,34 @@ mod rebalance_patience_tests {
         fn overloaded_main(tenth_midfielder: Player) -> Vec<Player> {
             let mut players = vec![tenth_midfielder];
             let mut id = 100u32;
-            let push = |pos: PlayerPositionType, n: usize, ca: u8, id: &mut u32, out: &mut Vec<Player>| {
-                for _ in 0..n {
-                    out.push(Self::player(*id, pos, ca, 27));
-                    *id += 1;
-                }
-            };
-            push(PlayerPositionType::Goalkeeper, 2, 120, &mut id, &mut players);
-            push(PlayerPositionType::DefenderCenter, 8, 120, &mut id, &mut players);
-            push(PlayerPositionType::MidfielderCenter, 9, 120, &mut id, &mut players);
+            let push =
+                |pos: PlayerPositionType, n: usize, ca: u8, id: &mut u32, out: &mut Vec<Player>| {
+                    for _ in 0..n {
+                        out.push(Self::player(*id, pos, ca, 27));
+                        *id += 1;
+                    }
+                };
+            push(
+                PlayerPositionType::Goalkeeper,
+                2,
+                120,
+                &mut id,
+                &mut players,
+            );
+            push(
+                PlayerPositionType::DefenderCenter,
+                8,
+                120,
+                &mut id,
+                &mut players,
+            );
+            push(
+                PlayerPositionType::MidfielderCenter,
+                9,
+                120,
+                &mut id,
+                &mut players,
+            );
             push(PlayerPositionType::Striker, 5, 120, &mut id, &mut players);
             players
         }
@@ -1603,7 +1632,9 @@ mod rebalance_patience_tests {
                 .name("Main".to_string())
                 .slug("main".to_string())
                 .team_type(TeamType::Main)
-                .players(PlayerCollection::new(Self::overloaded_main(tenth_midfielder)))
+                .players(PlayerCollection::new(Self::overloaded_main(
+                    tenth_midfielder,
+                )))
                 .staffs(StaffCollection::new(Vec::new()))
                 .reputation(TeamReputation::new(500, 500, 500))
                 .training_schedule(Self::schedule())
@@ -1639,7 +1670,11 @@ mod rebalance_patience_tests {
         }
 
         fn on_main(club: &Club, id: u32) -> Option<&Player> {
-            club.teams.teams[0].players.players.iter().find(|p| p.id == id)
+            club.teams.teams[0]
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == id)
         }
     }
 
@@ -1743,16 +1778,20 @@ mod overage_graduation_tests {
         fn main_roster() -> Vec<Player> {
             let mut players = Vec::new();
             let mut id = 100u32;
-            let push =
-                |pos: PlayerPositionType, n: usize, id: &mut u32, out: &mut Vec<Player>| {
-                    for _ in 0..n {
-                        out.push(Self::player(*id, pos, 120, 27));
-                        *id += 1;
-                    }
-                };
+            let push = |pos: PlayerPositionType, n: usize, id: &mut u32, out: &mut Vec<Player>| {
+                for _ in 0..n {
+                    out.push(Self::player(*id, pos, 120, 27));
+                    *id += 1;
+                }
+            };
             push(PlayerPositionType::Goalkeeper, 2, &mut id, &mut players);
             push(PlayerPositionType::DefenderCenter, 8, &mut id, &mut players);
-            push(PlayerPositionType::MidfielderCenter, 6, &mut id, &mut players);
+            push(
+                PlayerPositionType::MidfielderCenter,
+                6,
+                &mut id,
+                &mut players,
+            );
             push(PlayerPositionType::Striker, 6, &mut id, &mut players);
             players
         }
@@ -1766,7 +1805,12 @@ mod overage_graduation_tests {
                 id += 1;
             }
             for _ in 0..4 {
-                players.push(Self::player(id, PlayerPositionType::MidfielderCenter, 50, 18));
+                players.push(Self::player(
+                    id,
+                    PlayerPositionType::MidfielderCenter,
+                    50,
+                    18,
+                ));
                 id += 1;
             }
             for _ in 0..3 {
@@ -1810,7 +1854,12 @@ mod overage_graduation_tests {
                 Self::team(20, "u20", TeamType::U20, Self::u20_roster(candidate)),
             ];
             if with_second {
-                teams.push(Self::team(80, "second", TeamType::Second, Self::second_roster()));
+                teams.push(Self::team(
+                    80,
+                    "second",
+                    TeamType::Second,
+                    Self::second_roster(),
+                ));
             }
             Club::new(
                 100,
@@ -1831,7 +1880,13 @@ mod overage_graduation_tests {
 
         fn on_team(club: &Club, tt: TeamType, id: u32) -> bool {
             Self::team_idx_of(club, tt)
-                .map(|idx| club.teams.teams[idx].players.players.iter().any(|p| p.id == id))
+                .map(|idx| {
+                    club.teams.teams[idx]
+                        .players
+                        .players
+                        .iter()
+                        .any(|p| p.id == id)
+                })
                 .unwrap_or(false)
         }
     }
@@ -2067,7 +2122,9 @@ mod youth_contract_review_tests {
         let mut prospect = Fx::youth(9, 17, 0, 0.0);
         prospect.friendly_statistics.played = 12;
         for _ in 0..12 {
-            prospect.friendly_statistics.record_match_rating(7.8, 90, true);
+            prospect
+                .friendly_statistics
+                .record_match_rating(7.8, 90, true);
         }
         let mut club = Fx::club(vec![prospect]);
         club.review_youth_contracts(Fx::date());

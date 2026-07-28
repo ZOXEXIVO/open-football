@@ -3,6 +3,7 @@ pub mod routes;
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::decisions::PlayerDecisionsCounter;
+use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -140,6 +141,7 @@ pub struct PlayerEventsTemplate {
     pub decisions_count: usize,
     pub interested_clubs_count: usize,
     pub awards_count: u32,
+    pub news_count: usize,
     pub events: Vec<PlayerEventDto>,
 }
 
@@ -262,6 +264,7 @@ pub async fn player_events_action(
         decisions_count: PlayerDecisionsCounter::count_recent(player, simulator_data.date.date()),
         interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
         awards_count: player.awards_count.total(),
+        news_count: PlayerNewsCounter::count(simulator_data, player),
         events,
     }
     .into_response())
@@ -501,6 +504,10 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::TransferInterestDismissed => "event_transfer_interest_dismissed",
         HappinessEventType::TransferTalksExpected => "event_transfer_talks_expected",
         HappinessEventType::InterestCooled => "event_interest_cooled",
+        HappinessEventType::AgreedPersonalTerms => "event_agreed_personal_terms",
+        HappinessEventType::RejectedMoveOnPersonalTerms => {
+            "event_rejected_move_on_personal_terms"
+        }
         HappinessEventType::UsedInterestForContractLeverage => {
             "event_used_interest_for_contract_leverage"
         }
@@ -538,10 +545,12 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::LoanRecallRequested => "event_loan_recall_requested",
         HappinessEventType::LoanFormConcern => "event_loan_form_concern",
         HappinessEventType::WantsLoanMadePermanent => "event_wants_loan_made_permanent",
+        HappinessEventType::WantsToProveHimselfAtParent => "event_wants_to_prove_himself_at_parent",
         HappinessEventType::UnsettledAfterLoanReturn => "event_unsettled_after_loan_return",
         HappinessEventType::ReturnedFromLoanProven => "event_returned_from_loan_proven",
         HappinessEventType::ReturnedFromLoanDeflated => "event_returned_from_loan_deflated",
         HappinessEventType::BackedAfterLoanReturn => "event_backed_after_loan_return",
+        HappinessEventType::LoanSpellReviewed => "event_loan_spell_reviewed",
         HappinessEventType::ThreatenedByReturningLoanee => "event_threatened_by_returning_loanee",
         HappinessEventType::AdmiredForBigClubSpell => "event_admired_for_big_club_spell",
         HappinessEventType::BigClubAuraFaded => "event_big_club_aura_faded",
@@ -1377,6 +1386,8 @@ impl TransferInterestRender {
                 | HappinessEventType::InterestCooled
                 | HappinessEventType::UsedInterestForContractLeverage
                 | HappinessEventType::TransferBidRejected
+                | HappinessEventType::AgreedPersonalTerms
+                | HappinessEventType::RejectedMoveOnPersonalTerms
                 | HappinessEventType::DreamMoveCollapsed
                 | HappinessEventType::WantedByBiggerClub
         )
@@ -1482,6 +1493,18 @@ impl TransferInterestRender {
             }
             (HappinessEventType::TransferBidRejected, _, false) => {
                 "transfer_interest_headline_bid_rejected"
+            }
+            (HappinessEventType::AgreedPersonalTerms, _, true) => {
+                "transfer_interest_headline_terms_agreed_named"
+            }
+            (HappinessEventType::AgreedPersonalTerms, _, false) => {
+                "transfer_interest_headline_terms_agreed"
+            }
+            (HappinessEventType::RejectedMoveOnPersonalTerms, _, true) => {
+                "transfer_interest_headline_terms_rejected_named"
+            }
+            (HappinessEventType::RejectedMoveOnPersonalTerms, _, false) => {
+                "transfer_interest_headline_terms_rejected"
             }
             (HappinessEventType::DreamMoveCollapsed, _, true) => {
                 "transfer_interest_headline_dream_collapsed_named"
@@ -2329,6 +2352,7 @@ impl CareerDesireRender {
                 | HappinessEventType::WantsFirstTeamFootball
                 | HappinessEventType::WantsToLeaveAfterRelegation
                 | HappinessEventType::WantsLoanMadePermanent
+                | HappinessEventType::WantsToProveHimselfAtParent
         )
     }
 
@@ -2394,6 +2418,7 @@ impl CareerDesireRender {
             K::FirstTeamBreakthroughAmbition => "first_team_football",
             K::PostRelegationAmbition => "post_relegation",
             K::LoanToPermanentAmbition => "loan_permanent",
+            K::ParentClubProvingGround => "prove_at_parent",
         }
     }
 }
@@ -2512,10 +2537,22 @@ impl LoanRender {
                 | HappinessEventType::LoanRecallRequested
                 | HappinessEventType::LoanDevelopmentConcern
                 | HappinessEventType::LoanFormConcern
+                | HappinessEventType::LoanSpellReviewed
         )
     }
 
+    /// The loan report leads on the verdict — "a successful loan spell",
+    /// "he never got in the team" — because that is the sentence a
+    /// reader wants first; the numbers that produced it follow in the
+    /// reason line. Every other loan kind keeps its fixed headline.
     pub fn headline(ctx: &LoanEventContext, i18n: &I18n) -> String {
+        if let Some(spell) = ctx.spell.as_ref() {
+            let key = format!("loan_headline_verdict_{}", spell.verdict.as_token());
+            let raw = i18n.t(&key);
+            if raw != key {
+                return raw.to_string();
+            }
+        }
         let key = format!("loan_headline_{}", Self::kind_token(ctx));
         let raw = i18n.t(&key);
         if raw == key {
@@ -2526,12 +2563,68 @@ impl LoanRender {
     }
 
     pub fn reason_sentence(ctx: &LoanEventContext, i18n: &I18n) -> Option<String> {
+        if let Some(spell) = ctx.spell.as_ref() {
+            return Self::spell_sentence(spell, i18n);
+        }
         let key = format!("loan_reason_{}", Self::kind_token(ctx));
         let raw = i18n.t(&key);
         if raw == key {
             return None;
         }
         Some(raw.to_string())
+    }
+
+    /// The record itself: what he played, what he did in it, and how he
+    /// rated. Built from parts rather than one template so a spell with
+    /// no goals in it does not read "0 goals, 0 assists" — a defender's
+    /// clean season would otherwise look like a striker's failed one.
+    fn spell_sentence(spell: &core::LoanSpellRecord, i18n: &I18n) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+
+        let apps_key = if spell.starts == spell.appearances {
+            "loan_spell_apps"
+        } else {
+            "loan_spell_apps_with_starts"
+        };
+        if let Some(template) = translated(i18n, apps_key) {
+            parts.push(
+                template
+                    .replace("{apps}", &spell.appearances.to_string())
+                    .replace("{starts}", &spell.starts.to_string()),
+            );
+        }
+
+        // Goals and assists are worth a line only when there are some.
+        // The two are joined by the copy, not by a comma here, so a
+        // locale can order them the way its grammar wants.
+        let contribution_key = match (spell.goals, spell.assists) {
+            (0, 0) => None,
+            (_, 0) => Some("loan_spell_goals"),
+            (0, _) => Some("loan_spell_assists"),
+            _ => Some("loan_spell_goals_assists"),
+        };
+        if let Some(key) = contribution_key {
+            if let Some(template) = translated(i18n, key) {
+                parts.push(
+                    template
+                        .replace("{goals}", &spell.goals.to_string())
+                        .replace("{assists}", &spell.assists.to_string()),
+                );
+            }
+        }
+
+        if let Some(rating) = spell.average_rating {
+            if let Some(template) = translated(i18n, "loan_spell_rating") {
+                parts.push(template.replace("{rating}", &format!("{:.2}", rating)));
+            }
+        }
+
+        if parts.is_empty() {
+            // No copy for any part — fall back to the verdict alone
+            // rather than to a blank row.
+            return translated(i18n, spell.verdict.as_i18n_key()).map(str::to_string);
+        }
+        Some(parts.join(" · "))
     }
 
     fn kind_token(ctx: &LoanEventContext) -> &'static str {
@@ -2548,6 +2641,7 @@ impl LoanRender {
             K::ParentClubConcerned => "parent_concerned",
             K::LoanRecallRequested => "recall_requested",
             K::LoanDevelopmentConcern => "development_concern",
+            K::LoanSpellReviewed => "spell_reviewed",
         }
     }
 }
@@ -3729,6 +3823,15 @@ mod tests {
             "transfer_interest_headline_bid_rejected_named",
             "transfer_interest_headline_talks_named",
             "transfer_interest_headline_cooled_named",
+            // The two rungs where the saga stops being speculation.
+            "event_agreed_personal_terms",
+            "event_rejected_move_on_personal_terms",
+            "transfer_interest_headline_terms_agreed",
+            "transfer_interest_headline_terms_agreed_named",
+            "transfer_interest_headline_terms_rejected",
+            "transfer_interest_headline_terms_rejected_named",
+            "transfer_interest_stage_terms_agreed",
+            "transfer_interest_stage_terms_rejected",
             "transfer_interest_stage_concrete_interest",
             "transfer_interest_stage_bid_rejected",
             "transfer_interest_source_confirmed_approach",
@@ -4104,6 +4207,18 @@ mod tests {
             "parent_satisfied",
             "parent_concerned",
         ];
+        // The loan report keys off the verdict rather than the kind, so
+        // its tokens live in their own list. `loan_verdict_*` is the
+        // last-resort label the reason line falls back to when none of
+        // the record fragments have copy.
+        const LOAN_VERDICTS: &[&str] = &[
+            "standout",
+            "successful",
+            "steady",
+            "peripheral",
+            "struggled",
+            "inconclusive",
+        ];
         const RECOGNITION_KINDS: &[&str] = &[
             "player_of_the_week",
             "player_of_the_month",
@@ -4187,6 +4302,20 @@ mod tests {
         for t in LOAN_KINDS {
             check(format!("loan_headline_{}", t));
             check(format!("loan_reason_{}", t));
+        }
+        for t in LOAN_VERDICTS {
+            check(format!("loan_headline_verdict_{}", t));
+            check(format!("loan_verdict_{}", t));
+        }
+        for key in [
+            "loan_spell_apps",
+            "loan_spell_apps_with_starts",
+            "loan_spell_goals",
+            "loan_spell_assists",
+            "loan_spell_goals_assists",
+            "loan_spell_rating",
+        ] {
+            check(key.to_string());
         }
         for t in RECOGNITION_KINDS {
             check(format!("recognition_headline_{}", t));

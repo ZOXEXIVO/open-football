@@ -11744,6 +11744,29 @@ html:has(.fm-workers-page) {
     text-shadow: 0.4px 0 0 currentColor;
 }
 
+/* The nameplate as a cross-reference — a player's page links it to the
+   club's own paper. It must not LOOK like a link: a rule under a
+   masthead reads as a printing fault, so this inherits the nameplate
+   whole and never draws one in any state. The global
+   `a:link, a:visited, a:hover, a:active { text-decoration: none
+   !important }` near the top of this sheet already suppresses the line;
+   what a bare <a> would still take is Bootstrap's link colour, which is
+   what `color: inherit` is here to stop. Specificity (0,2,1) clears
+   that reset either way. Hover dims rather than underlines — the only
+   affordance a nameplate can carry without stopping being one. */
+a.np-masthead-link:link,
+a.np-masthead-link:visited,
+a.np-masthead-link:hover,
+a.np-masthead-link:focus-visible {
+    color: inherit !important;
+    text-decoration: none !important;
+}
+
+a.np-masthead-link:hover,
+a.np-masthead-link:focus-visible {
+    opacity: 0.72;
+}
+
 .np-ear {
     display: flex;
     align-items: baseline;
@@ -11902,6 +11925,41 @@ html:has(.fm-workers-page) {
     text-wrap: balance;
 }
 
+/* A headline about a person leads to him. Black ink and a rule under
+   the type — never a tinted word: the sheet runs on one plate, and a
+   printed cross-reference has always been underscored rather than
+   coloured. `text-decoration` rather than the briefs' background rule
+   because a headline wraps, and only the real underline follows it
+   onto the second line. */
+/* Written as `a.np-story-link:link` on purpose. A global
+   `a:link, a:visited, a:hover, a:active { text-decoration: none
+   !important }` sits near the top of this sheet, and its specificity
+   (0,1,1) beats a bare class (0,1,0) — so `.np-story-link { text-
+   decoration: underline !important }` loses silently and the link
+   renders as plain type. This is the same wall the briefs column hit,
+   which is why THAT one draws its rule with a background gradient
+   instead. A headline wraps and only a real underline follows it onto
+   the second line, so here the reset is out-specified rather than
+   worked around. The longhands must stay AFTER the shorthand:
+   `text-decoration` resets colour and thickness along with the line. */
+a.np-story-link:link,
+a.np-story-link:visited {
+    color: var(--np-ink) !important;
+    text-decoration: underline !important;
+    text-decoration-thickness: 1px !important;
+    text-decoration-color: var(--np-rule) !important;
+    text-underline-offset: 0.14em;
+    transition: text-decoration-color 0.15s ease;
+}
+
+a.np-story-link:hover,
+a.np-story-link:focus-visible {
+    color: var(--np-ink) !important;
+    text-decoration: underline !important;
+    text-decoration-thickness: 1px !important;
+    text-decoration-color: var(--np-ink) !important;
+}
+
 .np-lead-body {
     /* Newsprint is set in columns for a reason: past roughly seventy
        characters the eye loses the line on the way back. */
@@ -11922,6 +11980,22 @@ html:has(.fm-workers-page) {
     font-weight: 700;
     line-height: 0.74;
     color: var(--np-ink);
+}
+
+/* A drop cap is a letter. Copy that opens on a scoreline, a tally or a
+   fee renders its first character at 54px — a giant "4" hanging off
+   "4-1 against Sevilla", a giant "$" off a transfer fee — and that
+   reads as a printing fault rather than as a flourish. Real football
+   copy opens that way often, in all nine bundles, so the renderer sets
+   this class from the composed text instead of asking every writer in
+   every language to avoid the construction. Mirrors how `.np-quote`
+   stands the cap down. */
+.np-lead-body.np-no-cap::first-letter {
+    float: none;
+    margin: 0;
+    font-size: inherit;
+    font-weight: inherit;
+    line-height: inherit;
 }
 
 /* ── The photograph ────────────────────────────────────────── */
@@ -11989,18 +12063,35 @@ html:has(.fm-workers-page) {
     color: var(--np-ink);
 }
 
-/* ── Secondary pieces ──────────────────────────────────────── */
+/* ── The columns: the pair beside the rail, and the run below ─ */
 
-/* No negative margins. The rule sits on the second column's edge and
-   each column pads away from it — pulling a grid item back into the
+/* No negative margins. The rule sits on a column's own edge and each
+   column pads away from it — pulling a grid item back into the
    gutter made it wider than its own track, and the overflow pushed
    the whole sheet past the page. */
-.np-splits {
+.np-splits,
+.np-run {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
     margin-top: 26px;
     padding-top: 20px;
     border-top: 1px solid var(--np-ink);
+}
+
+/* The two that share the main column with the lead, and so are set to
+   what is left of the measure once the rail has taken its third. */
+.np-splits {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Everything the front block could not hold, once the photograph and
+   the results column have run out and the page has the full measure
+   back. Three columns rather than two: at this width a 14px body set
+   in halves is a line nobody finishes, and the narrower measure is
+   itself the signal that the reader has come off the front block. */
+.np-run {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 24px;
+    margin-top: 30px;
 }
 
 .np-split {
@@ -12008,10 +12099,32 @@ html:has(.fm-workers-page) {
     padding-right: 26px;
 }
 
-.np-split + .np-split {
-    padding-right: 0;
+/* A gutter rule belongs to the column on its right, so it is drawn by
+   every story that does not open a row.
+   Written per container with nth-child rather than as `.np-split +
+   .np-split`: the adjacent-sibling form is only correct while a run is
+   one row deep. With two rows it rules the first column of the second
+   row as well, which drops a vertical line down the middle of the
+   margin, and it leaves the last column of every row padded as though
+   another story followed it. */
+.np-splits > .np-split:nth-child(2n),
+.np-run > .np-split:not(:nth-child(3n + 1)) {
     padding-left: 26px;
     border-left: 1px solid var(--np-rule);
+}
+
+.np-splits > .np-split:nth-child(2n),
+.np-run > .np-split:nth-child(3n) {
+    padding-right: 0;
+}
+
+/* A single piece beside the rail has no partner to share the row with,
+   so it takes the whole of it rather than leaving half the block blank.
+   The run below never needs this: its length is rounded up to whole
+   rows before the page is set. */
+.np-splits > .np-split:only-child {
+    grid-column: 1 / -1;
+    padding-right: 0;
 }
 
 .np-split-body {
@@ -12022,6 +12135,32 @@ html:has(.fm-workers-page) {
     color: var(--np-ink-2);
     text-align: justify;
     hyphens: auto;
+}
+
+/* ── The pull-quote ────────────────────────────────────────── */
+
+/* Copy the paper attributes to a person rather than to its own
+   correspondent — a loanee asking to come home, a player who has just
+   asked to leave. Set in italic behind a heavy left rule, which is the
+   oldest and least decorated way a printed page says "these are his
+   words, not ours". Never justified: a quote is set ragged so it reads
+   as speech rather than as another column of reportage. */
+.np-quote {
+    padding-left: 14px;
+    border-left: 3px solid var(--np-ink);
+    font-style: italic;
+    text-align: left;
+    hyphens: none;
+    color: var(--np-ink);
+}
+
+.np-lead-body.np-quote::first-letter {
+    font-size: inherit;
+    font-weight: inherit;
+    font-style: italic;
+    float: none;
+    margin: 0;
+    line-height: inherit;
 }
 
 /* ── Results ───────────────────────────────────────────────── */
@@ -12045,9 +12184,12 @@ html:has(.fm-workers-page) {
     list-style: none;
 }
 
+/* Laid out with flex rather than fixed grid tracks: a cup tie carries
+   a competition mark between the club and the scoreline and a league
+   fixture does not, and an empty grid track would still spend its
+   column gap — shifting the score on every ordinary Saturday. */
 .np-result {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    display: flex;
     align-items: baseline;
     gap: 10px;
     padding: 9px 0;
@@ -12059,6 +12201,7 @@ html:has(.fm-workers-page) {
 }
 
 .np-result-date {
+    flex: 0 0 auto;
     font-family: var(--np-furniture);
     font-size: 9px;
     letter-spacing: 0.08em;
@@ -12067,12 +12210,28 @@ html:has(.fm-workers-page) {
 }
 
 .np-result-club {
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
     font-family: var(--np-serif);
     font-size: 14px;
     color: var(--np-ink-2) !important;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* The competition mark. Ruled rather than coloured, like every other
+   piece of furniture on this single-plate page. */
+.np-result-cup {
+    flex: 0 0 auto;
+    padding: 1px 4px;
+    border: 1px solid var(--np-rule);
+    font-family: var(--np-furniture);
+    font-size: 8px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--np-ink-3);
 }
 
 .np-result-club:hover {
@@ -12084,6 +12243,7 @@ html:has(.fm-workers-page) {
    the grey ladder by result — black for a win, mid for a draw,
    light for a defeat. */
 .np-result-score {
+    flex: 0 0 auto;
     font-family: var(--np-furniture);
     font-size: 15px;
     font-weight: 600;
@@ -12142,26 +12302,26 @@ html:has(.fm-workers-page) {
     border-bottom: 0;
 }
 
+/* `auto-fit`, not `auto-fill`: a band of three under a sheet wide
+   enough to hold four collapses the track nothing was set in, and the
+   three stretch across the whole measure. With `auto-fill` the empty
+   track stays open and the band ends on a gap where a fourth brief is
+   not — the same hole the run's rounding exists to close, one row
+   further down the page. */
 .np-briefs-band {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
     gap: 0 26px;
     border-top: 2px solid var(--np-ink);
 }
 
+/* No rule of its own. The band draws the black one above the line of
+   briefs, and a hairline on each item put a second, softer rule
+   directly under it — on every brief but the first, which is what made
+   one corner of the band look lighter than the rest of it. */
 .np-brief {
     min-width: 0;
     padding: 11px 0 12px;
-    border-bottom: 1px solid var(--np-rule-soft);
-}
-
-.np-briefs-band .np-brief {
-    border-top: 1px solid var(--np-rule-soft);
-    border-bottom: 0;
-}
-
-.np-briefs-band .np-brief:first-child {
-    border-top: 0;
 }
 
 .np-brief-kicker {
@@ -12310,6 +12470,13 @@ html:has(.fm-workers-page) {
     .np-figure {
         margin-bottom: 0;
     }
+
+    /* The run keeps its three columns all the way down to the phone
+       break. The typesetter rounds the run up to whole rows of
+       `PressDesk::RUN_COLUMNS`, so a page set two-wide here would end
+       on a story sitting alone beside an empty column — the exact hole
+       the rounding exists to close. Three narrower columns of newsprint
+       is the older and better answer anyway. */
 }
 
 @media (max-width: 900px) {
@@ -12357,21 +12524,40 @@ html:has(.fm-workers-page) {
         margin: 0 auto 20px;
     }
 
-    .np-splits {
+    .np-splits,
+    .np-run {
         grid-template-columns: minmax(0, 1fr);
+        /* The stories rule off from each other now, so the row gap
+           would only add a second, softer gap on top of the rule. */
+        row-gap: 0;
     }
 
-    .np-split,
-    .np-split + .np-split {
+    /* One column has no gutters to pad away from.
+
+       `:nth-child(n)` matches everything and is here for its weight
+       alone: the gutter rules it undoes score (0,3,0) through their
+       `:not()`, and a media query adds nothing to specificity — a bare
+       `.np-run > .np-split` would lose to them however late it is set,
+       leaving a vertical rule down a page with one column on it. */
+    .np-splits > .np-split:nth-child(n),
+    .np-run > .np-split:nth-child(n) {
         padding-right: 0;
         padding-left: 0;
+        border-left: 0;
     }
 
-    .np-split + .np-split {
+    /* The rule that stood between columns lies down between stories. */
+    .np-splits > .np-split + .np-split,
+    .np-run > .np-split + .np-split {
         margin-top: 18px;
         padding-top: 16px;
         border-top: 1px solid var(--np-rule);
-        border-left: 0;
+    }
+
+    /* Stacked, the briefs need the separator back — in one column it
+       falls between two briefs rather than under the band's own rule. */
+    .np-brief + .np-brief {
+        border-top: 1px solid var(--np-rule-soft);
     }
 
     .np-lead-body,

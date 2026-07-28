@@ -45,10 +45,7 @@ pub enum DebtStanding {
 impl DebtStanding {
     /// True when the club may not spend a fee on a player.
     pub fn blocks_transfer_spending(self) -> bool {
-        matches!(
-            self,
-            DebtStanding::Emergency | DebtStanding::Administration
-        )
+        matches!(self, DebtStanding::Emergency | DebtStanding::Administration)
     }
 
     /// True when the club must actively shed wages rather than merely

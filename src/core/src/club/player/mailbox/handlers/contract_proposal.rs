@@ -801,8 +801,8 @@ mod tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills,
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
     };
     use chrono::NaiveDate;
 
