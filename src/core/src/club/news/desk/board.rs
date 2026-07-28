@@ -2,6 +2,7 @@ use super::facts::{ClubDugoutWatch, SquadPulse};
 use crate::Club;
 use crate::club::DistressLevel;
 use crate::club::board::decision::BoardFacility;
+use crate::club::finance::{DebtProfile, DebtStanding};
 use crate::club::news::affairs::{ClubAffair, ClubAffairLog};
 use crate::club::news::types::{NewsStory, NewsStoryKind};
 use chrono::NaiveDate;
@@ -22,6 +23,64 @@ use chrono::NaiveDate;
 /// The silverware beats have no club-level flag behind them either, but
 /// they do exist in the players' event feeds, so those still come off
 /// the [`SquadPulse`] the squad walk already gathered.
+/// A club's balance sheet reduced to the handful of numbers the business
+/// page actually writes about, read once at the top of the desk.
+///
+/// Kept apart from the detectors for the same reason every other desk
+/// takes a facts struct: the reading is where the finance model lives
+/// (what counts as excess borrowing, what a trailing year is), and the
+/// writing is ordinary arithmetic that can then be exercised without a
+/// club, a league and a world standing behind it.
+#[derive(Debug, Clone, Copy)]
+struct ClubAccounts {
+    standing: DebtStanding,
+    /// Total borrowing, but only once it is past the agreed facility.
+    /// `0` inside it — borrowing inside a facility is how most of
+    /// football is financed and is not news anywhere.
+    excess_debt: i64,
+    /// Wages as a percentage of trailing revenue. `0` until there is
+    /// revenue to measure them against.
+    wage_share: i32,
+    distress: DistressLevel,
+}
+
+impl ClubAccounts {
+    fn read(club: &Club, date: NaiveDate) -> Self {
+        let balance = club.finance.balance.balance;
+        let income = club.finance.trailing_annual_income(date);
+        let wages = club
+            .finance
+            .trailing_avg_monthly_wages(date)
+            .saturating_mul(12);
+
+        // Administration is excluded from the debt figure on purpose:
+        // entering it writes the balance down to something serviceable
+        // and freezes the interest, so quoting the old number would be
+        // reporting a problem the process has already dealt with.
+        let excess_debt = if balance < 0
+            && !matches!(club.finance.debt.standing, DebtStanding::Administration)
+            && -balance > DebtProfile::facility_limit(income)
+        {
+            -balance
+        } else {
+            0
+        };
+
+        let wage_share = if income > 0 && wages > 0 {
+            (wages.saturating_mul(100) / income).min(i32::MAX as i64) as i32
+        } else {
+            0
+        };
+
+        ClubAccounts {
+            standing: club.finance.debt.standing,
+            excess_debt,
+            wage_share,
+            distress: club.finance.distress_level,
+        }
+    }
+}
+
 pub struct BoardroomDesk;
 
 impl BoardroomDesk {
@@ -37,6 +96,14 @@ impl BoardroomDesk {
     /// still not having a manager is itself the point.
     const HUNT_IS_NEWS_AFTER_DAYS: i64 = 7;
 
+    /// Wages as a percentage of trailing revenue at which the wage bill
+    /// stops being a line in the accounts and becomes a story. Every
+    /// club in the game runs a heavy wage ratio — the ceiling a solvent
+    /// club is held to is already 70% ([`DebtStanding::wage_ratio_ceiling`])
+    /// — so the bar is set where the money genuinely stops working:
+    /// nothing left over for anything that is not a footballer.
+    const WAGE_CRISIS_SHARE: i32 = 85;
+
     pub fn file(
         out: &mut Vec<NewsStory>,
         club: &Club,
@@ -51,7 +118,7 @@ impl BoardroomDesk {
         Self::file_confidence(out, club, settled, date);
         Self::file_silverware(out, pulse, date);
         Self::file_academy(out, club, date);
-        Self::file_accounts(out, club, date);
+        Self::file_accounts(out, ClubAccounts::read(club, date), date);
     }
 
     /// The week's entries from the club's own diary, each one a dated
@@ -129,6 +196,23 @@ impl BoardroomDesk {
                 }
                 ClubAffair::PromiseBroken => {
                     NewsStory::new(NewsStoryKind::BoardPromiseBroken, date)
+                }
+                ClubAffair::AdministrationEntered { points_deduction } => {
+                    NewsStory::new(NewsStoryKind::AdministrationEntered, date)
+                        .with_numbers(points_deduction as i32, 0)
+                }
+                ClubAffair::AdministrationExited => {
+                    NewsStory::new(NewsStoryKind::AdministrationExited, date)
+                }
+                ClubAffair::OwnerBailout { amount } => {
+                    NewsStory::new(NewsStoryKind::OwnerBailout, date).with_money(amount)
+                }
+                ClubAffair::SponsorSigned { annual_value } => {
+                    NewsStory::new(NewsStoryKind::SponsorSigned, date).with_money(annual_value)
+                }
+                ClubAffair::SponsorshipLost { count } => {
+                    NewsStory::new(NewsStoryKind::SponsorshipLost, date)
+                        .with_numbers(count as i32, 0)
                 }
             };
 
@@ -259,14 +343,62 @@ impl BoardroomDesk {
         );
     }
 
-    fn file_accounts(out: &mut Vec<NewsStory>, club: &Club, date: NaiveDate) {
-        let severity = match club.finance.distress_level {
+    /// The state a balance sheet leaves behind, as opposed to the dated
+    /// moments already filed from the diary.
+    ///
+    /// Each line has its own trigger and they are deliberately near-
+    /// disjoint, because four simultaneous variations on "the club has
+    /// no money" would take the whole boardroom allowance
+    /// (`NewsEditor::MAX_PER_DESK`) and push the football off its own
+    /// page. `MoneyWorries` is the vaguest of them and now only runs
+    /// when nothing sharper applies: cash-flow trouble with no debt
+    /// standing to name it by.
+    fn file_accounts(out: &mut Vec<NewsStory>, accounts: ClubAccounts, date: NaiveDate) {
+        // Barred from spending a fee at all. The single fact that
+        // decides the club's next two windows.
+        if accounts.standing.blocks_transfer_spending() {
+            out.push(NewsStory::new(NewsStoryKind::TransferEmbargo, date));
+        } else if accounts.standing.forces_wage_reduction() {
+            // Not barred, but every arrival has to be paid for by a
+            // departure first. The rumour mill's version of a balance
+            // sheet, and the line it runs on all summer.
+            out.push(NewsStory::new(NewsStoryKind::MustSellBeforeBuying, date));
+        }
+
+        // The debt figure itself.
+        if accounts.excess_debt > 0 {
+            out.push(
+                NewsStory::new(NewsStoryKind::DebtMountain, date).with_money(accounts.excess_debt),
+            );
+        }
+
+        // Wages against what comes through the door. Duller than the
+        // debt and usually the reason for it, so it files independently
+        // of the standing above.
+        if accounts.wage_share >= Self::WAGE_CRISIS_SHARE {
+            out.push(
+                NewsStory::new(NewsStoryKind::WageBillCrisis, date)
+                    .with_numbers(accounts.wage_share, 0)
+                    // A club paying its whole income out in wages is a
+                    // louder story than one paying four fifths.
+                    .weighted((accounts.wage_share - Self::WAGE_CRISIS_SHARE).min(60)),
+            );
+        }
+
+        let severity = match accounts.distress {
             DistressLevel::Insolvency => 220,
             DistressLevel::Severe => 130,
             DistressLevel::Distress => 50,
             DistressLevel::None => 0,
         };
-        if severity > 0 {
+        // Only when there is no sharper line to run instead — otherwise
+        // the page carries the vague story beside the specific one.
+        if severity > 0
+            && matches!(
+                accounts.standing,
+                DebtStanding::Solvent | DebtStanding::Leveraged
+            )
+        {
             out.push(
                 NewsStory::new(NewsStoryKind::MoneyWorries, date)
                     .with_numbers(severity, 0)
@@ -427,6 +559,172 @@ mod tests {
         let mut settled = Vec::new();
         BoardroomDesk::file_pursuits(&mut settled, Some(&watch), true, day(9));
         assert_eq!(kinds(&settled), vec![NewsStoryKind::ManagerTargetLinked]);
+    }
+
+    /// The balance sheet, as the desk sees it. Defaults to a club with
+    /// nothing wrong with it, so each test changes exactly the one
+    /// number it is about.
+    fn accounts() -> ClubAccounts {
+        ClubAccounts {
+            standing: DebtStanding::Solvent,
+            excess_debt: 0,
+            wage_share: 0,
+            distress: DistressLevel::None,
+        }
+    }
+
+    /// The day the club went into administration is a dated fact and
+    /// carries the one number that reaches the league table.
+    #[test]
+    fn administration_is_reported_with_the_points_it_costs() {
+        let mut log = ClubAffairLog::new();
+        log.record(
+            ClubAffair::AdministrationEntered {
+                points_deduction: 12,
+            },
+            day(3),
+        );
+        log.record(ClubAffair::OwnerBailout { amount: 8_000_000 }, day(4));
+
+        let mut out = Vec::new();
+        BoardroomDesk::file_affairs(&mut out, &log, day(1), day(8));
+
+        assert_eq!(
+            kinds(&out),
+            vec![
+                NewsStoryKind::AdministrationEntered,
+                NewsStoryKind::OwnerBailout
+            ]
+        );
+        assert_eq!(out[0].a, 12, "the points deduction is the story");
+        assert_eq!(out[1].money, 8_000_000);
+        assert!(
+            !out[0].kind.quotes_a_fee(),
+            "the write-down can legitimately be nothing, and the biggest \
+             story a club ever has must never be dropped over a $0"
+        );
+    }
+
+    /// Four simultaneous variations on "the club has no money" would
+    /// take the whole boardroom allowance and push the football off its
+    /// own front page. The embargo and the must-sell line are two ways
+    /// of saying the same thing, so only the sharper one runs.
+    #[test]
+    fn a_stricken_club_does_not_fill_the_page_with_its_own_accounts() {
+        let mut embargoed = Vec::new();
+        BoardroomDesk::file_accounts(
+            &mut embargoed,
+            ClubAccounts {
+                standing: DebtStanding::Administration,
+                distress: DistressLevel::Insolvency,
+                ..accounts()
+            },
+            day(9),
+        );
+
+        assert_eq!(
+            kinds(&embargoed),
+            vec![NewsStoryKind::TransferEmbargo],
+            "a club in administration has one accounts story, not four"
+        );
+    }
+
+    /// …and the two market lines are mutually exclusive: a club that
+    /// cannot spend at all is not a club that has to sell first.
+    #[test]
+    fn a_club_that_must_trade_is_not_also_a_club_that_cannot() {
+        let mut out = Vec::new();
+        BoardroomDesk::file_accounts(
+            &mut out,
+            ClubAccounts {
+                standing: DebtStanding::OwnerFunded,
+                excess_debt: 40_000_000,
+                ..accounts()
+            },
+            day(9),
+        );
+
+        assert_eq!(
+            kinds(&out),
+            vec![
+                NewsStoryKind::MustSellBeforeBuying,
+                NewsStoryKind::DebtMountain
+            ]
+        );
+        assert_eq!(out[1].money, 40_000_000);
+    }
+
+    /// "Counting the cost" is the vague version of a story the desk can
+    /// now tell precisely. It stands down whenever a debt standing can
+    /// name the problem, and runs when nothing else can.
+    #[test]
+    fn the_vague_money_story_gives_way_to_a_specific_one() {
+        let mut named = Vec::new();
+        BoardroomDesk::file_accounts(
+            &mut named,
+            ClubAccounts {
+                standing: DebtStanding::Emergency,
+                distress: DistressLevel::Severe,
+                ..accounts()
+            },
+            day(9),
+        );
+        assert!(
+            !kinds(&named).contains(&NewsStoryKind::MoneyWorries),
+            "the page carried the general story beside the specific one"
+        );
+
+        let mut unnamed = Vec::new();
+        BoardroomDesk::file_accounts(
+            &mut unnamed,
+            ClubAccounts {
+                standing: DebtStanding::Leveraged,
+                distress: DistressLevel::Severe,
+                ..accounts()
+            },
+            day(9),
+        );
+        assert_eq!(kinds(&unnamed), vec![NewsStoryKind::MoneyWorries]);
+    }
+
+    /// Every club in football pays most of what it earns to its players,
+    /// so the wage bill is only a story at the point the money stops
+    /// working. A heavy-but-ordinary ratio must print nothing.
+    #[test]
+    fn an_ordinary_wage_ratio_is_not_a_story() {
+        let mut ordinary = Vec::new();
+        BoardroomDesk::file_accounts(
+            &mut ordinary,
+            ClubAccounts {
+                wage_share: 70,
+                ..accounts()
+            },
+            day(9),
+        );
+        assert!(ordinary.is_empty());
+
+        let mut crisis = Vec::new();
+        BoardroomDesk::file_accounts(
+            &mut crisis,
+            ClubAccounts {
+                wage_share: 104,
+                ..accounts()
+            },
+            day(9),
+        );
+        assert_eq!(kinds(&crisis), vec![NewsStoryKind::WageBillCrisis]);
+        assert_eq!(crisis[0].a, 104);
+    }
+
+    /// A club borrowing comfortably inside its facility is how most of
+    /// football is financed. The desk only quotes a debt once it is past
+    /// what the bank agreed — and never while an administration is
+    /// writing it down.
+    #[test]
+    fn ordinary_borrowing_is_never_printed_as_a_debt_crisis() {
+        let mut out = Vec::new();
+        BoardroomDesk::file_accounts(&mut out, accounts(), day(9));
+        assert!(out.is_empty(), "a solvent club has no business page");
     }
 
     /// Being asked about is news whatever else happened — the club has

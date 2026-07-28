@@ -307,6 +307,33 @@ pub enum NewsStoryKind {
     EuropeSecured,
     AcademyPraise,
     MoneyWorries,
+
+    // ── Boardroom: the balance sheet in trouble ───────────────────
+    /// The club has gone into administration: a points deduction, an
+    /// embargo, and the debt written down to something it can service.
+    /// The loudest thing a set of accounts can do to a football club.
+    AdministrationEntered,
+    /// Out the other side of it, a year later.
+    AdministrationExited,
+    /// The owner covered a shortfall the club could not. Money that
+    /// keeps the lights on rather than money that buys a centre-half.
+    OwnerBailout,
+    /// Commercial news: a shirt or partner deal signed, with the annual
+    /// value on it.
+    SponsorSigned,
+    /// …and the other half of the same column, which papers print far
+    /// less often: deals expired and nobody replaced them.
+    SponsorshipLost,
+    /// Borrowing past the agreed facility. The number a supporter
+    /// quotes at every phone-in for the next five years.
+    DebtMountain,
+    /// The club may not spend a fee on a player at all.
+    TransferEmbargo,
+    /// Wages have outrun what comes through the door.
+    WageBillCrisis,
+    /// Nobody arrives until somebody leaves. The market consequence of
+    /// a balance sheet, and the version of it the rumour mill prints.
+    MustSellBeforeBuying,
 }
 
 impl NewsStoryKind {
@@ -314,7 +341,7 @@ impl NewsStoryKind {
     /// each one has a headline and a body in every translation bundle,
     /// so adding a variant without its copy fails a test rather than
     /// printing a raw key on the front page.
-    pub const ALL: [NewsStoryKind; 143] = [
+    pub const ALL: [NewsStoryKind; 152] = [
         NewsStoryKind::LeagueWin,
         NewsStoryKind::LeagueDraw,
         NewsStoryKind::GoallessDraw,
@@ -458,6 +485,15 @@ impl NewsStoryKind {
         NewsStoryKind::EuropeSecured,
         NewsStoryKind::AcademyPraise,
         NewsStoryKind::MoneyWorries,
+        NewsStoryKind::AdministrationEntered,
+        NewsStoryKind::AdministrationExited,
+        NewsStoryKind::OwnerBailout,
+        NewsStoryKind::SponsorSigned,
+        NewsStoryKind::SponsorshipLost,
+        NewsStoryKind::DebtMountain,
+        NewsStoryKind::TransferEmbargo,
+        NewsStoryKind::WageBillCrisis,
+        NewsStoryKind::MustSellBeforeBuying,
     ];
 
     pub fn desk(self) -> NewsDesk {
@@ -609,7 +645,16 @@ impl NewsStoryKind {
             | NewsStoryKind::CupFinalHeartbreak
             | NewsStoryKind::EuropeSecured
             | NewsStoryKind::AcademyPraise
-            | NewsStoryKind::MoneyWorries => NewsDesk::Boardroom,
+            | NewsStoryKind::MoneyWorries
+            | NewsStoryKind::AdministrationEntered
+            | NewsStoryKind::AdministrationExited
+            | NewsStoryKind::OwnerBailout
+            | NewsStoryKind::SponsorSigned
+            | NewsStoryKind::SponsorshipLost
+            | NewsStoryKind::DebtMountain
+            | NewsStoryKind::TransferEmbargo
+            | NewsStoryKind::WageBillCrisis
+            | NewsStoryKind::MustSellBeforeBuying => NewsDesk::Boardroom,
         }
     }
 
@@ -760,6 +805,15 @@ impl NewsStoryKind {
             NewsStoryKind::EuropeSecured => "europe_secured",
             NewsStoryKind::AcademyPraise => "academy_praise",
             NewsStoryKind::MoneyWorries => "money_worries",
+            NewsStoryKind::AdministrationEntered => "administration_entered",
+            NewsStoryKind::AdministrationExited => "administration_exited",
+            NewsStoryKind::OwnerBailout => "owner_bailout",
+            NewsStoryKind::SponsorSigned => "sponsor_signed",
+            NewsStoryKind::SponsorshipLost => "sponsorship_lost",
+            NewsStoryKind::DebtMountain => "debt_mountain",
+            NewsStoryKind::TransferEmbargo => "transfer_embargo",
+            NewsStoryKind::WageBillCrisis => "wage_bill_crisis",
+            NewsStoryKind::MustSellBeforeBuying => "must_sell_before_buying",
         }
     }
 
@@ -774,6 +828,11 @@ impl NewsStoryKind {
             // Going up and going down are the two editions a town keeps.
             NewsStoryKind::PromotionWon => 890,
             NewsStoryKind::RelegationConfirmed => 870,
+            // Administration outranks a sacking and very nearly a
+            // relegation: it takes points off a club that has not played
+            // for them, and it is the one boardroom morning a supporter
+            // still talks about twenty years later.
+            NewsStoryKind::AdministrationEntered => 860,
             NewsStoryKind::ManagerSacked => 820,
             // Losing the manager to somebody bigger is very nearly the
             // same size of morning as sacking him, and it hurts more:
@@ -782,6 +841,10 @@ impl NewsStoryKind {
             // New owners. The loudest thing that can happen to a club
             // without a ball being kicked.
             NewsStoryKind::TakeoverCompleted => 800,
+            // Coming out the other side. Smaller than going in — the
+            // damage is already done and the town has lived with it for
+            // a year — but the day the sanctions lift is still page one.
+            NewsStoryKind::AdministrationExited => 700,
             NewsStoryKind::DerbyWin | NewsStoryKind::DerbyDefeat => 720,
             NewsStoryKind::RecordSigning => 700,
             NewsStoryKind::NewManagerArrives => 690,
@@ -862,7 +925,29 @@ impl NewsStoryKind {
             // outranks the money itself: the money can come back.
             NewsStoryKind::BoardPromiseBroken => 425,
             NewsStoryKind::StadiumExpansion => 430,
+            // The owner keeping the lights on. Big news, and news a
+            // supporter reads with relief rather than pleasure — money
+            // that covers a hole buys nobody.
+            NewsStoryKind::OwnerBailout => 462,
+            // Barred from signing anybody at all. It decides the club's
+            // next two windows and every rumour printed in between.
+            NewsStoryKind::TransferEmbargo => 445,
+            // The debt figure itself: the number a phone-in quotes for
+            // the next five years.
+            NewsStoryKind::DebtMountain => 428,
+            // Wages against income. Duller than the debt and the reason
+            // for it.
+            NewsStoryKind::WageBillCrisis => 396,
+            // "Nobody comes in until somebody goes out" — the market's
+            // version of a balance sheet, and the line the rumour mill
+            // runs on all summer.
+            NewsStoryKind::MustSellBeforeBuying => 388,
             NewsStoryKind::WarChest => 410,
+            // Commercial news. It pays for everything and nobody sings
+            // about it, so it sits below the football and above the
+            // small change.
+            NewsStoryKind::SponsorSigned => 358,
+            NewsStoryKind::SponsorshipLost => 366,
             NewsStoryKind::PlayerOfMonth => 410,
             // A player telling his own club he has been away long
             // enough is the loan column's loudest week — it outranks
@@ -1079,6 +1164,16 @@ impl NewsStoryKind {
             | NewsStoryKind::WarChest
             | NewsStoryKind::BudgetCut
             | NewsStoryKind::BoardPromiseBroken
+            // The balance sheet's dated moments, from the same diary:
+            // the day the club went in, the day it came out, the day the
+            // owner wired the money, the day a sponsor signed or walked.
+            // The CONDITIONS those leave behind (the debt, the embargo,
+            // the wage bill) are `Standing` and live further down.
+            | NewsStoryKind::AdministrationEntered
+            | NewsStoryKind::AdministrationExited
+            | NewsStoryKind::OwnerBailout
+            | NewsStoryKind::SponsorSigned
+            | NewsStoryKind::SponsorshipLost
             // Squad life read from the seven-day feed on a seven-day
             // tick — the same shape as the fine and bust-up beats.
             | NewsStoryKind::FirstClubGoal
@@ -1187,7 +1282,15 @@ impl NewsStoryKind {
             | NewsStoryKind::SettlingIn
             | NewsStoryKind::CoachingAmbition
             | NewsStoryKind::AcademyPraise
-            | NewsStoryKind::MoneyWorries => NewsRecurrence::Standing,
+            | NewsStoryKind::MoneyWorries
+            // What a balance sheet leaves behind rather than what it
+            // did on a day. All four are true for months at a time, and
+            // a paper that ran the debt figure every Monday would read
+            // like a stuck record about the one subject nobody enjoys.
+            | NewsStoryKind::DebtMountain
+            | NewsStoryKind::TransferEmbargo
+            | NewsStoryKind::WageBillCrisis
+            | NewsStoryKind::MustSellBeforeBuying => NewsRecurrence::Standing,
         }
     }
 
@@ -1270,6 +1373,13 @@ impl NewsStoryKind {
                 // $0.00" is the same sentence nobody can stand behind.
                 | NewsStoryKind::WarChest
                 | NewsStoryKind::BudgetCut
+                // …and the same contract on the other side of the
+                // ledger: a bailout of nothing, a sponsor worth nothing
+                // and a debt of nothing are each a sentence the paper
+                // cannot stand behind, so the editor refuses them.
+                | NewsStoryKind::OwnerBailout
+                | NewsStoryKind::SponsorSigned
+                | NewsStoryKind::DebtMountain
         )
     }
 

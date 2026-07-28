@@ -5,6 +5,7 @@ use crate::club::classify_distress;
 use crate::club::finance::{
     AdministrationState, DebtProfile, DebtStanding, RevenueInputs, RevenueModel,
 };
+use crate::club::news::affairs::ClubAffair;
 use crate::context::GlobalContext;
 use chrono::Datelike;
 use chrono::NaiveDate;
@@ -218,6 +219,7 @@ impl Club {
             distress,
             league_tier,
             funded_months,
+            date,
         );
 
         // 9. Excess-cash deployment. Nothing else in the sim scales with
@@ -255,6 +257,13 @@ impl Club {
     /// writes the unpayable balance down to something the club can service
     /// in exchange for a points deduction and a year of embargo. Without a
     /// terminal state the balance is a pure divergent series.
+    ///
+    /// Three rungs of the ladder are also *dated events* rather than
+    /// states, so each is filed in the club's diary at the line that
+    /// performs it — see [`crate::club::news::affairs`]. The standing it
+    /// leaves behind (a debt, an embargo) the press can read off the club
+    /// whenever it likes; the day it changed, it cannot.
+    #[allow(clippy::too_many_arguments)]
     fn resolve_debt(
         &mut self,
         club_name: &str,
@@ -263,6 +272,7 @@ impl Club {
         distress: DistressLevel,
         league_tier: u8,
         funded_months: usize,
+        date: NaiveDate,
     ) {
         let administration = self.finance.debt.administration;
         let balance = self.finance.balance.balance;
@@ -287,6 +297,8 @@ impl Club {
         );
         if injection > 0 {
             self.finance.balance.push_owner_investment(injection);
+            self.affairs
+                .record(ClubAffair::OwnerBailout { amount: injection }, date);
             debug!(
                 "club: {}, finance: owner injected {} to cover a shortfall",
                 club_name, injection
@@ -303,6 +315,7 @@ impl Club {
                     distress,
                     None,
                 );
+                self.affairs.record(ClubAffair::AdministrationExited, date);
                 debug!("club: {}, finance: exited administration", club_name);
             } else {
                 self.finance.debt.administration = Some(state);
@@ -337,6 +350,12 @@ impl Club {
             debug!(
                 "club: {}, finance: entered administration — {} points deducted, {} written down",
                 club_name, state.points_deduction, written
+            );
+            self.affairs.record(
+                ClubAffair::AdministrationEntered {
+                    points_deduction: state.points_deduction,
+                },
+                date,
             );
             self.finance.debt.administration = Some(state);
             self.finance.debt.standing = DebtStanding::Administration;

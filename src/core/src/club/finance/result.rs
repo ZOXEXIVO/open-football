@@ -1,5 +1,6 @@
 use crate::ReputationLevel;
 use crate::club::finance::balance::DistressLevel;
+use crate::club::news::affairs::ClubAffair;
 use crate::club::{ClubSponsorship, SponsorPerformance, SponsorRenewalContext};
 use crate::league::result::LeagueProcessAccess;
 use log::debug;
@@ -108,6 +109,21 @@ impl ClubFinanceResult {
             let deals_to_sign =
                 ClubSponsorship::deals_to_sign(current, target, self.expired_sponsorships);
             if deals_to_sign == 0 {
+                // Deals ran out and the commercial department could not
+                // replace them: the club's reputation has fallen and the
+                // book is shrinking toward a smaller target. That is a
+                // dated fact and the only place it is visible, so it is
+                // filed here rather than inferred from a shorter list.
+                if self.expired_sponsorships > 0 {
+                    if let Some(club) = data.club_mut(self.club_id) {
+                        club.affairs.record(
+                            ClubAffair::SponsorshipLost {
+                                count: self.expired_sponsorships,
+                            },
+                            date,
+                        );
+                    }
+                }
                 return;
             }
 
@@ -133,13 +149,26 @@ impl ClubFinanceResult {
                 Some(c) => c,
                 None => return,
             };
+            // The best of the month's deals is what the paper prints:
+            // "signed three partners" is a line nobody reads, and the
+            // one with the biggest number on it is the story.
+            let mut headline_value = 0i64;
             for _ in 0..deals_to_sign {
                 if let Some(contract) = renewal_ctx.generate(date) {
+                    headline_value = headline_value.max(contract.wage as i64);
                     club.finance
                         .sponsorship
                         .sponsorship_contracts
                         .push(contract);
                 }
+            }
+            if headline_value > 0 {
+                club.affairs.record(
+                    ClubAffair::SponsorSigned {
+                        annual_value: headline_value,
+                    },
+                    date,
+                );
             }
 
             debug!(

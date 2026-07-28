@@ -70,6 +70,21 @@ pub enum ClubAffair {
     BudgetCut { amount: i64 },
     /// A promise the board made to the manager and did not keep.
     PromiseBroken,
+    /// The club has gone into administration. Carries the points
+    /// deduction, which is the part that reaches the league table and
+    /// therefore the part a supporter argues about.
+    AdministrationEntered { points_deduction: u8 },
+    /// …and the day the supervision lifts, a year later.
+    AdministrationExited,
+    /// The owner covered a shortfall the club could not. Booked as
+    /// funding, not revenue — and reported as what it is, which is the
+    /// lights staying on rather than a centre-half arriving.
+    OwnerBailout { amount: i64 },
+    /// The commercial department signed a deal, with its annual value.
+    SponsorSigned { annual_value: i64 },
+    /// Deals ran out and nothing replaced them. The half of the
+    /// commercial column that only gets printed when it goes wrong.
+    SponsorshipLost { count: u32 },
 }
 
 impl ClubAffair {
