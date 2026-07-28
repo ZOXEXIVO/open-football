@@ -124,6 +124,26 @@ pub enum NewsStoryKind {
     RetirementAnnounced,
     TrainingBustUp,
     ContractRenewed,
+    /// Off the mark for his new club. The one goal a signing is asked
+    /// about at every press conference until he scores it.
+    FirstClubGoal,
+    /// He has taken the shirt off somebody. The quiet half of every
+    /// selection story the paper has only ever printed the loud half of.
+    WonStartingPlace,
+    /// A voice in the dressing room where there was not one before.
+    LeaderEmerging,
+    /// The foreigner is settling: the language is coming, and somebody
+    /// he can speak to has walked through the door.
+    SettlingIn,
+    /// A friend or a mentor has gone, and the man left behind feels it.
+    /// Squad news, not transfer news — the deal was somebody else's.
+    TeammateFarewell,
+    /// He has stood down from the international side while carrying on
+    /// at his club. A career decision with a date on it.
+    InternationalRetirement,
+    /// The veteran has started looking at the other side of the white
+    /// line. Half the coaches in the game gave this interview once.
+    CoachingAmbition,
     /// The armband taken off him — the other half of a story the paper
     /// has always printed only the happy end of.
     CaptaincyLost,
@@ -232,6 +252,46 @@ pub enum NewsStoryKind {
     BoardBacking,
     ManagerSacked,
     NewManagerArrives,
+    /// A bigger club came for him and paid to take him. Not a sacking,
+    /// and a town reads the two very differently.
+    ManagerPoached,
+    /// Somebody has to pick the team on Saturday. The interim spell the
+    /// paper used to report as a permanent appointment.
+    CaretakerTakesCharge,
+    /// The stand-in kept the job. The club looked outside, found
+    /// nothing better, and gave it to the man who was already there.
+    CaretakerConfirmed,
+    /// The vacancy itself: the seat is empty, the names are doing the
+    /// rounds, and nobody has signed anything.
+    ManagerHunt,
+    /// The club has moved for somebody else's manager.
+    ManagerTargetLinked,
+    /// Somebody has moved for ours.
+    ManagerWanted,
+    /// The board went public with the final warning. The rung of the
+    /// ladder a supporter actually gets to watch.
+    ManagerUltimatum,
+    /// A new deal for the man in the dugout.
+    ManagerContractExtended,
+    /// Somebody wants to buy the club.
+    TakeoverRumour,
+    /// Somebody did. The single loudest thing that can happen to a club
+    /// without a ball being kicked.
+    TakeoverCompleted,
+    /// The sale fell over, and everything it was going to pay for went
+    /// with it.
+    TakeoverCollapsed,
+    /// The ground itself gets bigger.
+    StadiumExpansion,
+    /// Money spent where the supporters cannot see it — training
+    /// pitches, the academy building, the scouting network.
+    FacilityUpgrade,
+    /// Money on the table for the manager to spend.
+    WarChest,
+    /// Money taken back off it.
+    BudgetCut,
+    /// The board said there would be something, and there was not.
+    BoardPromiseBroken,
     DressingRoomInquest,
     SquadRallies,
     BoardInvests,
@@ -254,7 +314,7 @@ impl NewsStoryKind {
     /// each one has a headline and a body in every translation bundle,
     /// so adding a variant without its copy fails a test rather than
     /// printing a raw key on the front page.
-    pub const ALL: [NewsStoryKind; 120] = [
+    pub const ALL: [NewsStoryKind; 143] = [
         NewsStoryKind::LeagueWin,
         NewsStoryKind::LeagueDraw,
         NewsStoryKind::GoallessDraw,
@@ -299,6 +359,13 @@ impl NewsStoryKind {
         NewsStoryKind::RetirementAnnounced,
         NewsStoryKind::TrainingBustUp,
         NewsStoryKind::ContractRenewed,
+        NewsStoryKind::FirstClubGoal,
+        NewsStoryKind::WonStartingPlace,
+        NewsStoryKind::LeaderEmerging,
+        NewsStoryKind::SettlingIn,
+        NewsStoryKind::TeammateFarewell,
+        NewsStoryKind::InternationalRetirement,
+        NewsStoryKind::CoachingAmbition,
         NewsStoryKind::CaptaincyLost,
         NewsStoryKind::ShirtUnderThreat,
         NewsStoryKind::PathwayBlocked,
@@ -365,6 +432,22 @@ impl NewsStoryKind {
         NewsStoryKind::BoardBacking,
         NewsStoryKind::ManagerSacked,
         NewsStoryKind::NewManagerArrives,
+        NewsStoryKind::ManagerPoached,
+        NewsStoryKind::CaretakerTakesCharge,
+        NewsStoryKind::CaretakerConfirmed,
+        NewsStoryKind::ManagerHunt,
+        NewsStoryKind::ManagerTargetLinked,
+        NewsStoryKind::ManagerWanted,
+        NewsStoryKind::ManagerUltimatum,
+        NewsStoryKind::ManagerContractExtended,
+        NewsStoryKind::TakeoverRumour,
+        NewsStoryKind::TakeoverCompleted,
+        NewsStoryKind::TakeoverCollapsed,
+        NewsStoryKind::StadiumExpansion,
+        NewsStoryKind::FacilityUpgrade,
+        NewsStoryKind::WarChest,
+        NewsStoryKind::BudgetCut,
+        NewsStoryKind::BoardPromiseBroken,
         NewsStoryKind::DressingRoomInquest,
         NewsStoryKind::SquadRallies,
         NewsStoryKind::BoardInvests,
@@ -424,6 +507,13 @@ impl NewsStoryKind {
             | NewsStoryKind::RetirementAnnounced
             | NewsStoryKind::TrainingBustUp
             | NewsStoryKind::ContractRenewed
+            | NewsStoryKind::FirstClubGoal
+            | NewsStoryKind::WonStartingPlace
+            | NewsStoryKind::LeaderEmerging
+            | NewsStoryKind::SettlingIn
+            | NewsStoryKind::TeammateFarewell
+            | NewsStoryKind::InternationalRetirement
+            | NewsStoryKind::CoachingAmbition
             | NewsStoryKind::CaptaincyLost
             | NewsStoryKind::ShirtUnderThreat
             | NewsStoryKind::PathwayBlocked
@@ -494,6 +584,22 @@ impl NewsStoryKind {
             | NewsStoryKind::BoardBacking
             | NewsStoryKind::ManagerSacked
             | NewsStoryKind::NewManagerArrives
+            | NewsStoryKind::ManagerPoached
+            | NewsStoryKind::CaretakerTakesCharge
+            | NewsStoryKind::CaretakerConfirmed
+            | NewsStoryKind::ManagerHunt
+            | NewsStoryKind::ManagerTargetLinked
+            | NewsStoryKind::ManagerWanted
+            | NewsStoryKind::ManagerUltimatum
+            | NewsStoryKind::ManagerContractExtended
+            | NewsStoryKind::TakeoverRumour
+            | NewsStoryKind::TakeoverCompleted
+            | NewsStoryKind::TakeoverCollapsed
+            | NewsStoryKind::StadiumExpansion
+            | NewsStoryKind::FacilityUpgrade
+            | NewsStoryKind::WarChest
+            | NewsStoryKind::BudgetCut
+            | NewsStoryKind::BoardPromiseBroken
             | NewsStoryKind::DressingRoomInquest
             | NewsStoryKind::SquadRallies
             | NewsStoryKind::BoardInvests
@@ -555,6 +661,13 @@ impl NewsStoryKind {
             NewsStoryKind::RetirementAnnounced => "retirement_announced",
             NewsStoryKind::TrainingBustUp => "training_bust_up",
             NewsStoryKind::ContractRenewed => "contract_renewed",
+            NewsStoryKind::FirstClubGoal => "first_club_goal",
+            NewsStoryKind::WonStartingPlace => "won_starting_place",
+            NewsStoryKind::LeaderEmerging => "leader_emerging",
+            NewsStoryKind::SettlingIn => "settling_in",
+            NewsStoryKind::TeammateFarewell => "teammate_farewell",
+            NewsStoryKind::InternationalRetirement => "international_retirement",
+            NewsStoryKind::CoachingAmbition => "coaching_ambition",
             NewsStoryKind::CaptaincyLost => "captaincy_lost",
             NewsStoryKind::ShirtUnderThreat => "shirt_under_threat",
             NewsStoryKind::PathwayBlocked => "pathway_blocked",
@@ -621,6 +734,22 @@ impl NewsStoryKind {
             NewsStoryKind::BoardBacking => "board_backing",
             NewsStoryKind::ManagerSacked => "manager_sacked",
             NewsStoryKind::NewManagerArrives => "new_manager",
+            NewsStoryKind::ManagerPoached => "manager_poached",
+            NewsStoryKind::CaretakerTakesCharge => "caretaker_takes_charge",
+            NewsStoryKind::CaretakerConfirmed => "caretaker_confirmed",
+            NewsStoryKind::ManagerHunt => "manager_hunt",
+            NewsStoryKind::ManagerTargetLinked => "manager_target_linked",
+            NewsStoryKind::ManagerWanted => "manager_wanted",
+            NewsStoryKind::ManagerUltimatum => "manager_ultimatum",
+            NewsStoryKind::ManagerContractExtended => "manager_contract_extended",
+            NewsStoryKind::TakeoverRumour => "takeover_rumour",
+            NewsStoryKind::TakeoverCompleted => "takeover_completed",
+            NewsStoryKind::TakeoverCollapsed => "takeover_collapsed",
+            NewsStoryKind::StadiumExpansion => "stadium_expansion",
+            NewsStoryKind::FacilityUpgrade => "facility_upgrade",
+            NewsStoryKind::WarChest => "war_chest",
+            NewsStoryKind::BudgetCut => "budget_cut",
+            NewsStoryKind::BoardPromiseBroken => "board_promise_broken",
             NewsStoryKind::DressingRoomInquest => "dressing_room_inquest",
             NewsStoryKind::SquadRallies => "squad_rallies",
             NewsStoryKind::BoardInvests => "board_invests",
@@ -646,9 +775,23 @@ impl NewsStoryKind {
             NewsStoryKind::PromotionWon => 890,
             NewsStoryKind::RelegationConfirmed => 870,
             NewsStoryKind::ManagerSacked => 820,
+            // Losing the manager to somebody bigger is very nearly the
+            // same size of morning as sacking him, and it hurts more:
+            // nobody at the club wanted this one.
+            NewsStoryKind::ManagerPoached => 810,
+            // New owners. The loudest thing that can happen to a club
+            // without a ball being kicked.
+            NewsStoryKind::TakeoverCompleted => 800,
             NewsStoryKind::DerbyWin | NewsStoryKind::DerbyDefeat => 720,
             NewsStoryKind::RecordSigning => 700,
             NewsStoryKind::NewManagerArrives => 690,
+            // The stand-in gets it for keeps. Smaller than unveiling a
+            // stranger, and a story the town has stronger feelings
+            // about, because it already knows him.
+            NewsStoryKind::CaretakerConfirmed => 660,
+            // The public ultimatum. Louder than the standing "pressure
+            // builds" piece because it happened on a day.
+            NewsStoryKind::ManagerUltimatum => 620,
             // The final lost is the week the whole town went quiet.
             NewsStoryKind::CupFinalHeartbreak => 680,
             NewsStoryKind::StarSold => 660,
@@ -666,8 +809,20 @@ impl NewsStoryKind {
             // that when it happens it leads.
             NewsStoryKind::KeeperMasterclass => 545,
             NewsStoryKind::RetirementAnnounced => 560,
+            // Somebody has to pick the team on Saturday, and the paper
+            // has to tell its readers who.
+            NewsStoryKind::CaretakerTakesCharge => 558,
+            // Rumours of a sale. It changes nothing yet and everybody
+            // talks about nothing else.
+            NewsStoryKind::TakeoverRumour => 556,
+            // Another club has come asking about ours. A supporter's
+            // week is ruined by the asking, never mind the answer.
+            NewsStoryKind::ManagerWanted => 545,
             NewsStoryKind::TitleCharge | NewsStoryKind::RelegationFight => 540,
             NewsStoryKind::ManagerPressure => 520,
+            // Tying the man down. Quieter than appointing one, and the
+            // clearest statement of intent a board ever makes.
+            NewsStoryKind::ManagerContractExtended => 500,
             NewsStoryKind::TransferRequestFiled => 510,
             NewsStoryKind::PromiseBroken => 505,
             NewsStoryKind::WinningRun | NewsStoryKind::WinlessRun => 500,
@@ -690,11 +845,24 @@ impl NewsStoryKind {
             // most, and it outranks the same form from a senior pro.
             NewsStoryKind::RisingStar => 475,
             NewsStoryKind::UnbeatenRun => 470,
+            // The club has moved for somebody else's manager, and the
+            // sale that was going to change everything fell over. Both
+            // are stories about a thing that has not happened.
+            NewsStoryKind::ManagerTargetLinked => 472,
+            NewsStoryKind::TakeoverCollapsed => 468,
             NewsStoryKind::PlayerSold => 460,
+            // The vacancy itself, week after week: no manager, no
+            // signature, and a list of names in the papers.
+            NewsStoryKind::ManagerHunt => 452,
             NewsStoryKind::ClubServant => 450,
             NewsStoryKind::LeagueWin | NewsStoryKind::LeagueDefeat => 440,
             NewsStoryKind::RumourInterest | NewsStoryKind::RumourRival => 430,
             NewsStoryKind::MilestoneGoals | NewsStoryKind::MilestoneApps => 420,
+            // The board's word, and what it bought. A promise not kept
+            // outranks the money itself: the money can come back.
+            NewsStoryKind::BoardPromiseBroken => 425,
+            NewsStoryKind::StadiumExpansion => 430,
+            NewsStoryKind::WarChest => 410,
             NewsStoryKind::PlayerOfMonth => 410,
             // A player telling his own club he has been away long
             // enough is the loan column's loudest week — it outranks
@@ -711,6 +879,13 @@ impl NewsStoryKind {
             NewsStoryKind::TrainingBustUp => 390,
             NewsStoryKind::SigningNotWorking => 385,
             NewsStoryKind::LeagueDraw => 380,
+            NewsStoryKind::BudgetCut => 360,
+            // The last cap. A player can be finished with his country
+            // and nowhere near finished with his club.
+            NewsStoryKind::InternationalRetirement => 348,
+            // Off the mark. Every signing is asked about this goal at
+            // every press conference until he scores it.
+            NewsStoryKind::FirstClubGoal => 342,
             NewsStoryKind::TalksExpected => 375,
             NewsStoryKind::RedCard => 370,
             // The season's best goalkeeper, by the one award nobody
@@ -756,6 +931,21 @@ impl NewsStoryKind {
             NewsStoryKind::LoanWantsPermanent => 310,
             NewsStoryKind::DroughtEnded => 305,
             NewsStoryKind::KeeperWall => 300,
+            // He has taken somebody's shirt. The paper has always run
+            // the losing half of this story and never the winning one.
+            NewsStoryKind::WonStartingPlace => 302,
+            // A voice in the dressing room where there was not one.
+            NewsStoryKind::LeaderEmerging => 292,
+            // A friend gone. The transfer was somebody else's story;
+            // this is what it did to the man left behind.
+            NewsStoryKind::TeammateFarewell => 266,
+            // Looking at the other side of the white line. Half the
+            // coaches in the game gave this interview once.
+            NewsStoryKind::CoachingAmbition => 252,
+            // Settling in: the language coming, a compatriot arriving.
+            NewsStoryKind::SettlingIn => 238,
+            // Money spent where a supporter cannot see it.
+            NewsStoryKind::FacilityUpgrade => 232,
             // The number a goalkeeper's career is really counted in.
             NewsStoryKind::KeeperShutoutMilestone => 415,
             NewsStoryKind::FreeExit => 295,
@@ -869,8 +1059,33 @@ impl NewsStoryKind {
             | NewsStoryKind::FreeExit
             | NewsStoryKind::LoanExit
             | NewsStoryKind::LoanReturn
+            // The dugout and the boardroom, read from the club's own
+            // dated diary rather than from the state they leave behind.
+            // A log entry belongs to one day, so it belongs to exactly
+            // one edition — which is what makes these safe as `Event`
+            // where the old state-scraped versions were not.
             | NewsStoryKind::ManagerSacked
             | NewsStoryKind::NewManagerArrives
+            | NewsStoryKind::ManagerPoached
+            | NewsStoryKind::CaretakerTakesCharge
+            | NewsStoryKind::CaretakerConfirmed
+            | NewsStoryKind::ManagerUltimatum
+            | NewsStoryKind::ManagerContractExtended
+            | NewsStoryKind::TakeoverRumour
+            | NewsStoryKind::TakeoverCompleted
+            | NewsStoryKind::TakeoverCollapsed
+            | NewsStoryKind::StadiumExpansion
+            | NewsStoryKind::FacilityUpgrade
+            | NewsStoryKind::WarChest
+            | NewsStoryKind::BudgetCut
+            | NewsStoryKind::BoardPromiseBroken
+            // Squad life read from the seven-day feed on a seven-day
+            // tick — the same shape as the fine and bust-up beats.
+            | NewsStoryKind::FirstClubGoal
+            | NewsStoryKind::WonStartingPlace
+            | NewsStoryKind::LeaderEmerging
+            | NewsStoryKind::TeammateFarewell
+            | NewsStoryKind::InternationalRetirement
             // Season verdicts fire once from the players' event feeds,
             // the same Monday the whole squad carries them.
             | NewsStoryKind::PromotionWon
@@ -959,6 +1174,18 @@ impl NewsStoryKind {
             | NewsStoryKind::MediaDarling
             | NewsStoryKind::ManagerPressure
             | NewsStoryKind::BoardBacking
+            // An open vacancy and an in-flight approach both persist:
+            // the search runs for weeks and an approach lives for days
+            // across a weekly tick, so both are re-detected on the next
+            // Monday and must consult the back catalogue.
+            | NewsStoryKind::ManagerHunt
+            | NewsStoryKind::ManagerTargetLinked
+            | NewsStoryKind::ManagerWanted
+            // Settling in and eyeing the coaching badges are conditions
+            // rather than days, and both are read from the fortnight
+            // window on a seven-day tick.
+            | NewsStoryKind::SettlingIn
+            | NewsStoryKind::CoachingAmbition
             | NewsStoryKind::AcademyPraise
             | NewsStoryKind::MoneyWorries => NewsRecurrence::Standing,
         }
@@ -993,6 +1220,9 @@ impl NewsStoryKind {
                 | NewsStoryKind::ProspectSigned
                 | NewsStoryKind::VeteranArrives
                 | NewsStoryKind::NationalCallUp
+                // Two players can both be off the mark in the same
+                // week, and each of them has waited for it.
+                | NewsStoryKind::FirstClubGoal
                 | NewsStoryKind::LoanWatchGoals
                 | NewsStoryKind::LoanWatchStarter
                 | NewsStoryKind::SigningNotWorking
@@ -1036,6 +1266,34 @@ impl NewsStoryKind {
                 | NewsStoryKind::RecordSigning
                 | NewsStoryKind::PlayerSold
                 | NewsStoryKind::StarSold
+                // The boardroom's money. "The board have released
+                // $0.00" is the same sentence nobody can stand behind.
+                | NewsStoryKind::WarChest
+                | NewsStoryKind::BudgetCut
+        )
+    }
+
+    /// True when this kind's copy names somebody from the dugout
+    /// (`{manager}`, read from [`NewsStory::staff_id`]).
+    ///
+    /// Same lockstep contract as [`Self::quotes_a_fee`], for a different
+    /// failure: a kind that carries a staff id nobody wrote into the
+    /// copy prints an anonymous "the manager" for a man the paper knows
+    /// the name of, and a kind whose copy names a manager it was never
+    /// given prints the fallback for every club in the world. Pinned to
+    /// the bundles by `a_kind_that_names_a_manager_declares_it` (web).
+    pub fn names_a_manager(self) -> bool {
+        matches!(
+            self,
+            NewsStoryKind::ManagerSacked
+                | NewsStoryKind::NewManagerArrives
+                | NewsStoryKind::ManagerPoached
+                | NewsStoryKind::CaretakerTakesCharge
+                | NewsStoryKind::CaretakerConfirmed
+                | NewsStoryKind::ManagerTargetLinked
+                | NewsStoryKind::ManagerWanted
+                | NewsStoryKind::ManagerUltimatum
+                | NewsStoryKind::ManagerContractExtended
         )
     }
 
@@ -1059,6 +1317,12 @@ impl NewsStoryKind {
                 | NewsStoryKind::AgentTouting
                 | NewsStoryKind::ContractRenewed
                 | NewsStoryKind::NewManagerArrives
+                // The interim's first words, the veteran talking about
+                // his badges, and the international retirement — all
+                // three are statements somebody actually made.
+                | NewsStoryKind::CaretakerTakesCharge
+                | NewsStoryKind::CoachingAmbition
+                | NewsStoryKind::InternationalRetirement
                 | NewsStoryKind::PromiseBroken
                 | NewsStoryKind::ClearTheAir
                 | NewsStoryKind::ManagerCallsOutPlayer
@@ -1082,6 +1346,14 @@ pub struct NewsStory {
     /// market, rumour and loan desks file). `0` when the story has no
     /// second party.
     pub other_id: u32,
+    /// The staff member the story names — a manager, a caretaker, a
+    /// target. `0` when nobody from the dugout is in it.
+    ///
+    /// Its own slot rather than a reuse of `player_id`: the two live in
+    /// separate id spaces and separate lookups, and a dugout story that
+    /// silently resolved a coach id against the player index would name
+    /// the wrong man rather than fail.
+    pub staff_id: u32,
     /// Primary figure: goals scored, days out, league position, …
     pub a: i32,
     /// Secondary figure: goals conceded, points, rating × 100, …
@@ -1098,6 +1370,7 @@ impl NewsStory {
             priority: kind.base_priority(),
             player_id: 0,
             other_id: 0,
+            staff_id: 0,
             a: 0,
             b: 0,
             money: 0,
@@ -1106,6 +1379,12 @@ impl NewsStory {
 
     pub fn about(mut self, player_id: u32) -> Self {
         self.player_id = player_id;
+        self
+    }
+
+    /// Name the man from the dugout this story is about.
+    pub fn by_staff(mut self, staff_id: u32) -> Self {
+        self.staff_id = staff_id;
         self
     }
 

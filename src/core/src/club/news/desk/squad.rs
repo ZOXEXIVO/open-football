@@ -83,6 +83,7 @@ impl SquadDesk {
                     Self::file_breakthrough(out, player, &feed, date);
                     Self::file_discipline(out, player, &feed, date);
                     Self::file_dressing_room(out, player, &feed, date);
+                    Self::file_career_life(out, player, date);
                     Self::file_competition_for_places(out, player, &feed, date);
                     Self::file_contract(out, player, &feed, date);
                     DugoutDesk::file_player(out, player, &mut pulse, date);
@@ -428,6 +429,32 @@ impl SquadDesk {
             );
         }
 
+        // The goal every signing is asked about at every press
+        // conference until he scores it. Distinct from the milestone
+        // beats: this one is not a round number, it is the first.
+        if feed.happened(HappinessEventType::FirstClubGoal) {
+            out.push(
+                NewsStory::new(NewsStoryKind::FirstClubGoal, date)
+                    .about(player.id)
+                    .weighted(PlayerStanding::importance(player) / 3),
+            );
+        }
+
+        // Finished with his country, carrying on at his club. A career
+        // decision with a date on it, and the one retirement a player
+        // gets to make twice.
+        if feed.happened(HappinessEventType::InternationalRetirement) {
+            out.push(
+                NewsStory::new(NewsStoryKind::InternationalRetirement, date)
+                    .about(player.id)
+                    .with_numbers(
+                        player.player_attributes.international_apps as i32,
+                        player.age(date) as i32,
+                    )
+                    .weighted(player.player_attributes.international_apps as i32),
+            );
+        }
+
         // The returnee: a spell away has ended and he is back in the
         // building. Which of the four ways it ended decides how loudly
         // the paper says so.
@@ -624,6 +651,73 @@ impl SquadDesk {
                     .about(player.id)
                     .weighted(PlayerStanding::importance(player) / 2),
             );
+            return;
+        }
+
+        // A voice where there was not one. The dressing room's quiet
+        // hierarchy changing is a story a paper only ever gets to write
+        // about the armband — this is the version that happens first,
+        // and it is how a club finds its next captain.
+        if feed.happened(HappinessEventType::LeadershipEmergence) {
+            out.push(
+                NewsStory::new(NewsStoryKind::LeaderEmerging, date)
+                    .about(player.id)
+                    .with_numbers(player.age(date) as i32, 0)
+                    .weighted(PlayerStanding::importance(player) / 3),
+            );
+            return;
+        }
+
+        // Somebody he was close to has gone. The transfer itself was
+        // reported as the buying club's business; this is what it did to
+        // the man left behind, which is the half a local paper cares
+        // about.
+        if feed
+            .any_of(&[
+                HappinessEventType::CloseFriendSold,
+                HappinessEventType::MentorDeparted,
+            ])
+            .is_some()
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::TeammateFarewell, date)
+                    .about(player.id)
+                    .weighted(PlayerStanding::importance(player) / 3),
+            );
+        }
+    }
+
+    /// The slower half of a foreign player's life: the language coming,
+    /// somebody he can speak to walking through the door, and — at the
+    /// other end of a career — the first look at the coaching badges.
+    ///
+    /// Both are conditions rather than days, so both read the longer
+    /// window and are `Standing`: settling in is not something that
+    /// happened on a Tuesday.
+    fn file_career_life(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate) {
+        let feed = RecentEvents::fortnight(player);
+
+        if feed
+            .any_of(&[
+                HappinessEventType::CompatriotJoined,
+                HappinessEventType::LanguageProgress,
+            ])
+            .is_some()
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::SettlingIn, date)
+                    .about(player.id)
+                    .weighted(PlayerStanding::importance(player) / 4),
+            );
+        }
+
+        if feed.happened(HappinessEventType::CoachingCareerInterest) {
+            out.push(
+                NewsStory::new(NewsStoryKind::CoachingAmbition, date)
+                    .about(player.id)
+                    .with_numbers(player.age(date) as i32, 0)
+                    .weighted(PlayerStanding::importance(player) / 4),
+            );
         }
     }
 
@@ -670,6 +764,19 @@ impl SquadDesk {
                 NewsStory::new(NewsStoryKind::ShirtUnderThreat, date)
                     .about(player.id)
                     .weighted(PlayerStanding::importance(player) / 2),
+            );
+            return;
+        }
+
+        // The winning half of the same argument. The paper has always
+        // run "he has lost his place" and never "he has taken one",
+        // which reads as though shirts are only ever surrendered.
+        if feed.happened(HappinessEventType::WonStartingPlace) {
+            out.push(
+                NewsStory::new(NewsStoryKind::WonStartingPlace, date)
+                    .about(player.id)
+                    .with_numbers(player.age(date) as i32, 0)
+                    .weighted(PlayerStanding::importance(player) / 3),
             );
         }
     }

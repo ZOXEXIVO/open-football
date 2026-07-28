@@ -39,8 +39,13 @@ impl DugoutDesk {
             ])
             .is_some();
         pulse.investment |= feed.happened(HappinessEventType::EncouragedBySquadInvestment);
-        pulse.manager_left |= feed.happened(HappinessEventType::ManagerDeparture);
-        pulse.new_manager |= feed.happened(HappinessEventType::NewManagerBounce);
+        // A manager change is NOT read from here any more. The squad's
+        // `ManagerDeparture` / `NewManagerBounce` pair fires on every
+        // move of the head-coach seat — including the caretaker stepping
+        // up — so it fired twice per sacking and could not say whether
+        // the man had been dismissed, poached or promoted. The club's
+        // own dated diary carries all of that; see
+        // [`crate::club::news::affairs`].
         pulse.trophy |= feed
             .any_of(&[
                 HappinessEventType::TrophyWon,

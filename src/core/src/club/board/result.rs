@@ -2,10 +2,11 @@ use crate::club::StaffPosition;
 use crate::club::board::manager_market;
 use crate::club::board::{BoardDecision, BoardFacility, BoardMoodState};
 use crate::club::facilities::FacilityLevel;
+use crate::club::news::ClubAffair;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::league::result::LeagueProcessAccess;
 use crate::{Club, HappinessEventType, Staff, StaffEventType, TeamType};
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +54,14 @@ pub struct BoardResult {
     /// `process` applies the ones with real effects (budgets, facilities,
     /// takeover); the rest are informational for the UI.
     pub decisions: Vec<BoardDecision>,
+    /// Promises whose deadline lapsed unfulfilled at this season turn.
+    /// The trust penalty is applied inside the board; the count is
+    /// carried out so the club can date the broken word for the press —
+    /// "the board said there would be money" is a story, and it is one
+    /// no persistent field can put a day on.
+    pub promises_broken: u8,
+    /// A takeover the club had been living under fell through this tick.
+    pub takeover_collapsed: bool,
 }
 
 impl BoardResult {
@@ -76,6 +85,8 @@ impl BoardResult {
             offer_manager_renewal: false,
             manager_meeting: None,
             decisions: Vec::new(),
+            promises_broken: 0,
+            takeover_collapsed: false,
         }
     }
 
@@ -110,7 +121,18 @@ impl BoardResult {
             // separate percentage tweak here (that double-applied with the
             // decision amounts). `apply_decisions` is the single mutation
             // point for budgets, facility upgrades, and takeover injections.
-            Self::apply_decisions(&self.decisions, club);
+            Self::apply_decisions(&self.decisions, club, today);
+
+            // A promise the board made and did not keep. Recorded here
+            // rather than inside the ledger because only the club can
+            // date it, and a broken word is one of the few boardroom
+            // stories a supporter hears about at all.
+            for _ in 0..self.promises_broken {
+                club.record_affair(ClubAffair::PromiseBroken, today);
+            }
+            if self.takeover_collapsed {
+                club.record_affair(ClubAffair::TakeoverCollapsed, today);
+            }
 
             // Push the board's mood onto the manager's own job satisfaction —
             // a coach at a happy club feels secure, a coach under Poor mood
@@ -152,6 +174,7 @@ impl BoardResult {
             // for free. Only fires when the current contract is short enough
             // to genuinely be at risk (≤18 months out).
             if self.offer_manager_renewal && !self.manager_sacked {
+                let mut extended: Option<u32> = None;
                 if let Some(main_team) = club.teams.main_mut() {
                     if let Some(mgr) = main_team
                         .staffs
@@ -173,6 +196,7 @@ impl BoardResult {
                                 contract.salary = ((contract.salary as f32) * 1.15) as u32;
                                 mgr.job_satisfaction =
                                     (mgr.job_satisfaction + 10.0).clamp(0.0, 100.0);
+                                extended = Some(mgr.id);
                                 info!(
                                     "Board offered renewal (+2y, +15% salary) to manager {} at {}",
                                     mgr.id, club.name
@@ -180,6 +204,9 @@ impl BoardResult {
                             }
                         }
                     }
+                }
+                if let Some(staff_id) = extended {
+                    club.record_affair(ClubAffair::ManagerContractExtended { staff_id }, today);
                 }
             }
 
@@ -190,8 +217,10 @@ impl BoardResult {
             // mood's morale drag). Skipped when a total confidence
             // collapse sacks the manager the same tick.
             if self.manager_ultimatum_announced && !self.manager_sacked {
+                let mut warned: u32 = 0;
                 if let Some(main_team) = club.teams.main_mut() {
                     let coach_id = main_team.staffs.head_coach().id;
+                    warned = coach_id;
                     let cfg = HappinessConfig::default();
                     for player in main_team.players.players.iter_mut() {
                         let bond = player
@@ -214,6 +243,10 @@ impl BoardResult {
                         }
                     }
                 }
+                // The one rung of the sacking ladder a supporter gets to
+                // live through in advance, so the paper prints it as its
+                // own week rather than as hindsight after the axe.
+                club.record_affair(ClubAffair::ManagerUltimatum { staff_id: warned }, today);
             }
 
             // Sacking: terminate the manager contract on the main team and
@@ -225,6 +258,8 @@ impl BoardResult {
             // a rival club can sign them next tick.
             if self.manager_sacked {
                 let club_name = club.name.clone();
+                let mut dismissed: Option<u32> = None;
+                let mut caretaker: Option<u32> = None;
                 if let Some(main_team) = club.teams.main_mut() {
                     let mut sacked_salary: u32 = 0;
                     if let Some(staff) = main_team.staffs.take_by_position(StaffPosition::Manager) {
@@ -236,6 +271,7 @@ impl BoardResult {
                             "Board sacked manager (staff id {}) at {} — confidence {}",
                             id, club_name, self.confidence
                         );
+                        dismissed = Some(id);
                         sacked_staff = Some(staff);
                     }
 
@@ -245,8 +281,23 @@ impl BoardResult {
                         today,
                     );
                     if installed {
+                        caretaker = main_team
+                            .staffs
+                            .find_by_position(StaffPosition::CaretakerManager)
+                            .map(|staff| staff.id);
                         debug!("Caretaker promoted at {} after sacking", club_name);
                     }
+                }
+
+                // Two separate pieces of news on the same morning: the
+                // man who went, and the man who has to pick the team on
+                // Saturday. The press used to be able to tell neither
+                // apart from a poach or a permanent appointment.
+                if let Some(staff_id) = dismissed {
+                    club.record_affair(ClubAffair::ManagerSacked { staff_id }, today);
+                }
+                if let Some(staff_id) = caretaker {
+                    club.record_affair(ClubAffair::CaretakerAppointed { staff_id }, today);
                 }
 
                 // Start the search clock on the board, locking in the
@@ -280,12 +331,25 @@ impl BoardResult {
     /// transfer/wage budget adjustments, approved facility upgrades, and a
     /// takeover cash injection. Other variants (meetings, sackings, search,
     /// rumours, demands) are informational or handled by legacy fields.
-    fn apply_decisions(decisions: &[BoardDecision], club: &mut Club) {
+    fn apply_decisions(decisions: &[BoardDecision], club: &mut Club, today: NaiveDate) {
         for decision in decisions {
             match decision {
+                // Money the board moved. Filed for the press only when a
+                // budget actually existed to move — a club with no
+                // transfer budget modelled has had nothing put on or
+                // taken off its table, and "the board release $12m" for
+                // a sum that changed no figure anywhere is the same
+                // invented number the press has been caught printing
+                // before.
                 BoardDecision::IncreaseTransferBudget { amount, .. } => {
                     if let Some(budget) = club.finance.transfer_budget.as_mut() {
                         budget.amount += *amount as f64;
+                        club.record_affair(
+                            ClubAffair::WarChest {
+                                amount: *amount as i64,
+                            },
+                            today,
+                        );
                     }
                     debug!(
                         "Board raised transfer budget at {} by {}",
@@ -294,7 +358,19 @@ impl BoardResult {
                 }
                 BoardDecision::CutTransferBudget { amount, .. } => {
                     if let Some(budget) = club.finance.transfer_budget.as_mut() {
+                        let before = budget.amount;
                         budget.amount = (budget.amount - *amount as f64).max(0.0);
+                        // A cut against an already-empty budget takes
+                        // nothing off the table and is not a story.
+                        let taken = before - budget.amount;
+                        if taken > 0.0 {
+                            club.record_affair(
+                                ClubAffair::BudgetCut {
+                                    amount: taken as i64,
+                                },
+                                today,
+                            );
+                        }
                     }
                 }
                 BoardDecision::AdjustWageBudget { amount, .. } => {
@@ -303,9 +379,18 @@ impl BoardResult {
                     }
                 }
                 BoardDecision::ApproveFacilityUpgrade { facility, cost } => {
-                    Self::apply_facility_upgrade(club, *facility, *cost);
+                    // Only a change somebody can see is news. An upgrade
+                    // that found nothing to upgrade debits no cash and
+                    // files no story.
+                    if let Some(affair) = Self::apply_facility_upgrade(club, *facility, *cost) {
+                        club.record_affair(affair, today);
+                    }
+                }
+                BoardDecision::StartTakeoverRumour => {
+                    club.record_affair(ClubAffair::TakeoverRumour, today);
                 }
                 BoardDecision::CompleteTakeover => {
+                    club.record_affair(ClubAffair::TakeoverCompleted, today);
                     // New owner injects cash proportional to the club's wage
                     // bill — a war chest to back the fresh ambition.
                     let wages: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
@@ -324,8 +409,7 @@ impl BoardResult {
                 | BoardDecision::RejectFacilityUpgrade { .. }
                 | BoardDecision::DemandPlayerSale { .. }
                 | BoardDecision::BlockTransfer { .. }
-                | BoardDecision::ApproveTransferException { .. }
-                | BoardDecision::StartTakeoverRumour => {}
+                | BoardDecision::ApproveTransferException { .. } => {}
             }
         }
     }
@@ -333,7 +417,17 @@ impl BoardResult {
     /// Bump the targeted facility one level (debiting the cost) or expand
     /// the stadium's capacity proxy. Costs draw down cash via the finance
     /// balance so the upgrade has a real budget consequence.
-    fn apply_facility_upgrade(club: &mut Club, facility: BoardFacility, cost: i64) {
+    ///
+    /// Returns the affair to file when something actually changed — the
+    /// ground genuinely got bigger, or a facility genuinely moved up a
+    /// level. An approval that found nothing left to upgrade changes
+    /// nothing, costs nothing, and is not news.
+    fn apply_facility_upgrade(
+        club: &mut Club,
+        facility: BoardFacility,
+        cost: i64,
+    ) -> Option<ClubAffair> {
+        let mut affair = Some(ClubAffair::FacilityUpgrade { facility });
         let upgraded = match facility {
             BoardFacility::Training => Self::step_up(&mut club.facilities.training),
             BoardFacility::Youth => Self::step_up(&mut club.facilities.youth),
@@ -353,6 +447,7 @@ impl BoardResult {
                 match Self::expanded_capacity(current) {
                     Some(next) => {
                         club.facilities.stadium_capacity = next;
+                        affair = Some(ClubAffair::StadiumExpansion { capacity: next });
                         true
                     }
                     // No stadium model to change — the expansion is a
@@ -362,13 +457,15 @@ impl BoardResult {
                 }
             }
         };
-        if upgraded {
-            club.finance.balance.push_cash_outflow(cost.max(0));
-            debug!(
-                "Board approved {:?} upgrade at {} (cost {})",
-                facility, club.name, cost
-            );
+        if !upgraded {
+            return None;
         }
+        club.finance.balance.push_cash_outflow(cost.max(0));
+        debug!(
+            "Board approved {:?} upgrade at {} (cost {})",
+            facility, club.name, cost
+        );
+        affair
     }
 
     fn step_up(level: &mut FacilityLevel) -> bool {

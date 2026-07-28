@@ -67,6 +67,9 @@ pub use club::{
     ChemistryFactors,
     // Club itself
     Club,
+    ClubAffair,
+    ClubAffairEntry,
+    ClubAffairLog,
     ClubBoard,
     ClubColors,
     ClubContext,

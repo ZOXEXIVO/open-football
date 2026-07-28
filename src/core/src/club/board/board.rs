@@ -784,11 +784,20 @@ impl ClubBoard {
                 self.calculate_season_targets(board_ctx);
 
                 // Promises whose deadline lapsed unfulfilled break now and
-                // cost the manager board trust.
+                // cost the manager board trust. Counted before they are
+                // resolved — afterwards they are indistinguishable from
+                // promises broken in earlier seasons, and the club needs
+                // to date this one for the press.
+                let overdue = self
+                    .promises
+                    .active()
+                    .filter(|p| p.is_overdue(today))
+                    .count();
                 let penalty = self.promises.break_overdue(today);
                 if penalty != 0 {
                     self.relationship.adjust_communication(penalty);
                 }
+                result.promises_broken = overdue.min(u8::MAX as usize) as u8;
                 self.promises.prune(today, 800);
 
                 // Yearly infrastructure review → facility decisions applied
@@ -1723,6 +1732,7 @@ impl ClubBoard {
         // budget freeze. Emit the freeze as an explicit decision (the
         // legacy mood-percentage path in `process` no longer fires).
         if self.takeover.just_failed {
+            result.takeover_collapsed = true;
             self.confidence.level = (self.confidence.level - 8).clamp(0, 100);
             let freeze = self
                 .season_targets

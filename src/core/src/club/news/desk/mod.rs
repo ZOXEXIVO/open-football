@@ -34,9 +34,9 @@ pub mod squad;
 pub use board::BoardroomDesk;
 pub use dugout::DugoutDesk;
 pub use facts::{
-    CareerRecord, ClubLoanWatch, ClubTransferWeek, CupTie, KeeperMatchFacts, LoanWatchEntry,
-    PlayerStanding, RecentEvents, SquadPulse, StandingSnapshot, TransferMove, TransferMoveKind,
-    WeeklyMatchFacts,
+    CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie, KeeperMatchFacts,
+    LoanWatchEntry, ManagerPursuit, PlayerStanding, RecentEvents, SquadPulse, StandingSnapshot,
+    TransferMove, TransferMoveKind, WeeklyMatchFacts,
 };
 pub use fans::FansDesk;
 pub use loan::LoanDesk;

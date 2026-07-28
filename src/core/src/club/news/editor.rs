@@ -3,9 +3,16 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
 
 /// Identity the editor uses to decide whether a story is the same story
-/// it ran last week: the kind, who it is about, the other party, and —
-/// for progressing numbers only — the figure itself.
-type StoryKey = (&'static str, u32, u32, i32);
+/// it ran last week: the kind, who it is about (player and, for the
+/// dugout, staff), the other party, and — for progressing numbers only
+/// — the figure itself.
+///
+/// The staff slot is load-bearing for the boardroom desk, whose stories
+/// carry no player at all: without it, "the club have appointed a new
+/// manager" would be the same key whichever man it was about, and a
+/// club that changed manager twice inside three editions would print
+/// the second appointment as a rerun of the first.
+type StoryKey = (&'static str, u32, u32, u32, i32);
 
 /// Turns a week's raw candidates into the edition that actually goes to
 /// print: ranked by newsworthiness, one voice per subject, balanced
@@ -145,6 +152,7 @@ impl NewsEditor {
             story.kind.key_stem(),
             story.player_id,
             story.other_id,
+            story.staff_id,
             figure,
         )
     }

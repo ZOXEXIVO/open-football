@@ -38,9 +38,10 @@ pub use finance::{
 
 // Club press exports
 pub use news::{
-    BoardroomDesk, CareerRecord, ClubTransferWeek, IssueResult, MarketDesk, MatchDesk, NewsDesk,
-    NewsEditor, NewsRecurrence, NewsStory, NewsStoryKind, NewspaperIssue, PressMood, SquadDesk,
-    StandingSnapshot, TableDesk, TeamNewsroom, WeeklyMatchFacts,
+    BoardroomDesk, CareerRecord, ClubAffair, ClubAffairEntry, ClubAffairLog, ClubTransferWeek,
+    IssueResult, MarketDesk, MatchDesk, NewsDesk, NewsEditor, NewsRecurrence, NewsStory,
+    NewsStoryKind, NewspaperIssue, PressMood, SquadDesk, StandingSnapshot, TableDesk, TeamNewsroom,
+    WeeklyMatchFacts,
 };
 
 // Relations exports

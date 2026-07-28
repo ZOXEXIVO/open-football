@@ -1,9 +1,10 @@
+use crate::club::board::manager_market::ApproachState;
 use crate::club::news::RecentEvents;
 use crate::club::news::{
-    BoardroomDesk, ClubLoanWatch, ClubTransferWeek, CupTie, DugoutDesk, FansDesk, IssueResult,
-    KeeperMatchFacts, LoanDesk, LoanWatchEntry, MarketDesk, MatchDesk, NewsEditor, NewsStory,
-    NewspaperIssue, PressMood, ResultCompetition, SquadDesk, StandingSnapshot, TableDesk,
-    WeeklyMatchFacts,
+    BoardroomDesk, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie, DugoutDesk, FansDesk,
+    IssueResult, KeeperMatchFacts, LoanDesk, LoanWatchEntry, ManagerPursuit, MarketDesk, MatchDesk,
+    NewsEditor, NewsStory, NewspaperIssue, PressMood, ResultCompetition, SquadDesk,
+    StandingSnapshot, TableDesk, WeeklyMatchFacts,
 };
 use crate::r#match::MatchResult;
 use crate::r#match::player::statistics::MatchStatisticType;
@@ -35,6 +36,7 @@ impl NewsroomTick {
         let facts = WeeklyMatchFacts::from_world(data, week_start, week_end);
         let market = WeeklyMarket::from_world(data, week_start, week_end);
         let loans = WeeklyLoanWatch::from_world(data, week_end);
+        let dugout = WeeklyDugout::from_world(data);
 
         let editions: Vec<(u32, u32, NewspaperIssue)> = data
             .continents
@@ -43,7 +45,7 @@ impl NewsroomTick {
             .flat_map_iter(|country| {
                 country.clubs.iter().flat_map(|club| {
                     ClubPressRun::compile(
-                        club, country, &facts, &market, &loans, week_start, week_end,
+                        club, country, &facts, &market, &loans, &dugout, week_start, week_end,
                     )
                     .into_iter()
                     .map(|(team_id, issue)| (club.id, team_id, issue))
@@ -450,6 +452,57 @@ impl WeeklyLoanWatch {
     }
 }
 
+/// Who is being chased for whose dugout this week.
+///
+/// The manager market keeps its in-flight approaches in one world-level
+/// registry, because a pursuit belongs to neither club: the requesting
+/// side has no field saying "we have moved for him" and the source side
+/// has no field saying "somebody wants ours". Both find out the same way
+/// a supporter does — from the papers — so both are handed their half of
+/// every live approach here.
+struct WeeklyDugout {
+    by_club: FxHashMap<u32, ClubDugoutWatch>,
+}
+
+impl WeeklyDugout {
+    fn from_world(data: &SimulatorData) -> Self {
+        let mut by_club: FxHashMap<u32, ClubDugoutWatch> = FxHashMap::default();
+
+        for approach in &data.pending_manager_approaches {
+            // A dead approach is not a link, and the registry keeps
+            // rejected entries for one tick before reaping them.
+            if matches!(approach.state, ApproachState::Rejected) {
+                continue;
+            }
+
+            by_club
+                .entry(approach.requesting_club_id)
+                .or_default()
+                .pursuits
+                .push(ManagerPursuit {
+                    staff_id: approach.staff_id,
+                    other_club_id: approach.source_club_id,
+                    we_are_asking: true,
+                });
+            by_club
+                .entry(approach.source_club_id)
+                .or_default()
+                .pursuits
+                .push(ManagerPursuit {
+                    staff_id: approach.staff_id,
+                    other_club_id: approach.requesting_club_id,
+                    we_are_asking: false,
+                });
+        }
+
+        WeeklyDugout { by_club }
+    }
+
+    fn for_club(&self, club_id: u32) -> Option<&ClubDugoutWatch> {
+        self.by_club.get(&club_id)
+    }
+}
+
 /// One club's week, turned into as many editions as it has branded
 /// sides. Squads with no brand of their own (Reserve, U18..U23) are read
 /// about in the first team's.
@@ -462,6 +515,7 @@ impl ClubPressRun {
         facts: &WeeklyMatchFacts,
         market: &WeeklyMarket,
         loans: &WeeklyLoanWatch,
+        dugout: &WeeklyDugout,
         week_start: NaiveDate,
         week_end: NaiveDate,
     ) -> Vec<(u32, NewspaperIssue)> {
@@ -527,6 +581,16 @@ impl ClubPressRun {
                     } else {
                         None
                     },
+                    // The dugout belongs to the club, not to one of its
+                    // sides — a B team does not have its own manager
+                    // market — so the pursuit column runs in the page of
+                    // record alongside the rest of the boardroom.
+                    dugout: if is_flagship {
+                        dugout.for_club(club.id)
+                    } else {
+                        None
+                    },
+                    week_start,
                     flagship: is_flagship,
                 }
                 .compile(week_end)?;
@@ -655,6 +719,10 @@ struct TeamPressRun<'a> {
     transfers: Option<&'a ClubTransferWeek>,
     peak_value: i64,
     loans: Option<&'a ClubLoanWatch>,
+    dugout: Option<&'a ClubDugoutWatch>,
+    /// First day of the window the edition covers — the cut-off the
+    /// club's own diary is read back to.
+    week_start: NaiveDate,
     /// This side is the club's page of record.
     flagship: bool,
 }
@@ -703,7 +771,14 @@ impl TeamPressRun<'_> {
         // page of record — a reserve side's paper reporting the sacking
         // reads as if the reserve side had done the sacking.
         if self.flagship {
-            BoardroomDesk::file(&mut candidates, self.club, &pulse, date);
+            BoardroomDesk::file(
+                &mut candidates,
+                self.club,
+                &pulse,
+                self.dugout,
+                self.week_start,
+                date,
+            );
         }
 
         let stories = NewsEditor::compile(candidates, &self.team.newsroom.issues);
@@ -805,7 +880,7 @@ impl TransferSplit {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClubPressRun, TransferSplit, WeeklyLoanWatch, WeeklyMarket};
+    use super::{ClubPressRun, TransferSplit, WeeklyDugout, WeeklyLoanWatch, WeeklyMarket};
     use crate::academy::ClubAcademy;
     use crate::club::news::{ClubTransferWeek, TransferMove, TransferMoveKind, WeeklyMatchFacts};
     use crate::club::player::core::builder::PlayerBuilder;
@@ -1065,6 +1140,9 @@ mod tests {
             },
             &WeeklyLoanWatch {
                 by_parent: FxHashMap::default(),
+            },
+            &WeeklyDugout {
+                by_club: FxHashMap::default(),
             },
             Press::week_start(),
             Press::week_end(),

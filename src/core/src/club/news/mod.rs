@@ -1,10 +1,11 @@
 //! The club press: what a local football paper would print this week.
 //!
-//! | Module    | Concern                                                     |
-//! |-----------|-------------------------------------------------------------|
-//! | [`types`] | The printed artefacts — stories, editions, the newsroom      |
-//! | [`desk`]  | Detectors that read club state and file candidate stories   |
-//! | [`editor`]| Ranks, de-duplicates, balances and lays out one edition      |
+//! | Module     | Concern                                                    |
+//! |------------|------------------------------------------------------------|
+//! | [`types`]  | The printed artefacts — stories, editions, the newsroom     |
+//! | [`affairs`]| The club's own diary of dated, institution-level happenings |
+//! | [`desk`]   | Detectors that read club state and file candidate stories  |
+//! | [`editor`] | Ranks, de-duplicates, balances and lays out one edition     |
 //!
 //! Stories carry identifiers and numbers only. Names, money formats and
 //! translated prose are resolved by the web layer at render time, so an
@@ -20,15 +21,17 @@
 //! team's, which is also where the club-wide desks (boardroom,
 //! accounts, the loan column, the transfer market) file.
 
+pub mod affairs;
 pub mod desk;
 pub mod editor;
 pub mod types;
 
+pub use affairs::{ClubAffair, ClubAffairEntry, ClubAffairLog};
 pub use desk::{
-    BoardroomDesk, CareerRecord, ClubLoanWatch, ClubTransferWeek, CupTie, DugoutDesk, FansDesk,
-    KeeperMatchFacts, LoanDesk, LoanWatchEntry, MarketDesk, MatchDesk, PlayerStanding,
-    RecentEvents, RumourDesk, SquadDesk, SquadPulse, StandingSnapshot, TableDesk, TransferMove,
-    TransferMoveKind, WeeklyMatchFacts,
+    BoardroomDesk, CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie,
+    DugoutDesk, FansDesk, KeeperMatchFacts, LoanDesk, LoanWatchEntry, ManagerPursuit, MarketDesk,
+    MatchDesk, PlayerStanding, RecentEvents, RumourDesk, SquadDesk, SquadPulse, StandingSnapshot,
+    TableDesk, TransferMove, TransferMoveKind, WeeklyMatchFacts,
 };
 pub use editor::NewsEditor;
 pub use types::{

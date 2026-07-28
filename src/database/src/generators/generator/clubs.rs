@@ -7,8 +7,8 @@ use core::context::NaiveTime;
 use core::shared::Location;
 use core::transfers::pipeline::ClubTransferPlan;
 use core::{
-    Club, ClubBoard, ClubColors, ClubFacilities, ClubFinances, ClubPhilosophy, ClubStatus,
-    CountryEconomicFactors, FacilityLevel, Player, PlayerCollection, ReputationLevel,
+    Club, ClubAffairLog, ClubBoard, ClubColors, ClubFacilities, ClubFinances, ClubPhilosophy,
+    ClubStatus, CountryEconomicFactors, FacilityLevel, Player, PlayerCollection, ReputationLevel,
     SponsorPerformance, SponsorRenewalContext, StaffCollection, TacticsSelector, Team,
     TeamCollection, TeamReputation, TeamType, TrainingSchedule,
 };
@@ -237,6 +237,9 @@ impl DatabaseGenerator {
                     facilities,
                     rivals: club.rivals.clone(),
                     teams,
+                    // A new world has no history behind it; the diary
+                    // starts on the first thing that happens to the club.
+                    affairs: ClubAffairLog::new(),
                 }
             })
             .collect()

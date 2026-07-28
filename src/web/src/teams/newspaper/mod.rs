@@ -309,10 +309,14 @@ impl PressDesk {
         masthead: &str,
         i18n: &I18n,
     ) -> IssueView {
+        let paper = Paper {
+            name: &team.name,
+            club_id: team.club_id,
+        };
         let stories = issue
             .stories
             .iter()
-            .map(|story| Self::story(data, &team.name, story, i18n))
+            .map(|story| Self::story(data, paper, story, i18n))
             .collect::<Vec<_>>();
 
         let Tiers {
@@ -412,25 +416,33 @@ impl PressDesk {
             player_slug: player.slug(),
             player_name: PlayerName::display(&player.full_name),
             player_generated: player.is_generated(),
-            caption: StoryComposer::headline(data, story, i18n, &team.name),
+            caption: StoryComposer::headline(
+                data,
+                story,
+                i18n,
+                Paper {
+                    name: &team.name,
+                    club_id: team.club_id,
+                },
+            ),
         })
     }
 
-    /// One story, typeset. `paper_name` is the side whose edition it
-    /// ran in — the `{club}` slot — so a story lifted onto another page
-    /// still credits the paper that printed it.
+    /// One story, typeset. `paper` is the side whose edition it ran in —
+    /// its name fills the `{club}` slot, so a story lifted onto another
+    /// page still credits the paper that printed it.
     pub(crate) fn story(
         data: &SimulatorData,
-        paper_name: &str,
+        paper: Paper<'_>,
         story: &NewsStory,
         i18n: &I18n,
     ) -> StoryView {
         let (player_name, player_slug) = PlayerName::resolve(data, story.player_id);
-        let body = StoryComposer::body(data, story, i18n, paper_name);
+        let body = StoryComposer::body(data, story, i18n, paper);
 
         StoryView {
             kicker: i18n.t(story.kind.desk().i18n_key()).to_string(),
-            headline: StoryComposer::headline(data, story, i18n, paper_name),
+            headline: StoryComposer::headline(data, story, i18n, paper),
             // Read off the composed text, after the placeholders are
             // filled: whether a body opens with a letter depends on the
             // scoreline and the club name of this particular story, not
@@ -467,11 +479,21 @@ impl PressDesk {
     }
 }
 
+/// The edition a story ran in, as the composer needs it.
+///
+/// `name` is the side the paper belongs to and fills the `{club}` slot;
+/// `club_id` is the club behind it, which is where a `{manager}` is
+/// looked for first. Carried together because the two always travel
+/// together and a story lifted onto a player's page has to keep
+/// crediting the newsroom that printed it.
+#[derive(Clone, Copy)]
+pub(crate) struct Paper<'a> {
+    pub name: &'a str,
+    pub club_id: u32,
+}
+
 /// Fills the blanks in a translated headline or body with the real
 /// names, numbers and money of the story it belongs to.
-///
-/// `paper_name` is the side the edition belongs to, and it is what the
-/// `{club}` slot is filled with — see [`PressDesk`].
 struct StoryComposer;
 
 impl StoryComposer {
@@ -479,23 +501,23 @@ impl StoryComposer {
     /// `_v6` for any stem without touching code.
     const MAX_VARIANTS: usize = 6;
 
-    fn headline(data: &SimulatorData, story: &NewsStory, i18n: &I18n, paper_name: &str) -> String {
+    fn headline(data: &SimulatorData, story: &NewsStory, i18n: &I18n, paper: Paper<'_>) -> String {
         Self::compose(
             i18n.t(&Self::phrasing_key("h", story, i18n)),
             data,
             story,
             i18n,
-            paper_name,
+            paper,
         )
     }
 
-    fn body(data: &SimulatorData, story: &NewsStory, i18n: &I18n, paper_name: &str) -> String {
+    fn body(data: &SimulatorData, story: &NewsStory, i18n: &I18n, paper: Paper<'_>) -> String {
         Self::compose(
             i18n.t(&Self::phrasing_key("b", story, i18n)),
             data,
             story,
             i18n,
-            paper_name,
+            paper,
         )
     }
 
@@ -554,6 +576,7 @@ impl StoryComposer {
         for value in [
             story.player_id,
             story.other_id,
+            story.staff_id,
             story.a as u32,
             story.b as u32,
             story.date.num_days_from_ce() as u32,
@@ -572,12 +595,12 @@ impl StoryComposer {
         data: &SimulatorData,
         story: &NewsStory,
         i18n: &I18n,
-        paper_name: &str,
+        paper: Paper<'_>,
     ) -> String {
         let mut text = template.to_string();
 
         if text.contains("{club}") {
-            text = text.replace("{club}", paper_name);
+            text = text.replace("{club}", paper.name);
         }
         if text.contains("{player}") {
             let (name, _) = PlayerName::resolve(data, story.player_id);
@@ -587,6 +610,17 @@ impl StoryComposer {
                 name
             };
             text = text.replace("{player}", &name);
+        }
+        // The man in the dugout. A paper that writes "the manager" where
+        // it could write his name is a paper nobody believes was written
+        // by anybody, and a sacking is the one story a town discusses by
+        // name for a decade.
+        if text.contains("{manager}") {
+            let mut name = ManagerName::resolve(data, paper.club_id, story.staff_id);
+            if name.is_empty() {
+                name = i18n.t("newspaper_unnamed_manager").to_string();
+            }
+            text = text.replace("{manager}", &name);
         }
         // `{opponent}` names the other team in a match report, `{other}`
         // the other club in a transfer. Both come from the same slot.
@@ -645,6 +679,64 @@ impl StoryComposer {
 
         data.club(story.other_id)
             .map(|club| club.name.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// How the paper names somebody from the dugout.
+///
+/// A manager is harder to find than a player: he is not in the player
+/// index, and by the time the edition reporting his sacking is read he
+/// has left the club it names. So the lookup walks the three places he
+/// can actually be, cheapest first, and never falls back to a
+/// brute-force sweep of the world — a front page renders a dozen
+/// stories and a whole-world walk per story would cost more than the
+/// rest of the page put together.
+///
+/// 1. The club whose paper this is: covers the appointment, the new
+///    deal, the ultimatum, the caretaker — every story about the man
+///    currently in the seat.
+/// 2. The free-agent staff pool: covers the man who has just been
+///    sacked, which is where sackings put him the same tick.
+/// 3. The staff index: covers a poached manager and a rival club's
+///    target. It is a straight map lookup, and the id is re-checked
+///    against the team it points at, so a stale entry resolves to
+///    nobody rather than to the wrong man.
+struct ManagerName;
+
+impl ManagerName {
+    fn resolve(data: &SimulatorData, club_id: u32, staff_id: u32) -> String {
+        if staff_id == 0 {
+            return String::new();
+        }
+
+        if let Some(club) = data.club(club_id) {
+            if let Some(staff) = club
+                .teams
+                .iter()
+                .find_map(|team| team.staffs.find(staff_id))
+            {
+                return PlayerName::display(&staff.full_name);
+            }
+        }
+
+        if let Some(staff) = data
+            .free_agent_staff
+            .iter()
+            .find(|staff| staff.id == staff_id)
+        {
+            return PlayerName::display(&staff.full_name);
+        }
+
+        data.indexes
+            .as_ref()
+            .and_then(|indexes| indexes.get_staff_location(staff_id))
+            .and_then(|(_, _, club_id, team_id)| {
+                data.club(club_id)
+                    .and_then(|club| club.teams.find(team_id))
+                    .and_then(|team| team.staffs.find(staff_id))
+            })
+            .map(|staff| PlayerName::display(&staff.full_name))
             .unwrap_or_default()
     }
 }
@@ -796,6 +888,7 @@ mod tests {
                 "newspaper_no_issues",
                 "newspaper_no_player_news",
                 "newspaper_unnamed_player",
+                "newspaper_unnamed_manager",
                 "newspaper_another_club",
                 "newspaper_cup_tie",
             ] {
@@ -1045,6 +1138,30 @@ mod tests {
                     kind,
                     key
                 );
+            }
+        }
+    }
+
+    /// The dugout's version of the same lockstep. A kind that carries a
+    /// staff id but whose copy never names him wastes the one detail
+    /// that makes a sacking read like news; a kind whose copy asks for a
+    /// name it is never given prints "the manager" at every club in the
+    /// world. Both are silent — only the pairing catches them.
+    #[test]
+    fn a_kind_that_names_a_manager_declares_it() {
+        for (lang, _) in BUNDLES {
+            let bundle = PressKeys::bundle(lang);
+
+            for kind in NewsStoryKind::ALL {
+                for (key, headline, body) in phrasings(&bundle, kind.key_stem()) {
+                    assert_eq!(
+                        format!("{}{}", headline, body).contains("{manager}"),
+                        kind.names_a_manager(),
+                        "{}.json key {}: copy and NewsStoryKind::names_a_manager disagree",
+                        lang,
+                        key
+                    );
+                }
             }
         }
     }

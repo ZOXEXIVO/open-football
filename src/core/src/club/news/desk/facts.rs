@@ -274,6 +274,43 @@ pub struct ClubLoanWatch {
     pub players: Vec<LoanWatchEntry>,
 }
 
+/// One in-flight move for a manager, as it looks from a single club's
+/// side of it.
+///
+/// A pursuit involves two clubs and neither can see it in its own state:
+/// the approaches live in a world-level registry, so both the club doing
+/// the asking and the club being asked have to be handed their half of
+/// it. Which half decides which story gets written — chasing somebody
+/// else's manager and having your own chased are not the same week.
+#[derive(Debug, Clone, Copy)]
+pub struct ManagerPursuit {
+    /// The manager being pursued.
+    pub staff_id: u32,
+    /// The club on the other end: his employer when we are the ones
+    /// asking, the suitor when we are the ones being asked.
+    pub other_club_id: u32,
+    /// True when this club is the one doing the chasing.
+    pub we_are_asking: bool,
+}
+
+/// Everything in flight around one club's dugout this week.
+#[derive(Default)]
+pub struct ClubDugoutWatch {
+    pub pursuits: Vec<ManagerPursuit>,
+}
+
+impl ClubDugoutWatch {
+    /// The pursuit worth a line, from this club's point of view. At most
+    /// one either way — a paper reporting four simultaneous managerial
+    /// links is a paper reporting a database.
+    pub fn headline_pursuit(&self, we_are_asking: bool) -> Option<&ManagerPursuit> {
+        self.pursuits
+            .iter()
+            .filter(|pursuit| pursuit.we_are_asking == we_are_asking)
+            .min_by_key(|pursuit| (pursuit.staff_id, pursuit.other_club_id))
+    }
+}
+
 /// Career totals a milestone story needs. The live season counters only
 /// cover the current spell, so the ledger has to be folded in.
 pub struct CareerRecord;
@@ -414,9 +451,6 @@ impl<'a> RecentEvents<'a> {
 pub struct SquadPulse {
     /// Senior players seen — the denominator every share is read against.
     pub seniors: u16,
-    /// The manager has gone, and a new one has walked in.
-    pub manager_left: bool,
-    pub new_manager: bool,
     /// Silverware — a league title, a cup, a continental prize.
     pub trophy: bool,
     /// Promotion confirmed. Split from `trophy` because "going up" is
@@ -450,12 +484,6 @@ impl SquadPulse {
 
     pub fn is_widespread(&self, count: u16) -> bool {
         count >= Self::FLOOR && count.saturating_mul(Self::SHARE) >= self.seniors
-    }
-
-    /// Everything the boardroom desk used to walk the squad for itself
-    /// to learn.
-    pub fn is_dugout_settled(&self) -> bool {
-        !self.manager_left && !self.new_manager
     }
 }
 

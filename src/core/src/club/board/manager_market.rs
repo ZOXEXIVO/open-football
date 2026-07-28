@@ -23,6 +23,7 @@ use crate::club::Club;
 use crate::club::StaffStub;
 use crate::club::Team;
 use crate::club::board::ClubBoard;
+use crate::club::news::ClubAffair;
 use crate::club::staff::free_pool;
 use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
 use crate::shared::fullname::FullName;
@@ -384,12 +385,20 @@ impl ManagerSeatRepair {
         }
 
         // ── Nobody in the dugout — install interim cover, then search ──
+        let mut caretaker: Option<u32> = None;
         if let Some(main) = club.teams.main_mut() {
             // Prefer promoting the strongest internal coach; only mint a
             // synthetic caretaker when the cupboard is completely bare.
             if !ManagerSeat::promote_best_caretaker(main, 0, today) {
                 ManagerSeat::install_emergency_caretaker(main, club_id, today);
             }
+            caretaker = main
+                .staffs
+                .find_by_position(StaffPosition::CaretakerManager)
+                .map(|staff| staff.id);
+        }
+        if let Some(staff_id) = caretaker {
+            club.record_affair(ClubAffair::CaretakerAppointed { staff_id }, today);
         }
         // Don't reset an existing search clock — only open one if the board
         // wasn't already searching (e.g. a sacking that found no caretaker).
@@ -1122,12 +1131,20 @@ impl ManagerMarketTick {
                 return;
             };
 
+            let mut appointment: Option<ClubAffair> = None;
             if let Some((mut new_manager, salary)) = signed {
                 let new_id = new_manager.id;
                 new_manager.contract = Some(ManagerSeat::build_manager_contract(salary, today));
                 new_manager.job_satisfaction = 70.0; // Fresh start: optimistic.
                 if let Some(main_team) = club.teams.main_mut() {
                     main_team.staffs.push(new_manager);
+                    // Out of work when the club came for him: the
+                    // ordinary appointment, and a quieter story than
+                    // prising a man out of a job he already had.
+                    appointment = Some(ClubAffair::ManagerAppointed {
+                        staff_id: new_id,
+                        from_club_id: 0,
+                    });
                     debug!(
                         "Free-agent signed: staff {} appointed manager at {} ({}/y)",
                         new_id, club_name, salary
@@ -1143,11 +1160,19 @@ impl ManagerMarketTick {
                     let salary = staff.contract.as_ref().map(|c| c.salary).unwrap_or(0);
                     let id = staff.id;
                     staff.contract = Some(ManagerSeat::build_manager_contract(salary, today));
+                    // The caretaker keeps the job. Its own kind of story
+                    // — the man the club already had, given it for keeps
+                    // because nobody better would come.
+                    appointment = Some(ClubAffair::CaretakerConfirmed { staff_id: id });
                     debug!(
                         "Caretaker {} confirmed as permanent manager at {} (no free-agent shortlist)",
                         id, club_name
                     );
                 }
+            }
+
+            if let Some(affair) = appointment {
+                club.record_affair(affair, today);
             }
 
             // Fresh appointment — wipe chairman loyalty toward the
@@ -1448,6 +1473,17 @@ impl ManagerApproach {
                     new_id, self.requesting_club_id
                 );
             }
+            if signed {
+                // The loud version of an appointment: he was somebody
+                // else's manager on Friday.
+                req.record_affair(
+                    ClubAffair::ManagerAppointed {
+                        staff_id: new_id,
+                        from_club_id: self.source_club_id,
+                    },
+                    today,
+                );
+            }
             // Clear requesting club's search state — the seat is filled.
             req.board.chairman.manager_loyalty = 50;
             ManagerSearch::clear(&mut req.board);
@@ -1482,8 +1518,27 @@ impl ManagerApproach {
                 .find(|t| matches!(t.team_type, TeamType::Main))
                 .map(|t| t.reputation.world)
                 .unwrap_or(0);
+            let mut caretaker: Option<u32> = None;
             if let Some(main) = src.teams.main_mut() {
-                ManagerSeat::promote_best_caretaker(main, source_salary, today);
+                if ManagerSeat::promote_best_caretaker(main, source_salary, today) {
+                    caretaker = main
+                        .staffs
+                        .find_by_position(StaffPosition::CaretakerManager)
+                        .map(|staff| staff.id);
+                }
+            }
+            // Losing a manager to a bigger club is a different morning
+            // from being talked into sacking one, and the source club's
+            // paper has always had to print them as the same sentence.
+            src.record_affair(
+                ClubAffair::ManagerPoached {
+                    staff_id: new_id,
+                    to_club_id: self.requesting_club_id,
+                },
+                today,
+            );
+            if let Some(staff_id) = caretaker {
+                src.record_affair(ClubAffair::CaretakerAppointed { staff_id }, today);
             }
             ManagerSearch::open(&mut src.board, today, src_rep);
             // Reset confidence so the new search starts on neutral
