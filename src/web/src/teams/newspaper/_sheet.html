@@ -3,7 +3,10 @@
    the same paper rather than a summary of it. Expects `issue`. #}
 <article class="np-sheet np-mood-{{ issue.mood_slug }}">
     <header class="np-nameplate">
-        <div class="np-ear np-ear-left">{{ i18n.t("newspaper_edition") }} {{ issue.number }}</div>
+        <div class="np-ear np-ear-left">
+            <span class="np-ear-figure">{{ issue.number }}</span>
+            <span>{{ i18n.t("newspaper_edition") }}</span>
+        </div>
         <h2 class="np-masthead">{{ issue.masthead }}</h2>
         <div class="np-ear np-ear-right">{{ issue.date }}</div>
     </header>
@@ -59,7 +62,6 @@
                 <ul class="np-results">
                     {% for result in issue.results %}
                     <li class="np-result np-result-{{ result.outcome }}">
-                        <span class="np-result-mark" aria-hidden="true"></span>
                         <span class="np-result-date">{{ result.date }}</span>
                         <a class="np-result-club" href="/{{ lang }}/teams/{{ result.opponent_slug }}">{{ result.opponent_name }}</a>
                         <span class="np-result-score">{{ result.score }}</span>
@@ -73,7 +75,8 @@
 
     {% if !issue.briefs.is_empty() %}
     <section class="np-band">
-        <h4 class="np-box-title">{{ i18n.t("newspaper_in_brief") }}</h4>
+        <div class="np-fold" aria-hidden="true"></div>
+        <h4 class="np-box-title np-band-title">{{ i18n.t("newspaper_in_brief") }}</h4>
         <ul class="np-briefs np-briefs-band">
             {% for story in issue.briefs %}
             <li class="np-brief">

@@ -117,6 +117,12 @@ fn minify_css(css: &str) -> String {
     let mut in_string = false;
     let mut string_char = '"';
     let mut last_char = ' ';
+    // Parenthesis nesting. Inside `calc()` and friends a space is an
+    // operator delimiter, not decoration: drop the one before the minus
+    // in `calc(var(--x) - 6px)` and the expression becomes invalid, which
+    // takes the whole declaration down with it. The bug only shows in
+    // release builds, where this function runs.
+    let mut depth: u32 = 0;
 
     while let Some(c) = chars.next() {
         // Handle string literals
@@ -151,9 +157,24 @@ fn minify_css(css: &str) -> String {
 
         // Handle whitespace
         if c.is_whitespace() {
+            // Inside a function, collapse runs but never delete them.
+            if depth > 0 {
+                while chars.peek().map(|c| c.is_whitespace()).unwrap_or(false) {
+                    chars.next();
+                }
+                let next_closes = matches!(chars.peek(), Some(')') | Some(','));
+                if last_char != '(' && last_char != ',' && !next_closes {
+                    result.push(' ');
+                    last_char = ' ';
+                }
+                continue;
+            }
+
             // Collapse multiple whitespace to single space
             // Skip whitespace after certain characters
-            let skip_after = ['{', '}', ';', ':', ',', '>', '+', '~', '(', ')'];
+            // `)` deliberately absent: `rgba(…) inset` and
+            // `calc(…) var(…)` both need the space that follows it.
+            let skip_after = ['{', '}', ';', ':', ',', '>', '+', '~', '('];
             let skip_before = ['{', '}', ';', ':', ',', '>', '+', '~', '(', ')'];
 
             if !skip_after.contains(&last_char) {
@@ -175,6 +196,12 @@ fn minify_css(css: &str) -> String {
                 }
             }
             continue;
+        }
+
+        if c == '(' {
+            depth += 1;
+        } else if c == ')' {
+            depth = depth.saturating_sub(1);
         }
 
         result.push(c);

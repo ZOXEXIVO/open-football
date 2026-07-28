@@ -11653,71 +11653,80 @@ html:has(.fm-workers-page) {
 
 /* ============================================================
    NEWSPAPER TAB
-   A club's local weekly, set as it would have come off a rotary
-   press: cool aged newsprint, soft blue-black ink that never
-   reaches true black, one cheap spot red, and photographs
-   screened into halftone dots. The sheets sit on the app's dark
-   chrome like clippings left on a desk.
+
+   A club's weekly, printed the way a local paper really was: one
+   black plate on cool newsprint. No second colour anywhere —
+   emphasis comes from weight, size, rule thickness and a ladder
+   of greys, which is what a single-plate press had to work with
+   and is the reason old newspapers still look composed.
+
+   The sheet folds. Everything above the crease is the edition;
+   everything below it is the digest. That is the one structural
+   device here, and it means something.
    ============================================================ */
 
 .np-desk {
-    --np-paper: #e9e4d8;
-    --np-paper-edge: #ddd6c6;
-    --np-paper-deep: #d3cbb7;
-    --np-ink: #22201c;
-    --np-ink-soft: #575043;
-    --np-ink-faint: #7d7565;
-    --np-rule: #b4aa94;
-    --np-rule-soft: #c8bfa9;
-    --np-spot: #9c2f20;
+    --np-pad: 34px;
+    --np-paper: #ece9df;
+    --np-paper-hi: #f5f3ec;
+    --np-paper-deep: #ddd8ca;
+    --np-ink: #171612;
+    --np-ink-2: #4c473e;
+    --np-ink-3: #837c6e;
+    --np-rule: #c9c1ae;
+    --np-rule-soft: #dad4c4;
     --np-serif: Georgia, "Times New Roman", "Liberation Serif", "Nimbus Roman",
         "Songti SC", "Hiragino Mincho ProN", serif;
     --np-furniture: "Outfit", "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
-/* The sheet */
+/* ── The sheet ─────────────────────────────────────────────── */
 
 .np-sheet {
     position: relative;
-    padding: 26px 30px 30px;
+    padding: 28px var(--np-pad) var(--np-pad);
     color: var(--np-ink);
     background-color: var(--np-paper);
-    /* Woven fibre: two hairline weaves plus a light fall across the
-       top-left corner, as if the sheet were lying under a window. */
+    /* An even fine grain, and light falling across the top of the
+       sheet. Two layers, not five: newsprint is a plain material and
+       piling texture on it only makes it look printed on a screen. */
     background-image:
-        repeating-linear-gradient(
-            0deg,
-            rgba(120, 108, 82, 0.035) 0 1px,
-            transparent 1px 3px
-        ),
-        repeating-linear-gradient(
-            90deg,
-            rgba(120, 108, 82, 0.028) 0 1px,
-            transparent 1px 4px
-        ),
         radial-gradient(
-            ellipse at 18% -10%,
-            rgba(255, 253, 246, 0.55),
-            transparent 62%
-        );
-    border: 1px solid var(--np-paper-deep);
+            circle at 1px 1px,
+            rgba(92, 82, 62, 0.05) 1px,
+            transparent 0
+        ),
+        linear-gradient(180deg, var(--np-paper-hi), var(--np-paper) 240px);
+    background-size:
+        4px 4px,
+        100% 100%;
     box-shadow:
-        0 1px 0 rgba(255, 255, 255, 0.35) inset,
-        0 10px 26px rgba(0, 0, 0, 0.45);
+        0 1px 0 rgba(255, 255, 255, 0.5) inset,
+        0 18px 40px -18px rgba(0, 0, 0, 0.65);
 }
 
 .np-sheet + .np-sheet {
     margin-top: 18px;
 }
 
-/* Nameplate */
+.np-sheet a:focus-visible {
+    outline: 2px solid var(--np-ink);
+    outline-offset: 3px;
+}
+
+/* ── Nameplate ─────────────────────────────────────────────── */
 
 .np-nameplate {
     display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    gap: 16px;
-    padding-bottom: 10px;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: end;
+    gap: 20px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    /* Hairline over a heavy rule. With one plate the contrast has to
+       come from weight, and two weights are what make a nameplate look
+       printed rather than boxed. */
+    border-top: 1px solid var(--np-rule);
     border-bottom: 3px solid var(--np-ink);
 }
 
@@ -11725,90 +11734,117 @@ html:has(.fm-workers-page) {
     margin: 0;
     font-family: var(--np-serif);
     font-weight: 700;
-    font-size: clamp(26px, 5vw, 50px);
-    line-height: 1;
-    letter-spacing: 0.015em;
+    font-size: clamp(22px, 3.5vw, 50px);
+    line-height: 0.96;
+    letter-spacing: -0.005em;
     text-align: center;
     text-transform: uppercase;
-    text-shadow: 0.5px 0 0 rgba(34, 32, 28, 0.35);
+    text-wrap: balance;
+    /* A trace of ink spread. Any more and it reads as a blur. */
+    text-shadow: 0.4px 0 0 currentColor;
 }
 
 .np-ear {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 0;
     font-family: var(--np-furniture);
-    font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.16em;
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.19em;
     text-transform: uppercase;
-    color: var(--np-ink-soft);
+    white-space: nowrap;
+    color: var(--np-ink-3);
+}
+
+.np-ear-figure {
+    order: 2;
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: 0;
+    font-variant-numeric: lining-nums tabular-nums;
+    color: var(--np-ink);
 }
 
 .np-ear-right {
+    justify-content: flex-end;
     text-align: right;
 }
 
 .np-folio {
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
-    gap: 12px;
-    margin-top: 3px;
-    padding: 5px 0 7px;
-    border-bottom: 1px solid var(--np-ink);
+    align-items: center;
+    gap: 16px;
+    padding: 7px 0 8px;
+    border-bottom: 1px solid var(--np-rule);
     font-family: var(--np-furniture);
-    font-size: 10px;
-    letter-spacing: 0.18em;
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.2em;
     text-transform: uppercase;
-    color: var(--np-ink-faint);
+    color: var(--np-ink-3);
+}
+
+/* The correspondent line is the only thing here long enough to
+   collide with the stamp, so it is the one that gives way. */
+.np-folio > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .np-folio-mood {
-    color: var(--np-ink-soft);
+    flex: none;
     white-space: nowrap;
+    color: var(--np-ink-3);
 }
 
 .np-folio-mood-crisis,
 .np-folio-mood-uneasy {
-    color: var(--np-spot);
+    color: var(--np-ink);
 }
 
-/* The week's stamp.
-
-   Set in the folio line rather than floated over the page: an overlay
-   had to guess where the text below it ended, and guessed wrong the
-   moment a headline ran long. Here it is furniture, like the 'LATE
-   EDITION' ear a real masthead carries, and can never collide. */
-
+/* The week's stamp. Set in the folio line rather than floated over
+   the page: an overlay had to guess where the text below it ended,
+   and guessed wrong the moment a headline ran long. */
 .np-stamp {
     position: relative;
-    top: 2px;
+    top: 1px;
     padding: 3px 8px 2px 12px;
-    border: 2px solid var(--np-spot);
+    border: 2px solid var(--np-ink);
+    background: var(--np-paper-deep);
     transform: rotate(-3deg);
     transform-origin: right center;
     font-weight: 600;
-    color: var(--np-spot) !important;
-    /* Letterpress never inks evenly, so the stamp sits slightly light. */
-    opacity: 0.85;
+    color: var(--np-ink) !important;
+    /* Letterpress never inks evenly. */
+    opacity: 0.9;
 }
 
-/* Page grid */
+/* ── Page grid ─────────────────────────────────────────────── */
 
 .np-body {
     display: grid;
-    grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr);
-    gap: 0;
-    margin-top: 18px;
+    grid-template-columns: minmax(0, 2.35fr) minmax(0, 1fr);
+    margin-top: 22px;
 }
 
 .np-main {
     min-width: 0;
-    padding-right: 24px;
+    padding-right: 28px;
     border-right: 1px solid var(--np-rule);
 }
 
-/* A week with no fixtures and no briefs has no rail to rule off
-   against, so the text runs the full measure instead of leaving a
-   hairline down an empty column. */
+.np-rail {
+    min-width: 0;
+    padding-left: 26px;
+}
+
+/* A week with neither fixtures nor a face has no rail to rule off
+   against, so the text runs the full measure. */
 .np-body-full {
     grid-template-columns: minmax(0, 1fr);
 }
@@ -11822,58 +11858,58 @@ html:has(.fm-workers-page) {
     display: none;
 }
 
-.np-rail {
-    min-width: 0;
-    padding-left: 22px;
-}
-
-/* Stories */
+/* ── Stories ───────────────────────────────────────────────── */
 
 .np-kicker {
-    margin: 0 0 6px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    margin: 0 0 10px;
     font-family: var(--np-furniture);
-    font-size: 10px;
+    font-size: 9.5px;
     font-weight: 600;
-    letter-spacing: 0.2em;
+    letter-spacing: 0.21em;
     text-transform: uppercase;
-    color: var(--np-spot);
+    color: var(--np-ink);
 }
 
 .np-dateline {
-    margin-left: 8px;
-    padding-left: 8px;
+    padding-left: 10px;
     border-left: 1px solid var(--np-rule);
     font-weight: 500;
-    letter-spacing: 0.14em;
-    color: var(--np-ink-faint);
+    letter-spacing: 0.15em;
+    color: var(--np-ink-3);
 }
 
 .np-headline {
-    margin: 0 0 12px;
+    margin: 0 0 14px;
     font-family: var(--np-serif);
     font-weight: 700;
-    font-size: clamp(23px, 3.4vw, 38px);
-    line-height: 1.03;
-    letter-spacing: -0.012em;
+    font-size: clamp(26px, 3.9vw, 46px);
+    line-height: 0.98;
+    letter-spacing: -0.021em;
+    text-wrap: balance;
 }
 
 .np-subhead {
-    margin: 0 0 8px;
+    margin: 0 0 9px;
     font-family: var(--np-serif);
     font-weight: 700;
-    font-size: 17px;
-    line-height: 1.15;
+    font-size: 19px;
+    line-height: 1.14;
+    letter-spacing: -0.011em;
+    text-wrap: balance;
 }
 
 .np-lead-body {
     /* Newsprint is set in columns for a reason: past roughly seventy
-       characters the eye loses the line on the way back. The lead runs
-       to a real measure even when the page is wide. */
-    max-width: 62ch;
+       characters the eye loses the line on the way back. */
+    max-width: 60ch;
     margin: 0;
     font-family: var(--np-serif);
-    font-size: 15px;
-    line-height: 1.62;
+    font-size: 16px;
+    line-height: 1.58;
     color: var(--np-ink);
     text-align: justify;
     hyphens: auto;
@@ -11881,114 +11917,123 @@ html:has(.fm-workers-page) {
 
 .np-lead-body::first-letter {
     float: left;
-    margin: 6px 8px 0 0;
-    font-size: 47px;
+    margin: 8px 10px 0 0;
+    font-size: 54px;
     font-weight: 700;
-    line-height: 0.78;
+    line-height: 0.74;
     color: var(--np-ink);
 }
 
-/* The photograph */
+/* ── The photograph ────────────────────────────────────────── */
 
 .np-figure {
-    /* A single-column press photo. The source portrait is 200x250, so
-       anything wider is upscaling a small picture into a poster. */
-    max-width: 210px;
-    margin: 0 0 18px;
+    max-width: 215px;
+    margin: 0 0 22px;
 }
 
+/* Black and white, and nothing else. The contrast is pushed hard so
+   the tonal range reads as a printed photograph rather than a
+   desaturated screenshot; the screen above it does the rest. */
 .np-photo {
     position: relative;
     display: block;
     overflow: hidden;
-    border: 1px solid var(--np-ink);
-    /* Warm monochrome, lifted off pure black: newsprint ink physically
-       cannot reach it, and pretending otherwise reads as a screenshot. */
-    filter: grayscale(1) sepia(0.32) saturate(0.75) contrast(1.12)
-        brightness(1.14);
+    background: var(--np-paper-deep);
 }
 
 .np-photo img {
     display: block;
     width: 100%;
     height: auto;
+    /* Head-and-shoulders, cropped square: a portrait at full plate
+       height towers over the column it sits in. */
+    aspect-ratio: 1;
+    object-fit: cover;
+    object-position: 50% 18%;
+    filter: grayscale(1) brightness(1.04) contrast(1.42);
 }
 
-/* The dot screen. Small enough to read as texture at a glance,
-   coarse enough to be visible, which is the whole point. */
+/* The dot screen. Fine enough to read as texture, coarse enough to
+   be visible — which is the whole point of a halftone. */
 .np-screen {
     position: absolute;
     inset: 0;
     pointer-events: none;
     background-image: radial-gradient(
         circle at 50% 50%,
-        rgba(28, 26, 22, 0.62) 0.85px,
+        rgba(23, 22, 18, 0.6) 0.85px,
         transparent 1.15px
     );
     background-size: 3px 3px;
     mix-blend-mode: multiply;
-    opacity: 0.5;
+    opacity: 0.4;
 }
 
 .np-caption {
-    margin-top: 6px;
-    padding-top: 5px;
-    border-top: 1px solid var(--np-rule);
+    margin-top: 9px;
+    padding-top: 7px;
+    border-top: 2px solid var(--np-ink);
     font-family: var(--np-furniture);
     font-size: 10.5px;
-    line-height: 1.45;
-    color: var(--np-ink-soft);
+    line-height: 1.5;
+    color: var(--np-ink-2);
 }
 
 .np-caption strong {
     display: block;
+    margin-bottom: 2px;
+    font-size: 10px;
     font-weight: 600;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--np-ink);
 }
 
-/* Secondary pieces */
+/* ── Secondary pieces ──────────────────────────────────────── */
 
+/* No negative margins. The rule sits on the second column's edge and
+   each column pads away from it — pulling a grid item back into the
+   gutter made it wider than its own track, and the overflow pushed
+   the whole sheet past the page. */
 .np-splits {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0 22px;
-    margin-top: 20px;
-    padding-top: 16px;
+    margin-top: 26px;
+    padding-top: 20px;
     border-top: 1px solid var(--np-ink);
 }
 
+.np-split {
+    min-width: 0;
+    padding-right: 26px;
+}
+
 .np-split + .np-split {
-    margin-left: -22px;
-    padding-left: 22px;
+    padding-right: 0;
+    padding-left: 26px;
     border-left: 1px solid var(--np-rule);
 }
 
 .np-split-body {
     margin: 0;
     font-family: var(--np-serif);
-    font-size: 13.5px;
-    line-height: 1.6;
-    color: var(--np-ink-soft);
+    font-size: 14px;
+    line-height: 1.62;
+    color: var(--np-ink-2);
     text-align: justify;
     hyphens: auto;
 }
 
-/* Rail boxes */
-
-.np-box + .np-box {
-    margin-top: 20px;
-}
+/* ── Results ───────────────────────────────────────────────── */
 
 .np-box-title {
-    margin: 0 0 8px;
-    padding-bottom: 5px;
+    margin: 0 0 10px;
+    padding-bottom: 6px;
     border-bottom: 2px solid var(--np-ink);
     font-family: var(--np-furniture);
-    font-size: 10px;
+    font-size: 9.5px;
     font-weight: 600;
-    letter-spacing: 0.24em;
+    letter-spacing: 0.26em;
     text-transform: uppercase;
     color: var(--np-ink);
 }
@@ -12002,142 +12047,174 @@ html:has(.fm-workers-page) {
 
 .np-result {
     display: grid;
-    grid-template-columns: 8px auto minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 0;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 10px;
+    padding: 9px 0;
     border-bottom: 1px solid var(--np-rule-soft);
-    font-family: var(--np-serif);
-    font-size: 13px;
 }
 
-.np-result-mark {
-    width: 8px;
-    height: 8px;
-    border: 1px solid var(--np-ink);
-}
-
-.np-result-w .np-result-mark {
-    background: var(--np-ink);
-}
-
-.np-result-d .np-result-mark {
-    background: repeating-linear-gradient(
-        45deg,
-        var(--np-ink) 0 1px,
-        transparent 1px 3px
-    );
-}
-
-.np-result-l .np-result-mark {
-    border-color: var(--np-spot);
+.np-result:last-child {
+    border-bottom: 0;
 }
 
 .np-result-date {
     font-family: var(--np-furniture);
-    font-size: 9.5px;
-    letter-spacing: 0.06em;
-    color: var(--np-ink-faint);
-    font-variant-numeric: tabular-nums;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    font-variant-numeric: lining-nums tabular-nums;
+    color: var(--np-ink-3);
 }
 
 .np-result-club {
     overflow: hidden;
-    color: var(--np-ink) !important;
+    font-family: var(--np-serif);
+    font-size: 14px;
+    color: var(--np-ink-2) !important;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .np-result-club:hover {
-    color: var(--np-spot) !important;
+    color: var(--np-ink) !important;
 }
 
+/* The scoreline is the one figure on the page a reader looks for
+   first, so it is set like one: lining, tabular, and stepped down
+   the grey ladder by result — black for a win, mid for a draw,
+   light for a defeat. */
 .np-result-score {
-    font-variant-numeric: tabular-nums;
+    font-family: var(--np-furniture);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    font-variant-numeric: lining-nums tabular-nums;
+    color: var(--np-ink-2);
+}
+
+.np-result-w .np-result-club {
     font-weight: 700;
-    letter-spacing: 0.03em;
+    color: var(--np-ink) !important;
+}
+
+.np-result-w .np-result-score {
+    font-weight: 700;
+    color: var(--np-ink);
 }
 
 .np-result-l .np-result-score {
-    color: var(--np-spot);
+    color: var(--np-ink-3);
 }
 
-/* Briefs run as a ruled band across the foot of the page rather than
-   down the rail. A weekly club paper prints six or seven of them; in a
-   narrow column they tower over the lead and leave the main text sitting
-   beside a void, which is exactly what a broadsheet foot band exists to
-   solve. */
+/* ── The fold, and the digest below it ─────────────────────── */
+
 .np-band {
-    margin-top: 22px;
-    padding-top: 14px;
-    border-top: 3px double var(--np-ink);
+    position: relative;
+    margin-top: 30px;
+    padding-top: 22px;
+}
+
+/* The crease. A newspaper is folded once, and the fold is where the
+   edition stops and the digest starts. */
+.np-fold {
+    position: absolute;
+    top: 0;
+    right: calc(var(--np-pad) * -1);
+    left: calc(var(--np-pad) * -1);
+    height: 14px;
+    pointer-events: none;
+    background-image:
+        linear-gradient(
+            180deg,
+            rgba(23, 22, 18, 0.2),
+            rgba(23, 22, 18, 0) 45%
+        ),
+        linear-gradient(
+            0deg,
+            rgba(255, 255, 255, 0.85),
+            rgba(255, 255, 255, 0) 52%
+        );
+}
+
+.np-band-title {
+    display: inline-block;
+    padding-right: 18px;
+    border-bottom: 0;
 }
 
 .np-briefs-band {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 0 22px;
-}
-
-.np-briefs-band .np-brief {
-    border-bottom: 0;
-    border-top: 1px solid var(--np-rule-soft);
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 0 26px;
+    border-top: 2px solid var(--np-ink);
 }
 
 .np-brief {
-    padding: 8px 0;
+    min-width: 0;
+    padding: 11px 0 12px;
     border-bottom: 1px solid var(--np-rule-soft);
 }
 
-.np-brief:last-child {
+.np-briefs-band .np-brief {
+    border-top: 1px solid var(--np-rule-soft);
     border-bottom: 0;
+}
+
+.np-briefs-band .np-brief:first-child {
+    border-top: 0;
 }
 
 .np-brief-kicker {
     display: block;
-    margin-bottom: 2px;
+    margin-bottom: 4px;
     font-family: var(--np-furniture);
-    font-size: 9px;
+    font-size: 8.5px;
     font-weight: 600;
-    letter-spacing: 0.2em;
+    letter-spacing: 0.22em;
     text-transform: uppercase;
-    color: var(--np-ink-faint);
+    color: var(--np-ink-3);
 }
 
 .np-brief-text {
     font-family: var(--np-serif);
-    font-size: 13px;
-    line-height: 1.42;
+    font-size: 13.5px;
+    line-height: 1.4;
+    color: var(--np-ink);
 }
 
 .np-brief-link {
     color: var(--np-ink) !important;
-    /* A brief that leads somewhere says so with a rule under the text,
-       the way a printed cross-reference is underscored. */
-    border-bottom: 1px solid var(--np-rule);
+    /* A brief that leads somewhere says so with a rule under the
+       text, the way a printed cross-reference is underscored. */
+    background-image: linear-gradient(var(--np-rule), var(--np-rule));
+    background-repeat: no-repeat;
+    background-position: 0 100%;
+    background-size: 100% 1px;
+    transition: background-size 0.15s ease;
 }
 
 .np-brief-link:hover,
 .np-brief-link:focus-visible {
-    color: var(--np-spot) !important;
-    border-bottom-color: var(--np-spot);
+    background-image: linear-gradient(var(--np-ink), var(--np-ink));
+    background-size: 100% 2px;
 }
 
-/* Back issues.
+/* ── Back issues ───────────────────────────────────────────── */
 
-   A labelled rule, then the older editions set exactly like today's.
-   The archive is a stack of the same paper — summarising it in a folded
-   strip made the back catalogue look like a different product. */
+/* A labelled rule, then the older editions set exactly like today's.
+   The archive is a stack of the same paper — summarising it in a
+   folded strip made the back catalogue look like a different
+   product. */
 
 .np-archive-rule {
     display: flex;
     align-items: center;
     gap: 14px;
-    margin: 30px 0 16px;
+    margin: 34px 0 18px;
     font-family: var(--np-furniture);
-    font-size: 10px;
+    font-size: 9.5px;
     font-weight: 600;
-    letter-spacing: 0.24em;
+    letter-spacing: 0.26em;
     text-transform: uppercase;
     color: #7f8b93;
 }
@@ -12147,59 +12224,65 @@ html:has(.fm-workers-page) {
     content: "";
     flex: 1;
     height: 1px;
-    background: #34424b;
+    background: #33414a;
 }
 
-/* Nothing to print yet */
+/* ── Nothing to print yet ──────────────────────────────────── */
 
 .np-empty {
     max-width: 520px;
-    margin: 40px auto;
-    padding: 30px 34px;
+    margin: 48px auto;
+    padding: 34px 38px 36px;
     text-align: center;
     color: var(--np-ink);
     background-color: var(--np-paper);
-    border: 1px solid var(--np-paper-deep);
-    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+    background-image: linear-gradient(
+        180deg,
+        var(--np-paper-hi),
+        var(--np-paper) 160px
+    );
+    box-shadow: 0 16px 36px -16px rgba(0, 0, 0, 0.6);
 }
 
 .np-empty-rule {
     height: 3px;
-    margin-bottom: 18px;
+    margin-bottom: 20px;
     background: var(--np-ink);
 }
 
 .np-empty-title {
-    margin: 0 0 8px;
+    margin: 0 0 10px;
     font-family: var(--np-serif);
-    font-size: 22px;
+    font-size: 23px;
     font-weight: 700;
-    letter-spacing: 0.04em;
+    letter-spacing: -0.01em;
     text-transform: uppercase;
 }
 
 .np-empty-body {
     margin: 0;
     font-family: var(--np-serif);
-    font-size: 14px;
+    font-size: 14.5px;
     line-height: 1.6;
-    color: var(--np-ink-soft);
+    color: var(--np-ink-2);
 }
 
-/* Mood tints: a bad week yellows the paper a shade and a good one
-   brightens it. The same sheet, printed on a different morning. */
+/* ── Mood ──────────────────────────────────────────────────── */
+
+/* A bad week yellows the paper a shade and a good one brightens it.
+   The same sheet, printed on a different morning. */
 
 .np-sheet.np-mood-crisis {
-    --np-paper: #e6ded0;
-    --np-paper-edge: #d9d0be;
+    --np-paper: #e8e2d4;
+    --np-paper-hi: #f0ebe0;
 }
 
 .np-sheet.np-mood-triumph {
-    --np-paper: #ece8dd;
-    --np-paper-edge: #e2ddcf;
+    --np-paper: #efece4;
+    --np-paper-hi: #f8f6f0;
 }
 
-/* Narrower screens */
+/* ── Narrower screens ──────────────────────────────────────── */
 
 @media (max-width: 1100px) {
     .np-body {
@@ -12212,48 +12295,81 @@ html:has(.fm-workers-page) {
     }
 
     .np-rail {
-        margin-top: 20px;
-        padding-top: 16px;
+        display: grid;
+        /* Matches the figure's own cap. A narrower track and the
+           picture hangs over the column beside it. */
+        grid-template-columns: 215px minmax(0, 1fr);
+        gap: 0 26px;
+        align-items: start;
+        margin-top: 24px;
+        padding-top: 20px;
         padding-left: 0;
         border-top: 2px solid var(--np-ink);
     }
+
+    .np-figure {
+        margin-bottom: 0;
+    }
 }
 
-@media (max-width: 640px) {
-    .np-sheet {
-        padding: 18px 16px 22px;
-    }
-
+@media (max-width: 900px) {
+    /* Masthead on its own line, ears beneath it. Trying to keep three
+       things side by side here is what produced the overlap. */
     .np-nameplate {
         grid-template-columns: minmax(0, 1fr);
-        gap: 4px;
+        gap: 8px;
+        text-align: center;
+    }
+
+    .np-ear,
+    .np-ear-right {
+        justify-content: center;
         text-align: center;
     }
 
     .np-folio {
         flex-direction: column;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
     }
 
-    .np-ear-right {
+    .np-folio > span:first-child {
+        white-space: normal;
         text-align: center;
+    }
+}
+
+@media (max-width: 640px) {
+    .np-desk {
+        --np-pad: 18px;
+    }
+
+    .np-sheet {
+        padding-top: 18px;
+    }
+
+    .np-rail {
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .np-figure {
         max-width: 240px;
-        margin: 0 auto 16px;
+        margin: 0 auto 20px;
     }
 
     .np-splits {
         grid-template-columns: minmax(0, 1fr);
-        gap: 18px;
+    }
+
+    .np-split,
+    .np-split + .np-split {
+        padding-right: 0;
+        padding-left: 0;
     }
 
     .np-split + .np-split {
-        margin-left: 0;
-        padding-top: 14px;
-        padding-left: 0;
+        margin-top: 18px;
+        padding-top: 16px;
         border-top: 1px solid var(--np-rule);
         border-left: 0;
     }
@@ -12261,5 +12377,11 @@ html:has(.fm-workers-page) {
     .np-lead-body,
     .np-split-body {
         text-align: left;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .np-brief-link {
+        transition: none;
     }
 }
