@@ -9,7 +9,7 @@
    as a space in the middle of somebody's name. #}
 {%- for span in prose.spans -%}
 {%- if span.is_link() -%}
-<a class="{{ link_class }}" href="/{{ lang }}/{{ span.section }}/{{ span.slug }}" title="{{ span.text }}">{{ span.text }}</a>
+<a class="{{ link_class }}{% if span.marked %} np-mark{% endif %}" href="/{{ lang }}/{{ span.section }}/{{ span.slug }}" title="{{ span.text }}">{{ span.text }}</a>
 {%- else -%}
 {{ span.text }}
 {%- endif -%}

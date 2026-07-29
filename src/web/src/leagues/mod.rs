@@ -1,5 +1,6 @@
 pub mod awards;
 pub mod get;
+pub mod newspaper;
 pub mod transfers;
 
 use crate::GameAppData;
@@ -8,6 +9,7 @@ use axum::Router;
 pub fn league_routes() -> Router<GameAppData> {
     Router::new()
         .merge(get::routes::routes())
+        .merge(newspaper::routes::routes())
         .merge(transfers::routes::routes())
         .merge(awards::routes::routes())
 }

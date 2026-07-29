@@ -12,6 +12,12 @@
     </div>
     {% else %}
 
+    {# The bureau's slip, over the top edition. The blue on the sheets
+       below is the one thing on this page that did not come off the
+       press, and the slip is where it is accounted for — once, not on
+       every sheet. #}
+    <p class="np-slip">{{ marked_note }}</p>
+
     {% for issue in issues %}
     {% if loop.index0 == 1 %}
     <div class="np-archive-rule">

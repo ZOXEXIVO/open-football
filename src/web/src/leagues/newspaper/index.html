@@ -1,0 +1,40 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/{{ lang }}/leagues/{{ league_slug }}">{{ i18n.t("overview") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/leagues/{{ league_slug }}/newspaper">{{ i18n.t("newspaper") }}{% if newspaper_count > 0 %} <span class="fm-tab-badge">{{ newspaper_count }}</span>{% endif %}</a>
+    <a class="fm-tab" href="/{{ lang }}/leagues/{{ league_slug }}/transfers">{{ i18n.t("transfers") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/leagues/{{ league_slug }}/awards">{{ i18n.t("awards") }}</a>
+</div>
+{% endblock %}
+
+{% block html_title %}{{ title }} - {{ i18n.t("newspaper") }} | {{ i18n.t("site_name") }}{% endblock %}
+
+{% block content %}
+{# The division's paper is set through the club page's own sheet — same
+   nameplate, same columns, same photograph, same fold. A second
+   typesetter would drift from that one the first time the copy changed,
+   and the two papers are meant to look like they came off the same
+   press. #}
+<div class="fm-page np-desk">
+    {% if issues.is_empty() %}
+    <div class="np-empty">
+        <div class="np-empty-rule"></div>
+        <p class="np-empty-title">{{ i18n.t("newspaper_presses_idle") }}</p>
+        <p class="np-empty-body">{{ i18n.t("newspaper_no_league_issues") }}</p>
+    </div>
+    {% else %}
+
+    {% for issue in issues %}
+    {% if loop.index0 == 1 %}
+    <div class="np-archive-rule">
+        <span>{{ i18n.t("newspaper_back_issues") }}</span>
+    </div>
+    {% endif %}
+    {% include "teams/newspaper/_sheet.html" %}
+    {% endfor %}
+
+    {% endif %}
+</div>
+{% endblock %}

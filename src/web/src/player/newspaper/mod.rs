@@ -4,7 +4,7 @@ use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VE
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::decisions::PlayerDecisionsCounter;
 use crate::player::events::PlayerEventsCounter;
-use crate::teams::newspaper::{IssueView, PressDesk, PressTeam};
+use crate::teams::newspaper::{IssueView, Paper, PaperFor, PressDesk, PressFocus, PressTeam};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -21,38 +21,74 @@ use serde::Deserialize;
 /// needs a second one: he sits on the borrowing club's roster, so the
 /// club that still owns him reports him only through its loan column —
 /// and "how is our lad getting on" is the first thing that readership
-/// turns to. Both papers are read, and a player who is not on loan
-/// simply has one.
+/// turns to.
 ///
-/// A free agent or a retired player belongs to no newsroom and gets the
-/// empty state. Old editions still name him and still link to him; they
-/// are just not filed under any paper he can be said to read.
+/// And then every club he has ever played for. A transfer is reported
+/// twice — the buying club runs a signing, the selling club runs a
+/// departure — and until this walked his career history the second
+/// half of his own move was missing from his own page. The same goes
+/// for a loan that ends, a recall, a release: the club he is leaving
+/// is the one with something to say about it. Old papers keep five
+/// editions, so a club he left three seasons ago quietly contributes
+/// nothing; the ones he has just walked out of contribute exactly the
+/// week a reader came looking for.
+///
+/// This is also why a free agent or a retired player is no longer an
+/// empty page: he belongs to no newsroom now, but the paper that
+/// reported his release or his retirement is still on the shelf.
 pub struct PlayerPress;
 
 impl PlayerPress {
     pub fn papers<'a>(data: &'a SimulatorData, player: &Player) -> Vec<&'a Team> {
-        let mut papers: Vec<&Team> = Vec::new();
+        let mut papers: Vec<&'a Team> = Vec::new();
 
         if let Some((_, team)) = data.player_with_team(player.id) {
-            if let Some(paper) = PressTeam::covering(data, team) {
-                papers.push(paper);
-            }
+            Self::add(&mut papers, PressTeam::covering(data, team));
         }
 
         // The club that still holds his contract. Its flagship is where
         // the loan column files, and it is a different newsroom from the
         // one he trains at.
-        if let Some(parent) = player
-            .parent_club_id()
-            .and_then(|club_id| data.club(club_id))
-            .and_then(|club| club.teams.main())
-        {
-            if !papers.iter().any(|paper| paper.id == parent.id) {
-                papers.push(parent);
-            }
+        Self::add(
+            &mut papers,
+            player
+                .parent_club_id()
+                .and_then(|club_id| data.club(club_id))
+                .and_then(|club| club.teams.main()),
+        );
+
+        // Everywhere he has been. The order this arrives in does not
+        // matter — every paper on the list is read in full and the
+        // editions are then stacked by publication date — but it is
+        // stable, so two renders of the same career produce the same
+        // page. Squads with no paper of their own (youth, reserves)
+        // resolve to their club's flagship and dedupe against it.
+        for slug in player.statistics_history.career_team_slugs() {
+            let former = data
+                .indexes
+                .as_ref()
+                .and_then(|indexes| indexes.slug_indexes.get_team_by_slug(slug))
+                .and_then(|team_id| data.team(team_id));
+
+            Self::add(
+                &mut papers,
+                former.and_then(|team| PressTeam::covering(data, team)),
+            );
         }
 
         papers
+    }
+
+    /// Adds a paper the page has not got already. Every source here can
+    /// resolve to the same newsroom — a loanee's parent club is often
+    /// also the last club in his history — and an edition printed twice
+    /// on one page reads as a bug in the presses.
+    fn add<'a>(papers: &mut Vec<&'a Team>, paper: Option<&'a Team>) {
+        if let Some(paper) = paper {
+            if !papers.iter().any(|held| held.id == paper.id) {
+                papers.push(paper);
+            }
+        }
     }
 
     /// Whether an edition said anything about this player. An edition
@@ -123,6 +159,11 @@ pub struct PlayerNewspaperTemplate {
     pub interested_clubs_count: usize,
     pub awards_count: u32,
     pub news_count: usize,
+    /// The bureau's slip at the head of the shelf — "Marked for Lloyd
+    /// Kelly". One line, above the first edition, because the blue on
+    /// the sheets below it is the only thing on the page that was not
+    /// printed and a reader is owed the reason for it once.
+    pub marked_note: String,
     /// Newest edition first, across every paper that covers him. Whole
     /// editions, set exactly as the club's own page sets them.
     pub issues: Vec<IssueView>,
@@ -174,6 +215,7 @@ pub async fn player_newspaper_action(
     );
 
     let issues = PressCuttings::collect(simulator_data, player, &i18n);
+    let marked_note = i18n.t("newspaper_marked_for").replace("{name}", &title);
 
     Ok(PlayerNewspaperTemplate {
         css_version: CSS_VERSION,
@@ -238,6 +280,7 @@ pub async fn player_newspaper_action(
         interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
         awards_count: player.awards_count.total(),
         news_count: PlayerNewsCounter::count(simulator_data, player),
+        marked_note,
         issues,
     }
     .into_response())
@@ -257,6 +300,12 @@ struct PressCuttings;
 
 impl PressCuttings {
     fn collect(data: &SimulatorData, player: &Player, i18n: &I18n) -> Vec<IssueView> {
+        // The reader these editions are being set for. A clippings
+        // bureau went through the paper with a blue pencil before it
+        // posted it on, and this is the name it was paid to look for.
+        let slug = player.slug();
+        let focus = PressFocus::player(player.id, &slug);
+
         // Carries the real publication date alongside the view: the
         // rendered one is a localised string ("2 March 2026"), and
         // ordering a shelf of papers alphabetically would put April
@@ -264,7 +313,14 @@ impl PressCuttings {
         let mut dated: Vec<(NaiveDate, IssueView)> = PlayerPress::papers(data, player)
             .into_iter()
             .flat_map(|paper| {
-                let masthead = PressDesk::masthead(paper, i18n);
+                let masthead =
+                    PressDesk::masthead(paper.newsroom.masthead_key(), &paper.name, i18n);
+                let credit = PaperFor::Own(Paper {
+                    name: &paper.name,
+                    slug: &paper.slug,
+                    club_id: paper.club_id,
+                    team_id: paper.id,
+                });
 
                 paper
                     .newsroom
@@ -278,7 +334,7 @@ impl PressCuttings {
                             // newsrooms are told apart, and it is the
                             // way through to the club's full run.
                             paper_slug: paper.slug.clone(),
-                            ..PressDesk::issue(data, paper, issue, &masthead, i18n)
+                            ..PressDesk::issue(data, credit, issue, &masthead, i18n, focus)
                         };
 
                         (issue.date, view)
@@ -304,7 +360,7 @@ impl PressCuttings {
 mod tests {
     use super::{PlayerNewspaperTemplate, PlayerPress};
     use crate::I18n;
-    use crate::teams::newspaper::{IssueView, Prose, Span, StoryView};
+    use crate::teams::newspaper::{IssueView, PortraitView, Prose, ResultView, Span, StoryView};
     use askama::Template;
     use chrono::NaiveDate;
     use core::club::news::{NewsStory, NewsStoryKind, NewspaperIssue, PressMood};
@@ -322,7 +378,9 @@ mod tests {
                 ("newspaper_edition", "Edition"),
                 ("newspaper_results", "Results"),
                 ("newspaper_in_brief", "In brief"),
+                ("newspaper_cup_tie", "Cup"),
                 ("newspaper_back_issues", "Back issues"),
+                ("newspaper_marked_for", "Marked for {name}"),
                 (
                     "newspaper_our_correspondent",
                     "From our football correspondent",
@@ -342,17 +400,27 @@ mod tests {
         /// One story, with the headline already split into the plain
         /// type and the name the page underscores — the shape the
         /// composer hands the templates.
+        ///
+        /// `name` is the man in the headline. Diego Mora is the reader
+        /// whose page this is, so the typesetter would have marked him;
+        /// anybody else is one more name in his club's paper and is
+        /// left as the plain cross-reference it was printed as.
         fn story(before: &str, name: &str, after: &str) -> StoryView {
+            let his = name == "Diego Mora";
+            let slug = match name {
+                "" => String::new(),
+                "Diego Mora" => "17-diego-mora".to_string(),
+                _ => "42-nico-reyes".to_string(),
+            };
+
             let mut spans = Vec::new();
             if !before.is_empty() {
                 spans.push(Span::text(before.to_string()));
             }
             if !name.is_empty() {
-                spans.push(Span::link(
-                    name.to_string(),
-                    "players",
-                    "17-diego-mora".to_string(),
-                ));
+                let mut span = Span::link(name.to_string(), "players", slug.clone());
+                span.marked = his;
+                spans.push(span);
             }
             if !after.is_empty() {
                 spans.push(Span::text(after.to_string()));
@@ -365,14 +433,12 @@ mod tests {
                     spans: vec![Span::text("Body copy.".to_string())],
                 },
                 date: "2 March 2026".to_string(),
-                player_slug: if name.is_empty() {
-                    String::new()
-                } else {
-                    "17-diego-mora".to_string()
-                },
+                player_slug: slug,
                 player_name: name.to_string(),
                 is_quote: false,
                 drop_cap: true,
+                marked: his,
+                subject_marked: his,
             }
         }
 
@@ -394,6 +460,52 @@ mod tests {
                 briefs: vec![Self::story("", "Nico Reyes", " out for 42 days")],
                 results: Vec::new(),
                 portrait: None,
+            }
+        }
+
+        /// The same edition with the furniture the rail carries — the
+        /// face and the ruled results column — so the preview shows the
+        /// ring as well as the cuttings.
+        fn full_issue(number: u32) -> IssueView {
+            IssueView {
+                secondary: vec![
+                    Self::story("Córdoba board back the manager", "", ""),
+                    Self::story("Terms agreed with ", "Diego Mora", ""),
+                ],
+                run: vec![
+                    Self::story("Scouts sent to watch ", "Diego Mora", ""),
+                    Self::story("Academy keeper called up", "", ""),
+                    Self::story("", "Nico Reyes", " out for six weeks"),
+                ],
+                results: vec![
+                    ResultView {
+                        date: "28.02".to_string(),
+                        opponent_name: "Sevilla".to_string(),
+                        opponent_slug: "sevilla".to_string(),
+                        score: "3-1".to_string(),
+                        outcome: "w",
+                        is_cup: false,
+                        match_id: "2026-02-28_301_58".to_string(),
+                    },
+                    ResultView {
+                        date: "22.02".to_string(),
+                        opponent_name: "Real Betis".to_string(),
+                        opponent_slug: "real-betis".to_string(),
+                        score: "1-1".to_string(),
+                        outcome: "d",
+                        is_cup: true,
+                        match_id: String::new(),
+                    },
+                ],
+                portrait: Some(PortraitView {
+                    player_id: 17,
+                    player_slug: "17-diego-mora".to_string(),
+                    player_name: "Diego Mora".to_string(),
+                    player_generated: true,
+                    caption: "Three goals for Diego Mora".to_string(),
+                    marked: true,
+                }),
+                ..Self::issue(number)
             }
         }
 
@@ -428,6 +540,7 @@ mod tests {
                 interested_clubs_count: 0,
                 awards_count: 0,
                 news_count: issues.len(),
+                marked_note: "Marked for Diego Mora".to_string(),
                 issues,
             }
         }
@@ -442,7 +555,7 @@ mod tests {
         let html = Page::template(vec![Page::issue(12)]).render().unwrap();
 
         assert!(html.contains("The Córdoba Chronicle"));
-        assert!(html.contains("Three goals for <a class=\"np-story-link\""));
+        assert!(html.contains("Three goals for <a class=\"np-story-link np-mark\""));
         assert!(
             html.contains("Córdoba board back the manager"),
             "a story about somebody else still belongs in the edition he was in"
@@ -494,6 +607,121 @@ mod tests {
         assert!(html.contains("No paper covers this player yet."));
         assert!(!html.contains("np-sheet"));
         assert!(!html.contains("fm-tab-badge"));
+    }
+
+    /// The passages about him are marked, and nothing else on the sheet
+    /// is touched. This is the whole contract of the page: a reader
+    /// looking for himself in his club's week should find the paragraphs
+    /// without reading the paper twice — and the paper he is reading has
+    /// to stay a paper, so the club's other news keeps every bit of the
+    /// weight it was printed with.
+    #[test]
+    fn his_passages_are_marked_and_the_rest_of_the_paper_is_not() {
+        let html = Page::template(vec![Page::issue(12)]).render().unwrap();
+
+        assert!(
+            html.contains("<section class=\"np-lead np-cut\">"),
+            "a lead about him is not marked as a cutting"
+        );
+        assert!(
+            html.contains("<section class=\"np-split np-cut\">"),
+            "a story about him further down the page is not marked"
+        );
+        assert!(
+            html.contains("<section class=\"np-split\">"),
+            "the club's own news must stay unmarked — the page marks his \
+             passages, it does not put the rest of the week in the shade"
+        );
+        assert!(
+            html.contains("<li class=\"np-brief\">"),
+            "a brief about somebody else is not his and takes no mark"
+        );
+    }
+
+    /// The mark is made on his name, not on every name. A brief about a
+    /// team-mate's injury names a player and links to him like any other
+    /// cross-reference — marking that one would tell the reader he is
+    /// looking at himself when he is not.
+    #[test]
+    fn another_players_name_keeps_the_plain_printed_rule() {
+        let html = Page::template(vec![Page::issue(12)]).render().unwrap();
+
+        assert!(
+            html.contains("<a class=\"np-brief-link\" href=\"/en/players/42-nico-reyes\""),
+            "a team-mate's name was marked as though it were his"
+        );
+    }
+
+    /// The blue is the one thing on this page that did not come off the
+    /// press, so the page says so once, at the top, and never again.
+    #[test]
+    fn the_bureaus_slip_names_the_reader_once() {
+        let html = Page::template(vec![Page::issue(12), Page::issue(11)])
+            .render()
+            .unwrap();
+
+        assert_eq!(html.matches("np-slip").count(), 1);
+        assert!(html.contains("Marked for Diego Mora"));
+    }
+
+    /// An empty shelf carries no slip: there is nothing marked, so a
+    /// line explaining the marks would be explaining nothing.
+    #[test]
+    fn an_empty_shelf_carries_no_slip() {
+        let html = Page::template(Vec::new()).render().unwrap();
+
+        assert!(!html.contains("np-slip"));
+    }
+
+    /// Writes a self-contained copy of a player's press page so the
+    /// marking can be looked at in a browser without starting the
+    /// server — the twin of `newspaper_preview` on the club side:
+    ///
+    /// ```text
+    /// NEWSPAPER_PREVIEW_DIR=<dir> cargo test -p web --lib player_newspaper_preview -- --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn player_newspaper_preview() {
+        let Ok(dir) = std::env::var("NEWSPAPER_PREVIEW_DIR") else {
+            return;
+        };
+        std::fs::create_dir_all(&dir).expect("preview dir");
+
+        let page = Page::template(vec![Page::full_issue(14), Page::issue(13)])
+            .render()
+            .expect("render");
+
+        // The rendered page links assets by absolute URL, which a
+        // `file://` load cannot resolve — inline the two stylesheets the
+        // layout actually depends on and drop the rest.
+        let bootstrap =
+            std::fs::read_to_string("assets/static/css/bootstrap.min.css").expect("bootstrap");
+        let style = std::fs::read_to_string("assets/static/css/style.css").expect("stylesheet");
+
+        let mut html = page;
+        for link in [
+            "<link href=\"/static/css/bootstrap.min.css\" rel=\"stylesheet\">",
+            "<link href=\"/static/css/flags.css\" rel=\"stylesheet\">",
+            "<link href=\"/static/css/font.min.css\" rel=\"stylesheet\">",
+        ] {
+            html = html.replace(link, "");
+        }
+        if let Some(start) = html.find("<link href=\"/static/css/styles.min.css") {
+            if let Some(end) = html[start..].find('>') {
+                html.replace_range(start..start + end + 1, "");
+            }
+        }
+        html = html.replace(
+            "</head>",
+            &format!("<style>{bootstrap}</style><style>{style}</style></head>"),
+        );
+
+        std::fs::write(
+            std::path::Path::new(&dir).join("player-newspaper.html"),
+            html,
+        )
+        .expect("write preview");
     }
 
     /// The filter that makes this page a player's page: an edition that

@@ -1,6 +1,7 @@
 mod awards;
 mod country_info;
 mod data;
+mod league_newsroom;
 mod loan_wages;
 mod matchday;
 mod newsroom;
@@ -32,6 +33,7 @@ use awards::{
     WeeklyAwardsTick, WorldPlayerOfYearTick, YoungTeamOfTheWeekTick, YoungWeeklyAwardsTick,
 };
 use chrono::{Datelike, Duration, Weekday};
+use league_newsroom::LeagueNewsroomTick;
 use newsroom::NewsroomTick;
 use rayon::prelude::*;
 use std::any::Any;
@@ -439,6 +441,10 @@ impl FootballSimulator {
             // Monthly awards — first day of each month, awarding the previous
             // calendar month.
             MonthlyAwardsTick::run(data);
+            // …and the divisions' own monthly papers, which read the
+            // scoring charts the line above has just frozen. Strictly
+            // after it, never beside it.
+            LeagueNewsroomTick::run(data);
             // Drain any league-side pending season-awards snapshots and emit
             // the player events while stats are still meaningful.
             SeasonAwardsTick::run(data);

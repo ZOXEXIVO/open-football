@@ -2,6 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::player_history_slug;
+use crate::leagues::newspaper::LeagueNewspaperCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -42,6 +43,8 @@ pub struct LeagueGetTemplate {
     pub i18n: I18n,
     pub lang: String,
     pub league_slug: String,
+    /// Monthly editions on the division's shelf, for the tabbar badge.
+    pub newspaper_count: usize,
     /// Split-season leagues label their standings with the current
     /// tournament and append the annual aggregate below.
     pub split_season: bool,
@@ -646,6 +649,7 @@ pub async fn league_get_action(
             )
         },
         league_slug: league.slug.clone(),
+        newspaper_count: LeagueNewspaperCounter::count(league),
         split_season,
         tournament_label,
         annual_table_rows,

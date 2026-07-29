@@ -1,9 +1,9 @@
 use crate::MatchRuntime;
 use crate::context::{GlobalContext, SimulationContext};
 use crate::league::{
-    LeagueAwards, LeagueBuildOutput, LeagueDynamics, LeagueMilestones, LeaguePendingState,
-    LeagueRegulations, LeagueResult, LeagueStatistics, LeagueTable, LeagueTableRow, MatchStorage,
-    PlayerOfTheWeekHistory, Schedule, ScheduleItem,
+    LeagueAwards, LeagueBuildOutput, LeagueDynamics, LeagueMilestones, LeagueNewsroom,
+    LeaguePendingState, LeagueRegulations, LeagueResult, LeagueStatistics, LeagueTable,
+    LeagueTableRow, MatchStorage, PlayerOfTheWeekHistory, Schedule, ScheduleItem,
 };
 use crate::r#match::MatchResult;
 use crate::{Club, PlayerFieldPositionGroup, PlayerStatistics, Team};
@@ -36,6 +36,11 @@ pub struct League {
     pub financials: LeagueFinancials,
     pub player_of_week: PlayerOfTheWeekHistory,
     pub awards: LeagueAwards,
+    /// The division's own monthly paper — twelve editions, one per
+    /// month. Filled by `LeagueNewsroomTick`; empty for cups, playoffs
+    /// and friendly competitions, which have no league page to read it
+    /// on.
+    pub newsroom: LeagueNewsroom,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -101,6 +106,7 @@ impl League {
             financials,
             player_of_week: PlayerOfTheWeekHistory::new(),
             awards: LeagueAwards::default(),
+            newsroom: LeagueNewsroom::for_league(id),
         }
     }
 

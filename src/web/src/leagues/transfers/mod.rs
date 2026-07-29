@@ -2,6 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::player_history_slug;
+use crate::leagues::newspaper::LeagueNewspaperCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -43,6 +44,8 @@ pub struct LeagueTransfersTemplate {
     pub i18n: I18n,
     pub lang: String,
     pub league_slug: String,
+    /// Monthly editions on the division's shelf, for the tabbar badge.
+    pub newspaper_count: usize,
     pub completed_transfers: Vec<CompletedTransferItem>,
     pub has_permanent_transfers: bool,
     pub has_loan_transfers: bool,
@@ -333,6 +336,7 @@ pub async fn league_transfers_action(
             )
         },
         league_slug: league.slug.clone(),
+        newspaper_count: LeagueNewspaperCounter::count(league),
         has_permanent_transfers: completed_transfers.iter().any(|t| !t.is_loan),
         has_loan_transfers: completed_transfers.iter().any(|t| t.is_loan),
         completed_transfers,

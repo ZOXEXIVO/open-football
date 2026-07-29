@@ -11678,6 +11678,24 @@ html:has(.fm-workers-page) {
     --np-serif: Georgia, "Times New Roman", "Liberation Serif", "Nimbus Roman",
         "Songti SC", "Hiragino Mincho ProN", serif;
     --np-furniture: "Outfit", "Helvetica Neue", Helvetica, Arial, sans-serif;
+
+    /* The reader's own hand. Everything else on this page came off one
+       black plate; this did not. A clippings bureau went through the
+       edition with a chinagraph before it posted the paper on, and the
+       pencil was blue because blue does not photograph — so blue is the
+       one colour that has any business on a single-plate sheet. It is
+       never printer's ink, and it never marks anything the presses
+       decided: only the passages about the man whose page this is.
+       Lighter on the dark desk the sheets are laid out on, because the
+       same wax reads differently off the paper. */
+    --np-pencil: #27447e;
+    --np-pencil-soft: rgba(39, 68, 126, 0.4);
+    /* Laid over a word rather than under it, and mixed lighter and
+       bluer than the stroke itself: the ink of the pencil thinned to a
+       wash goes grey at this alpha, and grey on newsprint is a smudge
+       rather than a mark. */
+    --np-pencil-wash: rgba(46, 96, 190, 0.14);
+    --np-pencil-lit: #8aabe2;
 }
 
 /* ── The sheet ─────────────────────────────────────────────── */
@@ -12288,6 +12306,31 @@ a.np-prose-link:focus-visible {
     color: var(--np-ink-3);
 }
 
+/* The scoreline opens the match record, but the ruled column keeps
+   its ledger face: the link takes the same grey-ladder ink as the
+   plain figure (the !important outranks the site-wide anchor rules,
+   the same wall .np-result-club hit), and only the hover admits it
+   is a link at all. */
+a.np-result-score:link,
+a.np-result-score:visited {
+    color: var(--np-ink-2) !important;
+}
+
+.np-result-w a.np-result-score:link,
+.np-result-w a.np-result-score:visited {
+    color: var(--np-ink) !important;
+}
+
+.np-result-l a.np-result-score:link,
+.np-result-l a.np-result-score:visited {
+    color: var(--np-ink-3) !important;
+}
+
+a.np-result-score:hover {
+    color: var(--np-ink) !important;
+    text-decoration: underline !important;
+}
+
 /* ── The fold, and the digest below it ─────────────────────── */
 
 .np-band {
@@ -12464,6 +12507,217 @@ a.np-prose-link:focus-visible {
     --np-paper-hi: #f8f6f0;
 }
 
+/* ── Marked for the reader ─────────────────────────────────── */
+
+/* A player's press page is not a different newspaper. It is the same
+   editions, whole, with his passages gone through by hand before the
+   envelope was sealed — so nothing here dims, greys or hides the rest
+   of the week. The club's news is still the club's news; somebody has
+   simply been down the margin with a blue pencil first.
+
+   Two marks, one instrument. The passage lifts off the sheet and takes
+   a stroke down its margin; his name is scored wherever it is set. Both
+   stay inside the story's own column: a cutting that overhung the
+   gutter would cover the story beside it, and covering the rest of the
+   paper is the one thing this page must never do. */
+
+/* The bureau's slip, over the top edition. It sits on the desk rather
+   than on newsprint, so it is signed in the lighter wax — the same hand
+   reads differently off the paper. */
+.np-slip {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 0 0 16px;
+    font-family: var(--np-furniture);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    color: var(--np-pencil-lit);
+}
+
+.np-slip::before {
+    content: "";
+    flex: 0 0 38px;
+    height: 3px;
+    border-radius: 2px;
+    background-image: linear-gradient(
+        90deg,
+        rgba(138, 171, 226, 0),
+        var(--np-pencil-lit) 20%,
+        var(--np-pencil-lit) 74%,
+        rgba(138, 171, 226, 0)
+    );
+}
+
+/* A marked passage. `isolation` is load-bearing: the lift and the
+   stroke are drawn behind the type at a negative z-index, and with no
+   stacking context of their own they would fall behind the sheet they
+   are drawn on and vanish. */
+.np-cut {
+    --np-cut-margin: 0px;
+    position: relative;
+    isolation: isolate;
+}
+
+/* The lift. The passage sits on brighter stock than the sheet around
+   it and the light falls away underneath — that is the whole of the
+   effect, and the reason it is a shadow and not a tint. A coloured
+   field behind the type would be a highlighter, and a highlighter is
+   not something a clippings bureau owned.
+
+   Flat white over the paper rather than a fresh hex: the sheet's own
+   `--np-paper-hi` shifts with the week's mood, and it is already what
+   the top of the sheet is printed on — a cutting near the nameplate
+   set in that colour would be invisible, which is precisely where the
+   lead sits. The wash keeps the mood and clears the gradient. */
+.np-cut::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: -12px 0 -14px;
+    pointer-events: none;
+    background-color: var(--np-paper-hi);
+    background-image: linear-gradient(
+        rgba(255, 255, 255, 0.44),
+        rgba(255, 255, 255, 0.44)
+    );
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.7) inset,
+        0 14px 28px -16px rgba(23, 22, 18, 0.55),
+        0 2px 6px -4px rgba(23, 22, 18, 0.4);
+}
+
+/* The stroke down the margin. Wax never lays down evenly: it bites at
+   the top of a passage, skips once on the way down and trails off. */
+.np-cut::after {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    top: -4px;
+    bottom: -6px;
+    left: var(--np-cut-margin);
+    width: 3px;
+    pointer-events: none;
+    border-radius: 2px;
+    background-image: linear-gradient(
+        180deg,
+        rgba(39, 68, 126, 0),
+        var(--np-pencil) 7%,
+        var(--np-pencil) 36%,
+        var(--np-pencil-soft) 48%,
+        var(--np-pencil) 61%,
+        var(--np-pencil) 93%,
+        rgba(39, 68, 126, 0)
+    );
+    /* Wax leaves a halo where it dragged. Without it the stroke is a
+       crisp 3px bar, which is a user interface and not a pencil. */
+    box-shadow: 0 0 3px rgba(39, 68, 126, 0.32);
+}
+
+/* The copy steps in to leave the stroke its margin. Where that margin
+   begins depends on the column: an inner one already pads away from its
+   gutter rule, and the mark belongs inside that padding rather than
+   drawn across the printed line.
+
+   These two selectors score (0,3,0) — the same as the gutter rules they
+   have to beat — so they must stay AFTER them in the sheet. Set any
+   earlier and the stroke lands on top of the first word. */
+.np-splits > .np-split.np-cut,
+.np-run > .np-split.np-cut {
+    padding-left: calc(var(--np-cut-margin) + 17px);
+}
+
+.np-splits > .np-split.np-cut:nth-child(2n),
+.np-run > .np-split.np-cut:not(:nth-child(3n + 1)) {
+    --np-cut-margin: 26px;
+}
+
+.np-lead.np-cut {
+    padding-left: 17px;
+}
+
+/* A brief is one line in a band of them. It takes the lift and nothing
+   else: a 3px stroke beside 13px of type is a mark bigger than the
+   thing it marks. The band's column gap is real empty space, so the
+   lift can breathe sideways into it without reaching a neighbour. */
+.np-cut-brief::before {
+    inset: -3px -12px -5px;
+}
+
+.np-cut-brief::after {
+    display: none;
+}
+
+/* The face on the front page is his. The rule the caption already
+   hangs from is scored in the pencil instead of printed in the plate —
+   nothing is drawn over the photograph and nothing is rounded.
+   (An earlier pass ringed the face the way a subscriber ringed his own
+   cuttings. It crossed the corners of the plate and the user asked for
+   it out; a photograph on this page is a square of newsprint and stays
+   one.) */
+.np-cut-figure .np-caption {
+    border-top-color: var(--np-pencil);
+}
+
+/* His name, wherever it is set. A printed cross-reference is a hairline
+   in the plate's own grey; a marked one is the pencil, and thicker — so
+   the two read apart on weight alone, which is what a reader who cannot
+   see the blue needs them to do. */
+a.np-story-link.np-mark:link,
+a.np-story-link.np-mark:visited,
+a.np-story-link.np-mark:hover,
+a.np-story-link.np-mark:focus-visible {
+    text-decoration: underline !important;
+    text-decoration-thickness: 2px !important;
+    text-decoration-color: var(--np-pencil) !important;
+    text-underline-offset: 0.16em;
+}
+
+/* A headline is set at three times the size of the copy under it, and a
+   2px rule beneath 46px of type reads as a hairline again. */
+.np-headline a.np-story-link.np-mark:link,
+.np-headline a.np-story-link.np-mark:visited,
+.np-headline a.np-story-link.np-mark:hover,
+.np-headline a.np-story-link.np-mark:focus-visible {
+    text-decoration-thickness: 3px !important;
+}
+
+/* The same name made in the middle of a paragraph, where a rule alone
+   is not enough to find it — several other names are ruled the same way
+   in the same sentence. The wax lies over the word as well as under it.
+   Drawn with background layers rather than `text-decoration`, for the
+   reason set out over the in-copy link rule above. */
+a.np-prose-link.np-mark:link,
+a.np-prose-link.np-mark:visited,
+.np-brief-link.np-mark {
+    padding: 0 3px;
+    margin: 0 -3px;
+    background-image:
+        linear-gradient(var(--np-pencil), var(--np-pencil)),
+        linear-gradient(var(--np-pencil-wash), var(--np-pencil-wash));
+    background-repeat: no-repeat;
+    background-position:
+        0 100%,
+        0 0;
+    background-size:
+        100% 2px,
+        100% 100%;
+}
+
+a.np-prose-link.np-mark:hover,
+a.np-prose-link.np-mark:focus-visible,
+.np-brief-link.np-mark:hover,
+.np-brief-link.np-mark:focus-visible {
+    background-image:
+        linear-gradient(var(--np-pencil), var(--np-pencil)),
+        linear-gradient(var(--np-pencil-wash), var(--np-pencil-wash));
+    background-size:
+        100% 3px,
+        100% 100%;
+}
+
 /* ── Narrower screens ──────────────────────────────────────── */
 
 @media (max-width: 1100px) {
@@ -12580,6 +12834,25 @@ a.np-prose-link:focus-visible {
        falls between two briefs rather than under the band's own rule. */
     .np-brief + .np-brief {
         border-top: 1px solid var(--np-rule-soft);
+    }
+
+    /* One column has no gutter, so the stroke's margin goes back to the
+       measure it was taken from. Weighted to (0,4,0) for the same reason
+       the gutter reset above it carries `:nth-child(n)`: a media query
+       adds nothing to specificity, and the wide-screen rules these undo
+       score (0,3,0). */
+    .np-splits > .np-split.np-cut:nth-child(n),
+    .np-run > .np-split.np-cut:nth-child(n) {
+        --np-cut-margin: 0px;
+        padding-left: 17px;
+    }
+
+    /* A stacked story rules off from the one above it, and that rule is
+       painted before the lift is — so a lift that bled upwards would
+       rub it out. It stops at the rule instead. */
+    .np-splits > .np-split.np-cut:not(:first-child)::before,
+    .np-run > .np-split.np-cut:not(:first-child)::before {
+        top: 0;
     }
 
     .np-lead-body,

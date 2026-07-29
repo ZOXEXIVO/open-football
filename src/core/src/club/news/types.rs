@@ -22,17 +22,23 @@ pub enum NewsDesk {
     Fans,
     /// Boardroom and balance sheet.
     Boardroom,
+    /// The scoring charts. A club paper has no use for it — a division's
+    /// leading marksmen are not one club's news — so nothing files here
+    /// except the league's own monthly, where the charts are half the
+    /// paper.
+    Charts,
 }
 
 impl NewsDesk {
     /// Every desk that files copy. Walked by the locale tests.
-    pub const ALL: [NewsDesk; 6] = [
+    pub const ALL: [NewsDesk; 7] = [
         NewsDesk::Match,
         NewsDesk::Squad,
         NewsDesk::Market,
         NewsDesk::Loan,
         NewsDesk::Fans,
         NewsDesk::Boardroom,
+        NewsDesk::Charts,
     ];
 
     /// i18n key for the kicker label.
@@ -44,6 +50,7 @@ impl NewsDesk {
             NewsDesk::Loan => "news_desk_loan",
             NewsDesk::Fans => "news_desk_fans",
             NewsDesk::Boardroom => "news_desk_board",
+            NewsDesk::Charts => "news_desk_charts",
         }
     }
 }
@@ -334,6 +341,15 @@ pub enum NewsStoryKind {
     /// Nobody arrives until somebody leaves. The market consequence of
     /// a balance sheet, and the version of it the rumour mill prints.
     MustSellBeforeBuying,
+
+    // ── Charts desk: the division's month ─────────────────────────
+    /// The month's leading marksman in the division. A club paper can
+    /// only ever say a player scored; the league's own paper is the one
+    /// that can say nobody scored more.
+    LeagueTopScorer,
+    /// The men behind him on the same chart. Repeats within one edition
+    /// — a scoring chart is a list, and a list of one is a result.
+    LeagueScoringChase,
 }
 
 impl NewsStoryKind {
@@ -341,7 +357,7 @@ impl NewsStoryKind {
     /// each one has a headline and a body in every translation bundle,
     /// so adding a variant without its copy fails a test rather than
     /// printing a raw key on the front page.
-    pub const ALL: [NewsStoryKind; 152] = [
+    pub const ALL: [NewsStoryKind; 154] = [
         NewsStoryKind::LeagueWin,
         NewsStoryKind::LeagueDraw,
         NewsStoryKind::GoallessDraw,
@@ -494,6 +510,8 @@ impl NewsStoryKind {
         NewsStoryKind::TransferEmbargo,
         NewsStoryKind::WageBillCrisis,
         NewsStoryKind::MustSellBeforeBuying,
+        NewsStoryKind::LeagueTopScorer,
+        NewsStoryKind::LeagueScoringChase,
     ];
 
     pub fn desk(self) -> NewsDesk {
@@ -655,6 +673,8 @@ impl NewsStoryKind {
             | NewsStoryKind::TransferEmbargo
             | NewsStoryKind::WageBillCrisis
             | NewsStoryKind::MustSellBeforeBuying => NewsDesk::Boardroom,
+
+            NewsStoryKind::LeagueTopScorer | NewsStoryKind::LeagueScoringChase => NewsDesk::Charts,
         }
     }
 
@@ -814,6 +834,8 @@ impl NewsStoryKind {
             NewsStoryKind::TransferEmbargo => "transfer_embargo",
             NewsStoryKind::WageBillCrisis => "wage_bill_crisis",
             NewsStoryKind::MustSellBeforeBuying => "must_sell_before_buying",
+            NewsStoryKind::LeagueTopScorer => "league_top_scorer",
+            NewsStoryKind::LeagueScoringChase => "league_scoring_chase",
         }
     }
 
@@ -865,6 +887,15 @@ impl NewsStoryKind {
             NewsStoryKind::CupExit => 620,
             NewsStoryKind::Rout | NewsStoryKind::HeavyDefeat => 600,
             NewsStoryKind::HatTrick => 580,
+            // The month's leading scorer leads the division's own paper
+            // the way a trophy leads a club's. It is the one thing that
+            // page exists to say, and it outranks every live transfer
+            // link on it — a chart is settled, a rumour is not.
+            NewsStoryKind::LeagueTopScorer => 760,
+            // The rest of the chart. Deliberately below a rejected bid
+            // and a transfer request: after the man at the top, the
+            // biggest thing on a back page is somebody trying to leave.
+            NewsStoryKind::LeagueScoringChase => 470,
             // A shoot-out kept out is the save a town retells for
             // twenty years, and it decided the tie it happened in.
             NewsStoryKind::KeeperPenaltySave => 575,
@@ -1187,7 +1218,14 @@ impl NewsStoryKind {
             | NewsStoryKind::RelegationConfirmed
             | NewsStoryKind::CupFinalHeartbreak
             | NewsStoryKind::EuropeSecured
-            | NewsStoryKind::TrophyWon => NewsRecurrence::Event,
+            | NewsStoryKind::TrophyWon
+            // The scoring charts are read off a frozen monthly snapshot,
+            // which exists exactly once per calendar month. A chart is
+            // not a status that lingers and it is not a tally that ticks
+            // — it is a table somebody closed on the last day of the
+            // month, so it belongs to that month's edition and no other.
+            | NewsStoryKind::LeagueTopScorer
+            | NewsStoryKind::LeagueScoringChase => NewsRecurrence::Event,
 
             // A number that moves. The paper runs it again as soon as
             // the number does — "make it five in a row".
@@ -1329,6 +1367,9 @@ impl NewsStoryKind {
                 | NewsStoryKind::LoanWatchGoals
                 | NewsStoryKind::LoanWatchStarter
                 | NewsStoryKind::SigningNotWorking
+                // A scoring chart is a list. Printing one entry of it
+                // and calling that the charts is a result, not a table.
+                | NewsStoryKind::LeagueScoringChase
         )
     }
 
@@ -1470,6 +1511,11 @@ pub struct NewsStory {
     pub b: i32,
     /// Transfer fee or other money amount. `0` when not a money story.
     pub money: i64,
+    /// Match reports only: the side this paper covers played at home.
+    /// Together with `date` and `other_id` it rebuilds the match
+    /// record's id, which is how a scoreline in the copy links to the
+    /// match page. Meaningless — and left `false` — on every other desk.
+    pub home: bool,
 }
 
 impl NewsStory {
@@ -1484,6 +1530,7 @@ impl NewsStory {
             a: 0,
             b: 0,
             money: 0,
+            home: false,
         }
     }
 
@@ -1511,6 +1558,13 @@ impl NewsStory {
 
     pub fn with_money(mut self, money: i64) -> Self {
         self.money = money;
+        self
+    }
+
+    /// Match reports only: which end of the fixture this paper's side
+    /// was, so the scoreline can point at the match record.
+    pub fn at_home(mut self, home: bool) -> Self {
+        self.home = home;
         self
     }
 
@@ -1555,6 +1609,11 @@ pub struct IssueResult {
     pub goals_for: u8,
     pub goals_against: u8,
     pub competition: ResultCompetition,
+    /// Which end of the fixture this side was. With the date and the
+    /// two team ids this is enough to rebuild the match record's id
+    /// (`{date}_{home}_{away}`), so the scoreline in the column can
+    /// open the match itself.
+    pub is_home: bool,
 }
 
 impl IssueResult {
@@ -1799,16 +1858,33 @@ mod tests {
     /// would print a raw translation key on a front page and nothing
     /// would fail until a reader saw it. The compiler enforces the
     /// match arms; only the array length can silently drift.
+    ///
+    /// A desk is a standing section with a kicker over it, so it has to
+    /// have enough to say to be worth naming. Four kinds for the six a
+    /// club paper prints; two for `Charts`, which is a table — the man
+    /// at the top and the field behind him is the whole of what a
+    /// scoring chart contains, and padding it to four would mean
+    /// inventing copy to clear a threshold.
     #[test]
     fn every_desk_is_represented_on_the_page() {
         use crate::club::news::types::NewsDesk;
 
         for desk in NewsDesk::ALL {
+            let floor = match desk {
+                NewsDesk::Charts => 2,
+                _ => 4,
+            };
             let filed = NewsStoryKind::ALL
                 .iter()
                 .filter(|kind| kind.desk() == desk)
                 .count();
-            assert!(filed >= 4, "{:?} has almost nothing to file", desk);
+            assert!(
+                filed >= floor,
+                "{:?} has almost nothing to file ({} kinds, needs {})",
+                desk,
+                filed,
+                floor
+            );
         }
     }
 

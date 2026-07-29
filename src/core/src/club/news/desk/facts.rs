@@ -62,6 +62,28 @@ impl KeeperMatchFacts {
     }
 }
 
+/// The man a match report gets to name: the side's top scorer that
+/// afternoon, read off one match's goal details.
+///
+/// A report that only ever says "{club} beat {opponent} {score}" reads
+/// as a generated page however the phrasing rotates — the thing a real
+/// report always carries is WHO did it. The desk attaches him to the
+/// report, and the composer only reaches for player-flavoured copy when
+/// he is actually there, so a 0-2 defeat never names a hero it did not
+/// have.
+///
+/// `team_goals` pins the star to the result he starred in: a side can
+/// play twice in one week, and "his afternoon" printed under the other
+/// afternoon's scoreline is worse than no name at all.
+#[derive(Debug, Clone, Copy)]
+pub struct MatchStarFacts {
+    pub player_id: u32,
+    /// His goals in that match.
+    pub goals: u8,
+    /// The team's full tally in the same match.
+    pub team_goals: u8,
+}
+
 /// Everything the desks need to know about the week just played that
 /// they cannot read off a `Club`. Built once per Monday from the world's
 /// competitions and shared by every club in it.
@@ -75,6 +97,10 @@ pub struct WeeklyMatchFacts {
     pub cup_ties: FxHashMap<u32, CupTie>,
     /// What the week did to each goalkeeper who played in it.
     pub keepers: FxHashMap<u32, KeeperMatchFacts>,
+    /// Each side's top scorer per match, keyed by (team, opponent) —
+    /// the pair a match report already carries, so the desk can hand
+    /// the report its protagonist without a second lookup anywhere.
+    pub stars: FxHashMap<(u32, u32), MatchStarFacts>,
 }
 
 impl WeeklyMatchFacts {
@@ -84,7 +110,20 @@ impl WeeklyMatchFacts {
             red_cards: FxHashSet::default(),
             cup_ties: FxHashMap::default(),
             keepers: FxHashMap::default(),
+            stars: FxHashMap::default(),
         }
+    }
+
+    /// The star to print under one specific result, if the week
+    /// recorded one for exactly that afternoon. The tally check is what
+    /// keeps a side's two matches in one week from crediting the wrong
+    /// man: the entry survives only for the result it was read from.
+    pub fn star_of(&self, team_id: u32, opponent_team_id: u32, goals_for: u8) -> u32 {
+        self.stars
+            .get(&(team_id, opponent_team_id))
+            .filter(|star| star.team_goals == goals_for)
+            .map(|star| star.player_id)
+            .unwrap_or(0)
     }
 }
 
@@ -389,18 +428,32 @@ impl<'a> RecentEvents<'a> {
     /// A slightly longer memory for standing conditions — a rumour that
     /// broke ten days ago is still the story if nothing has moved since.
     pub const FORTNIGHT: u16 = 16;
+    /// The window a monthly paper covers. A club's weekly edition asks
+    /// what has moved since Monday; a division's monthly review is
+    /// written about the whole month, and a link that broke on the 3rd
+    /// is still part of that month's transfer story on the 31st.
+    pub const MONTH: u16 = 31;
 
     pub fn week(player: &'a Player) -> Self {
-        RecentEvents {
-            events: &player.happiness.recent_events,
-            window_days: Self::WEEK,
-        }
+        Self::within(player, Self::WEEK)
     }
 
     pub fn fortnight(player: &'a Player) -> Self {
+        Self::within(player, Self::FORTNIGHT)
+    }
+
+    pub fn month(player: &'a Player) -> Self {
+        Self::within(player, Self::MONTH)
+    }
+
+    /// The feed over an arbitrary window. The named constructors above
+    /// are the ones desks should reach for; this exists so a desk that
+    /// is shared between publications on different press cycles can be
+    /// handed the cycle it is being run on.
+    pub fn within(player: &'a Player, window_days: u16) -> Self {
         RecentEvents {
             events: &player.happiness.recent_events,
-            window_days: Self::FORTNIGHT,
+            window_days,
         }
     }
 

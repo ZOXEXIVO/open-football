@@ -24,21 +24,43 @@ impl RumourDesk {
     const REQUEST_IS_NEWS_FOR_DAYS: i64 = 21;
 
     pub fn file_player(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate) {
+        Self::file_player_over(out, player, date, RecentEvents::FORTNIGHT);
+    }
+
+    /// The same desk run on a different press cycle.
+    ///
+    /// The club paper comes out weekly and reads a fortnight back; the
+    /// division's own paper comes out monthly and has to read the whole
+    /// month, or half of every month's transfer talk is printed nowhere.
+    /// The detectors and their running order are identical — a rumour
+    /// column that ranked its stories differently depending on which
+    /// paper it was filed to would be two columns pretending to be one.
+    pub fn file_player_over(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        date: NaiveDate,
+        window_days: u16,
+    ) {
         if player.is_on_loan() {
             // A borrowed player's future is his parent club's story, and
             // it is filed by the loan desk on that club's page.
             return;
         }
 
-        Self::file_standing_at_club(out, player, date);
-        Self::file_interest(out, player, date);
+        Self::file_standing_at_club(out, player, date, window_days);
+        Self::file_interest(out, player, date, window_days);
     }
 
     /// Where the player stands with his own club: has he asked to go,
     /// has he been told to go, is he on the list, have talks broken
     /// down. One line, the sharpest version that applies.
-    fn file_standing_at_club(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate) {
-        let feed = RecentEvents::fortnight(player);
+    fn file_standing_at_club(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        date: NaiveDate,
+        window_days: u16,
+    ) {
+        let feed = RecentEvents::within(player, window_days);
         let importance = PlayerStanding::importance(player);
         let statuses = &player.statuses;
 
@@ -179,8 +201,8 @@ impl RumourDesk {
     /// Who wants him. Ordered by how far down the funnel the interest
     /// has travelled, because that is exactly how a back page ranks it:
     /// a rejected bid is a headline, a scout in the stand is a sentence.
-    fn file_interest(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate) {
-        let feed = RecentEvents::fortnight(player);
+    fn file_interest(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate, window_days: u16) {
+        let feed = RecentEvents::within(player, window_days);
         let importance = PlayerStanding::importance(player);
 
         // The move that did not happen. It outranks every live link on
@@ -296,7 +318,7 @@ impl RumourDesk {
             return;
         }
 
-        Self::file_status_speculation(out, player, date, importance);
+        Self::file_status_speculation(out, player, date, importance, window_days);
     }
 
     /// The fallback: no event fired this fortnight, but the player is
@@ -307,6 +329,7 @@ impl RumourDesk {
         player: &Player,
         date: NaiveDate,
         importance: i32,
+        window_days: u16,
     ) {
         let statuses = &player.statuses;
 
@@ -328,7 +351,7 @@ impl RumourDesk {
             60
         } else if statuses.has(PlayerStatusType::Wnt)
             || statuses.has(PlayerStatusType::Sct)
-            || Self::name_keeps_coming_up(player)
+            || Self::name_keeps_coming_up(player, window_days)
         {
             0
         } else {
@@ -344,8 +367,8 @@ impl RumourDesk {
 
     /// The generic "his name keeps appearing" beat, with no club
     /// attached — the shape most transfer talk actually takes in print.
-    fn name_keeps_coming_up(player: &Player) -> bool {
-        RecentEvents::fortnight(player)
+    fn name_keeps_coming_up(player: &Player, window_days: u16) -> bool {
+        RecentEvents::within(player, window_days)
             .any_of(&[
                 HappinessEventType::TransferRumour,
                 HappinessEventType::TransferSpeculationDistracts,

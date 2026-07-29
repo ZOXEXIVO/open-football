@@ -39,6 +39,13 @@ impl NewsEditor {
     /// have a report cut to make room for a scouting note.
     const MAX_MATCH_STORIES: usize = 6;
 
+    /// …and the charts, which are a table with a fixed number of places
+    /// on it. Four is the generic desk allowance and it would print
+    /// four fifths of a five-man list, which reads as a page that ran
+    /// out of room rather than as a chart. Only the league's own
+    /// monthly files here.
+    const MAX_CHART_PLACES: usize = 5;
+
     /// At most one player may be the subject of this many stories. A
     /// striker who scored a hat-trick, signed a new deal and was linked
     /// with a move is three separate pieces; four is an obsession.
@@ -107,7 +114,12 @@ impl NewsEditor {
                 continue;
             }
 
-            if story.player_id != 0 {
+            // A match report is the team's story; the scorer it names is
+            // a detail of the afternoon, not its subject. It neither
+            // counts against his allowance nor gets cut by it — a
+            // hat-trick hero must not lose his own piece because the
+            // report of the same match already carries his name.
+            if story.player_id != 0 && desk != NewsDesk::Match {
                 let player_used = per_player.get(&story.player_id).copied().unwrap_or(0);
                 if player_used >= Self::MAX_PER_PLAYER {
                     continue;
@@ -139,6 +151,7 @@ impl NewsEditor {
     fn desk_allowance(desk: NewsDesk) -> usize {
         match desk {
             NewsDesk::Match => Self::MAX_MATCH_STORIES,
+            NewsDesk::Charts => Self::MAX_CHART_PLACES,
             _ => Self::MAX_PER_DESK,
         }
     }
@@ -325,6 +338,35 @@ mod tests {
                 .iter()
                 .any(|story| story.kind == NewsStoryKind::LeagueDefeat),
             "the match report must survive a busy loan week"
+        );
+    }
+
+    /// A match report now carries the afternoon's top scorer, but it is
+    /// the team's story — it must neither spend his allowance nor be
+    /// cut by it. A hat-trick hero keeps his own piece alongside the
+    /// report of the match he scored it in.
+    #[test]
+    fn a_match_report_does_not_cost_its_star_his_own_news() {
+        let candidates = vec![
+            Desk::story(NewsStoryKind::LeagueWin, 9, 3).against(40),
+            Desk::story(NewsStoryKind::HatTrick, 9, 3),
+            Desk::printable(NewsStoryKind::StarForm, 9, 12),
+            Desk::story(NewsStoryKind::RumourInterest, 9, 0),
+            Desk::story(NewsStoryKind::MilestoneGoals, 9, 100),
+        ];
+
+        let edition = NewsEditor::compile(candidates, &VecDeque::new());
+
+        assert!(
+            edition
+                .iter()
+                .any(|story| story.kind == NewsStoryKind::LeagueWin),
+            "the match report must survive its star's busy week"
+        );
+        assert_eq!(
+            edition.len(),
+            1 + NewsEditor::MAX_PER_PLAYER,
+            "the report is on top of his allowance, not part of it"
         );
     }
 

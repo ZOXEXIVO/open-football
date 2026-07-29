@@ -148,6 +148,7 @@ impl LeagueResult {
                 TeamScore::from(&result.score.away_team),
             ),
         )
+        .with_venue(true)
         .with_tactic(final_home_tactic)
         .with_starting_eleven(home_starting_eleven);
         if let Some((start, _, change_minute)) = tactic_summary {
@@ -166,6 +167,7 @@ impl LeagueResult {
                 TeamScore::from(&result.score.home_team),
             ),
         )
+        .with_venue(false)
         .with_tactic(final_away_tactic)
         .with_starting_eleven(away_starting_eleven);
         if let Some((_, start, change_minute)) = tactic_summary {

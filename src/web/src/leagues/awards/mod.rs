@@ -2,6 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::player_history_slug;
+use crate::leagues::newspaper::LeagueNewspaperCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -41,6 +42,11 @@ pub struct LeagueAwardsTemplate {
     pub i18n: I18n,
     pub lang: String,
     pub league_slug: String,
+    /// Monthly editions on the division's shelf, for the tabbar badge.
+    /// Every league template that renders the tabbar carries this —
+    /// there is no shared base struct, so a new league tab must add it
+    /// or the template fails to compile.
+    pub newspaper_count: usize,
     pub hero_player: Option<AwardPlayerCard>,
     pub young_hero_player: Option<AwardPlayerCard>,
     pub player_of_month: Option<AwardPlayerCard>,
@@ -358,6 +364,7 @@ pub async fn league_awards_action(
             )
         },
         league_slug: league.slug.clone(),
+        newspaper_count: LeagueNewspaperCounter::count(league),
         hero_player,
         young_hero_player,
         player_of_month,

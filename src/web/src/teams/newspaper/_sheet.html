@@ -28,7 +28,7 @@
     <div class="np-body{% if issue.results.is_empty() && issue.portrait.is_none() %} np-body-full{% endif %}">
         <div class="np-main">
             {% if let Some(lead) = issue.lead %}
-            <section class="np-lead">
+            <section class="np-lead{% if lead.marked %} np-cut{% endif %}">
                 <p class="np-kicker">{{ lead.kicker }}<span class="np-dateline">{{ lead.date }}</span></p>
                 {# Every name in the headline carries a link to it, set as a rule
                    under the type rather than as a coloured word — the page has one
@@ -41,7 +41,7 @@
                     {%- else if lead.player_slug.is_empty() -%}
                     {{ lead.headline.text() }}
                     {%- else -%}
-                    <a class="np-story-link" href="/{{ lang }}/players/{{ lead.player_slug }}" title="{{ lead.player_name }}">{{ lead.headline.text() }}</a>
+                    <a class="np-story-link{% if lead.subject_marked %} np-mark{% endif %}" href="/{{ lang }}/players/{{ lead.player_slug }}" title="{{ lead.player_name }}">{{ lead.headline.text() }}</a>
                     {%- endif -%}
                 </h3>
                 <p class="np-lead-body{% if lead.is_quote %} np-quote{% endif %}{% if !lead.drop_cap %} np-no-cap{% endif %}">{% let prose = lead.body %}{% let link_class = "np-prose-link" %}{% include "teams/newspaper/_prose.html" %}</p>
@@ -59,7 +59,9 @@
 
         <aside class="np-rail">
             {% if let Some(portrait) = issue.portrait %}
-            <figure class="np-figure">
+            {# On his own page the caption's rule is scored rather than
+               printed. Nothing is drawn over the plate itself. #}
+            <figure class="np-figure{% if portrait.marked %} np-cut-figure{% endif %}">
                 <a class="np-photo" href="/{{ lang }}/players/{{ portrait.player_slug }}">
                     {% if portrait.player_generated %}
                     <img src="/api/players/{{ portrait.player_id }}/face.svg?v={{ crate::face::FACE_VERSION }}" alt="{{ portrait.player_name }}" loading="lazy">
@@ -69,7 +71,7 @@
                     <span class="np-screen" aria-hidden="true"></span>
                 </a>
                 <figcaption class="np-caption">
-                    <strong><a class="np-story-link" href="/{{ lang }}/players/{{ portrait.player_slug }}">{{ portrait.player_name }}</a></strong>
+                    <strong><a class="np-story-link{% if portrait.marked %} np-mark{% endif %}" href="/{{ lang }}/players/{{ portrait.player_slug }}">{{ portrait.player_name }}</a></strong>
                     <span>{{ portrait.caption }}</span>
                 </figcaption>
             </figure>
@@ -84,7 +86,7 @@
                         <span class="np-result-date">{{ result.date }}</span>
                         <a class="np-result-club" href="/{{ lang }}/teams/{{ result.opponent_slug }}">{{ result.opponent_name }}</a>
                         {% if result.is_cup %}<span class="np-result-cup">{{ i18n.t("newspaper_cup_tie") }}</span>{% endif %}
-                        <span class="np-result-score">{{ result.score }}</span>
+                        {% if !result.match_id.is_empty() %}<a class="np-result-score" href="/{{ lang }}/match/{{ result.match_id }}">{{ result.score }}</a>{% else %}<span class="np-result-score">{{ result.score }}</span>{% endif %}
                     </li>
                     {% endfor %}
                 </ul>
@@ -112,14 +114,14 @@
         <h4 class="np-box-title np-band-title">{{ i18n.t("newspaper_in_brief") }}</h4>
         <ul class="np-briefs np-briefs-band">
             {% for story in issue.briefs %}
-            <li class="np-brief">
+            <li class="np-brief{% if story.marked %} np-cut np-cut-brief{% endif %}">
                 <span class="np-brief-kicker">{{ story.kicker }}</span>
                 {% if story.headline.has_links() %}
                 <span class="np-brief-text">{% let prose = story.headline %}{% let link_class = "np-brief-link" %}{% include "teams/newspaper/_prose.html" %}</span>
                 {% else if story.player_slug.is_empty() %}
                 <span class="np-brief-text">{{ story.headline.text() }}</span>
                 {% else %}
-                <a class="np-brief-text np-brief-link" href="/{{ lang }}/players/{{ story.player_slug }}" title="{{ story.player_name }}">{{ story.headline.text() }}</a>
+                <a class="np-brief-text np-brief-link{% if story.subject_marked %} np-mark{% endif %}" href="/{{ lang }}/players/{{ story.player_slug }}" title="{{ story.player_name }}">{{ story.headline.text() }}</a>
                 {% endif %}
             </li>
             {% endfor %}

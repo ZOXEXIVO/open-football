@@ -7,7 +7,7 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate};
 use core::club::news::{IssueResult, NewsDesk, NewsStory, NewspaperIssue};
 use core::shared::fullname::FullName;
 use core::utils::FormattingUtils;
@@ -96,6 +96,16 @@ pub struct StoryView {
     /// The body is somebody talking rather than the correspondent
     /// writing, and the page sets it as a pull-quote.
     pub is_quote: bool,
+    /// The reader is named somewhere in this story — as its subject or
+    /// halfway down somebody else's paragraph — and the page sets it as
+    /// a marked cutting. Always false on a club's own page.
+    pub marked: bool,
+    /// The reader is the story's *subject*: the man [`Self::player_slug`]
+    /// points at. Held apart from [`Self::marked`] because a headline
+    /// that names nobody is underscored whole, and that one link is only
+    /// his when the story is his — a story that mentions him in the body
+    /// while leading on somebody else must not mark the other man's name.
+    pub subject_marked: bool,
     /// Whether this body may take the lead paragraph's drop cap.
     ///
     /// A drop cap is a letter. Set at 54px, a digit or a currency sign
@@ -135,7 +145,6 @@ impl Prose {
     pub fn has_links(&self) -> bool {
         self.spans.iter().any(Span::is_link)
     }
-
 }
 
 /// A stretch of one run of copy: either plain type, or a name the page
@@ -149,6 +158,10 @@ pub struct Span {
     /// Empty for plain type, and for a name whose subject could not be
     /// resolved — a dead link is worse than plain type.
     pub slug: String,
+    /// This name is the reader's own, and the page marks it by hand.
+    /// Always false on a club's page, where nobody in particular is
+    /// reading. See [`PressFocus`].
+    pub marked: bool,
 }
 
 impl Span {
@@ -157,6 +170,7 @@ impl Span {
             text,
             section: "",
             slug: String::new(),
+            marked: false,
         }
     }
 
@@ -168,11 +182,73 @@ impl Span {
             text,
             section,
             slug,
+            marked: false,
         }
     }
 
     pub fn is_link(&self) -> bool {
         !self.slug.is_empty()
+    }
+}
+
+/// The reader a page is set for.
+///
+/// A club's paper is set for nobody in particular: every name in it is
+/// one cross-reference among many, and none of them is worth more ink
+/// than the rest. A player's page is the other thing entirely — it is
+/// the envelope a clippings bureau posted on, the same editions with
+/// his passages gone through by hand before they were sent.
+///
+/// The focus is carried into the typesetting rather than searched for
+/// afterwards, because the composer is the only place that knows which
+/// name in a sentence is whose: by the time the copy is markup, "Kelly"
+/// is a word.
+#[derive(Clone, Copy)]
+pub(crate) struct PressFocus<'a> {
+    player_id: u32,
+    slug: &'a str,
+}
+
+impl<'a> PressFocus<'a> {
+    /// A paper read by nobody in particular. Nothing is marked, which
+    /// is what a club's own front page should look like.
+    pub(crate) fn none() -> Self {
+        PressFocus {
+            player_id: 0,
+            slug: "",
+        }
+    }
+
+    pub(crate) fn player(player_id: u32, slug: &'a str) -> Self {
+        PressFocus { player_id, slug }
+    }
+
+    /// Whether a story is *about* the reader — its subject, rather than
+    /// somebody it happens to name in passing.
+    fn is_subject(&self, player_id: u32) -> bool {
+        self.player_id != 0 && self.player_id == player_id
+    }
+
+    /// Goes through one run of copy and marks every mention of the
+    /// reader, reporting whether it found any.
+    ///
+    /// Matched on the slug rather than on the text: a bureau marking a
+    /// paper knows which Kelly it was paid to look for, and two players
+    /// can share a surname inside one sentence.
+    fn mark(&self, prose: &mut Prose) -> bool {
+        if self.slug.is_empty() {
+            return false;
+        }
+
+        let mut found = false;
+        for span in &mut prose.spans {
+            if span.section == "players" && span.slug == self.slug {
+                span.marked = true;
+                found = true;
+            }
+        }
+
+        found
     }
 }
 
@@ -183,6 +259,9 @@ pub struct PortraitView {
     pub player_name: String,
     pub player_generated: bool,
     pub caption: String,
+    /// The face on the front page is the reader's own, and the page
+    /// rings it the way a subscriber ringed himself. See [`PressFocus`].
+    pub marked: bool,
 }
 
 pub struct ResultView {
@@ -196,6 +275,10 @@ pub struct ResultView {
     /// Cup ties carry a competition mark; a 0-1 in a knockout round is
     /// a different result from a 0-1 on a league Saturday.
     pub is_cup: bool,
+    /// The match record behind the scoreline (`{date}_{home}_{away}`).
+    /// Empty when the paper cannot place the fixture, in which case the
+    /// score is set as plain type rather than as a dead link.
+    pub match_id: String,
 }
 
 pub async fn team_newspaper_action(
@@ -355,37 +438,43 @@ impl PressDesk {
     const RUN_COLUMNS: usize = 3;
 
     fn typeset(data: &SimulatorData, team: &Team, i18n: &I18n) -> Vec<IssueView> {
-        let masthead = Self::masthead(team, i18n);
+        let masthead = Self::masthead(team.newsroom.masthead_key(), &team.name, i18n);
+        let paper = PaperFor::Own(Paper {
+            name: &team.name,
+            slug: &team.slug,
+            club_id: team.club_id,
+            team_id: team.id,
+        });
 
         team.newsroom
             .issues
             .iter()
-            .map(|issue| Self::issue(data, team, issue, &masthead, i18n))
+            // A club's paper is read by the whole town, so nothing on it
+            // is marked for anybody.
+            .map(|issue| Self::issue(data, paper, issue, &masthead, i18n, PressFocus::none()))
             .collect()
     }
 
-    /// This side's nameplate, with the club named in it.
-    pub(crate) fn masthead(team: &Team, i18n: &I18n) -> String {
-        i18n.t(team.newsroom.masthead_key())
-            .replace("{club}", &team.name)
+    /// A nameplate, with whoever the paper belongs to named in it. The
+    /// masthead patterns are shared: a division's monthly is "The Serie
+    /// A Chronicle" by exactly the same rule that makes a club's weekly
+    /// "The Rubin Kazan Chronicle".
+    pub(crate) fn masthead(key: &str, name: &str, i18n: &I18n) -> String {
+        i18n.t(key).replace("{club}", name)
     }
 
-    pub(crate) fn issue(
-        data: &SimulatorData,
-        team: &Team,
+    pub(crate) fn issue<'a>(
+        data: &'a SimulatorData,
+        paper: PaperFor<'a>,
         issue: &NewspaperIssue,
         masthead: &str,
         i18n: &I18n,
+        focus: PressFocus<'_>,
     ) -> IssueView {
-        let paper = Paper {
-            name: &team.name,
-            slug: &team.slug,
-            club_id: team.club_id,
-        };
         let stories = issue
             .stories
             .iter()
-            .map(|story| Self::story(data, paper, story, i18n))
+            .map(|story| Self::story(data, paper.for_story(data, story), story, i18n, focus))
             .collect::<Vec<_>>();
 
         let Tiers {
@@ -393,9 +482,18 @@ impl PressDesk {
             secondary,
             run,
             briefs,
-        } = Self::tiers(stories);
+        } = Self::tiers(stories, paper.runs_a_briefs_band());
 
-        let portrait = Self::portrait(data, team, issue, i18n);
+        let portrait = Self::portrait(data, paper, issue, i18n, focus);
+
+        // The results column belongs to one side's own paper, so the
+        // paper's team is half of every match id in it. A division's
+        // monthly carries no results panel; its 0 falls through to a
+        // plain, unlinked scoreline if one ever appears.
+        let own_team_id = match paper {
+            PaperFor::Own(own) => own.team_id,
+            PaperFor::Division(_) => 0,
+        };
 
         IssueView {
             number: issue.number,
@@ -414,7 +512,7 @@ impl PressDesk {
             results: issue
                 .results
                 .iter()
-                .map(|result| Self::result(data, result))
+                .map(|result| Self::result(data, result, own_team_id))
                 .collect(),
             portrait,
         }
@@ -440,7 +538,14 @@ impl PressDesk {
     /// the run is short of filling its last row it takes the one or two
     /// it needs off the top of the briefs. That is the only reason the
     /// band ever holds fewer than four: it is never padded, only raided.
-    fn tiers(stories: Vec<StoryView>) -> Tiers {
+    ///
+    /// A paper with no band under the fold shares its stories out by
+    /// [`Self::tiers_unbanded`] instead.
+    fn tiers(stories: Vec<StoryView>, band: bool) -> Tiers {
+        if !band {
+            return Self::tiers_unbanded(stories);
+        }
+
         let mut stories = stories.into_iter();
         let lead = stories.next();
 
@@ -469,13 +574,54 @@ impl PressDesk {
         }
     }
 
+    /// The share-out for a paper that runs no briefs band — the
+    /// divisions' monthly (user, July 2026: "do not show briefs for
+    /// Leagues newspapers").
+    ///
+    /// A band of one-liners is a local weekly's small change: the
+    /// fine, the reserve-team result, the thing that is worth a
+    /// sentence to the people who already follow the club. A division's
+    /// monthly has no small change — every line on it is either a place
+    /// on the scoring chart or somebody's future, and there is nothing
+    /// on that page a reader would want as a one-liner.
+    ///
+    /// With the band gone it can no longer pay for the run's last row,
+    /// so the run is rounded **down** instead and the tail that cannot
+    /// fill a row is left out. The stories arrive in the editor's rank
+    /// order, so what goes is always the least newsworthy one or two —
+    /// which is what "the page is this size" means on a real paper.
+    /// Never more than `RUN_COLUMNS - 1` are dropped, and the common
+    /// full edition (a five-place chart plus four from the mill) comes
+    /// out at exactly 1 + 2 + 6 and loses nothing.
+    fn tiers_unbanded(stories: Vec<StoryView>) -> Tiers {
+        let mut stories = stories.into_iter();
+        let lead = stories.next();
+
+        let mut rest: Vec<StoryView> = stories.collect();
+        let beside_the_rail = Self::SECONDARY_SLOTS.min(rest.len());
+        let below = rest.len() - beside_the_rail;
+
+        let in_the_run = (below / Self::RUN_COLUMNS) * Self::RUN_COLUMNS;
+
+        rest.truncate(beside_the_rail + in_the_run);
+        let run = rest.split_off(beside_the_rail);
+
+        Tiers {
+            lead,
+            secondary: rest,
+            run,
+            briefs: Vec::new(),
+        }
+    }
+
     /// The first story on the page with a face behind it. A paper never
     /// runs a front page of pure text when it has a picture available.
-    fn portrait(
-        data: &SimulatorData,
-        team: &Team,
+    fn portrait<'a>(
+        data: &'a SimulatorData,
+        paper: PaperFor<'a>,
         issue: &NewspaperIssue,
         i18n: &I18n,
+        focus: PressFocus<'_>,
     ) -> Option<PortraitView> {
         let story = issue.stories.iter().find(|story| story.player_id != 0)?;
         let player = data.player(story.player_id)?;
@@ -485,17 +631,9 @@ impl PressDesk {
             player_slug: player.slug(),
             player_name: PlayerName::display(&player.full_name),
             player_generated: player.is_generated(),
-            caption: StoryComposer::headline(
-                data,
-                story,
-                i18n,
-                Paper {
-                    name: &team.name,
-                    slug: &team.slug,
-                    club_id: team.club_id,
-                },
-            )
-            .text(),
+            marked: focus.is_subject(player.id),
+            caption: StoryComposer::headline(data, story, i18n, paper.for_story(data, story))
+                .text(),
         })
     }
 
@@ -507,22 +645,31 @@ impl PressDesk {
         paper: Paper<'_>,
         story: &NewsStory,
         i18n: &I18n,
+        focus: PressFocus<'_>,
     ) -> StoryView {
         let (player_name, player_slug) = PlayerName::resolve(data, story.player_id);
-        let body = StoryComposer::body(data, story, i18n, paper);
+        let mut headline = StoryComposer::headline(data, story, i18n, paper);
+        let mut body = StoryComposer::body(data, story, i18n, paper);
+
+        // Both runs are gone through, and both are marked: a name in the
+        // headline and the same name four lines into the paragraph are
+        // the reader finding himself twice, not once. Written as two
+        // statements rather than `||` on purpose — the short-circuit
+        // would leave the body unmarked whenever the headline named him.
+        let in_the_headline = focus.mark(&mut headline);
+        let in_the_body = focus.mark(&mut body);
+        let subject_marked = focus.is_subject(story.player_id);
 
         StoryView {
             kicker: i18n.t(story.kind.desk().i18n_key()).to_string(),
-            headline: StoryComposer::headline(data, story, i18n, paper),
+            marked: subject_marked || in_the_headline || in_the_body,
+            subject_marked,
+            headline,
             // Read off the composed text, after the placeholders are
             // filled: whether a body opens with a letter depends on the
             // scoreline and the club name of this particular story, not
             // on the template it came from.
-            drop_cap: body
-                .text()
-                .chars()
-                .next()
-                .is_some_and(char::is_alphabetic),
+            drop_cap: body.text().chars().next().is_some_and(char::is_alphabetic),
             body,
             date: i18n.format_date(story.date),
             player_slug,
@@ -531,7 +678,7 @@ impl PressDesk {
         }
     }
 
-    fn result(data: &SimulatorData, result: &IssueResult) -> ResultView {
+    fn result(data: &SimulatorData, result: &IssueResult, own_team_id: u32) -> ResultView {
         let (opponent_name, opponent_slug) = data
             .team_data(result.opponent_team_id)
             .map(|team| (team.name.clone(), team.slug.clone()))
@@ -541,7 +688,7 @@ impl PressDesk {
             date: result.date.format("%d.%m").to_string(),
             opponent_name,
             opponent_slug,
-            score: format!("{}-{}", result.goals_for, result.goals_against),
+            score: MatchPage::score(result.goals_for as i32, result.goals_against as i32),
             outcome: if result.is_win() {
                 "w"
             } else if result.is_draw() {
@@ -550,7 +697,44 @@ impl PressDesk {
                 "l"
             },
             is_cup: result.is_cup(),
+            match_id: if own_team_id == 0 {
+                String::new()
+            } else {
+                MatchPage::id(
+                    result.date,
+                    result.is_home,
+                    own_team_id,
+                    result.opponent_team_id,
+                )
+            },
         }
+    }
+}
+
+/// How the paper writes a scoreline, and where it leads.
+///
+/// A score in newsprint is set solid — "2‑1" broken across a line end
+/// reads as a typo — and it is the one figure a reader wants to open:
+/// the match record behind it. The record's id is the schedule's own
+/// (`{date}_{home}_{away}`), so rebuilding it needs the date, the two
+/// sides, and which of them was at home.
+struct MatchPage;
+
+impl MatchPage {
+    /// The scoreline as type: joined with a non-breaking hyphen so it
+    /// can never wrap.
+    fn score(goals_for: i32, goals_against: i32) -> String {
+        format!("{}\u{2011}{}", goals_for, goals_against)
+    }
+
+    /// The match record's id, in the schedule's own format.
+    fn id(date: NaiveDate, is_home: bool, team_id: u32, opponent_team_id: u32) -> String {
+        let (home, away) = if is_home {
+            (team_id, opponent_team_id)
+        } else {
+            (opponent_team_id, team_id)
+        };
+        format!("{}_{}_{}", date, home, away)
     }
 }
 
@@ -559,14 +743,77 @@ impl PressDesk {
 /// `name` is the side the paper belongs to and fills the `{club}` slot;
 /// `slug` is where that name points when the page sets it as a link;
 /// `club_id` is the club behind it, which is where a `{manager}` is
-/// looked for first. Carried together because the three always travel
-/// together and a story lifted onto a player's page has to keep
-/// crediting the newsroom that printed it.
+/// looked for first; `team_id` is the side itself, which is half of a
+/// match record's id — a report's scoreline links to the match through
+/// it. Carried together because the four always travel together and a
+/// story lifted onto a player's page has to keep crediting the newsroom
+/// that printed it.
 #[derive(Clone, Copy)]
 pub(crate) struct Paper<'a> {
     pub name: &'a str,
     pub slug: &'a str,
     pub club_id: u32,
+    pub team_id: u32,
+}
+
+/// Who the `{club}` in a piece of copy belongs to, for the edition being
+/// set.
+///
+/// A club's paper is one voice: every story on the page is that club's
+/// story, so the slot is the same name from the nameplate to the briefs.
+/// A division's paper is not — its front page is one club's striker, its
+/// second column is another club's player being watched by a third. The
+/// same sentence has to name a different club in each of them, or the
+/// copy reads "Serie A turn down Juventus for Vlahović".
+///
+/// So the paper is resolved per STORY rather than per edition. That is
+/// the whole of the difference between the two publications as far as
+/// the typesetter is concerned, which is why there is still only one
+/// typesetter.
+#[derive(Clone, Copy)]
+pub(crate) enum PaperFor<'a> {
+    /// One side's own paper.
+    Own(Paper<'a>),
+    /// A division's paper, carrying its own name for the rare story
+    /// whose subject cannot be placed at a club.
+    Division(&'a str),
+}
+
+impl<'a> PaperFor<'a> {
+    /// Whether this paper runs a band of one-liners under the fold.
+    ///
+    /// A club weekly does: the fine, the reserve result, the thing
+    /// worth a sentence to people who already follow the club. A
+    /// division's monthly does not — every line on it is a place on the
+    /// scoring chart or somebody's future, and neither is small change.
+    /// See [`PressDesk::tiers_unbanded`].
+    fn runs_a_briefs_band(self) -> bool {
+        matches!(self, PaperFor::Own(_))
+    }
+
+    fn for_story(self, data: &'a SimulatorData, story: &NewsStory) -> Paper<'a> {
+        match self {
+            PaperFor::Own(paper) => paper,
+            PaperFor::Division(division) => data
+                .player_with_team(story.player_id)
+                .map(|(_, team)| Paper {
+                    name: &team.name,
+                    slug: &team.slug,
+                    club_id: team.club_id,
+                    team_id: team.id,
+                })
+                // A retired or released subject has no club to credit.
+                // The division's own name stands in, with no slug — an
+                // empty slug degrades to plain type rather than to a
+                // link pointing at a team page that does not exist.
+                .unwrap_or(Paper {
+                    name: division,
+                    slug: "",
+                    club_id: 0,
+                    team_id: 0,
+                }),
+        }
+    }
 }
 
 /// What a `{slot}` in a piece of copy turns into: a figure the page sets
@@ -627,6 +874,12 @@ impl StoryComposer {
     /// or the same theme in a different week — comes out phrased
     /// differently.
     ///
+    /// The pick runs over the phrasings this particular story can
+    /// FILL, not over everything the bundles carry: a match report
+    /// that knows its scorer may land on the copy that names him,
+    /// while the same report without one stays on the phrasings that
+    /// only need a scoreline. See [`Self::eligible_phrasings`].
+    ///
     /// Headline and body always use the same index, so a pair written
     /// to share a register is printed as the pair it was written as.
     /// The bundles ship variants in matched, gap-free pairs (enforced
@@ -634,12 +887,50 @@ impl StoryComposer {
     /// the count be read off the headline keys alone.
     fn phrasing_key(part: &str, story: &NewsStory, i18n: &I18n) -> String {
         let stem = story.kind.key_stem();
-        let index = Self::phrasing_index(story, Self::phrasing_count(i18n, stem));
+        let eligible = Self::eligible_phrasings(story, i18n, stem);
+        let index = eligible[Self::phrasing_index(story, eligible.len())];
+        Self::phrasing_key_at(part, stem, index)
+    }
+
+    /// The key one phrasing lives under: the bare stem for the base
+    /// pair, `_v2`, `_v3`, … for the variants.
+    fn phrasing_key_at(part: &str, stem: &str, index: usize) -> String {
         if index == 0 {
             format!("news_{}_{}", part, stem)
         } else {
             format!("news_{}_{}_v{}", part, stem, index + 1)
         }
+    }
+
+    /// Which of a stem's phrasings this story can actually set.
+    ///
+    /// Copy that names `{player}` is only on the table when the story
+    /// carries one. That is what lets situational copy exist at all:
+    /// the desks attach a protagonist when the week had one, the
+    /// writers write phrasings around him, and a story without one can
+    /// never land on "an unnamed player was the difference" — the stub
+    /// sentence this whole mechanism exists to prevent.
+    fn eligible_phrasings(story: &NewsStory, i18n: &I18n, stem: &str) -> Vec<usize> {
+        let count = Self::phrasing_count(i18n, stem);
+        let eligible: Vec<usize> = (0..count)
+            .filter(|&index| {
+                story.player_id != 0 || !Self::phrasing_names_a_player(i18n, stem, index)
+            })
+            .collect();
+
+        if eligible.is_empty() {
+            // Every phrasing wants a player the story does not carry —
+            // broken copy, not a quiet week. The base pair goes out with
+            // its fallback name, which at least shows what is missing.
+            return vec![0];
+        }
+        eligible
+    }
+
+    fn phrasing_names_a_player(i18n: &I18n, stem: &str, index: usize) -> bool {
+        let headline = Self::phrasing_key_at("h", stem, index);
+        let body = Self::phrasing_key_at("b", stem, index);
+        i18n.t(&headline).contains("{player}") || i18n.t(&body).contains("{player}")
     }
 
     /// How many phrasings the bundles carry for a stem. A missing key
@@ -801,7 +1092,23 @@ impl StoryComposer {
                     slug,
                 }
             }
-            "score" => Slot::Text(format!("{}-{}", story.a, story.b)),
+            // The scoreline: set solid on a non-breaking hyphen, and —
+            // in a match report that knows its fixture — a link to the
+            // match record itself. Any other desk quoting a score, and
+            // any report whose fixture cannot be placed, keeps it as
+            // plain type rather than minting a link to nowhere.
+            "score" => {
+                let text = MatchPage::score(story.a, story.b);
+                if story.kind.desk() == NewsDesk::Match && story.other_id != 0 && paper.team_id != 0
+                {
+                    return Slot::Name {
+                        text,
+                        section: "match",
+                        slug: MatchPage::id(story.date, story.home, paper.team_id, story.other_id),
+                    };
+                }
+                Slot::Text(text)
+            }
             "fee" => Slot::Text(format!(
                 "${}",
                 FormattingUtils::format_money(story.money as f64)
@@ -1387,6 +1694,161 @@ mod tests {
             }
         }
     }
+
+    /// The i18n fixture the eligibility tests run against: one stem
+    /// with two plain phrasings and one that names the scorer.
+    fn press_with_player_variant() -> crate::I18n {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "news_h_league_win".to_string(),
+            "{club} beat {opponent}".to_string(),
+        );
+        map.insert("news_b_league_win".to_string(), "{score}.".to_string());
+        map.insert(
+            "news_h_league_win_v2".to_string(),
+            "{club} see off {opponent}".to_string(),
+        );
+        map.insert("news_b_league_win_v2".to_string(), "A {score} win.".to_string());
+        map.insert(
+            "news_h_league_win_v3".to_string(),
+            "{player} the difference".to_string(),
+        );
+        map.insert(
+            "news_b_league_win_v3".to_string(),
+            "{player} settled it, {score}.".to_string(),
+        );
+        crate::I18n::for_test(map)
+    }
+
+    /// Copy that names the scorer may only be set when the story
+    /// carries one. A report without its protagonist landing on a
+    /// `{player}` phrasing would print "an unnamed player was the
+    /// difference" — the stub sentence the mechanism exists to prevent.
+    #[test]
+    fn a_phrasing_that_names_a_player_is_never_picked_without_one() {
+        use super::StoryComposer;
+        use chrono::NaiveDate;
+        use core::club::news::{NewsStory, NewsStoryKind};
+
+        let i18n = press_with_player_variant();
+        let day = NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+
+        for week in 0..40 {
+            let story = NewsStory::new(NewsStoryKind::LeagueWin, day + chrono::Duration::days(week))
+                .against(week as u32 + 1);
+            let key = StoryComposer::phrasing_key("h", &story, &i18n);
+            assert!(
+                !key.ends_with("_v3"),
+                "a report with no scorer picked the phrasing that names him"
+            );
+        }
+    }
+
+    /// …while a report that knows its man spreads across the whole
+    /// pool, scorer copy included — and each story keeps its phrasing.
+    #[test]
+    fn a_report_with_its_scorer_can_reach_the_copy_that_names_him() {
+        use super::StoryComposer;
+        use chrono::NaiveDate;
+        use core::club::news::{NewsStory, NewsStoryKind};
+        use std::collections::HashSet;
+
+        let i18n = press_with_player_variant();
+        let day = NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+
+        let keys: HashSet<String> = (1..40)
+            .map(|id| {
+                let story = NewsStory::new(NewsStoryKind::LeagueWin, day).about(id).against(7);
+                let headline = StoryComposer::phrasing_key("h", &story, &i18n);
+                assert_eq!(
+                    headline,
+                    StoryComposer::phrasing_key("h", &story, &i18n),
+                    "the pick must be stable per story"
+                );
+                headline
+            })
+            .collect();
+
+        assert!(
+            keys.iter().any(|key| key.ends_with("_v3")),
+            "forty scorers never reached the copy written for them: {:?}",
+            keys
+        );
+        assert!(keys.len() > 1, "the pool collapsed to one phrasing");
+    }
+
+    /// Broken copy, not a crash: if every phrasing of a stem demands a
+    /// player, a story without one falls back to the base pair rather
+    /// than panicking on an empty pool.
+    #[test]
+    fn a_stem_whose_every_phrasing_needs_a_player_falls_back_to_base() {
+        use super::StoryComposer;
+        use chrono::NaiveDate;
+        use core::club::news::{NewsStory, NewsStoryKind};
+
+        let mut map = std::collections::HashMap::new();
+        map.insert("news_h_league_win".to_string(), "{player} wins it".to_string());
+        map.insert("news_b_league_win".to_string(), "{player} again.".to_string());
+        let i18n = crate::I18n::for_test(map);
+
+        let day = NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+        let story = NewsStory::new(NewsStoryKind::LeagueWin, day).against(7);
+
+        assert_eq!(
+            StoryComposer::phrasing_key("h", &story, &i18n),
+            "news_h_league_win"
+        );
+    }
+
+    /// A scoreline is set solid — the non-breaking hyphen is what keeps
+    /// "2-1" off a line end — and its match id is the schedule's own:
+    /// date first, then the home side, then the away side, whichever of
+    /// them this paper covers.
+    #[test]
+    fn a_scoreline_is_set_solid_and_opens_its_match_record() {
+        use super::MatchPage;
+        use chrono::NaiveDate;
+
+        let day = NaiveDate::from_ymd_opt(2026, 8, 8).unwrap();
+        assert_eq!(
+            MatchPage::id(day, true, 1301104, 1525),
+            "2026-08-08_1301104_1525"
+        );
+        assert_eq!(
+            MatchPage::id(day, false, 1525, 1301104),
+            "2026-08-08_1301104_1525",
+            "an away report puts the opponent first"
+        );
+        assert_eq!(MatchPage::score(2, 1), "2\u{2011}1");
+    }
+
+    /// Every match report must stay printable without its scorer — a
+    /// stored result can arrive without details, and a 0-0 has nobody
+    /// to name. Each match stem therefore keeps at least one phrasing
+    /// in every locale that needs no `{player}` at all.
+    #[test]
+    fn a_match_report_can_always_print_without_its_scorer() {
+        for (lang, _) in BUNDLES {
+            let bundle = PressKeys::bundle(lang);
+
+            for kind in NewsStoryKind::ALL
+                .iter()
+                .filter(|kind| kind.desk() == NewsDesk::Match)
+            {
+                let playerless = phrasings(&bundle, kind.key_stem())
+                    .iter()
+                    .any(|(_, headline, body)| {
+                        !headline.contains("{player}") && !body.contains("{player}")
+                    });
+                assert!(
+                    playerless,
+                    "{}.json: every phrasing of {} demands a player the report may not have",
+                    lang,
+                    kind.key_stem()
+                );
+            }
+        }
+    }
 }
 
 /// The arithmetic that decides which run of type a story is set in.
@@ -1413,6 +1875,8 @@ mod tier_tests {
                 player_name: String::new(),
                 is_quote: false,
                 drop_cap: true,
+                marked: false,
+                subject_marked: false,
             })
             .collect()
     }
@@ -1422,7 +1886,7 @@ mod tier_tests {
     #[test]
     fn the_briefs_band_never_grows_past_its_four_lines() {
         for count in 0..=TeamNewsroom::MAX_STORIES {
-            let tiers = PressDesk::tiers(stories(count));
+            let tiers = PressDesk::tiers(stories(count), true);
 
             assert!(
                 tiers.briefs.len() <= PressDesk::BRIEF_SLOTS,
@@ -1444,9 +1908,13 @@ mod tier_tests {
     #[test]
     fn a_thin_edition_keeps_its_stories_off_the_briefs_band() {
         for count in 0..=(PressDesk::SECONDARY_SLOTS + 1) {
-            let tiers = PressDesk::tiers(stories(count));
+            let tiers = PressDesk::tiers(stories(count), true);
 
-            assert!(tiers.briefs.is_empty(), "{} stories reached the band", count);
+            assert!(
+                tiers.briefs.is_empty(),
+                "{} stories reached the band",
+                count
+            );
             assert!(tiers.run.is_empty(), "{} stories reached the run", count);
         }
     }
@@ -1456,7 +1924,7 @@ mod tier_tests {
     /// over goes under the fold.
     #[test]
     fn a_full_edition_fills_the_page_before_the_fold() {
-        let tiers = PressDesk::tiers(stories(TeamNewsroom::MAX_STORIES));
+        let tiers = PressDesk::tiers(stories(TeamNewsroom::MAX_STORIES), true);
 
         assert!(tiers.lead.is_some());
         assert_eq!(tiers.secondary.len(), PressDesk::SECONDARY_SLOTS);
@@ -1477,7 +1945,7 @@ mod tier_tests {
     #[test]
     fn the_run_always_comes_out_to_whole_rows() {
         for count in 0..=TeamNewsroom::MAX_STORIES {
-            let tiers = PressDesk::tiers(stories(count));
+            let tiers = PressDesk::tiers(stories(count), true);
 
             assert_eq!(
                 tiers.run.len() % PressDesk::RUN_COLUMNS,
@@ -1488,11 +1956,92 @@ mod tier_tests {
             );
         }
     }
+
+    /// A paper with no band sets nothing under the fold, at any size.
+    /// This is the whole of what the division's monthly asked for.
+    #[test]
+    fn an_unbanded_paper_never_sets_a_brief() {
+        for count in 0..=TeamNewsroom::MAX_STORIES {
+            let tiers = PressDesk::tiers(stories(count), false);
+
+            assert!(
+                tiers.briefs.is_empty(),
+                "an unbanded edition of {} put {} lines under the fold",
+                count,
+                tiers.briefs.len()
+            );
+        }
+    }
+
+    /// With no band to raid, the run rounds down instead of up — so the
+    /// page still never ends on a part-built row.
+    #[test]
+    fn an_unbanded_run_still_comes_out_to_whole_rows() {
+        for count in 0..=TeamNewsroom::MAX_STORIES {
+            let tiers = PressDesk::tiers(stories(count), false);
+
+            assert_eq!(
+                tiers.run.len() % PressDesk::RUN_COLUMNS,
+                0,
+                "an unbanded edition of {} left {} stories alone on the last row",
+                count,
+                tiers.run.len() % PressDesk::RUN_COLUMNS
+            );
+        }
+    }
+
+    /// Rounding down costs the tail, and the cost is bounded: never
+    /// more than a row short of two. The stories arrive ranked, so what
+    /// goes is always the least newsworthy.
+    #[test]
+    fn an_unbanded_page_drops_only_the_tail_of_the_ranking() {
+        for count in 0..=TeamNewsroom::MAX_STORIES {
+            let tiers = PressDesk::tiers(stories(count), false);
+            let set = usize::from(tiers.lead.is_some()) + tiers.secondary.len() + tiers.run.len();
+
+            assert!(
+                count - set < PressDesk::RUN_COLUMNS,
+                "an unbanded edition of {} dropped {} stories",
+                count,
+                count - set
+            );
+
+            // Whatever survived is an unbroken prefix of the ranking.
+            let printed: Vec<String> = tiers
+                .lead
+                .iter()
+                .chain(tiers.secondary.iter())
+                .chain(tiers.run.iter())
+                .map(|story| story.headline.text())
+                .collect();
+            let expected: Vec<String> = (0..set).map(|index| format!("Story {}", index)).collect();
+            assert_eq!(
+                printed, expected,
+                "an edition of {} reordered itself",
+                count
+            );
+        }
+    }
+
+    /// The division's full monthly — a five-place scoring chart and the
+    /// four the mill allows — comes out at exactly a lead, the pair
+    /// beside the rail and two whole rows, losing nothing.
+    #[test]
+    fn a_full_league_monthly_fits_the_page_exactly() {
+        let tiers = PressDesk::tiers(stories(9), false);
+
+        assert!(tiers.lead.is_some());
+        assert_eq!(tiers.secondary.len(), PressDesk::SECONDARY_SLOTS);
+        assert_eq!(tiers.run.len(), 2 * PressDesk::RUN_COLUMNS);
+        assert!(tiers.briefs.is_empty());
+    }
 }
 
 #[cfg(test)]
 mod render_tests {
-    use super::{IssueView, PortraitView, Prose, ResultView, Span, StoryView, TeamNewspaperTemplate};
+    use super::{
+        IssueView, PortraitView, Prose, ResultView, Span, StoryView, TeamNewspaperTemplate,
+    };
     use crate::I18n;
     use askama::Template;
     use std::collections::HashMap;
@@ -1510,19 +2059,18 @@ mod render_tests {
             let mut rest = text;
 
             while let Some(open) = rest.find('{') {
-                let close = open + rest[open..].find('}').expect("unclosed slot in fixture copy");
+                let close = open
+                    + rest[open..]
+                        .find('}')
+                        .expect("unclosed slot in fixture copy");
                 if open > 0 {
                     spans.push(Span::text(rest[..open].to_string()));
                 }
                 spans.push(match &rest[open + 1..close] {
-                    "player" => Span::link(
-                        player.to_string(),
-                        "players",
-                        "17-diego-mora".to_string(),
-                    ),
-                    "club" => {
-                        Span::link("Córdoba".to_string(), "teams", "cordoba".to_string())
+                    "player" => {
+                        Span::link(player.to_string(), "players", "17-diego-mora".to_string())
                     }
+                    "club" => Span::link("Córdoba".to_string(), "teams", "cordoba".to_string()),
                     other => panic!("fixture copy uses an unknown slot {{{}}}", other),
                 });
                 rest = &rest[close + 1..];
@@ -1614,6 +2162,9 @@ mod render_tests {
                 player_name: player.to_string(),
                 is_quote: false,
                 drop_cap: true,
+                // Nobody in particular reads a club's own front page.
+                marked: false,
+                subject_marked: false,
             }
         }
 
@@ -1709,6 +2260,9 @@ mod render_tests {
                     Self::story("The terraces", "The crowd stays with them", "", ""),
                 ],
                 results: vec![
+                    // A fixture the paper could not place keeps its
+                    // scoreline as plain type — the other branch of the
+                    // column's template.
                     ResultView {
                         date: "25.02".to_string(),
                         opponent_name: "Real Zaragoza".to_string(),
@@ -1716,6 +2270,7 @@ mod render_tests {
                         score: "1-1".to_string(),
                         outcome: "d",
                         is_cup: true,
+                        match_id: String::new(),
                     },
                     ResultView {
                         date: "01.03".to_string(),
@@ -1724,6 +2279,7 @@ mod render_tests {
                         score: "4-1".to_string(),
                         outcome: "w",
                         is_cup: false,
+                        match_id: "2026-03-01_301_58".to_string(),
                     },
                 ],
                 portrait: Some(PortraitView {
@@ -1732,6 +2288,7 @@ mod render_tests {
                     player_name: "Diego Mora".to_string(),
                     player_generated: true,
                     caption: "Three goals for Diego Mora".to_string(),
+                    marked: false,
                 }),
             }
         }
@@ -1922,6 +2479,17 @@ mod render_tests {
 
         assert!(html.contains("np-split-body np-quote"));
         assert!(html.contains("I want to come back and fight for my place"));
+    }
+
+    /// The ruled column's scoreline opens the match record when the
+    /// paper could place the fixture — and stays plain type when it
+    /// could not, because a dead link is worse than a figure.
+    #[test]
+    fn the_results_columns_scoreline_opens_the_match_record() {
+        let html = Page::template(vec![Page::full_issue()]).render().unwrap();
+
+        assert!(html.contains(r#"href="/en/match/2026-03-01_301_58""#));
+        assert!(html.contains(r#"<span class="np-result-score">1-1</span>"#));
     }
 
     /// A cup tie in the ruled column is marked, because "1-1" against a

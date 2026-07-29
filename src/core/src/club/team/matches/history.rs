@@ -93,6 +93,11 @@ pub struct MatchHistoryItem {
     /// Empty for legacy items predating the recording (and for paths
     /// that don't go through the squad selector, e.g. dev_match).
     pub starting_eleven: Vec<(u32, PlayerPositionType)>,
+    /// Which end of the fixture this team was. Together with the date
+    /// and the two team ids this reconstructs the match record's id
+    /// (`{date}_{home}_{away}`), which is how the newspaper's scorelines
+    /// link back to the match page.
+    pub is_home: bool,
 }
 
 impl MatchHistoryItem {
@@ -105,7 +110,13 @@ impl MatchHistoryItem {
             tactic_used: None,
             tactic_change_minute: None,
             starting_eleven: Vec::new(),
+            is_home: false,
         }
+    }
+
+    pub fn with_venue(mut self, is_home: bool) -> Self {
+        self.is_home = is_home;
+        self
     }
 
     pub fn with_tactic(mut self, tactic: Option<MatchTacticType>) -> Self {

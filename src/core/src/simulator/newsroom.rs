@@ -3,10 +3,10 @@ use crate::club::news::RecentEvents;
 use crate::club::news::{
     BoardroomDesk, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie, DugoutDesk, FansDesk,
     IssueResult, KeeperMatchFacts, LoanDesk, LoanWatchEntry, ManagerPursuit, MarketDesk, MatchDesk,
-    NewsEditor, NewsStory, NewspaperIssue, PressMood, ResultCompetition, SquadDesk,
+    MatchStarFacts, NewsEditor, NewsStory, NewspaperIssue, PressMood, ResultCompetition, SquadDesk,
     StandingSnapshot, TableDesk, WeeklyMatchFacts,
 };
-use crate::r#match::MatchResult;
+use crate::r#match::{FieldSquad, MatchResult};
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::simulator::SimulatorData;
 use crate::{
@@ -140,10 +140,97 @@ impl WeeklyMatchFacts {
             }
 
             self.absorb_keepers(result);
+            self.absorb_stars(result);
 
             if knockout {
                 self.absorb_cup_tie(result);
             }
+        }
+    }
+
+    /// Read each side's man of the match report out of one result: its
+    /// top scorer that afternoon, ties settled by whoever struck first.
+    ///
+    /// This is what lets a match report carry a name instead of only a
+    /// scoreline — the same channel the keeper and hat-trick beats
+    /// already use, pointed at the report itself. Goals are attributed
+    /// to a side through the recorded squads, so a result stored
+    /// without its details (an older save, a walkover) simply
+    /// contributes no star and the report prints without one.
+    fn absorb_stars(&mut self, result: &MatchResult) {
+        let Some(details) = result.details.as_ref() else {
+            return;
+        };
+
+        // (goals, first strike) per scorer per side, walked off the
+        // same goal feed the hat-trick tally reads. Own goals belong to
+        // nobody's afternoon.
+        let mut home: FxHashMap<u32, (u8, u64)> = FxHashMap::default();
+        let mut away: FxHashMap<u32, (u8, u64)> = FxHashMap::default();
+
+        for goal in &result.score.details {
+            if goal.stat_type != MatchStatisticType::Goal || goal.is_auto_goal {
+                continue;
+            }
+
+            let side = if Self::fielded(&details.left_team_players, goal.player_id) {
+                &mut home
+            } else if Self::fielded(&details.right_team_players, goal.player_id) {
+                &mut away
+            } else {
+                continue;
+            };
+
+            let entry = side.entry(goal.player_id).or_insert((0, goal.time));
+            entry.0 = entry.0.saturating_add(1);
+            entry.1 = entry.1.min(goal.time);
+        }
+
+        let home_goals = result.score.home_team.get();
+        let away_goals = result.score.away_team.get();
+
+        self.crown(result.home_team_id, result.away_team_id, home_goals, &home);
+        self.crown(result.away_team_id, result.home_team_id, away_goals, &away);
+    }
+
+    fn fielded(squad: &FieldSquad, player_id: u32) -> bool {
+        squad.main.contains(&player_id) || squad.substitutes.contains(&player_id)
+    }
+
+    /// Keep one side's loudest scorer for one match. The slot is keyed
+    /// by (team, opponent); when a cup replay puts two meetings in one
+    /// week the bigger individual afternoon survives, and the
+    /// `team_goals` pin in [`WeeklyMatchFacts::star_of`] keeps it off
+    /// the other meeting's report.
+    fn crown(
+        &mut self,
+        team_id: u32,
+        opponent_team_id: u32,
+        team_goals: u8,
+        tally: &FxHashMap<u32, (u8, u64)>,
+    ) {
+        let Some((player_id, (goals, _))) =
+            tally
+                .iter()
+                .min_by_key(|(player_id, (goals, first_strike))| {
+                    (std::cmp::Reverse(*goals), *first_strike, **player_id)
+                })
+        else {
+            return;
+        };
+
+        let candidate = MatchStarFacts {
+            player_id: *player_id,
+            goals: *goals,
+            team_goals,
+        };
+
+        let slot = self
+            .stars
+            .entry((team_id, opponent_team_id))
+            .or_insert(candidate);
+        if (candidate.goals, candidate.team_goals) > (slot.goals, slot.team_goals) {
+            *slot = candidate;
         }
     }
 
@@ -233,6 +320,15 @@ impl WeeklyMatchFacts {
         self.cup_ties.extend(other.cup_ties);
         for (player_id, keeper) in other.keepers {
             self.keepers.entry(player_id).or_default().absorb(keeper);
+        }
+        // Same louder-afternoon rule as `crown`: two half-worlds can
+        // both have seen the fixture only through the global store, so
+        // a straight extend would let iteration order pick the star.
+        for (key, star) in other.stars {
+            let slot = self.stars.entry(key).or_insert(star);
+            if (star.goals, star.team_goals) > (slot.goals, slot.team_goals) {
+                *slot = star;
+            }
         }
         self
     }
@@ -389,11 +485,7 @@ impl WeeklyLoanWatch {
                             if parent == 0 {
                                 continue;
                             }
-                            by_parent
-                                .entry(parent)
-                                .or_default()
-                                .players
-                                .push(entry);
+                            by_parent.entry(parent).or_default().players.push(entry);
                         }
                     }
                 }
@@ -433,8 +525,7 @@ impl WeeklyLoanWatch {
             permanent_option: loan.loan_future_fee.is_some(),
             is_prospect: player.age(today) <= Self::PROSPECT_AGE,
             wants_permanent: feed.happened(HappinessEventType::WantsLoanMadePermanent),
-            wants_to_prove_himself: feed
-                .happened(HappinessEventType::WantsToProveHimselfAtParent),
+            wants_to_prove_himself: feed.happened(HappinessEventType::WantsToProveHimselfAtParent),
             recall_requested: feed.happened(HappinessEventType::LoanRecallRequested),
             development_concern: feed.happened(HappinessEventType::LoanDevelopmentConcern),
             form_concern: feed.happened(HappinessEventType::LoanFormConcern),
@@ -626,10 +717,7 @@ impl ClubPressRun {
         week_start: NaiveDate,
         week_end: NaiveDate,
     ) -> Vec<IssueResult> {
-        let cup_opponent = facts
-            .cup_ties
-            .get(&team.id)
-            .map(|tie| tie.opponent_team_id);
+        let cup_opponent = facts.cup_ties.get(&team.id).map(|tie| tie.opponent_team_id);
 
         team.match_history
             .items()
@@ -648,6 +736,7 @@ impl ClubPressRun {
                 } else {
                     ResultCompetition::League
                 },
+                is_home: item.is_home,
             })
             .collect()
     }
@@ -1181,5 +1270,80 @@ mod tests {
         assert!(second.arrivals.iter().any(|a| a.player_id == 201));
         assert_eq!(main.departures.len(), 1);
         assert!(second.departures.is_empty());
+    }
+
+    /// The star channel: each side's top scorer is read off one match's
+    /// goal feed, ties settled by who struck first, own goals belong to
+    /// nobody, and the entry remembers the team's tally so the desk can
+    /// pin it to the right result.
+    #[test]
+    fn the_weeks_stars_are_read_off_the_goal_feed() {
+        use crate::r#match::player::statistics::MatchStatisticType;
+        use crate::r#match::{FieldSquad, GoalDetail, MatchResult, MatchResultRaw, Score};
+
+        let mut left = FieldSquad::new();
+        left.team_id = 10;
+        left.main = vec![101, 102];
+        let mut right = FieldSquad::new();
+        right.team_id = 20;
+        right.main = vec![201, 202];
+
+        let mut raw = MatchResultRaw::with_match_time(90 * 60 * 1000);
+        raw.left_team_players = left;
+        raw.right_team_players = right;
+
+        let mut score = Score::new(10, 20);
+        let goal = |player_id: u32, time: u64, own: bool| GoalDetail {
+            player_id,
+            stat_type: MatchStatisticType::Goal,
+            is_auto_goal: own,
+            time,
+        };
+        // Home 3-1: 101 opens, 102 scores twice; the third home goal is
+        // 202 putting through his own net, which crowns nobody.
+        score.add_goal_detail(goal(101, 10, false));
+        score.add_goal_detail(goal(102, 30, false));
+        score.add_goal_detail(goal(102, 60, false));
+        score.add_goal_detail(goal(202, 70, true));
+        score.add_goal_detail(goal(201, 80, false));
+        for _ in 0..3 {
+            score.increment_home_goals();
+        }
+        score.increment_away_goals();
+
+        let result = MatchResult {
+            id: "m".to_string(),
+            league_id: 1,
+            league_slug: "l".to_string(),
+            home_team_id: 10,
+            away_team_id: 20,
+            details: Some(raw),
+            score,
+            friendly: false,
+        };
+
+        let mut facts = WeeklyMatchFacts::empty();
+        facts.absorb(std::iter::once(&result), false);
+
+        let home = facts.stars.get(&(10, 20)).expect("the home side scored");
+        assert_eq!(
+            (home.player_id, home.goals, home.team_goals),
+            (102, 2, 3),
+            "the brace outranks the opener, and the tally is the team's"
+        );
+
+        let away = facts.stars.get(&(20, 10)).expect("the away side scored");
+        assert_eq!(
+            (away.player_id, away.goals, away.team_goals),
+            (201, 1, 1),
+            "an own goal must never crown the man who scored it"
+        );
+
+        assert_eq!(facts.star_of(10, 20, 3), 102);
+        assert_eq!(
+            facts.star_of(10, 20, 2),
+            0,
+            "a tally from a different afternoon must not borrow this one's star"
+        );
     }
 }

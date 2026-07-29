@@ -9,7 +9,7 @@
    clubs in it. Copy that is about a player without ever naming him falls
    back to underscoring the whole line, because the alternative is a
    story with no route to its subject at all. #}
-<section class="np-split">
+<section class="np-split{% if story.marked %} np-cut{% endif %}">
     <p class="np-kicker">{{ story.kicker }}<span class="np-dateline">{{ story.date }}</span></p>
     <h4 class="np-subhead">
         {%- if story.headline.has_links() -%}
@@ -17,7 +17,7 @@
         {%- else if story.player_slug.is_empty() -%}
         {{ story.headline.text() }}
         {%- else -%}
-        <a class="np-story-link" href="/{{ lang }}/players/{{ story.player_slug }}" title="{{ story.player_name }}">{{ story.headline.text() }}</a>
+        <a class="np-story-link{% if story.subject_marked %} np-mark{% endif %}" href="/{{ lang }}/players/{{ story.player_slug }}" title="{{ story.player_name }}">{{ story.headline.text() }}</a>
         {%- endif -%}
     </h4>
     <p class="np-split-body{% if story.is_quote %} np-quote{% endif %}">{% let prose = story.body %}{% let link_class = "np-prose-link" %}{% include "teams/newspaper/_prose.html" %}</p>

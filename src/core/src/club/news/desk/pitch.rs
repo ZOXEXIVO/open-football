@@ -31,6 +31,13 @@ impl MatchDesk {
             out.push(
                 NewsStory::new(kind, result.date)
                     .against(result.opponent_team_id)
+                    // The side's top scorer that afternoon, when the
+                    // week's facts recorded one for exactly this result.
+                    // With him on the story the composer may reach for
+                    // the copy that names him; without him it stays on
+                    // the phrasings that only need a scoreline.
+                    .about(facts.star_of(team.id, result.opponent_team_id, result.goals_for))
+                    .at_home(result.is_home)
                     .with_numbers(result.goals_for as i32, result.goals_against as i32)
                     .weighted(goal_bonus),
             );
@@ -90,6 +97,8 @@ impl MatchDesk {
         out.push(
             NewsStory::new(kind, result.date)
                 .against(result.opponent_team_id)
+                .about(facts.star_of(team_id, result.opponent_team_id, result.goals_for))
+                .at_home(result.is_home)
                 .with_numbers(result.goals_for as i32, result.goals_against as i32),
         );
     }

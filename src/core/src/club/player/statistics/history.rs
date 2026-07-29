@@ -2018,6 +2018,59 @@ impl PlayerStatisticsHistory {
         }
     }
 
+    /// Every side the player has turned out for, each named once.
+    ///
+    /// Loan spells count: a season spent somewhere else is still a
+    /// season spent there, and the club that lent him out is usually
+    /// the one with something to say about it.
+    ///
+    /// Reads all three stores rather than choosing the canonical one.
+    /// The projection has to pick — it is adding numbers up, and a row
+    /// counted twice is a wrong statistic. This is a list of *places*,
+    /// so the only failure mode a second source can introduce is a
+    /// duplicate slug, which the set removes.
+    ///
+    /// Ordering is on the ledger's own `seq_id`, newest spell first.
+    /// That is a **stable presentation order, not a chronology** and
+    /// callers must not read recency into it: a club whose row was
+    /// re-used rather than re-opened — a loan return to a parent the
+    /// player had not played for keeps the original spell — holds the
+    /// place that row was first given. Deciding the true order would
+    /// mean reconciling `joined_date`, `season` and `season_start_year`
+    /// across three stores, which no caller has yet needed.
+    pub fn career_team_slugs(&self) -> Vec<&str> {
+        let mut dated: Vec<(u32, &str)> = self
+            .season_ledger
+            .iter()
+            .map(|entry| (entry.seq_id, entry.team_slug.as_str()))
+            .chain(
+                self.items
+                    .iter()
+                    .map(|item| (item.seq_id, item.team_slug.as_str())),
+            )
+            .chain(
+                self.current
+                    .iter()
+                    .map(|entry| (entry.seq_id, entry.team_slug.as_str())),
+            )
+            .filter(|(_, slug)| !slug.is_empty())
+            .collect();
+
+        // Newest first, and the slug breaks ties so two stores holding
+        // the same spell under the same `seq_id` cannot reorder the
+        // list between renders.
+        dated.sort_by(|(left_seq, left), (right_seq, right)| {
+            right_seq.cmp(left_seq).then_with(|| left.cmp(right))
+        });
+
+        let mut seen: HashSet<&str> = HashSet::new();
+        dated
+            .into_iter()
+            .filter(|(_, slug)| seen.insert(slug))
+            .map(|(_, slug)| slug)
+            .collect()
+    }
+
     /// Slug of the player's currently active club spell — the entry in
     /// `current` without a `departed_date`. Used to identify which past
     /// items belong to the *current* club for career-apps clauses.
@@ -2358,6 +2411,61 @@ mod club_career_apps_tests {
             league_name: String::new(),
             league_slug: String::new(),
         }
+    }
+
+    /// A career walked backwards, each club named once.
+    ///
+    /// This is what the player's newspaper page reads to decide whose
+    /// papers to look in. A transfer is reported twice — the buying
+    /// club runs a signing, the selling club runs a departure — so a
+    /// page built only from where he is now shows the reader half of
+    /// his own move.
+    #[test]
+    fn career_team_slugs_walks_every_club_backwards_naming_each_once() {
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.seed_initial_team(&team("cordoba"), d(2024, 8, 1), false);
+        hist.record_loan(
+            PlayerStatistics::default(),
+            &team("cordoba"),
+            &team("albacete"),
+            0.0,
+            d(2025, 1, 15),
+        );
+        hist.record_loan_return(
+            PlayerStatistics::default(),
+            &team("albacete"),
+            &team("cordoba"),
+            d(2025, 6, 30),
+        );
+        hist.record_transfer(
+            PlayerStatistics::default(),
+            &team("cordoba"),
+            &team("sevilla"),
+            4_000_000.0,
+            d(2025, 7, 10),
+        );
+
+        // Córdoba twice over — seeded, loaned out of, returned to and
+        // finally sold by — is still one newsroom, and it sits where
+        // its original row sat: the return re-used that row rather than
+        // opening a new one, because he had not played for them since
+        // the loan started. The page reads all three papers either way;
+        // what matters here is that none is missing and none is twice.
+        assert_eq!(
+            hist.career_team_slugs(),
+            vec!["sevilla", "albacete", "cordoba"]
+        );
+    }
+
+    /// Nowhere to look is not a crash — it is a reader with an empty
+    /// shelf, which is what a newly generated player has.
+    #[test]
+    fn career_team_slugs_is_empty_for_a_player_who_has_played_nowhere() {
+        assert!(
+            PlayerStatisticsHistory::new()
+                .career_team_slugs()
+                .is_empty()
+        );
     }
 
     #[test]

@@ -35,8 +35,8 @@ pub use board::BoardroomDesk;
 pub use dugout::DugoutDesk;
 pub use facts::{
     CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie, KeeperMatchFacts,
-    LoanWatchEntry, ManagerPursuit, PlayerStanding, RecentEvents, SquadPulse, StandingSnapshot,
-    TransferMove, TransferMoveKind, WeeklyMatchFacts,
+    LoanWatchEntry, ManagerPursuit, MatchStarFacts, PlayerStanding, RecentEvents, SquadPulse,
+    StandingSnapshot, TransferMove, TransferMoveKind, WeeklyMatchFacts,
 };
 pub use fans::FansDesk;
 pub use loan::LoanDesk;
@@ -47,10 +47,18 @@ pub use squad::SquadDesk;
 
 #[cfg(test)]
 mod tests {
-    use super::facts::{ClubTransferWeek, StandingSnapshot, TransferMove, TransferMoveKind};
+    use super::facts::{
+        ClubTransferWeek, MatchStarFacts, StandingSnapshot, TransferMove, TransferMoveKind,
+        WeeklyMatchFacts,
+    };
     use super::{MarketDesk, MatchDesk, TableDesk};
-    use crate::club::news::types::{NewsStory, NewsStoryKind};
+    use crate::club::news::types::{IssueResult, NewsStory, NewsStoryKind, ResultCompetition};
+    use crate::{
+        PlayerCollection, StaffCollection, Team, TeamBuilder, TeamReputation, TeamType,
+        TrainingSchedule,
+    };
     use chrono::NaiveDate;
+    use rustc_hash::FxHashSet;
 
     struct Fixture;
 
@@ -84,6 +92,88 @@ mod tests {
         fn kinds(stories: &[NewsStory]) -> Vec<NewsStoryKind> {
             stories.iter().map(|story| story.kind).collect()
         }
+
+        fn team(id: u32) -> Team {
+            TeamBuilder::new()
+                .id(id)
+                .club_id(1)
+                .name("Team".to_string())
+                .slug("team".to_string())
+                .team_type(TeamType::Main)
+                .league_id(Some(1))
+                .reputation(TeamReputation::new(500, 500, 500))
+                .players(PlayerCollection::new(Vec::new()))
+                .staffs(StaffCollection::new(Vec::new()))
+                .training_schedule(TrainingSchedule::new(
+                    chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        fn played(opponent: u32, goals_for: u8, goals_against: u8) -> IssueResult {
+            IssueResult {
+                date: Self::day(),
+                opponent_team_id: opponent,
+                goals_for,
+                goals_against,
+                competition: ResultCompetition::League,
+                is_home: true,
+            }
+        }
+    }
+
+    /// The report carries its protagonist: the star recorded for that
+    /// team, that opponent and that exact tally rides onto the story,
+    /// while a second result the star did not belong to stays about the
+    /// club alone.
+    #[test]
+    fn a_match_report_names_the_man_who_won_it() {
+        const TEAM: u32 = 1;
+        const OPPONENT: u32 = 40;
+        const OTHER_OPPONENT: u32 = 41;
+
+        let mut facts = WeeklyMatchFacts::empty();
+        facts.stars.insert(
+            (TEAM, OPPONENT),
+            MatchStarFacts {
+                player_id: 9,
+                goals: 2,
+                team_goals: 2,
+            },
+        );
+
+        let mut out = Vec::new();
+        MatchDesk::file(
+            &mut out,
+            &[
+                Fixture::played(OPPONENT, 2, 1),
+                Fixture::played(OTHER_OPPONENT, 1, 0),
+            ],
+            &FxHashSet::default(),
+            &facts,
+            &Fixture::team(TEAM),
+        );
+
+        let starred = out
+            .iter()
+            .find(|story| story.other_id == OPPONENT)
+            .expect("the 2-1 was reported");
+        assert_eq!(starred.player_id, 9, "the report must carry its scorer");
+        assert!(
+            starred.home,
+            "the report must remember which end of the fixture it was"
+        );
+
+        let plain = out
+            .iter()
+            .find(|story| story.other_id == OTHER_OPPONENT)
+            .expect("the 1-0 was reported");
+        assert_eq!(
+            plain.player_id, 0,
+            "a result the week recorded no star for stays about the club"
+        );
     }
 
     #[test]

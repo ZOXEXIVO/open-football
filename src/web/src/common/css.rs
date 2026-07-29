@@ -209,6 +209,45 @@ mod tests {
         );
     }
 
+    /// A player's press page marks the passages about him, and the mark
+    /// needs a margin to stand in. The rule that opens that margin scores
+    /// (0,3,0) — exactly what the column gutters score — so it only wins
+    /// on source order, and moving the marking block above the gutters
+    /// (an "alphabetise the sheet" tidy-up would) puts a 3px pencil
+    /// stroke straight through the first word of every marked story.
+    #[test]
+    fn the_newspaper_cutting_margin_is_set_after_the_gutters_it_outranks() {
+        let css = Bundle::without_comments(&Bundle::text());
+        let flat: String = css.chars().filter(|c| !c.is_whitespace()).collect();
+
+        for (gutter, cutting) in [
+            (
+                ".np-splits>.np-split:nth-child(2n)",
+                ".np-splits>.np-split.np-cut",
+            ),
+            (
+                // Whitespace-stripped, so `3n + 1` reads `3n+1` here.
+                ".np-run>.np-split:not(:nth-child(3n+1))",
+                ".np-run>.np-split.np-cut",
+            ),
+        ] {
+            let gutter_at = flat
+                .find(gutter)
+                .unwrap_or_else(|| panic!("`{}` is gone from the sheet", gutter));
+            let cutting_at = flat
+                .find(cutting)
+                .unwrap_or_else(|| panic!("`{}` is gone from the sheet", cutting));
+
+            assert!(
+                cutting_at > gutter_at,
+                "`{}` is set before `{}`: they carry the same specificity, so \
+                 the gutter padding wins and the pencil stroke lands on the type",
+                cutting,
+                gutter
+            );
+        }
+    }
+
     /// The masthead is the same wall from the other side. On a player's
     /// page the nameplate links to the club's own paper, and it must
     /// stay plain type: a rule under a masthead reads as a printing
