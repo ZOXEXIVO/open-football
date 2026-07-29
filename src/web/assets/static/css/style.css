@@ -12736,30 +12736,28 @@ a.np-prose-link.np-mark:focus-visible,
 /* ── Narrower screens ──────────────────────────────────────── */
 
 @media (max-width: 1100px) {
-    .np-body {
-        grid-template-columns: minmax(0, 1fr);
+    /* The rail narrows; it does not unship. Sent below the main column
+       it carried the photograph down past the lead and both splits — a
+       face printed the better part of a screen under the nameplate it
+       belongs to, which reads as a plate filed with the wrong story.
+       The track keeps roughly the share of the measure the rail holds
+       on the wide sheet, so the face stays beside the front page all
+       the way to the phone break.
+
+       `:not(.np-body-full)` because this and the full-measure rule both
+       score (0,1,0) and this one is set later: without it a week with
+       neither a face nor a fixture list would open an empty column and
+       rule off against nothing. */
+    .np-body:not(.np-body-full) {
+        grid-template-columns: minmax(0, 1fr) clamp(150px, 22vw, 215px);
     }
 
     .np-main {
-        padding-right: 0;
-        border-right: 0;
+        padding-right: 24px;
     }
 
     .np-rail {
-        display: grid;
-        /* Matches the figure's own cap. A narrower track and the
-           picture hangs over the column beside it. */
-        grid-template-columns: 215px minmax(0, 1fr);
-        gap: 0 26px;
-        align-items: start;
-        margin-top: 24px;
-        padding-top: 20px;
-        padding-left: 0;
-        border-top: 2px solid var(--np-ink);
-    }
-
-    .np-figure {
-        margin-bottom: 0;
+        padding-left: 22px;
     }
 
     /* The run keeps its three columns all the way down to the phone
@@ -12806,13 +12804,48 @@ a.np-prose-link.np-mark:focus-visible,
         padding-top: 18px;
     }
 
-    .np-rail {
+    /* One column, and the rail stops being one. Stacking the rail whole
+       would print last week's scores above the headline, so it is
+       dissolved instead: `display: contents` hands the face and the
+       results column straight to the sheet's grid, and the face is
+       ordered up under the folio — where a front page has always
+       printed the man the edition is about. A smaller plate than the
+       rail carried, because it now stands between the nameplate and the
+       headline and must not push the headline off the first screen.
+
+       Carries the same `:not(.np-body-full)` as the rule it undoes, and
+       must: the 1100 block is open at this width too, and at (0,2,0) it
+       outranks a bare `.np-body` however late that is set — which would
+       leave a phone on the two-column body this rule exists to fold.
+       A full-measure week needs nothing here; it is already one column. */
+    .np-body:not(.np-body-full) {
         grid-template-columns: minmax(0, 1fr);
     }
 
+    .np-main {
+        padding-right: 0;
+        border-right: 0;
+    }
+
+    /* Beaten by `.np-body-full .np-rail { display: none }` at (0,2,0),
+       which is what an empty rail still wants. */
+    .np-rail {
+        display: contents;
+    }
+
     .np-figure {
-        max-width: 240px;
+        order: -1;
+        max-width: 200px;
         margin: 0 auto 20px;
+    }
+
+    /* The rule the rail used to hang from. It belongs to the results
+       column now: with the face moved upstairs, the box is the only
+       thing standing below the front block. */
+    .np-box {
+        margin-top: 24px;
+        padding-top: 20px;
+        border-top: 2px solid var(--np-ink);
     }
 
     .np-splits,

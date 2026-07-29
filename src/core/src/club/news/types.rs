@@ -10,6 +10,17 @@ pub enum NewsDesk {
     Match,
     /// Squad news: form, fitness, discipline, milestones, contracts.
     Squad,
+    /// Marks out of ten. What one player did in one afternoon — the
+    /// masterclass, the man of the match, the missed sitter, the error
+    /// that cost it.
+    ///
+    /// Its own section rather than more squad news, for the reason a
+    /// real paper separates them: a ratings column is written against
+    /// the ninety minutes just played, while squad news is written
+    /// against a career. Sharing an allowance would mean a striker's
+    /// stinker competing with a testimonial, and one of them losing on
+    /// priority every week.
+    Verdicts,
     /// The transfer market — arrivals, departures, speculation.
     Market,
     /// The loan column: how the club's players away on loan are doing,
@@ -31,9 +42,10 @@ pub enum NewsDesk {
 
 impl NewsDesk {
     /// Every desk that files copy. Walked by the locale tests.
-    pub const ALL: [NewsDesk; 7] = [
+    pub const ALL: [NewsDesk; 8] = [
         NewsDesk::Match,
         NewsDesk::Squad,
+        NewsDesk::Verdicts,
         NewsDesk::Market,
         NewsDesk::Loan,
         NewsDesk::Fans,
@@ -46,6 +58,7 @@ impl NewsDesk {
         match self {
             NewsDesk::Match => "news_desk_match",
             NewsDesk::Squad => "news_desk_squad",
+            NewsDesk::Verdicts => "news_desk_verdicts",
             NewsDesk::Market => "news_desk_market",
             NewsDesk::Loan => "news_desk_loan",
             NewsDesk::Fans => "news_desk_fans",
@@ -163,6 +176,111 @@ pub enum NewsStoryKind {
     /// A career visibly closing — the veteran weighing up whether this
     /// is the last one.
     CareerTwilight,
+
+    // ── Squad desk: the foreigner's life ──────────────────────────
+    /// He wants to go home. The one thing a foreign signing's form
+    /// never explains and every dressing room knows about first.
+    HomesickAbroad,
+    /// A year in and still on his own: the language has not come, the
+    /// city has not opened up, and it is showing on Saturdays.
+    StrugglingToSettle,
+    /// A club back in his own country has come in for him, and this
+    /// time it is not a rumour he can dismiss.
+    HomeCalling,
+    /// He has stopped looking like a man in the wrong country.
+    SettledAtLast,
+    /// Signed from the neighbours, and the dressing room has not
+    /// forgotten which shirt he used to wear.
+    ColdShoulder,
+
+    // ── Squad desk: the room itself ───────────────────────────────
+    /// Two of them went at it, and it was not about football.
+    TeammateConflict,
+    /// The senior pro who has taken the new boy on — the quiet half of
+    /// a dressing room, and the half that decides whether a signing
+    /// works.
+    TakenUnderWing,
+    /// Somebody stood up in the dressing room and said it out loud.
+    DressingRoomSpeech,
+
+    // ── Squad desk: the training ground and the bench ─────────────
+    /// The reports out of the training ground are good — the week's
+    /// quietest story and the one that most often precedes a run in
+    /// the side.
+    TrainingGroundBuzz,
+    /// …and the version nobody wants written about them.
+    TrainingConcerns,
+    /// He is sick of the bench and has stopped hiding it.
+    BenchFrustration,
+    /// His country has stopped picking him.
+    DroppedByCountry,
+    /// Left off the registered list altogether: not injured, not
+    /// dropped — ineligible, which is worse and takes longer to fix.
+    LeftOutOfSquadList,
+    /// Off-field trouble. Every paper's favourite story and every
+    /// manager's least.
+    OffFieldControversy,
+    /// He has seen what the man next to him earns.
+    WageEnvy,
+    /// The number nine shirt changes hands. A small thing everywhere
+    /// except in the town it happens in.
+    ShirtNumberHandover,
+    /// He has outgrown the division and everybody can see it.
+    OutgrownDivision,
+    /// The dressing room has started doing the arithmetic.
+    RelegationNerves,
+    /// The deal torn up before its date — by agreement, or otherwise.
+    ContractTornUp,
+    /// The season's individual verdict: player of the year, a place in
+    /// the team of the season, a nomination among the best in the
+    /// world.
+    SeasonAward,
+
+    // ── Verdicts desk: one player, ninety minutes ─────────────────
+    /// The afternoon's outstanding player, as the match itself
+    /// recorded him.
+    ManOfTheMatch,
+    /// A performance the paper marks in the eights — the game a
+    /// supporter brings up for a decade.
+    MatchMasterclass,
+    /// Three or more made for other people in one game. The rarest
+    /// line on a ratings page, and never once printed before.
+    AssistShow,
+    /// He ran the game without scoring in it: the passes that opened
+    /// it up, whoever eventually applied the finish.
+    CreatorInChief,
+    /// A defender's masterclass — headers, blocks, tackles, and
+    /// nothing behind him. The performance that never shows up in a
+    /// scoreline.
+    DefensiveRock,
+    /// Nobody could get near him.
+    DribblingDisplay,
+    /// Off the bench and decisive. Half an hour that changed the
+    /// afternoon.
+    SuperSub,
+    /// The man who won a derby. A different story from winning a
+    /// match, and the one a town keeps.
+    DerbyHero,
+    /// A performance the paper marks down. The other half of a ratings
+    /// column, and the half that sells it.
+    MatchStinker,
+    /// The chances were there and he put them everywhere but in. The
+    /// single most-argued-about afternoon in football.
+    WastefulFinishing,
+    /// His mistake, their goal. An outfield error has ten men and a
+    /// goalkeeper behind it and still ended up in the net.
+    CostlyError,
+    /// Into his own goal. Nobody's fault and entirely his, which is
+    /// exactly why it prints.
+    OwnGoalShame,
+    /// He missed from twelve yards when it was his to settle.
+    PenaltyMissed,
+    /// Taken off before the hour with the game still there to be
+    /// played. A manager's verdict delivered in public.
+    HookedEarly,
+    /// He spent the afternoon fouling people, and the referee ran out
+    /// of patience.
+    FoulTrouble,
 
     // ── Squad desk: the manager and his players ───────────────────
     ManagerBacksPlayer,
@@ -357,7 +475,7 @@ impl NewsStoryKind {
     /// each one has a headline and a body in every translation bundle,
     /// so adding a variant without its copy fails a test rather than
     /// printing a raw key on the front page.
-    pub const ALL: [NewsStoryKind; 154] = [
+    pub const ALL: [NewsStoryKind; 189] = [
         NewsStoryKind::LeagueWin,
         NewsStoryKind::LeagueDraw,
         NewsStoryKind::GoallessDraw,
@@ -413,6 +531,41 @@ impl NewsStoryKind {
         NewsStoryKind::ShirtUnderThreat,
         NewsStoryKind::PathwayBlocked,
         NewsStoryKind::CareerTwilight,
+        NewsStoryKind::HomesickAbroad,
+        NewsStoryKind::StrugglingToSettle,
+        NewsStoryKind::HomeCalling,
+        NewsStoryKind::SettledAtLast,
+        NewsStoryKind::ColdShoulder,
+        NewsStoryKind::TeammateConflict,
+        NewsStoryKind::TakenUnderWing,
+        NewsStoryKind::DressingRoomSpeech,
+        NewsStoryKind::TrainingGroundBuzz,
+        NewsStoryKind::TrainingConcerns,
+        NewsStoryKind::BenchFrustration,
+        NewsStoryKind::DroppedByCountry,
+        NewsStoryKind::LeftOutOfSquadList,
+        NewsStoryKind::OffFieldControversy,
+        NewsStoryKind::WageEnvy,
+        NewsStoryKind::ShirtNumberHandover,
+        NewsStoryKind::OutgrownDivision,
+        NewsStoryKind::RelegationNerves,
+        NewsStoryKind::ContractTornUp,
+        NewsStoryKind::SeasonAward,
+        NewsStoryKind::ManOfTheMatch,
+        NewsStoryKind::MatchMasterclass,
+        NewsStoryKind::AssistShow,
+        NewsStoryKind::CreatorInChief,
+        NewsStoryKind::DefensiveRock,
+        NewsStoryKind::DribblingDisplay,
+        NewsStoryKind::SuperSub,
+        NewsStoryKind::DerbyHero,
+        NewsStoryKind::MatchStinker,
+        NewsStoryKind::WastefulFinishing,
+        NewsStoryKind::CostlyError,
+        NewsStoryKind::OwnGoalShame,
+        NewsStoryKind::PenaltyMissed,
+        NewsStoryKind::HookedEarly,
+        NewsStoryKind::FoulTrouble,
         NewsStoryKind::ManagerBacksPlayer,
         NewsStoryKind::ManagerCallsOutPlayer,
         NewsStoryKind::DroppedForBigMatch,
@@ -572,6 +725,26 @@ impl NewsStoryKind {
             | NewsStoryKind::ShirtUnderThreat
             | NewsStoryKind::PathwayBlocked
             | NewsStoryKind::CareerTwilight
+            | NewsStoryKind::HomesickAbroad
+            | NewsStoryKind::StrugglingToSettle
+            | NewsStoryKind::HomeCalling
+            | NewsStoryKind::SettledAtLast
+            | NewsStoryKind::ColdShoulder
+            | NewsStoryKind::TeammateConflict
+            | NewsStoryKind::TakenUnderWing
+            | NewsStoryKind::DressingRoomSpeech
+            | NewsStoryKind::TrainingGroundBuzz
+            | NewsStoryKind::TrainingConcerns
+            | NewsStoryKind::BenchFrustration
+            | NewsStoryKind::DroppedByCountry
+            | NewsStoryKind::LeftOutOfSquadList
+            | NewsStoryKind::OffFieldControversy
+            | NewsStoryKind::WageEnvy
+            | NewsStoryKind::ShirtNumberHandover
+            | NewsStoryKind::OutgrownDivision
+            | NewsStoryKind::RelegationNerves
+            | NewsStoryKind::ContractTornUp
+            | NewsStoryKind::SeasonAward
             | NewsStoryKind::ManagerBacksPlayer
             | NewsStoryKind::ManagerCallsOutPlayer
             | NewsStoryKind::DroppedForBigMatch
@@ -579,6 +752,22 @@ impl NewsStoryKind {
             | NewsStoryKind::PlayerFined
             | NewsStoryKind::ClearTheAir
             | NewsStoryKind::RoleFrustration => NewsDesk::Squad,
+
+            NewsStoryKind::ManOfTheMatch
+            | NewsStoryKind::MatchMasterclass
+            | NewsStoryKind::AssistShow
+            | NewsStoryKind::CreatorInChief
+            | NewsStoryKind::DefensiveRock
+            | NewsStoryKind::DribblingDisplay
+            | NewsStoryKind::SuperSub
+            | NewsStoryKind::DerbyHero
+            | NewsStoryKind::MatchStinker
+            | NewsStoryKind::WastefulFinishing
+            | NewsStoryKind::CostlyError
+            | NewsStoryKind::OwnGoalShame
+            | NewsStoryKind::PenaltyMissed
+            | NewsStoryKind::HookedEarly
+            | NewsStoryKind::FoulTrouble => NewsDesk::Verdicts,
 
             NewsStoryKind::NewSigning
             | NewsStoryKind::RecordSigning
@@ -737,6 +926,41 @@ impl NewsStoryKind {
             NewsStoryKind::ShirtUnderThreat => "shirt_under_threat",
             NewsStoryKind::PathwayBlocked => "pathway_blocked",
             NewsStoryKind::CareerTwilight => "career_twilight",
+            NewsStoryKind::HomesickAbroad => "homesick_abroad",
+            NewsStoryKind::StrugglingToSettle => "struggling_to_settle",
+            NewsStoryKind::HomeCalling => "home_calling",
+            NewsStoryKind::SettledAtLast => "settled_at_last",
+            NewsStoryKind::ColdShoulder => "cold_shoulder",
+            NewsStoryKind::TeammateConflict => "teammate_conflict",
+            NewsStoryKind::TakenUnderWing => "taken_under_wing",
+            NewsStoryKind::DressingRoomSpeech => "dressing_room_speech",
+            NewsStoryKind::TrainingGroundBuzz => "training_ground_buzz",
+            NewsStoryKind::TrainingConcerns => "training_concerns",
+            NewsStoryKind::BenchFrustration => "bench_frustration",
+            NewsStoryKind::DroppedByCountry => "dropped_by_country",
+            NewsStoryKind::LeftOutOfSquadList => "left_out_of_squad_list",
+            NewsStoryKind::OffFieldControversy => "off_field_controversy",
+            NewsStoryKind::WageEnvy => "wage_envy",
+            NewsStoryKind::ShirtNumberHandover => "shirt_number_handover",
+            NewsStoryKind::OutgrownDivision => "outgrown_division",
+            NewsStoryKind::RelegationNerves => "relegation_nerves",
+            NewsStoryKind::ContractTornUp => "contract_torn_up",
+            NewsStoryKind::SeasonAward => "season_award",
+            NewsStoryKind::ManOfTheMatch => "man_of_the_match",
+            NewsStoryKind::MatchMasterclass => "match_masterclass",
+            NewsStoryKind::AssistShow => "assist_show",
+            NewsStoryKind::CreatorInChief => "creator_in_chief",
+            NewsStoryKind::DefensiveRock => "defensive_rock",
+            NewsStoryKind::DribblingDisplay => "dribbling_display",
+            NewsStoryKind::SuperSub => "super_sub",
+            NewsStoryKind::DerbyHero => "derby_hero",
+            NewsStoryKind::MatchStinker => "match_stinker",
+            NewsStoryKind::WastefulFinishing => "wasteful_finishing",
+            NewsStoryKind::CostlyError => "costly_error",
+            NewsStoryKind::OwnGoalShame => "own_goal_shame",
+            NewsStoryKind::PenaltyMissed => "penalty_missed",
+            NewsStoryKind::HookedEarly => "hooked_early",
+            NewsStoryKind::FoulTrouble => "foul_trouble",
             NewsStoryKind::RoleFrustration => "role_frustration",
             NewsStoryKind::MoveCollapsed => "move_collapsed",
             NewsStoryKind::AmbitionWarning => "ambition_warning",
@@ -1108,6 +1332,87 @@ impl NewsStoryKind {
             NewsStoryKind::LoanWatchBenched => 195,
             NewsStoryKind::LoanSpellEnds => 190,
             NewsStoryKind::FansChant => 180,
+
+            // ── The ratings page ──────────────────────────────────
+            // What one man did in one afternoon. These rank high on
+            // purpose: individual performance is most of what a real
+            // football paper is, and the desk that files them was
+            // added because the page had almost none of it.
+            //
+            // Winning a derby on your own is the loudest thing a
+            // player can do in a shirt.
+            NewsStoryKind::DerbyHero => 468,
+            // An eight-out-of-ten afternoon: the game a supporter
+            // still brings up a decade later.
+            NewsStoryKind::MatchMasterclass => 432,
+            // Twelve yards, his to settle, and he missed. Louder than
+            // any good thing he did the same afternoon.
+            NewsStoryKind::PenaltyMissed => 414,
+            // Into his own net. Nobody's fault and entirely his.
+            NewsStoryKind::OwnGoalShame => 401,
+            // His mistake, their goal — and unlike a keeper's, this
+            // one had a keeper behind it.
+            NewsStoryKind::CostlyError => 397,
+            // Three made for other people in one game.
+            NewsStoryKind::AssistShow => 394,
+            NewsStoryKind::ManOfTheMatch => 391,
+            // The chances were there. This is the afternoon a town
+            // argues about all week, which is exactly why it prints
+            // above the ordinary bad display.
+            NewsStoryKind::WastefulFinishing => 357,
+            // Marked down. The half of a ratings column that sells it.
+            NewsStoryKind::MatchStinker => 345,
+            NewsStoryKind::SuperSub => 337,
+            NewsStoryKind::DefensiveRock => 307,
+            // A manager's verdict delivered in public, at 55 minutes.
+            NewsStoryKind::HookedEarly => 293,
+            NewsStoryKind::CreatorInChief => 289,
+            NewsStoryKind::DribblingDisplay => 281,
+            NewsStoryKind::FoulTrouble => 273,
+
+            // ── A foreign player's life ───────────────────────────
+            // Wanting out of the country is a different story from
+            // wanting out of the club, and a bigger one: form can be
+            // coached, homesickness cannot.
+            NewsStoryKind::HomesickAbroad => 393,
+            // …and the version with a destination attached.
+            NewsStoryKind::HomeCalling => 373,
+            // Signed from the neighbours. A dressing room forgets
+            // nothing and a local paper forgets less.
+            NewsStoryKind::ColdShoulder => 317,
+            // Still on his own after a year. The explanation nobody
+            // reaches for when a signing is not working.
+            NewsStoryKind::StrugglingToSettle => 309,
+            NewsStoryKind::SettledAtLast => 244,
+
+            // ── The room ──────────────────────────────────────────
+            NewsStoryKind::TeammateConflict => 387,
+            NewsStoryKind::DressingRoomSpeech => 263,
+            NewsStoryKind::TakenUnderWing => 233,
+
+            // ── Everything else a real back page carries ──────────
+            // The season's individual honours. Above every weekly
+            // beat: a player of the year is a front page anywhere.
+            NewsStoryKind::SeasonAward => 442,
+            // Off-field trouble. Every paper's favourite story.
+            NewsStoryKind::OffFieldControversy => 427,
+            NewsStoryKind::ContractTornUp => 403,
+            // His country has stopped picking him — the quiet end of
+            // an international career, and it runs a shade under the
+            // call-up that started it.
+            NewsStoryKind::DroppedByCountry => 329,
+            NewsStoryKind::OutgrownDivision => 322,
+            // Ineligible rather than dropped: worse, and it takes a
+            // window to undo.
+            NewsStoryKind::LeftOutOfSquadList => 313,
+            NewsStoryKind::BenchFrustration => 303,
+            NewsStoryKind::WageEnvy => 297,
+            NewsStoryKind::RelegationNerves => 287,
+            NewsStoryKind::TrainingConcerns => 247,
+            NewsStoryKind::ShirtNumberHandover => 228,
+            // The week's quietest story, and the one that most often
+            // comes before a run in the side.
+            NewsStoryKind::TrainingGroundBuzz => 213,
         }
     }
 
@@ -1225,7 +1530,39 @@ impl NewsStoryKind {
             // — it is a table somebody closed on the last day of the
             // month, so it belongs to that month's edition and no other.
             | NewsStoryKind::LeagueTopScorer
-            | NewsStoryKind::LeagueScoringChase => NewsRecurrence::Event,
+            | NewsStoryKind::LeagueScoringChase
+            // The whole ratings page. Every one of these is read off ONE
+            // afternoon's stat line out of the week just played — the
+            // same channel, and the same guarantee, as the goalkeeper
+            // beats above: the match happened on a date, its numbers
+            // never change again, and next Monday's facts are built from
+            // next week's fixtures. A verdict on Saturday is never
+            // re-detected, so the back catalogue is irrelevant to it.
+            | NewsStoryKind::ManOfTheMatch
+            | NewsStoryKind::MatchMasterclass
+            | NewsStoryKind::AssistShow
+            | NewsStoryKind::CreatorInChief
+            | NewsStoryKind::DefensiveRock
+            | NewsStoryKind::DribblingDisplay
+            | NewsStoryKind::SuperSub
+            | NewsStoryKind::DerbyHero
+            | NewsStoryKind::MatchStinker
+            | NewsStoryKind::WastefulFinishing
+            | NewsStoryKind::CostlyError
+            | NewsStoryKind::OwnGoalShame
+            | NewsStoryKind::PenaltyMissed
+            | NewsStoryKind::HookedEarly
+            | NewsStoryKind::FoulTrouble
+            // Squad life that happens on a day and is read from the
+            // seven-day feed on a seven-day tick — the same shape as the
+            // fine and bust-up beats above.
+            | NewsStoryKind::TeammateConflict
+            | NewsStoryKind::DressingRoomSpeech
+            | NewsStoryKind::OffFieldControversy
+            | NewsStoryKind::ShirtNumberHandover
+            | NewsStoryKind::ContractTornUp
+            | NewsStoryKind::DroppedByCountry
+            | NewsStoryKind::SeasonAward => NewsRecurrence::Event,
 
             // A number that moves. The paper runs it again as soon as
             // the number does — "make it five in a row".
@@ -1328,7 +1665,32 @@ impl NewsStoryKind {
             | NewsStoryKind::DebtMountain
             | NewsStoryKind::TransferEmbargo
             | NewsStoryKind::WageBillCrisis
-            | NewsStoryKind::MustSellBeforeBuying => NewsRecurrence::Standing,
+            | NewsStoryKind::MustSellBeforeBuying
+            // A foreign player's life. Not one of these is a Tuesday:
+            // homesickness, isolation, a dressing room that has not
+            // forgiven where he came from, a senior pro quietly looking
+            // after him — all conditions, all read from the fortnight
+            // window on a seven-day tick, all re-detected next Monday.
+            | NewsStoryKind::HomesickAbroad
+            | NewsStoryKind::StrugglingToSettle
+            | NewsStoryKind::HomeCalling
+            | NewsStoryKind::SettledAtLast
+            | NewsStoryKind::ColdShoulder
+            | NewsStoryKind::TakenUnderWing
+            // …and the same for how he is training, how much he is
+            // playing, what he thinks of his wages, and whether the
+            // division is still big enough for him. Every one is a state
+            // he is in rather than something that happened, so a paper
+            // that ran them weekly would print the same man's grievance
+            // every Monday until it was resolved.
+            | NewsStoryKind::TrainingGroundBuzz
+            | NewsStoryKind::TrainingConcerns
+            | NewsStoryKind::BenchFrustration
+            | NewsStoryKind::WageEnvy
+            | NewsStoryKind::OutgrownDivision
+            | NewsStoryKind::RelegationNerves
+            // Ineligibility lasts as long as the registered list does.
+            | NewsStoryKind::LeftOutOfSquadList => NewsRecurrence::Standing,
         }
     }
 
@@ -1370,6 +1732,18 @@ impl NewsStoryKind {
                 // A scoring chart is a list. Printing one entry of it
                 // and calling that the charts is a result, not a table.
                 | NewsStoryKind::LeagueScoringChase
+                // A ratings column names several men, which is the whole
+                // point of one: after a 4-0 a paper marks down the back
+                // four together, and after a 4-0 the other way it raves
+                // about three of them. The desk allowance still caps the
+                // section at four lines, so letting these repeat widens
+                // the column without ever widening the page.
+                | NewsStoryKind::ManOfTheMatch
+                | NewsStoryKind::MatchMasterclass
+                | NewsStoryKind::MatchStinker
+                | NewsStoryKind::CostlyError
+                | NewsStoryKind::WastefulFinishing
+                | NewsStoryKind::DefensiveRock
         )
     }
 
@@ -1396,6 +1770,16 @@ impl NewsStoryKind {
                 | NewsStoryKind::LoanFlop
                 | NewsStoryKind::SigningNotWorking
                 | NewsStoryKind::SigningComesGood
+                // The ratings page quotes a MATCH rating rather than a
+                // season average — the number out of ten beside a name,
+                // which is the one figure a ratings column cannot be
+                // written without. Same slot (`b`), same guarantee: a
+                // player who was not on the pitch has no mark, and the
+                // editor refuses a verdict that would print 0.00.
+                | NewsStoryKind::ManOfTheMatch
+                | NewsStoryKind::MatchMasterclass
+                | NewsStoryKind::MatchStinker
+                | NewsStoryKind::HookedEarly
         )
     }
 
@@ -1478,6 +1862,14 @@ impl NewsStoryKind {
                 | NewsStoryKind::ClearTheAir
                 | NewsStoryKind::ManagerCallsOutPlayer
                 | NewsStoryKind::FansTurnOnTeam
+                // The three a foreign player, a substitute and a captain
+                // say out loud. Wanting to go home is the one thing on
+                // this page nobody else can say for him — a paper can
+                // report bad form, but homesickness only exists once he
+                // admits it.
+                | NewsStoryKind::HomesickAbroad
+                | NewsStoryKind::BenchFrustration
+                | NewsStoryKind::DressingRoomSpeech
         )
     }
 }
@@ -1896,6 +2288,10 @@ mod tests {
                 NewsDesk::Charts => 2,
                 _ => 4,
             };
+            // The ratings page is the one section that is expected to be
+            // wide: it exists because the paper had almost no individual
+            // performance in it at all.
+            let floor = if desk == NewsDesk::Verdicts { 8 } else { floor };
             let filed = NewsStoryKind::ALL
                 .iter()
                 .filter(|kind| kind.desk() == desk)
@@ -1930,7 +2326,25 @@ mod tests {
 
         // Everything the rumour and verdict desks file: all of it comes
         // from `RecentEvents::fortnight` or from a persistent status.
-        const LINGERING: [NewsStoryKind; 23] = [
+        const LINGERING: [NewsStoryKind; 36] = [
+            // A foreign player's life and his standing in the building.
+            // Every one of these is a condition read from the fortnight
+            // window on a weekly tick, so every one is re-detected next
+            // Monday — the exact shape that made a transfer request lead
+            // the paper twice.
+            NewsStoryKind::HomesickAbroad,
+            NewsStoryKind::StrugglingToSettle,
+            NewsStoryKind::HomeCalling,
+            NewsStoryKind::SettledAtLast,
+            NewsStoryKind::ColdShoulder,
+            NewsStoryKind::TakenUnderWing,
+            NewsStoryKind::TrainingGroundBuzz,
+            NewsStoryKind::TrainingConcerns,
+            NewsStoryKind::BenchFrustration,
+            NewsStoryKind::WageEnvy,
+            NewsStoryKind::OutgrownDivision,
+            NewsStoryKind::RelegationNerves,
+            NewsStoryKind::LeftOutOfSquadList,
             NewsStoryKind::TransferAgreed,
             NewsStoryKind::RumourCools,
             NewsStoryKind::CommitsToClub,

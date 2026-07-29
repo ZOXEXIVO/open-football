@@ -3,11 +3,11 @@ use crate::club::news::RecentEvents;
 use crate::club::news::{
     BoardroomDesk, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie, DugoutDesk, FansDesk,
     IssueResult, KeeperMatchFacts, LoanDesk, LoanWatchEntry, ManagerPursuit, MarketDesk, MatchDesk,
-    MatchStarFacts, NewsEditor, NewsStory, NewspaperIssue, PressMood, ResultCompetition, SquadDesk,
-    StandingSnapshot, TableDesk, WeeklyMatchFacts,
+    MatchStarFacts, NewsEditor, NewsStory, NewspaperIssue, OutfieldMatchFacts, PressMood,
+    ResultCompetition, SquadDesk, StandingSnapshot, TableDesk, WeeklyMatchFacts,
 };
-use crate::r#match::{FieldSquad, MatchResult};
 use crate::r#match::player::statistics::MatchStatisticType;
+use crate::r#match::{FieldSquad, MatchResult, SubstitutionReason};
 use crate::simulator::SimulatorData;
 use crate::{
     Club, Country, HappinessEventType, Person, Player, PlayerFieldPositionGroup, Team, TeamType,
@@ -140,6 +140,7 @@ impl WeeklyMatchFacts {
             }
 
             self.absorb_keepers(result);
+            self.absorb_outfield(result);
             self.absorb_stars(result);
 
             if knockout {
@@ -281,6 +282,115 @@ impl WeeklyMatchFacts {
         }
     }
 
+    /// Read the other ten out of one match's stat lines.
+    ///
+    /// The outfield twin of [`Self::absorb_keepers`], and the bigger of
+    /// the two gaps: a goalkeeper at least had clean sheets on his
+    /// record, while an outfield player's afternoon left no trace on the
+    /// page at all unless he scored three or was sent off. Everything a
+    /// ratings column is written from — the mark out of ten, the shots
+    /// against the expected goals, the assists, the key passes, the
+    /// tackles and clearances, the error that ended in the net — is in
+    /// this stat line and was being thrown away every Monday.
+    fn absorb_outfield(&mut self, result: &MatchResult) {
+        let Some(details) = result.details.as_ref() else {
+            return;
+        };
+
+        // Spot-kicks he took and missed. The scorer of a shoot-out
+        // penalty is nobody's story; the man who missed one is a back
+        // page, and until now the feed only ever credited the keeper.
+        let mut missed: FxHashMap<u32, u8> = FxHashMap::default();
+        for kick in &details.penalty_shootout {
+            if kick.scored {
+                continue;
+            }
+            *missed.entry(kick.taker_id).or_insert(0) += 1;
+        }
+
+        let home_goals = result.score.home_team.get();
+        let away_goals = result.score.away_team.get();
+
+        // Who was taken off by CHOICE. An injury swap and a manager's
+        // verdict look identical in a stat line — same early exit, same
+        // half-finished rating — and printing the first as the second
+        // invents a decision nobody made.
+        let hooked: FxHashSet<u32> = details
+            .substitutions
+            .iter()
+            .filter(|sub| sub.reason == SubstitutionReason::Discretionary)
+            .map(|sub| sub.player_out_id)
+            .collect();
+
+        for (player_id, stats) in &details.player_stats {
+            if stats.position_group == PlayerFieldPositionGroup::Goalkeeper {
+                continue;
+            }
+            // He has to have been on the pitch. An unused substitute
+            // carries an all-zero line, and a mark of nothing is not a
+            // bad mark — it is no mark, which is the single failure this
+            // whole page has hit twice.
+            if stats.minutes_played == 0 || stats.match_rating <= 0.0 {
+                continue;
+            }
+
+            // What his side conceded, so a defender's shift can be told
+            // apart from a defender's shift in a hiding. A stat line has
+            // no idea what happened at the other end.
+            let (conceded, started) = if Self::fielded(&details.left_team_players, *player_id) {
+                (
+                    away_goals,
+                    details.left_team_players.main.contains(player_id),
+                )
+            } else if Self::fielded(&details.right_team_players, *player_id) {
+                (
+                    home_goals,
+                    details.right_team_players.main.contains(player_id),
+                )
+            } else {
+                // Recorded a stat line without appearing in either
+                // squad. Nothing here can be attributed to a side,
+                // so nothing is written about him.
+                continue;
+            };
+
+            let rating = (stats.match_rating * 100.0) as i32;
+            let contribution = stats.goals.saturating_add(stats.assists);
+
+            self.outfield
+                .entry(*player_id)
+                .or_default()
+                .absorb(OutfieldMatchFacts {
+                    best_rating: rating,
+                    worst_rating: rating,
+                    worst_rating_minutes: stats.minutes_played,
+                    worst_rating_started: started,
+                    worst_rating_hooked: started && hooked.contains(player_id),
+                    goals: stats.goals,
+                    assists: stats.assists,
+                    key_passes: stats.key_passes,
+                    successful_dribbles: stats.successful_dribbles,
+                    defensive_actions: stats
+                        .tackles
+                        .saturating_add(stats.interceptions)
+                        .saturating_add(stats.blocks)
+                        .saturating_add(stats.clearances),
+                    shots: stats.shots_total,
+                    xg_x100: (stats.xg * 100.0) as i32,
+                    shut_out: conceded == 0,
+                    own_goals: stats.own_goals,
+                    errors_leading_to_goal: stats.errors_leading_to_goal,
+                    fouls: stats.fouls,
+                    yellow_cards: stats.yellow_cards,
+                    penalties_missed: missed.get(player_id).copied().unwrap_or(0),
+                    man_of_the_match: details.player_of_the_match_id == Some(*player_id),
+                    // Only a substitute can have an impact off the
+                    // bench; a starter's goal is just a goal.
+                    impact_off_the_bench: if started { 0 } else { contribution },
+                });
+        }
+    }
+
     /// Record a knockout tie from each side's point of view, so the
     /// match desk can tell "went through" from "went out" without
     /// re-reading the fixture. A shoot-out is carried alongside the
@@ -320,6 +430,9 @@ impl WeeklyMatchFacts {
         self.cup_ties.extend(other.cup_ties);
         for (player_id, keeper) in other.keepers {
             self.keepers.entry(player_id).or_default().absorb(keeper);
+        }
+        for (player_id, outfield) in other.outfield {
+            self.outfield.entry(player_id).or_default().absorb(outfield);
         }
         // Same louder-afternoon rule as `crown`: two half-worlds can
         // both have seen the fixture only through the global store, so

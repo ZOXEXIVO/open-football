@@ -62,6 +62,136 @@ impl KeeperMatchFacts {
     }
 }
 
+/// One outfield player's afternoon, as the match engine recorded it.
+///
+/// The gap this closes is the same one [`KeeperMatchFacts`] closed for
+/// goalkeepers, and it was the larger of the two: for the other ten
+/// players the desks could see a goal, a red card and a SEASON average,
+/// and nothing else. So a striker who put four clear chances into the
+/// stands, a centre-half whose error gifted the winner, a midfielder who
+/// made three for other people and a full-back marked 5.1 in a hiding
+/// all left exactly the same trace on the page — none.
+///
+/// Everything here is in the per-match stat line, which survives into
+/// stored results (`copy_without_data_positions` strips only the
+/// position replay), so the press run reads it directly.
+///
+/// Each field keeps the SINGLE most newsworthy match of the week rather
+/// than a total, because a verdict is about one afternoon: "he was
+/// marked 8.4" is a piece and "he averaged 7.1 across two games" is a
+/// table. The two ratings are kept apart for the same reason — a player
+/// can be magnificent on Wednesday and dreadful on Saturday, and both
+/// are real stories that a single averaged figure would erase.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OutfieldMatchFacts {
+    /// His best mark of the week, ×100.
+    pub best_rating: i32,
+    /// His worst mark of the week, ×100. Non-zero only once he has
+    /// actually been marked.
+    pub worst_rating: i32,
+    /// Minutes in the match his worst mark came from, and whether he
+    /// started it — a substitute cannot be "hooked", and a man given
+    /// twenty minutes is not to be marked down for them.
+    pub worst_rating_minutes: u16,
+    pub worst_rating_started: bool,
+    /// He started that match and was taken off by CHOICE. Load-bearing
+    /// for the hooked-early piece: a man carried off injured on the half
+    /// hour has also "been taken off before the hour having been marked
+    /// down", and reporting it as a manager's verdict would invent a
+    /// decision nobody made. The engine tags every substitution with its
+    /// reason, so the distinction is read rather than guessed.
+    pub worst_rating_hooked: bool,
+    pub goals: u16,
+    pub assists: u16,
+    pub key_passes: u16,
+    pub successful_dribbles: u16,
+    /// Tackles, interceptions, blocks and clearances in one afternoon —
+    /// a defender's whole contribution, and the one that never reaches
+    /// a scoreline.
+    pub defensive_actions: u16,
+    /// Shots and the expected goals behind them, from the same match.
+    /// Kept as a pair: shots alone cannot separate a man who had six
+    /// efforts from distance from one who missed three open goals.
+    pub shots: u16,
+    pub xg_x100: i32,
+    /// True when the side he was playing for kept a clean sheet in the
+    /// afternoon his defensive shift came from. Read from the result
+    /// rather than the stat line — a defender's stat line has no idea
+    /// what happened at the other end.
+    pub shut_out: bool,
+    pub own_goals: u16,
+    pub errors_leading_to_goal: u16,
+    pub fouls: u16,
+    pub yellow_cards: u16,
+    /// Spot-kicks he took in a shoot-out and missed.
+    pub penalties_missed: u8,
+    /// He was the match's outstanding player, by the engine's own
+    /// verdict rather than the desk's arithmetic.
+    pub man_of_the_match: bool,
+    /// Goals and assists he produced after coming on as a substitute.
+    pub impact_off_the_bench: u16,
+}
+
+impl OutfieldMatchFacts {
+    /// Keep the loudest version of each figure across a week in which he
+    /// played more than once.
+    ///
+    /// The ratings are the exception to the plain maximum: `worst_rating`
+    /// travels with the minutes and the starting flag from ITS OWN
+    /// match, because "taken off at 55 having been marked 5.2" is only
+    /// true of one afternoon and reading the minutes off the other one
+    /// would invent a substitution that never happened.
+    pub fn absorb(&mut self, other: OutfieldMatchFacts) {
+        self.best_rating = self.best_rating.max(other.best_rating);
+
+        if other.worst_rating > 0
+            && (self.worst_rating == 0 || other.worst_rating < self.worst_rating)
+        {
+            self.worst_rating = other.worst_rating;
+            self.worst_rating_minutes = other.worst_rating_minutes;
+            self.worst_rating_started = other.worst_rating_started;
+            self.worst_rating_hooked = other.worst_rating_hooked;
+        }
+
+        self.goals = self.goals.max(other.goals);
+        self.assists = self.assists.max(other.assists);
+        self.key_passes = self.key_passes.max(other.key_passes);
+        self.successful_dribbles = self.successful_dribbles.max(other.successful_dribbles);
+        self.own_goals = self.own_goals.max(other.own_goals);
+        self.errors_leading_to_goal = self
+            .errors_leading_to_goal
+            .max(other.errors_leading_to_goal);
+        self.fouls = self.fouls.max(other.fouls);
+        self.yellow_cards = self.yellow_cards.max(other.yellow_cards);
+        self.penalties_missed = self.penalties_missed.max(other.penalties_missed);
+        self.man_of_the_match |= other.man_of_the_match;
+        self.impact_off_the_bench = self.impact_off_the_bench.max(other.impact_off_the_bench);
+
+        // The defensive shift keeps the clean sheet it was actually
+        // performed in front of: forty clearances in a 4-0 defeat is not
+        // the rearguard piece, and pairing the bigger shift with the
+        // other afternoon's clean sheet would print one.
+        if other.defensive_actions > self.defensive_actions {
+            self.defensive_actions = other.defensive_actions;
+            self.shut_out = other.shut_out;
+        }
+
+        // Same pairing rule for the wasteful-finishing piece: the shots
+        // and the expected goals have to come from one game or the
+        // sentence is arithmetic across two.
+        if other.xg_x100 > self.xg_x100 {
+            self.xg_x100 = other.xg_x100;
+            self.shots = other.shots;
+        }
+    }
+
+    /// True when nothing here is worth a line. Most players in most
+    /// weeks — which is the point of a ratings column having a bar.
+    pub fn is_routine(&self) -> bool {
+        self.best_rating == 0 && self.worst_rating == 0
+    }
+}
+
 /// The man a match report gets to name: the side's top scorer that
 /// afternoon, read off one match's goal details.
 ///
@@ -97,6 +227,9 @@ pub struct WeeklyMatchFacts {
     pub cup_ties: FxHashMap<u32, CupTie>,
     /// What the week did to each goalkeeper who played in it.
     pub keepers: FxHashMap<u32, KeeperMatchFacts>,
+    /// …and the same for the other ten, which is where nearly all of a
+    /// football paper's individual copy comes from.
+    pub outfield: FxHashMap<u32, OutfieldMatchFacts>,
     /// Each side's top scorer per match, keyed by (team, opponent) —
     /// the pair a match report already carries, so the desk can hand
     /// the report its protagonist without a second lookup anywhere.
@@ -110,6 +243,7 @@ impl WeeklyMatchFacts {
             red_cards: FxHashSet::default(),
             cup_ties: FxHashMap::default(),
             keepers: FxHashMap::default(),
+            outfield: FxHashMap::default(),
             stars: FxHashMap::default(),
         }
     }

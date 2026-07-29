@@ -79,11 +79,25 @@ impl SquadDesk {
                 if senior {
                     pulse.seniors = pulse.seniors.saturating_add(1);
 
+                    // The ratings page. Senior sides only: a reserve
+                    // fixture has no correspondent marking it, and a
+                    // youth-team afternoon is a development report
+                    // rather than a verdict.
+                    Self::file_outfield_deeds(
+                        out,
+                        player,
+                        facts,
+                        feed.happened(HappinessEventType::DerbyHero),
+                        date,
+                    );
                     Self::file_form(out, player, played_this_week, date);
                     Self::file_breakthrough(out, player, &feed, date);
                     Self::file_discipline(out, player, &feed, date);
                     Self::file_dressing_room(out, player, &feed, date);
                     Self::file_career_life(out, player, date);
+                    Self::file_adaptation(out, player, date);
+                    Self::file_standing_in_the_building(out, player, date);
+                    Self::file_off_field(out, player, &feed, date);
                     Self::file_competition_for_places(out, player, &feed, date);
                     Self::file_contract(out, player, &feed, date);
                     DugoutDesk::file_player(out, player, &mut pulse, date);
@@ -125,6 +139,292 @@ impl SquadDesk {
         }
 
         Self::file_keeper_deeds(out, player_id, facts, date);
+    }
+
+    /// The bars a ratings column is written to. All calibrated against
+    /// the engine's own rating bands rather than picked round: a neutral
+    /// afternoon is 6.00 by construction, the good-performer band runs
+    /// 7.0-7.4, and a poor display bottoms out in the high fives. See
+    /// `match/engine/rating`.
+    ///
+    /// A mark in the eights is the afternoon a supporter still brings up
+    /// a decade later.
+    const MASTERCLASS_RATING: i32 = 800;
+    /// …and the bottom of the same column. Deliberately NOT the mirror
+    /// of the masterclass bar: the distribution is not symmetrical about
+    /// 6.00, so 4.00 would print about nobody. 5.80 is the bottom tail —
+    /// a genuinely poor afternoon rather than a quiet one.
+    const STINKER_RATING: i32 = 580;
+    /// A starter taken off before this minute was not being rested, and
+    /// if he was being marked down while he was on it was not a
+    /// tactical switch either. The rating bar sits just under the
+    /// neutral 6.00 so a competent hour never reads as a hooking.
+    const HOOKED_MINUTES: u16 = 62;
+    const HOOKED_RATING: i32 = 615;
+    /// Assists in one game before it is the story of his afternoon
+    /// rather than a line in it.
+    const ASSIST_SHOW: u16 = 3;
+    /// Passes that made a chance for somebody else. The archetype wide
+    /// midfielder serves 1-3 in a routine game, so four is the
+    /// afternoon he actually ran.
+    const CREATOR_KEY_PASSES: u16 = 4;
+    /// Tackles, interceptions, blocks and clearances in one afternoon.
+    /// A centre-half's routine shift is 5-9 and a busy one reaches 15,
+    /// so this is the volume bar only — the RATING is what separates a
+    /// man in command from a man drowning, and both are required.
+    const DEFENSIVE_SHIFT: u16 = 8;
+    const DEFENSIVE_ROCK_RATING: i32 = 720;
+    /// Five completed dribbles in one game is a top-of-the-division
+    /// afternoon; the routine wide man manages one or two.
+    const DRIBBLING_DISPLAY: u16 = 5;
+    /// Shots, and the expected goals behind them, before an afternoon
+    /// counts as squandered. Both bars matter and neither works alone:
+    /// six efforts from thirty yards is not a miss (the xG floor throws
+    /// it out) and one open goal put over the bar is bad luck rather
+    /// than a pattern (the shot floor throws that out). A busy centre
+    /// forward runs 2-4 shots at 0.3-0.8 expected goals, so this is the
+    /// top of his range with nothing to show for it.
+    const WASTEFUL_SHOTS: u16 = 4;
+    const WASTEFUL_XG: i32 = 80;
+    /// Fouls before the paper stops calling it a competitive edge. A
+    /// side gives away about eleven in a match between eleven players,
+    /// so five from one man is the afternoon he spent kicking people.
+    /// A SECOND booking is deliberately not on this list — that is a
+    /// sending-off, and `RedCard` is already its story.
+    const FOUL_TROUBLE: u16 = 5;
+
+    /// The ratings page: what ONE outfield player did in ONE afternoon.
+    ///
+    /// This is the column the paper never had. Every other beat on this
+    /// desk reads a season (`StarForm` on an average, `GoalDrought` on a
+    /// tally) or a career (the milestones), and the only match-level
+    /// stories an outfield player could earn were a hat-trick and a
+    /// sending-off. So the striker who burned four clear chances, the
+    /// defender whose error gifted the winner, the midfielder who made
+    /// three for other people and the full-back marked 5.1 in a hiding
+    /// were all — in a newspaper about football — nothing at all.
+    ///
+    /// At most one line per player per week, and the order below is the
+    /// order a reader remembers an afternoon in: what he did wrong first
+    /// when it decided something, then what he did that won it, then the
+    /// quieter verdicts. A paper does not print "he was the best man on
+    /// the pitch" and "he was dreadful" about one player on one page, and
+    /// where both are true of two different afternoons the louder one is
+    /// the story.
+    pub(super) fn file_outfield_deeds(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        facts: &WeeklyMatchFacts,
+        derby_hero: bool,
+        date: NaiveDate,
+    ) {
+        let player_id = player.id;
+        let Some(week) = facts.outfield.get(&player_id) else {
+            return;
+        };
+        if week.is_routine() {
+            return;
+        }
+
+        let verdict = |kind: NewsStoryKind, a: i32, b: i32, weight: i32| {
+            NewsStory::new(kind, date)
+                .about(player_id)
+                .with_numbers(a, b)
+                .weighted(weight)
+        };
+
+        // Winning a derby is the loudest thing a player can do in a
+        // shirt, and it outranks anything else the same week did to him.
+        if derby_hero {
+            out.push(verdict(
+                NewsStoryKind::DerbyHero,
+                week.goals.max(1) as i32,
+                week.best_rating,
+                week.goals as i32 * 40,
+            ));
+            return;
+        }
+
+        // Into his own net. Nobody's fault and entirely his, which is
+        // exactly why it leads over everything he did well.
+        if week.own_goals > 0 {
+            out.push(verdict(
+                NewsStoryKind::OwnGoalShame,
+                week.own_goals as i32,
+                week.worst_rating,
+                (week.own_goals as i32 - 1) * 50,
+            ));
+            return;
+        }
+
+        // Twelve yards, his to settle, and he missed. The one thing a
+        // shoot-out is remembered by from the other end — the keeper's
+        // save was already reported and the taker never was.
+        if week.penalties_missed > 0 {
+            out.push(verdict(
+                NewsStoryKind::PenaltyMissed,
+                week.penalties_missed as i32,
+                week.worst_rating,
+                (week.penalties_missed as i32 - 1) * 40,
+            ));
+            return;
+        }
+
+        // His mistake, their goal. Unlike a goalkeeper's error this one
+        // had a goalkeeper behind it and still ended up in the net.
+        if week.errors_leading_to_goal > 0 {
+            out.push(verdict(
+                NewsStoryKind::CostlyError,
+                week.errors_leading_to_goal as i32,
+                week.worst_rating,
+                (week.errors_leading_to_goal as i32 - 1) * 45,
+            ));
+            return;
+        }
+
+        if week.best_rating >= Self::MASTERCLASS_RATING {
+            out.push(verdict(
+                NewsStoryKind::MatchMasterclass,
+                (week.goals.saturating_add(week.assists)) as i32,
+                week.best_rating,
+                (week.best_rating - Self::MASTERCLASS_RATING) / 4,
+            ));
+            return;
+        }
+
+        // The engine's own verdict on the afternoon, which the newsroom
+        // has been recording and throwing away since the match page
+        // started showing it.
+        if week.man_of_the_match {
+            out.push(verdict(
+                NewsStoryKind::ManOfTheMatch,
+                (week.goals.saturating_add(week.assists)) as i32,
+                week.best_rating,
+                (week.best_rating - 700).max(0) / 5,
+            ));
+            return;
+        }
+
+        if week.assists >= Self::ASSIST_SHOW {
+            out.push(verdict(
+                NewsStoryKind::AssistShow,
+                week.assists as i32,
+                week.best_rating,
+                (week.assists as i32 - Self::ASSIST_SHOW as i32) * 40,
+            ));
+            return;
+        }
+
+        // Off the bench and decisive. Half an hour that changed the
+        // afternoon, and a story only a substitute can be the subject of.
+        if week.impact_off_the_bench > 0 {
+            out.push(verdict(
+                NewsStoryKind::SuperSub,
+                week.impact_off_the_bench as i32,
+                week.best_rating,
+                (week.impact_off_the_bench as i32 - 1) * 35,
+            ));
+            return;
+        }
+
+        // The chances were there and he put them everywhere but in. Both
+        // bars are load-bearing: without the expected-goals floor this
+        // fires on a winger who had six shots from distance, and without
+        // the shot floor it fires on one missed sitter, which is bad luck
+        // rather than a story.
+        if week.goals == 0
+            && week.shots >= Self::WASTEFUL_SHOTS
+            && week.xg_x100 >= Self::WASTEFUL_XG
+        {
+            out.push(verdict(
+                NewsStoryKind::WastefulFinishing,
+                week.shots as i32,
+                week.worst_rating,
+                (week.xg_x100 - Self::WASTEFUL_XG) / 3,
+            ));
+            return;
+        }
+
+        // Taken off before the hour, having been marked down while he
+        // was on. A manager's verdict delivered in public — and only if
+        // it WAS one: `worst_rating_hooked` is false for an injury swap,
+        // which otherwise looks identical from the stat line.
+        if week.worst_rating_hooked
+            && week.worst_rating_minutes <= Self::HOOKED_MINUTES
+            && week.worst_rating <= Self::HOOKED_RATING
+        {
+            out.push(verdict(
+                NewsStoryKind::HookedEarly,
+                week.worst_rating_minutes as i32,
+                week.worst_rating,
+                (Self::HOOKED_RATING - week.worst_rating) / 5,
+            ));
+            return;
+        }
+
+        if week.worst_rating > 0 && week.worst_rating <= Self::STINKER_RATING {
+            out.push(verdict(
+                NewsStoryKind::MatchStinker,
+                week.worst_rating_minutes as i32,
+                week.worst_rating,
+                (Self::STINKER_RATING - week.worst_rating) / 4,
+            ));
+            return;
+        }
+
+        // A defender's whole afternoon, and the one that never reaches a
+        // scoreline. Three gates, and each throws out a different false
+        // positive: the clean sheet (the same shift in a 4-0 defeat is a
+        // man drowning, not a man in command), the position (a forward
+        // who tracked back is not the rearguard story), and the rating —
+        // because defensive volume RISES when a side is under the cosh,
+        // so the count alone cannot tell command from siege.
+        if week.shut_out
+            && week.defensive_actions >= Self::DEFENSIVE_SHIFT
+            && week.best_rating >= Self::DEFENSIVE_ROCK_RATING
+            && matches!(
+                player.position().position_group(),
+                PlayerFieldPositionGroup::Defender
+            )
+        {
+            out.push(verdict(
+                NewsStoryKind::DefensiveRock,
+                week.defensive_actions as i32,
+                week.best_rating,
+                (week.defensive_actions as i32 - Self::DEFENSIVE_SHIFT as i32) * 12,
+            ));
+            return;
+        }
+
+        if week.key_passes >= Self::CREATOR_KEY_PASSES {
+            out.push(verdict(
+                NewsStoryKind::CreatorInChief,
+                week.key_passes as i32,
+                week.best_rating,
+                (week.key_passes as i32 - Self::CREATOR_KEY_PASSES as i32) * 15,
+            ));
+            return;
+        }
+
+        if week.successful_dribbles >= Self::DRIBBLING_DISPLAY {
+            out.push(verdict(
+                NewsStoryKind::DribblingDisplay,
+                week.successful_dribbles as i32,
+                week.best_rating,
+                (week.successful_dribbles as i32 - Self::DRIBBLING_DISPLAY as i32) * 12,
+            ));
+            return;
+        }
+
+        // He spent the afternoon fouling people.
+        if week.fouls >= Self::FOUL_TROUBLE {
+            out.push(verdict(
+                NewsStoryKind::FoulTrouble,
+                week.fouls as i32,
+                week.worst_rating,
+                (week.fouls as i32 - Self::FOUL_TROUBLE as i32).max(0) * 10,
+            ));
+        }
     }
 
     /// The goalkeeper's week.
@@ -717,6 +1017,311 @@ impl SquadDesk {
                     .about(player.id)
                     .with_numbers(player.age(date) as i32, 0)
                     .weighted(PlayerStanding::importance(player) / 4),
+            );
+        }
+    }
+
+    /// The foreign player's life away from the pitch.
+    ///
+    /// This is the half of a transfer that no fee explains and no form
+    /// table shows. The simulation has always run it — a signing who
+    /// cannot settle, one who never learns the language, one openly
+    /// hoping for a move back toward home, one the dressing room will
+    /// not have because of the shirt he used to wear — and the paper
+    /// printed none of it, so a foreign player's decline read as
+    /// unexplained bad form.
+    ///
+    /// All conditions rather than days, so all read the longer window
+    /// and all are `Standing`: nobody becomes homesick on a Tuesday. One
+    /// line per player, sourest first — a man who wants to go home is
+    /// not also a man settling in.
+    fn file_adaptation(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate) {
+        let feed = RecentEvents::fortnight(player);
+        let importance = PlayerStanding::importance(player);
+
+        // He wants to go home. The one thing on this page nobody can
+        // report for him — form can be observed, homesickness only
+        // exists once he says it — which is why it is set as a quote.
+        if feed.happened(HappinessEventType::WantsReturnHome) {
+            out.push(
+                NewsStory::new(NewsStoryKind::HomesickAbroad, date)
+                    .about(player.id)
+                    .with_numbers(player.age(date) as i32, 0)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        // …and the same wish with a destination attached: a club in his
+        // own country has actually come in. Named where the feed knew
+        // who it was, because "a club back home" and "his first club
+        // back home" are different stories.
+        if feed.happened(HappinessEventType::HomeReturnOpportunity) {
+            out.push(
+                NewsStory::new(NewsStoryKind::HomeCalling, date)
+                    .about(player.id)
+                    .against(feed.interested_club(HappinessEventType::HomeReturnOpportunity))
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        // Signed from the neighbours, and the room has not forgotten.
+        if feed.happened(HappinessEventType::ColdShoulderOverRivalPast) {
+            out.push(
+                NewsStory::new(NewsStoryKind::ColdShoulder, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+
+        // A year in and still on his own. The explanation nobody reaches
+        // for when a signing is not working.
+        if feed.happened(HappinessEventType::FeelingIsolated) {
+            out.push(
+                NewsStory::new(NewsStoryKind::StrugglingToSettle, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+
+        // He has stopped looking like a man in the wrong country.
+        if feed.happened(HappinessEventType::SettledIntoSquad) {
+            out.push(
+                NewsStory::new(NewsStoryKind::SettledAtLast, date)
+                    .about(player.id)
+                    .weighted(importance / 3),
+            );
+        }
+    }
+
+    /// Where he stands in the building: how he is training, how much he
+    /// is playing, what he makes of his wages, and whether the division
+    /// is still big enough for him.
+    ///
+    /// Every one of these is a state rather than an event, so all are
+    /// `Standing` and read the fortnight. The pecking order is the one a
+    /// back page uses: a grievance outranks contentment, and something
+    /// that stops him playing at all outranks both.
+    fn file_standing_in_the_building(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate) {
+        let feed = RecentEvents::fortnight(player);
+        let importance = PlayerStanding::importance(player);
+
+        // Not injured, not dropped — ineligible. Worse than either,
+        // because it takes a window to undo.
+        if feed.happened(HappinessEventType::SquadRegistrationOmitted) {
+            out.push(
+                NewsStory::new(NewsStoryKind::LeftOutOfSquadList, date)
+                    .about(player.id)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        // He has outgrown the division and everybody can see it. A story
+        // about the club as much as about him.
+        if feed.happened(HappinessEventType::TooGoodForLevel) {
+            out.push(
+                NewsStory::new(NewsStoryKind::OutgrownDivision, date)
+                    .about(player.id)
+                    .with_numbers(player.age(date) as i32, 0)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        // Sick of the bench, and no longer hiding it.
+        if feed
+            .any_of(&[
+                HappinessEventType::LackOfPlayingTime,
+                HappinessEventType::WantsFirstTeamFootball,
+            ])
+            .is_some()
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::BenchFrustration, date)
+                    .about(player.id)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        // He has seen what the man next to him earns. Read through the
+        // event rather than off the wage bill on purpose: the dressing
+        // room's sense of what is fair is already modelled, and a desk
+        // comparing two salaries itself would be inventing a grievance
+        // nobody in the squad actually has.
+        if feed.happened(HappinessEventType::SalaryGapNoticed) {
+            out.push(
+                NewsStory::new(NewsStoryKind::WageEnvy, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+
+        if feed.happened(HappinessEventType::RelegationFear) {
+            out.push(
+                NewsStory::new(NewsStoryKind::RelegationNerves, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+
+        // The training ground. The quietest column in the paper and the
+        // one that most often runs the week before somebody's run in the
+        // side starts or ends.
+        if feed
+            .any_of(&[
+                HappinessEventType::PoorTraining,
+                HappinessEventType::TrainingStandardFrustration,
+            ])
+            .is_some()
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::TrainingConcerns, date)
+                    .about(player.id)
+                    .weighted(importance / 3),
+            );
+            return;
+        }
+
+        if feed
+            .any_of(&[
+                HappinessEventType::GoodTraining,
+                HappinessEventType::EliteTrainingLift,
+            ])
+            .is_some()
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::TrainingGroundBuzz, date)
+                    .about(player.id)
+                    .weighted(importance / 4),
+            );
+        }
+    }
+
+    /// The things that happen to a footballer on a date and have nothing
+    /// to do with a stat line: trouble away from the ground, a row with
+    /// a teammate, a senior pro quietly taking him on, a shirt number
+    /// changing hands, an international career ending by omission, a
+    /// contract torn up, and the honours a season hands out.
+    ///
+    /// All read the seven-day feed on a seven-day tick, so all are
+    /// `Event`. One line per player: the loudest wins.
+    fn file_off_field(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        date: NaiveDate,
+    ) {
+        let importance = PlayerStanding::importance(player);
+
+        // The season's individual verdicts, from the player of the year
+        // down to a place in the team of the season. Every one of them
+        // is a front page somewhere and none had anywhere to appear.
+        if feed
+            .any_of(&[
+                HappinessEventType::WorldPlayerOfYear,
+                HappinessEventType::ContinentalPlayerOfYear,
+                HappinessEventType::PlayerOfTheSeason,
+                HappinessEventType::TeamOfTheYearSelection,
+                HappinessEventType::TeamOfTheSeasonSelection,
+                HappinessEventType::WorldPlayerOfYearNomination,
+                HappinessEventType::ContinentalPlayerOfYearNomination,
+            ])
+            .is_some()
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::SeasonAward, date)
+                    .about(player.id)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        // Off-field trouble: every paper's favourite story and every
+        // manager's least.
+        if feed.happened(HappinessEventType::ControversyIncident) {
+            out.push(
+                NewsStory::new(NewsStoryKind::OffFieldControversy, date)
+                    .about(player.id)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        if feed.happened(HappinessEventType::ContractTerminated) {
+            out.push(
+                NewsStory::new(NewsStoryKind::ContractTornUp, date)
+                    .about(player.id)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        // Two of them went at it, and it was not about football.
+        if feed.happened(HappinessEventType::ConflictWithTeammate) {
+            out.push(
+                NewsStory::new(NewsStoryKind::TeammateConflict, date)
+                    .about(player.id)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        // His country has stopped picking him. The quiet end of an
+        // international career, and the paper has only ever printed the
+        // call-up that began it.
+        if feed.happened(HappinessEventType::NationalTeamDropped) {
+            out.push(
+                NewsStory::new(NewsStoryKind::DroppedByCountry, date)
+                    .about(player.id)
+                    .with_numbers(player.player_attributes.international_apps as i32, 0)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        // Somebody stood up in the dressing room and said it out loud.
+        if feed.happened(HappinessEventType::DressingRoomSpeech) {
+            out.push(
+                NewsStory::new(NewsStoryKind::DressingRoomSpeech, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+
+        // The number nine changes hands. A small thing everywhere except
+        // in the town it happens in.
+        if feed.happened(HappinessEventType::ShirtNumberPromotion) {
+            out.push(
+                NewsStory::new(NewsStoryKind::ShirtNumberHandover, date)
+                    .about(player.id)
+                    .weighted(importance / 3),
+            );
+            return;
+        }
+
+        // The senior pro who has taken the new boy on. The quiet half of
+        // a dressing room, and the half that decides whether a signing
+        // works at all.
+        if feed
+            .any_of(&[
+                HappinessEventType::SeniorMentorSupport,
+                HappinessEventType::LearningFromStarTeammate,
+                HappinessEventType::TakesReplacementUnderWing,
+            ])
+            .is_some()
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::TakenUnderWing, date)
+                    .about(player.id)
+                    .weighted(importance / 4),
             );
         }
     }

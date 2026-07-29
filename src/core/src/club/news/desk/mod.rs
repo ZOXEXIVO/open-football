@@ -35,8 +35,8 @@ pub use board::BoardroomDesk;
 pub use dugout::DugoutDesk;
 pub use facts::{
     CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie, KeeperMatchFacts,
-    LoanWatchEntry, ManagerPursuit, MatchStarFacts, PlayerStanding, RecentEvents, SquadPulse,
-    StandingSnapshot, TransferMove, TransferMoveKind, WeeklyMatchFacts,
+    LoanWatchEntry, ManagerPursuit, MatchStarFacts, OutfieldMatchFacts, PlayerStanding,
+    RecentEvents, SquadPulse, StandingSnapshot, TransferMove, TransferMoveKind, WeeklyMatchFacts,
 };
 pub use fans::FansDesk;
 pub use loan::LoanDesk;
@@ -48,14 +48,18 @@ pub use squad::SquadDesk;
 #[cfg(test)]
 mod tests {
     use super::facts::{
-        ClubTransferWeek, MatchStarFacts, StandingSnapshot, TransferMove, TransferMoveKind,
-        WeeklyMatchFacts,
+        ClubTransferWeek, MatchStarFacts, OutfieldMatchFacts, StandingSnapshot, TransferMove,
+        TransferMoveKind, WeeklyMatchFacts,
     };
+    use super::squad::SquadDesk;
     use super::{MarketDesk, MatchDesk, TableDesk};
     use crate::club::news::types::{IssueResult, NewsStory, NewsStoryKind, ResultCompetition};
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::shared::FullName;
     use crate::{
-        PlayerCollection, StaffCollection, Team, TeamBuilder, TeamReputation, TeamType,
-        TrainingSchedule,
+        PersonAttributes, Player, PlayerAttributes, PlayerCollection, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection, Team, TeamBuilder,
+        TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::NaiveDate;
     use rustc_hash::FxHashSet;
@@ -523,6 +527,383 @@ mod tests {
         SquadDesk::file_keeper_deeds(&mut out, 1, &week, Fixture::day());
 
         assert!(out.is_empty(), "{:?}", Fixture::kinds(&out));
+    }
+
+    /// One outfield player, one afternoon, one line — and the order the
+    /// page tells it in.
+    ///
+    /// The precedence is a judgement about what a reader remembers rather
+    /// than about which number is biggest, exactly as it is for the
+    /// goalkeeper. A paper does not print "the best man on the pitch" and
+    /// "his error decided it" about one player on one page.
+    #[test]
+    fn an_outfield_players_week_is_told_in_one_line_loudest_first() {
+        let filed = |facts: OutfieldMatchFacts| -> Vec<NewsStoryKind> {
+            Verdicts::filed(PlayerPositionType::Striker, facts, false)
+        };
+
+        // A goal in his own net leads over everything he did well.
+        assert_eq!(
+            filed(OutfieldMatchFacts {
+                own_goals: 1,
+                best_rating: 830,
+                worst_rating: 550,
+                man_of_the_match: true,
+                ..Verdicts::blank()
+            }),
+            vec![NewsStoryKind::OwnGoalShame]
+        );
+
+        // The spot-kick he missed outranks his mark for the ninety
+        // minutes: a shoot-out is remembered by its ending.
+        assert_eq!(
+            filed(OutfieldMatchFacts {
+                penalties_missed: 1,
+                best_rating: 780,
+                worst_rating: 780,
+                ..Verdicts::blank()
+            }),
+            vec![NewsStoryKind::PenaltyMissed]
+        );
+
+        // His mistake, their goal — above a masterclass in the same week.
+        assert_eq!(
+            filed(OutfieldMatchFacts {
+                errors_leading_to_goal: 1,
+                best_rating: 820,
+                worst_rating: 600,
+                ..Verdicts::blank()
+            }),
+            vec![NewsStoryKind::CostlyError]
+        );
+
+        // Nothing went wrong, and the mark is in the eights.
+        assert_eq!(
+            filed(OutfieldMatchFacts {
+                best_rating: 840,
+                worst_rating: 840,
+                goals: 2,
+                man_of_the_match: true,
+                ..Verdicts::blank()
+            }),
+            vec![NewsStoryKind::MatchMasterclass]
+        );
+
+        // Man of the match without the eights: the engine's own verdict,
+        // which the newsroom recorded and threw away for a year.
+        assert_eq!(
+            filed(OutfieldMatchFacts {
+                best_rating: 760,
+                worst_rating: 760,
+                man_of_the_match: true,
+                ..Verdicts::blank()
+            }),
+            vec![NewsStoryKind::ManOfTheMatch]
+        );
+
+        // Three made for other people is the story of his afternoon.
+        assert_eq!(
+            filed(OutfieldMatchFacts {
+                best_rating: 770,
+                worst_rating: 770,
+                assists: 3,
+                ..Verdicts::blank()
+            }),
+            vec![NewsStoryKind::AssistShow]
+        );
+
+        // The chances were there and none of them went in.
+        assert_eq!(
+            filed(OutfieldMatchFacts {
+                best_rating: 640,
+                worst_rating: 640,
+                shots: 5,
+                xg_x100: 140,
+                ..Verdicts::blank()
+            }),
+            vec![NewsStoryKind::WastefulFinishing]
+        );
+
+        // Marked down and taken off: the more specific story wins.
+        assert_eq!(
+            filed(OutfieldMatchFacts {
+                best_rating: 540,
+                worst_rating: 540,
+                worst_rating_minutes: 55,
+                worst_rating_started: true,
+                worst_rating_hooked: true,
+                ..Verdicts::blank()
+            }),
+            vec![NewsStoryKind::HookedEarly]
+        );
+
+        // …and the same mark without the substitution.
+        assert_eq!(
+            filed(OutfieldMatchFacts {
+                best_rating: 540,
+                worst_rating: 540,
+                worst_rating_minutes: 90,
+                worst_rating_started: true,
+                ..Verdicts::blank()
+            }),
+            vec![NewsStoryKind::MatchStinker]
+        );
+    }
+
+    /// An ordinary afternoon is not news.
+    ///
+    /// This is the bar the whole ratings page hangs on: a 6.6 in a 1-1
+    /// with two tackles and a shot is the week nearly every outfield
+    /// player in the world has, and a page that reported it would report
+    /// all of them.
+    #[test]
+    fn a_routine_afternoon_is_not_a_verdict() {
+        assert!(
+            Verdicts::filed(
+                PlayerPositionType::MidfielderCenter,
+                OutfieldMatchFacts {
+                    best_rating: 660,
+                    worst_rating: 660,
+                    worst_rating_minutes: 90,
+                    worst_rating_started: true,
+                    shots: 1,
+                    xg_x100: 15,
+                    key_passes: 2,
+                    successful_dribbles: 1,
+                    defensive_actions: 4,
+                    fouls: 1,
+                    ..Verdicts::blank()
+                },
+                false,
+            )
+            .is_empty(),
+            "the median afternoon must leave the page alone"
+        );
+
+        // A player who never came off the bench carries an all-zero
+        // line, and a mark of nothing is not a bad mark — it is no mark.
+        assert!(
+            Verdicts::filed(
+                PlayerPositionType::Striker,
+                OutfieldMatchFacts {
+                    ..Verdicts::blank()
+                },
+                false,
+            )
+            .is_empty(),
+            "an unused substitute has not been marked at all"
+        );
+    }
+
+    /// The three false positives the detectors are shaped around, each of
+    /// which would print a sentence the paper cannot stand behind.
+    #[test]
+    fn a_verdict_never_reports_something_that_did_not_happen() {
+        // A man carried off injured on the half hour has also "been taken
+        // off early having been marked down". Reporting it as a
+        // manager's verdict invents a decision nobody made — so the
+        // substitution reason, not the minute, is what qualifies.
+        let injured = OutfieldMatchFacts {
+            best_rating: 555,
+            worst_rating: 555,
+            worst_rating_minutes: 31,
+            worst_rating_started: true,
+            worst_rating_hooked: false,
+            ..Verdicts::blank()
+        };
+        assert_eq!(
+            Verdicts::filed(PlayerPositionType::MidfielderCenter, injured, false),
+            vec![NewsStoryKind::MatchStinker],
+            "an injury swap must not read as a manager's verdict"
+        );
+
+        // A forward who tracked back all afternoon is not the rearguard
+        // story, however many times he put a foot in.
+        assert!(
+            Verdicts::filed(
+                PlayerPositionType::Striker,
+                OutfieldMatchFacts {
+                    best_rating: 745,
+                    worst_rating: 745,
+                    defensive_actions: 12,
+                    shut_out: true,
+                    ..Verdicts::blank()
+                },
+                false,
+            )
+            .is_empty(),
+            "the defensive piece belongs to a defender"
+        );
+
+        // The same shift in a hiding is a man drowning, not a man in
+        // command — defensive volume RISES when a side is under the cosh,
+        // so the clean sheet is what tells the two apart.
+        assert!(
+            Verdicts::filed(
+                PlayerPositionType::DefenderCenter,
+                OutfieldMatchFacts {
+                    best_rating: 745,
+                    worst_rating: 745,
+                    defensive_actions: 14,
+                    shut_out: false,
+                    ..Verdicts::blank()
+                },
+                false,
+            )
+            .is_empty(),
+            "fourteen clearances in a 4-0 defeat is not a rearguard piece"
+        );
+
+        // …and with the clean sheet behind it, it is.
+        assert_eq!(
+            Verdicts::filed(
+                PlayerPositionType::DefenderCenter,
+                OutfieldMatchFacts {
+                    best_rating: 745,
+                    worst_rating: 745,
+                    defensive_actions: 11,
+                    shut_out: true,
+                    ..Verdicts::blank()
+                },
+                false,
+            ),
+            vec![NewsStoryKind::DefensiveRock]
+        );
+    }
+
+    /// Winning a derby is the loudest thing a player can do in a shirt,
+    /// and it outranks whatever else the same week did to him.
+    #[test]
+    fn the_man_who_won_a_derby_leads_his_own_week() {
+        assert_eq!(
+            Verdicts::filed(
+                PlayerPositionType::Striker,
+                OutfieldMatchFacts {
+                    best_rating: 780,
+                    worst_rating: 520,
+                    goals: 1,
+                    own_goals: 1,
+                    ..Verdicts::blank()
+                },
+                true,
+            ),
+            vec![NewsStoryKind::DerbyHero]
+        );
+    }
+
+    /// Every verdict that quotes a mark out of ten has to carry one, or
+    /// the editor's own well-formedness gate silently swallows the story.
+    /// This is the desk-side half of `a_story_never_quotes_a_figure_it_
+    /// does_not_have`.
+    #[test]
+    fn every_verdict_that_quotes_a_mark_carries_one() {
+        let cases = [
+            (
+                PlayerPositionType::Striker,
+                OutfieldMatchFacts {
+                    best_rating: 845,
+                    worst_rating: 845,
+                    ..Verdicts::blank()
+                },
+            ),
+            (
+                PlayerPositionType::Striker,
+                OutfieldMatchFacts {
+                    best_rating: 755,
+                    worst_rating: 755,
+                    man_of_the_match: true,
+                    ..Verdicts::blank()
+                },
+            ),
+            (
+                PlayerPositionType::MidfielderCenter,
+                OutfieldMatchFacts {
+                    best_rating: 525,
+                    worst_rating: 525,
+                    worst_rating_minutes: 90,
+                    worst_rating_started: true,
+                    ..Verdicts::blank()
+                },
+            ),
+            (
+                PlayerPositionType::MidfielderCenter,
+                OutfieldMatchFacts {
+                    best_rating: 560,
+                    worst_rating: 560,
+                    worst_rating_minutes: 48,
+                    worst_rating_started: true,
+                    worst_rating_hooked: true,
+                    ..Verdicts::blank()
+                },
+            ),
+        ];
+
+        for (position, facts) in cases {
+            let stories = Verdicts::stories(position, facts, false);
+            for story in &stories {
+                if story.kind.quotes_a_rating() {
+                    assert!(story.b > 0, "{:?} would print a mark of 0.00", story.kind);
+                }
+            }
+            assert_eq!(stories.len(), 1, "one verdict per player per week");
+        }
+    }
+
+    /// Builds the ratings desk's inputs without a world: an outfield
+    /// player at a given position and one week of match facts.
+    struct Verdicts;
+
+    impl Verdicts {
+        fn blank() -> OutfieldMatchFacts {
+            OutfieldMatchFacts::default()
+        }
+
+        fn player(position: PlayerPositionType) -> Player {
+            PlayerBuilder::new()
+                .id(1)
+                .full_name(FullName::new("Test".to_string(), "Player".to_string()))
+                .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::flat_for_ability(140))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap()
+        }
+
+        fn stories(
+            position: PlayerPositionType,
+            facts: OutfieldMatchFacts,
+            derby_hero: bool,
+        ) -> Vec<NewsStory> {
+            let player = Self::player(position);
+            let mut outfield: rustc_hash::FxHashMap<u32, OutfieldMatchFacts> =
+                rustc_hash::FxHashMap::default();
+            outfield.insert(player.id, facts);
+
+            let week = WeeklyMatchFacts {
+                outfield,
+                ..WeeklyMatchFacts::empty()
+            };
+
+            let mut out = Vec::new();
+            SquadDesk::file_outfield_deeds(&mut out, &player, &week, derby_hero, Fixture::day());
+            out
+        }
+
+        fn filed(
+            position: PlayerPositionType,
+            facts: OutfieldMatchFacts,
+            derby_hero: bool,
+        ) -> Vec<NewsStoryKind> {
+            Fixture::kinds(&Self::stories(position, facts, derby_hero))
+        }
     }
 
     #[test]

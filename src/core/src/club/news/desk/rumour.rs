@@ -406,12 +406,12 @@ mod tests {
     use super::RumourDesk;
     use crate::club::news::types::{NewsStory, NewsStoryKind};
     use crate::club::player::core::builder::PlayerBuilder;
-    use crate::shared::fullname::FullName;
     use crate::club::player::happiness::{
         HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
         TransferInterestContext, TransferInterestKind, TransferInterestReaction,
         TransferInterestSource, TransferInterestStage,
     };
+    use crate::shared::fullname::FullName;
     use crate::{
         HappinessEventType, PersonAttributes, Player, PlayerAttributes, PlayerPosition,
         PlayerPositionType, PlayerPositions, PlayerSkills,

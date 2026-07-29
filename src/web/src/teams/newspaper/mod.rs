@@ -2205,6 +2205,7 @@ mod render_tests {
                 ("newspaper_cup_tie", "Cup"),
                 ("news_desk_loan", "Loan watch"),
                 ("news_desk_fans", "The terraces"),
+                ("news_desk_verdicts", "Player ratings"),
             ])
         }
 
@@ -2306,6 +2307,21 @@ mod render_tests {
                     ),
                 ],
                 run: vec![
+                    // The ratings page. Its copy arrives with the mark
+                    // already substituted, exactly as the composer emits
+                    // it, so the preview shows the sentence a reader gets.
+                    // It sits in the run rather than beside the rail
+                    // because `tiers` caps that block at
+                    // `SECONDARY_SLOTS`, and a fixture wider than the
+                    // real page is a fixture that proves nothing.
+                    Self::story(
+                        "Player ratings",
+                        "A masterclass from {player}",
+                        "Marked 8.40 \u{2014} the sort of number a correspondent writes \
+                         down twice to be sure. Everything he tried came off, and what he \
+                         did not try was not worth trying.",
+                        "Diego Mora",
+                    ),
                     Self::story(
                         "Match",
                         "{club} make it 4 in a row",
@@ -2327,20 +2343,6 @@ mod render_tests {
                          about what the next window will look like.",
                         "",
                     ),
-                    Self::story(
-                        "Squad",
-                        "180 appearances for {player}",
-                        "Eight seasons, one club, and a milestone the dressing room made \
-                         rather more of than he did.",
-                        "Andrés Vidal",
-                    ),
-                    Self::story(
-                        "Loan watch",
-                        "4 goals on loan for {player}",
-                        "The reports coming back are good enough that his return is now a \
-                         question of when rather than whether.",
-                        "Pau Ferrer",
-                    ),
                     // Real copy that never names its subject. There is
                     // nothing in the line to underscore, so this one — and
                     // only this one — keeps the whole-headline rule.
@@ -2350,6 +2352,15 @@ mod render_tests {
                         "Nothing has been put in writing yet, which is not the same thing \
                          as nothing having been said.",
                         "Iván Salas",
+                    ),
+                    // The other half of a ratings column, which is the
+                    // half that sells it.
+                    Self::story(
+                        "Player ratings",
+                        "A day to forget for {player}",
+                        "Marked 5.20, and generously at that. Nothing came off, and by the \
+                         end the crowd had stopped expecting it to.",
+                        "Rubén Ortega",
                     ),
                 ],
                 briefs: vec![
