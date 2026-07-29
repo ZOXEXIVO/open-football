@@ -2,7 +2,6 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::{PlayerPage, resolve_player_page};
-use crate::player::decisions::PlayerDecisionsCounter;
 use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection};
@@ -51,7 +50,6 @@ pub struct PlayerTransfersTemplate {
     pub is_force_match_selection: bool,
     pub is_on_watchlist: bool,
     pub events_count: usize,
-    pub decisions_count: usize,
     pub interested_clubs_count: usize,
     pub awards_count: u32,
     pub news_count: usize,
@@ -463,7 +461,6 @@ pub async fn player_transfers_action(
         is_force_match_selection: player.is_force_match_selection,
         is_on_watchlist: simulator_data.watchlist.contains(&player.id),
         events_count: PlayerEventsCounter::count(player),
-        decisions_count: PlayerDecisionsCounter::count_recent(player, simulator_data.date.date()),
         interested_clubs_count: interested_clubs.len(),
         awards_count: player.awards_count.total(),
         news_count: PlayerNewsCounter::count(simulator_data, player),

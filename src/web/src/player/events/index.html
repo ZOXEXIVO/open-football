@@ -19,7 +19,7 @@
         {% else %}
         <ol class="fm-evt-list">
             {% for event in events %}
-            <li class="fm-evt-card{% if event.is_big %} fm-evt-big{% endif %}{% if event.is_positive %} fm-evt-positive{% elif event.is_negative %} fm-evt-negative{% else %} fm-evt-neutral{% endif %}">
+            <li class="fm-evt-card{% if event.is_big %} fm-evt-big{% endif %}{% if event.is_decision %} fm-evt-decision{% endif %}{% if event.is_positive %} fm-evt-positive{% elif event.is_negative %} fm-evt-negative{% else %} fm-evt-neutral{% endif %}">
                 <span class="fm-evt-rail" aria-hidden="true"></span>
                 <div class="fm-evt-content">
                     <header class="fm-evt-head">
@@ -30,14 +30,21 @@
                             </h4>
                         </div>
                         <div class="fm-evt-meta">
+                            {% if event.is_decision %}
+                            <span class="fm-evt-kind">{{ i18n.t("decisions_decision") }}</span>
+                            {% endif %}
                             {% if let Some(severity_label) = event.severity_label %}{% if let Some(severity_tag) = event.severity_tag %}
                             <span class="fm-evt-severity fm-evt-severity-{{ severity_tag }}">{{ severity_label }}</span>
                             {% endif %}{% endif %}
                             <time class="fm-evt-time">{{ event.time_ago_label }}</time>
                         </div>
                     </header>
-                    {% if event.detail.is_some() || event.follow_up.is_some() || event.comparison.is_some() %}
+                    {% if event.detail.is_some() || event.follow_up.is_some() || event.comparison.is_some() || event.movement.is_some() || event.decided_by.is_some() %}
                     <dl class="fm-evt-grid">
+                        {% if let Some(movement) = event.movement %}
+                        <dt class="fm-evt-label">{{ i18n.t("decisions_movement") }}</dt>
+                        <dd class="fm-evt-value">{{ movement }}</dd>
+                        {% endif %}
                         {% if let Some(comparison) = event.comparison %}
                         <dt class="fm-evt-label">{{ events_i18n.t("event_label_comparison") }}</dt>
                         <dd class="fm-evt-value">{{ comparison|safe }}</dd>
@@ -49,6 +56,10 @@
                         {% if let Some(follow_up) = event.follow_up %}
                         <dt class="fm-evt-label">{{ events_i18n.t("event_label_outlook") }}</dt>
                         <dd class="fm-evt-value fm-evt-outlook">{{ follow_up }}</dd>
+                        {% endif %}
+                        {% if let Some(decided_by) = event.decided_by %}
+                        <dt class="fm-evt-label">{{ i18n.t("decisions_who") }}</dt>
+                        <dd class="fm-evt-value">{{ decided_by }}</dd>
                         {% endif %}
                     </dl>
                     {% endif %}

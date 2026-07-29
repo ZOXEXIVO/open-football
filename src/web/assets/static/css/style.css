@@ -3320,6 +3320,27 @@ a:active {
     box-shadow: inset 0 0 0 1px rgba(229, 57, 53, 0.25);
 }
 
+/* --- Decision chip ---
+   The register the Decisions tab used to own now shares this feed. Those
+   rows are paperwork rather than feeling — a club filing, dated to the day
+   — and the chip names the kind so the eye can skim past the ledger to the
+   mood without reading either. */
+
+.fm-evt-kind {
+    display: inline-block;
+    padding: 2px 7px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-radius: 2px;
+    line-height: 1.4;
+    white-space: nowrap;
+    background: rgba(90, 110, 124, 0.14);
+    color: #8a9aa6;
+    border: 1px solid rgba(90, 110, 124, 0.3);
+}
+
 /* --- Body grid: CAUSE / IMPACT / OUTLOOK --- */
 
 .fm-evt-grid {
@@ -3476,6 +3497,23 @@ a:active {
     box-shadow:
         0 0 0 1px rgba(0, 0, 0, 0.3),
         0 0 4px rgba(229, 57, 53, 0.35);
+}
+
+/* Decision — a club filing carries no valence, so it takes a colder rail
+   than the neutral mood card and a square marker instead of the diamond.
+   Placed after the valence variants deliberately: a decision row is always
+   also `.fm-evt-neutral`, and these have to win. */
+.fm-evt-decision .fm-evt-rail {
+    background: linear-gradient(180deg, #4a5c68 0%, #38464f 100%);
+}
+.fm-evt-decision .fm-evt-marker {
+    transform: none;
+    border-radius: 1px;
+    background: #5f727e;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+.fm-evt-decision .fm-evt-headline {
+    color: #c9d1d8;
 }
 
 /* --- Big events: career-visible moments --- */
@@ -4512,29 +4550,6 @@ a:active {
 .fm-history-table .fm-history-breakdown-row--last > td.sq-fee,
 .fm-history-table .fm-history-breakdown-row--last > td.sq-stat {
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-/* --- Player Decisions Table --- */
-
-.fm-decisions-table .dec-when {
-    width: 12%;
-    color: #7a868e;
-    font-size: 12px;
-}
-
-.fm-decisions-table .dec-movement {
-    width: 24%;
-    white-space: nowrap;
-}
-
-.fm-decisions-table .dec-decision {
-    width: 44%;
-}
-
-.fm-decisions-table .dec-who {
-    width: 20%;
-    color: #7a868e;
-    font-size: 12px;
 }
 
 /* --- Team Stats Table --- */

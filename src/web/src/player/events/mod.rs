@@ -1,14 +1,15 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::slug::{PlayerPage, resolve_player_page};
-use crate::player::decisions::PlayerDecisionsCounter;
+use crate::common::slug::{PlayerPage, player_from_slug, resolve_player_page};
 use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, EventI18n, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use chrono::NaiveDate;
 use core::CareerDesireEventContext;
 use core::ContractEventContext;
 use core::HappinessEvent;
@@ -25,6 +26,7 @@ use core::MatchSelectionContext;
 use core::MediaFanEventContext;
 use core::NationalTeamEventContext;
 use core::PersonalAdaptationEventContext;
+use core::PlayerDecision;
 use core::PlayerStatusType;
 use core::RoleStatusEventContext;
 use core::SelectionDecisionScope;
@@ -108,6 +110,17 @@ pub struct PlayerEventDto {
     /// player who took the slot and why the manager preferred them.
     /// Empty when no `MatchSelectionContext` is attached.
     pub comparison: Option<String>,
+    /// Roster or market movement — the club-to-club route with its fee, or
+    /// the terms a contract offer carried. Only decision-register rows fill
+    /// this; happiness events leave it empty.
+    pub movement: Option<String>,
+    /// Who took the decision — the board, or a named coach. Register rows
+    /// only, and empty even there when nobody was recorded.
+    pub decided_by: Option<String>,
+    /// True for a row that came from the decision register rather than the
+    /// player's happiness feed. Drives the "Decision" chip and the card's
+    /// muted ledger styling.
+    pub is_decision: bool,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -140,7 +153,6 @@ pub struct PlayerEventsTemplate {
     pub is_force_match_selection: bool,
     pub is_on_watchlist: bool,
     pub events_count: usize,
-    pub decisions_count: usize,
     pub interested_clubs_count: usize,
     pub awards_count: u32,
     pub news_count: usize,
@@ -265,13 +277,37 @@ pub async fn player_events_action(
         is_force_match_selection: player.is_force_match_selection,
         is_on_watchlist: simulator_data.watchlist.contains(&player.id),
         events_count: events.len(),
-        decisions_count: PlayerDecisionsCounter::count_recent(player, simulator_data.date.date()),
         interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
         awards_count: player.awards_count.total(),
         news_count: PlayerNewsCounter::count(simulator_data, player),
         events,
     }
     .into_response())
+}
+
+/// The Decisions tab folded into this feed — every register row now renders
+/// as an event card. Its URL stays reachable and answers 301 so bookmarks
+/// and outside links land on the merged page.
+///
+/// The player is resolved here instead of echoing the incoming slug back, so
+/// a stale or bare-id `/decisions` link reaches the canonical events URL in
+/// one hop rather than bouncing through the slug redirect on the way.
+pub async fn player_decisions_redirect(
+    State(state): State<GameAppData>,
+    Path(route_params): Path<PlayerEventsRequest>,
+) -> ApiResult<Response> {
+    let guard = state.data.read().await;
+
+    let simulator_data = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+
+    let (player, _) = player_from_slug(simulator_data, &route_params.player_slug)?;
+
+    Ok(DecisionRender::moved_to_events(
+        &route_params.lang,
+        &player.slug(),
+    ))
 }
 
 /// Big events: rare, career-visible moments. The threshold is "would a
@@ -603,8 +639,11 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
 pub struct PlayerEventsCounter;
 
 impl PlayerEventsCounter {
+    /// Tab badge: the happiness feed plus the decision register, matching
+    /// what the page actually renders. The register folded in when the
+    /// Decisions tab was removed, so its rows count here too.
     pub fn count(player: &core::Player) -> usize {
-        Self::visible_iter(player).count()
+        Self::visible_iter(player).count() + player.decision_history.items.len()
     }
 
     fn visible_iter(player: &core::Player) -> impl Iterator<Item = &HappinessEvent> {
@@ -701,12 +740,125 @@ fn build_events(
                 severity_label,
                 severity_tag,
                 comparison,
+                movement: None,
+                decided_by: None,
+                is_decision: false,
             }
         })
         .collect();
 
+    // The decision register joins the same feed. It is not truncated the way
+    // the happiness feed is: the register is the player's career paper trail
+    // and used to be a page of its own, so every row still shows.
+    let today = simulator_data.date.date();
+    events.extend(
+        player
+            .decision_history
+            .items
+            .iter()
+            .map(|row| DecisionRender::to_event(row, events_i18n, today)),
+    );
+
+    // Stable sort, so a decision and a happiness event stamped the same day
+    // keep the feed's own order: what the player felt, then what the club
+    // put on paper.
     events.sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
     events
+}
+
+/// Renders a decision-register row as an event card.
+///
+/// The register stores two row shapes that its producers never unified.
+/// Club-side listings put the action key in `movement` and the
+/// `dec_reason_*` key justifying it in `decision`; move and contract rows
+/// put the action key in `decision` and a free-form line — the club-to-club
+/// route with its fee, the terms on offer — in `movement`. The `dec_reason_`
+/// prefix is the discriminator: the register only ever spells a reason that
+/// way, never an action, so a row sorts into headline and supporting line
+/// without every producer having to agree on field order.
+struct DecisionRender;
+
+impl DecisionRender {
+    /// The one `dec_*` family that names a justification rather than an act.
+    const REASON_PREFIX: &'static str = "dec_reason_";
+
+    fn is_reason(key: &str) -> bool {
+        key.starts_with(Self::REASON_PREFIX)
+    }
+
+    /// Split a row into `(action key, supporting line)`. The supporting line
+    /// is a reason key in one shape and free text in the other — the caller
+    /// re-tests it to pick the label it belongs under.
+    fn split(row: &PlayerDecision) -> (&str, &str) {
+        if Self::is_reason(&row.decision) {
+            (&row.movement, &row.decision)
+        } else {
+            (&row.decision, &row.movement)
+        }
+    }
+
+    fn to_event(row: &PlayerDecision, events_i18n: &EventI18n, today: NaiveDate) -> PlayerEventDto {
+        let (action, supporting) = Self::split(row);
+
+        // A reason explains the decision, so it reads as the card's CAUSE.
+        // A route or a set of terms is the decision's substance rather than
+        // its cause, and gets its own MOVEMENT row instead.
+        let (detail, movement) = if supporting.is_empty() {
+            (None, None)
+        } else if Self::is_reason(supporting) {
+            (Some(events_i18n.t(supporting).to_string()), None)
+        } else {
+            (None, Some(events_i18n.t(supporting).to_string()))
+        };
+
+        let decided_by = if row.decided_by.is_empty() {
+            None
+        } else {
+            Some(events_i18n.t(&row.decided_by).to_string())
+        };
+
+        PlayerEventDto {
+            // Always an i18n key from the register's own closed vocabulary,
+            // so the template's `|safe` on this field stays sound.
+            description: events_i18n.t(action).to_string(),
+            // A register row records what the club did, not how the player
+            // took it — the valence rails stay off.
+            is_positive: false,
+            is_negative: false,
+            is_big: false,
+            days_ago: Self::days_ago(row.date, today),
+            // Register rows carry their own date rather than a "1825d ago"
+            // that no reader can convert. The happiness feed spans weeks and
+            // reads better relative; a career paper trail spans years and
+            // reads better absolute.
+            time_ago_label: row.date.format("%d.%m.%Y").to_string(),
+            partner_name: None,
+            partner_slug: None,
+            detail,
+            follow_up: None,
+            severity_label: None,
+            severity_tag: None,
+            comparison: None,
+            movement,
+            decided_by,
+            is_decision: true,
+        }
+    }
+
+    /// Sort key shared with the happiness feed. A row dated in the future
+    /// cannot arise from the simulation, but clamping keeps it at the top
+    /// rather than wrapping to the bottom of a `u16`.
+    fn days_ago(date: NaiveDate, today: NaiveDate) -> u16 {
+        (today - date).num_days().clamp(0, u16::MAX as i64) as u16
+    }
+
+    /// Where the retired Decisions tab now points. Built by hand because
+    /// `Redirect::permanent` is a 308: the tab moved for good, and 301 is
+    /// the status browsers and crawlers cache as such.
+    fn moved_to_events(lang: &str, player_slug: &str) -> Response {
+        let url = format!("/{}/players/{}/events", lang, player_slug);
+        (StatusCode::MOVED_PERMANENTLY, [(header::LOCATION, url)]).into_response()
+    }
 }
 
 /// Renders a [`HappinessEventContext`] payload into the strings the
@@ -5281,6 +5433,201 @@ mod tests {
                 "en.json missing required transfer-environment key {}",
                 key
             );
+        }
+    }
+
+    fn decision_row(
+        date: (i32, u32, u32),
+        movement: &str,
+        decision: &str,
+        decided_by: &str,
+    ) -> PlayerDecision {
+        PlayerDecision {
+            date: NaiveDate::from_ymd_opt(date.0, date.1, date.2).unwrap(),
+            movement: movement.to_string(),
+            decision: decision.to_string(),
+            decided_by: decided_by.to_string(),
+        }
+    }
+
+    fn today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 7, 29).unwrap()
+    }
+
+    /// The register never agreed on field order: a club-side listing writes
+    /// the action into `movement`, a completed move writes it into
+    /// `decision`. Both shapes must put the action in the card's headline,
+    /// so this pins the `dec_reason_` discriminator against a real row from
+    /// each producer family.
+    #[test]
+    fn decision_render_headlines_the_action_in_both_row_shapes() {
+        let i18n = load_en_i18n();
+
+        // Club-side listing — action in `movement`, reason in `decision`.
+        let listing = decision_row(
+            (2026, 4, 30),
+            "dec_transfer_listed",
+            "dec_reason_surplus_squad",
+            "dec_decided_board",
+        );
+        let card = DecisionRender::to_event(&listing, &i18n, today());
+        assert_eq!(card.description, i18n.t("dec_transfer_listed"));
+        assert_eq!(
+            card.detail.as_deref(),
+            Some(i18n.t("dec_reason_surplus_squad")),
+            "a reason explains the decision, so it reads as the CAUSE"
+        );
+        assert_eq!(
+            card.movement, None,
+            "a reason must not pose as a roster movement"
+        );
+        assert_eq!(
+            card.decided_by.as_deref(),
+            Some(i18n.t("dec_decided_board"))
+        );
+
+        // Completed move — action in `decision`, composed route in `movement`.
+        let transfer = decision_row(
+            (2026, 7, 1),
+            "Old FC → New FC · $2.5M",
+            "dec_transfer_completed",
+            "",
+        );
+        let card = DecisionRender::to_event(&transfer, &i18n, today());
+        assert_eq!(card.description, i18n.t("dec_transfer_completed"));
+        assert_eq!(
+            card.movement.as_deref(),
+            Some("Old FC → New FC · $2.5M"),
+            "a route is the decision's substance, so it gets its own row"
+        );
+        assert_eq!(card.detail, None, "a route is not a cause");
+        assert_eq!(
+            card.decided_by, None,
+            "an unrecorded decider renders no WHO row"
+        );
+    }
+
+    /// The early loan recall records only the action. That row must still
+    /// render as a headline-only card rather than an empty CAUSE row.
+    #[test]
+    fn decision_render_handles_a_row_with_no_supporting_line() {
+        let i18n = load_en_i18n();
+        let card = DecisionRender::to_event(
+            &decision_row((2026, 2, 14), "", "dec_loan_recalled", ""),
+            &i18n,
+            today(),
+        );
+        assert_eq!(card.description, i18n.t("dec_loan_recalled"));
+        assert!(card.detail.is_none());
+        assert!(card.movement.is_none());
+        assert!(card.decided_by.is_none());
+    }
+
+    /// A register row is club paperwork, not feeling: no valence rail, no
+    /// severity pill, and its own date rather than the relative stamp the
+    /// happiness feed uses — a decade-old filing has to read as a date, not
+    /// as "3600d ago".
+    #[test]
+    fn decision_cards_are_neutral_dated_ledger_rows() {
+        let i18n = load_en_i18n();
+        let card = DecisionRender::to_event(
+            &decision_row(
+                (2026, 4, 30),
+                "dec_transfer_listed",
+                "dec_reason_surplus_squad",
+                "dec_decided_board",
+            ),
+            &i18n,
+            today(),
+        );
+        assert!(card.is_decision);
+        assert!(!card.is_positive);
+        assert!(!card.is_negative);
+        assert!(!card.is_big);
+        assert!(card.severity_label.is_none());
+        assert!(card.severity_tag.is_none());
+        assert!(card.follow_up.is_none());
+        assert!(card.comparison.is_none());
+        assert_eq!(card.time_ago_label, "30.04.2026");
+        // Sorted into the same feed as the happiness events.
+        assert_eq!(card.days_ago, 90);
+    }
+
+    /// The sort key is a `u16`. A future-dated row cannot come out of the
+    /// simulation, but clamping keeps a stray one at the top of the feed
+    /// instead of wrapping it to the bottom.
+    #[test]
+    fn decision_days_ago_clamps_instead_of_wrapping() {
+        let today = today();
+        assert_eq!(DecisionRender::days_ago(today, today), 0);
+        assert_eq!(
+            DecisionRender::days_ago(NaiveDate::from_ymd_opt(2026, 8, 29).unwrap(), today),
+            0
+        );
+        assert_eq!(
+            DecisionRender::days_ago(NaiveDate::from_ymd_opt(1800, 1, 1).unwrap(), today),
+            u16::MAX
+        );
+    }
+
+    /// The Decisions tab is gone, so its URL has to answer 301 — a plain
+    /// permanent move, cached as one — and point at the feed its rows moved
+    /// into. `Redirect::permanent` would answer 308 here, which is why the
+    /// response is built by hand.
+    #[test]
+    fn the_retired_decisions_url_moves_permanently_to_events() {
+        let response = DecisionRender::moved_to_events("en", "43090278-pierluigi-gollini");
+        assert_eq!(response.status(), StatusCode::MOVED_PERMANENTLY);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .expect("a redirect must carry a Location"),
+            "/en/players/43090278-pierluigi-gollini/events"
+        );
+    }
+
+    /// The register's vocabulary — the `dec_*` family and the three labels
+    /// its card reuses — lives in page chrome, and this page reads it
+    /// through `EventI18n`'s chrome fallback. Since the Decisions tab was
+    /// folded in here this page is that vocabulary's only reader, so pin
+    /// that every key still resolves from this scope, in every locale.
+    #[test]
+    fn the_decision_register_vocabulary_resolves_from_the_events_scope() {
+        use crate::i18n::I18nManager;
+        use crate::i18n::events::EventI18nManager;
+
+        let chrome: std::collections::HashMap<String, String> =
+            serde_json::from_str(include_str!("../../../assets/i18n/en.json"))
+                .expect("chrome en.json is not valid JSON");
+        let register: Vec<&str> = chrome
+            .keys()
+            .filter(|k| k.starts_with("dec_"))
+            .map(String::as_str)
+            .collect();
+        assert!(
+            register.len() > 40,
+            "expected the register's dec_* family, found {}",
+            register.len()
+        );
+
+        let events = EventI18nManager::new(&I18nManager::new());
+        for lang in crate::i18n::SUPPORTED_LANG_CODES {
+            let i18n = events.for_lang(lang);
+            for key in &register {
+                assert_ne!(
+                    i18n.t(key),
+                    *key,
+                    "{lang}: register key {key} does not resolve from the events scope"
+                );
+            }
+            for label in ["decisions_decision", "decisions_movement", "decisions_who"] {
+                assert_ne!(
+                    i18n.t(label),
+                    label,
+                    "{lang}: decision-card label {label} does not resolve"
+                );
+            }
         }
     }
 }

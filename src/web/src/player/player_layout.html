@@ -8,7 +8,6 @@
     <a class="fm-tab{% if active_tab == "newspaper" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/newspaper">{{ i18n.t("newspaper") }}{% if news_count > 0 %} <span class="fm-tab-badge">{{ news_count }}</span>{% endif %}</a>
     <a class="fm-tab{% if active_tab == "transfers" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/transfers">{{ i18n.t("transfers") }}{% if interested_clubs_count > 0 %} <span class="fm-tab-badge">{{ interested_clubs_count }}</span>{% endif %}</a>
     <a class="fm-tab{% if active_tab == "relations" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/relations">{{ i18n.t("relations") }}</a>
-    <a class="fm-tab{% if active_tab == "decisions" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/decisions">{{ i18n.t("decisions") }}{% if decisions_count > 0 %} <span class="fm-tab-badge">{{ decisions_count }}</span>{% endif %}</a>
     <a class="fm-tab{% if active_tab == "events" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/events">{{ i18n.t("events") }}{% if events_count > 0 %} <span class="fm-tab-badge">{{ events_count }}</span>{% endif %}</a>
     <a class="fm-tab{% if active_tab == "awards" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/awards">{{ i18n.t("awards") }}{% if awards_count > 0 %} <span class="fm-tab-badge">{{ awards_count }}</span>{% endif %}</a>
     <a class="fm-tab{% if active_tab == "matches" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/matches">{{ i18n.t("matches") }}</a>

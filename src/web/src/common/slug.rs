@@ -39,11 +39,39 @@ pub enum PlayerPage<'a> {
     Redirect(Response),
 }
 
+/// Resolve a `{player_slug}` path segment to the player it names, whether
+/// the slug is canonical or stale — a player lives on a team, in the
+/// free-agent pool, or in the retired archive, and this checks all three.
+///
+/// Handlers that render a page want `resolve_player_page`, which also sends
+/// a stale slug on to its canonical URL. A handler that is already
+/// redirecting somewhere else only needs the player.
+pub fn player_from_slug<'a>(
+    data: &'a SimulatorData,
+    slug: &str,
+) -> ApiResult<(&'a Player, Option<&'a Team>)> {
+    let player_id = parse_slug_id(slug)
+        .ok_or_else(|| ApiError::NotFound(format!("Player slug {} is malformed", slug)))?;
+
+    if let Some((p, t)) = data.player_with_team(player_id) {
+        Ok((p, Some(t)))
+    } else if let Some(p) = data.free_agents.iter().find(|p| p.id == player_id) {
+        Ok((p, None))
+    } else if let Some(p) = data.retired_player(player_id) {
+        Ok((p, None))
+    } else {
+        Err(ApiError::NotFound(format!(
+            "Player with ID {} not found",
+            player_id
+        )))
+    }
+}
+
 /// Resolve the `{player_slug}` path segment for any player-scoped page.
 ///
 /// Returns `PlayerPage::Found` when the incoming slug matches the canonical
 /// `{id}-{name}` form — handlers then render normally. Returns
-/// `PlayerPage::Redirect` with a 301 when the player exists but the slug is
+/// `PlayerPage::Redirect` with a 308 when the player exists but the slug is
 /// stale / missing / wrong, so legacy `/players/{id}` URLs redirect to the
 /// full canonical link without handlers needing per-page redirect logic.
 ///
@@ -56,21 +84,7 @@ pub fn resolve_player_page<'a>(
     lang: &str,
     subpath: &str,
 ) -> ApiResult<PlayerPage<'a>> {
-    let player_id = parse_slug_id(slug)
-        .ok_or_else(|| ApiError::NotFound(format!("Player slug {} is malformed", slug)))?;
-
-    let (player, team) = if let Some((p, t)) = data.player_with_team(player_id) {
-        (p, Some(t))
-    } else if let Some(p) = data.free_agents.iter().find(|p| p.id == player_id) {
-        (p, None)
-    } else if let Some(p) = data.retired_player(player_id) {
-        (p, None)
-    } else {
-        return Err(ApiError::NotFound(format!(
-            "Player with ID {} not found",
-            player_id
-        )));
-    };
+    let (player, team) = player_from_slug(data, slug)?;
 
     let canonical_slug = player.slug();
     if slug != canonical_slug {
