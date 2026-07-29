@@ -3,7 +3,7 @@ pub mod routes;
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::player_history_slug;
 use crate::views::{self, MenuSection};
-use crate::{ApiError, ApiResult, GameAppData, I18n};
+use crate::{ApiError, ApiResult, GameAppData, I18n, NewsI18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
@@ -29,6 +29,9 @@ pub struct TeamNewspaperTemplate {
     pub cpu_brand: &'static str,
     pub cores_count: usize,
     pub i18n: I18n,
+    /// Press copy, scoped apart from `i18n` — the edition partial resolves
+    /// its chrome against this.
+    pub news: NewsI18n,
     pub lang: String,
     pub title: String,
     pub sub_title_prefix: String,
@@ -292,6 +295,7 @@ pub async fn team_newspaper_action(
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
     let i18n = state.i18n.for_lang(&route_params.lang);
+    let news = state.news_i18n.for_lang(&route_params.lang);
 
     let team_id = simulator_data
         .indexes
@@ -314,7 +318,7 @@ pub async fn team_newspaper_action(
     let league = team.league_id.and_then(|id| simulator_data.league(id));
 
     let issues = PressTeam::covering(simulator_data, team)
-        .map(|paper| PressDesk::typeset(simulator_data, paper, &i18n))
+        .map(|paper| PressDesk::typeset(simulator_data, paper, &i18n, &news))
         .unwrap_or_default();
 
     let (neighbor_teams, country_leagues) =
@@ -349,6 +353,7 @@ pub async fn team_newspaper_action(
         cpu_brand: &CPU_BRAND,
         cores_count: *CPU_CORES,
         i18n,
+        news,
         lang: route_params.lang.clone(),
         title: team.name.clone(),
         sub_title_prefix: String::new(),
@@ -437,8 +442,8 @@ impl PressDesk {
     /// whether the last row of the page is a full one.
     const RUN_COLUMNS: usize = 3;
 
-    fn typeset(data: &SimulatorData, team: &Team, i18n: &I18n) -> Vec<IssueView> {
-        let masthead = Self::masthead(team.newsroom.masthead_key(), &team.name, i18n);
+    fn typeset(data: &SimulatorData, team: &Team, i18n: &I18n, news: &NewsI18n) -> Vec<IssueView> {
+        let masthead = Self::masthead(team.newsroom.masthead_key(), &team.name, news);
         let paper = PaperFor::Own(Paper {
             name: &team.name,
             slug: &team.slug,
@@ -451,7 +456,9 @@ impl PressDesk {
             .iter()
             // A club's paper is read by the whole town, so nothing on it
             // is marked for anybody.
-            .map(|issue| Self::issue(data, paper, issue, &masthead, i18n, PressFocus::none()))
+            .map(|issue| {
+                Self::issue(data, paper, issue, &masthead, i18n, news, PressFocus::none())
+            })
             .collect()
     }
 
@@ -459,8 +466,8 @@ impl PressDesk {
     /// masthead patterns are shared: a division's monthly is "The Serie
     /// A Chronicle" by exactly the same rule that makes a club's weekly
     /// "The Rubin Kazan Chronicle".
-    pub(crate) fn masthead(key: &str, name: &str, i18n: &I18n) -> String {
-        i18n.t(key).replace("{club}", name)
+    pub(crate) fn masthead(key: &str, name: &str, news: &NewsI18n) -> String {
+        news.t(key).replace("{club}", name)
     }
 
     pub(crate) fn issue<'a>(
@@ -469,12 +476,13 @@ impl PressDesk {
         issue: &NewspaperIssue,
         masthead: &str,
         i18n: &I18n,
+        news: &NewsI18n,
         focus: PressFocus<'_>,
     ) -> IssueView {
         let stories = issue
             .stories
             .iter()
-            .map(|story| Self::story(data, paper.for_story(data, story), story, i18n, focus))
+            .map(|story| Self::story(data, paper.for_story(data, story), story, i18n, news, focus))
             .collect::<Vec<_>>();
 
         let Tiers {
@@ -484,7 +492,7 @@ impl PressDesk {
             briefs,
         } = Self::tiers(stories, paper.runs_a_briefs_band());
 
-        let portrait = Self::portrait(data, paper, issue, i18n, focus);
+        let portrait = Self::portrait(data, paper, issue, news, focus);
 
         // The results column belongs to one side's own paper, so the
         // paper's team is half of every match id in it. A division's
@@ -502,7 +510,7 @@ impl PressDesk {
             // player page fills this in after typesetting.
             paper_slug: String::new(),
             date: i18n.format_date(issue.date),
-            mood_label: i18n.t(issue.mood.i18n_key()).to_string(),
+            mood_label: news.t(issue.mood.i18n_key()).to_string(),
             mood_slug: issue.mood.slug(),
             mood_stamped: issue.mood.is_stamped(),
             lead,
@@ -620,7 +628,7 @@ impl PressDesk {
         data: &'a SimulatorData,
         paper: PaperFor<'a>,
         issue: &NewspaperIssue,
-        i18n: &I18n,
+        news: &NewsI18n,
         focus: PressFocus<'_>,
     ) -> Option<PortraitView> {
         let story = issue.stories.iter().find(|story| story.player_id != 0)?;
@@ -632,7 +640,7 @@ impl PressDesk {
             player_name: PlayerName::display(&player.full_name),
             player_generated: player.is_generated(),
             marked: focus.is_subject(player.id),
-            caption: StoryComposer::headline(data, story, i18n, paper.for_story(data, story))
+            caption: StoryComposer::headline(data, story, news, paper.for_story(data, story))
                 .text(),
         })
     }
@@ -645,11 +653,12 @@ impl PressDesk {
         paper: Paper<'_>,
         story: &NewsStory,
         i18n: &I18n,
+        news: &NewsI18n,
         focus: PressFocus<'_>,
     ) -> StoryView {
         let (player_name, player_slug) = PlayerName::resolve(data, story.player_id);
-        let mut headline = StoryComposer::headline(data, story, i18n, paper);
-        let mut body = StoryComposer::body(data, story, i18n, paper);
+        let mut headline = StoryComposer::headline(data, story, news, paper);
+        let mut body = StoryComposer::body(data, story, news, paper);
 
         // Both runs are gone through, and both are marked: a name in the
         // headline and the same name four lines into the paragraph are
@@ -661,7 +670,7 @@ impl PressDesk {
         let subject_marked = focus.is_subject(story.player_id);
 
         StoryView {
-            kicker: i18n.t(story.kind.desk().i18n_key()).to_string(),
+            kicker: news.t(story.kind.desk().i18n_key()).to_string(),
             marked: subject_marked || in_the_headline || in_the_body,
             subject_marked,
             headline,
@@ -842,22 +851,27 @@ impl StoryComposer {
     /// `_v6` for any stem without touching code.
     const MAX_VARIANTS: usize = 6;
 
-    fn headline(data: &SimulatorData, story: &NewsStory, i18n: &I18n, paper: Paper<'_>) -> Prose {
+    fn headline(
+        data: &SimulatorData,
+        story: &NewsStory,
+        news: &NewsI18n,
+        paper: Paper<'_>,
+    ) -> Prose {
         Self::compose(
-            i18n.t(&Self::phrasing_key("h", story, i18n)),
+            news.t(&Self::phrasing_key("h", story, news)),
             data,
             story,
-            i18n,
+            news,
             paper,
         )
     }
 
-    fn body(data: &SimulatorData, story: &NewsStory, i18n: &I18n, paper: Paper<'_>) -> Prose {
+    fn body(data: &SimulatorData, story: &NewsStory, news: &NewsI18n, paper: Paper<'_>) -> Prose {
         Self::compose(
-            i18n.t(&Self::phrasing_key("b", story, i18n)),
+            news.t(&Self::phrasing_key("b", story, news)),
             data,
             story,
-            i18n,
+            news,
             paper,
         )
     }
@@ -885,9 +899,9 @@ impl StoryComposer {
     /// The bundles ship variants in matched, gap-free pairs (enforced
     /// by `variant_copy_ships_in_matched_pairs`), which is what lets
     /// the count be read off the headline keys alone.
-    fn phrasing_key(part: &str, story: &NewsStory, i18n: &I18n) -> String {
+    fn phrasing_key(part: &str, story: &NewsStory, news: &NewsI18n) -> String {
         let stem = story.kind.key_stem();
-        let eligible = Self::eligible_phrasings(story, i18n, stem);
+        let eligible = Self::eligible_phrasings(story, news, stem);
         let index = eligible[Self::phrasing_index(story, eligible.len())];
         Self::phrasing_key_at(part, stem, index)
     }
@@ -910,11 +924,11 @@ impl StoryComposer {
     /// writers write phrasings around him, and a story without one can
     /// never land on "an unnamed player was the difference" — the stub
     /// sentence this whole mechanism exists to prevent.
-    fn eligible_phrasings(story: &NewsStory, i18n: &I18n, stem: &str) -> Vec<usize> {
-        let count = Self::phrasing_count(i18n, stem);
+    fn eligible_phrasings(story: &NewsStory, news: &NewsI18n, stem: &str) -> Vec<usize> {
+        let count = Self::phrasing_count(news, stem);
         let eligible: Vec<usize> = (0..count)
             .filter(|&index| {
-                story.player_id != 0 || !Self::phrasing_names_a_player(i18n, stem, index)
+                story.player_id != 0 || !Self::phrasing_names_a_player(news, stem, index)
             })
             .collect();
 
@@ -927,19 +941,19 @@ impl StoryComposer {
         eligible
     }
 
-    fn phrasing_names_a_player(i18n: &I18n, stem: &str, index: usize) -> bool {
+    fn phrasing_names_a_player(news: &NewsI18n, stem: &str, index: usize) -> bool {
         let headline = Self::phrasing_key_at("h", stem, index);
         let body = Self::phrasing_key_at("b", stem, index);
-        i18n.t(&headline).contains("{player}") || i18n.t(&body).contains("{player}")
+        news.t(&headline).contains("{player}") || news.t(&body).contains("{player}")
     }
 
     /// How many phrasings the bundles carry for a stem. A missing key
     /// comes back from `t()` as the key itself, which is the probe.
-    fn phrasing_count(i18n: &I18n, stem: &str) -> usize {
+    fn phrasing_count(news: &NewsI18n, stem: &str) -> usize {
         let mut count = 1;
         for suffix in 2..=Self::MAX_VARIANTS {
             let key = format!("news_h_{}_v{}", stem, suffix);
-            if i18n.t(&key) == key {
+            if news.t(&key) == key {
                 break;
             }
             count = suffix;
@@ -989,7 +1003,7 @@ impl StoryComposer {
         template: &str,
         data: &SimulatorData,
         story: &NewsStory,
-        i18n: &I18n,
+        news: &NewsI18n,
         paper: Paper<'_>,
     ) -> Prose {
         let mut spans: Vec<Span> = Vec::new();
@@ -1003,7 +1017,7 @@ impl StoryComposer {
 
             plain.push_str(&rest[..open]);
 
-            match Self::slot(&rest[open + 1..close], data, story, i18n, paper) {
+            match Self::slot(&rest[open + 1..close], data, story, news, paper) {
                 Slot::Text(text) => plain.push_str(&text),
                 Slot::Name {
                     text,
@@ -1039,7 +1053,7 @@ impl StoryComposer {
         name: &str,
         data: &SimulatorData,
         story: &NewsStory,
-        i18n: &I18n,
+        news: &NewsI18n,
         paper: Paper<'_>,
     ) -> Slot {
         match name {
@@ -1055,7 +1069,7 @@ impl StoryComposer {
             "player" => {
                 let (name, slug) = PlayerName::resolve(data, story.player_id);
                 if name.is_empty() {
-                    return Slot::Text(i18n.t("newspaper_unnamed_player").to_string());
+                    return Slot::Text(news.t("newspaper_unnamed_player").to_string());
                 }
                 Slot::Name {
                     text: name,
@@ -1070,7 +1084,7 @@ impl StoryComposer {
             "manager" => {
                 let name = ManagerName::resolve(data, paper.club_id, story.staff_id);
                 if name.is_empty() {
-                    return Slot::Text(i18n.t("newspaper_unnamed_manager").to_string());
+                    return Slot::Text(news.t("newspaper_unnamed_manager").to_string());
                 }
                 Slot::Name {
                     text: name,
@@ -1084,7 +1098,7 @@ impl StoryComposer {
             "opponent" | "other" => {
                 let (name, slug) = Self::other_party(data, story);
                 if name.is_empty() {
-                    return Slot::Text(i18n.t("newspaper_another_club").to_string());
+                    return Slot::Text(news.t("newspaper_another_club").to_string());
                 }
                 Slot::Name {
                     text: name,
@@ -1297,15 +1311,15 @@ mod tests {
 
     /// Every locale the newspaper has to print in.
     const BUNDLES: &[(&str, &[u8])] = &[
-        ("en", include_bytes!("../../../assets/i18n/en.json")),
-        ("de", include_bytes!("../../../assets/i18n/de.json")),
-        ("es", include_bytes!("../../../assets/i18n/es.json")),
-        ("fr", include_bytes!("../../../assets/i18n/fr.json")),
-        ("ja", include_bytes!("../../../assets/i18n/ja.json")),
-        ("pt", include_bytes!("../../../assets/i18n/pt.json")),
-        ("ru", include_bytes!("../../../assets/i18n/ru.json")),
-        ("tr", include_bytes!("../../../assets/i18n/tr.json")),
-        ("zh", include_bytes!("../../../assets/i18n/zh.json")),
+        ("en", include_bytes!("../../../assets/i18n/news/en.json")),
+        ("de", include_bytes!("../../../assets/i18n/news/de.json")),
+        ("es", include_bytes!("../../../assets/i18n/news/es.json")),
+        ("fr", include_bytes!("../../../assets/i18n/news/fr.json")),
+        ("ja", include_bytes!("../../../assets/i18n/news/ja.json")),
+        ("pt", include_bytes!("../../../assets/i18n/news/pt.json")),
+        ("ru", include_bytes!("../../../assets/i18n/news/ru.json")),
+        ("tr", include_bytes!("../../../assets/i18n/news/tr.json")),
+        ("zh", include_bytes!("../../../assets/i18n/news/zh.json")),
     ];
 
     /// Collects the keys the page asks for at render time, so a missing
@@ -1353,8 +1367,9 @@ mod tests {
                 keys.push(masthead.to_string());
             }
 
+            // Paper chrome only. The bare `newspaper` tab label belongs to
+            // the page, not the press, and stays in the chrome bundle.
             for chrome in [
-                "newspaper",
                 "newspaper_edition",
                 "newspaper_results",
                 "newspaper_in_brief",
@@ -1697,7 +1712,7 @@ mod tests {
 
     /// The i18n fixture the eligibility tests run against: one stem
     /// with two plain phrasings and one that names the scorer.
-    fn press_with_player_variant() -> crate::I18n {
+    fn press_with_player_variant() -> crate::NewsI18n {
         let mut map = std::collections::HashMap::new();
         map.insert(
             "news_h_league_win".to_string(),
@@ -1708,7 +1723,10 @@ mod tests {
             "news_h_league_win_v2".to_string(),
             "{club} see off {opponent}".to_string(),
         );
-        map.insert("news_b_league_win_v2".to_string(), "A {score} win.".to_string());
+        map.insert(
+            "news_b_league_win_v2".to_string(),
+            "A {score} win.".to_string(),
+        );
         map.insert(
             "news_h_league_win_v3".to_string(),
             "{player} the difference".to_string(),
@@ -1717,7 +1735,7 @@ mod tests {
             "news_b_league_win_v3".to_string(),
             "{player} settled it, {score}.".to_string(),
         );
-        crate::I18n::for_test(map)
+        crate::NewsI18n::for_test(map)
     }
 
     /// Copy that names the scorer may only be set when the story
@@ -1730,13 +1748,14 @@ mod tests {
         use chrono::NaiveDate;
         use core::club::news::{NewsStory, NewsStoryKind};
 
-        let i18n = press_with_player_variant();
+        let news = press_with_player_variant();
         let day = NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
 
         for week in 0..40 {
-            let story = NewsStory::new(NewsStoryKind::LeagueWin, day + chrono::Duration::days(week))
-                .against(week as u32 + 1);
-            let key = StoryComposer::phrasing_key("h", &story, &i18n);
+            let story =
+                NewsStory::new(NewsStoryKind::LeagueWin, day + chrono::Duration::days(week))
+                    .against(week as u32 + 1);
+            let key = StoryComposer::phrasing_key("h", &story, &news);
             assert!(
                 !key.ends_with("_v3"),
                 "a report with no scorer picked the phrasing that names him"
@@ -1753,16 +1772,18 @@ mod tests {
         use core::club::news::{NewsStory, NewsStoryKind};
         use std::collections::HashSet;
 
-        let i18n = press_with_player_variant();
+        let news = press_with_player_variant();
         let day = NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
 
         let keys: HashSet<String> = (1..40)
             .map(|id| {
-                let story = NewsStory::new(NewsStoryKind::LeagueWin, day).about(id).against(7);
-                let headline = StoryComposer::phrasing_key("h", &story, &i18n);
+                let story = NewsStory::new(NewsStoryKind::LeagueWin, day)
+                    .about(id)
+                    .against(7);
+                let headline = StoryComposer::phrasing_key("h", &story, &news);
                 assert_eq!(
                     headline,
-                    StoryComposer::phrasing_key("h", &story, &i18n),
+                    StoryComposer::phrasing_key("h", &story, &news),
                     "the pick must be stable per story"
                 );
                 headline
@@ -1787,15 +1808,21 @@ mod tests {
         use core::club::news::{NewsStory, NewsStoryKind};
 
         let mut map = std::collections::HashMap::new();
-        map.insert("news_h_league_win".to_string(), "{player} wins it".to_string());
-        map.insert("news_b_league_win".to_string(), "{player} again.".to_string());
-        let i18n = crate::I18n::for_test(map);
+        map.insert(
+            "news_h_league_win".to_string(),
+            "{player} wins it".to_string(),
+        );
+        map.insert(
+            "news_b_league_win".to_string(),
+            "{player} again.".to_string(),
+        );
+        let news = crate::NewsI18n::for_test(map);
 
         let day = NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
         let story = NewsStory::new(NewsStoryKind::LeagueWin, day).against(7);
 
         assert_eq!(
-            StoryComposer::phrasing_key("h", &story, &i18n),
+            StoryComposer::phrasing_key("h", &story, &news),
             "news_h_league_win"
         );
     }
@@ -1835,11 +1862,12 @@ mod tests {
                 .iter()
                 .filter(|kind| kind.desk() == NewsDesk::Match)
             {
-                let playerless = phrasings(&bundle, kind.key_stem())
-                    .iter()
-                    .any(|(_, headline, body)| {
-                        !headline.contains("{player}") && !body.contains("{player}")
-                    });
+                let playerless =
+                    phrasings(&bundle, kind.key_stem())
+                        .iter()
+                        .any(|(_, headline, body)| {
+                            !headline.contains("{player}") && !body.contains("{player}")
+                        });
                 assert!(
                     playerless,
                     "{}.json: every phrasing of {} demands a player the report may not have",
@@ -2090,11 +2118,16 @@ mod render_tests {
     struct Page;
 
     impl Page {
-        /// Real English chrome, so a preview screenshot shows the page a
-        /// reader gets rather than a grid of raw keys.
-        fn copy() -> HashMap<String, String> {
-            [
-                ("newspaper", "Newspaper"),
+        /// Real English page chrome, so a preview screenshot shows the
+        /// page a reader gets rather than a grid of raw keys.
+        fn chrome() -> HashMap<String, String> {
+            Self::map(&[("newspaper", "Newspaper"), ("site_name", "Open Football")])
+        }
+
+        /// The same, for the press scope the edition partial resolves
+        /// against.
+        fn press() -> HashMap<String, String> {
+            Self::map(&[
                 ("newspaper_edition", "Edition"),
                 ("newspaper_results", "Results"),
                 ("newspaper_in_brief", "In brief"),
@@ -2111,11 +2144,14 @@ mod render_tests {
                 ("newspaper_cup_tie", "Cup"),
                 ("news_desk_loan", "Loan watch"),
                 ("news_desk_fans", "The terraces"),
-                ("site_name", "Open Football"),
-            ]
-            .into_iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect()
+            ])
+        }
+
+        fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect()
         }
 
         fn template(issues: Vec<IssueView>) -> TeamNewspaperTemplate {
@@ -2124,7 +2160,8 @@ mod render_tests {
                 computer_name: "test",
                 cpu_brand: "test",
                 cores_count: 1,
-                i18n: I18n::for_test(Self::copy()),
+                i18n: I18n::for_test(Self::chrome()),
+                news: crate::NewsI18n::for_test(Self::press()),
                 lang: "en".to_string(),
                 title: "Córdoba".to_string(),
                 sub_title_prefix: String::new(),

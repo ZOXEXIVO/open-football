@@ -30,6 +30,8 @@ pub use settings::Settings;
 
 pub use ai::{AiConfig, AiJobs, LlmSettings};
 pub use error::{ApiError, ApiResult};
+pub use i18n::events::{EventI18n, EventI18nManager};
+pub use i18n::news::{NewsI18n, NewsI18nManager};
 pub use i18n::{I18n, I18nManager};
 pub use worker::{
     DistributedDispatcher, WorkerRegistry, WorkerServer, WorkerSnapshot, WorkerStatus,
@@ -95,6 +97,12 @@ pub struct GameAppData {
     pub process_lock: Arc<Mutex<()>>,
     pub cancel_flag: Arc<AtomicBool>,
     pub i18n: Arc<I18nManager>,
+    /// Press vocabulary, scoped away from `i18n` so the chrome bundle every
+    /// page clones stays small. Only the newspaper pages resolve against it.
+    pub news_i18n: Arc<NewsI18nManager>,
+    /// Happiness-event vocabulary, scoped for the same reason. Only the
+    /// player events page resolves against it.
+    pub events_i18n: Arc<EventI18nManager>,
     /// Live registry of distributed match workers. Always present;
     /// starts empty and is populated at runtime from the /workers page.
     pub workers: WorkerRegistry,
@@ -114,6 +122,8 @@ impl Clone for GameAppData {
             process_lock: Arc::clone(&self.process_lock),
             cancel_flag: Arc::clone(&self.cancel_flag),
             i18n: Arc::clone(&self.i18n),
+            news_i18n: Arc::clone(&self.news_i18n),
+            events_i18n: Arc::clone(&self.events_i18n),
             workers: self.workers.clone(),
             ai: self.ai.clone(),
             ai_jobs: self.ai_jobs.clone(),

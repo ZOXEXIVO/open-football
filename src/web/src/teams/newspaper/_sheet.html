@@ -5,7 +5,7 @@
     <header class="np-nameplate">
         <div class="np-ear np-ear-left">
             <span class="np-ear-figure">{{ issue.number }}</span>
-            <span>{{ i18n.t("newspaper_edition") }}</span>
+            <span>{{ news.t("newspaper_edition") }}</span>
         </div>
         {# On a player's page the nameplate opens the club's own paper.
            Deliberately NOT `np-story-link`: that class draws a rule
@@ -21,7 +21,7 @@
         <div class="np-ear np-ear-right">{{ issue.date }}</div>
     </header>
     <div class="np-folio">
-        <span>{{ i18n.t("newspaper_our_correspondent") }}</span>
+        <span>{{ news.t("newspaper_our_correspondent") }}</span>
         <span class="np-folio-mood np-folio-mood-{{ issue.mood_slug }}{% if issue.mood_stamped %} np-stamp{% endif %}">{{ issue.mood_label }}</span>
     </div>
 
@@ -79,13 +79,13 @@
 
             {% if !issue.results.is_empty() %}
             <section class="np-box">
-                <h4 class="np-box-title">{{ i18n.t("newspaper_results") }}</h4>
+                <h4 class="np-box-title">{{ news.t("newspaper_results") }}</h4>
                 <ul class="np-results">
                     {% for result in issue.results %}
                     <li class="np-result np-result-{{ result.outcome }}">
                         <span class="np-result-date">{{ result.date }}</span>
                         <a class="np-result-club" href="/{{ lang }}/teams/{{ result.opponent_slug }}">{{ result.opponent_name }}</a>
-                        {% if result.is_cup %}<span class="np-result-cup">{{ i18n.t("newspaper_cup_tie") }}</span>{% endif %}
+                        {% if result.is_cup %}<span class="np-result-cup">{{ news.t("newspaper_cup_tie") }}</span>{% endif %}
                         {% if !result.match_id.is_empty() %}<a class="np-result-score" href="/{{ lang }}/match/{{ result.match_id }}">{{ result.score }}</a>{% else %}<span class="np-result-score">{{ result.score }}</span>{% endif %}
                     </li>
                     {% endfor %}
@@ -111,7 +111,7 @@
     {% if !issue.briefs.is_empty() %}
     <section class="np-band">
         <div class="np-fold" aria-hidden="true"></div>
-        <h4 class="np-box-title np-band-title">{{ i18n.t("newspaper_in_brief") }}</h4>
+        <h4 class="np-box-title np-band-title">{{ news.t("newspaper_in_brief") }}</h4>
         <ul class="np-briefs np-briefs-band">
             {% for story in issue.briefs %}
             <li class="np-brief{% if story.marked %} np-cut np-cut-brief{% endif %}">

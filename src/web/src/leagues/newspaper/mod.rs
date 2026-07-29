@@ -3,7 +3,7 @@ pub mod routes;
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::teams::newspaper::{IssueView, PaperFor, PressDesk, PressFocus};
 use crate::views::{self, MenuSection};
-use crate::{ApiError, ApiResult, GameAppData, I18n};
+use crate::{ApiError, ApiResult, GameAppData, I18n, NewsI18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
@@ -34,6 +34,8 @@ pub struct LeagueNewspaperTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub i18n: I18n,
+    /// Press copy, scoped apart from `i18n`.
+    pub news: NewsI18n,
     pub lang: String,
     pub league_slug: String,
     /// Editions on the shelf, for the tabbar badge.
@@ -47,6 +49,7 @@ pub async fn league_newspaper_action(
     Path(route_params): Path<LeagueNewspaperRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let i18n = state.i18n.for_lang(&route_params.lang);
+    let news = state.news_i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
 
     let simulator_data = guard
@@ -74,7 +77,7 @@ pub async fn league_newspaper_action(
     })?;
 
     let league_title = views::league_display_name(league, &i18n, simulator_data);
-    let issues = LeaguePress::typeset(simulator_data, league, &i18n);
+    let issues = LeaguePress::typeset(simulator_data, league, &i18n, &news);
 
     Ok(LeagueNewspaperTemplate {
         css_version: CSS_VERSION,
@@ -127,6 +130,7 @@ pub async fn league_newspaper_action(
         issues,
         lang: route_params.lang,
         i18n,
+        news,
     })
 }
 
@@ -155,8 +159,13 @@ impl LeagueNewspaperCounter {
 struct LeaguePress;
 
 impl LeaguePress {
-    fn typeset(data: &SimulatorData, league: &League, i18n: &I18n) -> Vec<IssueView> {
-        let masthead = PressDesk::masthead(league.newsroom.masthead_key(), &league.name, i18n);
+    fn typeset(
+        data: &SimulatorData,
+        league: &League,
+        i18n: &I18n,
+        news: &NewsI18n,
+    ) -> Vec<IssueView> {
+        let masthead = PressDesk::masthead(league.newsroom.masthead_key(), &league.name, news);
         let paper = PaperFor::Division(&league.name);
 
         league
@@ -165,7 +174,9 @@ impl LeaguePress {
             .iter()
             // A division's paper is read by everybody in it, so nothing
             // on it is marked for anybody.
-            .map(|issue| PressDesk::issue(data, paper, issue, &masthead, i18n, PressFocus::none()))
+            .map(|issue| {
+                PressDesk::issue(data, paper, issue, &masthead, i18n, news, PressFocus::none())
+            })
             .collect()
     }
 }
@@ -173,8 +184,8 @@ impl LeaguePress {
 #[cfg(test)]
 mod tests {
     use super::LeagueNewspaperTemplate;
-    use crate::I18n;
     use crate::teams::newspaper::{IssueView, PortraitView, Prose, Span, StoryView};
+    use crate::{I18n, NewsI18n};
     use askama::Template;
     use std::collections::HashMap;
 
@@ -183,12 +194,18 @@ mod tests {
     struct Page;
 
     impl Page {
-        fn copy() -> HashMap<String, String> {
-            [
+        fn chrome() -> HashMap<String, String> {
+            Self::map(&[
                 ("newspaper", "Newspaper"),
                 ("overview", "Overview"),
                 ("transfers", "Transfers"),
                 ("awards", "Awards"),
+                ("site_name", "Open Football"),
+            ])
+        }
+
+        fn press() -> HashMap<String, String> {
+            Self::map(&[
                 ("newspaper_edition", "Edition"),
                 ("newspaper_results", "Results"),
                 ("newspaper_in_brief", "In brief"),
@@ -202,11 +219,14 @@ mod tests {
                     "newspaper_no_league_issues",
                     "Nothing has been printed about this division yet.",
                 ),
-                ("site_name", "Open Football"),
-            ]
-            .into_iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect()
+            ])
+        }
+
+        fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect()
         }
 
         /// One story as the composer hands it over: plain type either
@@ -354,7 +374,8 @@ mod tests {
                 header_color: "#1e272d".to_string(),
                 foreground_color: "#ffffff".to_string(),
                 menu_sections: Vec::new(),
-                i18n: I18n::for_test(Self::copy()),
+                i18n: I18n::for_test(Self::chrome()),
+                news: NewsI18n::for_test(Self::press()),
                 lang: "en".to_string(),
                 league_slug: "italian-serie-a".to_string(),
                 newspaper_count: issues.len(),

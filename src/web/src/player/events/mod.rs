@@ -5,7 +5,7 @@ use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::decisions::PlayerDecisionsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection};
-use crate::{ApiError, ApiResult, GameAppData, I18n};
+use crate::{ApiError, ApiResult, EventI18n, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
@@ -127,6 +127,8 @@ pub struct PlayerEventsTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub i18n: I18n,
+    /// Happiness-event copy, scoped apart from .
+    pub events_i18n: EventI18n,
     pub lang: String,
     pub active_tab: &'static str,
     pub player_id: u32,
@@ -150,6 +152,7 @@ pub async fn player_events_action(
     Path(route_params): Path<PlayerEventsRequest>,
 ) -> ApiResult<Response> {
     let i18n = state.i18n.for_lang(&route_params.lang);
+    let events_i18n = state.events_i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
 
     let simulator_data = guard
@@ -196,7 +199,7 @@ pub async fn player_events_action(
         .map(|l| l.slug.clone());
     let events = build_events(
         player,
-        &i18n,
+        &events_i18n,
         simulator_data,
         &route_params.lang,
         league_slug.as_deref(),
@@ -250,6 +253,7 @@ pub async fn player_events_action(
             Vec::new()
         },
         i18n,
+        events_i18n,
         lang: route_params.lang.clone(),
         active_tab: "events",
         player_id: player.id,
@@ -505,9 +509,7 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::TransferTalksExpected => "event_transfer_talks_expected",
         HappinessEventType::InterestCooled => "event_interest_cooled",
         HappinessEventType::AgreedPersonalTerms => "event_agreed_personal_terms",
-        HappinessEventType::RejectedMoveOnPersonalTerms => {
-            "event_rejected_move_on_personal_terms"
-        }
+        HappinessEventType::RejectedMoveOnPersonalTerms => "event_rejected_move_on_personal_terms",
         HappinessEventType::UsedInterestForContractLeverage => {
             "event_used_interest_for_contract_leverage"
         }
@@ -631,7 +633,7 @@ impl PlayerEventsCounter {
 
 fn build_events(
     player: &core::Player,
-    i18n: &I18n,
+    events_i18n: &EventI18n,
     simulator_data: &SimulatorData,
     lang: &str,
     league_slug: Option<&str>,
@@ -643,7 +645,7 @@ fn build_events(
                 .and_then(|pid| resolve_partner(simulator_data, pid));
 
             let description =
-                build_description(e, resolved_partner.as_ref(), i18n, lang, league_slug);
+                build_description(e, resolved_partner.as_ref(), events_i18n, lang, league_slug);
 
             // When the description already names + links the partner
             // inline, suppress the template's trailing dash-suffix so the
@@ -656,12 +658,14 @@ fn build_events(
                     .unwrap_or((None, None))
             };
             let (detail, follow_up, severity_label, severity_tag) =
-                EventContextRenderer::render(e, i18n);
+                EventContextRenderer::render(e, events_i18n);
             let comparison = e
                 .context
                 .as_ref()
                 .and_then(|ctx| ctx.selection_context.as_ref())
-                .and_then(|sel| SelectionRender::comparison(sel, simulator_data, i18n, lang));
+                .and_then(|sel| {
+                    SelectionRender::comparison(sel, simulator_data, events_i18n, lang)
+                });
             // Context-aware headline routing. The dispatcher tries each
             // registered renderer in order; the first whose `handles()`
             // matches AND whose specialized context is attached produces
@@ -670,7 +674,7 @@ fn build_events(
             let dispatcher = HeadlineDispatcher {
                 event: e,
                 simulator_data,
-                i18n,
+                events_i18n,
                 lang,
             };
             let (description_html, partner_in_headline) = dispatcher
@@ -689,7 +693,7 @@ fn build_events(
                 is_negative: e.magnitude < 0.0,
                 is_big: is_big_event(&e.event_type),
                 days_ago: e.days_ago,
-                time_ago_label: EventContextRenderer::time_ago_label(e.days_ago, i18n),
+                time_ago_label: EventContextRenderer::time_ago_label(e.days_ago, events_i18n),
                 partner_name,
                 partner_slug,
                 detail,
@@ -715,7 +719,7 @@ struct EventContextRenderer;
 impl EventContextRenderer {
     fn render(
         event: &HappinessEvent,
-        i18n: &I18n,
+        events_i18n: &EventI18n,
     ) -> (
         Option<String>,
         Option<String>,
@@ -726,9 +730,11 @@ impl EventContextRenderer {
             return (None, None, None, None);
         };
 
-        let detail = Self::detail_sentences(ctx, i18n);
-        let follow_up = ctx.follow_up.map(|fu| i18n.t(fu.as_i18n_key()).to_string());
-        let severity_label = Some(i18n.t(ctx.severity.as_i18n_key()).to_string());
+        let detail = Self::detail_sentences(ctx, events_i18n);
+        let follow_up = ctx
+            .follow_up
+            .map(|fu| events_i18n.t(fu.as_i18n_key()).to_string());
+        let severity_label = Some(events_i18n.t(ctx.severity.as_i18n_key()).to_string());
         let severity_tag = Some(Self::severity_tag(ctx.severity).to_string());
         (detail, follow_up, severity_label, severity_tag)
     }
@@ -737,28 +743,28 @@ impl EventContextRenderer {
     /// event's cause, followed by AT MOST ONE evidence sentence picked
     /// by [`EvidencePicker::pick`]. Keeps the explanation specific
     /// without dumping every evidence atom on the user.
-    fn detail_sentences(ctx: &HappinessEventContext, i18n: &I18n) -> Option<String> {
+    fn detail_sentences(ctx: &HappinessEventContext, events_i18n: &EventI18n) -> Option<String> {
         // Selection events override the generic relationship cause —
         // the football-specific "manager preferred a fitter teammate"
         // reads better than "tactical disagreement set this off".
         if let Some(sel) = ctx.selection_context.as_ref() {
-            return SelectionRender::reason_sentence(sel, i18n);
+            return SelectionRender::reason_sentence(sel, events_i18n);
         }
         // Support events (manager encouragement, dressing-room speech,
         // fan praise, fans-chant) carry their own structured trigger
         // and metadata — the renderer composes a contextual sentence
         // from those rather than the generic relationship cause.
         if let Some(support) = ctx.support_context.as_ref() {
-            return SupportRender::reason_sentence(support, ctx, i18n);
+            return SupportRender::reason_sentence(support, ctx, events_i18n);
         }
         // Transfer-interest events compose a stage / source / kind /
         // evidence sentence followed by the player's private reaction.
         if let Some(tic) = ctx.transfer_interest_context.as_ref() {
             let mut parts: Vec<String> = Vec::new();
-            if let Some(reason) = TransferInterestRender::reason_sentence(tic, i18n) {
+            if let Some(reason) = TransferInterestRender::reason_sentence(tic, events_i18n) {
                 parts.push(reason);
             }
-            if let Some(reaction) = TransferInterestRender::reaction_sentence(tic, i18n) {
+            if let Some(reaction) = TransferInterestRender::reaction_sentence(tic, events_i18n) {
                 parts.push(reaction);
             }
             if parts.is_empty() {
@@ -767,14 +773,15 @@ impl EventContextRenderer {
             return Some(parts.join(" "));
         }
         if let Some(tc) = ctx.training_context.as_ref() {
-            return TrainingRender::reason_sentence(tc, i18n);
+            return TrainingRender::reason_sentence(tc, events_i18n);
         }
         if let Some(conflict) = ctx.teammate_conflict_context.as_ref() {
             let mut parts: Vec<String> = Vec::new();
-            if let Some(reason) = TeammateConflictRender::reason_sentence(conflict, i18n) {
+            if let Some(reason) = TeammateConflictRender::reason_sentence(conflict, events_i18n) {
                 parts.push(reason);
             }
-            if let Some(evidence) = TeammateConflictRender::evidence_sentence(conflict, i18n) {
+            if let Some(evidence) = TeammateConflictRender::evidence_sentence(conflict, events_i18n)
+            {
                 parts.push(evidence);
             }
             if !parts.is_empty() {
@@ -783,10 +790,10 @@ impl EventContextRenderer {
         }
         if let Some(mc) = ctx.manager_interaction_context.as_ref() {
             let mut parts: Vec<String> = Vec::new();
-            if let Some(reason) = ManagerInteractionRender::reason_sentence(mc, i18n) {
+            if let Some(reason) = ManagerInteractionRender::reason_sentence(mc, events_i18n) {
                 parts.push(reason);
             }
-            if let Some(evidence) = ManagerInteractionRender::evidence_sentence(mc, i18n) {
+            if let Some(evidence) = ManagerInteractionRender::evidence_sentence(mc, events_i18n) {
                 parts.push(evidence);
             }
             if !parts.is_empty() {
@@ -795,73 +802,73 @@ impl EventContextRenderer {
             return None;
         }
         if let Some(cc) = ctx.contract_context.as_ref() {
-            return ContractRender::reason_sentence(cc, i18n);
+            return ContractRender::reason_sentence(cc, events_i18n);
         }
         if let Some(ic) = ctx.injury_context.as_ref() {
-            return InjuryRecoveryRender::reason_sentence(ic, i18n);
+            return InjuryRecoveryRender::reason_sentence(ic, events_i18n);
         }
         if let Some(mp) = ctx.match_performance_context.as_ref() {
-            return MatchPerformanceRender::reason_sentence(mp, i18n);
+            return MatchPerformanceRender::reason_sentence(mp, events_i18n);
         }
         if let Some(rc) = ctx.role_status_context.as_ref() {
-            return RoleStatusRender::reason_sentence(rc, i18n);
+            return RoleStatusRender::reason_sentence(rc, events_i18n);
         }
         if let Some(nt) = ctx.national_team_context.as_ref() {
-            return NationalTeamRender::reason_sentence(nt, i18n);
+            return NationalTeamRender::reason_sentence(nt, events_i18n);
         }
         if let Some(lc) = ctx.leadership_context.as_ref() {
-            return LeadershipRender::reason_sentence(lc, i18n);
+            return LeadershipRender::reason_sentence(lc, events_i18n);
         }
         if let Some(mf) = ctx.media_fan_context.as_ref() {
-            return MediaFanRender::reason_sentence(mf, i18n);
+            return MediaFanRender::reason_sentence(mf, events_i18n);
         }
         if let Some(pa) = ctx.personal_adaptation_context.as_ref() {
-            return PersonalAdaptationRender::reason_sentence(pa, i18n);
+            return PersonalAdaptationRender::reason_sentence(pa, events_i18n);
         }
         if let Some(cd) = ctx.career_desire_context.as_ref() {
-            return CareerDesireRender::reason_sentence(cd, i18n);
+            return CareerDesireRender::reason_sentence(cd, events_i18n);
         }
         if let Some(cs) = ctx.career_stage_context.as_ref() {
-            return CareerStageRender::reason_sentence(cs, i18n);
+            return CareerStageRender::reason_sentence(cs, events_i18n);
         }
         if let Some(ls) = ctx.life_simulation_desire_context.as_ref() {
-            return LifeSimulationRender::reason_sentence(ls, i18n);
+            return LifeSimulationRender::reason_sentence(ls, events_i18n);
         }
         if let Some(lc) = ctx.loan_context.as_ref() {
-            return LoanRender::reason_sentence(lc, i18n);
+            return LoanRender::reason_sentence(lc, events_i18n);
         }
         if let Some(rc) = ctx.recognition_context.as_ref() {
-            return RecognitionRender::reason_sentence(rc, i18n);
+            return RecognitionRender::reason_sentence(rc, events_i18n);
         }
         if let Some(sc) = ctx.season_outcome_context.as_ref() {
-            return SeasonOutcomeRender::reason_sentence(sc, i18n);
+            return SeasonOutcomeRender::reason_sentence(sc, events_i18n);
         }
         if let Some(rc) = ctx.regulation_context.as_ref() {
-            return RegulationRender::reason_sentence(rc, i18n);
+            return RegulationRender::reason_sentence(rc, events_i18n);
         }
         if let Some(pt) = ctx.private_talk_context.as_ref() {
-            return PrivateTalkRender::reason_sentence(pt, i18n);
+            return PrivateTalkRender::reason_sentence(pt, events_i18n);
         }
         if let Some(cd) = ctx.club_direction_context.as_ref() {
-            return ClubDirectionRender::reason_sentence(cd, i18n);
+            return ClubDirectionRender::reason_sentence(cd, events_i18n);
         }
         if let Some(bm) = ctx.big_match_selection_context.as_ref() {
-            return BigMatchRender::reason_sentence(bm, i18n);
+            return BigMatchRender::reason_sentence(bm, events_i18n);
         }
         if let Some(sf) = ctx.substitution_frustration_context.as_ref() {
-            return SubFrustrationRender::reason_sentence(sf, i18n);
+            return SubFrustrationRender::reason_sentence(sf, events_i18n);
         }
         if let Some(ns) = ctx.new_signing_threat_context.as_ref() {
-            return NewSigningThreatRender::reason_sentence(ns, i18n);
+            return NewSigningThreatRender::reason_sentence(ns, events_i18n);
         }
         let cause_key = format!("reason_main_{}", Self::cause_token(ctx));
-        let main = i18n.t(&cause_key);
+        let main = events_i18n.t(&cause_key);
         let mut out = main.to_string();
 
         if let Some(evidence) = EvidencePicker::pick(ctx) {
             let ev_key = format!("reason_ev_{}", Self::evidence_token(evidence));
-            let sentence = i18n.t(&ev_key);
-            // Skip if the i18n layer fell back to the raw key — keeps
+            let sentence = events_i18n.t(&ev_key);
+            // Skip if the events_i18n layer fell back to the raw key — keeps
             // partially-translated locales from showing the placeholder.
             if sentence != ev_key {
                 out.push(' ');
@@ -875,11 +882,11 @@ impl EventContextRenderer {
     /// Localised "X d ago" / "now" label. Centralised here so the
     /// template stays free of zero-day branching — an event emitted
     /// today reads as "now" rather than the visually noisy "0d ago".
-    fn time_ago_label(days_ago: u16, i18n: &I18n) -> String {
+    fn time_ago_label(days_ago: u16, events_i18n: &EventI18n) -> String {
         if days_ago == 0 {
-            i18n.t("now").to_string()
+            events_i18n.t("now").to_string()
         } else {
-            format!("{}{}", days_ago, i18n.t("days_ago_short"))
+            format!("{}{}", days_ago, events_i18n.t("days_ago_short"))
         }
     }
 
@@ -892,7 +899,7 @@ impl EventContextRenderer {
         }
     }
 
-    /// Cause → i18n-key suffix. The full key is `reason_main_<token>`,
+    /// Cause → events_i18n-key suffix. The full key is `reason_main_<token>`,
     /// kept here as a single function so the locale audit can grep one
     /// list and confirm every cause has a sentence.
     fn cause_token(ctx: &HappinessEventContext) -> &'static str {
@@ -1076,13 +1083,13 @@ impl SelectionRender {
     fn headline(
         ctx: &MatchSelectionContext,
         data: &SimulatorData,
-        i18n: &I18n,
+        events_i18n: &EventI18n,
         lang: &str,
     ) -> DescriptionRender {
         if let Some(comp) = ctx.comparison.as_ref() {
             if let Some((name, slug)) = resolve_partner(data, comp.selected_player_id) {
                 let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
-                let raw = i18n.t(Self::headline_key_for(ctx, true));
+                let raw = events_i18n.t(Self::headline_key_for(ctx, true));
                 let html = raw.replace("{rival}", &link);
                 return DescriptionRender {
                     html,
@@ -1090,14 +1097,16 @@ impl SelectionRender {
                 };
             }
         }
-        let html = i18n.t(Self::headline_key_for(ctx, false)).to_string();
+        let html = events_i18n
+            .t(Self::headline_key_for(ctx, false))
+            .to_string();
         DescriptionRender {
             html,
             partner_in_headline: false,
         }
     }
 
-    /// Headline i18n key — picks a scope-aware variant. The `_named`
+    /// Headline events_i18n key — picks a scope-aware variant. The `_named`
     /// suffix variants embed `{rival}` for the rival's player link.
     fn headline_key_for(ctx: &MatchSelectionContext, with_rival: bool) -> &'static str {
         match (ctx.scope, with_rival) {
@@ -1127,9 +1136,9 @@ impl SelectionRender {
 
     /// Build the "Cause" body — a single composed sentence describing
     /// why the manager picked someone else.
-    fn reason_sentence(ctx: &MatchSelectionContext, i18n: &I18n) -> Option<String> {
+    fn reason_sentence(ctx: &MatchSelectionContext, events_i18n: &EventI18n) -> Option<String> {
         let key = ctx.reason.as_i18n_key();
-        let main = i18n.t(key);
+        let main = events_i18n.t(key);
         if main == key {
             return None;
         }
@@ -1142,7 +1151,7 @@ impl SelectionRender {
     fn comparison(
         ctx: &MatchSelectionContext,
         data: &SimulatorData,
-        i18n: &I18n,
+        events_i18n: &EventI18n,
         lang: &str,
     ) -> Option<String> {
         let comp = ctx.comparison.as_ref()?;
@@ -1152,7 +1161,7 @@ impl SelectionRender {
         let factor_phrase = comp
             .top_factors
             .first()
-            .map(|f| Self::factor_phrase(*f, i18n))
+            .map(|f| Self::factor_phrase(*f, events_i18n))
             .unwrap_or_default();
 
         let template_key = if factor_phrase.is_empty() {
@@ -1160,14 +1169,14 @@ impl SelectionRender {
         } else {
             "selection_comparison_with_factor"
         };
-        let template = i18n.t(template_key);
+        let template = events_i18n.t(template_key);
         let mut out = template.replace("{rival}", &link);
         out = out.replace("{factor}", &factor_phrase);
         Some(out)
     }
 
-    fn factor_phrase(factor: SelectionScoreFactor, i18n: &I18n) -> String {
-        i18n.t(factor.as_i18n_key()).to_string()
+    fn factor_phrase(factor: SelectionScoreFactor, events_i18n: &EventI18n) -> String {
+        events_i18n.t(factor.as_i18n_key()).to_string()
     }
 }
 
@@ -1194,14 +1203,16 @@ impl SupportRender {
     pub fn headline(
         event_type: &HappinessEventType,
         support: &SupportEventContext,
-        i18n: &I18n,
+        events_i18n: &EventI18n,
     ) -> String {
         let key = Self::headline_key(event_type, support);
-        let translated = i18n.t(key);
+        let translated = events_i18n.t(key);
         if translated == key {
             // Fallback to the legacy static line when the locale is
             // partially translated and the variant key isn't there yet.
-            i18n.t(event_type_to_i18n_key(event_type)).to_string()
+            events_i18n
+                .t(event_type_to_i18n_key(event_type))
+                .to_string()
         } else {
             translated.to_string()
         }
@@ -1284,7 +1295,7 @@ impl SupportRender {
     pub fn reason_sentence(
         support: &SupportEventContext,
         ctx: &HappinessEventContext,
-        i18n: &I18n,
+        events_i18n: &EventI18n,
     ) -> Option<String> {
         let mut out = String::new();
 
@@ -1292,14 +1303,14 @@ impl SupportRender {
             "support_reason_main_{}",
             Self::trigger_token(support.trigger)
         );
-        let main = i18n.t(&trigger_key);
+        let main = events_i18n.t(&trigger_key);
         if main != trigger_key {
             out.push_str(main);
         } else {
             // Fall back to a setting-based sentence so we never expose
             // the raw key.
             let setting_key = format!("support_reason_setting_{}", Self::setting_token(support));
-            let setting = i18n.t(&setting_key);
+            let setting = events_i18n.t(&setting_key);
             if setting != setting_key {
                 out.push_str(setting);
             }
@@ -1312,7 +1323,7 @@ impl SupportRender {
                 "reason_ev_{}",
                 EventContextRenderer::evidence_token(evidence)
             );
-            let sentence = i18n.t(&ev_key);
+            let sentence = events_i18n.t(&ev_key);
             if sentence != ev_key {
                 if !out.is_empty() {
                     out.push(' ');
@@ -1400,7 +1411,7 @@ impl TransferInterestRender {
         event_type: &HappinessEventType,
         ctx: &TransferInterestContext,
         data: &SimulatorData,
-        i18n: &I18n,
+        events_i18n: &EventI18n,
         lang: &str,
     ) -> (String, bool) {
         let club_link = ctx
@@ -1409,11 +1420,13 @@ impl TransferInterestRender {
             .map(|(name, slug)| (name, slug));
 
         let key = Self::headline_key(event_type, ctx, club_link.is_some());
-        let raw = i18n.t(key);
+        let raw = events_i18n.t(key);
         if raw == key {
             // Fall back to the legacy static line when the locale is
             // partially translated and the variant key isn't there yet.
-            let fallback = i18n.t(event_type_to_i18n_key(event_type)).to_string();
+            let fallback = events_i18n
+                .t(event_type_to_i18n_key(event_type))
+                .to_string();
             return (fallback, false);
         }
         if let Some((name, slug)) = club_link {
@@ -1527,13 +1540,13 @@ impl TransferInterestRender {
 
     /// Compose the reason / source line — explains *how* the rumour
     /// surfaced and *what kind* of move it represents.
-    fn reason_sentence(ctx: &TransferInterestContext, i18n: &I18n) -> Option<String> {
+    fn reason_sentence(ctx: &TransferInterestContext, events_i18n: &EventI18n) -> Option<String> {
         let stage_key = ctx.interest_stage.as_i18n_key();
         let source_key = ctx.interest_source.as_i18n_key();
         let kind_key = ctx.interest_kind.as_i18n_key();
-        let stage = i18n.t(stage_key);
-        let source = i18n.t(source_key);
-        let kind = i18n.t(kind_key);
+        let stage = events_i18n.t(stage_key);
+        let source = events_i18n.t(source_key);
+        let kind = events_i18n.t(kind_key);
 
         let mut out = String::new();
         if stage != stage_key {
@@ -1554,7 +1567,7 @@ impl TransferInterestRender {
 
         if let Some(evidence) = Self::pick_evidence(ctx) {
             let ev_key = evidence.as_i18n_key();
-            let ev = i18n.t(ev_key);
+            let ev = events_i18n.t(ev_key);
             if ev != ev_key {
                 if !out.is_empty() {
                     out.push(' ');
@@ -1571,16 +1584,16 @@ impl TransferInterestRender {
 
     /// Compose the reaction line — the player's private response and,
     /// when a sporting fit is set, how it shapes the calculation.
-    fn reaction_sentence(ctx: &TransferInterestContext, i18n: &I18n) -> Option<String> {
+    fn reaction_sentence(ctx: &TransferInterestContext, events_i18n: &EventI18n) -> Option<String> {
         let key = ctx.player_reaction.as_i18n_key();
-        let raw = i18n.t(key);
+        let raw = events_i18n.t(key);
         if raw == key {
             return None;
         }
         let mut out = raw.to_string();
         if let Some(fit) = ctx.sporting_fit {
             let fk = fit.as_i18n_key();
-            let f = i18n.t(fk);
+            let f = events_i18n.t(fk);
             if f != fk {
                 out.push(' ');
                 out.push_str(f);
@@ -1673,19 +1686,19 @@ impl TrainingRender {
         )
     }
 
-    pub fn headline(ctx: &TrainingEventContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &TrainingEventContext, events_i18n: &EventI18n) -> String {
         let key = format!("training_headline_{}", Self::reason_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(ctx.reason.as_i18n_key()).to_string()
+            events_i18n.t(ctx.reason.as_i18n_key()).to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &TrainingEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(ctx: &TrainingEventContext, events_i18n: &EventI18n) -> Option<String> {
         let key = format!("training_reason_main_{}", Self::reason_token(ctx));
-        let main = i18n.t(&key);
+        let main = events_i18n.t(&key);
         if main == key {
             return None;
         }
@@ -1730,7 +1743,7 @@ impl ManagerInteractionRender {
     pub fn headline(
         event_type: &HappinessEventType,
         ctx: &ManagerInteractionEventContext,
-        i18n: &I18n,
+        events_i18n: &EventI18n,
     ) -> String {
         // Criticism with a concrete reason gets the dedicated headline
         // family (event_manager_criticism_<reason>) — that's where the
@@ -1739,7 +1752,7 @@ impl ManagerInteractionRender {
         if matches!(event_type, HappinessEventType::ManagerCriticism) {
             if let Some(reason) = ctx.criticism_reason {
                 let key = format!("event_manager_criticism_{}", reason.as_headline_token());
-                let raw = i18n.t(&key);
+                let raw = events_i18n.t(&key);
                 if raw != key {
                     return raw.to_string();
                 }
@@ -1750,21 +1763,26 @@ impl ManagerInteractionRender {
             Self::event_token(event_type),
             ctx.topic.as_i18n_key().trim_start_matches("manager_topic_")
         );
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(event_type_to_i18n_key(event_type)).to_string()
+            events_i18n
+                .t(event_type_to_i18n_key(event_type))
+                .to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &ManagerInteractionEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &ManagerInteractionEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         // Concrete criticism reason wins — that's where the cause copy
         // explains the *why* in football terms ("The criticism focused on
         // missed pressing triggers and slow recovery runs.").
         if let Some(reason) = ctx.criticism_reason {
             let key = reason.as_i18n_key();
-            let raw = i18n.t(key);
+            let raw = events_i18n.t(key);
             if raw != key {
                 return Some(raw.to_string());
             }
@@ -1776,14 +1794,14 @@ impl ManagerInteractionRender {
                 .as_i18n_key()
                 .trim_start_matches("manager_acceptance_")
         );
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             // Topic-only fallback
             let topic_key = format!(
                 "manager_reason_topic_{}",
                 ctx.topic.as_i18n_key().trim_start_matches("manager_topic_")
             );
-            let topic_raw = i18n.t(&topic_key);
+            let topic_raw = events_i18n.t(&topic_key);
             if topic_raw == topic_key {
                 return None;
             }
@@ -1795,10 +1813,13 @@ impl ManagerInteractionRender {
     /// Compose the supporting "Evidence" sentence — concrete signal
     /// the manager weighed (rating number, repeat warning, trust gap).
     /// Returns `None` when the context has no readable evidence.
-    pub fn evidence_sentence(ctx: &ManagerInteractionEventContext, i18n: &I18n) -> Option<String> {
+    pub fn evidence_sentence(
+        ctx: &ManagerInteractionEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         if ctx.repeated_recently {
             let key = "manager_evidence_repeated_recently";
-            let raw = i18n.t(key);
+            let raw = events_i18n.t(key);
             if raw != key {
                 return Some(raw.to_string());
             }
@@ -1806,7 +1827,7 @@ impl ManagerInteractionRender {
         if let Some(rating) = ctx.match_rating {
             if rating < 6.3 {
                 let key = "manager_evidence_low_match_rating";
-                let raw = i18n.t(key);
+                let raw = events_i18n.t(key);
                 if raw != key {
                     return Some(raw.replace("{rating}", &format!("{:.1}", rating)));
                 }
@@ -1853,9 +1874,12 @@ impl TeammateConflictRender {
 
     /// Compose the cause sentence describing why the conflict happened
     /// in concrete football terms.
-    pub fn reason_sentence(ctx: &TeammateConflictContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &TeammateConflictContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let key = ctx.reason.as_i18n_key();
-        let raw = i18n.t(key);
+        let raw = events_i18n.t(key);
         if raw == key {
             return None;
         }
@@ -1865,7 +1889,10 @@ impl TeammateConflictRender {
     /// "Where it happened" sentence — short setting note that lands
     /// after the cause line. Optional: returns `None` when the locale
     /// has no copy for the location yet.
-    pub fn evidence_sentence(ctx: &TeammateConflictContext, i18n: &I18n) -> Option<String> {
+    pub fn evidence_sentence(
+        ctx: &TeammateConflictContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let key = format!(
             "conflict_evidence_{}",
             match ctx.location {
@@ -1876,7 +1903,7 @@ impl TeammateConflictRender {
                 core::ConflictLocation::TeamMeeting => "team_meeting",
             }
         );
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             return None;
         }
@@ -1902,19 +1929,19 @@ impl ContractRender {
         )
     }
 
-    pub fn headline(ctx: &ContractEventContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &ContractEventContext, events_i18n: &EventI18n) -> String {
         let key = format!("contract_headline_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(ctx.kind.as_i18n_key()).to_string()
+            events_i18n.t(ctx.kind.as_i18n_key()).to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &ContractEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(ctx: &ContractEventContext, events_i18n: &EventI18n) -> Option<String> {
         let key = format!("contract_reason_{}", Self::kind_token(ctx));
-        let main = i18n.t(&key);
+        let main = events_i18n.t(&key);
         let mut parts: Vec<String> = Vec::new();
         if main != key {
             parts.push(main.to_string());
@@ -1938,7 +1965,7 @@ impl ContractRender {
             for atom in preferred {
                 if ctx.evidence.contains(&atom) {
                     let k = atom.as_i18n_key();
-                    let raw = i18n.t(k);
+                    let raw = events_i18n.t(k);
                     if raw != k {
                         parts.push(raw.to_string());
                         break;
@@ -1984,19 +2011,22 @@ impl InjuryRecoveryRender {
         )
     }
 
-    pub fn headline(ctx: &InjuryRecoveryEventContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &InjuryRecoveryEventContext, events_i18n: &EventI18n) -> String {
         let key = format!("injury_headline_{}", Self::stage_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(ctx.stage.as_i18n_key()).to_string()
+            events_i18n.t(ctx.stage.as_i18n_key()).to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &InjuryRecoveryEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &InjuryRecoveryEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let key = format!("injury_reason_{}", Self::stage_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             return None;
         }
@@ -2039,20 +2069,25 @@ impl MatchPerformanceRender {
     pub fn headline(
         event_type: &HappinessEventType,
         ctx: &MatchPerformanceEventContext,
-        i18n: &I18n,
+        events_i18n: &EventI18n,
     ) -> String {
         let key = format!("match_perf_headline_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(event_type_to_i18n_key(event_type)).to_string()
+            events_i18n
+                .t(event_type_to_i18n_key(event_type))
+                .to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &MatchPerformanceEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &MatchPerformanceEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let key = format!("match_perf_reason_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             return None;
         }
@@ -2092,19 +2127,22 @@ impl RoleStatusRender {
         )
     }
 
-    pub fn headline(ctx: &RoleStatusEventContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &RoleStatusEventContext, events_i18n: &EventI18n) -> String {
         let key = format!("role_status_headline_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(ctx.kind.as_i18n_key()).to_string()
+            events_i18n.t(ctx.kind.as_i18n_key()).to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &RoleStatusEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &RoleStatusEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let key = format!("role_status_reason_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             return None;
         }
@@ -2142,19 +2180,22 @@ impl NationalTeamRender {
         )
     }
 
-    pub fn headline(ctx: &NationalTeamEventContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &NationalTeamEventContext, events_i18n: &EventI18n) -> String {
         let key = format!("national_headline_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(ctx.kind.as_i18n_key()).to_string()
+            events_i18n.t(ctx.kind.as_i18n_key()).to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &NationalTeamEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &NationalTeamEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let key = format!("national_reason_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             return None;
         }
@@ -2191,19 +2232,22 @@ impl LeadershipRender {
         )
     }
 
-    pub fn headline(ctx: &LeadershipEventContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &LeadershipEventContext, events_i18n: &EventI18n) -> String {
         let key = format!("leadership_headline_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(ctx.kind.as_i18n_key()).to_string()
+            events_i18n.t(ctx.kind.as_i18n_key()).to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &LeadershipEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &LeadershipEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let key = format!("leadership_reason_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             return None;
         }
@@ -2243,19 +2287,19 @@ impl MediaFanRender {
         )
     }
 
-    pub fn headline(ctx: &MediaFanEventContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &MediaFanEventContext, events_i18n: &EventI18n) -> String {
         let key = format!("media_fan_headline_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(ctx.kind.as_i18n_key()).to_string()
+            events_i18n.t(ctx.kind.as_i18n_key()).to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &MediaFanEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(ctx: &MediaFanEventContext, events_i18n: &EventI18n) -> Option<String> {
         let key = format!("media_fan_reason_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             return None;
         }
@@ -2291,19 +2335,22 @@ impl PersonalAdaptationRender {
         )
     }
 
-    pub fn headline(ctx: &PersonalAdaptationEventContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &PersonalAdaptationEventContext, events_i18n: &EventI18n) -> String {
         let key = format!("adaptation_headline_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(ctx.kind.as_i18n_key()).to_string()
+            events_i18n.t(ctx.kind.as_i18n_key()).to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &PersonalAdaptationEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &PersonalAdaptationEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let key = format!("adaptation_reason_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             return None;
         }
@@ -2356,19 +2403,22 @@ impl CareerDesireRender {
         )
     }
 
-    pub fn headline(ctx: &CareerDesireEventContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &CareerDesireEventContext, events_i18n: &EventI18n) -> String {
         let key = format!("career_desire_headline_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(ctx.kind.as_i18n_key()).to_string()
+            events_i18n.t(ctx.kind.as_i18n_key()).to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &CareerDesireEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &CareerDesireEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let key = format!("career_desire_reason_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         let base = if raw == key {
             String::new()
         } else {
@@ -2378,7 +2428,7 @@ impl CareerDesireRender {
         // Append up to two evidence-specific details so the reason
         // line reflects the actual signals the detector latched onto,
         // rather than a single canned sentence per kind.
-        let details = Self::evidence_details(ctx, i18n);
+        let details = Self::evidence_details(ctx, events_i18n);
         if base.is_empty() && details.is_empty() {
             return None;
         }
@@ -2393,11 +2443,11 @@ impl CareerDesireRender {
         }
     }
 
-    fn evidence_details(ctx: &CareerDesireEventContext, i18n: &I18n) -> Vec<String> {
+    fn evidence_details(ctx: &CareerDesireEventContext, events_i18n: &EventI18n) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for ev in ctx.evidence.iter().take(2) {
             let key = ev.as_i18n_key();
-            let raw = i18n.t(key);
+            let raw = events_i18n.t(key);
             if raw != key {
                 out.push(raw.to_string());
             }
@@ -2439,29 +2489,32 @@ impl CareerStageRender {
         )
     }
 
-    pub fn headline(ctx: &core::CareerStageEventContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &core::CareerStageEventContext, events_i18n: &EventI18n) -> String {
         let key = format!("career_stage_headline_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(ctx.kind.as_i18n_key()).to_string()
+            events_i18n.t(ctx.kind.as_i18n_key()).to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &core::CareerStageEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &core::CareerStageEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
         // A concrete retirement reason leads the explanation.
         if let Some(reason) = ctx.retirement_reason {
             let key = reason.as_i18n_key();
-            let raw = i18n.t(key);
+            let raw = events_i18n.t(key);
             if raw != key {
                 parts.push(raw.to_string());
             }
         }
         for ev in ctx.evidence.iter().take(2) {
             let key = ev.as_i18n_key();
-            let raw = i18n.t(key);
+            let raw = events_i18n.t(key);
             if raw != key {
                 parts.push(raw.to_string());
             }
@@ -2492,30 +2545,33 @@ impl LifeSimulationRender {
         matches!(event_type, HappinessEventType::LifeSimulationDesire)
     }
 
-    pub fn headline(ctx: &core::LifeSimulationDesireContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &core::LifeSimulationDesireContext, events_i18n: &EventI18n) -> String {
         let kind_key = ctx.kind.as_i18n_key();
-        let raw = i18n.t(kind_key);
+        let raw = events_i18n.t(kind_key);
         if raw == kind_key {
             // Fall back to a generic "wants something" line if a locale
             // hasn't been updated yet.
-            i18n.t("life_sim_kind_generic").to_string()
+            events_i18n.t("life_sim_kind_generic").to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &core::LifeSimulationDesireContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &core::LifeSimulationDesireContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
         if let Some(t) = ctx.trigger {
             let key = t.as_i18n_key();
-            let raw = i18n.t(key);
+            let raw = events_i18n.t(key);
             if raw != key {
                 parts.push(raw.to_string());
             }
         }
         for ev in ctx.evidence.iter().take(2) {
             let key = ev.as_i18n_key();
-            let raw = i18n.t(key);
+            let raw = events_i18n.t(key);
             if raw != key {
                 parts.push(raw.to_string());
             }
@@ -2545,29 +2601,29 @@ impl LoanRender {
     /// "he never got in the team" — because that is the sentence a
     /// reader wants first; the numbers that produced it follow in the
     /// reason line. Every other loan kind keeps its fixed headline.
-    pub fn headline(ctx: &LoanEventContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &LoanEventContext, events_i18n: &EventI18n) -> String {
         if let Some(spell) = ctx.spell.as_ref() {
             let key = format!("loan_headline_verdict_{}", spell.verdict.as_token());
-            let raw = i18n.t(&key);
+            let raw = events_i18n.t(&key);
             if raw != key {
                 return raw.to_string();
             }
         }
         let key = format!("loan_headline_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(ctx.kind.as_i18n_key()).to_string()
+            events_i18n.t(ctx.kind.as_i18n_key()).to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &LoanEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(ctx: &LoanEventContext, events_i18n: &EventI18n) -> Option<String> {
         if let Some(spell) = ctx.spell.as_ref() {
-            return Self::spell_sentence(spell, i18n);
+            return Self::spell_sentence(spell, events_i18n);
         }
         let key = format!("loan_reason_{}", Self::kind_token(ctx));
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             return None;
         }
@@ -2578,7 +2634,7 @@ impl LoanRender {
     /// rated. Built from parts rather than one template so a spell with
     /// no goals in it does not read "0 goals, 0 assists" — a defender's
     /// clean season would otherwise look like a striker's failed one.
-    fn spell_sentence(spell: &core::LoanSpellRecord, i18n: &I18n) -> Option<String> {
+    fn spell_sentence(spell: &core::LoanSpellRecord, events_i18n: &EventI18n) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
 
         let apps_key = if spell.starts == spell.appearances {
@@ -2586,7 +2642,7 @@ impl LoanRender {
         } else {
             "loan_spell_apps_with_starts"
         };
-        if let Some(template) = translated(i18n, apps_key) {
+        if let Some(template) = translated(events_i18n, apps_key) {
             parts.push(
                 template
                     .replace("{apps}", &spell.appearances.to_string())
@@ -2604,7 +2660,7 @@ impl LoanRender {
             _ => Some("loan_spell_goals_assists"),
         };
         if let Some(key) = contribution_key {
-            if let Some(template) = translated(i18n, key) {
+            if let Some(template) = translated(events_i18n, key) {
                 parts.push(
                     template
                         .replace("{goals}", &spell.goals.to_string())
@@ -2614,7 +2670,7 @@ impl LoanRender {
         }
 
         if let Some(rating) = spell.average_rating {
-            if let Some(template) = translated(i18n, "loan_spell_rating") {
+            if let Some(template) = translated(events_i18n, "loan_spell_rating") {
                 parts.push(template.replace("{rating}", &format!("{:.2}", rating)));
             }
         }
@@ -2622,7 +2678,7 @@ impl LoanRender {
         if parts.is_empty() {
             // No copy for any part — fall back to the verdict alone
             // rather than to a blank row.
-            return translated(i18n, spell.verdict.as_i18n_key()).map(str::to_string);
+            return translated(events_i18n, spell.verdict.as_i18n_key()).map(str::to_string);
         }
         Some(parts.join(" · "))
     }
@@ -2679,20 +2735,25 @@ impl RecognitionRender {
     pub fn headline(
         event_type: &HappinessEventType,
         ctx: &core::RecognitionEventContext,
-        i18n: &I18n,
+        events_i18n: &EventI18n,
     ) -> String {
         let key = format!("recognition_headline_{}", ctx.kind.as_token());
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
-            i18n.t(event_type_to_i18n_key(event_type)).to_string()
+            events_i18n
+                .t(event_type_to_i18n_key(event_type))
+                .to_string()
         } else {
             raw.to_string()
         }
     }
 
-    pub fn reason_sentence(ctx: &core::RecognitionEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &core::RecognitionEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let key = format!("recognition_reason_{}", ctx.kind.as_token());
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             return None;
         }
@@ -2714,9 +2775,9 @@ impl SeasonOutcomeRender {
         )
     }
 
-    pub fn headline(ctx: &core::SeasonOutcomeContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &core::SeasonOutcomeContext, events_i18n: &EventI18n) -> String {
         let key = format!("season_outcome_headline_{}", ctx.kind.as_token());
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             String::new()
         } else {
@@ -2724,9 +2785,12 @@ impl SeasonOutcomeRender {
         }
     }
 
-    pub fn reason_sentence(ctx: &core::SeasonOutcomeContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &core::SeasonOutcomeContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let key = format!("season_outcome_reason_{}", ctx.kind.as_token());
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             return None;
         }
@@ -2746,24 +2810,25 @@ impl RegulationRender {
         matches!(event_type, HappinessEventType::SquadRegistrationOmitted)
     }
 
-    pub fn headline(ctx: &core::RegulationEventContext, i18n: &I18n) -> String {
+    pub fn headline(ctx: &core::RegulationEventContext, events_i18n: &EventI18n) -> String {
         let key = format!(
             "regulation_headline_{}_{}",
             ctx.outcome.as_token(),
             ctx.slot_kind.as_token()
         );
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             // Fall back to slot-only key, then to the legacy event-type
             // line. Keeps short copy when the slot×outcome matrix is
             // partially translated.
             let slot_key = format!("regulation_headline_slot_{}", ctx.slot_kind.as_token());
-            let slot_raw = i18n.t(&slot_key);
+            let slot_raw = events_i18n.t(&slot_key);
             if slot_raw == slot_key {
-                i18n.t(event_type_to_i18n_key(
-                    &HappinessEventType::SquadRegistrationOmitted,
-                ))
-                .to_string()
+                events_i18n
+                    .t(event_type_to_i18n_key(
+                        &HappinessEventType::SquadRegistrationOmitted,
+                    ))
+                    .to_string()
             } else {
                 slot_raw.to_string()
             }
@@ -2772,9 +2837,12 @@ impl RegulationRender {
         }
     }
 
-    pub fn reason_sentence(ctx: &core::RegulationEventContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &core::RegulationEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let key = format!("regulation_reason_{}", ctx.slot_kind.as_token());
-        let raw = i18n.t(&key);
+        let raw = events_i18n.t(&key);
         if raw == key {
             return None;
         }
@@ -2785,8 +2853,8 @@ impl RegulationRender {
 /// Look up a translated piece of copy or return `None` when the locale
 /// only has the fallback key. Drives the "skip-the-detail-if-missing"
 /// pattern used by every render struct in this module.
-fn translated<'a>(i18n: &'a I18n, key: &'a str) -> Option<&'a str> {
-    let raw = i18n.t(key);
+fn translated<'a>(events_i18n: &'a EventI18n, key: &'a str) -> Option<&'a str> {
+    let raw = events_i18n.t(key);
     if raw == key { None } else { Some(raw) }
 }
 
@@ -2797,8 +2865,8 @@ impl PrivateTalkRender {
         matches!(event_type, HappinessEventType::AskedForPrivateTalk)
     }
 
-    pub fn headline(_ctx: &core::PrivateTalkRequestContext, i18n: &I18n) -> String {
-        i18n.t("event_asked_for_private_talk").to_string()
+    pub fn headline(_ctx: &core::PrivateTalkRequestContext, events_i18n: &EventI18n) -> String {
+        events_i18n.t("event_asked_for_private_talk").to_string()
     }
 
     /// Compose `<reason>. <trust-mood>` so the row reads "He is unhappy
@@ -2806,9 +2874,12 @@ impl PrivateTalkRender {
     /// generic single-sentence form. Trust is bucketed coarsely so the
     /// rendered phrase is stable across float drift; missing trust /
     /// missing translation keys are skipped silently.
-    pub fn reason_sentence(ctx: &core::PrivateTalkRequestContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &core::PrivateTalkRequestContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
-        if let Some(raw) = translated(i18n, ctx.reason.as_i18n_key()) {
+        if let Some(raw) = translated(events_i18n, ctx.reason.as_i18n_key()) {
             parts.push(raw.to_string());
         }
         if let Some(trust) = ctx.trust_in_manager {
@@ -2819,12 +2890,12 @@ impl PrivateTalkRender {
             } else {
                 "private_talk_trust_mid"
             };
-            if let Some(raw) = translated(i18n, bucket_key) {
+            if let Some(raw) = translated(events_i18n, bucket_key) {
                 parts.push(raw.to_string());
             }
         }
         if ctx.repeated_request {
-            if let Some(raw) = translated(i18n, "private_talk_repeat_note") {
+            if let Some(raw) = translated(events_i18n, "private_talk_repeat_note") {
                 parts.push(raw.to_string());
             }
         }
@@ -2846,8 +2917,8 @@ impl ClubDirectionRender {
         )
     }
 
-    pub fn headline(ctx: &core::ClubDirectionContext, i18n: &I18n) -> String {
-        i18n.t(ctx.kind.as_i18n_key()).to_string()
+    pub fn headline(ctx: &core::ClubDirectionContext, events_i18n: &EventI18n) -> String {
+        events_i18n.t(ctx.kind.as_i18n_key()).to_string()
     }
 
     /// Surface up to two evidence sentences plus an optional net-
@@ -2855,14 +2926,17 @@ impl ClubDirectionRender {
     /// renderer's resolver can find them (linked via partner-id in the
     /// renderer dispatch — keep the helper free of SimulatorData
     /// lookups so the contract / API stays narrow).
-    pub fn reason_sentence(ctx: &core::ClubDirectionContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &core::ClubDirectionContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let mut sentences: Vec<String> = Vec::new();
         let mut picked = 0;
         for ev in &ctx.evidence {
             if picked >= 2 {
                 break;
             }
-            if let Some(raw) = translated(i18n, ev.as_i18n_key()) {
+            if let Some(raw) = translated(events_i18n, ev.as_i18n_key()) {
                 sentences.push(raw.to_string());
                 picked += 1;
             }
@@ -2875,7 +2949,7 @@ impl ClubDirectionRender {
             } else {
                 "club_direction_net_signings_flat"
             };
-            if let Some(raw) = translated(i18n, key) {
+            if let Some(raw) = translated(events_i18n, key) {
                 sentences.push(raw.to_string());
             }
         }
@@ -2899,18 +2973,23 @@ impl BigMatchRender {
     pub fn headline(
         event_type: &HappinessEventType,
         _ctx: &core::BigMatchSelectionContext,
-        i18n: &I18n,
+        events_i18n: &EventI18n,
     ) -> String {
-        i18n.t(event_type_to_i18n_key(event_type)).to_string()
+        events_i18n
+            .t(event_type_to_i18n_key(event_type))
+            .to_string()
     }
 
     /// `<decision> <fixture-fragment>` followed by an optional
     /// captaincy / form / status amplifier. Each fragment is skipped
     /// silently if the locale doesn't carry the key — the row
     /// degrades to whatever pieces are translated.
-    pub fn reason_sentence(ctx: &core::BigMatchSelectionContext, i18n: &I18n) -> Option<String> {
-        let decision = translated(i18n, ctx.decision.as_i18n_key());
-        let kind = translated(i18n, ctx.kind.as_i18n_key());
+    pub fn reason_sentence(
+        ctx: &core::BigMatchSelectionContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
+        let decision = translated(events_i18n, ctx.decision.as_i18n_key());
+        let kind = translated(events_i18n, ctx.kind.as_i18n_key());
         let mut parts: Vec<String> = Vec::new();
         match (decision, kind) {
             (Some(d), Some(k)) => parts.push(format!("{} {}", d, k)),
@@ -2919,20 +2998,20 @@ impl BigMatchRender {
             _ => {}
         }
         if ctx.was_captain {
-            if let Some(raw) = translated(i18n, "big_match_amplifier_captain") {
+            if let Some(raw) = translated(events_i18n, "big_match_amplifier_captain") {
                 parts.push(raw.to_string());
             }
         }
         if ctx.recent_hot_form
             && matches!(ctx.decision, core::BigMatchDecision::BenchedUnexpectedly)
         {
-            if let Some(raw) = translated(i18n, "big_match_amplifier_hot_form_dropped") {
+            if let Some(raw) = translated(events_i18n, "big_match_amplifier_hot_form_dropped") {
                 parts.push(raw.to_string());
             }
         }
         if ctx.is_young_or_fringe && matches!(ctx.decision, core::BigMatchDecision::StartedTrusted)
         {
-            if let Some(raw) = translated(i18n, "big_match_amplifier_young_or_fringe") {
+            if let Some(raw) = translated(events_i18n, "big_match_amplifier_young_or_fringe") {
                 parts.push(raw.to_string());
             }
         }
@@ -2950,8 +3029,11 @@ impl SubFrustrationRender {
         matches!(event_type, HappinessEventType::SubstitutionFrustration)
     }
 
-    pub fn headline(_ctx: &core::SubstitutionFrustrationContext, i18n: &I18n) -> String {
-        i18n.t("event_substitution_frustration").to_string()
+    pub fn headline(
+        _ctx: &core::SubstitutionFrustrationContext,
+        events_i18n: &EventI18n,
+    ) -> String {
+        events_i18n.t("event_substitution_frustration").to_string()
     }
 
     /// `<kind sentence> + <minute & rating fragment>`. Numeric fields
@@ -2959,15 +3041,15 @@ impl SubFrustrationRender {
     /// otherwise fall back to a concise locale-agnostic numeric form.
     pub fn reason_sentence(
         ctx: &core::SubstitutionFrustrationContext,
-        i18n: &I18n,
+        events_i18n: &EventI18n,
     ) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
-        if let Some(raw) = translated(i18n, ctx.kind.as_i18n_key()) {
+        if let Some(raw) = translated(events_i18n, ctx.kind.as_i18n_key()) {
             parts.push(raw.to_string());
         }
         match (ctx.minute_off, ctx.match_rating_at_sub) {
             (Some(min), Some(rating)) => {
-                let template = i18n.t("sub_frustration_detail_minute_rating");
+                let template = events_i18n.t("sub_frustration_detail_minute_rating");
                 if template != "sub_frustration_detail_minute_rating" {
                     parts.push(
                         template
@@ -2979,7 +3061,7 @@ impl SubFrustrationRender {
                 }
             }
             (Some(min), None) => {
-                let template = i18n.t("sub_frustration_detail_minute_only");
+                let template = events_i18n.t("sub_frustration_detail_minute_only");
                 if template != "sub_frustration_detail_minute_only" {
                     parts.push(template.replace("{min}", &min.to_string()));
                 } else {
@@ -2989,7 +3071,7 @@ impl SubFrustrationRender {
             _ => {}
         }
         if ctx.recent_early_hooks >= 3 {
-            if let Some(raw) = translated(i18n, "sub_frustration_repeat_note") {
+            if let Some(raw) = translated(events_i18n, "sub_frustration_repeat_note") {
                 parts.push(raw.to_string());
             }
         }
@@ -3007,24 +3089,27 @@ impl NewSigningThreatRender {
         matches!(event_type, HappinessEventType::ThreatenedByNewSigning)
     }
 
-    pub fn headline(_ctx: &core::NewSigningThreatContext, i18n: &I18n) -> String {
-        i18n.t("event_threatened_by_new_signing").to_string()
+    pub fn headline(_ctx: &core::NewSigningThreatContext, events_i18n: &EventI18n) -> String {
+        events_i18n.t("event_threatened_by_new_signing").to_string()
     }
 
     /// `<primary reason>` followed by a secondary reason from the
     /// `all_reasons` list when it adds information (status overlap +
     /// younger / wage shock together makes for a better detail row
     /// than a single sentence). At most two reason sentences emitted.
-    pub fn reason_sentence(ctx: &core::NewSigningThreatContext, i18n: &I18n) -> Option<String> {
+    pub fn reason_sentence(
+        ctx: &core::NewSigningThreatContext,
+        events_i18n: &EventI18n,
+    ) -> Option<String> {
         let mut sentences: Vec<String> = Vec::new();
-        if let Some(raw) = translated(i18n, ctx.primary_reason.as_i18n_key()) {
+        if let Some(raw) = translated(events_i18n, ctx.primary_reason.as_i18n_key()) {
             sentences.push(raw.to_string());
         }
         for extra in ctx.all_reasons.iter().filter(|r| **r != ctx.primary_reason) {
             if sentences.len() >= 2 {
                 break;
             }
-            if let Some(raw) = translated(i18n, extra.as_i18n_key()) {
+            if let Some(raw) = translated(events_i18n, extra.as_i18n_key()) {
                 sentences.push(raw.to_string());
             }
         }
@@ -3045,7 +3130,7 @@ impl NewSigningThreatRender {
 struct HeadlineDispatcher<'a> {
     event: &'a HappinessEvent,
     simulator_data: &'a SimulatorData,
-    i18n: &'a I18n,
+    events_i18n: &'a EventI18n,
     lang: &'a str,
 }
 
@@ -3059,13 +3144,18 @@ impl<'a> HeadlineDispatcher<'a> {
         // wouldn't accidentally catch other dropped-from-squad cousins.
         if matches!(ev, HappinessEventType::MatchDropped) {
             if let Some(sel) = ctx.selection_context.as_ref() {
-                let h = SelectionRender::headline(sel, self.simulator_data, self.i18n, self.lang);
+                let h = SelectionRender::headline(
+                    sel,
+                    self.simulator_data,
+                    self.events_i18n,
+                    self.lang,
+                );
                 return Some((h.html, h.partner_in_headline));
             }
         }
         if SupportRender::handles(ev) {
             if let Some(s) = ctx.support_context.as_ref() {
-                return Some((SupportRender::headline(ev, s, self.i18n), false));
+                return Some((SupportRender::headline(ev, s, self.events_i18n), false));
             }
         }
         if TransferInterestRender::handles(ev) {
@@ -3074,7 +3164,7 @@ impl<'a> HeadlineDispatcher<'a> {
                     ev,
                     tic,
                     self.simulator_data,
-                    self.i18n,
+                    self.events_i18n,
                     self.lang,
                 );
                 return Some((html, false));
@@ -3082,82 +3172,91 @@ impl<'a> HeadlineDispatcher<'a> {
         }
         if TrainingRender::handles(ev) {
             if let Some(tc) = ctx.training_context.as_ref() {
-                return Some((TrainingRender::headline(tc, self.i18n), false));
+                return Some((TrainingRender::headline(tc, self.events_i18n), false));
             }
         }
         if ManagerInteractionRender::handles(ev) {
             if let Some(mc) = ctx.manager_interaction_context.as_ref() {
-                return Some((ManagerInteractionRender::headline(ev, mc, self.i18n), false));
+                return Some((
+                    ManagerInteractionRender::headline(ev, mc, self.events_i18n),
+                    false,
+                ));
             }
         }
         if ContractRender::handles(ev) {
             if let Some(cc) = ctx.contract_context.as_ref() {
-                return Some((ContractRender::headline(cc, self.i18n), false));
+                return Some((ContractRender::headline(cc, self.events_i18n), false));
             }
         }
         if InjuryRecoveryRender::handles(ev) {
             if let Some(ic) = ctx.injury_context.as_ref() {
-                return Some((InjuryRecoveryRender::headline(ic, self.i18n), false));
+                return Some((InjuryRecoveryRender::headline(ic, self.events_i18n), false));
             }
         }
         if MatchPerformanceRender::handles(ev) {
             if let Some(mp) = ctx.match_performance_context.as_ref() {
-                return Some((MatchPerformanceRender::headline(ev, mp, self.i18n), false));
+                return Some((
+                    MatchPerformanceRender::headline(ev, mp, self.events_i18n),
+                    false,
+                ));
             }
         }
         if RoleStatusRender::handles(ev) {
             if let Some(rc) = ctx.role_status_context.as_ref() {
-                return Some((RoleStatusRender::headline(rc, self.i18n), false));
+                return Some((RoleStatusRender::headline(rc, self.events_i18n), false));
             }
         }
         if NationalTeamRender::handles(ev) {
             if let Some(nt) = ctx.national_team_context.as_ref() {
-                return Some((NationalTeamRender::headline(nt, self.i18n), false));
+                return Some((NationalTeamRender::headline(nt, self.events_i18n), false));
             }
         }
         if LeadershipRender::handles(ev) {
             if let Some(lc) = ctx.leadership_context.as_ref() {
-                return Some((LeadershipRender::headline(lc, self.i18n), false));
+                return Some((LeadershipRender::headline(lc, self.events_i18n), false));
             }
         }
         if MediaFanRender::handles(ev) {
             if let Some(mf) = ctx.media_fan_context.as_ref() {
-                return Some((MediaFanRender::headline(mf, self.i18n), false));
+                return Some((MediaFanRender::headline(mf, self.events_i18n), false));
             }
         }
         if PersonalAdaptationRender::handles(ev) {
             if let Some(pa) = ctx.personal_adaptation_context.as_ref() {
-                return Some((PersonalAdaptationRender::headline(pa, self.i18n), false));
+                return Some((
+                    PersonalAdaptationRender::headline(pa, self.events_i18n),
+                    false,
+                ));
             }
         }
         if CareerDesireRender::handles(ev) {
             if let Some(cd) = ctx.career_desire_context.as_ref() {
-                return Some((CareerDesireRender::headline(cd, self.i18n), false));
+                return Some((CareerDesireRender::headline(cd, self.events_i18n), false));
             }
         }
         if CareerStageRender::handles(ev) {
             if let Some(cs) = ctx.career_stage_context.as_ref() {
-                return Some((CareerStageRender::headline(cs, self.i18n), false));
+                return Some((CareerStageRender::headline(cs, self.events_i18n), false));
             }
         }
         if LifeSimulationRender::handles(ev) {
             if let Some(ls) = ctx.life_simulation_desire_context.as_ref() {
-                return Some((LifeSimulationRender::headline(ls, self.i18n), false));
+                return Some((LifeSimulationRender::headline(ls, self.events_i18n), false));
             }
         }
         if LoanRender::handles(ev) {
             if let Some(lc) = ctx.loan_context.as_ref() {
-                return Some((LoanRender::headline(lc, self.i18n), false));
+                return Some((LoanRender::headline(lc, self.events_i18n), false));
             }
         }
         if RecognitionRender::handles(ev) {
             if let Some(rc) = ctx.recognition_context.as_ref() {
-                return Some((RecognitionRender::headline(ev, rc, self.i18n), false));
+                return Some((RecognitionRender::headline(ev, rc, self.events_i18n), false));
             }
         }
         if SeasonOutcomeRender::handles(ev) {
             if let Some(sc) = ctx.season_outcome_context.as_ref() {
-                let h = SeasonOutcomeRender::headline(sc, self.i18n);
+                let h = SeasonOutcomeRender::headline(sc, self.events_i18n);
                 if !h.is_empty() {
                     return Some((h, false));
                 }
@@ -3165,32 +3264,35 @@ impl<'a> HeadlineDispatcher<'a> {
         }
         if RegulationRender::handles(ev) {
             if let Some(rc) = ctx.regulation_context.as_ref() {
-                return Some((RegulationRender::headline(rc, self.i18n), false));
+                return Some((RegulationRender::headline(rc, self.events_i18n), false));
             }
         }
         if PrivateTalkRender::handles(ev) {
             if let Some(pt) = ctx.private_talk_context.as_ref() {
-                return Some((PrivateTalkRender::headline(pt, self.i18n), false));
+                return Some((PrivateTalkRender::headline(pt, self.events_i18n), false));
             }
         }
         if ClubDirectionRender::handles(ev) {
             if let Some(cd) = ctx.club_direction_context.as_ref() {
-                return Some((ClubDirectionRender::headline(cd, self.i18n), false));
+                return Some((ClubDirectionRender::headline(cd, self.events_i18n), false));
             }
         }
         if BigMatchRender::handles(ev) {
             if let Some(bm) = ctx.big_match_selection_context.as_ref() {
-                return Some((BigMatchRender::headline(ev, bm, self.i18n), false));
+                return Some((BigMatchRender::headline(ev, bm, self.events_i18n), false));
             }
         }
         if SubFrustrationRender::handles(ev) {
             if let Some(sf) = ctx.substitution_frustration_context.as_ref() {
-                return Some((SubFrustrationRender::headline(sf, self.i18n), false));
+                return Some((SubFrustrationRender::headline(sf, self.events_i18n), false));
             }
         }
         if NewSigningThreatRender::handles(ev) {
             if let Some(nt) = ctx.new_signing_threat_context.as_ref() {
-                return Some((NewSigningThreatRender::headline(nt, self.i18n), false));
+                return Some((
+                    NewSigningThreatRender::headline(nt, self.events_i18n),
+                    false,
+                ));
             }
         }
         None
@@ -3200,24 +3302,28 @@ impl<'a> HeadlineDispatcher<'a> {
 /// Build the headline string for a single event. Substitutes the
 /// `{partner}` placeholder with a player link when the upgraded event
 /// type has a partner-aware key + a resolved partner; falls back to the
-/// legacy static i18n line otherwise. The returned string is rendered
+/// legacy static events_i18n line otherwise. The returned string is rendered
 /// via askama's `|safe` filter, so this is the only point where event
 /// copy crosses into HTML — keep substitutions to controlled values.
 fn build_description(
     event: &HappinessEvent,
     partner: Option<&(String, String)>,
-    i18n: &I18n,
+    events_i18n: &EventI18n,
     lang: &str,
     league_slug: Option<&str>,
 ) -> DescriptionRender {
     if matches!(event.event_type, HappinessEventType::TeamOfTheWeekSelection) {
-        let raw = i18n.t(event_type_to_i18n_key(&event.event_type));
+        let raw = events_i18n.t(event_type_to_i18n_key(&event.event_type));
         let html = if let Some(slug) = league_slug {
             let url = format!("/{}/leagues/{}/awards", lang, slug);
-            let link = format!(r#"<a href="{}">{}</a>"#, url, i18n.t("team_of_the_week"));
+            let link = format!(
+                r#"<a href="{}">{}</a>"#,
+                url,
+                events_i18n.t("team_of_the_week")
+            );
             raw.replace("{tow}", &link)
         } else {
-            raw.replace("{tow}", i18n.t("team_of_the_week"))
+            raw.replace("{tow}", events_i18n.t("team_of_the_week"))
         };
         return DescriptionRender {
             html,
@@ -3229,17 +3335,17 @@ fn build_description(
         event.event_type,
         HappinessEventType::YoungTeamOfTheWeekSelection
     ) {
-        let raw = i18n.t(event_type_to_i18n_key(&event.event_type));
+        let raw = events_i18n.t(event_type_to_i18n_key(&event.event_type));
         let html = if let Some(slug) = league_slug {
             let url = format!("/{}/leagues/{}/awards", lang, slug);
             let link = format!(
                 r#"<a href="{}">{}</a>"#,
                 url,
-                i18n.t("young_team_of_the_week")
+                events_i18n.t("young_team_of_the_week")
             );
             raw.replace("{tow}", &link)
         } else {
-            raw.replace("{tow}", i18n.t("young_team_of_the_week"))
+            raw.replace("{tow}", events_i18n.t("young_team_of_the_week"))
         };
         return DescriptionRender {
             html,
@@ -3258,7 +3364,7 @@ fn build_description(
                 .and_then(|c| c.teammate_conflict_context.as_ref())
                 .and_then(TeammateConflictRender::partner_named_key)
             {
-                let raw = i18n.t(&reason_key);
+                let raw = events_i18n.t(&reason_key);
                 if raw != reason_key {
                     let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
                     return DescriptionRender {
@@ -3269,7 +3375,7 @@ fn build_description(
             }
         }
         if let Some(named_key) = partner_named_key(&event.event_type) {
-            let raw = i18n.t(named_key);
+            let raw = events_i18n.t(named_key);
             let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
             return DescriptionRender {
                 html: raw.replace("{partner}", &link),
@@ -3279,14 +3385,14 @@ fn build_description(
     }
 
     DescriptionRender {
-        html: i18n
+        html: events_i18n
             .t(event_type_to_i18n_key(&event.event_type))
             .to_string(),
         partner_in_headline: false,
     }
 }
 
-/// Returns the `_named` i18n key for a partner-aware event type — one
+/// Returns the `_named` events_i18n key for a partner-aware event type — one
 /// that uses a `{partner}` placeholder so the rendered headline reads
 /// like "Clashed with Marcus Edwards" instead of "Had a disagreement
 /// with a teammate — Marcus Edwards". Only the upgraded event types
@@ -3340,6 +3446,25 @@ fn resolve_partner(data: &SimulatorData, partner_id: u32) -> Option<(String, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The English event bundle, verbatim — for the audits that assert on
+    /// the file's text rather than on a resolved key.
+    const EN_EVENTS: &str = include_str!("../../../assets/i18n/events/en.json");
+
+    /// Every key the page can resolve, layered the way `EventI18n` layers
+    /// them: the event scope on top, page chrome behind it. Event copy
+    /// reuses a handful of generic chrome labels (award names, "now"), so
+    /// a fixture built from the event bundle alone would report them
+    /// missing.
+    fn en_map() -> std::collections::HashMap<String, String> {
+        let parse = |scope: &str, text: &str| -> std::collections::HashMap<String, String> {
+            serde_json::from_str(text)
+                .unwrap_or_else(|e| panic!("{} en.json is not valid JSON: {}", scope, e))
+        };
+        let mut map = parse("chrome", include_str!("../../../assets/i18n/en.json"));
+        map.extend(parse("events", EN_EVENTS));
+        map
+    }
 
     #[test]
     fn partner_named_key_covers_every_partner_required_event() {
@@ -3670,8 +3795,7 @@ mod tests {
         // resolve to MUST exist in the English bundle. Catches a new
         // trigger added to the SupportRender match without a copy
         // line — the visible UI would otherwise display the raw key.
-        let bytes = include_bytes!("../../../assets/i18n/en.json");
-        let raw = std::str::from_utf8(bytes).unwrap();
+        let raw = EN_EVENTS;
         for key in [
             "event_manager_encouragement_default",
             "event_manager_encouragement_pom",
@@ -3717,8 +3841,7 @@ mod tests {
         // the player reacted. The legacy default must read as a
         // reaction copy ("Responded to..."), not "Gave a motivational
         // speech...".
-        let bytes = include_bytes!("../../../assets/i18n/en.json");
-        let raw = std::str::from_utf8(bytes).unwrap();
+        let raw = EN_EVENTS;
         assert!(
             !raw.contains("\"event_dressing_room_speech\": \"Gave a motivational speech in the dressing room\""),
             "legacy 'Gave a motivational speech' copy still in en.json — it implied the player gave the speech"
@@ -3727,8 +3850,7 @@ mod tests {
 
     #[test]
     fn selection_headline_keys_present_in_en_locale() {
-        let bytes = include_bytes!("../../../assets/i18n/en.json");
-        let raw = std::str::from_utf8(bytes).unwrap();
+        let raw = EN_EVENTS;
         for key in [
             "selection_headline_left_out_named",
             "selection_headline_left_out",
@@ -3798,8 +3920,7 @@ mod tests {
         // Catches a new stage / kind / reaction added to the core enum
         // without a copy line — the visible UI would otherwise show the
         // raw key.
-        let bytes = include_bytes!("../../../assets/i18n/en.json");
-        let raw = std::str::from_utf8(bytes).unwrap();
+        let raw = EN_EVENTS;
         for key in [
             "event_scouted_by_club",
             "event_transfer_rumour",
@@ -3881,8 +4002,7 @@ mod tests {
         // the Phase 1-11 renderers can resolve to MUST exist in the
         // English bundle. Catches a new variant added to the core enum
         // without a copy line.
-        let bytes = include_bytes!("../../../assets/i18n/en.json");
-        let raw = std::str::from_utf8(bytes).unwrap();
+        let raw = EN_EVENTS;
         for key in [
             // Phase 1
             "training_headline_responded_to_criticism",
@@ -3950,7 +4070,11 @@ mod tests {
             "loan_headline_listing_accepted",
         ];
         for loc in LOCALES {
-            let path_full = format!("{}/assets/i18n/{}.json", env!("CARGO_MANIFEST_DIR"), loc);
+            let path_full = format!(
+                "{}/assets/i18n/events/{}.json",
+                env!("CARGO_MANIFEST_DIR"),
+                loc
+            );
             let raw = std::fs::read_to_string(&path_full)
                 .unwrap_or_else(|e| panic!("could not read {}: {}", path_full, e));
             for key in REPRESENTATIVES {
@@ -3975,11 +4099,7 @@ mod tests {
         // either is forgotten, en.json is missing a key and the
         // renderer falls back to the raw key string, which renders as
         // ugly snake_case in the UI.
-        use std::collections::HashMap;
-
-        let bytes = include_bytes!("../../../assets/i18n/en.json");
-        let map: HashMap<String, String> =
-            serde_json::from_slice(bytes).expect("en.json is valid JSON");
+        let map = en_map();
 
         const CAUSE_TOKENS: &[&str] = &[
             "personality_clash",
@@ -4344,10 +4464,7 @@ mod tests {
         // resolve to a real cause sentence + a real headline variant in
         // en.json. The renderer falls back to the legacy generic line
         // when a key is missing, which silently hides the upgrade.
-        use std::collections::HashMap;
-        let bytes = include_bytes!("../../../assets/i18n/en.json");
-        let map: HashMap<String, String> =
-            serde_json::from_slice(bytes).expect("en.json is valid JSON");
+        let map = en_map();
         const REASONS: &[core::ManagerCriticismReason] = &[
             core::ManagerCriticismReason::MissedAssignment,
             core::ManagerCriticismReason::PoorPressing,
@@ -4388,10 +4505,7 @@ mod tests {
         // partner-aware headline ({partner} placeholder) plus a cause
         // sentence + a location evidence sentence in en.json. Otherwise
         // the renderer silently degrades to the generic legacy copy.
-        use std::collections::HashMap;
-        let bytes = include_bytes!("../../../assets/i18n/en.json");
-        let map: HashMap<String, String> =
-            serde_json::from_slice(bytes).expect("en.json is valid JSON");
+        let map = en_map();
         const REASONS: &[core::TeammateConflictReason] = &[
             core::TeammateConflictReason::TrainingStandards,
             core::TeammateConflictReason::PositionalRivalry,
@@ -4455,7 +4569,11 @@ mod tests {
             "conflict_evidence_dressing_room",
         ];
         for loc in LOCALES {
-            let path_full = format!("{}/assets/i18n/{}.json", env!("CARGO_MANIFEST_DIR"), loc);
+            let path_full = format!(
+                "{}/assets/i18n/events/{}.json",
+                env!("CARGO_MANIFEST_DIR"),
+                loc
+            );
             let raw = std::fs::read_to_string(&path_full)
                 .unwrap_or_else(|e| panic!("could not read {}: {}", path_full, e));
             for key in REPRESENTATIVES {
@@ -4469,20 +4587,17 @@ mod tests {
         }
     }
 
-    /// Lightweight in-memory I18n stub that returns either the loaded
-    /// value or — for missing keys — the key itself. Mirrors the
-    /// production `I18n.t` semantics so the renderer's "fall back to the
-    /// raw key" branch can still be exercised without standing up the
-    /// full bundle loader.
-    fn test_i18n_from(map: std::collections::HashMap<String, String>) -> I18n {
-        I18n::for_test(map)
+    /// Lightweight in-memory stub that returns either the loaded value
+    /// or — for missing keys — the key itself. Mirrors the production
+    /// `EventI18n.t` semantics so the renderer's "fall back to the raw
+    /// key" branch can still be exercised without standing up the full
+    /// bundle loader.
+    fn test_i18n_from(map: std::collections::HashMap<String, String>) -> EventI18n {
+        EventI18n::for_test(map)
     }
 
-    fn load_en_i18n() -> I18n {
-        let bytes = include_bytes!("../../../assets/i18n/en.json");
-        let map: std::collections::HashMap<String, String> =
-            serde_json::from_slice(bytes).expect("en.json is valid JSON");
-        test_i18n_from(map)
+    fn load_en_i18n() -> EventI18n {
+        test_i18n_from(en_map())
     }
 
     #[test]
@@ -4708,8 +4823,7 @@ mod tests {
         // in the locale data — confirm it's gone from the bundled en
         // file. This guards against regressions where someone re-adds
         // a generic relationship-state-mixed sentence.
-        let bytes = include_bytes!("../../../assets/i18n/en.json");
-        let raw = std::str::from_utf8(bytes).unwrap();
+        let raw = EN_EVENTS;
         assert!(
             !raw.contains("loosely formed"),
             "en.json still contains the 'loosely formed' filler phrase"
@@ -4898,15 +5012,15 @@ mod tests {
             "reason_ev_high_fee_pressure",
         ];
         let locales: &[(&str, &[u8])] = &[
-            ("en", include_bytes!("../../../assets/i18n/en.json")),
-            ("de", include_bytes!("../../../assets/i18n/de.json")),
-            ("es", include_bytes!("../../../assets/i18n/es.json")),
-            ("fr", include_bytes!("../../../assets/i18n/fr.json")),
-            ("ja", include_bytes!("../../../assets/i18n/ja.json")),
-            ("pt", include_bytes!("../../../assets/i18n/pt.json")),
-            ("ru", include_bytes!("../../../assets/i18n/ru.json")),
-            ("tr", include_bytes!("../../../assets/i18n/tr.json")),
-            ("zh", include_bytes!("../../../assets/i18n/zh.json")),
+            ("en", include_bytes!("../../../assets/i18n/events/en.json")),
+            ("de", include_bytes!("../../../assets/i18n/events/de.json")),
+            ("es", include_bytes!("../../../assets/i18n/events/es.json")),
+            ("fr", include_bytes!("../../../assets/i18n/events/fr.json")),
+            ("ja", include_bytes!("../../../assets/i18n/events/ja.json")),
+            ("pt", include_bytes!("../../../assets/i18n/events/pt.json")),
+            ("ru", include_bytes!("../../../assets/i18n/events/ru.json")),
+            ("tr", include_bytes!("../../../assets/i18n/events/tr.json")),
+            ("zh", include_bytes!("../../../assets/i18n/events/zh.json")),
         ];
         for (locale, bytes) in locales {
             let raw = std::str::from_utf8(bytes).unwrap();
@@ -4999,15 +5113,15 @@ mod tests {
             "club_direction_net_signings_flat",
         ];
         let locales: &[(&str, &[u8])] = &[
-            ("en", include_bytes!("../../../assets/i18n/en.json")),
-            ("de", include_bytes!("../../../assets/i18n/de.json")),
-            ("es", include_bytes!("../../../assets/i18n/es.json")),
-            ("fr", include_bytes!("../../../assets/i18n/fr.json")),
-            ("ja", include_bytes!("../../../assets/i18n/ja.json")),
-            ("pt", include_bytes!("../../../assets/i18n/pt.json")),
-            ("ru", include_bytes!("../../../assets/i18n/ru.json")),
-            ("tr", include_bytes!("../../../assets/i18n/tr.json")),
-            ("zh", include_bytes!("../../../assets/i18n/zh.json")),
+            ("en", include_bytes!("../../../assets/i18n/events/en.json")),
+            ("de", include_bytes!("../../../assets/i18n/events/de.json")),
+            ("es", include_bytes!("../../../assets/i18n/events/es.json")),
+            ("fr", include_bytes!("../../../assets/i18n/events/fr.json")),
+            ("ja", include_bytes!("../../../assets/i18n/events/ja.json")),
+            ("pt", include_bytes!("../../../assets/i18n/events/pt.json")),
+            ("ru", include_bytes!("../../../assets/i18n/events/ru.json")),
+            ("tr", include_bytes!("../../../assets/i18n/events/tr.json")),
+            ("zh", include_bytes!("../../../assets/i18n/events/zh.json")),
         ];
         for (locale, bytes) in locales {
             let raw = std::str::from_utf8(bytes).unwrap();
@@ -5028,8 +5142,7 @@ mod tests {
         // big-match event must resolve to a real headline plus the
         // specialized-context reason / evidence sentences. Missing
         // entries cause the renderer to surface the raw key.
-        let bytes = include_bytes!("../../../assets/i18n/en.json");
-        let raw = std::str::from_utf8(bytes).unwrap();
+        let raw = EN_EVENTS;
         for key in [
             // Event headline keys
             "event_rejected_contract_offer",
@@ -5136,8 +5249,7 @@ mod tests {
 
     #[test]
     fn transfer_environment_event_keys_present_in_en_locale() {
-        let bytes = include_bytes!("../../../assets/i18n/en.json");
-        let raw = std::str::from_utf8(bytes).unwrap();
+        let raw = EN_EVENTS;
         for key in [
             // event headline keys
             "event_top_club_opportunity",

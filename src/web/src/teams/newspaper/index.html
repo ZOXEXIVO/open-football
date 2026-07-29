@@ -7,15 +7,15 @@
     {% if issues.is_empty() %}
     <div class="np-empty">
         <div class="np-empty-rule"></div>
-        <p class="np-empty-title">{{ i18n.t("newspaper_presses_idle") }}</p>
-        <p class="np-empty-body">{{ i18n.t("newspaper_no_issues") }}</p>
+        <p class="np-empty-title">{{ news.t("newspaper_presses_idle") }}</p>
+        <p class="np-empty-body">{{ news.t("newspaper_no_issues") }}</p>
     </div>
     {% else %}
 
     {% for issue in issues %}
     {% if loop.index0 == 1 %}
     <div class="np-archive-rule">
-        <span>{{ i18n.t("newspaper_back_issues") }}</span>
+        <span>{{ news.t("newspaper_back_issues") }}</span>
     </div>
     {% endif %}
     {% include "teams/newspaper/_sheet.html" %}

@@ -6,7 +6,7 @@ use crate::player::decisions::PlayerDecisionsCounter;
 use crate::player::events::PlayerEventsCounter;
 use crate::teams::newspaper::{IssueView, Paper, PaperFor, PressDesk, PressFocus, PressTeam};
 use crate::views::{self, MenuSection};
-use crate::{ApiError, ApiResult, GameAppData, I18n};
+use crate::{ApiError, ApiResult, GameAppData, I18n, NewsI18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
@@ -144,6 +144,8 @@ pub struct PlayerNewspaperTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub i18n: I18n,
+    /// Press copy, scoped apart from `i18n`.
+    pub news: NewsI18n,
     pub lang: String,
     pub active_tab: &'static str,
     pub player_id: u32,
@@ -174,6 +176,7 @@ pub async fn player_newspaper_action(
     Path(route_params): Path<PlayerNewspaperRequest>,
 ) -> ApiResult<Response> {
     let i18n = state.i18n.for_lang(&route_params.lang);
+    let news = state.news_i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
 
     let simulator_data = guard
@@ -214,8 +217,8 @@ pub async fn player_newspaper_action(
         player.full_name.display_last_name()
     );
 
-    let issues = PressCuttings::collect(simulator_data, player, &i18n);
-    let marked_note = i18n.t("newspaper_marked_for").replace("{name}", &title);
+    let issues = PressCuttings::collect(simulator_data, player, &i18n, &news);
+    let marked_note = news.t("newspaper_marked_for").replace("{name}", &title);
 
     Ok(PlayerNewspaperTemplate {
         css_version: CSS_VERSION,
@@ -265,6 +268,7 @@ pub async fn player_newspaper_action(
             Vec::new()
         },
         i18n,
+        news,
         lang: route_params.lang.clone(),
         active_tab: "newspaper",
         player_id: player.id,
@@ -299,7 +303,12 @@ pub async fn player_newspaper_action(
 struct PressCuttings;
 
 impl PressCuttings {
-    fn collect(data: &SimulatorData, player: &Player, i18n: &I18n) -> Vec<IssueView> {
+    fn collect(
+        data: &SimulatorData,
+        player: &Player,
+        i18n: &I18n,
+        news: &NewsI18n,
+    ) -> Vec<IssueView> {
         // The reader these editions are being set for. A clippings
         // bureau went through the paper with a blue pencil before it
         // posted it on, and this is the name it was paid to look for.
@@ -314,7 +323,7 @@ impl PressCuttings {
             .into_iter()
             .flat_map(|paper| {
                 let masthead =
-                    PressDesk::masthead(paper.newsroom.masthead_key(), &paper.name, i18n);
+                    PressDesk::masthead(paper.newsroom.masthead_key(), &paper.name, news);
                 let credit = PaperFor::Own(Paper {
                     name: &paper.name,
                     slug: &paper.slug,
@@ -334,7 +343,7 @@ impl PressCuttings {
                             // newsrooms are told apart, and it is the
                             // way through to the club's full run.
                             paper_slug: paper.slug.clone(),
-                            ..PressDesk::issue(data, credit, issue, &masthead, i18n, focus)
+                            ..PressDesk::issue(data, credit, issue, &masthead, i18n, news, focus)
                         };
 
                         (issue.date, view)
@@ -359,8 +368,8 @@ impl PressCuttings {
 #[cfg(test)]
 mod tests {
     use super::{PlayerNewspaperTemplate, PlayerPress};
-    use crate::I18n;
     use crate::teams::newspaper::{IssueView, PortraitView, Prose, ResultView, Span, StoryView};
+    use crate::{I18n, NewsI18n};
     use askama::Template;
     use chrono::NaiveDate;
     use core::club::news::{NewsStory, NewsStoryKind, NewspaperIssue, PressMood};
@@ -372,9 +381,12 @@ mod tests {
     struct Page;
 
     impl Page {
-        fn copy() -> HashMap<String, String> {
-            [
-                ("newspaper", "Newspaper"),
+        fn chrome() -> HashMap<String, String> {
+            Self::map(&[("newspaper", "Newspaper"), ("site_name", "Open Football")])
+        }
+
+        fn press() -> HashMap<String, String> {
+            Self::map(&[
                 ("newspaper_edition", "Edition"),
                 ("newspaper_results", "Results"),
                 ("newspaper_in_brief", "In brief"),
@@ -390,11 +402,14 @@ mod tests {
                     "newspaper_no_player_news",
                     "No paper covers this player yet.",
                 ),
-                ("site_name", "Open Football"),
-            ]
-            .into_iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect()
+            ])
+        }
+
+        fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect()
         }
 
         /// One story, with the headline already split into the plain
@@ -524,7 +539,8 @@ mod tests {
                 header_color: "#1e272d".to_string(),
                 foreground_color: "#ffffff".to_string(),
                 menu_sections: Vec::new(),
-                i18n: I18n::for_test(Self::copy()),
+                i18n: I18n::for_test(Self::chrome()),
+                news: NewsI18n::for_test(Self::press()),
                 lang: "en".to_string(),
                 active_tab: "newspaper",
                 player_id: 17,

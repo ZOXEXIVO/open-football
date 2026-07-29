@@ -14,7 +14,7 @@
         {% if events.is_empty() %}
         <div class="fm-evt-empty">
             <div class="fm-evt-empty-mark"></div>
-            <div class="fm-evt-empty-text">{{ i18n.t("no_events") }}</div>
+            <div class="fm-evt-empty-text">{{ events_i18n.t("no_events") }}</div>
         </div>
         {% else %}
         <ol class="fm-evt-list">
@@ -39,15 +39,15 @@
                     {% if event.detail.is_some() || event.follow_up.is_some() || event.comparison.is_some() %}
                     <dl class="fm-evt-grid">
                         {% if let Some(comparison) = event.comparison %}
-                        <dt class="fm-evt-label">{{ i18n.t("event_label_comparison") }}</dt>
+                        <dt class="fm-evt-label">{{ events_i18n.t("event_label_comparison") }}</dt>
                         <dd class="fm-evt-value">{{ comparison|safe }}</dd>
                         {% endif %}
                         {% if let Some(detail) = event.detail %}
-                        <dt class="fm-evt-label">{{ i18n.t("event_label_cause") }}</dt>
+                        <dt class="fm-evt-label">{{ events_i18n.t("event_label_cause") }}</dt>
                         <dd class="fm-evt-value">{{ detail }}</dd>
                         {% endif %}
                         {% if let Some(follow_up) = event.follow_up %}
-                        <dt class="fm-evt-label">{{ i18n.t("event_label_outlook") }}</dt>
+                        <dt class="fm-evt-label">{{ events_i18n.t("event_label_outlook") }}</dt>
                         <dd class="fm-evt-value fm-evt-outlook">{{ follow_up }}</dd>
                         {% endif %}
                     </dl>

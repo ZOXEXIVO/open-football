@@ -24,8 +24,8 @@ use simulator_core::utils::TimeEstimation;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use web::{
-    AiConfig, AiJobs, DistributedDispatcher, FootballSimulatorServer, GameAppData, I18nManager,
-    Settings, WorkerRegistry, WorkerServer,
+    AiConfig, AiJobs, DistributedDispatcher, EventI18nManager, FootballSimulatorServer,
+    GameAppData, I18nManager, NewsI18nManager, Settings, WorkerRegistry, WorkerServer,
 };
 
 #[tokio::main]
@@ -76,12 +76,17 @@ async fn main() {
     let i18n = Arc::new(I18nManager::new());
     i18n.set_date(game_data.date);
 
+    let news_i18n = Arc::new(NewsI18nManager::new());
+    let events_i18n = Arc::new(EventI18nManager::new(&i18n));
+
     let data = GameAppData {
         database: Arc::new(database),
         data: Arc::new(RwLock::new(Some(Arc::new(game_data)))),
         process_lock: Arc::new(Mutex::new(())),
         cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         i18n,
+        news_i18n,
+        events_i18n,
         workers,
         ai: AiConfig::new(),
         ai_jobs: AiJobs::new(),
