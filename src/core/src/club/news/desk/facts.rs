@@ -482,13 +482,42 @@ impl<'a> RecentEvents<'a> {
 
     /// The club named by a transfer-interest event, when the emit site
     /// knew it. `0` means "somebody, and the paper isn't saying who" —
-    /// which is how most of these stories genuinely appear in print.
+    /// which is fine for copy that never names the suitor.
     pub fn interested_club(&self, kind: HappinessEventType) -> u32 {
         self.find(kind)
             .and_then(|event| event.context.as_ref())
             .and_then(|context| context.transfer_interest_context.as_ref())
             .and_then(|interest| interest.interested_club_id)
             .unwrap_or(0)
+    }
+
+    /// The beat, but only when the paper can put a name to whoever is
+    /// asking.
+    ///
+    /// The club a transfer story names is not decoration: "Milan want
+    /// him" and "somebody wants him" are different stories, and the copy
+    /// for most of these kinds is built around the name. A beat that
+    /// fired without one is therefore not the story it looks like — it
+    /// is a mood the player is carrying, and printing it as an approach
+    /// puts an anonymous club on the page. Desks that name a suitor ask
+    /// for it through here, so the two cases cannot be confused.
+    pub fn suitor(&self, kind: HappinessEventType) -> Option<u32> {
+        match self.interested_club(kind) {
+            0 => None,
+            club_id => Some(club_id),
+        }
+    }
+
+    /// The first of the listed beats that both fired and named somebody.
+    ///
+    /// Ordered like [`Self::any_of`] — loudest first — but a beat with
+    /// no name on it does not block the quieter one behind it that has
+    /// one. A rejected bid the paper can attribute is a better story
+    /// than a veto it cannot.
+    pub fn suitor_of(&self, kinds: &[HappinessEventType]) -> Option<(HappinessEventType, u32)> {
+        kinds
+            .iter()
+            .find_map(|kind| self.suitor(kind.clone()).map(|club| (kind.clone(), club)))
     }
 }
 

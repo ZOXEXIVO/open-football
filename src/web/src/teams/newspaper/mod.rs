@@ -803,9 +803,15 @@ impl<'a> PaperFor<'a> {
     fn for_story(self, data: &'a SimulatorData, story: &NewsStory) -> Paper<'a> {
         match self {
             PaperFor::Own(paper) => paper,
+            // The credit the press run froze when it filed the story,
+            // and only then the player's current side. A back issue is
+            // a record of a month, so a man sold since is still named
+            // against the club he asked to leave — resolving him live
+            // printed the request against the club he had just joined.
             PaperFor::Division(division) => data
-                .player_with_team(story.player_id)
-                .map(|(_, team)| Paper {
+                .team(story.credited_team_id)
+                .or_else(|| data.player_with_team(story.player_id).map(|(_, team)| team))
+                .map(|team| Paper {
                     name: &team.name,
                     slug: &team.slug,
                     club_id: team.club_id,
@@ -924,16 +930,25 @@ impl StoryComposer {
     /// writers write phrasings around him, and a story without one can
     /// never land on "an unnamed player was the difference" — the stub
     /// sentence this whole mechanism exists to prevent.
+    ///
+    /// The second party works the same way and for the same reason. Not
+    /// every phrasing of a transfer story names the club at the other
+    /// end — "{player} attracts admirers" is a real back-page sentence
+    /// that names nobody — so a story the desks could not attribute
+    /// picks from those, and never from the ones that would have to
+    /// print "another club" where a name belongs.
     fn eligible_phrasings(story: &NewsStory, news: &NewsI18n, stem: &str) -> Vec<usize> {
         let count = Self::phrasing_count(news, stem);
         let eligible: Vec<usize> = (0..count)
             .filter(|&index| {
-                story.player_id != 0 || !Self::phrasing_names_a_player(news, stem, index)
+                (story.player_id != 0 || !Self::phrasing_names(news, stem, index, &["{player}"]))
+                    && (story.other_id != 0
+                        || !Self::phrasing_names(news, stem, index, &["{other}", "{opponent}"]))
             })
             .collect();
 
         if eligible.is_empty() {
-            // Every phrasing wants a player the story does not carry —
+            // Every phrasing wants somebody the story does not carry —
             // broken copy, not a quiet week. The base pair goes out with
             // its fallback name, which at least shows what is missing.
             return vec![0];
@@ -941,10 +956,13 @@ impl StoryComposer {
         eligible
     }
 
-    fn phrasing_names_a_player(news: &NewsI18n, stem: &str, index: usize) -> bool {
-        let headline = Self::phrasing_key_at("h", stem, index);
-        let body = Self::phrasing_key_at("b", stem, index);
-        news.t(&headline).contains("{player}") || news.t(&body).contains("{player}")
+    /// Whether either half of a phrasing sets one of the given slots.
+    fn phrasing_names(news: &NewsI18n, stem: &str, index: usize, slots: &[&str]) -> bool {
+        let headline = news.t(&Self::phrasing_key_at("h", stem, index)).to_string();
+        let body = news.t(&Self::phrasing_key_at("b", stem, index)).to_string();
+        slots
+            .iter()
+            .any(|slot| headline.contains(slot) || body.contains(slot))
     }
 
     /// How many phrasings the bundles carry for a stem. A missing key
@@ -1438,6 +1456,49 @@ mod tests {
             pairs.push((h_key, headline, body));
         }
         pairs
+    }
+
+    /// A story the desks could not attribute never lands on copy that
+    /// names the club at the other end.
+    ///
+    /// The rumour desk already refuses to file an unattributed approach
+    /// (`an_approach_with_nobody_behind_it_is_not_printed`, core), so
+    /// this is the second lock: whatever reaches the composer without a
+    /// second party picks from the phrasings that name nobody. Walked
+    /// over a spread of dates because the pick is a hash — one date
+    /// would only prove one phrasing was safe — and over every locale,
+    /// because the eligible set is read off each bundle's own copy.
+    #[test]
+    fn an_unattributed_story_never_picks_copy_that_names_a_club() {
+        use super::StoryComposer;
+        use crate::NewsI18n;
+        use chrono::NaiveDate;
+        use core::club::news::NewsStory;
+
+        let first = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+
+        for (lang, _) in BUNDLES {
+            let news = NewsI18n::for_test(PressKeys::bundle(lang).into_iter().collect());
+
+            for day in 0..40 {
+                let story = NewsStory::new(
+                    NewsStoryKind::RumourInterest,
+                    first + chrono::Duration::days(day),
+                )
+                .about(7);
+
+                for part in ["h", "b"] {
+                    let key = StoryComposer::phrasing_key(part, &story, &news);
+                    let copy = news.t(&key);
+                    assert!(
+                        !copy.contains("{other}") && !copy.contains("{opponent}"),
+                        "{}: an unattributed rumour picked copy that names a club: {}",
+                        lang,
+                        copy
+                    );
+                }
+            }
+        }
     }
 
     /// A story flagged as a quote is set as a pull-quote on the page.

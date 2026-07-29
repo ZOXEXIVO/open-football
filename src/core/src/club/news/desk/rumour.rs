@@ -201,6 +201,16 @@ impl RumourDesk {
     /// Who wants him. Ordered by how far down the funnel the interest
     /// has travelled, because that is exactly how a back page ranks it:
     /// a rejected bid is a headline, a scout in the stand is a sentence.
+    ///
+    /// Every rung down to the agent's briefing names the club doing the
+    /// chasing, and the copy for those kinds is written around the name.
+    /// So they are read through `suitor`, which yields the beat only
+    /// when the paper can say whose interest it was: a rung the
+    /// simulation recorded anonymously is not a quieter version of the
+    /// same story, it is a mood the player is carrying and no approach
+    /// at all. Those fall through to the generic speculation line at the
+    /// bottom, which was written for exactly that — his name keeps
+    /// coming up, and the paper is not saying whose idea it was.
     fn file_interest(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate, window_days: u16) {
         let feed = RecentEvents::within(player, window_days);
         let importance = PlayerStanding::importance(player);
@@ -209,18 +219,18 @@ impl RumourDesk {
         // the page: a deal that collapsed at the last stage is the only
         // transfer story with an ending, and the one the player is still
         // carrying around the training ground.
-        if feed.happened(HappinessEventType::DreamMoveCollapsed) {
+        if let Some(club) = feed.suitor(HappinessEventType::DreamMoveCollapsed) {
             out.push(
                 NewsStory::new(NewsStoryKind::MoveCollapsed, date)
                     .about(player.id)
-                    .against(feed.interested_club(HappinessEventType::DreamMoveCollapsed))
+                    .against(club)
                     .weighted(importance),
             );
             return;
         }
 
         // A concrete bid the club turned down.
-        if let Some(beat) = feed.any_of(&[
+        if let Some((beat, club)) = feed.suitor_of(&[
             HappinessEventType::MoveVetoedByClub,
             HappinessEventType::TransferBidRejected,
         ]) {
@@ -228,17 +238,17 @@ impl RumourDesk {
             out.push(
                 NewsStory::new(NewsStoryKind::BidRejected, date)
                     .about(player.id)
-                    .against(feed.interested_club(beat))
+                    .against(club)
                     .weighted(importance + if vetoed { 60 } else { 0 }),
             );
             return;
         }
 
-        if feed.happened(HappinessEventType::TransferTalksExpected) {
+        if let Some(club) = feed.suitor(HappinessEventType::TransferTalksExpected) {
             out.push(
                 NewsStory::new(NewsStoryKind::TalksExpected, date)
                     .about(player.id)
-                    .against(feed.interested_club(HappinessEventType::TransferTalksExpected))
+                    .against(club)
                     .weighted(importance),
             );
             return;
@@ -246,45 +256,55 @@ impl RumourDesk {
 
         // The neighbours. Always the loudest version of an interest
         // story, whatever the size of the club involved.
-        if feed.happened(HappinessEventType::InterestFromRival) {
+        if let Some(club) = feed.suitor(HappinessEventType::InterestFromRival) {
             out.push(
                 NewsStory::new(NewsStoryKind::RumourRival, date)
                     .about(player.id)
-                    .against(feed.interested_club(HappinessEventType::InterestFromRival))
+                    .against(club)
                     .weighted(importance),
             );
             return;
         }
 
-        if let Some(beat) = feed.any_of(&[
+        // `TopClubOpportunity` is deliberately not on this list. It
+        // fires when a player has just WALKED INTO a big club, not when
+        // one has come asking — it carries no suitor because there is
+        // none, and reading it as interest printed "another club join
+        // the queue" about a man nobody had enquired for.
+        if let Some((_, club)) = feed.suitor_of(&[
             HappinessEventType::InterestFromBiggerClub,
             HappinessEventType::WantedByBiggerClub,
             HappinessEventType::FavoriteClubInterest,
-            HappinessEventType::TopClubOpportunity,
         ]) {
             out.push(
                 NewsStory::new(NewsStoryKind::RumourInterest, date)
                     .about(player.id)
-                    .against(feed.interested_club(beat))
+                    .against(club)
                     .weighted(importance),
             );
             return;
         }
 
-        if let Some(beat) = feed.any_of(&[
+        // `HomeReturnOpportunity` is off this list for the same reason:
+        // it is the player wanting to go home, not a club at home
+        // wanting him, and a homecoming story with no home in it is not
+        // a story.
+        if let Some((_, club)) = feed.suitor_of(&[
             HappinessEventType::HomecomingRumour,
             HappinessEventType::FormerClubInterest,
-            HappinessEventType::HomeReturnOpportunity,
         ]) {
             out.push(
                 NewsStory::new(NewsStoryKind::HomecomingLink, date)
                     .about(player.id)
-                    .against(feed.interested_club(beat))
+                    .against(club)
                     .weighted(importance / 2),
             );
             return;
         }
 
+        // The agent's briefing names nobody by design — he is touting,
+        // not reporting an approach — so this rung reads the beat
+        // directly and passes on whatever club the feed happens to hold.
         if feed.happened(HappinessEventType::AgentStirsInterest) {
             out.push(
                 NewsStory::new(NewsStoryKind::AgentTouting, date)
@@ -295,11 +315,14 @@ impl RumourDesk {
             return;
         }
 
-        if feed.happened(HappinessEventType::ScoutedByClub) {
+        // The man in the stand belongs to somebody. Every phrasing of
+        // this one says whose notebook it was, so an unattributed
+        // watching brief is not printed at all.
+        if let Some(club) = feed.suitor(HappinessEventType::ScoutedByClub) {
             out.push(
                 NewsStory::new(NewsStoryKind::ScoutsWatching, date)
                     .about(player.id)
-                    .against(feed.interested_club(HappinessEventType::ScoutedByClub))
+                    .against(club)
                     .weighted(importance / 2),
             );
             return;
@@ -384,6 +407,11 @@ mod tests {
     use crate::club::news::types::{NewsStory, NewsStoryKind};
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
+    use crate::club::player::happiness::{
+        HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+        TransferInterestContext, TransferInterestKind, TransferInterestReaction,
+        TransferInterestSource, TransferInterestStage,
+    };
     use crate::{
         HappinessEventType, PersonAttributes, Player, PlayerAttributes, PlayerPosition,
         PlayerPositionType, PlayerPositions, PlayerSkills,
@@ -393,12 +421,32 @@ mod tests {
     struct Mill;
 
     impl Mill {
+        /// The club doing the chasing in every fixture that has one.
+        const SUITOR: u32 = 44;
+
         fn day() -> NaiveDate {
             NaiveDate::from_ymd_opt(2026, 3, 2).unwrap()
         }
 
-        /// A squad player carrying the listed moods and nothing else.
+        /// A squad player carrying the listed moods, each attributed to
+        /// a club the way the transfer pipeline attributes them.
+        ///
+        /// The attribution is not decoration in a fixture either: the
+        /// desk will not print an approach it cannot put a name to, so a
+        /// context-free mood here would be testing the anonymous path
+        /// while claiming to test the ranking. That path has its own
+        /// test — `an_approach_with_nobody_behind_it_is_not_printed`.
         fn player(moods: &[HappinessEventType]) -> Player {
+            Self::build(moods, true)
+        }
+
+        /// The same player, with every mood recorded the way a desk that
+        /// never knew who was asking records it.
+        fn anonymous_player(moods: &[HappinessEventType]) -> Player {
+            Self::build(moods, false)
+        }
+
+        fn build(moods: &[HappinessEventType], attributed: bool) -> Player {
             let mut player = PlayerBuilder::new()
                 .id(7)
                 .full_name(FullName::new("R".to_string(), "Mour".to_string()))
@@ -416,14 +464,45 @@ mod tests {
                 .build()
                 .unwrap();
             for mood in moods {
-                player.happiness.add_event(mood.clone(), -3.0);
+                if attributed {
+                    player.happiness.add_event_with_context(
+                        mood.clone(),
+                        -3.0,
+                        None,
+                        Self::approach_from(Self::SUITOR),
+                    );
+                } else {
+                    player.happiness.add_event(mood.clone(), -3.0);
+                }
             }
             player
         }
 
+        /// The context the transfer pipeline hangs on an interest beat.
+        fn approach_from(club_id: u32) -> HappinessEventContext {
+            HappinessEventContext::new(
+                HappinessEventCause::MediaPressure,
+                HappinessEventSeverity::Moderate,
+                HappinessEventScope::Media,
+            )
+            .with_transfer_interest_context(
+                TransferInterestContext::new(
+                    TransferInterestStage::ConcreteInterest,
+                    TransferInterestSource::NationalPress,
+                    TransferInterestKind::StepUp,
+                    TransferInterestReaction::Flattered,
+                )
+                .with_interested_club(club_id),
+            )
+        }
+
         fn kinds(moods: &[HappinessEventType]) -> Vec<NewsStoryKind> {
+            Self::kinds_of(&Self::player(moods))
+        }
+
+        fn kinds_of(player: &Player) -> Vec<NewsStoryKind> {
             let mut out: Vec<NewsStory> = Vec::new();
-            RumourDesk::file_player(&mut out, &Self::player(moods), Self::day());
+            RumourDesk::file_player(&mut out, player, Self::day());
             out.iter().map(|story| story.kind).collect()
         }
     }
@@ -456,6 +535,69 @@ mod tests {
 
         assert!(kinds.contains(&NewsStoryKind::MoveCollapsed));
         assert!(!kinds.contains(&NewsStoryKind::RumourInterest));
+    }
+
+    /// Every phrasing of an interest story names the club doing the
+    /// chasing, so a beat that arrived without one is not that story.
+    /// The paper drops to the anonymous speculation line instead of
+    /// printing "another club watching him", which names nobody while
+    /// pretending to.
+    #[test]
+    fn an_approach_with_nobody_behind_it_is_not_printed() {
+        let player = Mill::anonymous_player(&[
+            HappinessEventType::InterestFromBiggerClub,
+            HappinessEventType::TransferRumour,
+        ]);
+        let kinds = Mill::kinds_of(&player);
+
+        assert!(
+            !kinds.contains(&NewsStoryKind::RumourInterest),
+            "an unattributed approach reached the page: {:?}",
+            kinds
+        );
+        assert!(
+            kinds.contains(&NewsStoryKind::TransferSpeculation),
+            "the anonymous line is what carries it instead: {:?}",
+            kinds
+        );
+    }
+
+    /// A named suitor further down the ladder beats an anonymous rung
+    /// above it. A rejected bid the paper can attribute is a story; a
+    /// veto it cannot is a sentence about nobody.
+    #[test]
+    fn a_named_suitor_outranks_an_anonymous_rung_above_it() {
+        let mut player = Mill::anonymous_player(&[HappinessEventType::MoveVetoedByClub]);
+        player.happiness.add_event_with_context(
+            HappinessEventType::TransferBidRejected,
+            -3.0,
+            None,
+            Mill::approach_from(Mill::SUITOR),
+        );
+
+        let mut out: Vec<NewsStory> = Vec::new();
+        RumourDesk::file_player(&mut out, &player, Mill::day());
+
+        let bid = out
+            .iter()
+            .find(|story| story.kind == NewsStoryKind::BidRejected)
+            .expect("the attributable rejection is the story");
+        assert_eq!(bid.other_id, Mill::SUITOR);
+    }
+
+    /// Walking into a big club is not the same as one coming for you.
+    /// `TopClubOpportunity` fires on arrival and names nobody, and
+    /// reading it as an approach is what put "another club join the
+    /// queue" on a page about a player nobody had enquired for.
+    #[test]
+    fn arriving_at_a_big_club_is_not_transfer_interest() {
+        let kinds = Mill::kinds(&[HappinessEventType::TopClubOpportunity]);
+
+        assert!(
+            !kinds.contains(&NewsStoryKind::RumourInterest),
+            "an arrival was printed as an approach: {:?}",
+            kinds
+        );
     }
 
     /// A window that shut on an unsold player is its own quiet story,

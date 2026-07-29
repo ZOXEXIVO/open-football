@@ -1505,6 +1505,20 @@ pub struct NewsStory {
     /// silently resolved a coach id against the player index would name
     /// the wrong man rather than fail.
     pub staff_id: u32,
+    /// The side this story was credited to on the day it was filed.
+    ///
+    /// A club's own paper is its own credit and never needs this: the
+    /// nameplate is the club, whoever has since been sold. A division's
+    /// paper names a different side in every story, and it used to look
+    /// that side up when the page was served — so a back issue quietly
+    /// re-credited itself to wherever the subject had moved in the
+    /// meantime, and printed "asks to leave" against the club he had
+    /// just joined. Frozen at press time instead, exactly as the awards
+    /// shelf freezes the club card on a month's scoring chart.
+    ///
+    /// `0` when no side was recorded — every club paper, and any
+    /// subject a press run could not place.
+    pub credited_team_id: u32,
     /// Primary figure: goals scored, days out, league position, …
     pub a: i32,
     /// Secondary figure: goals conceded, points, rating × 100, …
@@ -1527,6 +1541,7 @@ impl NewsStory {
             player_id: 0,
             other_id: 0,
             staff_id: 0,
+            credited_team_id: 0,
             a: 0,
             b: 0,
             money: 0,
@@ -1547,6 +1562,13 @@ impl NewsStory {
 
     pub fn against(mut self, other_id: u32) -> Self {
         self.other_id = other_id;
+        self
+    }
+
+    /// Freeze the side this story belongs to, for a paper that carries
+    /// more than one. See [`NewsStory::credited_team_id`].
+    pub fn credited_to(mut self, team_id: u32) -> Self {
+        self.credited_team_id = team_id;
         self
     }
 

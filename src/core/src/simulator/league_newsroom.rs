@@ -6,6 +6,7 @@ use crate::league::{ChartsDesk, League};
 use crate::simulator::SimulatorData;
 use chrono::{Datelike, NaiveDate};
 use rayon::prelude::*;
+use std::collections::HashMap;
 
 /// The monthly press run for the divisions themselves.
 ///
@@ -117,7 +118,15 @@ impl LeagueNewsroomTick {
             ChartsDesk::file(&mut candidates, snapshot, today);
         }
 
-        Self::file_rumours(&mut candidates, league, country, today);
+        let sides = Self::file_rumours(&mut candidates, league, country, today);
+
+        // Every line on a division's page names somebody's club, and the
+        // page is read for a year afterwards. The credit is therefore
+        // settled here, against the division as it stood on press day,
+        // rather than looked up when a reader opens the archive — a
+        // player sold in September would otherwise drag August's "asks
+        // to leave" onto the club he had just joined.
+        sides.credit(&mut candidates);
 
         let stories = NewsEditor::compile(candidates, &league.newsroom.issues);
 
@@ -156,20 +165,59 @@ impl LeagueNewsroomTick {
     /// Only sides actually playing in this division are walked. A
     /// club's B team and its under-18s are in other competitions (or
     /// none), and their players belong to those papers.
+    ///
+    /// Returns the team sheet it read on the way through. The charts
+    /// desk needs the same answer for its own credits, and walking a
+    /// country's clubs twice to ask the same question would be two
+    /// readings of one roster that a mid-walk sale could disagree on.
     fn file_rumours(
         out: &mut Vec<NewsStory>,
         league: &League,
         country: &Country,
         today: NaiveDate,
-    ) {
+    ) -> DivisionSides {
+        let mut sides = DivisionSides::default();
+
         for club in &country.clubs {
             for team in &club.teams.teams {
                 if team.league_id != Some(league.id) {
                     continue;
                 }
                 for player in &team.players.players {
+                    sides.side_of.insert(player.id, team.id);
                     RumourDesk::file_player_over(out, player, today, RecentEvents::MONTH);
                 }
+            }
+        }
+
+        sides
+    }
+}
+
+/// Who played for whom in this division on press day.
+///
+/// A club's paper has one credit and it is on the nameplate. A
+/// division's has one per story, and unlike the nameplate it can go out
+/// of date between the presses running and a reader opening the page —
+/// which is the whole reason it is written down here rather than looked
+/// up then.
+#[derive(Default)]
+struct DivisionSides {
+    side_of: HashMap<u32, u32>,
+}
+
+impl DivisionSides {
+    /// Stamp each story with the side its subject was at.
+    ///
+    /// A subject the walk never saw — a scorer sold between the last
+    /// fixture of the month and the first of the next — keeps the `0`
+    /// he was filed with, and the page falls back to naming his current
+    /// club. That is the old behaviour, and for a man who has left the
+    /// division it is the only club there is left to name.
+    fn credit(&self, stories: &mut [NewsStory]) {
+        for story in stories {
+            if let Some(team_id) = self.side_of.get(&story.player_id) {
+                story.credited_team_id = *team_id;
             }
         }
     }
@@ -177,7 +225,7 @@ impl LeagueNewsroomTick {
 
 #[cfg(test)]
 mod tests {
-    use super::LeagueNewsroomTick;
+    use super::{DivisionSides, LeagueNewsroomTick};
     use crate::PlayerFieldPositionGroup;
     use crate::club::news::{NewsEditor, NewsStory, NewsStoryKind, NewspaperIssue, PressMood};
     use crate::league::awards::{MonthlyAwardsSnapshot, MonthlyStatLeader};
@@ -304,6 +352,52 @@ mod tests {
             .collect();
 
         assert_eq!(chase, vec![101, 102, 103, 104]);
+    }
+
+    /// The credit on a division's story is settled on press day, not
+    /// when a reader opens the archive. A player sold in September must
+    /// not drag August's "asks to leave" onto the club he has just
+    /// joined — which is exactly what a live lookup printed.
+    #[test]
+    fn a_months_stories_are_credited_where_they_were_written() {
+        let mut sides = DivisionSides::default();
+        sides.side_of.insert(300, 41);
+        sides.side_of.insert(301, 42);
+        // 302–305 were never on one of the division's team sheets.
+
+        let mut stories = Month::rumours();
+        sides.credit(&mut stories);
+
+        let credited: Vec<(u32, u32)> = stories
+            .iter()
+            .map(|story| (story.player_id, story.credited_team_id))
+            .collect();
+
+        assert_eq!(credited[0], (300, 41));
+        assert_eq!(credited[1], (301, 42));
+        assert!(
+            credited[2..].iter().all(|(_, team)| *team == 0),
+            "a subject the walk never saw keeps no credit, and the page \
+             falls back to naming his current club: {:?}",
+            credited
+        );
+    }
+
+    /// The charts come off a frozen snapshot but are filed before the
+    /// walk, so they only get their credit if the same stamp covers
+    /// them. A scoring chart that renamed its clubs a month later is
+    /// the same bug as a transfer request that did.
+    #[test]
+    fn the_scoring_chart_is_credited_too() {
+        let mut sides = DivisionSides::default();
+        sides.side_of.insert(100, 41);
+
+        let mut stories = Vec::new();
+        ChartsDesk::file(&mut stories, &Month::snapshot(5), Month::press_day());
+        sides.credit(&mut stories);
+
+        assert_eq!(stories[0].player_id, 100);
+        assert_eq!(stories[0].credited_team_id, 41);
     }
 
     /// The window is the month just ended, and it has to survive the
