@@ -1727,6 +1727,7 @@ impl PlayerGenerator {
             .foots(foots)
             .positions(positions)
             .languages(native_languages)
+            .last_transfer_date(ClubJoinAnchor::resolve(record))
             .made_senior_debut(Player::presumed_already_debuted(
                 age,
                 statistics_history.is_some(),
@@ -1785,6 +1786,52 @@ impl PotentialAbility {
             .find(|(band, _, _)| *band == raw)
             .map_or((0, 20), |(_, min, max)| (*min as i32, *max as i32));
         rng.int_range(min, max + 1) as u8
+    }
+}
+
+/// Resolves when a scraped player joined the club he is recorded at now.
+pub struct ClubJoinAnchor;
+
+impl ClubJoinAnchor {
+    /// Approximate the join date from the scraped season-by-season history.
+    ///
+    /// The record's `contract.started` field cannot serve here despite looking
+    /// like the obvious source: the scrape stamps it synthetically, and 54,484
+    /// of the 54,645 player records carry the identical `2025-07-01`. Seeding
+    /// tenure from it would tell the simulation that every footballer alive
+    /// joined his club on the same day.
+    ///
+    /// The history rows do carry a real signal — they name the club a player
+    /// turned out for each season — so the first season of his current
+    /// unbroken spell is a genuine join date. Walking back only while the run
+    /// of seasons is contiguous means a player who left and later returned
+    /// dates his tenure from the return, not from the first spell. Loan
+    /// seasons are skipped: being borrowed by a club is not joining it, and a
+    /// loanee later signed outright should date his stay from the permanent
+    /// move.
+    ///
+    /// `None` when the history says nothing about his current club — either it
+    /// is empty (roughly three quarters of records) or it names only earlier
+    /// clubs. That is a genuine "unknown", and `Player::years_at_club` treats
+    /// it as one rather than inventing a career-length stay.
+    pub fn resolve(record: &OdbPlayer) -> Option<NaiveDate> {
+        let mut seasons: Vec<u16> = record
+            .history
+            .iter()
+            .filter(|h| h.club_id == record.club_id && !h.is_loan)
+            .map(|h| h.season)
+            .collect();
+        seasons.sort_unstable();
+        seasons.dedup();
+
+        let mut spell_start = *seasons.last()?;
+        for pair in seasons.windows(2).rev() {
+            if pair[1] != pair[0] + 1 {
+                break;
+            }
+            spell_start = pair[0];
+        }
+        Some(Season::new(spell_start).start_date())
     }
 }
 
@@ -3701,6 +3748,111 @@ mod odb_hydration_tests {
             ph.stamina,
             ph.strength,
         ]
+    }
+
+    fn history(rows: Vec<(u16, u32, bool)>) -> Vec<OdbHistoryItem> {
+        rows.into_iter()
+            .map(|(season, club_id, is_loan)| OdbHistoryItem {
+                season,
+                club_id,
+                is_loan,
+                played: 20,
+                goals: 3,
+                rating: 7.0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn join_anchor_reads_the_current_unbroken_spell() {
+        // Two clubs, then four straight seasons at the club he is at now:
+        // tenure runs from the first of those four, not from his debut.
+        let mut r = record(900_001, 130, 140, vec![("ST", 20)]);
+        r.club_id = 500;
+        r.history = history(vec![
+            (2016, 400, false),
+            (2017, 400, false),
+            (2018, 450, false),
+            (2022, 500, false),
+            (2023, 500, false),
+            (2024, 500, false),
+            (2025, 500, false),
+        ]);
+        assert_eq!(
+            ClubJoinAnchor::resolve(&r),
+            NaiveDate::from_ymd_opt(2022, 8, 1)
+        );
+    }
+
+    #[test]
+    fn join_anchor_dates_a_second_spell_from_the_return() {
+        // Left in 2019, came back in 2024. He is a five-year returnee, not
+        // a ten-year servant — the gap breaks the run.
+        let mut r = record(900_002, 130, 140, vec![("MC", 20)]);
+        r.club_id = 500;
+        r.history = history(vec![
+            (2016, 500, false),
+            (2017, 500, false),
+            (2018, 500, false),
+            (2020, 600, false),
+            (2021, 600, false),
+            (2024, 500, false),
+            (2025, 500, false),
+        ]);
+        assert_eq!(
+            ClubJoinAnchor::resolve(&r),
+            NaiveDate::from_ymd_opt(2024, 8, 1)
+        );
+    }
+
+    #[test]
+    fn join_anchor_ignores_loan_seasons_at_the_current_club() {
+        // Borrowed in 2023, signed outright in 2025. Being on loan at a club
+        // is not joining it, so the anchor is the permanent move.
+        let mut r = record(900_003, 130, 140, vec![("DC", 20)]);
+        r.club_id = 500;
+        r.history = history(vec![
+            (2023, 500, true),
+            (2024, 700, false),
+            (2025, 500, false),
+        ]);
+        assert_eq!(
+            ClubJoinAnchor::resolve(&r),
+            NaiveDate::from_ymd_opt(2025, 8, 1)
+        );
+    }
+
+    #[test]
+    fn join_anchor_is_none_without_evidence() {
+        // No history at all, and history naming only earlier clubs, both mean
+        // the same thing: nothing on record says when he arrived HERE. The
+        // fabricated-tenure bug lived on this returning a date anyway.
+        let mut empty = record(900_004, 130, 140, vec![("ST", 20)]);
+        empty.club_id = 500;
+        assert_eq!(ClubJoinAnchor::resolve(&empty), None);
+
+        let mut elsewhere = record(900_005, 130, 140, vec![("ST", 20)]);
+        elsewhere.club_id = 500;
+        elsewhere.history = history(vec![(2023, 400, false), (2024, 450, false)]);
+        assert_eq!(ClubJoinAnchor::resolve(&elsewhere), None);
+    }
+
+    #[test]
+    fn hydrated_player_carries_the_join_anchor() {
+        let data = empty_data();
+        let mut r = record(900_006, 130, 140, vec![("ST", 20)]);
+        r.club_id = 500;
+        r.history = history(vec![(2019, 500, false), (2020, 500, false)]);
+        let p = PlayerGenerator::generate_from_odb(&r, 1, "it", &data);
+        assert_eq!(
+            p.last_transfer_date(),
+            NaiveDate::from_ymd_opt(2019, 8, 1),
+            "the anchor must reach the built player, not stop at the generator"
+        );
+
+        let bare = record(900_007, 130, 140, vec![("ST", 20)]);
+        let p = PlayerGenerator::generate_from_odb(&bare, 1, "it", &data);
+        assert_eq!(p.last_transfer_date(), None);
     }
 
     #[test]

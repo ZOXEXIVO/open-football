@@ -4,6 +4,7 @@ use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::language::Language;
 use crate::club::player::player::{ManagerPromiseKind, Player};
 use crate::club::{Person, PlayerPositionType};
+use crate::utils::DateUtils;
 use crate::{
     CareerDesireEventContext, CareerDesireEvidence, CareerDesireKind, ContractEventContext,
     ContractEventEvidence, ContractEventKind, HappinessEventCause, HappinessEventContext,
@@ -353,6 +354,37 @@ impl Player {
     /// Days elapsed since the player's most recent transfer/loan, if any.
     pub fn days_since_transfer(&self, now: NaiveDate) -> Option<i64> {
         self.last_transfer_date.map(|d| (now - d).num_days())
+    }
+
+    /// Years the player has spent at his current club, for the restlessness
+    /// readers that ask "has he been here long enough to want a change?".
+    ///
+    /// The transfer anchor answers this outright when it exists. When it
+    /// doesn't, there are two very different situations behind the same
+    /// `None`, and the recorded career separates them:
+    ///
+    ///   * A career one-club man — every completed season he has on record
+    ///     was played for the club he is still at. He really has been here
+    ///     throughout, so his tenure runs from a typical debut age.
+    ///   * Anyone else — most of all a freshly hydrated database player, whose
+    ///     record either names other clubs or has no completed season on it at
+    ///     all. Nothing there says how long he has been at THIS club, so this
+    ///     claims nothing.
+    ///
+    /// That second case is why the fallback cannot simply be `age - 17`.
+    /// Every player in a newly generated world starts without an anchor, so
+    /// a career-length guess handed each of them close to a decade of
+    /// invented service on the first tick — enough for ~780 of them to file
+    /// a transfer request before a ball was kicked.
+    pub fn years_at_club(&self, now: NaiveDate) -> f32 {
+        if let Some(days) = self.days_since_transfer(now) {
+            return (days as f32 / 365.0).max(0.0);
+        }
+        if self.statistics_history.only_ever_at_current_club() {
+            let age = DateUtils::age(self.birth_date, now);
+            return (age as f32 - 17.0).max(0.0);
+        }
+        0.0
     }
 
     /// Multiplier (0.80..1.00) applied to match rating while settling at a
@@ -3035,6 +3067,169 @@ fn environment_story_roll(player_id: u32, date: NaiveDate) -> f32 {
         .wrapping_add((year as u64).wrapping_mul(54_321));
     let frac = ((h >> 17) as u32 as f32) / (u32::MAX as f32);
     frac.clamp(0.0, 0.999)
+}
+
+#[cfg(test)]
+mod years_at_club_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::statistics::{PlayerStatistics, TeamInfo};
+    use crate::league::Season;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, PlayerStatisticsHistory,
+    };
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    const TODAY: (i32, u32, u32) = (2026, 8, 1);
+
+    fn team(slug: &str) -> TeamInfo {
+        TeamInfo {
+            name: slug.to_string(),
+            slug: slug.to_string(),
+            reputation: 7_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+        }
+    }
+
+    fn season_apps() -> PlayerStatistics {
+        PlayerStatistics {
+            played: 25,
+            goals: 4,
+            ..PlayerStatistics::default()
+        }
+    }
+
+    /// A 28-year-old — old enough that the discarded `age - 17` guess would
+    /// have handed him eleven years of service he never served.
+    fn player_aged_28() -> Player {
+        let mut attrs = PlayerAttributes::default();
+        attrs.current_ability = 130;
+        attrs.potential_ability = 136;
+        PlayerBuilder::new()
+            .id(82_060_853)
+            .full_name(FullName::new("Levi".into(), "Garcia".into()))
+            .birth_date(d(1997, 11, 20))
+            .country_id(389)
+            .attributes(PersonAttributes {
+                adaptability: 10.0,
+                ambition: 16.2,
+                controversy: 10.0,
+                loyalty: 3.7,
+                pressure: 10.0,
+                professionalism: 15.0,
+                sportsmanship: 10.0,
+                temperament: 10.0,
+                consistency: 10.0,
+                important_matches: 10.0,
+                dirtiness: 10.0,
+            })
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Striker,
+                    level: 20,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap()
+    }
+
+    /// The bug this exists to prevent. A freshly generated world gives every
+    /// player a current-season row at his club and no transfer anchor; the
+    /// old `age - 17` fallback read that as a career of service and pushed
+    /// ~780 players into filing a transfer request on the opening tick.
+    #[test]
+    fn a_newly_generated_player_claims_no_tenure() {
+        let mut p = player_aged_28();
+        p.statistics_history
+            .seed_initial_team(&team("spartak-moscow"), d(2026, 8, 1), false);
+        let (y, m, day) = TODAY;
+        assert_eq!(p.years_at_club(d(y, m, day)), 0.0);
+    }
+
+    /// Nor does a career that names other clubs. Everything on this record
+    /// was played elsewhere, so it says nothing about how long he has been
+    /// where he is now.
+    #[test]
+    fn a_career_spent_elsewhere_claims_no_tenure() {
+        let mut p = player_aged_28();
+        p.statistics_history
+            .seed_initial_team(&team("aek-athens"), d(2024, 8, 1), false);
+        p.statistics_history.record_season_end(
+            Season::new(2024),
+            season_apps(),
+            &team("aek-athens"),
+            false,
+            None,
+        );
+        p.statistics_history.record_transfer(
+            season_apps(),
+            &team("aek-athens"),
+            &team("spartak-moscow"),
+            25_000_000.0,
+            d(2025, 7, 1),
+        );
+        let (y, m, day) = TODAY;
+        assert_eq!(p.years_at_club(d(y, m, day)), 0.0);
+    }
+
+    /// The transfer anchor answers outright wherever it exists.
+    #[test]
+    fn a_transfer_anchor_wins_over_every_guess() {
+        let mut p = player_aged_28();
+        p.last_transfer_date = Some(d(2022, 8, 1));
+        let (y, m, day) = TODAY;
+        let years = p.years_at_club(d(y, m, day));
+        assert!(
+            (years - 4.0).abs() < 0.05,
+            "four years since the move, got {years}"
+        );
+    }
+
+    /// The one population the career-length guess was written for keeps it:
+    /// every completed season on his record was served at the club he is
+    /// still at.
+    #[test]
+    fn a_genuine_one_club_man_still_counts_from_his_debut() {
+        let mut p = player_aged_28();
+        p.statistics_history
+            .seed_initial_team(&team("spartak-moscow"), d(2024, 8, 1), false);
+        p.statistics_history.record_season_end(
+            Season::new(2024),
+            season_apps(),
+            &team("spartak-moscow"),
+            false,
+            None,
+        );
+        let (y, m, day) = TODAY;
+        let years = p.years_at_club(d(y, m, day));
+        assert!(
+            (years - 11.0).abs() < 0.05,
+            "28-year-old one-club man should count from a debut at 17, got {years}"
+        );
+    }
+
+    /// An anchor dated in the future (a signing recorded today) must not
+    /// produce negative tenure.
+    #[test]
+    fn tenure_never_goes_negative() {
+        let mut p = player_aged_28();
+        p.last_transfer_date = Some(d(2027, 1, 1));
+        assert_eq!(p.years_at_club(d(2026, 8, 1)), 0.0);
+        assert!(
+            PlayerStatisticsHistory::new()
+                .career_team_slugs()
+                .is_empty()
+        );
+    }
 }
 
 #[cfg(test)]

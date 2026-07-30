@@ -956,13 +956,10 @@ impl Player {
     /// club legend stays). Bounded so tenure alone never dominates the
     /// structural club-size signal.
     fn tenure_restlessness_component(&self, ambition: f32, now: NaiveDate) -> f32 {
-        // Years at the club. A one-club man (never transferred) has been here
-        // his whole career — approximate from age since a typical debut.
-        let age = DateUtils::age(self.birth_date, now);
-        let years_at_club = self
-            .last_transfer_date
-            .map(|d| ((now - d).num_days() as f32 / 365.0).max(0.0))
-            .unwrap_or_else(|| (age as f32 - 17.0).max(0.0));
+        // Years at the club, from the transfer anchor where there is one and
+        // the recorded career where there isn't — see `Player::years_at_club`
+        // for why an unanchored player cannot be assumed to be a one-club man.
+        let years_at_club = self.years_at_club(now);
 
         // A stable, settled spell is healthy — nothing stirs until the stay
         // is genuinely long, then restlessness builds with each extra year.

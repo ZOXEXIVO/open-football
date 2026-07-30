@@ -805,10 +805,7 @@ impl Player {
         // long stay — so a true one-club legend or a content servant stays
         // put rather than every veteran walking out.
         if !recently_transferred {
-            let years_at_club = self
-                .days_since_transfer(now)
-                .map(|d| d as f32 / 365.0)
-                .unwrap_or_else(|| (age as f32 - 17.0).max(0.0));
+            let years_at_club = self.years_at_club(now);
             let restless_for_a_new_challenge = years_at_club >= 8.0
                 && self.attributes.ambition >= 16.0
                 && self.attributes.loyalty < 12.0

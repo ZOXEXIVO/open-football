@@ -47,6 +47,7 @@ pub struct PlayerBuilder {
     traits: Option<Vec<PlayerTrait>>,
     generated: Option<bool>,
     made_senior_debut: Option<bool>,
+    last_transfer_date: Option<NaiveDate>,
 }
 
 impl PlayerBuilder {
@@ -91,6 +92,15 @@ impl PlayerBuilder {
 
     pub fn statuses(mut self, statuses: PlayerStatus) -> Self {
         self.statuses = Some(statuses);
+        self
+    }
+
+    /// Anchor the player's spell at his current club. Left unset the player
+    /// carries no anchor, which every tenure reader treats as "unknown" —
+    /// see [`Player::years_at_club`]. Database hydration passes a date only
+    /// when the record actually evidences one.
+    pub fn last_transfer_date(mut self, date: Option<NaiveDate>) -> Self {
+        self.last_transfer_date = date;
         self
     }
 
@@ -242,7 +252,7 @@ impl PlayerBuilder {
                 .decision_history
                 .unwrap_or_else(PlayerDecisionHistory::new),
             languages: self.languages.unwrap_or_default(),
-            last_transfer_date: None,
+            last_transfer_date: self.last_transfer_date,
             plan: None,
             favorite_clubs: self.favorite_clubs.unwrap_or_default(),
             sold_from: None,

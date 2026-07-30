@@ -2081,6 +2081,38 @@ impl PlayerStatisticsHistory {
             .map(|e| e.team_slug.as_str())
     }
 
+    /// True when every completed season on the player's record was played
+    /// for the club he is at now — the career one-club man, academy products
+    /// included (youth seasons alias to the parent club's slug, so a homegrown
+    /// player's early record already reads as his club's).
+    ///
+    /// Loan seasons are ignored: a servant sent out for a year has not left
+    /// in any sense the dressing room recognises.
+    ///
+    /// Deliberately requires at least one COMPLETED season. World generation
+    /// seeds every player with a current-season row at whichever club he was
+    /// found at, so `current` on its own says "this is where we met him",
+    /// never "this is where he has always been" — and reading it as tenure is
+    /// what let a newly generated world credit its whole population with a
+    /// career's worth of service it had not served.
+    pub fn only_ever_at_current_club(&self) -> bool {
+        let Some(active) = self.active_team_slug() else {
+            return false;
+        };
+        let mut completed = self
+            .season_ledger
+            .iter()
+            .map(|entry| (entry.team_slug.as_str(), entry.is_loan))
+            .chain(
+                self.items
+                    .iter()
+                    .map(|item| (item.team_slug.as_str(), item.is_loan)),
+            )
+            .filter(|(slug, is_loan)| !slug.is_empty() && !is_loan)
+            .peekable();
+        completed.peek().is_some() && completed.all(|(slug, _)| slug == active)
+    }
+
     /// Slug of the club where the player's career began — the earliest
     /// entry (lowest `seq_id`) across frozen items and current-season
     /// spells. Youth stats alias to the club's Main team, so an academy
@@ -2455,6 +2487,100 @@ mod club_career_apps_tests {
             hist.career_team_slugs(),
             vec!["sevilla", "albacete", "cordoba"]
         );
+    }
+
+    /// A season worth freezing — a 0-app row is subject to the carry rules
+    /// and may not land in the frozen history at all.
+    fn season_apps() -> PlayerStatistics {
+        PlayerStatistics {
+            played: 25,
+            goals: 4,
+            ..PlayerStatistics::default()
+        }
+    }
+
+    /// A world-generation seed is not a career. Every player is stamped
+    /// with a current-season row at whichever club he was found at, so if
+    /// that row counted as evidence of a one-club career, the entire
+    /// population would read as club servants on the opening day.
+    #[test]
+    fn only_ever_at_current_club_rejects_a_bare_generation_seed() {
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.seed_initial_team(&team("spartak-moscow"), d(2026, 8, 1), false);
+        assert!(!hist.only_ever_at_current_club());
+    }
+
+    #[test]
+    fn only_ever_at_current_club_accepts_seasons_served_here() {
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.seed_initial_team(&team("juventus"), d(2024, 8, 1), false);
+        hist.record_season_end(
+            Season::new(2024),
+            season_apps(),
+            &team("juventus"),
+            false,
+            None,
+        );
+        assert!(hist.only_ever_at_current_club());
+    }
+
+    /// A season served somewhere else is the whole point of the test —
+    /// he has been here since the move, not since his debut.
+    #[test]
+    fn only_ever_at_current_club_rejects_a_career_that_names_another_club() {
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.seed_initial_team(&team("ajax"), d(2024, 8, 1), false);
+        hist.record_season_end(Season::new(2024), season_apps(), &team("ajax"), false, None);
+        hist.record_transfer(
+            season_apps(),
+            &team("ajax"),
+            &team("juventus"),
+            10_000_000.0,
+            d(2025, 7, 10),
+        );
+        hist.record_season_end(
+            Season::new(2025),
+            season_apps(),
+            &team("juventus"),
+            false,
+            Some(d(2025, 7, 10)),
+        );
+        assert!(!hist.only_ever_at_current_club());
+    }
+
+    /// A year out on loan does not end a club servant's spell.
+    #[test]
+    fn only_ever_at_current_club_looks_past_a_loan_out() {
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.seed_initial_team(&team("juventus"), d(2023, 8, 1), false);
+        hist.record_season_end(
+            Season::new(2023),
+            season_apps(),
+            &team("juventus"),
+            false,
+            None,
+        );
+        hist.record_loan(
+            season_apps(),
+            &team("juventus"),
+            &team("frosinone"),
+            0.0,
+            d(2024, 8, 1),
+        );
+        hist.record_season_end(
+            Season::new(2024),
+            season_apps(),
+            &team("frosinone"),
+            true,
+            None,
+        );
+        hist.record_loan_return(
+            season_apps(),
+            &team("frosinone"),
+            &team("juventus"),
+            d(2025, 6, 30),
+        );
+        assert!(hist.only_ever_at_current_club());
     }
 
     /// Nowhere to look is not a crash — it is a reader with an empty
