@@ -398,9 +398,11 @@ mod tests {
         ("zh", include_bytes!("../../assets/i18n/zh.json")),
     ];
 
-    /// Prose-length values that are proper nouns: competition brands and
-    /// coaching-licence tiers that are written the same way in every language.
+    /// Prose-length values that are proper nouns: competition brands,
+    /// coaching-licence tiers and the author's own name, all written the
+    /// same way in every language that uses the Latin alphabet.
     const PROSE_EXEMPT: &[&str] = &[
+        "about_me_name",
         "supporters_shield",
         "champions_league",
         "europa_league",

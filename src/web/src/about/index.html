@@ -1,0 +1,168 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="fm-page fm-ab-page">
+    <article class="fm-ab-doc">
+
+        <header class="fm-ab-hero">
+            <h2 class="fm-ab-lede">{{ i18n.t("about_hero_lede") }}</h2>
+            <p class="fm-ab-standfirst">{{ i18n.t("about_hero_text") }}</p>
+            <ul class="fm-ab-chips">
+                <li class="fm-ab-chip fm-ab-chip-ver"><span class="fm-ab-chip-dot" aria-hidden="true"></span>v{{ version }}</li>
+                <li class="fm-ab-chip"><i class="fa fa-cube" aria-hidden="true"></i>{{ i18n.t("about_chip_binary") }}</li>
+                <li class="fm-ab-chip"><i class="fa fa-plug-circle-xmark" aria-hidden="true"></i>{{ i18n.t("about_chip_offline") }}</li>
+                <li class="fm-ab-chip"><i class="fa fa-code-branch" aria-hidden="true"></i>{{ i18n.t("about_chip_open_source") }}</li>
+            </ul>
+        </header>
+
+        <section class="fm-ab-sec">
+            <div class="fm-ab-sec-head">
+                <i class="fa fa-futbol fm-ab-sec-ic" aria-hidden="true"></i>
+                <h3>{{ i18n.t("about_what_title") }}</h3>
+            </div>
+            <div class="fm-ab-split">
+                <div class="fm-ab-prose">
+                    <p class="fm-ab-p-lead">{{ i18n.t("about_what_lede") }}</p>
+                    <p>{{ i18n.t("about_what_p1") }}</p>
+                    <p>{{ i18n.t("about_what_p2") }}</p>
+                    <div class="fm-ab-questions-block">
+                        <div class="fm-ab-aside-title">{{ i18n.t("about_questions_title") }}</div>
+                        <ul class="fm-ab-questions">
+                            <li>{{ i18n.t("about_question_1") }}</li>
+                            <li>{{ i18n.t("about_question_2") }}</li>
+                            <li>{{ i18n.t("about_question_3") }}</li>
+                            <li>{{ i18n.t("about_question_4") }}</li>
+                        </ul>
+                    </div>
+                </div>
+                <aside class="fm-ab-aside">
+                    <div class="fm-ab-aside-title">{{ i18n.t("about_what_inside") }}</div>
+                    <ul class="fm-ab-list">
+                        <li><i class="fa fa-globe" aria-hidden="true"></i><span>{{ i18n.t("about_feature_world") }}</span></li>
+                        <li><i class="fa fa-bolt" aria-hidden="true"></i><span>{{ i18n.t("about_feature_match") }}</span></li>
+                        <li><i class="fa fa-seedling" aria-hidden="true"></i><span>{{ i18n.t("about_feature_players") }}</span></li>
+                        <li><i class="fa fa-right-left" aria-hidden="true"></i><span>{{ i18n.t("about_feature_market") }}</span></li>
+                        <li><i class="fa fa-mobile-screen" aria-hidden="true"></i><span>{{ i18n.t("about_feature_ui") }}</span></li>
+                        <li><i class="fa fa-microchip" aria-hidden="true"></i><span>{{ i18n.t("about_feature_cpu") }}</span></li>
+                    </ul>
+                </aside>
+            </div>
+        </section>
+
+        <section class="fm-ab-sec">
+            <div class="fm-ab-sec-head">
+                <i class="fa fa-play fm-ab-sec-ic" aria-hidden="true"></i>
+                <h3>{{ i18n.t("about_how_title") }}</h3>
+            </div>
+            <div class="fm-ab-prose fm-ab-prose-wide">
+                <p class="fm-ab-p-lead">{{ i18n.t("about_how_lede") }}</p>
+                <p>{{ i18n.t("about_how_p1") }}</p>
+            </div>
+
+            <!-- The life of one session, drawn as it actually runs: three
+                 live stops on a solid line, then a dashed stub into a
+                 hollow node. The world ends with the process, and the
+                 drawing says so before the caption does. -->
+            <ol class="fm-ab-run">
+                <li class="fm-ab-run-step">
+                    <span class="fm-ab-run-node"><i class="fa fa-play" aria-hidden="true"></i></span>
+                    <div class="fm-ab-run-title">{{ i18n.t("about_step_run") }}</div>
+                    <div class="fm-ab-run-note">{{ i18n.t("about_step_run_note") }}</div>
+                </li>
+                <li class="fm-ab-run-step">
+                    <span class="fm-ab-run-node"><i class="fa fa-globe" aria-hidden="true"></i></span>
+                    <div class="fm-ab-run-title">{{ i18n.t("about_step_load") }}</div>
+                    <div class="fm-ab-run-note">{{ i18n.t("about_step_load_note") }}</div>
+                </li>
+                <li class="fm-ab-run-step fm-ab-run-step-last">
+                    <span class="fm-ab-run-node"><i class="fa fa-forward" aria-hidden="true"></i></span>
+                    <div class="fm-ab-run-title">{{ i18n.t("about_step_process") }}</div>
+                    <div class="fm-ab-run-note">{{ i18n.t("about_step_process_note") }}</div>
+                </li>
+                <li class="fm-ab-run-step fm-ab-run-step-end">
+                    <span class="fm-ab-run-node"><i class="fa fa-power-off" aria-hidden="true"></i></span>
+                    <div class="fm-ab-run-title">{{ i18n.t("about_step_close") }}</div>
+                    <div class="fm-ab-run-note">{{ i18n.t("about_step_close_note") }}</div>
+                </li>
+            </ol>
+
+            <div class="fm-ab-note">
+                <i class="fa fa-memory" aria-hidden="true"></i>
+                <div class="fm-ab-note-body">
+                    <div class="fm-ab-note-title">{{ i18n.t("about_memory_title") }}</div>
+                    <p>{{ i18n.t("about_memory_text") }}</p>
+                </div>
+            </div>
+
+            <div class="fm-ab-split fm-ab-split-run">
+                <div class="fm-ab-prose">
+                    <div class="fm-ab-aside-title">{{ i18n.t("about_local_title") }}</div>
+                    <p>{{ i18n.t("about_local_text") }}</p>
+                    <p class="fm-ab-p-small">{{ i18n.t("about_local_note") }}</p>
+                </div>
+                <div class="fm-ab-term">
+                    <div class="fm-ab-term-line">
+                        <span class="fm-ab-term-sign">$</span><span>./open-football</span>
+                    </div>
+                    <div class="fm-ab-term-line fm-ab-term-line-out">
+                        <span class="fm-ab-term-sign">→</span><span>http://localhost:18000</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="fm-ab-sec">
+            <div class="fm-ab-sec-head">
+                <i class="fa fa-flask fm-ab-sec-ic" aria-hidden="true"></i>
+                <h3>{{ i18n.t("about_why_title") }}</h3>
+            </div>
+            <div class="fm-ab-prose fm-ab-prose-wide">
+                <p class="fm-ab-p-lead">{{ i18n.t("about_why_lede") }}</p>
+                <p>{{ i18n.t("about_why_p1") }}</p>
+                <p>{{ i18n.t("about_why_p2") }}</p>
+                <p>{{ i18n.t("about_why_p3") }}</p>
+            </div>
+            <div class="fm-ab-note fm-ab-note-data">
+                <i class="fa fa-database" aria-hidden="true"></i>
+                <div class="fm-ab-note-body">
+                    <div class="fm-ab-note-title">{{ i18n.t("about_data_title") }}</div>
+                    <p>{{ i18n.t("about_data_text") }}</p>
+                </div>
+                <a class="fm-ab-note-link" href="https://github.com/ZOXEXIVO/open-football-database"
+                   target="_blank" rel="noopener"
+                   title="{{ i18n.t("about_link_database") }} — open-football-database"
+                   aria-label="{{ i18n.t("about_link_database") }} — open-football-database">
+                    <i class="fa-brands fa-github" aria-hidden="true"></i>
+                </a>
+            </div>
+        </section>
+
+        <section class="fm-ab-sec">
+            <div class="fm-ab-sec-head">
+                <i class="fa fa-envelope fm-ab-sec-ic" aria-hidden="true"></i>
+                <h3>{{ i18n.t("about_me_title") }}</h3>
+            </div>
+            <div class="fm-ab-card">
+                <div class="fm-ab-card-name">{{ i18n.t("about_me_name") }}</div>
+                <div class="fm-ab-card-meta">
+                    <span>{{ i18n.t("about_me_role") }}</span>
+                    <span class="fm-ab-card-sep" aria-hidden="true"></span>
+                    <span class="flag flag-ru"></span>
+                    <span>{{ i18n.t("about_me_location") }}</span>
+                </div>
+                <p class="fm-ab-card-text">{{ i18n.t("about_me_text") }}</p>
+                <div class="fm-ab-links">
+                    <a class="fm-ab-link" href="mailto:zoxexivo@gmail.com">
+                        <i class="fa fa-envelope" aria-hidden="true"></i>
+                        <span class="fm-ab-link-body">
+                            <span class="fm-ab-link-label">{{ i18n.t("about_link_email") }}</span>
+                            <span class="fm-ab-link-value">zoxexivo@gmail.com</span>
+                        </span>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+    </article>
+</div>
+{% endblock %}

@@ -1,4 +1,5 @@
 use crate::GameAppData;
+use crate::about::about_routes;
 use crate::ai::routes::ai_routes;
 use crate::champions_league::champions_league_routes;
 use crate::common::default_handler::default_handler;
@@ -50,6 +51,16 @@ async fn sitemap_xml(State(state): State<GameAppData>) -> impl IntoResponse {
     for lang in SUPPORTED_LANG_CODES {
         xml.push_str(&format!(
             "  <url>\n    <loc>https://open-football.org/{}</loc>\n    <lastmod>{}</lastmod>\n    <changefreq>monthly</changefreq>\n  </url>\n",
+            lang, date
+        ));
+    }
+
+    // The about page is static copy, so it changes less often than
+    // anything else here — but it is the page a first-time visitor
+    // should be able to find.
+    for lang in SUPPORTED_LANG_CODES {
+        xml.push_str(&format!(
+            "  <url>\n    <loc>https://open-football.org/{}/about</loc>\n    <lastmod>{}</lastmod>\n    <changefreq>monthly</changefreq>\n  </url>\n",
             lang, date
         ));
     }
@@ -138,6 +149,7 @@ impl ServerRoutes {
             .merge(face_routes())
             .merge(watchlist_routes())
             .merge(search_routes())
+            .merge(about_routes())
             .merge(workers_routes())
             .merge(ai_routes())
             .fallback(default_handler)

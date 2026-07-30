@@ -184,7 +184,15 @@ fn minify_css(css: &str) -> String {
                 }
 
                 if let Some(&next) = chars.peek() {
-                    if !skip_before.contains(&next) && !result.is_empty() {
+                    // A space between a bare word and `(` is load-bearing:
+                    // `and (max-width: …)` minified to `and(max-width: …)`
+                    // tokenises as a function, the media query stops
+                    // parsing, and the whole block is dropped. Nothing
+                    // else at this depth puts a space there, so keeping
+                    // it costs one byte per media query.
+                    let word_before_paren =
+                        next == '(' && (last_char.is_ascii_alphanumeric() || last_char == '-');
+                    if (!skip_before.contains(&next) || word_before_paren) && !result.is_empty() {
                         result.push(' ');
                         last_char = ' ';
                     }

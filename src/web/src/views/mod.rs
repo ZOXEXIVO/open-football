@@ -172,6 +172,24 @@ pub fn search_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSecti
     ]
 }
 
+fn about_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
+    let about_url = format!("/{}/about", lang);
+    MenuSection::plain(vec![MenuItem {
+        active: current_path == about_url,
+        title: i18n.t("about").to_string(),
+        url: about_url,
+        icon: "fa-circle-question".to_string(),
+    }])
+}
+
+pub fn about_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+    vec![
+        home_section(i18n, lang),
+        search_section(i18n, lang, current_path),
+        about_section(i18n, lang, current_path),
+    ]
+}
+
 /// Continent ids (matching the embedded database).
 const CONTINENT_EUROPE: u32 = 1;
 const CONTINENT_SOUTH_AMERICA: u32 = 3;

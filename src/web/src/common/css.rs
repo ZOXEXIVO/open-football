@@ -113,6 +113,32 @@ mod tests {
         );
     }
 
+    /// `and (max-width: …)` needs the space it is written with. Collapsed
+    /// to `and(max-width: …)` the word tokenises as a function, the media
+    /// query stops parsing, and the browser throws the whole block away —
+    /// silently, and only in release, where the minifier runs. It cost the
+    /// sidebar its narrow-desktop width and the about page its
+    /// reduced-motion guard before anything here noticed.
+    #[test]
+    fn the_bundle_has_no_media_query_glued_to_its_combinator() {
+        let css = Bundle::without_comments(&Bundle::text());
+        let glued: Vec<&str> = css
+            .match_indices("@media")
+            .map(|(at, _)| &css[at..css[at..].find('{').map_or(css.len(), |end| at + end)])
+            .filter(|query| {
+                query.contains("and(") || query.contains("or(") || query.contains("not(")
+            })
+            .collect();
+
+        assert!(
+            glued.is_empty(),
+            "{} media query(ies) lost the space before a parenthesis and will not \
+             parse: {:?}",
+            glued.len(),
+            glued
+        );
+    }
+
     /// The whole point of the bundle is that the page can reach it.
     #[test]
     fn the_bundle_carries_the_newspaper() {

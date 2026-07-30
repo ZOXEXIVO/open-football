@@ -11882,6 +11882,11 @@ a.np-masthead-link:focus-visible {
 
 /* ── Page grid ─────────────────────────────────────────────── */
 
+/* The front block: the lead's measure, then the rail. Counted in the
+   same units as `.np-run` below — 2.35 to 1 is 2.35 + 2.35 to 2 — so the
+   rail's rule and the run's second rule are the same line down the
+   sheet. A page whose vertical rules step sideways between one row of
+   news and the next was never set on a stone. */
 .np-body {
     display: grid;
     grid-template-columns: minmax(0, 2.35fr) minmax(0, 1fr);
@@ -12133,9 +12138,26 @@ a.np-prose-link:focus-visible {
 }
 
 /* The two that share the main column with the lead, and so are set to
-   what is left of the measure once the rail has taken its third. */
+   what is left of the measure once the rail has taken its third.
+
+   The correction is the whole reason this is not a plain pair of halves.
+   The pair is measured inside `.np-main`'s content box — behind its
+   padding and the rail's rule — while the run below is measured across
+   the whole sheet. Split in half against the narrower figure, the
+   pair's gutter lands half an inset to the left of the run's first
+   rule, and the sheet gets two rules a hair apart doing one job. So
+   half the inset is handed back to the first column, which puts the
+   gutter on the run's line exactly. */
 .np-splits {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    /* `.np-main`'s padding-right plus its rule, halved. */
+    --np-splits-inset: calc((28px + 1px) / 2);
+    grid-template-columns: calc(50% + var(--np-splits-inset)) minmax(0, 1fr);
+}
+
+/* No rail means no inset to hand back: the pair is already measured
+   across the sheet, and halves are halves. */
+.np-body-full .np-splits {
+    --np-splits-inset: 0px;
 }
 
 /* Everything the front block could not hold, once the photograph and
@@ -12144,8 +12166,24 @@ a.np-prose-link:focus-visible {
    in halves is a line nobody finishes, and the narrower measure is
    itself the signal that the reader has come off the front block. */
 .np-run {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    row-gap: 24px;
+    /* Not `repeat(3, 1fr)`: the run is set on the front block's grid, not
+       on a fresh one. `2.35 2.35 2` divides the measure at 35.07% and
+       70.15% — the pair's gutter and the rail's rule to the pixel —
+       where equal thirds fell at 33.3% and 66.7% and left every rule on
+       the page stepping sideways at the fold. The last column is the
+       photograph's column carried down the sheet, so it is the narrow
+       one; two columns of news and a narrower third is a masthead
+       broadsheet's oldest measure anyway. Keep in step with `.np-body`. */
+    grid-template-columns:
+        minmax(0, 2.35fr)
+        minmax(0, 2.35fr)
+        minmax(0, 2fr);
+    /* Space between one row of stories and the next. Not `row-gap` any
+       more: the rows are the parts of a story now, not the stories
+       themselves — see the subgrid note below, which is where this is
+       spent. */
+    --np-run-space: 24px;
+    row-gap: 0;
     margin-top: 30px;
 }
 
@@ -12180,6 +12218,56 @@ a.np-prose-link:focus-visible {
 .np-splits > .np-split:only-child {
     grid-column: 1 / -1;
     padding-right: 0;
+}
+
+/* A run reads across as well as down. Three stories side by side are
+   three columns of one page, so the kicker, the headline and the first
+   line of copy have to fall on the same three lines in all of them —
+   and on the row below as well. Left to itself the grid lines up only
+   the TOP of each story: a four-line headline beside a two-line one
+   opens the two bodies on different lines, and the second row repeats
+   the mistake against the first.
+
+   `subgrid` is what a stone hand did with a measure. Each story spans
+   three of the container's row tracks and hands its own three parts
+   back to them, so every kicker in a row shares one track, every
+   headline the next, and every body opens on one line. Where subgrid is
+   not supported the declaration drops, the story stays a three-row grid
+   of its own, and the page sets exactly what it set before — ragged,
+   but not broken. */
+.np-splits > .np-split,
+.np-run > .np-split {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: span 3;
+}
+
+/* Each part sits on its line rather than filling the track the deepest
+   of the three asked for. Stretching is the default, and a stretched
+   body would drag the pull-quote's heavy rule on down the column well
+   past the last word of the quote. */
+.np-splits > .np-split > *,
+.np-run > .np-split > * {
+    align-self: start;
+}
+
+/* Now that a story's parts are tracks of the container, the
+   container's own `row-gap` would open between a kicker and its
+   headline as readily as between one row of stories and the next. So
+   the space between rows is carried by the part that ends a story, and
+   the last row — which has nothing under it but the fold — gives it
+   back.
+
+   `-n + 3` is the last row exactly: the typesetter rounds the run up to
+   whole rows of `PressDesk::RUN_COLUMNS`, which
+   `the_run_always_comes_out_to_whole_rows` holds it to at every edition
+   size. */
+.np-run > .np-split > .np-split-body {
+    margin-bottom: var(--np-run-space);
+}
+
+.np-run > .np-split:nth-last-child(-n + 3) > .np-split-body {
+    margin-bottom: 0;
 }
 
 .np-split-body {
@@ -12572,6 +12660,10 @@ a.np-result-score:hover {
    are drawn on and vanish. */
 .np-cut {
     --np-cut-margin: 0px;
+    /* How far past the foot of the type the lift is drawn, so a cutting
+       has air under it. Named because the run has to hold the space it
+       carries for the row beneath clear of exactly this much. */
+    --np-cut-air: 14px;
     position: relative;
     isolation: isolate;
 }
@@ -12591,7 +12683,7 @@ a.np-result-score:hover {
     content: "";
     position: absolute;
     z-index: -1;
-    inset: -12px 0 -14px;
+    inset: -12px 0 calc(var(--np-cut-air) * -1);
     pointer-events: none;
     background-color: var(--np-paper-hi);
     background-image: linear-gradient(
@@ -12651,6 +12743,17 @@ a.np-result-score:hover {
 
 .np-lead.np-cut {
     padding-left: 17px;
+}
+
+/* A story in the run stands on shared row tracks, and the space it
+   holds for the row beneath it is inside its own box rather than in a
+   gutter between the two. So the lift stops short of the foot of that
+   box by the space, keeping the air under the type it was drawn for and
+   nothing more: bled the whole way it would cross into the row below
+   and take that story's kicker into the cutting. The last row carries
+   no space for anybody and keeps the plain bleed. */
+.np-run > .np-split.np-cut:not(:nth-last-child(-n + 3))::before {
+    bottom: calc(var(--np-run-space) - var(--np-cut-air));
 }
 
 /* A brief is one line in a band of them. It takes the lift and nothing
@@ -12748,12 +12851,35 @@ a.np-prose-link.np-mark:focus-visible,
        score (0,1,0) and this one is set later: without it a week with
        neither a face nor a fixture list would open an empty column and
        rule off against nothing. */
+    /* One figure for the photograph's column, because the run has to
+       carry the same one down the sheet — see `.np-run` on the wide
+       sheet, where the two are counted in `fr` instead. */
+    .np-desk {
+        --np-rail-track: clamp(150px, 22vw, 215px);
+    }
+
     .np-body:not(.np-body-full) {
-        grid-template-columns: minmax(0, 1fr) clamp(150px, 22vw, 215px);
+        grid-template-columns: minmax(0, 1fr) var(--np-rail-track);
+    }
+
+    /* The rail is a fixed track now rather than a share of the measure,
+       so the run's last column is that track and the two news columns
+       divide what is left — which is exactly what `.np-main` beside them
+       is doing. Every rule still falls on one line. */
+    .np-run {
+        grid-template-columns:
+            minmax(0, 1fr)
+            minmax(0, 1fr)
+            var(--np-rail-track);
     }
 
     .np-main {
         padding-right: 24px;
+    }
+
+    /* Tracks the padding above: half of it, plus the rule. */
+    .np-splits {
+        --np-splits-inset: calc((24px + 1px) / 2);
     }
 
     .np-rail {
@@ -12851,9 +12977,27 @@ a.np-prose-link.np-mark:focus-visible,
     .np-splits,
     .np-run {
         grid-template-columns: minmax(0, 1fr);
-        /* The stories rule off from each other now, so the row gap
-           would only add a second, softer gap on top of the rule. */
-        row-gap: 0;
+    }
+
+    /* One column, so nothing stands beside a story to be lined up with
+       — and the shared tracks would fight the rule that falls between
+       one story and the next below, which a story can only pad away
+       from as a box of its own. Back to a block.
+
+       Stacked, the separation IS that rule, so a story carries no space
+       for the row beneath it. The body's margin and the lift's reach
+       below the type are both spent out of this, so zeroing it puts
+       both back to what they are anywhere else on the sheet. `0px`
+       rather than `0`: the lift subtracts a length from it, and
+       `calc(0 - 14px)` is not one. */
+    .np-run {
+        --np-run-space: 0px;
+    }
+
+    .np-splits > .np-split,
+    .np-run > .np-split {
+        display: block;
+        grid-row: auto;
     }
 
     /* One column has no gutters to pad away from.
@@ -12914,5 +13058,717 @@ a.np-prose-link.np-mark:focus-visible,
     a.np-prose-link:link,
     a.np-prose-link:visited {
         transition: none;
+    }
+}
+
+/* ============================================
+   ABOUT PAGE
+
+   The only page in the app with no data behind
+   it, so it is set as a document rather than a
+   dashboard: one measure, a rule per section,
+   and the chrome's own vocabulary turned up a
+   size. Green marks what is running, amber
+   marks what ends.
+   ============================================ */
+
+.fm-ab-page {
+    padding-bottom: 44px;
+}
+
+.fm-ab-doc {
+    max-width: 1060px;
+    margin: 0 auto;
+}
+
+/* --- Hero ------------------------------------------------ */
+
+.fm-ab-hero {
+    padding: 30px 0 32px;
+    border-bottom: 1px solid #263340;
+}
+
+/* The page opens on the sentence itself — an eyebrow above it would
+   only repeat the name the sentence starts with. */
+.fm-ab-lede {
+    margin: 0;
+    max-width: 34ch;
+    font-size: clamp(22px, 2.7vw, 34px);
+    font-weight: 300;
+    line-height: 1.25;
+    letter-spacing: -0.02em;
+    color: #e8eff5;
+}
+
+.fm-ab-standfirst {
+    margin: 18px 0 0;
+    max-width: 62ch;
+    font-size: 15.5px;
+    font-weight: 300;
+    line-height: 1.68;
+    color: #93a4b1;
+}
+
+.fm-ab-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 24px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.fm-ab-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 12px;
+    border: 1px solid #263340;
+    border-radius: 999px;
+    background: #1a232b;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: #8a99a6;
+}
+
+.fm-ab-chip i {
+    font-size: 10px;
+    color: #4a9d5b;
+}
+
+.fm-ab-chip-ver {
+    color: #b0bac2;
+    letter-spacing: 0.8px;
+    text-transform: none;
+}
+
+/* The live dot the process button wears, at rest: the version you are
+   reading is the version that is running. */
+.fm-ab-chip-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #4a9d5b;
+    box-shadow: 0 0 0 3px rgba(74, 157, 91, 0.16);
+}
+
+/* --- Sections -------------------------------------------- */
+
+.fm-ab-sec {
+    padding-top: 30px;
+}
+
+.fm-ab-sec + .fm-ab-sec {
+    margin-top: 30px;
+    border-top: 1px solid #1f2a32;
+}
+
+.fm-ab-sec-head {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    margin-bottom: 20px;
+}
+
+/* The rule runs out of the title and fades — a section opening,
+   not a box. */
+.fm-ab-sec-head::after {
+    content: "";
+    flex: 1 1 auto;
+    height: 1px;
+    background: linear-gradient(90deg, #263340 0%, rgba(38, 51, 64, 0) 100%);
+}
+
+.fm-ab-sec-ic {
+    flex: 0 0 26px;
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #2a3843;
+    border-radius: 3px;
+    background: #1f2b34;
+    color: #4a9d5b;
+    font-size: 11px;
+}
+
+.fm-ab-sec-head h3 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: #c8d6e0;
+}
+
+.fm-ab-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+    gap: 28px;
+    align-items: start;
+}
+
+.fm-ab-prose p {
+    margin: 0 0 13px;
+    font-size: 14.5px;
+    font-weight: 300;
+    line-height: 1.75;
+    color: #93a4b1;
+}
+
+.fm-ab-prose p:last-child {
+    margin-bottom: 0;
+}
+
+.fm-ab-prose .fm-ab-p-lead {
+    margin-bottom: 16px;
+    font-size: 17px;
+    font-weight: 400;
+    line-height: 1.55;
+    color: #d3dde5;
+}
+
+.fm-ab-prose .fm-ab-p-small {
+    font-size: 13px;
+    color: #74838f;
+}
+
+.fm-ab-prose-wide {
+    max-width: 74ch;
+}
+
+.fm-ab-aside {
+    padding: 14px 16px 16px;
+    border: 1px solid #263340;
+    border-radius: 4px;
+    background: linear-gradient(180deg, #1c2830 0%, #192228 100%);
+}
+
+.fm-ab-aside-title {
+    margin-bottom: 12px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: #546a78;
+}
+
+.fm-ab-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.fm-ab-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 0;
+    border-top: 1px solid #212d36;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #a9b8c4;
+}
+
+.fm-ab-list li:first-child {
+    padding-top: 0;
+    border-top: 0;
+}
+
+.fm-ab-list li:last-child {
+    padding-bottom: 0;
+}
+
+.fm-ab-list i {
+    flex: 0 0 14px;
+    width: 14px;
+    margin-top: 3px;
+    text-align: center;
+    font-size: 11px;
+    color: #4a9d5b;
+}
+
+/* The questions sit under the copy that earned them, so they need the
+   gap of a new thought rather than the gap of a new paragraph. */
+.fm-ab-questions-block {
+    margin-top: 24px;
+}
+
+.fm-ab-questions {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.fm-ab-questions li {
+    position: relative;
+    margin-bottom: 15px;
+    padding-left: 15px;
+    font-size: 13.5px;
+    font-weight: 300;
+    line-height: 1.55;
+    color: #a9b8c4;
+}
+
+.fm-ab-questions li:last-child {
+    margin-bottom: 0;
+}
+
+.fm-ab-questions li::before {
+    content: "";
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 0;
+    width: 2px;
+    border-radius: 1px;
+    background: #2f6f43;
+}
+
+/* --- The life of one session ----------------------------- */
+
+/* Three live stops on a solid line, then a dashed stub into a
+   hollow node. Closing the app is the only step that leaves
+   nothing behind, so it is the only one drawn as an outline. */
+
+.fm-ab-run {
+    --ab-run-gap: 26px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--ab-run-gap);
+    margin: 28px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.fm-ab-run-step {
+    position: relative;
+    padding-top: 40px;
+}
+
+.fm-ab-run-step::after {
+    content: "";
+    position: absolute;
+    top: 13px;
+    left: 36px;
+    right: calc(-1 * var(--ab-run-gap));
+    height: 2px;
+    background: #35664a;
+    transform-origin: left center;
+}
+
+.fm-ab-run-step-last::after {
+    height: 0;
+    background: none;
+    border-top: 2px dashed #6b4f24;
+}
+
+.fm-ab-run-step-end::after {
+    content: none;
+}
+
+.fm-ab-run-node {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #35664a;
+    border-radius: 50%;
+    background: #1b2a22;
+    color: #5cb86c;
+    font-size: 11px;
+}
+
+.fm-ab-run-step-end .fm-ab-run-node {
+    border-style: dashed;
+    border-color: #6b4f24;
+    background: transparent;
+    color: #b7893f;
+}
+
+.fm-ab-run-title {
+    margin-bottom: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.7px;
+    text-transform: uppercase;
+    color: #c3d0da;
+    /* German and French step names run to two lines in four columns;
+       balanced breaks keep the second line from being one orphan word. */
+    text-wrap: balance;
+}
+
+.fm-ab-run-step-end .fm-ab-run-title {
+    color: #b7893f;
+}
+
+.fm-ab-run-note {
+    font-size: 12.5px;
+    font-weight: 300;
+    line-height: 1.55;
+    color: #7e8f9c;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .fm-ab-run-step::after {
+        animation: fm-ab-draw-x 0.5s ease-out both;
+    }
+
+    .fm-ab-run-step:nth-child(1)::after {
+        animation-delay: 0.12s;
+    }
+
+    .fm-ab-run-step:nth-child(2)::after {
+        animation-delay: 0.32s;
+    }
+
+    .fm-ab-run-step:nth-child(3)::after {
+        animation-delay: 0.52s;
+    }
+}
+
+@keyframes fm-ab-draw-x {
+    from {
+        transform: scaleX(0);
+    }
+
+    to {
+        transform: scaleX(1);
+    }
+}
+
+@keyframes fm-ab-draw-y {
+    from {
+        transform: scaleY(0);
+    }
+
+    to {
+        transform: scaleY(1);
+    }
+}
+
+/* --- Callouts -------------------------------------------- */
+
+.fm-ab-note {
+    display: flex;
+    gap: 14px;
+    margin-top: 26px;
+    padding: 15px 18px;
+    border: 1px solid #2a3843;
+    border-left: 2px solid #b7893f;
+    border-radius: 4px;
+    background:
+        linear-gradient(90deg, rgba(183, 137, 63, 0.07) 0%, rgba(183, 137, 63, 0) 45%),
+        #1a232b;
+}
+
+.fm-ab-note > i {
+    margin-top: 2px;
+    font-size: 15px;
+    color: #b7893f;
+}
+
+.fm-ab-note-body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* The note names a repository — this is the way to it. It sits at the
+   end of the row so the copy keeps its own measure. */
+.fm-ab-note-link {
+    display: flex;
+    flex: 0 0 auto;
+    align-self: center;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    margin-left: auto;
+    border: 1px solid #2a3843;
+    border-radius: 4px;
+    background: #161e25;
+    font-size: 16px;
+    color: #6c8290;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.fm-ab-note-link:hover {
+    border-color: #35664a;
+    background: #18232a;
+    color: #5cb86c;
+}
+
+.fm-ab-note-link:focus-visible {
+    outline: 2px solid #4a9eff;
+    outline-offset: 2px;
+}
+
+.fm-ab-note-title {
+    margin-bottom: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: #d8b26a;
+}
+
+.fm-ab-note p {
+    margin: 0;
+    max-width: 76ch;
+    font-size: 13.5px;
+    font-weight: 300;
+    line-height: 1.65;
+    color: #9aa9b5;
+}
+
+/* The database is the one thing that survives the process,
+   so its callout is drawn in the running colour. */
+.fm-ab-note-data {
+    border-left-color: #4a9d5b;
+    background:
+        linear-gradient(90deg, rgba(74, 157, 91, 0.07) 0%, rgba(74, 157, 91, 0) 45%),
+        #1a232b;
+}
+
+.fm-ab-note-data > i {
+    color: #4a9d5b;
+}
+
+.fm-ab-note-data .fm-ab-note-title {
+    color: #7fd28b;
+}
+
+/* --- Running it locally ---------------------------------- */
+
+.fm-ab-split-run {
+    margin-top: 26px;
+}
+
+/* No window chrome and no traffic lights: the prompt is the only
+   signal the block needs to read as a terminal. */
+.fm-ab-term {
+    align-self: start;
+    padding: 16px 18px;
+    border: 1px solid #263340;
+    border-left: 2px solid #2c3c4a;
+    border-radius: 4px;
+    background: #12191f;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.95;
+    overflow-x: auto;
+}
+
+.fm-ab-term-line {
+    display: flex;
+    gap: 10px;
+    color: #c3d0da;
+}
+
+.fm-ab-term-sign {
+    flex: 0 0 auto;
+    color: #4a9d5b;
+}
+
+.fm-ab-term-line-out {
+    color: #7a8a96;
+}
+
+.fm-ab-term-line-out .fm-ab-term-sign {
+    color: #4a9eff;
+}
+
+/* --- Author ---------------------------------------------- */
+
+.fm-ab-card {
+    padding: 20px 22px 22px;
+    border: 1px solid #263340;
+    border-radius: 4px;
+    background: linear-gradient(180deg, #1c2830 0%, #192228 100%);
+}
+
+.fm-ab-card-name {
+    font-size: 24px;
+    font-weight: 300;
+    letter-spacing: -0.01em;
+    color: #e8eff5;
+}
+
+.fm-ab-card-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+    font-size: 12px;
+    letter-spacing: 0.3px;
+    color: #7e8f9c;
+}
+
+.fm-ab-card-meta .flag {
+    flex: 0 0 auto;
+    width: 17px;
+    height: 13px;
+    border-radius: 2px;
+}
+
+.fm-ab-card-sep {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: #3c4c58;
+}
+
+.fm-ab-card-text {
+    margin: 17px 0 0;
+    max-width: 70ch;
+    font-size: 14px;
+    font-weight: 300;
+    line-height: 1.75;
+    color: #9aa9b5;
+}
+
+/* Flex, not a stretched grid: one contact should sit at its own width
+   rather than run the length of the card. */
+.fm-ab-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.fm-ab-link {
+    display: flex;
+    flex: 0 1 280px;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 14px;
+    border: 1px solid #263340;
+    border-radius: 4px;
+    background: #161e25;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.fm-ab-link:hover {
+    border-color: #35664a;
+    background: #18232a;
+}
+
+.fm-ab-link > i {
+    flex: 0 0 18px;
+    width: 18px;
+    text-align: center;
+    font-size: 15px;
+    color: #6c8290;
+    transition: color 0.15s;
+}
+
+.fm-ab-link:hover > i {
+    color: #5cb86c;
+}
+
+.fm-ab-link-body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.fm-ab-link-label {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 1.1px;
+    text-transform: uppercase;
+    color: #546a78;
+}
+
+.fm-ab-link-value {
+    overflow: hidden;
+    font-size: 13px;
+    color: #c3d0da;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fm-ab-link:focus-visible {
+    outline: 2px solid #4a9eff;
+    outline-offset: 2px;
+}
+
+/* --- Narrow ---------------------------------------------- */
+
+@media (max-width: 900px) {
+    .fm-ab-split {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 22px;
+    }
+}
+
+/* Below this the four stops stop fitting side by side. The
+   line turns and runs down the page instead — same drawing,
+   same dashed tail into the hollow node. */
+@media (max-width: 820px) {
+    .fm-ab-run {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+    }
+
+    .fm-ab-run-step {
+        padding: 0 0 24px 42px;
+    }
+
+    .fm-ab-run-step:last-child {
+        padding-bottom: 0;
+    }
+
+    .fm-ab-run-step::after {
+        top: 34px;
+        right: auto;
+        bottom: 8px;
+        left: 13px;
+        width: 2px;
+        height: auto;
+        transform-origin: center top;
+    }
+
+    .fm-ab-run-step-last::after {
+        width: 0;
+        border-top: 0;
+        border-left: 2px dashed #6b4f24;
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) and (max-width: 820px) {
+    .fm-ab-run-step::after {
+        animation-name: fm-ab-draw-y;
+    }
+}
+
+@media (max-width: 560px) {
+    .fm-ab-hero {
+        padding: 22px 0 26px;
+    }
+
+    .fm-ab-lede {
+        max-width: none;
+    }
+
+    .fm-ab-note {
+        padding: 14px 15px;
+    }
+
+    .fm-ab-card {
+        padding: 18px 16px 20px;
+    }
+
+    .fm-ab-card-text,
+    .fm-ab-standfirst {
+        font-size: 14px;
     }
 }

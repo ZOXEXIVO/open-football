@@ -1,3 +1,4 @@
+mod about;
 mod ai;
 mod champions_league;
 mod common;
