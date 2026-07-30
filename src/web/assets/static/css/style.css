@@ -7680,7 +7680,8 @@ a:active {
 }
 
 @media (max-width: 768px) {
-    .fm-ai-icon-robot {
+    .fm-ai-icon-robot,
+    .fm-ai-icon-about {
         display: none;
     }
 }
