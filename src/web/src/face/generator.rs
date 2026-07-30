@@ -888,10 +888,12 @@ pub fn generate_face_svg(
 
     let mut s = String::with_capacity(24000);
     s.push_str(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 250">"#);
-    // Debug trace of the sampled variants (invisible; keeps visual QA cheap)
+    // Debug trace of the sampled variants (invisible; keeps visual QA cheap).
+    // Facial hair reads `b<grown><style>` / `m<grown><style>`
     s.push_str(&format!(
-        "<!--h{hair_st} e{eye_st} f{face_var} n{nose_st} b{} w{heft:.1} a{aggr:.1} p{}-->",
+        "<!--h{hair_st} e{eye_st} f{face_var} n{nose_st} b{}{beard_v} m{}{mst_v} w{heft:.1} a{aggr:.1} p{}-->",
         u8::from(beard),
+        u8::from(mstache),
         ph as u8,
     ));
 
@@ -1564,125 +1566,224 @@ pub fn generate_face_svg(
 
     // ── Facial hair ─────────────────────────────────────────
     {
-        // Lower-face region: outer edge follows the jaw, top edge runs under
-        // the nose, with an evenodd hole punched around the lips.
-        let btl = cl + 2.0;
-        let btr = cr - 2.0;
-        let bt_y = cy_cheek + 10.0;
-        let jy8 = jy + 8.0;
-        // Beard bottom must clear the head's chin sag or skin peeks through
-        let chy7 = chy + chin_sag * 1.5 + 3.0;
-        let nyb = ny + 2.0;
-        let hole_rx = mw - 2.5;
-        let hole_ry = (upper_h + lower_h - 1.5).max(3.0);
-        let hole_cy = my + 0.5;
-        let hole_l = cx - hole_rx;
-        let hole_d = 2.0 * hole_rx;
-        let beard_d = format!(
-            "M{btl} {bt_y} C{} {jy} {} {jy8} {chl} {chy} Q{cx} {chy7} {chr} {chy} \
-             C{} {jy8} {} {jy} {btr} {bt_y} C{} {nyb} {} {nyb} {btl} {bt_y}Z \
-             M{hole_l} {hole_cy} a{hole_rx} {hole_ry} 0 1 0 {hole_d} 0 a{hole_rx} {hole_ry} 0 1 0 -{hole_d} 0Z",
-            cl + 2.0,
-            jl + 2.0,
-            jr - 2.0,
-            cr - 2.0,
-            cx + 30.0,
-            cx - 30.0,
-        );
+        // Everything here is clipped to the head, so the sides and the bottom
+        // of each shape are drawn deliberately outside the silhouette: the
+        // clip — not hand-tuned insets — decides where the hair meets the
+        // jaw. Nothing can float inside the cheek or spill onto the neck.
+        s.push_str(r#"<g clip-path="url(#hc)">"#);
+
         let stubble_col = shade(hair, 0.72);
+        // Stubble is skin seen through cropped hair, so it has to darken the
+        // complexion whatever the hair colour: a blond shade laid straight
+        // onto pale skin reads as a light smear, not growth
+        let shadow_col = blend(&shade(skin, 0.80), hair, 0.45);
+        let bx_l = cl - 14.0;
+        let bx_r = cr + 14.0;
+        let bx_b = chy + chin_sag + 16.0;
+        // Mouth-corner gate: the low point of the cheek line, from which the
+        // moustache band climbs back up under the nose
+        let gate_l = cx - mw - 3.0;
+        let gate_r = cx + mw + 3.0;
+        let gate_y = my - 3.0;
+        // Only the lips stay bare, and the hole is lip-shaped rather than an
+        // ellipse: the moustache then lands on the upper lip instead of
+        // ringing the whole mouth with a punched-out band of skin
+        let lip_l = cx - mw + 0.5;
+        let lip_r = cx + mw - 0.5;
+        let lip_top = my - upper_h + 0.2;
+        let lip_hole = format!(
+            "M{lip_l} {my} Q{} {} {} {lip_top} Q{cx} {} {} {lip_top} Q{} {} {lip_r} {my} \
+             Q{cx} {} {lip_l} {my}Z",
+            cx - mw * 0.5,
+            my - upper_h - 0.8,
+            cx - 3.0,
+            my - upper_h * 0.5,
+            cx + 3.0,
+            cx + mw * 0.5,
+            my - upper_h - 0.8,
+            my + lower_h * 2.2,
+        );
+
+        // Lower-face region. `sb` is the sideburn junction height and `mst`
+        // the top of the moustache band; the returned pair is the filled
+        // region (lips punched out) plus its top edge on its own, so the
+        // cheek line can be re-stroked as a speckled fringe.
+        let beard_shape = |sb: f32, mst: f32| -> (String, String) {
+            let cheek_c = sb + (gate_y - sb) * 0.5;
+            let in_l = bx_l + 10.0;
+            let in_r = bx_r - 10.0;
+            let out_l = gate_l - 13.0;
+            let out_r = gate_r + 13.0;
+            // Moustache: wings droop out to the mouth corners and the top
+            // dips at the philtrum, following the base of the nose — a flat
+            // top with square shoulders reads as a stuck-on rectangle
+            let mo_top = mst + 0.5;
+            let mo_mid = mst + 4.5;
+            let mo_drop = mst + 6.0;
+            let mo_out_l = cx - mw * 0.45;
+            let mo_out_r = cx + mw * 0.45;
+            let mo_sh_l = cx - mw * 0.72;
+            let mo_sh_r = cx + mw * 0.72;
+            let top = format!(
+                "C{in_r} {cheek_c} {out_r} {gate_y} {gate_r} {gate_y} \
+                 C{gate_r} {mo_drop} {mo_sh_r} {mst} {mo_out_r} {mo_top} \
+                 Q{cx} {mo_mid} {mo_out_l} {mo_top} \
+                 C{mo_sh_l} {mst} {gate_l} {mo_drop} {gate_l} {gate_y} \
+                 C{out_l} {gate_y} {in_l} {cheek_c} {bx_l} {sb}"
+            );
+            (
+                format!(
+                    "M{bx_l} {sb} C{bx_l} {jy} {bx_l} {bx_b} {cx} {bx_b} \
+                     C{bx_r} {bx_b} {bx_r} {jy} {bx_r} {sb} {top}Z {lip_hole}"
+                ),
+                format!("M{bx_r} {sb} {top}"),
+            )
+        };
 
         if beard {
             match beard_v {
                 0 => {
-                    // Heavy stubble
+                    // Heavy stubble — even coverage, no mass
+                    let (reg, edge) = beard_shape(cy_cheek + 25.0, ny + 8.0);
                     s.push_str(&format!(
-                        r#"<path d="{beard_d}" fill-rule="evenodd" fill="{stubble_col}" filter="url(#stb)" opacity="{}"/>"#,
-                        opacity(0.38 + maturity * 0.12),
+                        r#"<path d="{reg}" fill-rule="evenodd" fill="{shadow_col}" filter="url(#stb)" opacity="{}"/>"#,
+                        opacity(0.62 + maturity * 0.18),
+                    ));
+                    s.push_str(&format!(
+                        r#"<path d="{edge}" stroke="{shadow_col}" stroke-width="5" fill="none" filter="url(#stb)" opacity="0.35"/>"#,
                     ));
                 }
                 1 => {
-                    // Short boxed beard: soft mass + speckle texture
+                    // Short boxed beard — thin mass under a speckled edge
+                    let (reg, edge) = beard_shape(cy_cheek + 21.0, ny + 7.0);
                     s.push_str(&format!(
-                        r#"<path d="{beard_d}" fill-rule="evenodd" fill="{hair}" filter="url(#b3)" opacity="0.28"/>"#,
+                        r#"<path d="{reg}" fill-rule="evenodd" fill="{hair}" filter="url(#b3)" opacity="0.26"/>"#,
                     ));
                     s.push_str(&format!(
-                        r#"<path d="{beard_d}" fill-rule="evenodd" fill="{stubble_col}" filter="url(#stb)" opacity="0.85"/>"#,
+                        r#"<path d="{reg}" fill-rule="evenodd" fill="{hair}" filter="url(#b1)" opacity="0.62"/>"#,
+                    ));
+                    s.push_str(&format!(
+                        r#"<path d="{reg}" fill-rule="evenodd" fill="{stubble_col}" filter="url(#stb)" opacity="0.70"/>"#,
+                    ));
+                    s.push_str(&format!(
+                        r#"<path d="{edge}" stroke="{stubble_col}" stroke-width="4.5" fill="none" filter="url(#stb)" opacity="0.50"/>"#,
                     ));
                 }
                 2 => {
-                    // Full beard with an under-chin curtain
+                    // Full beard — solid mass, grain overlay, lit chin
+                    let (reg, edge) = beard_shape(cy_cheek + 16.0, ny + 4.0);
                     s.push_str(&format!(
-                        r#"<path d="{beard_d}" fill-rule="evenodd" fill="{hair}" filter="url(#b2)" opacity="0.75"/>"#,
+                        r#"<path d="{reg}" fill-rule="evenodd" fill="{hair}" filter="url(#b2)" opacity="0.50"/>"#,
                     ));
                     s.push_str(&format!(
-                        r#"<path d="M{} {} Q{cx} {} {} {} Q{cx} {} {} {}Z" fill="{hair}" filter="url(#b1)" opacity="0.75"/>"#,
-                        jl + 4.0,
-                        jy + 10.0,
-                        chy + 16.0,
-                        jr - 4.0,
-                        jy + 10.0,
-                        chy + 6.0,
-                        jl + 4.0,
-                        jy + 10.0,
+                        r#"<path d="{reg}" fill-rule="evenodd" fill="{hair}" filter="url(#b1)" opacity="0.92"/>"#,
                     ));
                     s.push_str(&format!(
-                        r#"<path d="{beard_d}" fill-rule="evenodd" fill="{hair_hi}" filter="url(#stb)" opacity="0.25"/>"#,
+                        r#"<path d="{reg}" fill-rule="evenodd" fill="{hair_hi}" filter="url(#stb)" opacity="0.20"/>"#,
+                    ));
+                    s.push_str(&format!(
+                        r#"<path d="{edge}" stroke="{hair}" stroke-width="5.5" fill="none" filter="url(#stb)" opacity="0.55"/>"#,
+                    ));
+                    // Volume: the chin front catches the key light, the jaw
+                    // underside stays in shadow
+                    s.push_str(&format!(
+                        r#"<ellipse cx="{}" cy="{}" rx="{}" ry="9" fill="{hair_hi}" filter="url(#b3)" opacity="0.16"/>"#,
+                        cx - 1.0,
+                        chy - 13.0,
+                        mw * 0.95,
+                    ));
+                    s.push_str(&format!(
+                        r#"<path d="M{jl} {jy} Q{cx} {} {jr} {jy}" stroke="{hair_dk}" stroke-width="8" fill="none" filter="url(#b3)" opacity="0.30"/>"#,
+                        chy + chin_sag + 6.0,
                     ));
                 }
                 3 => {
-                    // Goatee — chin blob + soft edge
+                    // Goatee — the moustache wraps the mouth corners into a
+                    // chin patch, so it reads as one connected ring instead
+                    // of a stripe hanging off the lip; cheeks stay clean
+                    let g_l = cx - mw - 4.0;
+                    let g_r = cx + mw + 4.0;
+                    let g_top = ny + 6.0;
+                    // Runs past the chin's lower edge so the clip — not a
+                    // guessed offset — ends it flush with the jaw
+                    let g_bot = chy + chin_sag + 1.0;
+                    let g_side = my + 2.0;
+                    let g_mid = g_side + (g_bot - g_side) * 0.55;
                     let goatee_d = format!(
-                        "M{} {} Q{cx} {} {} {} L{} {chy} Q{cx} {} {} {chy}Z",
-                        chl - 4.0,
-                        my + 3.0,
-                        my + 7.0,
-                        chr + 4.0,
-                        my + 3.0,
-                        chr + 5.0,
-                        chy + 8.0,
-                        chl - 5.0,
+                        "M{g_l} {g_side} C{g_l} {} {} {g_top} {} {} Q{cx} {} {} {} \
+                         C{} {g_top} {g_r} {} {g_r} {g_side} \
+                         C{} {g_mid} {} {g_bot} {cx} {g_bot} \
+                         C{} {g_bot} {} {g_mid} {g_l} {g_side}Z {lip_hole}",
+                        g_top + 7.0,
+                        cx - mw * 0.78,
+                        cx - mw * 0.42,
+                        g_top + 0.5,
+                        g_top + 5.0,
+                        cx + mw * 0.42,
+                        g_top + 0.5,
+                        cx + mw * 0.78,
+                        g_top + 7.0,
+                        cx + mw * 0.95,
+                        cx + mw * 0.62,
+                        cx - mw * 0.62,
+                        cx - mw * 0.95,
                     );
                     s.push_str(&format!(
-                        r#"<path d="{goatee_d}" fill="{hair}" filter="url(#b1)" opacity="0.55"/>"#,
+                        r#"<path d="{goatee_d}" fill-rule="evenodd" fill="{hair}" filter="url(#b2)" opacity="0.40"/>"#,
                     ));
                     s.push_str(&format!(
-                        r#"<path d="{goatee_d}" fill="{stubble_col}" filter="url(#stb)" opacity="0.80"/>"#,
+                        r#"<path d="{goatee_d}" fill-rule="evenodd" fill="{hair}" filter="url(#b1)" opacity="0.70"/>"#,
+                    ));
+                    s.push_str(&format!(
+                        r#"<path d="{goatee_d}" fill-rule="evenodd" fill="{stubble_col}" filter="url(#stb)" opacity="0.70"/>"#,
                     ));
                 }
                 _ => {
-                    // Chinstrap — speckled band hugging the jaw
+                    // Chinstrap — speckled band tracking the jaw silhouette,
+                    // started off-face so the clip cuts it flush at the edge
+                    let strap_d = format!(
+                        "M{bx_l} {} C{} {jy} {} {} {cx} {} C{} {} {} {jy} {bx_r} {}",
+                        cy_cheek + 20.0,
+                        jl - 6.0,
+                        chl - 4.0,
+                        chy + 2.0,
+                        chy + chin_sag - 1.0,
+                        chr + 4.0,
+                        chy + 2.0,
+                        jr + 6.0,
+                        cy_cheek + 20.0,
+                    );
                     s.push_str(&format!(
-                        r#"<path d="M{} {} C{} {jy} {} {} {cx} {} C{} {} {} {jy} {} {}" stroke="{stubble_col}" stroke-width="6.5" fill="none" filter="url(#stb)" opacity="0.70"/>"#,
-                        cl + 1.5,
-                        cy_cheek + 12.0,
-                        cl + 1.5,
-                        jl + 3.0,
-                        jy + 9.0,
-                        chy + 3.0,
-                        jr - 3.0,
-                        jy + 9.0,
-                        cr - 1.5,
-                        cr - 1.5,
-                        cy_cheek + 12.0,
+                        r#"<path d="{strap_d}" stroke="{hair}" stroke-width="7" fill="none" filter="url(#b1)" opacity="0.45"/>"#,
+                    ));
+                    s.push_str(&format!(
+                        r#"<path d="{strap_d}" stroke="{stubble_col}" stroke-width="8" fill="none" filter="url(#stb)" opacity="0.75"/>"#,
                     ));
                 }
             }
         } else if age >= 22 && !(ph.epicanthic() || ph == Phenotype::Andean) {
             // Five o'clock shadow — deepens with maturity; sparse-growth
             // classes never shadow the jaw
+            let (reg, _) = beard_shape(cy_cheek + 28.0, ny + 9.0);
             s.push_str(&format!(
-                r#"<path d="{beard_d}" fill-rule="evenodd" fill="{stubble_col}" filter="url(#stb)" opacity="{}"/>"#,
-                opacity(0.10 + maturity * 0.14),
+                r#"<path d="{reg}" fill-rule="evenodd" fill="{shadow_col}" filter="url(#stb)" opacity="{}"/>"#,
+                opacity(0.16 + maturity * 0.20),
             ));
         }
 
-        if mstache {
-            let (mst_w, mst_h, mst_op): (f32, f32, f32) = match mst_v {
-                0 => (11.0, 2.4, 0.50),
-                1 => (14.0, 5.0, 0.75),
-                2 => (17.0, 4.5, 0.70),
-                _ => (15.0, 6.0, 0.70),
+        // Every grown style except the chinstrap already carries its own
+        // moustache band; a standalone one would only double the ink over
+        // the philtrum
+        if mstache && !(beard && beard_v <= 3) {
+            // Widths track the mouth so the moustache never ends up narrower
+            // than the lips it sits on
+            let (mst_k, mst_h, mst_op): (f32, f32, f32) = match mst_v {
+                0 => (0.90, 3.0, 0.50),
+                1 => (1.02, 6.0, 0.75),
+                2 => (1.20, 5.5, 0.70),
+                _ => (1.08, 7.5, 0.70),
             };
+            let mst_w = mw * mst_k;
             let mst_d = format!(
                 "M{} {} Q{cx} {} {} {} Q{cx} {} {} {}Z",
                 cx - mst_w,
@@ -1716,6 +1817,8 @@ pub fn generate_face_svg(
                 }
             }
         }
+
+        s.push_str("</g>");
     }
 
     // ── Hair ────────────────────────────────────────────────

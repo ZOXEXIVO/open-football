@@ -270,7 +270,14 @@ pub struct LoanSpellRecord {
 }
 
 impl LoanSpellRecord {
-    pub fn new(starts: u16, appearances: u16, goals: u16, assists: u16, rating: f32, days: i64) -> Self {
+    pub fn new(
+        starts: u16,
+        appearances: u16,
+        goals: u16,
+        assists: u16,
+        rating: f32,
+        days: i64,
+    ) -> Self {
         let days = days.clamp(0, u16::MAX as i64) as u16;
         LoanSpellRecord {
             verdict: LoanSpellVerdict::classify(starts, appearances, rating, days as i64),

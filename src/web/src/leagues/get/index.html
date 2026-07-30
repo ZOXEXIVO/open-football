@@ -3,7 +3,7 @@
 {% block submenu %}
 <div class="fm-tabbar">
     <a class="fm-tab active" href="/{{ lang }}/leagues/{{ league_slug }}">{{ i18n.t("overview") }}</a>
-    <a class="fm-tab" href="/{{ lang }}/leagues/{{ league_slug }}/newspaper">{{ i18n.t("newspaper") }}{% if newspaper_count > 0 %} <span class="fm-tab-badge">{{ newspaper_count }}</span>{% endif %}</a>
+    <a class="fm-tab" href="/{{ lang }}/leagues/{{ league_slug }}/newspaper">{{ i18n.t("news") }}{% if newspaper_count > 0 %} <span class="fm-tab-badge">{{ newspaper_count }}</span>{% endif %}</a>
     <a class="fm-tab" href="/{{ lang }}/leagues/{{ league_slug }}/transfers">{{ i18n.t("transfers") }}</a>
     <a class="fm-tab" href="/{{ lang }}/leagues/{{ league_slug }}/awards">{{ i18n.t("awards") }}</a>
 </div>

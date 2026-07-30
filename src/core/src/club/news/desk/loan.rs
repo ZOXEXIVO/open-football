@@ -18,6 +18,12 @@ impl LoanDesk {
     const MIN_APPEARANCES_FOR_FORM: i32 = 3;
     /// Goals at a borrowing club start to matter from here.
     const GOALS_WORTH_A_LINE: i32 = 3;
+    /// The same line, when one of them landed in the last fortnight. A
+    /// live run is worth printing earlier than a cold one — but every
+    /// phrasing of this story is about repetition ("the goals keep
+    /// coming"), so it still takes more than one. A single goal, however
+    /// recent, is a result rather than a run.
+    const GOALS_WORTH_A_LINE_ON_A_RUN: i32 = 2;
     /// Calling a spell a failure needs a bigger sample than describing
     /// it does — a verdict is harder to take back than a scoreline.
     const MIN_APPEARANCES_FOR_VERDICT: i32 = 6;
@@ -167,7 +173,14 @@ impl LoanDesk {
         // Goals travel. A loanee scoring at his borrowing club is the
         // one loan story that reaches the front half of the paper, and
         // it runs whether or not he has also given an interview.
-        if entry.goals >= Self::GOALS_WORTH_A_LINE || entry.scored_recently {
+        //
+        // Both bars read the tally, never the recent-goal flag alone:
+        // the headline the reader gets may be the one phrasing that
+        // names no figure ("keeps scoring at Danubio"), so a story filed
+        // on nothing does not even print the 0 that would give it away.
+        if entry.goals >= Self::GOALS_WORTH_A_LINE
+            || (entry.scored_recently && entry.goals >= Self::GOALS_WORTH_A_LINE_ON_A_RUN)
+        {
             out.push(
                 NewsStory::new(NewsStoryKind::LoanWatchGoals, date)
                     .about(entry.player_id)
@@ -336,6 +349,53 @@ mod tests {
         assert!(
             kinds.contains(&NewsStoryKind::LoanWatchGoals),
             "six goals on loan is news even when he has already spoken"
+        );
+    }
+
+    /// The line that says a man is scoring is filed off the tally and
+    /// nothing else.
+    ///
+    /// `scored_recently` is read from a happiness event that fires on an
+    /// assist as readily as on a goal, and the last pass before a winner
+    /// is quite often the goalkeeper's kick. A borrowed keeper therefore
+    /// arrived at this desk flagged, and the column printed "keeps
+    /// scoring at Danubio" about a man with no goals in his career —
+    /// under the one phrasing that names no figure, so the story did not
+    /// even print the 0 that would have shown the reader what happened.
+    #[test]
+    fn a_loanee_who_has_not_scored_is_never_said_to_be_scoring() {
+        let mut keeper = Spell::entry(12, 0, 0);
+        keeper.scored_recently = true;
+
+        let kinds = Spell::kinds(&Spell::file(keeper));
+
+        assert!(
+            !kinds.contains(&NewsStoryKind::LoanWatchGoals),
+            "a goalless loanee was reported as scoring: {:?}",
+            kinds
+        );
+        assert!(
+            kinds.contains(&NewsStoryKind::LoanWatchStarter),
+            "he is still playing every week, and that is the true story: {:?}",
+            kinds
+        );
+    }
+
+    /// One goal is a result; the copy on this line is about a run. Every
+    /// phrasing of it says so — "the goals keep coming", "keeps scoring"
+    /// — and the numbers are set plural, so a tally of one would print
+    /// "1 goals" underneath a headline claiming a streak.
+    #[test]
+    fn a_single_goal_is_not_yet_a_scoring_run() {
+        let mut once = Spell::entry(12, 0, 1);
+        once.scored_recently = true;
+        assert!(!Spell::kinds(&Spell::file(once)).contains(&NewsStoryKind::LoanWatchGoals));
+
+        let mut twice = Spell::entry(12, 0, 2);
+        twice.scored_recently = true;
+        assert!(
+            Spell::kinds(&Spell::file(twice)).contains(&NewsStoryKind::LoanWatchGoals),
+            "a live run of two is what the early bar is for"
         );
     }
 

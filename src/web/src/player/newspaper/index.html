@@ -1,6 +1,10 @@
 {% extends "player/player_layout.html" %}
 
-{% block html_title %}{{ title }} - {{ i18n.t("newspaper") }} | {{ i18n.t("site_name") }}{% endblock %}
+{# The one press page with no nameplate of its own to be titled with: it
+   is a shelf of cuttings out of every paper that ever named him, so the
+   tab is titled the way the tabbar is — by the man, not by a publication
+   he does not belong to. #}
+{% block html_title %}{{ title }} - {{ i18n.t("news") }} | {{ i18n.t("site_name") }}{% endblock %}
 
 {% block content %}
 <div class="fm-page np-desk">

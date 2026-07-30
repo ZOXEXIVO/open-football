@@ -25,6 +25,10 @@ pub struct LeagueNewspaperTemplate {
     pub cpu_brand: &'static str,
     pub cores_count: usize,
     pub title: String,
+    /// The monthly's own name — "The Serie A Chronicle" — which titles
+    /// the browser tab. Same rule as a club's paper: the tab names the
+    /// publication, not the section it sits under.
+    pub masthead: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
     pub sub_title: String,
@@ -77,14 +81,16 @@ pub async fn league_newspaper_action(
     })?;
 
     let league_title = views::league_display_name(league, &i18n, simulator_data);
-    let issues = LeaguePress::typeset(simulator_data, league, &i18n, &news);
+    let masthead = PressDesk::masthead(league.newsroom.masthead_key(), &league.name, &news);
+    let issues = LeaguePress::typeset(simulator_data, league, &masthead, &i18n, &news);
 
     Ok(LeagueNewspaperTemplate {
         css_version: CSS_VERSION,
         computer_name: &COMPUTER_NAME,
         cpu_brand: &CPU_BRAND,
         cores_count: *CPU_CORES,
-        title: format!("{} — {}", league_title, i18n.t("newspaper")),
+        title: format!("{} — {}", league_title, i18n.t("news")),
+        masthead,
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
@@ -162,10 +168,10 @@ impl LeaguePress {
     fn typeset(
         data: &SimulatorData,
         league: &League,
+        masthead: &str,
         i18n: &I18n,
         news: &NewsI18n,
     ) -> Vec<IssueView> {
-        let masthead = PressDesk::masthead(league.newsroom.masthead_key(), &league.name, news);
         let paper = PaperFor::Division(&league.name);
 
         league
@@ -175,7 +181,7 @@ impl LeaguePress {
             // A division's paper is read by everybody in it, so nothing
             // on it is marked for anybody.
             .map(|issue| {
-                PressDesk::issue(data, paper, issue, &masthead, i18n, news, PressFocus::none())
+                PressDesk::issue(data, paper, issue, masthead, i18n, news, PressFocus::none())
             })
             .collect()
     }
@@ -196,7 +202,7 @@ mod tests {
     impl Page {
         fn chrome() -> HashMap<String, String> {
             Self::map(&[
-                ("newspaper", "Newspaper"),
+                ("news", "News"),
                 ("overview", "Overview"),
                 ("transfers", "Transfers"),
                 ("awards", "Awards"),
@@ -366,6 +372,7 @@ mod tests {
                 cpu_brand: "test",
                 cores_count: 1,
                 title: "Serie A".to_string(),
+                masthead: "The Serie A Chronicle".to_string(),
                 sub_title_prefix: String::new(),
                 sub_title_suffix: String::new(),
                 sub_title: "Italy".to_string(),

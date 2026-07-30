@@ -34,6 +34,13 @@ pub struct TeamNewspaperTemplate {
     pub news: NewsI18n,
     pub lang: String,
     pub title: String,
+    /// The paper's own name — "The Rubin Kazan Chronicle" — which is what
+    /// the browser tab is titled with. A tab that said "Rubin Kazan -
+    /// Newspaper" named the section; this names the publication, the way
+    /// a reader would refer to it. Set even on a club that has never gone
+    /// to press, because the nameplate is the paper's identity rather
+    /// than a property of any one edition.
+    pub masthead: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
     pub sub_title: String,
@@ -317,7 +324,15 @@ pub async fn team_newspaper_action(
 
     let league = team.league_id.and_then(|id| simulator_data.league(id));
 
-    let issues = PressTeam::covering(simulator_data, team)
+    let press = PressTeam::covering(simulator_data, team);
+    // The nameplate the page is titled with. A squad with no presses of
+    // its own reads the flagship's paper, so it is titled with the
+    // flagship's nameplate; a club the world has no paper for at all
+    // falls back to its own name rather than to an empty tab.
+    let masthead = press
+        .map(|paper| PressDesk::masthead(paper.newsroom.masthead_key(), &paper.name, &news))
+        .unwrap_or_else(|| team.name.clone());
+    let issues = press
         .map(|paper| PressDesk::typeset(simulator_data, paper, &i18n, &news))
         .unwrap_or_default();
 
@@ -356,6 +371,7 @@ pub async fn team_newspaper_action(
         news,
         lang: route_params.lang.clone(),
         title: team.name.clone(),
+        masthead,
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: league_title,
@@ -1385,8 +1401,9 @@ mod tests {
                 keys.push(masthead.to_string());
             }
 
-            // Paper chrome only. The bare `newspaper` tab label belongs to
-            // the page, not the press, and stays in the chrome bundle.
+            // Paper chrome only. The tab itself is labelled "News" out of
+            // the chrome bundle — the tabbar names a section, and only
+            // what is printed on the sheet belongs to the press scope.
             for chrome in [
                 "newspaper_edition",
                 "newspaper_results",
@@ -2182,7 +2199,7 @@ mod render_tests {
         /// Real English page chrome, so a preview screenshot shows the
         /// page a reader gets rather than a grid of raw keys.
         fn chrome() -> HashMap<String, String> {
-            Self::map(&[("newspaper", "Newspaper"), ("site_name", "Open Football")])
+            Self::map(&[("news", "News"), ("site_name", "Open Football")])
         }
 
         /// The same, for the press scope the edition partial resolves
@@ -2226,6 +2243,7 @@ mod render_tests {
                 news: crate::NewsI18n::for_test(Self::press()),
                 lang: "en".to_string(),
                 title: "Córdoba".to_string(),
+                masthead: "The Córdoba Chronicle".to_string(),
                 sub_title_prefix: String::new(),
                 sub_title_suffix: String::new(),
                 sub_title: "Spanish Segunda".to_string(),
@@ -2550,6 +2568,32 @@ mod render_tests {
         let html = Page::template(Vec::new()).render().unwrap();
 
         assert!(!html.contains("fm-tab-badge"));
+    }
+
+    /// The browser tab carries the paper's own name, and the tabbar
+    /// carries the section's. A reader with a dozen tabs open is looking
+    /// for the publication — "The Córdoba Chronicle" — while the strip
+    /// above the page is telling him which part of the club he is in.
+    /// The two say different things on purpose.
+    #[test]
+    fn the_browser_tab_is_titled_with_the_nameplate() {
+        let html = Page::template(vec![Page::full_issue()]).render().unwrap();
+
+        assert!(html.contains("<title>The Córdoba Chronicle | Open Football</title>"));
+        assert!(
+            html.contains("/teams/cordoba/newspaper\">News"),
+            "the tabbar labels the section, not the publication"
+        );
+    }
+
+    /// The nameplate is the paper's identity, not a property of an
+    /// edition, so a club that has never gone to press is still titled
+    /// with it — the tab of an empty shelf must not go blank.
+    #[test]
+    fn an_idle_newsroom_still_has_a_nameplate_on_the_tab() {
+        let html = Page::template(Vec::new()).render().unwrap();
+
+        assert!(html.contains("<title>The Córdoba Chronicle | Open Football</title>"));
     }
 
     /// A drop cap is a letter. Copy that opens on a scoreline or a fee

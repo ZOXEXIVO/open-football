@@ -171,6 +171,80 @@ pub async fn player_matches_action(
             })
             .collect();
 
+        // Domestic cup ties the player actually appeared in. The knockout
+        // cup lives on `Country::domestic_cup`, outside the league
+        // programme, so the league block above cannot see it — and a
+        // young keeper's first senior football is very often a cup
+        // rotation start. Without this his record read as empty while
+        // the club paper was reporting the afternoon, which makes a true
+        // story look invented.
+        if let Some(cup_league) = simulator_data
+            .country_by_club(team.club_id)
+            .and_then(|country| country.domestic_cup.as_ref())
+            .map(|cup| &cup.league)
+        {
+            for schedule_item in cup_league.schedule.get_matches_for_team(team.id) {
+                if schedule_item.result.is_none() {
+                    continue;
+                }
+                // Same contract as the league block: the stat line is
+                // what proves he was on the pitch rather than on the
+                // bench.
+                let appeared = cup_league
+                    .matches
+                    .get(&schedule_item.id)
+                    .and_then(|mr| mr.details.as_ref())
+                    .is_some_and(|d| d.player_stats.contains_key(&player.id));
+                if !appeared {
+                    continue;
+                }
+
+                let is_home = schedule_item.home_team_id == team.id;
+                let (Some(home_team_data), Some(away_team_data)) = (
+                    simulator_data.team_data(schedule_item.home_team_id),
+                    simulator_data.team_data(schedule_item.away_team_id),
+                ) else {
+                    continue;
+                };
+
+                match_items.push((
+                    schedule_item.date,
+                    PlayerMatchItem {
+                        date: schedule_item.date.format("%d.%m.%Y").to_string(),
+                        time: schedule_item.date.format("%H:%M").to_string(),
+                        opponent_slug: if is_home {
+                            away_team_data.slug.clone()
+                        } else {
+                            home_team_data.slug.clone()
+                        },
+                        opponent_name: if is_home {
+                            away_team_data.name.clone()
+                        } else {
+                            home_team_data.name.clone()
+                        },
+                        is_home,
+                        competition_name: cup_league.name.clone(),
+                        // A cup `Score` may store its sides in either
+                        // order relative to the fixture; map the goals
+                        // back through the recorded `team_id`s.
+                        result: schedule_item.result.as_ref().map(|res| {
+                            let home_first = schedule_item.home_team_id == res.home_team.team_id;
+                            let (home_goals, away_goals) = if home_first {
+                                (res.home_team.get(), res.away_team.get())
+                            } else {
+                                (res.away_team.get(), res.home_team.get())
+                            };
+                            PlayerMatchResult {
+                                match_id: schedule_item.id.clone(),
+                                home_goals,
+                                away_goals,
+                            }
+                        }),
+                    },
+                ));
+            }
+        }
+
         // Continental competition matches the player actually appeared in.
         // Gate on a recorded result AND match stats for this player: the
         // global match store is keyed by the same match_id the bracket holds,
@@ -225,14 +299,27 @@ pub async fn player_matches_action(
             ));
         }
 
-        // National team matches the player actually appeared in. The fixture
-        // stores the same match_id used as the global match-store key, so the
-        // player_stats lookup proves they were on the pitch. The old
-        // squad-membership / caps heuristic listed every national fixture once
-        // a player had any cap — including games they sat out, or another
-        // country's games for a player capped elsewhere.
-        if let Some(country) = simulator_data.country_by_club(team.club_id) {
-            for fixture in &country.national_team.schedule {
+        // International matches the player actually appeared in. The
+        // fixture stores the same match_id used as the global
+        // match-store key, so the player_stats lookup proves they were
+        // on the pitch. The old squad-membership / caps heuristic listed
+        // every national fixture once a player had any cap — including
+        // games they sat out, or another country's games for a player
+        // capped elsewhere.
+        //
+        // Both squads a country fields are walked, and the country is
+        // the player's OWN rather than his employer's. Either shortcut
+        // hides real football: a U21 cap appeared nowhere at all — which
+        // is most of a teenage international's record, and the reason a
+        // paper reporting one read as invented — and a foreign player's
+        // caps were dropped for the sole reason that his club sits in
+        // somebody else's league.
+        let national_country = simulator_data
+            .country(player.country_id)
+            .or_else(|| simulator_data.country_by_club(team.club_id));
+        if let Some(country) = national_country {
+            let squads = [&country.national_team, &country.u21_national_team];
+            for fixture in squads.iter().flat_map(|squad| squad.schedule.iter()) {
                 let Some(ref result) = fixture.result else {
                     continue;
                 };

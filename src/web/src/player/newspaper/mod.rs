@@ -379,7 +379,7 @@ mod tests {
 
     impl Page {
         fn chrome() -> HashMap<String, String> {
-            Self::map(&[("newspaper", "Newspaper"), ("site_name", "Open Football")])
+            Self::map(&[("news", "News"), ("site_name", "Open Football")])
         }
 
         fn press() -> HashMap<String, String> {

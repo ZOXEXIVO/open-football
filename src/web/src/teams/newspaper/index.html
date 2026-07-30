@@ -1,6 +1,9 @@
 {% extends "teams/team_layout.html" %}
 
-{% block html_title %}{{ title }} - {{ i18n.t("newspaper") }} | {{ i18n.t("site_name") }}{% endblock %}
+{# The tab is titled with the paper's own nameplate — "The Milan
+   Sentinel", not "Milan - Newspaper". A reader with six tabs open is
+   looking for the publication, and the masthead is what it is called. #}
+{% block html_title %}{{ masthead }} | {{ i18n.t("site_name") }}{% endblock %}
 
 {% block content %}
 <div class="fm-page np-desk">

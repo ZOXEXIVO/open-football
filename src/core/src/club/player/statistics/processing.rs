@@ -4365,6 +4365,136 @@ mod tests {
              loan years, River Plate origin at the foot"
         );
     }
+
+    #[test]
+    fn returned_and_stayed_parent_outranks_the_loan_it_followed() {
+        // Luciano Sokolić repro — the SINGLE three-year-loan variant from the
+        // live History page (River Plate → Danubio, one long loan, no second
+        // move). River (Argentina, calendar-year league) loaned him to Danubio
+        // (Uruguay) on 01.08.2026; he was recalled/returned to River mid-final-
+        // season (15.01.2029) with 0 senior parent apps THAT season, and STAYED
+        // — River is his club again from 2029/30 on (real apps). The 2028/29
+        // group rendered in the WRONG order:
+        //
+        //   2028/29 Danubio (Loan, 26)
+        //   2028/29 River Plate (0)      <- the club he returned to and still
+        //                                   plays for, shown BELOW the loan.
+        //
+        // Unlike `loan_return_between_two_loans_…`, no second loan opens, so
+        // `flush_stale_entries` never fires — the return-season 0-app parent
+        // row survives via the ≥40% coverage rule and is ranked by the
+        // projection's `continuing_homes` gate. That gate keyed on apps in the
+        // RETURN-season row (0 here), mis-ranking it as a non-continuing
+        // registration below the loan. The returned-and-stayed parent must sit
+        // ABOVE the loan it followed so the current club traces straight down
+        // the page; the row's continuity is proven by the NEXT season's River
+        // row carrying real apps.
+        use crate::club::player::statistics::projection::PlayerStatisticsProjection;
+
+        let river = TeamInfo {
+            name: "River Plate".to_string(),
+            slug: "river-plate".to_string(),
+            reputation: 8_000,
+            league_name: "Primera Division".to_string(),
+            league_slug: "primera".to_string(),
+        };
+        let danubio = TeamInfo {
+            name: "Danubio".to_string(),
+            slug: "danubio".to_string(),
+            reputation: 5_000,
+            league_name: "Primera Division UY".to_string(),
+            league_slug: "primera-uy".to_string(),
+        };
+
+        let mut player = make_player();
+        player
+            .statistics_history
+            .seed_initial_team(&river, make_date(2026, 8, 1), false);
+
+        // River -> Danubio free loan on 01.08.2026, three-year loan.
+        player.statistics = make_stats(0, 0);
+        player.on_manual_loan(&river, &river, &danubio, make_date(2026, 8, 2));
+
+        // Danubio 2026/27 (6 apps), 2027/28 (25) completed on loan.
+        player.statistics = make_stats(6, 0);
+        player.on_season_end(Season::new(2026), &danubio, make_date(2027, 6, 15));
+        player.statistics = make_stats(25, 0);
+        player.on_season_end(Season::new(2027), &danubio, make_date(2028, 6, 15));
+
+        // Danubio 2028/29 (26 apps), mid-season return to River on 15.01.2029.
+        player.statistics = make_stats(26, 0);
+        player.on_loan_return(&danubio, &river, make_date(2029, 1, 15));
+
+        // 2028/29 season-end at River (0 parent apps) — freezes the return-
+        // season parent registration and re-seeds River for 2029/30.
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2028), &river, make_date(2029, 6, 15));
+
+        // River 2029/30 in progress: real apps (the return that stuck).
+        let live = make_stats(12, 0);
+        let empty = PlayerStatistics::default();
+        let live_input = crate::PlayerLiveStatsInput {
+            league: &live,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let rows = PlayerStatisticsProjection::player_history_rows(
+            &player.statistics_history,
+            &live_input,
+            make_date(2029, 12, 1),
+        );
+        let order: Vec<(String, u16, bool)> = rows
+            .iter()
+            .map(|r| (r.team_slug.clone(), r.season.start_year, r.is_loan))
+            .collect();
+
+        let pos = |slug: &str, year: u16, is_loan: bool| -> Option<usize> {
+            order
+                .iter()
+                .position(|(s, y, l)| s == slug && *y == year && *l == is_loan)
+        };
+        let river_2028 = pos("river-plate", 2028, false);
+        let danubio_2028 = pos("danubio", 2028, true);
+        assert!(
+            river_2028.is_some(),
+            "the 0-app River return row for 2028/29 must survive (≥40% coverage); got {order:?}"
+        );
+        assert!(
+            danubio_2028.is_some(),
+            "the Danubio 2028/29 loan row must be present; got {order:?}"
+        );
+        // The returned-and-stayed parent sits ABOVE the loan it followed.
+        assert!(
+            river_2028 < danubio_2028,
+            "the returned-and-stayed River row must render ABOVE the Danubio \
+             loan it followed within 2028/29; got {order:?}"
+        );
+
+        // The 2026/27 River ORIGIN row (no return that season — fully loaned
+        // out) stays at the FOOT, below the Danubio loan: it does not continue.
+        let river_2026 = pos("river-plate", 2026, false);
+        let danubio_2026 = pos("danubio", 2026, true);
+        assert!(
+            river_2026 > danubio_2026,
+            "the River origin row (no return in 2026/27) stays below the loan; got {order:?}"
+        );
+
+        // Full expected top-to-bottom thread.
+        assert_eq!(
+            order,
+            vec![
+                ("river-plate".to_string(), 2029, false),
+                ("river-plate".to_string(), 2028, false),
+                ("danubio".to_string(), 2028, true),
+                ("danubio".to_string(), 2027, true),
+                ("danubio".to_string(), 2026, true),
+                ("river-plate".to_string(), 2026, false),
+            ],
+            "River traceable down the page: 2029/30 → 2028/29 returns on top of \
+             the Danubio loans, origin at the foot"
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -34,9 +34,10 @@ pub mod squad;
 pub use board::BoardroomDesk;
 pub use dugout::DugoutDesk;
 pub use facts::{
-    CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie, KeeperMatchFacts,
-    LoanWatchEntry, ManagerPursuit, MatchStarFacts, OutfieldMatchFacts, PlayerStanding,
-    RecentEvents, SquadPulse, StandingSnapshot, TransferMove, TransferMoveKind, WeeklyMatchFacts,
+    Absorbing, CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie,
+    KeeperMatchFacts, LoanWatchEntry, ManagerPursuit, MatchStarFacts, OutfieldMatchFacts,
+    PlayerStanding, RecentEvents, SquadPulse, StandingSnapshot, TransferMove, TransferMoveKind,
+    WeeklyMatchFacts,
 };
 pub use fans::FansDesk;
 pub use loan::LoanDesk;
@@ -67,8 +68,20 @@ mod tests {
     struct Fixture;
 
     impl Fixture {
+        /// The first team, and one of the club's own academy squads —
+        /// both sides whose football its paper may report.
+        const OUR_SIDE: u32 = 1;
+        const OUR_YOUTH_SIDE: u32 = 2;
+        /// A side the club does not own: a national team, or the club
+        /// that sold the player last week.
+        const SOMEBODY_ELSE: u32 = 999;
+
         fn day() -> NaiveDate {
             NaiveDate::from_ymd_opt(2026, 3, 2).unwrap()
+        }
+
+        fn our_sides() -> FxHashSet<u32> {
+            [Self::OUR_SIDE, Self::OUR_YOUTH_SIDE].into_iter().collect()
         }
 
         fn table(position: u8, teams: u8, played: u8, total_rounds: u8) -> StandingSnapshot {
@@ -437,8 +450,8 @@ mod tests {
         use rustc_hash::FxHashMap;
 
         let filed = |facts: KeeperMatchFacts| -> Vec<NewsStoryKind> {
-            let mut keepers: FxHashMap<u32, KeeperMatchFacts> = FxHashMap::default();
-            keepers.insert(1, facts);
+            let mut keepers: FxHashMap<(u32, u32), KeeperMatchFacts> = FxHashMap::default();
+            keepers.insert((1, Fixture::OUR_SIDE), facts);
 
             let week = crate::club::news::WeeklyMatchFacts {
                 keepers,
@@ -446,7 +459,7 @@ mod tests {
             };
 
             let mut out = Vec::new();
-            SquadDesk::file_keeper_deeds(&mut out, 1, &week, Fixture::day());
+            SquadDesk::file_keeper_deeds(&mut out, 1, &Fixture::our_sides(), &week, Fixture::day());
             Fixture::kinds(&out)
         };
 
@@ -507,9 +520,9 @@ mod tests {
         use crate::club::news::desk::squad::SquadDesk;
         use rustc_hash::FxHashMap;
 
-        let mut keepers: FxHashMap<u32, KeeperMatchFacts> = FxHashMap::default();
+        let mut keepers: FxHashMap<(u32, u32), KeeperMatchFacts> = FxHashMap::default();
         keepers.insert(
-            1,
+            (1, Fixture::OUR_SIDE),
             KeeperMatchFacts {
                 saves: 2,
                 conceded: 1,
@@ -524,9 +537,58 @@ mod tests {
         };
 
         let mut out = Vec::new();
-        SquadDesk::file_keeper_deeds(&mut out, 1, &week, Fixture::day());
+        SquadDesk::file_keeper_deeds(&mut out, 1, &Fixture::our_sides(), &week, Fixture::day());
 
         assert!(out.is_empty(), "{:?}", Fixture::kinds(&out));
+    }
+
+    /// The afternoon a club paper is not entitled to.
+    ///
+    /// The week's facts are gathered from every competitive fixture in
+    /// the world, internationals included, and the club press then walks
+    /// its own roster over them. Keyed by player alone, "is he on my
+    /// books" was the only question asked — so a keeper's six saves for
+    /// his country came out under his club's nameplate, in copy that
+    /// names the club ("{player} keeps {club} in it on his own") about
+    /// ninety minutes the club did not play. The reader's own check is
+    /// the give-away: the match is nowhere on the player's record,
+    /// because it was never his club's match.
+    #[test]
+    fn a_paper_never_claims_an_afternoon_played_for_somebody_else() {
+        use crate::club::news::KeeperMatchFacts;
+        use crate::club::news::desk::squad::SquadDesk;
+        use rustc_hash::FxHashMap;
+
+        let masterclass = KeeperMatchFacts {
+            saves: 8,
+            conceded: 1,
+            penalties_saved: 0,
+            errors_leading_to_goal: 0,
+        };
+
+        let filed = |side: u32| -> Vec<NewsStoryKind> {
+            let mut keepers: FxHashMap<(u32, u32), KeeperMatchFacts> = FxHashMap::default();
+            keepers.insert((1, side), masterclass);
+
+            let week = crate::club::news::WeeklyMatchFacts {
+                keepers,
+                ..crate::club::news::WeeklyMatchFacts::empty()
+            };
+
+            let mut out = Vec::new();
+            SquadDesk::file_keeper_deeds(&mut out, 1, &Fixture::our_sides(), &week, Fixture::day());
+            Fixture::kinds(&out)
+        };
+
+        assert_eq!(
+            filed(Fixture::OUR_YOUTH_SIDE),
+            vec![NewsStoryKind::KeeperMasterclass],
+            "a youth keeper's afternoon for one of the club's own sides is the club's news"
+        );
+        assert!(
+            filed(Fixture::SOMEBODY_ELSE).is_empty(),
+            "an afternoon played for a national team or a former club is not this club's"
+        );
     }
 
     /// One outfield player, one afternoon, one line — and the order the
@@ -883,9 +945,9 @@ mod tests {
             derby_hero: bool,
         ) -> Vec<NewsStory> {
             let player = Self::player(position);
-            let mut outfield: rustc_hash::FxHashMap<u32, OutfieldMatchFacts> =
+            let mut outfield: rustc_hash::FxHashMap<(u32, u32), OutfieldMatchFacts> =
                 rustc_hash::FxHashMap::default();
-            outfield.insert(player.id, facts);
+            outfield.insert((player.id, Fixture::OUR_SIDE), facts);
 
             let week = WeeklyMatchFacts {
                 outfield,
@@ -893,7 +955,14 @@ mod tests {
             };
 
             let mut out = Vec::new();
-            SquadDesk::file_outfield_deeds(&mut out, &player, &week, derby_hero, Fixture::day());
+            SquadDesk::file_outfield_deeds(
+                &mut out,
+                &player,
+                &Fixture::our_sides(),
+                &week,
+                derby_hero,
+                Fixture::day(),
+            );
             out
         }
 

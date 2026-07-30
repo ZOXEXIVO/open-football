@@ -4,7 +4,7 @@ pub mod routes;
 /// Cache-busting version for /face.svg URLs. Responses are served
 /// `immutable`, so bump this whenever generator output changes — every
 /// template injects it via `{{ crate::face::FACE_VERSION }}`.
-pub const FACE_VERSION: u32 = 8;
+pub const FACE_VERSION: u32 = 9;
 
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};

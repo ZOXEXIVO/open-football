@@ -28,10 +28,10 @@ pub mod types;
 
 pub use affairs::{ClubAffair, ClubAffairEntry, ClubAffairLog};
 pub use desk::{
-    BoardroomDesk, CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie,
-    DugoutDesk, FansDesk, KeeperMatchFacts, LoanDesk, LoanWatchEntry, ManagerPursuit, MarketDesk,
-    MatchDesk, MatchStarFacts, OutfieldMatchFacts, PlayerStanding, RecentEvents, RumourDesk,
-    SquadDesk, SquadPulse, StandingSnapshot, TableDesk, TransferMove, TransferMoveKind,
+    Absorbing, BoardroomDesk, CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek,
+    CupTie, DugoutDesk, FansDesk, KeeperMatchFacts, LoanDesk, LoanWatchEntry, ManagerPursuit,
+    MarketDesk, MatchDesk, MatchStarFacts, OutfieldMatchFacts, PlayerStanding, RecentEvents,
+    RumourDesk, SquadDesk, SquadPulse, StandingSnapshot, TableDesk, TransferMove, TransferMoveKind,
     WeeklyMatchFacts,
 };
 pub use editor::NewsEditor;

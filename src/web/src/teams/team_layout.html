@@ -5,9 +5,9 @@
 {% block submenu %}
 <div class="fm-tabbar">
     <a class="fm-tab{% if active_tab == "squad" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}">{{ i18n.t("squad") }}</a>
-    <a class="fm-tab{% if active_tab == "newspaper" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/newspaper">{{ i18n.t("newspaper") }}{% if newspaper_count > 0 %} <span class="fm-tab-badge">{{ newspaper_count }}</span>{% endif %}</a>
     <a class="fm-tab{% if active_tab == "staff" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/staff">{{ i18n.t("staff") }}</a>
     <a class="fm-tab{% if active_tab == "tactics" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/tactics">{{ i18n.t("tactics") }}</a>
+    <a class="fm-tab{% if active_tab == "newspaper" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/newspaper">{{ i18n.t("news") }}{% if newspaper_count > 0 %} <span class="fm-tab-badge">{{ newspaper_count }}</span>{% endif %}</a>
     {% if show_finances_tab %}<a class="fm-tab{% if active_tab == "finances" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/finances">{{ i18n.t("finances") }}</a>{% endif %}
     <a class="fm-tab{% if active_tab == "relations" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/relations">{{ i18n.t("relations") }}</a>
     <a class="fm-tab{% if active_tab == "scouting" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/scouting">{{ i18n.t("scouting") }}</a>

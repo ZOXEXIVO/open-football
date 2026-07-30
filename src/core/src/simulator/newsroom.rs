@@ -1,10 +1,10 @@
 use crate::club::board::manager_market::ApproachState;
 use crate::club::news::RecentEvents;
 use crate::club::news::{
-    BoardroomDesk, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie, DugoutDesk, FansDesk,
-    IssueResult, KeeperMatchFacts, LoanDesk, LoanWatchEntry, ManagerPursuit, MarketDesk, MatchDesk,
-    MatchStarFacts, NewsEditor, NewsStory, NewspaperIssue, OutfieldMatchFacts, PressMood,
-    ResultCompetition, SquadDesk, StandingSnapshot, TableDesk, WeeklyMatchFacts,
+    Absorbing, BoardroomDesk, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie, DugoutDesk,
+    FansDesk, IssueResult, KeeperMatchFacts, LoanDesk, LoanWatchEntry, ManagerPursuit, MarketDesk,
+    MatchDesk, MatchStarFacts, NewsEditor, NewsStory, NewspaperIssue, OutfieldMatchFacts,
+    PressMood, ResultCompetition, SquadDesk, StandingSnapshot, TableDesk, WeeklyMatchFacts,
 };
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, MatchResult, SubstitutionReason};
@@ -125,7 +125,9 @@ impl WeeklyMatchFacts {
                         *per_match.entry(goal.player_id).or_insert(0) += 1;
                     }
                     MatchStatisticType::RedCard => {
-                        self.red_cards.insert(goal.player_id);
+                        if let Some(team_id) = Self::side_of(result, goal.player_id) {
+                            self.red_cards.insert((goal.player_id, team_id));
+                        }
                     }
                     _ => {}
                 }
@@ -135,7 +137,10 @@ impl WeeklyMatchFacts {
                 if *goals < 3 {
                     continue;
                 }
-                let best = self.hat_tricks.entry(*player_id).or_insert(0);
+                let Some(team_id) = Self::side_of(result, *player_id) else {
+                    continue;
+                };
+                let best = self.hat_tricks.entry((*player_id, team_id)).or_insert(0);
                 *best = (*best).max(*goals);
             }
 
@@ -147,6 +152,22 @@ impl WeeklyMatchFacts {
                 self.absorb_cup_tie(result);
             }
         }
+    }
+
+    /// Which of the two sides in a result fielded a player. `None` when
+    /// the recorded squads cannot place him — an older save without
+    /// details, or a goal feed naming somebody neither squad lists — in
+    /// which case nothing about him is written: an afternoon that cannot
+    /// be attributed to a side is an afternoon no paper can claim.
+    fn side_of(result: &MatchResult, player_id: u32) -> Option<u32> {
+        let details = result.details.as_ref()?;
+        if Self::fielded(&details.left_team_players, player_id) {
+            return Some(details.left_team_players.team_id);
+        }
+        if Self::fielded(&details.right_team_players, player_id) {
+            return Some(details.right_team_players.team_id);
+        }
+        None
     }
 
     /// Read each side's man of the match report out of one result: its
@@ -269,9 +290,14 @@ impl WeeklyMatchFacts {
             if stats.minutes_played == 0 {
                 continue;
             }
+            // …and the afternoon has to belong to a side, because that
+            // is what decides whose paper may print it.
+            let Some(team_id) = Self::side_of(result, *player_id) else {
+                continue;
+            };
 
             self.keepers
-                .entry(*player_id)
+                .entry((*player_id, team_id))
                 .or_default()
                 .absorb(KeeperMatchFacts {
                     saves: stats.saves,
@@ -336,29 +362,33 @@ impl WeeklyMatchFacts {
 
             // What his side conceded, so a defender's shift can be told
             // apart from a defender's shift in a hiding. A stat line has
-            // no idea what happened at the other end.
-            let (conceded, started) = if Self::fielded(&details.left_team_players, *player_id) {
-                (
-                    away_goals,
-                    details.left_team_players.main.contains(player_id),
-                )
-            } else if Self::fielded(&details.right_team_players, *player_id) {
-                (
-                    home_goals,
-                    details.right_team_players.main.contains(player_id),
-                )
-            } else {
-                // Recorded a stat line without appearing in either
-                // squad. Nothing here can be attributed to a side,
-                // so nothing is written about him.
-                continue;
-            };
+            // no idea what happened at the other end. The side itself is
+            // kept too: it is what decides whose paper may print this.
+            let (team_id, conceded, started) =
+                if Self::fielded(&details.left_team_players, *player_id) {
+                    (
+                        details.left_team_players.team_id,
+                        away_goals,
+                        details.left_team_players.main.contains(player_id),
+                    )
+                } else if Self::fielded(&details.right_team_players, *player_id) {
+                    (
+                        details.right_team_players.team_id,
+                        home_goals,
+                        details.right_team_players.main.contains(player_id),
+                    )
+                } else {
+                    // Recorded a stat line without appearing in either
+                    // squad. Nothing here can be attributed to a side,
+                    // so nothing is written about him.
+                    continue;
+                };
 
             let rating = (stats.match_rating * 100.0) as i32;
             let contribution = stats.goals.saturating_add(stats.assists);
 
             self.outfield
-                .entry(*player_id)
+                .entry((*player_id, team_id))
                 .or_default()
                 .absorb(OutfieldMatchFacts {
                     best_rating: rating,
@@ -422,17 +452,17 @@ impl WeeklyMatchFacts {
 
     /// Rayon fold partner: two half-worlds become one.
     fn merged(mut self, other: WeeklyMatchFacts) -> Self {
-        for (player_id, goals) in other.hat_tricks {
-            let best = self.hat_tricks.entry(player_id).or_insert(0);
+        for (key, goals) in other.hat_tricks {
+            let best = self.hat_tricks.entry(key).or_insert(0);
             *best = (*best).max(goals);
         }
         self.red_cards.extend(other.red_cards);
         self.cup_ties.extend(other.cup_ties);
-        for (player_id, keeper) in other.keepers {
-            self.keepers.entry(player_id).or_default().absorb(keeper);
+        for (key, keeper) in other.keepers {
+            self.keepers.entry(key).or_default().absorb(keeper);
         }
-        for (player_id, outfield) in other.outfield {
-            self.outfield.entry(player_id).or_default().absorb(outfield);
+        for (key, outfield) in other.outfield {
+            self.outfield.entry(key).or_default().absorb(outfield);
         }
         // Same louder-afternoon rule as `crown`: two half-worlds can
         // both have seen the fixture only through the global store, so
@@ -647,7 +677,14 @@ impl WeeklyLoanWatch {
             // record. There is no plain "he scored" event to read, and
             // the season tally above already covers volume — what this
             // adds is that one of them landed *recently*.
-            scored_recently: feed.happened(HappinessEventType::DecisiveGoal),
+            //
+            // The event behind it fires on an ASSIST as well as a goal —
+            // "decisive contribution in a one-goal win" — and the last
+            // pass before a winner can come off a goalkeeper's boot. So
+            // the tally is checked too: without it the column filed "he
+            // keeps scoring" about a keeper who had never scored in his
+            // life, which is the one thing a paper cannot come back from.
+            scored_recently: feed.happened(HappinessEventType::DecisiveGoal) && stats.goals > 0,
         })
     }
 
@@ -760,6 +797,9 @@ impl ClubPressRun {
             .map(|business| TransferSplit::by_team(club, business, flagship.id))
             .unwrap_or_default();
         let peak_value = Self::squad_peak_value(club);
+        // Every side the club owns, branded or not. The ratings page
+        // reports football played by one of these and nothing else.
+        let sides: FxHashSet<u32> = club.teams.iter().map(|team| team.id).collect();
 
         papers
             .iter()
@@ -771,6 +811,7 @@ impl ClubPressRun {
                     club,
                     team,
                     rosters: Self::rosters(club, team, is_flagship),
+                    sides: &sides,
                     results,
                     standing: Self::standing(team.league_id, country, team.id),
                     rivals: &rivals,
@@ -914,6 +955,10 @@ struct TeamPressRun<'a> {
     team: &'a Team,
     /// The squads this paper speaks for.
     rosters: Vec<&'a Team>,
+    /// Every side the club owns — the football this paper is entitled to
+    /// report as its own. Shared across the club's editions because it
+    /// is a property of the club, not of one of its papers.
+    sides: &'a FxHashSet<u32>,
     results: Vec<IssueResult>,
     standing: Option<StandingSnapshot>,
     rivals: &'a FxHashSet<u32>,
@@ -955,6 +1000,7 @@ impl TeamPressRun<'_> {
         let pulse = SquadDesk::file(
             &mut candidates,
             &self.rosters,
+            self.sides,
             self.facts,
             played_this_week,
             date,
@@ -1116,6 +1162,56 @@ mod tests {
 
         fn week_end() -> NaiveDate {
             NaiveDate::from_ymd_opt(2026, 3, 2).unwrap()
+        }
+
+        /// A ninety-minute stat line with nothing in it, for tests that
+        /// only care about one or two counters.
+        fn stat_line(
+            position_group: crate::PlayerFieldPositionGroup,
+        ) -> crate::r#match::PlayerMatchEndStats {
+            crate::r#match::PlayerMatchEndStats {
+                shots_on_target: 0,
+                shots_total: 0,
+                passes_attempted: 0,
+                passes_completed: 0,
+                tackles: 0,
+                interceptions: 0,
+                saves: 0,
+                shots_faced: 0,
+                goals: 0,
+                assists: 0,
+                match_rating: 0.0,
+                raw_match_rating: 0.0,
+                xg: 0.0,
+                position_group,
+                fouls: 0,
+                yellow_cards: 0,
+                red_cards: 0,
+                minutes_played: 90,
+                key_passes: 0,
+                progressive_passes: 0,
+                progressive_carries: 0,
+                successful_dribbles: 0,
+                attempted_dribbles: 0,
+                successful_pressures: 0,
+                pressures: 0,
+                blocks: 0,
+                clearances: 0,
+                passes_into_box: 0,
+                crosses_attempted: 0,
+                crosses_completed: 0,
+                xg_chain: 0.0,
+                xg_buildup: 0.0,
+                miscontrols: 0,
+                heavy_touches: 0,
+                carry_distance: 0,
+                errors_leading_to_shot: 0,
+                errors_leading_to_goal: 0,
+                xg_prevented: 0.0,
+                offsides: 0,
+                own_goals: 0,
+                zone_stats: Default::default(),
+            }
         }
 
         fn player(id: u32) -> Player {
@@ -1458,5 +1554,91 @@ mod tests {
             0,
             "a tally from a different afternoon must not borrow this one's star"
         );
+    }
+
+    /// Every per-player line the week records is filed under the side
+    /// that played it.
+    ///
+    /// The gather walks the whole world, which includes internationals —
+    /// where the "side" is a country and not a club team at all. Filed
+    /// under the player alone, that line was indistinguishable from his
+    /// club football, and the club press printed a goalkeeper's caps as
+    /// its own. Recording the side is what lets a paper answer the only
+    /// question that matters: was this ours.
+    #[test]
+    fn every_players_week_is_filed_under_the_side_that_played_it() {
+        use crate::PlayerFieldPositionGroup;
+        use crate::r#match::player::statistics::MatchStatisticType;
+        use crate::r#match::{FieldSquad, GoalDetail, MatchResult, MatchResultRaw, Score};
+
+        const ITALY: u32 = 380;
+        const SPAIN: u32 = 724;
+        const KEEPER: u32 = 101;
+        const SCORER: u32 = 102;
+
+        let mut left = FieldSquad::new();
+        left.team_id = ITALY;
+        left.main = vec![KEEPER, SCORER];
+        let mut right = FieldSquad::new();
+        right.team_id = SPAIN;
+        right.main = vec![201];
+
+        let mut raw = MatchResultRaw::with_match_time(90 * 60 * 1000);
+        raw.left_team_players = left;
+        raw.right_team_players = right;
+
+        let mut keeper_line = Press::stat_line(PlayerFieldPositionGroup::Goalkeeper);
+        keeper_line.saves = 8;
+        keeper_line.shots_faced = 8;
+        raw.player_stats.insert(KEEPER, keeper_line);
+
+        let mut scorer_line = Press::stat_line(PlayerFieldPositionGroup::Forward);
+        scorer_line.match_rating = 8.6;
+        scorer_line.goals = 3;
+        raw.player_stats.insert(SCORER, scorer_line);
+
+        let mut score = Score::new(ITALY, SPAIN);
+        for time in [10u64, 40, 70] {
+            score.add_goal_detail(GoalDetail {
+                player_id: SCORER,
+                stat_type: MatchStatisticType::Goal,
+                is_auto_goal: false,
+                time,
+            });
+            score.increment_home_goals();
+        }
+        score.add_goal_detail(GoalDetail {
+            player_id: 201,
+            stat_type: MatchStatisticType::RedCard,
+            is_auto_goal: false,
+            time: 80,
+        });
+
+        let result = MatchResult {
+            id: "int-1".to_string(),
+            league_id: 0,
+            league_slug: "international".to_string(),
+            home_team_id: ITALY,
+            away_team_id: SPAIN,
+            details: Some(raw),
+            score,
+            friendly: false,
+        };
+
+        let mut facts = WeeklyMatchFacts::empty();
+        facts.absorb(std::iter::once(&result), false);
+
+        assert!(facts.keepers.contains_key(&(KEEPER, ITALY)));
+        assert!(facts.outfield.contains_key(&(SCORER, ITALY)));
+        assert_eq!(facts.hat_tricks.get(&(SCORER, ITALY)), Some(&3));
+        assert!(facts.red_cards.contains(&(201, SPAIN)));
+
+        // …and none of it is reachable from a club that happens to
+        // employ them, which is the whole point of the pairing.
+        let juventus: rustc_hash::FxHashSet<u32> = [1139, 98036631].into_iter().collect();
+        assert!(facts.keeper_of(KEEPER, &juventus).is_none());
+        assert!(facts.outfield_of(SCORER, &juventus).is_none());
+        assert!(facts.hat_trick_of(SCORER, &juventus).is_none());
+        assert!(!facts.was_sent_off(201, &juventus));
     }
 }

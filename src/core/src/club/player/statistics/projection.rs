@@ -1157,38 +1157,55 @@ impl PlayerStatisticsProjection {
         //     trace the current club straight down the page.
         //
         // A home row "continues" when the SAME club has a non-loan row in
-        // the very next season AND the row carries real content of its own —
-        // either the player actually appeared for it this season, or it
-        // records a genuine signing event (a present `transfer_fee`; only
-        // the season roll-over re-seed paths write a permanent row with
-        // `None`, the same invariant the noise-row retain above leans on).
-        // The next-season signal is independent of seq_id (which the
-        // reserve re-place corrupts), but on its own it over-matches a
-        // perpetual loanee who is merely REGISTERED at his parent club every
-        // season while playing none of it: that 0-app fee-less parent row
-        // trivially "continues" and would wrongly outrank the loan that IS
-        // the season's real story (the reported Nava case — a Juventus
-        // player on repeated loans to Palermo, whose 0-app Juventus row
-        // floated above his Palermo loan). Requiring apps-or-fee keeps the
-        // genuine returned-and-stayed case (Sokolić at River Plate, 5+ apps)
-        // AND the mid-season new-club signing that sticks (Sokolić again: a
-        // 0-app "Free" Slavia Prague row signed while the season's Palermo
-        // loan wound down, with Slavia carrying the next season) on top,
-        // while dropping a registration-only parent below the loan it
-        // accompanies.
+        // the very next season AND that continuation is backed by real
+        // content — the player either appeared for the club THIS season, OR
+        // the next-season row it continues into carries content of its own
+        // (appearances or a genuine `transfer_fee`; only the season roll-over
+        // re-seed paths write a permanent row with `None`, the invariant the
+        // noise-row retain above leans on). The next-season signal is
+        // independent of seq_id (which the reserve re-place corrupts), but on
+        // its own it over-matches a perpetual loanee who is merely REGISTERED
+        // at his parent club every season while playing none of it: that
+        // 0-app fee-less parent row trivially "continues" and would wrongly
+        // outrank the loan that IS the season's real story (the reported Nava
+        // case — a Juventus player on repeated loans to Palermo, whose 0-app
+        // Juventus row floated above his Palermo loan). The this-OR-next
+        // content test keeps both genuine returned-and-stayed shapes on top:
+        // Sokolić recalled to River mid-season and playing it out (apps THIS
+        // season), AND Sokolić recalled with 0 parent apps in the return
+        // season but STAYING and playing the NEXT one (content NEXT season —
+        // the live single-loan case, whose 0-app 2028/29 River return was
+        // mis-ranked below the Danubio loan it followed) — while still
+        // dropping the Nava registration below the loan, since his parent row
+        // is 0-app both this season and next (still loaned out).
         let continuing_homes: HashSet<(u16, String, String)> = {
+            // Every (season, club) that has a NON-loan row — the raw "same
+            // club appears next season" continuity signal.
             let non_loan_seasons: HashSet<(u16, &str)> = result
                 .iter()
                 .filter(|r| !r.is_loan)
                 .map(|r| (r.season.start_year, r.team_slug.as_str()))
                 .collect();
+            // The subset of those that carry real content (apps or a genuine
+            // signing fee). A returned-and-stayed parent proves itself real
+            // either now (this row) or in the season it continues into.
+            let non_loan_content_seasons: HashSet<(u16, &str)> = result
+                .iter()
+                .filter(|r| {
+                    !r.is_loan && (r.statistics.total_games() > 0 || r.transfer_fee.is_some())
+                })
+                .map(|r| (r.season.start_year, r.team_slug.as_str()))
+                .collect();
             result
                 .iter()
                 .filter(|r| {
-                    !r.is_loan
-                        && (r.statistics.total_games() > 0 || r.transfer_fee.is_some())
-                        && non_loan_seasons
-                            .contains(&(r.season.start_year + 1, r.team_slug.as_str()))
+                    if r.is_loan {
+                        return false;
+                    }
+                    let next = (r.season.start_year + 1, r.team_slug.as_str());
+                    let this_content = r.statistics.total_games() > 0 || r.transfer_fee.is_some();
+                    non_loan_seasons.contains(&next)
+                        && (this_content || non_loan_content_seasons.contains(&next))
                 })
                 .map(|r| {
                     (

@@ -6,6 +6,7 @@ use super::rumour::RumourDesk;
 use crate::club::news::types::{NewsStory, NewsStoryKind};
 use crate::{HappinessEventType, Person, Player, PlayerFieldPositionGroup, Team};
 use chrono::{Duration, NaiveDate};
+use rustc_hash::FxHashSet;
 
 /// Squad news: form, fitness, discipline, milestones, contracts — plus
 /// everything a paper's own players say and do off the pitch.
@@ -50,11 +51,20 @@ impl SquadDesk {
     /// its own that it speaks for, so every player in the world is
     /// walked exactly once a week however many editions a club prints.
     ///
+    /// `sides` is every team the CLUB owns, which is a wider set than
+    /// `rosters` and deliberately so: it is the filter on whose football
+    /// the ratings page may report. A youth keeper handed a cup start by
+    /// the first team is his club's news wherever his squad registration
+    /// sits, while ninety minutes for his country — or for the club that
+    /// sold him on Friday — are not, however current the roster entry
+    /// is. See [`WeeklyMatchFacts`].
+    ///
     /// Returns what the week did to the dressing room as a whole, for
     /// the desks whose stories only exist in aggregate.
     pub fn file(
         out: &mut Vec<NewsStory>,
         rosters: &[&Team],
+        sides: &FxHashSet<u32>,
         facts: &WeeklyMatchFacts,
         played_this_week: bool,
         date: NaiveDate,
@@ -71,7 +81,7 @@ impl SquadDesk {
 
                 let feed = RecentEvents::week(player);
 
-                Self::file_match_deeds(out, player.id, facts, date);
+                Self::file_match_deeds(out, player.id, sides, facts, date);
                 Self::file_fitness(out, player, &feed, date);
                 Self::file_awards(out, player, &feed, date);
                 Self::file_life_events(out, player, &feed, date);
@@ -86,6 +96,7 @@ impl SquadDesk {
                     Self::file_outfield_deeds(
                         out,
                         player,
+                        sides,
                         facts,
                         feed.happened(HappinessEventType::DerbyHero),
                         date,
@@ -121,24 +132,25 @@ impl SquadDesk {
     fn file_match_deeds(
         out: &mut Vec<NewsStory>,
         player_id: u32,
+        sides: &FxHashSet<u32>,
         facts: &WeeklyMatchFacts,
         date: NaiveDate,
     ) {
-        if let Some(goals) = facts.hat_tricks.get(&player_id) {
+        if let Some(goals) = facts.hat_trick_of(player_id, sides) {
             out.push(
                 NewsStory::new(NewsStoryKind::HatTrick, date)
                     .about(player_id)
-                    .with_numbers(*goals as i32, 0)
+                    .with_numbers(goals as i32, 0)
                     // Four and five-goal hauls are a different story again.
-                    .weighted((*goals as i32 - 3) * 60),
+                    .weighted((goals as i32 - 3) * 60),
             );
         }
 
-        if facts.red_cards.contains(&player_id) {
+        if facts.was_sent_off(player_id, sides) {
             out.push(NewsStory::new(NewsStoryKind::RedCard, date).about(player_id));
         }
 
-        Self::file_keeper_deeds(out, player_id, facts, date);
+        Self::file_keeper_deeds(out, player_id, sides, facts, date);
     }
 
     /// The bars a ratings column is written to. All calibrated against
@@ -214,12 +226,13 @@ impl SquadDesk {
     pub(super) fn file_outfield_deeds(
         out: &mut Vec<NewsStory>,
         player: &Player,
+        sides: &FxHashSet<u32>,
         facts: &WeeklyMatchFacts,
         derby_hero: bool,
         date: NaiveDate,
     ) {
         let player_id = player.id;
-        let Some(week) = facts.outfield.get(&player_id) else {
+        let Some(week) = facts.outfield_of(player_id, sides) else {
             return;
         };
         if week.is_routine() {
@@ -444,10 +457,11 @@ impl SquadDesk {
     pub(super) fn file_keeper_deeds(
         out: &mut Vec<NewsStory>,
         player_id: u32,
+        sides: &FxHashSet<u32>,
         facts: &WeeklyMatchFacts,
         date: NaiveDate,
     ) {
-        let Some(keeper) = facts.keepers.get(&player_id) else {
+        let Some(keeper) = facts.keeper_of(player_id, sides) else {
             return;
         };
 
@@ -599,15 +613,26 @@ impl SquadDesk {
             .is_some()
         {
             // The rating lands in `b`, which is the slot the `{rating}`
-            // placeholder reads from.
+            // placeholder reads from — and every phrasing of this piece
+            // is built around it ("a rating of {rating} was enough for
+            // the selectors"). The selection is made on last week's
+            // football but the figure is a SEASON average, and the two
+            // part company at the turn of the season: the XI is picked
+            // from the closing week and the counters are drained days
+            // later, leaving "a rating of 0.00 was enough for the
+            // selectors" under a story about the best player in the
+            // division. No figure, no piece — the honour still reaches
+            // the page through the player's own event feed.
             let rating = player
                 .statistics
                 .average_rating_realistic(player.position().position_group());
-            out.push(
-                NewsStory::new(NewsStoryKind::TeamOfTheWeek, date)
-                    .about(player.id)
-                    .with_numbers(0, (rating * 100.0) as i32),
-            );
+            if rating > 0.0 {
+                out.push(
+                    NewsStory::new(NewsStoryKind::TeamOfTheWeek, date)
+                        .about(player.id)
+                        .with_numbers(0, (rating * 100.0) as i32),
+                );
+            }
         }
     }
 
@@ -758,12 +783,22 @@ impl SquadDesk {
         // The returnee: a spell away has ended and he is back in the
         // building. Which of the four ways it ended decides how loudly
         // the paper says so.
+        //
+        // Every phrasing of the piece is built around what he did while
+        // he was away — "{n} appearances and {m} goals away from home" —
+        // so the spell record is required rather than optional. Reading
+        // the numbers off the player instead, as this once did, printed
+        // the spell he has not started yet: `on_loan_return` freezes the
+        // borrowing season into the ledger and resets the live counters
+        // on the way through the door, so every homecoming went to print
+        // as nought appearances and nought goals.
         if let Some(homecoming) = feed.any_of(&[
             HappinessEventType::BackedAfterLoanReturn,
             HappinessEventType::ReturnedFromLoanProven,
             HappinessEventType::UnsettledAfterLoanReturn,
             HappinessEventType::ReturnedFromLoanDeflated,
-        ]) {
+        ]) && let Some(spell) = feed.loan_spell()
+        {
             let weight = match homecoming {
                 HappinessEventType::BackedAfterLoanReturn => 60,
                 HappinessEventType::ReturnedFromLoanProven => 40,
@@ -773,10 +808,7 @@ impl SquadDesk {
             out.push(
                 NewsStory::new(NewsStoryKind::LoanReturn, date)
                     .about(player.id)
-                    .with_numbers(
-                        player.statistics.played as i32 + player.statistics.played_subs as i32,
-                        player.statistics.goals as i32,
-                    )
+                    .with_numbers(spell.appearances as i32, spell.goals as i32)
                     .weighted(weight),
             );
         }

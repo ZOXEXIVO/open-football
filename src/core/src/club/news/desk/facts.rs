@@ -1,5 +1,5 @@
 use crate::transfers::{CompletedTransfer, TransferType};
-use crate::{HappinessEvent, HappinessEventType, Player, PlayerSquadStatus};
+use crate::{HappinessEvent, HappinessEventType, LoanSpellRecord, Player, PlayerSquadStatus};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// One knockout tie a club played this week. Domestic cup results never
@@ -25,6 +25,14 @@ impl CupTie {
     }
 }
 
+/// A week's worth of one player's football, folded down to the single
+/// loudest afternoon in it. Implemented by both per-player fact types so
+/// the "keep the louder game" rule lives in one place per type and the
+/// readers can share a fold.
+pub trait Absorbing: Copy {
+    fn absorb(&mut self, other: Self);
+}
+
 /// A goalkeeper's afternoon, as the match engine recorded it.
 ///
 /// The one position whose week is invisible in the numbers every other
@@ -37,6 +45,8 @@ impl CupTie {
 /// than a total — a story is about one afternoon, and "he made nine
 /// saves" is a piece where "he made nine saves across two games" is
 /// not.
+///
+/// Held per SIDE rather than per player — see [`WeeklyMatchFacts`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KeeperMatchFacts {
     pub saves: u16,
@@ -49,10 +59,10 @@ pub struct KeeperMatchFacts {
     pub errors_leading_to_goal: u16,
 }
 
-impl KeeperMatchFacts {
+impl Absorbing for KeeperMatchFacts {
     /// Keep the loudest version of each figure across a week in which he
     /// played more than once.
-    pub fn absorb(&mut self, other: KeeperMatchFacts) {
+    fn absorb(&mut self, other: KeeperMatchFacts) {
         self.saves = self.saves.max(other.saves);
         self.conceded = self.conceded.max(other.conceded);
         self.penalties_saved = self.penalties_saved.max(other.penalties_saved);
@@ -82,6 +92,8 @@ impl KeeperMatchFacts {
 /// table. The two ratings are kept apart for the same reason — a player
 /// can be magnificent on Wednesday and dreadful on Saturday, and both
 /// are real stories that a single averaged figure would erase.
+///
+/// Held per SIDE rather than per player — see [`WeeklyMatchFacts`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OutfieldMatchFacts {
     /// His best mark of the week, ×100.
@@ -132,7 +144,7 @@ pub struct OutfieldMatchFacts {
     pub impact_off_the_bench: u16,
 }
 
-impl OutfieldMatchFacts {
+impl Absorbing for OutfieldMatchFacts {
     /// Keep the loudest version of each figure across a week in which he
     /// played more than once.
     ///
@@ -141,7 +153,7 @@ impl OutfieldMatchFacts {
     /// match, because "taken off at 55 having been marked 5.2" is only
     /// true of one afternoon and reading the minutes off the other one
     /// would invent a substitution that never happened.
-    pub fn absorb(&mut self, other: OutfieldMatchFacts) {
+    fn absorb(&mut self, other: OutfieldMatchFacts) {
         self.best_rating = self.best_rating.max(other.best_rating);
 
         if other.worst_rating > 0
@@ -184,7 +196,9 @@ impl OutfieldMatchFacts {
             self.shots = other.shots;
         }
     }
+}
 
+impl OutfieldMatchFacts {
     /// True when nothing here is worth a line. Most players in most
     /// weeks — which is the point of a ratings column having a bar.
     pub fn is_routine(&self) -> bool {
@@ -217,19 +231,32 @@ pub struct MatchStarFacts {
 /// Everything the desks need to know about the week just played that
 /// they cannot read off a `Club`. Built once per Monday from the world's
 /// competitions and shared by every club in it.
+///
+/// Every per-player entry is keyed by `(player, side he played for)`
+/// rather than by the player alone, and that pairing is load-bearing.
+/// The map is built from every competitive fixture in the world — which
+/// includes internationals, where the "side" is a country — and it is
+/// then read by a club paper walking its own roster. Keyed by player
+/// alone, "is he on my books today" was the only question asked, so a
+/// keeper's afternoon for his country, or for the club that sold him on
+/// Friday, came out under the buying club's nameplate: "{player} keeps
+/// {club} in it on his own" about ninety minutes {club} did not play.
+/// With the side recorded, a paper can ask the question that actually
+/// decides it — was this OUR afternoon — and the answer for an
+/// international or a previous employer is no.
 pub struct WeeklyMatchFacts {
     /// Goals scored in a single match this week, for players who
     /// managed at least three in one game.
-    pub hat_tricks: FxHashMap<u32, u8>,
-    /// Players sent off this week.
-    pub red_cards: FxHashSet<u32>,
+    pub hat_tricks: FxHashMap<(u32, u32), u8>,
+    /// Players sent off this week, and the side they were sent off for.
+    pub red_cards: FxHashSet<(u32, u32)>,
     /// Knockout ties, keyed by the team that played them.
     pub cup_ties: FxHashMap<u32, CupTie>,
     /// What the week did to each goalkeeper who played in it.
-    pub keepers: FxHashMap<u32, KeeperMatchFacts>,
+    pub keepers: FxHashMap<(u32, u32), KeeperMatchFacts>,
     /// …and the same for the other ten, which is where nearly all of a
     /// football paper's individual copy comes from.
-    pub outfield: FxHashMap<u32, OutfieldMatchFacts>,
+    pub outfield: FxHashMap<(u32, u32), OutfieldMatchFacts>,
     /// Each side's top scorer per match, keyed by (team, opponent) —
     /// the pair a match report already carries, so the desk can hand
     /// the report its protagonist without a second lookup anywhere.
@@ -246,6 +273,67 @@ impl WeeklyMatchFacts {
             outfield: FxHashMap::default(),
             stars: FxHashMap::default(),
         }
+    }
+
+    /// A goalkeeper's week as one of `sides` played it, or `None` when
+    /// none of them fielded him. `sides` is every squad the club owns —
+    /// wide enough that a youth keeper's cup start for the first team is
+    /// still his club's news, narrow enough that an international or a
+    /// former employer's afternoon is not.
+    ///
+    /// Folded rather than picked, for the same reason [`KeeperMatchFacts::absorb`]
+    /// folds: a man who played twice for the club in one week has one
+    /// week, and the loudest half of it is the story.
+    pub fn keeper_of(&self, player_id: u32, sides: &FxHashSet<u32>) -> Option<KeeperMatchFacts> {
+        Self::folded(sides, |team_id| {
+            self.keepers.get(&(player_id, team_id)).copied()
+        })
+    }
+
+    /// The outfield twin of [`Self::keeper_of`].
+    pub fn outfield_of(
+        &self,
+        player_id: u32,
+        sides: &FxHashSet<u32>,
+    ) -> Option<OutfieldMatchFacts> {
+        Self::folded(sides, |team_id| {
+            self.outfield.get(&(player_id, team_id)).copied()
+        })
+    }
+
+    /// Goals in one game for one of `sides`, when he managed three or
+    /// more. A hat-trick for his country is his country's story.
+    pub fn hat_trick_of(&self, player_id: u32, sides: &FxHashSet<u32>) -> Option<u8> {
+        sides
+            .iter()
+            .filter_map(|team_id| self.hat_tricks.get(&(player_id, *team_id)).copied())
+            .max()
+    }
+
+    /// Whether he was sent off playing for one of `sides`.
+    pub fn was_sent_off(&self, player_id: u32, sides: &FxHashSet<u32>) -> bool {
+        sides
+            .iter()
+            .any(|team_id| self.red_cards.contains(&(player_id, *team_id)))
+    }
+
+    /// Fold whatever `lookup` finds across the club's sides into one
+    /// week, using each fact type's own "loudest afternoon" rule.
+    fn folded<T: Absorbing>(
+        sides: &FxHashSet<u32>,
+        lookup: impl Fn(u32) -> Option<T>,
+    ) -> Option<T> {
+        let mut week: Option<T> = None;
+        for team_id in sides {
+            let Some(found) = lookup(*team_id) else {
+                continue;
+            };
+            match week.as_mut() {
+                Some(week) => week.absorb(found),
+                None => week = Some(found),
+            }
+        }
+        week
     }
 
     /// The star to print under one specific result, if the week
@@ -612,6 +700,23 @@ impl<'a> RecentEvents<'a> {
         self.events
             .iter()
             .find(|event| &event.event_type == kind && event.days_ago <= self.window_days)
+    }
+
+    /// What a returning loanee did while he was away.
+    ///
+    /// The one record on the subject that survives the journey home: the
+    /// live counters a loan spell accumulates are frozen into the season
+    /// ledger and reset the moment `on_loan_return` runs, so by press day
+    /// the player's own `statistics` describe the fresh parent spell —
+    /// which is nothing, because he has not played for them yet. Copy
+    /// written off those counters says "0 appearances and 0 goals away
+    /// from home" about a man who played thirty games. The return event
+    /// carries the real record for exactly this reason.
+    pub fn loan_spell(&self) -> Option<LoanSpellRecord> {
+        self.find(HappinessEventType::LoanSpellReviewed)
+            .and_then(|event| event.context.as_ref())
+            .and_then(|context| context.loan_context.as_ref())
+            .and_then(|loan| loan.spell)
     }
 
     /// The club named by a transfer-interest event, when the emit site
