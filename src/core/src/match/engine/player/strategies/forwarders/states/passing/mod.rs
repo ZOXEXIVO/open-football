@@ -281,10 +281,11 @@ impl ForwardPassingState {
             }
         }
 
-        // Pass streak bonus: encourage patient build-up play
-        let pass_streak = ctx.memory().pass_streak;
-        let streak_bonus = (pass_streak as f32 * 2.0).min(10.0);
-        score += streak_bonus;
+        // (A "pass streak" bonus used to sit here. Its counter was only
+        // ever incremented from a memory-event branch that nothing called,
+        // so the term evaluated to exactly 0.0 on every pass in every
+        // match. Removed rather than revived — patient build-up is already
+        // expressed by the possession-retention and space terms.)
 
         // Bonus for receiver being in open space (reward free players directly)
         score += receiver_space * 15.0;

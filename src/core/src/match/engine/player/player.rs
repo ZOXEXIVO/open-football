@@ -652,11 +652,6 @@ impl MatchPlayer {
     pub fn lod_skip_update(&mut self, context: &MatchContext) {
         self.tick_tackle_cooldown();
 
-        let current_tick = context.current_tick();
-        if current_tick > 0 && current_tick % 100 == 0 {
-            self.memory.decay(current_tick);
-        }
-
         let half_ms = MATCH_HALF_TIME_MS as f32;
         let full_ms = half_ms * 2.0;
         let match_progress = (context.total_match_time as f32 / full_ms).clamp(0.0, 1.0);
@@ -742,18 +737,36 @@ impl MatchPlayer {
 
     /// Out-of-band state override that PRESERVES the running `in_state_time`.
     ///
-    /// The loose-ball override, `run_for_ball`, and `set_default_state`
-    /// redirect a player mid-action — the AI yanks them onto the ball or
-    /// back into shape — rather than the state machine choosing to move on.
-    /// The pre-refactor engine left the in-state timer running across these
-    /// redirects, and that is load-bearing: resetting it measurably shifts
-    /// timing-driven state behaviour (notably the goalkeeper save states,
-    /// which key off `in_state_time`) and collapses scoring in the dev
-    /// harness (`stats` goals/match dropped ~10×). So this preserves the
-    /// timer to stay calibration-neutral; a clean per-entry timer here is
-    /// deferred to a change that re-tunes the affected states.
+    /// Use only where the destination state genuinely does not read the
+    /// timer, or where a continuing timer is the intended semantics. If
+    /// the destination has ANY `in_state_time > N` guard, use
+    /// [`redirect_to_fresh`](Self::redirect_to_fresh) — a preserved timer
+    /// there trips the destination's timeout on its first real tick.
     #[inline]
     pub fn redirect_to(&mut self, state: PlayerState, source: TransitionSource) {
+        self.set_state_internal(state, source);
+    }
+
+    /// Out-of-band override that RESETS `in_state_time`, so the
+    /// destination's timers count from the moment the player was yanked
+    /// into it.
+    ///
+    /// Fixes a genuine incoherence in the redirect path: the dispatcher
+    /// ran the override tick with `override_state_time = 0` while the
+    /// player's persisted counter kept climbing, so the destination saw 0
+    /// on the entry tick and a stale (often huge) value on the very next
+    /// one. A goalkeeper redirected into `TakeBall` after 300 ticks of
+    /// `Standing` therefore hit `in_state_time > 200` on its SECOND tick
+    /// and abandoned the chase immediately; the same stale timer made
+    /// every defender leave `Standing` for `HoldingLine`, and every
+    /// midfielder for `Running`, on the first tick after a goal reset.
+    ///
+    /// Timer-preserving `redirect_to` remains available for destinations
+    /// that don't read the timer, but every entry into a timeout-driven
+    /// state now routes through here.
+    #[inline]
+    pub fn redirect_to_fresh(&mut self, state: PlayerState, source: TransitionSource) {
+        self.in_state_time = 0;
         self.set_state_internal(state, source);
     }
 
@@ -774,10 +787,14 @@ impl MatchPlayer {
 
     pub fn set_default_state(&mut self, source: TransitionSource) {
         let default = Self::default_state(self.tactical_position.current_position);
-        // Redirect (timer-preserving): the pre-refactor `set_default_state`
-        // set the state without resetting in_state_time. Callers that need
-        // a reset (kickoff) do it explicitly, matching the old behaviour.
-        self.redirect_to(default, source);
+        // A restart rebuilds the formation: kickoff, goal reset, half or
+        // extra-time restart, a substitute walking on. The player is
+        // ENTERING their default state, so its timers must count from now
+        // — the per-role `Standing` states all have timeouts (defenders
+        // leave for `HoldingLine` after 100 ticks, midfielders for
+        // `Running` after 8), and a carried-over timer fired every one of
+        // them on the first tick after the whistle.
+        self.redirect_to_fresh(default, source);
         self.rebuild_waypoint_cache();
     }
 
@@ -794,7 +811,18 @@ impl MatchPlayer {
         }
     }
 
+    /// Loose-ball signal from the ball layer (`BallEvent::TakeMe`):
+    /// abandon whatever you're doing and go claim it.
+    ///
+    /// Ignored while the player is committed to an un-abortable action —
+    /// the same guard `should_force_takeball` applies. Without it this
+    /// path reproduced the exact bug the override guard fixes, one tick
+    /// later and through a different door (the observed graph carried
+    /// `Forward: Shooting -> Take Ball` tagged `event_handler`).
     pub fn run_for_ball(&mut self) {
+        if self.state.is_committed_action() {
+            return;
+        }
         let target = match self.tactical_position.current_position.position_group() {
             PlayerFieldPositionGroup::Goalkeeper => {
                 PlayerState::Goalkeeper(GoalkeeperState::TakeBall)
@@ -805,10 +833,10 @@ impl MatchPlayer {
             }
             PlayerFieldPositionGroup::Forward => PlayerState::Forward(ForwardState::TakeBall),
         };
-        // Loose-ball signal from an event handler — redirect onto the ball
-        // mid-action. Timer-preserving (`redirect_to`) to match the
-        // pre-refactor behaviour and stay calibration-neutral.
-        self.redirect_to(target, TransitionSource::EventHandler);
+        // Entering TakeBall — the chase starts now, so its give-up timers
+        // must start now too (the goalkeeper variant bails at 120 / 200
+        // ticks and a carried-over timer tripped both on entry).
+        self.redirect_to_fresh(target, TransitionSource::EventHandler);
     }
 
     #[inline]
@@ -1068,35 +1096,67 @@ mod tests {
 
     #[test]
     fn redirect_to_sets_state_but_preserves_timer() {
-        // The out-of-band override path keeps the running timer — this is
-        // load-bearing for timing-driven states (notably the GK save
-        // states) and is what keeps the refactor calibration-neutral.
+        // The timer-preserving primitive is still available for
+        // destinations that don't read `in_state_time`.
         let mut p = build_player(PlayerPositionType::DefenderCenter);
         p.in_state_time = 137;
         p.redirect_to(
-            PlayerState::Defender(DefenderState::TakeBall),
+            PlayerState::Defender(DefenderState::Marking),
             TransitionSource::LooseBallOverride,
         );
-        assert_eq!(p.state, PlayerState::Defender(DefenderState::TakeBall));
+        assert_eq!(p.state, PlayerState::Defender(DefenderState::Marking));
         assert_eq!(p.in_state_time, 137, "redirect_to must preserve the timer");
     }
 
     #[test]
-    fn run_for_ball_enters_takeball_preserving_timer() {
-        // run_for_ball redirects onto a loose ball mid-action without
-        // resetting in_state_time (matches the pre-refactor behaviour).
+    fn redirect_to_fresh_resets_timer() {
+        // Every entry into a timeout-driven state uses the fresh variant,
+        // so the destination's guards count from the redirect.
+        let mut p = build_player(PlayerPositionType::DefenderCenter);
+        p.in_state_time = 137;
+        p.redirect_to_fresh(
+            PlayerState::Defender(DefenderState::TakeBall),
+            TransitionSource::LooseBallOverride,
+        );
+        assert_eq!(p.state, PlayerState::Defender(DefenderState::TakeBall));
+        assert_eq!(p.in_state_time, 0, "redirect_to_fresh must reset the timer");
+    }
+
+    #[test]
+    fn run_for_ball_enters_takeball_with_a_fresh_timer() {
+        // The chase starts at the redirect, so TakeBall's give-up timers
+        // must start there too — a carried-over timer made the goalkeeper
+        // variant abandon on its second tick.
         let mut p = build_player(PlayerPositionType::MidfielderCenter);
         p.in_state_time = 90;
         p.run_for_ball();
         assert_eq!(p.state, PlayerState::Midfielder(MidfielderState::TakeBall));
-        assert_eq!(p.in_state_time, 90, "run_for_ball preserves in_state_time");
+        assert_eq!(p.in_state_time, 0, "run_for_ball resets in_state_time");
     }
 
     #[test]
-    fn set_default_state_sets_default_preserving_timer() {
+    fn run_for_ball_is_ignored_while_committed() {
+        // A header already launched is not abandoned because the ball came
+        // loose — the loose-ball claim passes to the next-closest player.
+        let mut p = build_player(PlayerPositionType::ForwardCenter);
+        p.transition_to(
+            PlayerState::Forward(ForwardState::Heading),
+            TransitionSource::Handler,
+        );
+        p.run_for_ball();
+        assert_eq!(
+            p.state,
+            PlayerState::Forward(ForwardState::Heading),
+            "committed action must survive the loose-ball signal"
+        );
+    }
+
+    #[test]
+    fn set_default_state_resets_the_timer() {
         // reset_players_positions / substitutions route through
-        // set_default_state, which is timer-preserving; callers that need a
-        // reset (kickoff) do it explicitly.
+        // set_default_state. A restart is an ENTRY into the default state,
+        // so its timers start at the whistle — otherwise every defender
+        // left Standing for HoldingLine on the first tick after a goal.
         let mut p = build_player(PlayerPositionType::DefenderCenter);
         p.redirect_to(
             PlayerState::Defender(DefenderState::Marking),
@@ -1105,9 +1165,6 @@ mod tests {
         p.in_state_time = 250;
         p.set_default_state(TransitionSource::Reset);
         assert_eq!(p.state, PlayerState::Defender(DefenderState::Standing));
-        assert_eq!(
-            p.in_state_time, 250,
-            "set_default_state preserves the timer"
-        );
+        assert_eq!(p.in_state_time, 0, "set_default_state resets the timer");
     }
 }

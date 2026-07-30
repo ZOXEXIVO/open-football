@@ -689,7 +689,18 @@ impl Ball {
         // 0.30 narrows the strong-vs-weak save spread while leaving the
         // equal-skill baseline (skill_mult ≈ 0.65 at skill 0.5) in the
         // same band as before.
-        let skill_mult = 0.52 + skill * 0.32;
+        // Retrimmed `0.52 + skill*0.32` → `0.36 + skill*0.22`. This roll
+        // compounds once per tick the keeper is within reach, so its
+        // calibration is a function of how many ticks that is — and the
+        // state-machine repair lengthened that window on both ends: a
+        // keeper committed to a dive is no longer yanked away by the
+        // loose-ball override mid-save, and one chasing a loose ball
+        // moves at the `Active` speed band instead of the idle one.
+        // Measured population saves/on-target went 74.9% → 83.8% (real
+        // ~67%) on the same fixtures with the save MODEL untouched. The
+        // ~32% cut to the per-tick rate restores the intended cumulative
+        // per-shot conversion across the now-longer window.
+        let skill_mult = 0.44 + skill * 0.27;
         // Environment shifts keeper handling — heavy rain spills more,
         // wind on cross-claims has a subtler effect (the keeper still
         // sets feet under a regular shot).

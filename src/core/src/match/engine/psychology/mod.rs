@@ -172,6 +172,45 @@ impl Psychology {
         m
     }
 
+    /// Multiplier a player's head applies to any "do I take this on?"
+    /// decision — pulling the trigger from distance, running at a
+    /// defender, committing to a press.
+    ///
+    /// Distinct from [`skill_modifiers`](Self::skill_modifiers), which
+    /// tilts how well an action is EXECUTED. This tilts whether it is
+    /// ATTEMPTED at all, which is the half of football psychology the
+    /// state machine had no access to: `PsychState` was only ever read by
+    /// the pass evaluator and the ownership duel, so a striker who had
+    /// just shanked two chances was exactly as eager to shoot as one who
+    /// had scored twice.
+    ///
+    /// Continuous and deliberately narrow — roughly 0.82..1.14. Real
+    /// confidence changes how often a player tries something, not whether
+    /// they are capable of it, and outcome quality is already shaped
+    /// elsewhere. Returns exactly 1.0 for a neutral head, so a player with
+    /// no recorded psychology is unaffected.
+    pub fn initiative_multiplier(state: &PsychState) -> f32 {
+        // Confidence is the dominant term: it runs -1..+1 and moves on
+        // goals, assists, errors and misses.
+        let confidence_term = state.confidence * 0.10;
+        // Nervousness only ever suppresses — 0..1, and a player gripped by
+        // it defers rather than gambles.
+        let nerves_term = -state.nervousness * 0.08;
+        // Momentum is the short-lived swing right after a goal or an
+        // error; smaller weight because it decays fast by design.
+        let momentum_term = state.momentum_boost * 0.08;
+        (1.0 + confidence_term + nerves_term + momentum_term).clamp(0.80, 1.15)
+    }
+
+    /// `initiative_multiplier` for a player who may have no recorded
+    /// psychology yet — neutral (1.0) in that case.
+    pub fn initiative_for(psychology: &PsychologyState, player_id: u32) -> f32 {
+        psychology
+            .get(player_id)
+            .map(Self::initiative_multiplier)
+            .unwrap_or(1.0)
+    }
+
     /// Confidence delta from a positive event. Caller adds it (clamped).
     pub fn confidence_delta_positive(event: PositiveEvent) -> f32 {
         match event {

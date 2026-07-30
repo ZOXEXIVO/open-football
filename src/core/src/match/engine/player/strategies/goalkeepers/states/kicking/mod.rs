@@ -36,6 +36,15 @@ impl StateProcessingHandler for GoalkeeperKickingState {
             ));
         }
 
+        // No target worth aiming at — hoof it clear rather than hold the
+        // ball. Mirrors the Distributing / Throwing timeout so no release
+        // path can stall with the ball in hand.
+        if ctx.in_state_time > 20 {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Clearing,
+            ));
+        }
+
         None
     }
 

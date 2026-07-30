@@ -216,6 +216,16 @@ impl<'b> BallOperationsImpl<'b> {
         }
     }
 
+    /// True while the ball is a dead ball waiting on a goal kick. The
+    /// restart flag survives until the ball is next touched in open play,
+    /// so this reads true from the award through to the keeper striking
+    /// it — which is exactly the window in which the keeper has to decide
+    /// between playing short and going long.
+    pub fn is_goal_kick_restart(&self) -> bool {
+        use crate::r#match::PassOriginRestart;
+        self.ctx.tick_context.ball.pass_origin_restart == PassOriginRestart::GoalKick
+    }
+
     pub fn in_own_penalty_area(&self) -> bool {
         // TODO
         let penalty_area = self

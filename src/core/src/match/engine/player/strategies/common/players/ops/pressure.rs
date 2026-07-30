@@ -1,3 +1,4 @@
+use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::{MatchPlayerLite, StateProcessingContext};
 
 /// Operations for assessing pressure situations on the field
@@ -140,6 +141,11 @@ impl<'p> PressureOperationsImpl<'p> {
         let anticipation = (self.ctx.player.skills.mental.anticipation / 20.0).clamp(0.0, 1.0);
         let condition = (self.ctx.player.player_attributes.condition_percentage() as f32 / 100.0)
             .clamp(0.0, 1.0);
-        distance_score * 0.45 + work * 0.25 + anticipation * 0.15 + condition * 0.15
+        let raw = distance_score * 0.45 + work * 0.25 + anticipation * 0.15 + condition * 0.15;
+        // Committing to a counter-press is a decision to take something
+        // on, so a confident player does it more readily and a rattled one
+        // hangs off. Narrow tilt (±~15%) — psychology should colour who
+        // steps out, not override work rate or position.
+        raw * Psychology::initiative_for(&self.ctx.context.psychology, self.ctx.player.id)
     }
 }

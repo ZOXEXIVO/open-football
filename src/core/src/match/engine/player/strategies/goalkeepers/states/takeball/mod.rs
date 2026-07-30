@@ -1,3 +1,4 @@
+use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
@@ -51,9 +52,31 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Use Seek for full-speed approach - no slowing when chasing a loose ball
         let target = ctx.tick_context.positions.ball.position;
+
+        // A keeper sprinting off their line to claim a loose ball moves
+        // like one rushing out, not like one shuffling along the six-yard
+        // box. `Seek` caps at the OUTFIELD base speed, and the movement
+        // integrator then applies the goalkeeper `Active` ceiling — so
+        // without scaling here the ceiling can never bind and the keeper
+        // arrives at walking pace. Scale by the same agility/acceleration
+        // profile the ceiling is derived from, capped so this stays a
+        // ceiling-filling multiplier and never outruns it.
+        let gk_ceiling = ctx.player.skills.goalkeeper_max_speed(
+            ctx.player.player_attributes.condition,
+            GoalkeeperSpeedContext::Active,
+        );
+        let base_speed = ctx.player.max_speed_with_condition_cached();
+        let urgency = if base_speed > 0.0 {
+            (gk_ceiling / base_speed).clamp(1.0, 1.5)
+        } else {
+            1.0
+        };
+        let max_speed = base_speed * urgency;
+
         let mut arrive_velocity = SteeringBehavior::Seek { target }
             .calculate(ctx.player)
-            .velocity;
+            .velocity
+            * urgency;
 
         // Add separation force to prevent player stacking
         // BUT reduce separation when very close to ball to allow claiming
@@ -100,19 +123,17 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         if neighbor_count > 0 {
             // Average and scale the separation force
             separation_force = separation_force / (neighbor_count as f32);
-            separation_force = separation_force
-                * ctx.player.max_speed_with_condition_cached()
-                * SEPARATION_WEIGHT
-                * separation_factor;
+            separation_force = separation_force * max_speed * SEPARATION_WEIGHT * separation_factor;
 
             // Blend arrive and separation velocities
             arrive_velocity = arrive_velocity + separation_force;
 
-            // Limit to max speed
+            // Limit to the keeper's own chase ceiling — NOT the outfield
+            // base, which would undo the urgency scaling above the moment
+            // any other player came within the separation radius.
             let magnitude = arrive_velocity.magnitude();
-            if magnitude > ctx.player.max_speed_with_condition_cached() {
-                arrive_velocity =
-                    arrive_velocity * (ctx.player.max_speed_with_condition_cached() / magnitude);
+            if magnitude > max_speed {
+                arrive_velocity *= max_speed / magnitude;
             }
         }
 

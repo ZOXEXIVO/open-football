@@ -7,6 +7,8 @@ use crate::r#match::engine::coach::TacticalNeed;
 use crate::r#match::engine::flow::result::SubstitutionReason;
 use crate::r#match::engine::sub_scoring::{LiveSubstitutionStats, SubScoring};
 use crate::r#match::field::MatchField;
+use crate::r#match::player::state::PlayerState;
+use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::{MatchContext, MatchPlayer};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
@@ -650,6 +652,14 @@ impl Substitutions {
                 // Smack the condition down — the critical-condition path in
                 // `process_substitutions` will now pull them off on this tick.
                 p.player_attributes.condition = 1500;
+                // And put them on the floor. Without this the "injured"
+                // player kept sprinting, pressing and tackling at full
+                // tilt until a substitution pass happened to notice them,
+                // and a side with no substitutions left never slowed down
+                // at all. `PlayerState::Injured` stops them, denies them
+                // recovery, and takes them out of the loose-ball chase
+                // until the physio is done.
+                p.transition_to(PlayerState::Injured, TransitionSource::EventHandler);
             }
         }
     }

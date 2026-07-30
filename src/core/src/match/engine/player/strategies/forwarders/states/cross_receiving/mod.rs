@@ -8,6 +8,10 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
+/// A ground cross collected this close to goal is a cutback finish, not a
+/// reception. Kept in step with `FINISHING_RANGE` in the finishing state.
+const CUTBACK_FINISH_RANGE: f32 = 36.0;
+
 #[derive(Default, Clone)]
 pub struct ForwardCrossReceivingState {}
 
@@ -25,10 +29,27 @@ impl StateProcessingHandler for ForwardCrossReceivingState {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Heading));
             }
 
-            // Ground ball — control it
-            return Some(StateChangeResult::with_event(Event::PlayerEvent(
-                PlayerEvent::RequestBallReceive(ctx.player.id),
-            )));
+            // Ground ball — control it, and MOVE ON in the same result.
+            //
+            // This used to be an event-only result (`state: None`), and
+            // `StateProcessingResult::merge_state_change` drops the events
+            // of a result that carries no transition — so the receive
+            // request never reached the dispatcher and the cross simply
+            // rolled through the forward. Pairing the event with the
+            // state the player is genuinely moving into fixes the drop at
+            // this site without touching the global merge contract.
+            //
+            // A cutback arriving inside the box is a finishing chance;
+            // anything further out is a normal reception.
+            let next = if ball_ops.distance_to_opponent_goal() <= CUTBACK_FINISH_RANGE {
+                ForwardState::Finishing
+            } else {
+                ForwardState::Running
+            };
+            return Some(StateChangeResult::with_forward_state_and_event(
+                next,
+                Event::PlayerEvent(PlayerEvent::RequestBallReceive(ctx.player.id)),
+            ));
         }
 
         None

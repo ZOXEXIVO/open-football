@@ -6,8 +6,15 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const PICKUP_DISTANCE_THRESHOLD: f32 = 1.0; // Maximum distance to pick up the ball
+const PICKUP_DISTANCE_THRESHOLD: f32 = 1.0; // Maximum distance to actually gather the ball
 const PICKUP_SUCCESS_PROBABILITY: f32 = 0.9; // Probability of successfully picking up the ball
+/// The state is entered from up to ~10u away (a keeper walking onto a
+/// ball rolling through their box), so it needs an approach phase. Beyond
+/// this the ball is someone else's problem.
+const PICKUP_APPROACH_RANGE: f32 = 14.0;
+/// Ticks spent closing on the ball before giving up. A keeper covering
+/// 10u at walking-to-jogging pace needs well under this.
+const PICKUP_APPROACH_TIMEOUT: u64 = 60;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperPickingUpState {}
@@ -27,16 +34,37 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
             ));
         }
 
-        // 1. Check if the ball is within pickup distance
-        let ball_distance = ctx.ball().distance();
-        if ball_distance > PICKUP_DISTANCE_THRESHOLD {
-            // Ball is too far to pick up, transition to appropriate state (e.g., Standing)
+        // 1. Someone beat us to it.
+        if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
             ));
         }
 
-        // 2. Attempt to pick up the ball
+        // 2. Hands are only legal inside our own penalty area. If the ball
+        // has rolled out of the box while we were closing on it, break off
+        // — collecting it there would be a handball.
+        if !ctx.ball().in_own_penalty_area() {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Standing,
+            ));
+        }
+
+        // 3. Approach phase. The state is entered from up to ~10u out, so
+        // walking onto the ball is part of the job; only abandon when it
+        // is genuinely out of range or the approach has dragged on.
+        let ball_distance = ctx.ball().distance();
+        if ball_distance > PICKUP_APPROACH_RANGE || ctx.in_state_time > PICKUP_APPROACH_TIMEOUT {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Standing,
+            ));
+        }
+        if ball_distance > PICKUP_DISTANCE_THRESHOLD {
+            // Still closing — `velocity()` walks us onto it.
+            return None;
+        }
+
+        // 4. Attempt to pick up the ball
         let pickup_success = ctx.context.rng.unit_f32() < PICKUP_SUCCESS_PROBABILITY;
         if pickup_success {
             // Pickup is successful

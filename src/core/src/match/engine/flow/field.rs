@@ -101,7 +101,9 @@ impl MatchField {
             p.velocity = Vector3::zeros();
 
             // Formation rebuild on a restart — resets each player's state
-            // timer along with the state (via `transition_to`).
+            // timer along with the state (`set_default_state` routes
+            // through `redirect_to_fresh`), so nobody walks out of the
+            // restart already past their default state's timeout.
             p.set_default_state(TransitionSource::Reset);
         });
     }

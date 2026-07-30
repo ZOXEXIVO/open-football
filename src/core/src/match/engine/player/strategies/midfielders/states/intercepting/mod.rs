@@ -7,6 +7,12 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::cmp::Ordering;
 
+/// Aerial-contest band. Same values the defender's Intercepting state
+/// uses, so the same dropping ball reads identically whichever role gets
+/// to it first.
+const HEADING_HEIGHT: f32 = 1.5;
+const HEADING_DISTANCE: f32 = 5.0;
+
 #[derive(Default, Clone)]
 pub struct MidfielderInterceptingState {}
 
@@ -15,6 +21,22 @@ impl StateProcessingHandler for MidfielderInterceptingState {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
+            ));
+        }
+
+        // Aerial ball in reach — contest it in the air. Mirrors the
+        // defender's Intercepting → Heading hand-off. Checked BEFORE the
+        // possession branch because a lofted ball dropping into midfield
+        // has to be attacked whoever nominally "has" the ball: this is
+        // the second-ball contest, and without it midfielders were the
+        // only outfield role that could never head the ball.
+        let ball_position = ctx.tick_context.positions.ball.position;
+        if ball_position.z > HEADING_HEIGHT
+            && ctx.ball().distance() < HEADING_DISTANCE
+            && ctx.ball().is_towards_player_with_angle(0.6)
+        {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Heading,
             ));
         }
 

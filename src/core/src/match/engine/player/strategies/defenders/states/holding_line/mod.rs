@@ -16,6 +16,11 @@ const PRESSING_DISTANCE_THRESHOLD: f32 = 60.0; // Step out to press ball carrier
 const DANGEROUS_RUN_SCAN_DISTANCE: f32 = 100.0; // Scan wider for dangerous runs
 const DANGEROUS_RUN_SPEED: f32 = 2.0; // Detect slower dangerous runs too
 const DANGEROUS_RUN_ANGLE: f32 = 0.5; // Wider angle detection for goal-bound runs
+// Aerial-contest band — same values as the Marking / Intercepting
+// hand-offs so an incoming cross reads identically from every defensive
+// state.
+const AERIAL_HEADING_HEIGHT: f32 = 1.5;
+const AERIAL_HEADING_DISTANCE: f32 = 5.0;
 
 #[derive(Default, Clone)]
 pub struct DefenderHoldingLineState {}
@@ -34,6 +39,21 @@ impl StateProcessingHandler for DefenderHoldingLineState {
         {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::AttackingCorner,
+            ));
+        }
+
+        // AERIAL BALL — a cross or long ball dropping onto the line is
+        // attacked in the air. Holding the line was the most-occupied
+        // defensive state yet had no heading exit, so a defender sitting
+        // in shape watched crosses drop past their head and only reacted
+        // once the ball was on the floor.
+        let ball_position = ctx.tick_context.positions.ball.position;
+        if ball_position.z > AERIAL_HEADING_HEIGHT
+            && ctx.ball().distance() < AERIAL_HEADING_DISTANCE
+            && ctx.ball().is_towards_player_with_angle(0.6)
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Heading,
             ));
         }
 

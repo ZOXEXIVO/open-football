@@ -10,6 +10,8 @@ use nalgebra::Vector3;
 const DANGER_ZONE_RADIUS: f32 = 35.0;
 const CLOSE_DANGER_DISTANCE: f32 = 100.0;
 const FAR_THREAT_DISTANCE: f32 = 300.0;
+/// Below this height the ball is on the deck — scooped up, not caught.
+const GROUND_BALL_HEIGHT: f32 = 1.2;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperStandingState {}
@@ -30,20 +32,47 @@ impl StateProcessingHandler for GoalkeeperStandingState {
             }
         }
 
-        // Direct catch for close slow balls
+        // Close slow ball. A keeper who can legally use their hands does
+        // two different things here depending on where the ball is:
+        // a rolling or dead ball ON THE GROUND is picked up, an airborne
+        // one is caught. Splitting them wires `PickingUpBall` — fully
+        // implemented but previously unreachable — and stops a stationary
+        // ball at the keeper's feet being modelled as a claim out of the
+        // air.
         let ball_distance = ctx.ball().distance();
         if ball_distance < 10.0
             && !ctx.ball().is_owned()
             && ctx.ball().on_own_side()
             && ctx.tick_context.positions.ball.velocity.norm() < 10.0
         {
+            let grounded = ctx.tick_context.positions.ball.position.z < GROUND_BALL_HEIGHT;
+            // Hands are only legal inside our own penalty area.
+            if grounded && ctx.ball().in_own_penalty_area() {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::PickingUpBall,
+                ));
+            }
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
             ));
         }
 
-        // If goalkeeper has the ball, distribute it (never run with ball)
+        // If goalkeeper has the ball, put it back in play (never run with
+        // it). A GOAL KICK is a dead ball from the floor, so the hands are
+        // out of play and the choice is short-pass versus long kick — the
+        // keeper's kicking ability and how far the opposition have pushed
+        // up decide which. Everything else (a claim, a back-pass) routes
+        // through Distributing, whose own logic picks the outlet.
         if ctx.player.has_ball(ctx) {
+            if ctx.ball().is_goal_kick_restart() {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    if Self::goes_long_from_goal_kick(ctx) {
+                        GoalkeeperState::Kicking
+                    } else {
+                        GoalkeeperState::Distributing
+                    },
+                ));
+            }
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Distributing,
             ));
@@ -189,6 +218,44 @@ impl StateProcessingHandler for GoalkeeperStandingState {
 }
 
 impl GoalkeeperStandingState {
+    /// Goal kick: go long, or play short to a defender?
+    ///
+    /// Continuous score, no threshold flip. Going long is driven by the
+    /// keeper's kicking leg, by how high the opposition have pushed
+    /// (nothing else is on when they squeeze the box), and by how direct
+    /// the manager wants the side to be. Playing short is driven by
+    /// having a genuinely free defender to give it to and the composure
+    /// to do it under pressure — the modern build-out, available only to
+    /// keepers who can actually pass.
+    fn goes_long_from_goal_kick(ctx: &StateProcessingContext) -> bool {
+        let gk = &ctx.player.skills.goalkeeping;
+        let kick_skill = (gk.kicking / 20.0).clamp(0.0, 1.0);
+        let short_skill = ((gk.passing + gk.first_touch) / 40.0).clamp(0.0, 1.0);
+        let composure = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
+
+        // Opposition players who have committed into our build-out zone.
+        let squeezing = ctx.players().opponents().nearby(200.0).count() as f32;
+        let press = ((squeezing - 1.0) / 3.0).clamp(0.0, 1.0);
+
+        // A defender we could actually give it to: close, and not marked.
+        let free_short = ctx
+            .players()
+            .teammates()
+            .nearby(120.0)
+            .filter(|t| ctx.tick_context.grid.opponents(t.id, 18.0).next().is_none())
+            .count();
+        let short_available = (free_short as f32 / 2.0).min(1.0);
+
+        // Patient sides build out; direct sides launch it.
+        let patience = ctx.team().build_up_patience().clamp(0.0, 1.0);
+
+        let long = 0.40 + kick_skill * 0.50 + press * 0.75 - patience * 0.35;
+        let short =
+            0.20 + short_available * 0.55 + short_skill * 0.45 + composure * 0.15 - press * 0.55;
+
+        long >= short
+    }
+
     fn is_opponent_in_danger_zone(&self, ctx: &StateProcessingContext) -> bool {
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let opponent_distance = ctx

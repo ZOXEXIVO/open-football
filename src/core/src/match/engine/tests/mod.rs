@@ -6,3 +6,4 @@ mod fatigue_calibration_tests;
 mod intelligence_tests;
 mod match_realism_tests;
 mod solid_engine_tests;
+mod state_reachability_tests;

@@ -2880,9 +2880,7 @@ impl PlayerEventDispatcher {
         let xg = base_xg;
         let prevented_xg = if on_target { base_xg } else { base_xg * 0.15 };
         if let Some(shooter) = field.get_player_mut(shoot_event_model.from_player_id) {
-            shooter
-                .memory
-                .record_shot(shoot_event_model.tick, on_target);
+            shooter.memory.record_shot(shoot_event_model.tick);
             shooter.memory.record_shot_xg(shoot_event_model.tick, xg);
         }
         #[cfg(feature = "match-logs")]

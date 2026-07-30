@@ -20,7 +20,7 @@ impl StateProcessingHandler for GoalkeeperThrowingState {
             ));
         }
 
-        // 2. Find the best teammate to kick the ball to
+        // 2. Find the best teammate to throw the ball to
         if let Some((teammate, _reason)) = self.find_best_pass_option(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Standing,
@@ -31,6 +31,16 @@ impl StateProcessingHandler for GoalkeeperThrowingState {
                         .with_reason("GK_THROWING")
                         .build(ctx),
                 )),
+            ));
+        }
+
+        // Nobody in throwing range. A keeper doesn't stand holding the
+        // ball indefinitely (and the referee wouldn't let them) — switch
+        // to booting it clear. Mirrors the Distributing timeout so no
+        // release path can stall with the ball in hand.
+        if ctx.in_state_time > 20 {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Clearing,
             ));
         }
 

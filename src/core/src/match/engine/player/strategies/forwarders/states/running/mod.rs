@@ -1,5 +1,6 @@
 use crate::IntegerUtils;
 use crate::PlayerPositionType;
+use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
@@ -409,8 +410,13 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
                 match evaluate_forward_shot_decision(ctx, "FWD_RUN_POINT_BLANK") {
                     ShotDecision::Shoot { reason } => {
+                        // Inside the box this is a FINISH, not a shot from
+                        // range: `Finishing` carries no distance-based
+                        // abort gates, which is what a tap-in needs (the
+                        // Shooting state would happily reject a six-yard
+                        // chance from a sub-0.5 finisher).
                         return Some(
-                            StateChangeResult::with_forward_state(ForwardState::Shooting)
+                            StateChangeResult::with_forward_state(ForwardState::Finishing)
                                 .with_shot_reason(reason),
                         );
                     }
@@ -2036,9 +2042,18 @@ impl ForwardRunningState {
         // (14/12 dribbling, 12/10 pace) so a 7/20 dribbler still
         // *sometimes* takes on a single defender and a 17/20 elite
         // attempts 2-man take-ons most of the time.
+        //
+        // Both pivots are then tilted by the player's head: running at a
+        // defender is the most self-expressive thing a footballer does, so
+        // a winger who has just beaten his man twice goes again, and one
+        // who has been dispossessed and booked keeps it simple. Narrow
+        // (±~15%) — psychology colours how often the take-on is tried, not
+        // whether it comes off (`dribble_duel` owns that).
+        let initiative = Psychology::initiative_for(&ctx.context.psychology, ctx.player.id);
         let elite_take_on = SkillCurve::new(dribbling_raw, 14.0, 0.6).probability()
-            * SkillCurve::new(pace_raw, 12.0, 0.6).probability();
-        let modest_take_on = SkillCurve::new(dribbling_raw, 10.0, 0.6).probability();
+            * SkillCurve::new(pace_raw, 12.0, 0.6).probability()
+            * initiative;
+        let modest_take_on = SkillCurve::new(dribbling_raw, 10.0, 0.6).probability() * initiative;
         let roll = ctx.context.rng.unit_f32();
         if roll < elite_take_on {
             opponents_blocking <= 2

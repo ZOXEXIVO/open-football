@@ -1,11 +1,11 @@
 use crate::r#match::midfielders::states::{
     MidfielderAttackSupportingState, MidfielderCreatingSpaceState, MidfielderCrossingState,
     MidfielderDistanceShootingState, MidfielderDistributingState, MidfielderDribblingState,
-    MidfielderGuardingState, MidfielderInterceptingState, MidfielderPassingState,
-    MidfielderPressingState, MidfielderRestingState, MidfielderReturningState,
-    MidfielderRunningState, MidfielderShootingState, MidfielderStandingState,
-    MidfielderSwitchingPlayState, MidfielderTacklingState, MidfielderTakeBallState,
-    MidfielderWalkingState,
+    MidfielderGuardingState, MidfielderHeadingState, MidfielderInterceptingState,
+    MidfielderPassingState, MidfielderPressingState, MidfielderRestingState,
+    MidfielderReturningState, MidfielderRunningState, MidfielderShootingState,
+    MidfielderStandingState, MidfielderSwitchingPlayState, MidfielderTacklingState,
+    MidfielderTakeBallState, MidfielderWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::Result;
@@ -35,12 +35,13 @@ pub enum MidfielderState {
     Intercepting = 16,    // Intercepting the ball,
     CreatingSpace = 17,   // Creating space for teammates
     Guarding = 18, // Guarding an attacker — denying space and preventing them from getting open
+    Heading = 19,  // Contesting an aerial ball in midfield — knock-down, clearance or flick
 }
 
 impl MidfielderState {
     /// Every variant in declared order — single source of truth for the
     /// state universe (transition-graph audit + id-stability snapshot).
-    pub const ALL: [MidfielderState; 19] = [
+    pub const ALL: [MidfielderState; 20] = [
         MidfielderState::Standing,
         MidfielderState::Distributing,
         MidfielderState::Dribbling,
@@ -60,6 +61,7 @@ impl MidfielderState {
         MidfielderState::Intercepting,
         MidfielderState::CreatingSpace,
         MidfielderState::Guarding,
+        MidfielderState::Heading,
     ];
 }
 
@@ -120,6 +122,7 @@ impl MidfielderStrategies {
             MidfielderState::Guarding => {
                 state_processor.process(MidfielderGuardingState::default())
             }
+            MidfielderState::Heading => state_processor.process(MidfielderHeadingState::default()),
         }
     }
 }
@@ -146,6 +149,7 @@ impl Display for MidfielderState {
             MidfielderState::Intercepting => write!(f, "Intercepting"),
             MidfielderState::CreatingSpace => write!(f, "Creating Space"),
             MidfielderState::Guarding => write!(f, "Guarding"),
+            MidfielderState::Heading => write!(f, "Heading"),
         }
     }
 }

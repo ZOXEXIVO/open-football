@@ -21,6 +21,12 @@ const MAX_SHOOTING_DISTANCE: f32 = 88.0; // Edge-of-box / arriving-midfielder st
 const STANDARD_SHOOTING_DISTANCE: f32 = 52.0; // Standard shooting range for midfielders
 const POINT_BLANK_DISTANCE: f32 = 20.0; // ~10m - must shoot, goalkeeper is right there
 
+// Aerial-contest band, matching the Intercepting hand-off and the
+// defender's equivalents so the same dropping ball reads identically
+// whichever role reaches it first.
+const AERIAL_HEADING_HEIGHT: f32 = 1.5;
+const AERIAL_HEADING_DISTANCE: f32 = 4.0;
+
 #[derive(Default, Clone)]
 pub struct MidfielderRunningState {}
 
@@ -32,6 +38,22 @@ impl StateProcessingHandler for MidfielderRunningState {
         if !ctx.player.has_ball(ctx) && ctx.player().defensive().is_stranded_offside() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Returning,
+            ));
+        }
+
+        // AERIAL BALL IN REACH: a lofted clearance or long ball dropping
+        // onto a running midfielder is contested in the air, not waited
+        // out. Checked early — the heading window is only a couple of
+        // ticks wide, and everything below this point assumes a ball that
+        // can be played with the feet. Without it, midfielders let every
+        // aerial ball bounce and the second ball always fell to whoever
+        // reacted quickest after it landed.
+        if !ctx.player.has_ball(ctx)
+            && ctx.tick_context.positions.ball.position.z > AERIAL_HEADING_HEIGHT
+            && ctx.ball().distance() < AERIAL_HEADING_DISTANCE
+        {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Heading,
             ));
         }
 
@@ -735,13 +757,25 @@ impl StateProcessingHandler for MidfielderRunningState {
             // ground yet were the one outfield role that never entered
             // Resting (defenders gate on stamina in Pressing/Marking,
             // forwards via needs_recovery; nothing produced the
-            // midfielder variant). Conservative gate: genuinely gassed,
-            // play far away, and not in our half — catch breath while
-            // the opponents circulate harmlessly. Resting's own exits
-            // (ball close, team under threat) pull the player back out.
-            if ctx.player.player_attributes.condition_percentage() < 40
-                && ctx.ball().distance() > 150.0
-                && !ctx.ball().on_own_side()
+            // midfielder variant).
+            //
+            // The original gate was a three-way conjunction — under 40%
+            // condition AND ball beyond 150u AND play in the opposition
+            // half — that was never satisfied in a real match: the
+            // in-match condition floor keeps players well above 40% while
+            // they are still far enough from the ball to stand down, so
+            // `Resting` stayed empirically dead even though it was
+            // statically reachable. Matched to the forward's
+            // `needs_recovery` shape instead: genuinely tired, after a
+            // sustained run, with the ball far enough away to stand down.
+            // Resting's own exits (ball close, team under threat) pull the
+            // player back out immediately.
+            const REST_STAMINA_THRESHOLD: u32 = 60;
+            const REST_BALL_DISTANCE: f32 = 150.0;
+            const REST_MIN_RUN_TICKS: u64 = 60;
+            if ctx.player.player_attributes.condition_percentage() < REST_STAMINA_THRESHOLD
+                && ctx.in_state_time > REST_MIN_RUN_TICKS
+                && ctx.ball().distance() > REST_BALL_DISTANCE
             {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Resting,

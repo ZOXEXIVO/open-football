@@ -50,18 +50,21 @@ impl PlayerFieldPositionGroup {
         // got closer) should yield back to Running. Without the yield,
         // chasers pile up over time because TakeBall only exits on
         // ownership, not on "someone else is a better chaser now".
+        // `redirect_to_fresh` zeroes the PERSISTED counter as well as the
+        // dispatch value. The two used to disagree — dispatch saw 0 while
+        // `player.in_state_time` kept climbing — so the destination state
+        // read 0 on its entry tick and a stale value on the next one.
+        // That is what made a goalkeeper redirected into `TakeBall` trip
+        // its own `in_state_time > 200` give-up guard on tick two and
+        // flap straight back to `Standing`.
         let override_state_time = if Self::should_yield_takeball(*self, player, tick_context) {
-            // Redirect preserves the persisted in_state_time (the
-            // pre-refactor override left it running — load-bearing for GK
-            // save-state timing); dispatch THIS tick with 0 to match the
-            // old "override_state_time = 0" behaviour exactly.
-            player.redirect_to(
+            player.redirect_to_fresh(
                 Self::yield_state_for(*self),
                 TransitionSource::LooseBallOverride,
             );
             0
         } else if Self::should_force_takeball(*self, player, tick_context) {
-            player.redirect_to(
+            player.redirect_to_fresh(
                 Self::takeball_state_for(*self),
                 TransitionSource::LooseBallOverride,
             );
@@ -124,6 +127,15 @@ impl PlayerFieldPositionGroup {
     /// True when this player is in TakeBall but another teammate is
     /// strictly-closer to the ball. Releases the chase so the pack doesn't
     /// accumulate ex-chasers who overshot or got passed by the ball.
+    /// True when this player is mid-way through an action a real
+    /// footballer cannot abort. Committed players are skipped by BOTH
+    /// loose-ball redirects and are absent from the chase table, so the
+    /// designation naturally falls to the next-closest teammate.
+    #[inline]
+    fn is_committed(player: &MatchPlayer) -> bool {
+        player.state.is_committed_action()
+    }
+
     fn should_yield_takeball(
         _group: PlayerFieldPositionGroup,
         player: &MatchPlayer,
@@ -193,7 +205,7 @@ impl PlayerFieldPositionGroup {
         my_side: PlayerSide,
     ) -> bool {
         for tm in tick_context.positions.players.as_slice() {
-            if tm.player_id == player.id || tm.side != my_side {
+            if tm.player_id == player.id || tm.side != my_side || !tm.chase_eligible {
                 continue;
             }
             let d_sq = (ball_pos - tm.position).norm_squared();
@@ -219,6 +231,18 @@ impl PlayerFieldPositionGroup {
         player: &MatchPlayer,
         tick_context: &GameTickContext,
     ) -> bool {
+        // Mid-action — a keeper already committed to a dive, a header
+        // already launched, a defender already sliding. Real footballers
+        // cannot abandon these, and the observed transition graph carried
+        // exactly those edges (`Goalkeeper: Diving -> Take Ball`,
+        // `Forward: Heading -> Take Ball`) before this guard. The player
+        // is also absent from the chase table while committed, so the
+        // claim passes to the next-closest teammate rather than being
+        // dropped.
+        if Self::is_committed(player) {
+            return false;
+        }
+
         // Already chasing — leave the state alone.
         if matches!(
             player.state,
@@ -303,7 +327,7 @@ impl PlayerFieldPositionGroup {
         my_side: PlayerSide,
     ) -> bool {
         for tm in tick_context.positions.players.as_slice() {
-            if tm.player_id == player.id || tm.side != my_side {
+            if tm.player_id == player.id || tm.side != my_side || !tm.chase_eligible {
                 continue;
             }
             let d_sq = (ball_pos - tm.position).norm_squared();
@@ -493,18 +517,21 @@ impl StateProcessingResult {
     /// cooldown and shot-reason side-channels propagate unconditionally —
     /// they're consumed regardless of whether the state changed.
     ///
-    /// KNOWN LATENT BUG, deliberately preserved here: a handler that emits
-    /// an event WITHOUT a state change (`state == None`) has that event
-    /// dropped — e.g. `ForwardCrossReceivingState`'s ground-ball
-    /// `RequestBallReceive`. Propagating those events is the obvious fix,
-    /// but it un-masks goalkeeper save events the engine's scoring
-    /// calibration was (unknowingly) built around: with them restored, GK
-    /// saves jump from ~54% to ~96% of shots on target and dev_match
-    /// goals/match collapse ~10× (0.60 → 0.05). Fixing it therefore needs a
-    /// separate recalibration pass and is out of scope for this
-    /// calibration-neutral state-graph-safety change. Keeping the merge as
-    /// a single testable method is the structural win; the behaviour stays
-    /// byte-for-byte identical to the pre-refactor closure.
+    /// EVENTS REQUIRE A TRANSITION. A handler that emits an event without
+    /// one (`state == None`) has that event dropped. This is a real
+    /// constraint on state authors, not an accident: propagating
+    /// event-only results globally un-masks goalkeeper save events the
+    /// engine's scoring calibration was built around (GK saves jump from
+    /// ~54% to ~96% of shots on target and dev_match goals/match collapse
+    /// ~10×, 0.60 → 0.05), so the contract stays as-is until a dedicated
+    /// recalibration pass.
+    ///
+    /// The one state that violated it — `ForwardCrossReceivingState`'s
+    /// ground-ball `RequestBallReceive`, which is why cutbacks rolled
+    /// straight through the receiver — now pairs its event with the state
+    /// the forward actually moves into. `event_only_result_is_dropped`
+    /// below pins the contract so the next author hits a failing test
+    /// rather than a silently vanishing event.
     pub fn merge_state_change(&mut self, change: StateChangeResult) {
         self.start_tackle_cooldown = change.start_tackle_cooldown;
         self.shot_reason = change.shot_reason;
@@ -667,12 +694,15 @@ mod merge_tests {
     }
 
     #[test]
-    fn event_only_result_is_dropped_known_latent_bug() {
-        // DOCUMENTED behaviour, intentionally preserved for calibration
-        // neutrality: an event with no state change (state == None) is NOT
-        // propagated. Restoring it un-masks goalkeeper save events and
-        // collapses scoring (see `merge_state_change`). If this assertion
-        // ever flips, it must land together with a GK recalibration.
+    fn event_only_result_is_dropped() {
+        // The merge contract: events ride along with a transition. An
+        // event with no state change is NOT propagated — propagating them
+        // globally un-masks goalkeeper save events and collapses scoring
+        // (see `merge_state_change`). If this assertion ever flips, it
+        // must land together with a GK recalibration.
+        //
+        // State authors: if you need to emit an event, transition. The
+        // `with_*_state_and_event` constructors exist for exactly this.
         let mut result = StateProcessingResult::new();
         result.merge_state_change(StateChangeResult::with_event(Event::PlayerEvent(
             PlayerEvent::RequestBallReceive(7),
@@ -681,7 +711,62 @@ mod merge_tests {
         assert!(result.state.is_none());
         assert!(
             !result.events.has_events(),
-            "event-only results are dropped (known latent bug, see merge_state_change)"
+            "event-only results are dropped (see merge_state_change)"
+        );
+    }
+
+    #[test]
+    fn no_state_emits_an_event_without_transitioning() {
+        // Source-level guard for the merge contract above: an
+        // `event_only` result is silently discarded, so no state handler
+        // may construct one. `ForwardCrossReceivingState` used to, and its
+        // ground-ball receive request vanished every time — cutbacks
+        // rolled straight through the forward.
+        let states_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("match")
+            .join("engine")
+            .join("player")
+            .join("strategies");
+
+        struct Scanner;
+        impl Scanner {
+            fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
+                let Ok(entries) = std::fs::read_dir(dir) else {
+                    return;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        Self::walk(&path, hits);
+                        continue;
+                    }
+                    if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                        continue;
+                    }
+                    // The processor itself defines and tests the helpers.
+                    if path.file_name().and_then(|f| f.to_str()) == Some("processor.rs") {
+                        continue;
+                    }
+                    let Ok(src) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    if src.contains("StateChangeResult::with_event(")
+                        || src.contains("StateChangeResult::with_events(")
+                    {
+                        hits.push(path.display().to_string());
+                    }
+                }
+            }
+        }
+
+        let mut hits = Vec::new();
+        Scanner::walk(&states_dir, &mut hits);
+        assert!(
+            hits.is_empty(),
+            "state handler(s) build an event-only StateChangeResult, whose events \
+             the merge drops — pair the event with a transition via \
+             `with_*_state_and_event`: {hits:?}"
         );
     }
 

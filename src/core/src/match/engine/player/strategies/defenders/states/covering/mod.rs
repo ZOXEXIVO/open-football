@@ -17,12 +17,30 @@ const DANGEROUS_RUN_SPEED: f32 = 2.5; // Reduced from 3.0 - detect slower runs
 const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Reduced from 0.7 - wider angle
 const MIN_STATE_TIME_DEFAULT: u64 = 20; // Reduced - faster reactions
 const MIN_STATE_TIME_WITH_THREAT: u64 = 5; // Reduced - very fast reaction to threats
+// Aerial-contest band — same values as the Marking / Intercepting
+// hand-offs so an incoming cross reads identically from every defensive
+// state.
+const AERIAL_HEADING_HEIGHT: f32 = 1.5;
+const AERIAL_HEADING_DISTANCE: f32 = 5.0;
 
 #[derive(Default, Clone)]
 pub struct DefenderCoveringState {}
 
 impl StateProcessingHandler for DefenderCoveringState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // AERIAL BALL — a cross dropping onto a covering defender is
+        // headed clear. Checked first: the heading window is a couple of
+        // ticks wide and everything below assumes a ball playable with
+        // the feet.
+        if ctx.tick_context.positions.ball.position.z > AERIAL_HEADING_HEIGHT
+            && ctx.ball().distance() < AERIAL_HEADING_DISTANCE
+            && ctx.ball().is_towards_player_with_angle(0.6)
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Heading,
+            ));
+        }
+
         // BOX EMERGENCY — override every other consideration. If the
         // carrier is in our penalty area and we're one of the two
         // closest defenders, stop covering and engage immediately.

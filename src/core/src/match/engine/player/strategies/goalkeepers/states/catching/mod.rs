@@ -9,6 +9,27 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
+/// Length of the save window, in AI ticks, that `per_tick_save` spreads a
+/// per-SHOT save probability across. Get this wrong and the keeper's
+/// realised save rate drifts away from `save_probability` even though
+/// that model is untouched: the per-tick die is rolled once per tick the
+/// keeper spends in the save, so a longer window compounds to a higher
+/// cumulative save rate.
+///
+/// Was 3.0, derived when the loose-ball override could yank a keeper out
+/// of `Catching` / `Diving` part-way through a save. Keepers now hold
+/// those states to completion (see `PlayerState::is_committed_action`),
+/// so the real window is longer and the constant that described it was
+/// stale. 3.8 is the re-derived length.
+///
+/// NB this state-machine save roll is the minor of the two save paths —
+/// the dominant one is the per-tick physics check in
+/// `Ball::try_save_shot`, and that is where the population save rate was
+/// actually recalibrated. Measured on its own, moving this constant
+/// 3.0 → 3.8 was within run-to-run noise; it is corrected because it is
+/// now the honest number, not because it moved the aggregate.
+const EXPECTED_SAVE_TICKS: f32 = 3.8;
+
 #[derive(Default, Clone)]
 pub struct GoalkeeperCatchingState {}
 
@@ -174,7 +195,6 @@ impl GoalkeeperCatchingState {
                 .clamp(0.0, 1.0);
 
             // Per-shot save probability, then converted to per-tick.
-            // Calibrated for ~3 ticks of approach during a save.
             let mut save_prob = prof.save_probability(shot_difficulty);
             // Deflection damping: the GK was set for the original
             // trajectory. A redirected shot arrives on a line they
@@ -187,7 +207,7 @@ impl GoalkeeperCatchingState {
             if target.deflected {
                 save_prob *= 0.50;
             }
-            let per_tick = prof.per_tick_save(save_prob, 3.0);
+            let per_tick = prof.per_tick_save(save_prob, EXPECTED_SAVE_TICKS);
             return ctx.context.rng.unit_f32() < per_tick;
         }
 

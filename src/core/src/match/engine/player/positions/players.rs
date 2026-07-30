@@ -19,6 +19,13 @@ pub struct PlayerFieldMetadata {
     pub side: PlayerSide,
     pub position: Vector3<f32>,
     pub velocity: Vector3<f32>,
+    /// False while the player is mid-way through a physical action they
+    /// cannot abort — see [`PlayerState::is_committed_action`]. The
+    /// loose-ball chase table skips these entries, so the "closest
+    /// teammate" designation passes to someone who can actually go for
+    /// the ball instead of yanking a diving keeper or a player already
+    /// in the air out of their action.
+    pub chase_eligible: bool,
 }
 
 impl Default for PlayerFieldMetadata {
@@ -29,6 +36,7 @@ impl Default for PlayerFieldMetadata {
             side: PlayerSide::Left,
             position: Vector3::zeros(),
             velocity: Vector3::zeros(),
+            chase_eligible: true,
         }
     }
 }
@@ -146,12 +154,16 @@ impl PlayerFieldData {
                         .unwrap_or_else(|| panic!("unknown player side, player_id = {}", p.id)),
                     position: p.position,
                     velocity: p.velocity,
+                    chase_eligible: !p.state.is_committed_action(),
                 };
                 self.insert_slot(p.id, idx as u8);
                 self.len += 1;
             }
         } else {
-            // Fast path: only update positions and velocities in-place
+            // Fast path: only the per-tick mutable fields. `chase_eligible`
+            // rides along with position/velocity because state changes
+            // every tick — a stale value would leave a diving keeper in
+            // the chase table for a full tick after they committed.
             for (i, p) in field
                 .players
                 .iter()
@@ -160,6 +172,7 @@ impl PlayerFieldData {
             {
                 self.items[i].position = p.position;
                 self.items[i].velocity = p.velocity;
+                self.items[i].chase_eligible = !p.state.is_committed_action();
             }
         }
     }

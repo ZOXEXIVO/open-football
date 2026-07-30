@@ -1,6 +1,6 @@
 use crate::r#match::defenders::states::{
     DefenderAttackingCornerState, DefenderClearingState, DefenderCoveringState,
-    DefenderGuardingState, DefenderHeadingState, DefenderHoldingLineState,
+    DefenderCrossingState, DefenderGuardingState, DefenderHeadingState, DefenderHoldingLineState,
     DefenderInterceptingState, DefenderMarkingState, DefenderPassingState, DefenderPressingState,
     DefenderPushingUpState, DefenderRestingState, DefenderReturningState, DefenderRunningState,
     DefenderShootingState, DefenderStandingState, DefenderTacklingState, DefenderTakeBallState,
@@ -35,12 +35,13 @@ pub enum DefenderState {
     Shooting = 17,        // Shoting the ball,
     Guarding = 18, // Guarding an attacker — denying space and preventing them from getting open
     AttackingCorner = 19, // Pushed up to attack an attacking corner (run into the box, head on goal)
+    Crossing = 20,        // Overlapping fullback delivering from a wide advanced position
 }
 
 impl DefenderState {
     /// Every variant in declared order — single source of truth for the
     /// state universe (transition-graph audit + id-stability snapshot).
-    pub const ALL: [DefenderState; 20] = [
+    pub const ALL: [DefenderState; 21] = [
         DefenderState::Standing,
         DefenderState::Covering,
         DefenderState::PushingUp,
@@ -61,6 +62,7 @@ impl DefenderState {
         DefenderState::Shooting,
         DefenderState::Guarding,
         DefenderState::AttackingCorner,
+        DefenderState::Crossing,
     ];
 }
 
@@ -103,6 +105,7 @@ impl DefenderStrategies {
             DefenderState::AttackingCorner => {
                 state_processor.process(DefenderAttackingCornerState::default())
             }
+            DefenderState::Crossing => state_processor.process(DefenderCrossingState::default()),
         }
     }
 }
@@ -130,6 +133,7 @@ impl Display for DefenderState {
             DefenderState::Shooting => write!(f, "Shooting"),
             DefenderState::Guarding => write!(f, "Guarding"),
             DefenderState::AttackingCorner => write!(f, "Attacking Corner"),
+            DefenderState::Crossing => write!(f, "Crossing"),
         }
     }
 }

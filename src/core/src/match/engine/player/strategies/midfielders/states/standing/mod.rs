@@ -23,17 +23,27 @@ impl StateProcessingHandler for MidfielderStandingState {
         }
 
         if ctx.player.has_ball(ctx) {
-            // Go directly to Passing state — it has the best pass evaluation logic
-            // Only hold possession if under no pressure and no teammates nearby
-            // With the ball and no passing options, stay in Standing —
-            // the top-of-function idle logic will refresh next tick.
-            // HoldingPossession did nothing extra beyond that.
-            return if self.has_passing_options(ctx) {
+            // With the ball and no passing options, stay in Standing — the
+            // top-of-function idle logic will refresh next tick.
+            //
+            // With options, the choice is between two different jobs.
+            // `Passing` runs the full progressive evaluation — it is
+            // looking to advance the ball. `Distributing` picks purely on
+            // space around the receiver: it is the deep-lying playmaker
+            // recycling possession, keeping the ball moving while the
+            // shape reforms. That second state had no inbound transition
+            // at all, so a midfielder in settled possession with nothing
+            // on always went looking for a forward pass.
+            return if !self.has_passing_options(ctx) {
+                None
+            } else if self.should_recycle_possession(ctx) {
+                Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Distributing,
+                ))
+            } else {
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Passing,
                 ))
-            } else {
-                None
             };
         } else {
             // Loose-ball claim lives in the dispatcher.
@@ -46,8 +56,20 @@ impl StateProcessingHandler for MidfielderStandingState {
                         MidfielderState::CreatingSpace,
                     ));
                 }
+                // With our team on the ball at the far end of the pitch
+                // and nothing to chase, a midfielder walks — they do not
+                // break into a run every time possession settles. This is
+                // the ONLY entry into `MidfielderState::Walking`, and it
+                // has to live inside this branch: everything below returns
+                // before the state's timeout, so a walk gate placed there
+                // was unreachable by construction (the state stayed at
+                // 0 observed entries across 200 matches).
                 return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Running,
+                    if self.should_walk(ctx) {
+                        MidfielderState::Walking
+                    } else {
+                        MidfielderState::Running
+                    },
                 ));
             } else {
                 // Only press/tackle if an OPPONENT has the ball AND we're the best chaser
@@ -124,7 +146,9 @@ impl StateProcessingHandler for MidfielderStandingState {
             ));
         }
 
-        // Midfielders should not stand still for long — get moving quickly
+        // Midfielders should not stand still for long — get moving quickly.
+        // (The walk-or-run fork lives in the possession branch above; by
+        // the time control has been lost this player has somewhere to be.)
         if ctx.in_state_time > 8 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
@@ -147,6 +171,75 @@ impl StateProcessingHandler for MidfielderStandingState {
 }
 
 impl MidfielderStandingState {
+    /// Should this midfielder drop to a walk rather than break into a run?
+    ///
+    /// Mirrors the defender's walking gate: the ball is far away or we're
+    /// already where we want to be, nothing is threatening, and either
+    /// we're tired or there is simply nothing to do. Called only from the
+    /// possession branch, so "our team has the ball" is already true.
+    ///
+    /// Real midfielders spend a large share of a match walking — this is
+    /// where that comes from, and it feeds the fatigue model's `Low`
+    /// intensity band, which midfielders previously never touched.
+    fn should_walk(&self, ctx: &StateProcessingContext) -> bool {
+        const WALK_BALL_DISTANCE: f32 = 250.0;
+        const IN_POSITION_DISTANCE: f32 = 40.0;
+        const THREAT_RADIUS: f32 = 100.0;
+
+        let no_immediate_threat = ctx
+            .players()
+            .opponents()
+            .nearby(THREAT_RADIUS)
+            .next()
+            .is_none();
+        if !no_immediate_threat {
+            return false;
+        }
+
+        let ball_far = ctx.ball().distance() > WALK_BALL_DISTANCE;
+        let in_position = ctx.player().distance_from_start_position() < IN_POSITION_DISTANCE;
+
+        // Tired players take any excuse to walk; fresh ones only walk when
+        // there is genuinely nothing to run toward.
+        if ctx.player().is_tired() {
+            ball_far || in_position
+        } else {
+            ball_far && in_position
+        }
+    }
+
+    /// Is this a "keep the ball moving" moment rather than a "play
+    /// forward" one?
+    ///
+    /// True for the settled deep-lying picture: we're not yet in the
+    /// final third, nobody is closing us down, and the manager wants
+    /// possession held. That is when a midfielder recycles — sideways and
+    /// backwards into space — instead of forcing the ball forward.
+    fn should_recycle_possession(&self, ctx: &StateProcessingContext) -> bool {
+        const PRESSURE_RADIUS: f32 = 20.0;
+        const FINAL_THIRD_PROGRESS: f32 = 0.66;
+
+        // Under pressure there is no time to pick out space — the passing
+        // state's evaluation is the right tool.
+        if ctx.players().opponents().exists(PRESSURE_RADIUS) {
+            return false;
+        }
+
+        // In the final third the job is to create, not to recycle.
+        let Some(side) = ctx.player.side else {
+            return false;
+        };
+        let field_width = ctx.context.field_size.width as f32;
+        if side.attacking_progress_x(ctx.player.position.x, field_width) > FINAL_THIRD_PROGRESS {
+            return false;
+        }
+
+        // Recycling is what a possession side does; a direct one plays
+        // forward. `build_up_patience` carries both the manager's
+        // instruction and the team's tactical shape.
+        ctx.team().build_up_patience() > 0.5
+    }
+
     /// Determines if the midfielder has passing options.
     fn has_passing_options(&self, ctx: &StateProcessingContext) -> bool {
         const PASSING_DISTANCE_THRESHOLD: f32 = 30.0;

@@ -9,6 +9,12 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
+/// Inside this range a struck ball is a finish rather than a shot from
+/// distance — hands off to `ForwardState::Finishing`, which carries no
+/// range-based abort gates. Kept in step with `FINISHING_RANGE` in the
+/// finishing state and `POINT_BLANK_DISTANCE` in the running state.
+const FINISHING_HANDOFF_RANGE: f32 = 36.0;
+
 #[derive(Default, Clone)]
 pub struct ForwardRunningInBehindState {}
 
@@ -31,8 +37,14 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
             }
             return Some(match evaluate_forward_shot_decision(ctx, "FWD_RIB_SHOT") {
                 ShotDecision::Shoot { reason } => {
-                    StateChangeResult::with_forward_state(ForwardState::Shooting)
-                        .with_shot_reason(reason)
+                    // A runner who has broken through and reached the box
+                    // is finishing, not shooting from range.
+                    let state = if distance <= FINISHING_HANDOFF_RANGE {
+                        ForwardState::Finishing
+                    } else {
+                        ForwardState::Shooting
+                    };
+                    StateChangeResult::with_forward_state(state).with_shot_reason(reason)
                 }
                 ShotDecision::Pass => StateChangeResult::with_forward_state(ForwardState::Passing),
                 ShotDecision::Hold => {

@@ -1,45 +1,29 @@
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum IntentionKind {
-    LookingToShoot,
-    HoldUpPlay,
-    SeekingThroughBall(u32),
-    SwitchPlay,
-    MakeRun,
-    OneTwo(u32),
-    BeatDefender,
-    TrackRunner(u32),
-    HoldPosition,
-    DeliverCross,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct TimedIntention {
-    pub kind: IntentionKind,
-    pub created_tick: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum MemoryEventType {
-    ShotTaken,
-    PassIntercepted,
-    PassCompleted,
-    TackleLost,
-    TackleWon,
-    LostPossession,
-    ReceivedBall,
-    MissedTeammateRun,
-}
-
-const MAX_INTENTIONS: usize = 3;
-const MAX_EVENTS: usize = 8;
-
-#[derive(Debug, Clone)]
+/// Per-player, per-match scratch memory.
+///
+/// Deliberately small and entirely live: every field here is written by
+/// the event pipeline and read by a decision path. An earlier version
+/// also carried an intention queue (`IntentionKind` / `TimedIntention`),
+/// a rolling `recent_events` log and a `confidence` scalar — none of
+/// which had a single caller anywhere in the engine. They cost a pair of
+/// `Vec` allocations per player per match plus a decay pass every 100
+/// ticks and influenced nothing, so they were removed rather than left
+/// as a trap for the next reader.
+///
+/// The one live consumer of the old event log was
+/// `MemoryEventType::PassCompleted`, which incremented a `pass_streak`
+/// that the forward passing state turned into a scoring bonus. Since
+/// `record_event` was only ever called with `ShotTaken`, that branch
+/// never ran and the bonus was always exactly zero — the term is gone
+/// with it.
+///
+/// In-match psychology lives in [`PsychologyState`] on the match context
+/// (confidence / nervousness, fed by real events and read by the pass
+/// evaluator, the ownership duel and the state machine) — that is the
+/// single source of truth for how a player is feeling.
+///
+/// [`PsychologyState`]: crate::r#match::engine::psychology::PsychologyState
+#[derive(Debug, Clone, Default)]
 pub struct PlayerMemory {
-    intentions: Vec<TimedIntention>,
-    recent_events: Vec<MemoryEventType>,
-
-    pub confidence: f32,
-
     pub last_shot_tick: u64,
     pub shots_taken: u32,
     pub shots_on_target: u32,
@@ -50,9 +34,6 @@ pub struct PlayerMemory {
     /// of carrying the ball, not 100 decisions per second.
     pub last_shot_decision_tick: u64,
 
-    pub last_pass_tick: u64,
-    pub pass_streak: u32,
-
     pub last_xg: f32,
     pub last_xg_tick: u64,
     /// Sum of expected-goals across every shot the player took this match.
@@ -61,81 +42,7 @@ pub struct PlayerMemory {
 
 impl PlayerMemory {
     pub fn new() -> Self {
-        PlayerMemory {
-            intentions: Vec::with_capacity(MAX_INTENTIONS),
-            recent_events: Vec::with_capacity(MAX_EVENTS),
-            confidence: 0.5,
-            last_shot_tick: 0,
-            shots_taken: 0,
-            shots_on_target: 0,
-            last_shot_decision_tick: 0,
-            last_pass_tick: 0,
-            pass_streak: 0,
-            last_xg: 0.0,
-            last_xg_tick: 0,
-            xg_total: 0.0,
-        }
-    }
-
-    pub fn push_intention(&mut self, kind: IntentionKind, tick: u64) {
-        // Remove existing intention of same kind
-        self.intentions
-            .retain(|i| std::mem::discriminant(&i.kind) != std::mem::discriminant(&kind));
-
-        if self.intentions.len() >= MAX_INTENTIONS {
-            self.intentions.remove(0);
-        }
-
-        self.intentions.push(TimedIntention {
-            kind,
-            created_tick: tick,
-        });
-    }
-
-    pub fn top_intention(&self) -> Option<&TimedIntention> {
-        self.intentions.last()
-    }
-
-    pub fn has_intention(&self, kind: &IntentionKind) -> bool {
-        self.intentions
-            .iter()
-            .any(|i| std::mem::discriminant(&i.kind) == std::mem::discriminant(kind))
-    }
-
-    pub fn record_event(&mut self, event: MemoryEventType) {
-        if self.recent_events.len() >= MAX_EVENTS {
-            self.recent_events.remove(0);
-        }
-        self.recent_events.push(event);
-
-        // Update confidence based on event
-        match event {
-            MemoryEventType::ShotTaken => {}
-            MemoryEventType::PassCompleted => {
-                self.confidence = (self.confidence + 0.03).min(1.0);
-                self.pass_streak += 1;
-            }
-            MemoryEventType::PassIntercepted => {
-                self.confidence = (self.confidence - 0.08).max(0.0);
-                self.pass_streak = 0;
-            }
-            MemoryEventType::TackleWon => {
-                self.confidence = (self.confidence + 0.05).min(1.0);
-            }
-            MemoryEventType::TackleLost => {
-                self.confidence = (self.confidence - 0.06).max(0.0);
-            }
-            MemoryEventType::LostPossession => {
-                self.confidence = (self.confidence - 0.04).max(0.0);
-                self.pass_streak = 0;
-            }
-            MemoryEventType::ReceivedBall => {
-                self.confidence = (self.confidence + 0.02).min(1.0);
-            }
-            MemoryEventType::MissedTeammateRun => {
-                self.confidence = (self.confidence - 0.02).max(0.0);
-            }
-        }
+        Self::default()
     }
 
     /// Can this player take a shot right now?
@@ -161,23 +68,16 @@ impl PlayerMemory {
         current_tick.saturating_sub(self.last_shot_tick) >= PLAYER_SHOT_COOLDOWN_TICKS
     }
 
-    pub fn record_shot(&mut self, tick: u64, on_target: bool) {
+    /// Credit a shot at the moment it is struck. `shots_on_target` is NOT
+    /// credited here — it's credited lazily by `credit_shot_on_target`
+    /// when the ball actually reaches the goal frame (keeper save or
+    /// goal). Before that split, any shot aimed between the posts counted
+    /// as on-target even when a defender blocked it or it sailed over the
+    /// bar, leaving ~49% of "on-target" shots with no corresponding
+    /// save-or-goal outcome.
+    pub fn record_shot(&mut self, tick: u64) {
         self.last_shot_tick = tick;
         self.shots_taken += 1;
-        // Confidence still moves at launch based on intent (did we aim
-        // correctly?). The `shots_on_target` stat is NOT credited here
-        // anymore — it's credited lazily by `credit_shot_on_target` when
-        // the ball actually reaches the goal frame (keeper save or
-        // goal). Before this split, any shot aimed between the posts
-        // counted as on-target even when a defender blocked it or it
-        // sailed over the bar, leaving ~49% of "on-target" shots with
-        // no corresponding save-or-goal outcome.
-        if on_target {
-            self.confidence = (self.confidence + 0.05).min(1.0);
-        } else {
-            self.confidence = (self.confidence - 0.03).max(0.0);
-        }
-        self.record_event(MemoryEventType::ShotTaken);
     }
 
     /// Post-hoc on-target credit. Called when a shot actually reaches
@@ -192,31 +92,5 @@ impl PlayerMemory {
         self.last_xg = xg;
         self.last_xg_tick = tick;
         self.xg_total += xg;
-    }
-
-    pub fn decay(&mut self, _current_tick: u64) {
-        // Regress confidence toward 0.5
-        if self.confidence > 0.5 {
-            self.confidence = (self.confidence - 0.02).max(0.5);
-        } else if self.confidence < 0.5 {
-            self.confidence = (self.confidence + 0.02).min(0.5);
-        }
-
-        // Remove old intentions (older than 500 ticks are stale)
-        // We don't have the tick here easily, so just trim if full
-        if self.intentions.len() > 1 {
-            self.intentions.remove(0);
-        }
-
-        // Decay pass streak
-        if self.pass_streak > 0 {
-            self.pass_streak = self.pass_streak.saturating_sub(1);
-        }
-    }
-}
-
-impl Default for PlayerMemory {
-    fn default() -> Self {
-        Self::new()
     }
 }

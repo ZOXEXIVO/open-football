@@ -343,7 +343,8 @@ pub struct ChaseEntry {
 /// Per-side two-smallest `(dist_sq, id)` table against the ball's
 /// landing position, over the SAME entry set the dispatcher's loose-ball
 /// overrides used to scan per player (`positions.players.as_slice()`,
-/// substitutes included). Lexicographic ordering (dist_sq, then id)
+/// substitutes included) MINUS players committed to an un-abortable
+/// action (`chase_eligible == false`). Lexicographic ordering (dist_sq, then id)
 /// makes the O(1) queries reproduce the original scans exactly:
 ///
 ///   * `should_force_takeball`: "no other same-side entry strictly
@@ -377,6 +378,15 @@ impl LooseBallChase {
         self.left = [None; 2];
         self.right = [None; 2];
         for meta in positions.players.as_slice() {
+            // A player mid-dive / mid-header / mid-tackle cannot take over
+            // a chase, so they must not hold the "closest teammate"
+            // designation either — otherwise skipping the redirect for
+            // them would strand the ball with nobody claiming it. Dropping
+            // them here hands the designation to the next-closest
+            // teammate, which is what a real defensive line does.
+            if !meta.chase_eligible {
+                continue;
+            }
             let entry = ChaseEntry {
                 dist_sq: (ball_pos - meta.position).norm_squared(),
                 id: meta.player_id,

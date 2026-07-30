@@ -1,6 +1,7 @@
 use crate::r#match::MatchPlayerLite;
 use crate::r#match::PlayerSide;
 use crate::r#match::StateProcessingContext;
+use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 #[cfg(feature = "match-logs")]
@@ -671,6 +672,17 @@ pub fn evaluate_forward_shot_decision(
         * gk_context_mult
         * balance_factor
         * (1.0 + selection_marginal_adj);
+    // ── Psychology ────────────────────────────────────────────────────
+    // Whether a player pulls the trigger is partly in their head. A
+    // striker who has just scored backs himself from 25 yards; one who
+    // has shanked two and picked up a booking takes the extra touch.
+    // `PsychState` already tracked exactly this (confidence, nervousness,
+    // momentum, fed by real match events) but nothing in the state
+    // machine read it — only the pass evaluator and the ownership duel
+    // did. Applied BEFORE the inside-six floor: nobody's nerves talk them
+    // out of an open net.
+    willingness *= Psychology::initiative_for(&ctx.context.psychology, ctx.player.id);
+
     if inside_six {
         // Inside-six floor scales with execution_skill so a 5/20
         // player floors near 0.15, not 0.30.

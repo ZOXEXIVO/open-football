@@ -103,6 +103,18 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
+            // OVERLAP DELIVERY: a wide defender who has carried the ball
+            // into an advanced wide position crosses it. Before this the
+            // defender state machine had no crossing state at all, so the
+            // overlapping fullback — one of the largest sources of chances
+            // in real football — could only pass square, shoot, or keep
+            // running until they were dispossessed.
+            if self.should_cross(ctx) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Crossing,
+                ));
+            }
+
             // Defenders should almost always pass — only shoot if very close with clear shot.
             // Routes through `shooting_close` so the threshold reads
             // fatigue-aware finishing/composure/decisions, not raw
@@ -969,6 +981,56 @@ impl DefenderRunningState {
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
         distance_to_goal <= MAX_SHOOTING_DISTANCE && ctx.player().has_clear_shot()
+    }
+
+    /// Should this defender deliver a cross?
+    ///
+    /// The overlapping-fullback picture: a WIDE defender (a centre-back
+    /// out here is lost, not overlapping), carrying the ball, high enough
+    /// up the pitch and close enough to the touchline for a delivery to
+    /// make sense, with someone to aim at in the box.
+    fn should_cross(&self, ctx: &StateProcessingContext) -> bool {
+        /// How far up the pitch the defender must have carried the ball.
+        const ADVANCED_PROGRESS: f32 = 0.62;
+        /// Distance from a touchline that still counts as a wide channel.
+        const WIDE_CHANNEL: f32 = 0.24;
+        /// A target must be inside this range of goal to be worth a ball.
+        const BOX_RANGE: f32 = 150.0;
+
+        // Centre-backs don't overlap; wide defenders do.
+        if ctx
+            .player
+            .tactical_position
+            .current_position
+            .is_central_defender()
+        {
+            return false;
+        }
+
+        let Some(side) = ctx.player.side else {
+            return false;
+        };
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+
+        // Far enough forward to be crossing rather than building.
+        if side.attacking_progress_x(ctx.player.position.x, field_width) < ADVANCED_PROGRESS {
+            return false;
+        }
+
+        // Actually in a wide channel — a cross from central areas is just
+        // a pass, and the passing state handles those better.
+        let lateral = (ctx.player.position.y / field_height.max(1.0)).clamp(0.0, 1.0);
+        if lateral > WIDE_CHANNEL && lateral < 1.0 - WIDE_CHANNEL {
+            return false;
+        }
+
+        // Somebody to aim at.
+        let goal_pos = ctx.player().opponent_goal_position();
+        ctx.players()
+            .teammates()
+            .all()
+            .any(|t| t.id != ctx.player.id && (t.position - goal_pos).magnitude() <= BOX_RANGE)
     }
 
     /// Find the best build-up pass target within `max_distance`.
