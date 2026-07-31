@@ -85,7 +85,7 @@
                     <li class="np-result np-result-{{ result.outcome }}">
                         <span class="np-result-date">{{ result.date }}</span>
                         <a class="np-result-club" href="/{{ lang }}/teams/{{ result.opponent_slug }}">{{ result.opponent_name }}</a>
-                        {% if result.is_continental %}<span class="np-result-cup">{{ news.t("newspaper_continental_night") }}</span>{% elif result.is_cup %}<span class="np-result-cup">{{ news.t("newspaper_cup_tie") }}</span>{% endif %}
+                        {% if result.is_continental %}<span class="np-result-cup">{{ news.t("newspaper_continental_night") }}</span>{% elif result.is_playoff %}<span class="np-result-cup">{{ news.t("newspaper_playoff_tie") }}</span>{% elif result.is_cup %}<span class="np-result-cup">{{ news.t("newspaper_cup_tie") }}</span>{% endif %}
                         {% if !result.match_id.is_empty() %}<a class="np-result-score" href="/{{ lang }}/match/{{ result.match_id }}">{{ result.score }}</a>{% else %}<span class="np-result-score">{{ result.score }}</span>{% endif %}
                     </li>
                     {% endfor %}

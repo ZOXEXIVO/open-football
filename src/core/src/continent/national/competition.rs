@@ -266,6 +266,34 @@ impl NationalTeamCompetition {
         &self.config.short_name
     }
 
+    /// The two countries who reached the final, once one has been
+    /// played: `(champion, runner_up)`.
+    ///
+    /// The champion is recorded when the tournament completes; the side
+    /// that lost the final is not, and it is the more interesting half
+    /// of the story. Both are read back off the bracket so the world
+    /// sweep can tell a squad it has won something from a squad that
+    /// has spent a month getting to a final and lost it.
+    pub fn finalists(&self) -> Option<(u32, u32)> {
+        let champion = self.champion?;
+        let final_tie = self
+            .knockout
+            .iter()
+            .find(|bracket| bracket.round == KnockoutRound::Final)?
+            .fixtures
+            .first()?;
+
+        let runner_up = if final_tie.home_country_id == champion {
+            final_tie.away_country_id
+        } else {
+            final_tie.home_country_id
+        };
+
+        // A one-team tournament crowns somebody without a final being
+        // played; there is no beaten finalist to report.
+        (runner_up != champion).then_some((champion, runner_up))
+    }
+
     /// Draw qualifying groups from country IDs sorted by reputation (descending)
     pub fn draw_qualifying_groups(
         &mut self,

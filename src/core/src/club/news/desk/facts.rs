@@ -341,6 +341,8 @@ pub struct WeeklyMatchFacts {
     /// is not a knockout tie, and `CupTie::advanced()` would report
     /// every drawn group game as an elimination.
     pub continental: FxHashMap<u32, ContinentalNight>,
+    /// Playoff ties this week, keyed by the team playing them.
+    pub playoff: FxHashMap<u32, PlayoffTie>,
 }
 
 /// One continental fixture, from one side's point of view.
@@ -349,6 +351,33 @@ pub struct ContinentalNight {
     pub opponent_team_id: u32,
     pub goals_for: u8,
     pub goals_against: u8,
+}
+
+/// A playoff tie in progress or just finished, from one side's point of
+/// view.
+///
+/// Playoff fixtures already reach club papers — a playoff runs through
+/// an inner `League` the weekly gather walks — so the football was
+/// reported and the stakes were not: a semi-final second leg printed as
+/// a routine league Saturday. What the desk could never see is the
+/// thing that makes a playoff a playoff, which is the series behind the
+/// single game.
+///
+/// Read from the series rather than from `cup_ties` on purpose. A
+/// best-of-three is not a single tie, and `CupTie::advanced()` — which
+/// settles a drawn ninety minutes on a shoot-out tally — would report
+/// the loser of game one as eliminated.
+#[derive(Debug, Clone, Copy)]
+pub struct PlayoffTie {
+    pub opponent_team_id: u32,
+    /// True once this side has won the series.
+    pub advanced: bool,
+    /// True once the other side has.
+    pub eliminated: bool,
+    /// The series decides who plays in the final.
+    pub decides_a_finalist: bool,
+    /// Games in the series. One means a single-leg knockout.
+    pub best_of: u8,
 }
 
 impl WeeklyMatchFacts {
@@ -362,6 +391,7 @@ impl WeeklyMatchFacts {
             stars: FxHashMap::default(),
             drama: FxHashMap::default(),
             continental: FxHashMap::default(),
+            playoff: FxHashMap::default(),
         }
     }
 
@@ -445,6 +475,11 @@ impl WeeklyMatchFacts {
     /// European copy rather than the league report.
     pub fn continental_of(&self, sides: &FxHashSet<u32>) -> Option<ContinentalNight> {
         sides.iter().find_map(|team_id| self.continental.get(team_id).copied())
+    }
+
+    /// The playoff tie one of the club's sides is in this week.
+    pub fn playoff_of(&self, sides: &FxHashSet<u32>) -> Option<PlayoffTie> {
+        sides.iter().find_map(|team_id| self.playoff.get(team_id).copied())
     }
 
     pub fn drama_of(

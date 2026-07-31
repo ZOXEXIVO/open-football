@@ -461,6 +461,8 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::ManagerDeparture => "event_manager_departure",
         HappinessEventType::NationalTeamCallup => "event_national_team_callup",
         HappinessEventType::NationalTeamDropped => "event_national_team_dropped",
+        HappinessEventType::NationalTeamTriumph => "event_national_team_triumph",
+        HappinessEventType::NationalTeamHeartbreak => "event_national_team_heartbreak",
         HappinessEventType::ShirtNumberPromotion => "event_shirt_number_promotion",
         HappinessEventType::ControversyIncident => "event_controversy_incident",
         HappinessEventType::FirstClubGoal => "event_first_club_goal",

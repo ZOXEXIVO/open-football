@@ -33,7 +33,7 @@ use super::skills_array::*;
 
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 
 impl Player {
     /// Weekly development tick. See module docs for the model.
@@ -349,5 +349,32 @@ impl Player {
         // CA > PA states.
         self.player_attributes.current_ability =
             recomputed_ca.min(self.player_attributes.potential_ability);
+
+        self.refresh_ability_marker(now);
+    }
+
+    /// How long a development mark stands before it is replaced.
+    ///
+    /// Roughly a quarter of a season. The question the mark exists to
+    /// answer — has this player got better lately — is one that only
+    /// resolves over months; a baseline that moved every week would
+    /// answer it over a week and therefore never answer it at all.
+    const ABILITY_MARK_DAYS: i64 = 84;
+
+    /// Lay down, or refresh, the ability mark this player's progress is
+    /// measured against.
+    ///
+    /// The first call on a player simply records where he is — a
+    /// baseline cannot be a comparison — so nothing is reported about
+    /// anybody until a full window has passed under it.
+    fn refresh_ability_marker(&mut self, now: NaiveDate) {
+        let today = now.num_days_from_ce();
+        let marked_on = self.player_attributes.ability_marked_on_day;
+        let stale =
+            marked_on == 0 || (today - marked_on) as i64 >= Self::ABILITY_MARK_DAYS;
+        if stale {
+            self.player_attributes.ability_marker = self.player_attributes.current_ability;
+            self.player_attributes.ability_marked_on_day = today;
+        }
     }
 }

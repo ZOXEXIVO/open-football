@@ -1,5 +1,6 @@
 use crate::club::board::manager_market::ApproachState;
 use crate::club::news::RecentEvents;
+use crate::league::PlayoffRoundLabel;
 use crate::continent::competitions::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
 };
@@ -7,7 +8,7 @@ use crate::club::news::{
     Absorbing, BoardroomDesk, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie, DugoutDesk,
     FansDesk, IssueResult, KeeperMatchFacts, LoanDesk, LoanWatchEntry, ManagerPursuit, MarketDesk,
     MatchDesk, MatchDramaFacts, MatchStarFacts, NewsEditor, NewsStory, NewspaperIssue,
-    ContinentalNight, OutfieldMatchFacts, PressMood, ResultCompetition, SquadDesk, StandingSnapshot, TableDesk,
+    ContinentalNight, OutfieldMatchFacts, PlayoffTie, PressMood, ResultCompetition, SquadDesk, StandingSnapshot, TableDesk,
     TownMood,
     WeeklyMatchFacts,
 };
@@ -98,6 +99,14 @@ impl WeeklyMatchFacts {
                     .filter(|league| !league.friendly)
                 {
                     country_facts.absorb(league.matches.iter_in_range(week_start, week_end), false);
+                }
+
+                // The series behind the games. A playoff's fixtures run
+                // through an inner league the loop above already walks,
+                // so the football was always reported — as a routine
+                // league Saturday, because nothing carried the stakes.
+                for playoff in country.playoffs.iter() {
+                    country_facts.absorb_playoff(playoff, week_start, week_end);
                 }
 
                 if let Some(cup) = country.domestic_cup.as_ref() {
@@ -416,6 +425,52 @@ impl WeeklyMatchFacts {
         );
     }
 
+    /// Read the week's playoff ties off the bracket itself.
+    ///
+    /// Anchored on `last_game_date` rather than on the match store: the
+    /// question a playoff piece has to answer is not "did they play"
+    /// but "is the series over", and only the bracket knows that. A
+    /// best-of-three sitting at one win each has had two games this
+    /// week and decided nothing.
+    fn absorb_playoff(
+        &mut self,
+        playoff: &crate::league::LeaguePlayoff,
+        week_start: NaiveDate,
+        week_end: NaiveDate,
+    ) {
+        for series in playoff.series.iter() {
+            let Some(played) = series.last_game_date else {
+                continue;
+            };
+            if played < week_start || played >= week_end {
+                continue;
+            }
+
+            let winner = series.winner();
+            // Winning this one puts a side in the final, which is a
+            // bigger sentence than "through to the next round" and the
+            // only round distinction a supporter needs.
+            let decides_a_finalist =
+                playoff.round_label(series.round + 1) == PlayoffRoundLabel::Final;
+
+            for (team_id, opponent_team_id) in [
+                (series.home_team_id, series.away_team_id),
+                (series.away_team_id, series.home_team_id),
+            ] {
+                self.playoff.insert(
+                    team_id,
+                    PlayoffTie {
+                        opponent_team_id,
+                        advanced: winner == Some(team_id),
+                        eliminated: winner.is_some() && winner != Some(team_id),
+                        decides_a_finalist,
+                        best_of: series.best_of,
+                    },
+                );
+            }
+        }
+    }
+
     /// Keep the louder of two meetings, on the same rule as `crown`.
     fn record_drama(&mut self, team_id: u32, opponent_team_id: u32, candidate: MatchDramaFacts) {
         let slot = self
@@ -682,6 +737,7 @@ impl WeeklyMatchFacts {
             }
         }
         self.continental.extend(other.continental);
+        self.playoff.extend(other.playoff);
         for (key, drama) in other.drama {
             let slot = self.drama.entry(key).or_insert(drama);
             if drama.loudness() > slot.loudness() {
@@ -1094,6 +1150,10 @@ impl ClubPressRun {
             .continental
             .get(&team.id)
             .map(|night| night.opponent_team_id);
+        let playoff_opponent = facts
+            .playoff
+            .get(&team.id)
+            .map(|tie| tie.opponent_team_id);
 
         team.match_history
             .items()
@@ -1109,6 +1169,8 @@ impl ClubPressRun {
                 goals_against: item.score.1.get(),
                 competition: if continental_opponent == Some(item.rival_team_id) {
                     ResultCompetition::Continental
+                } else if playoff_opponent == Some(item.rival_team_id) {
+                    ResultCompetition::Playoff
                 } else if cup_opponent == Some(item.rival_team_id) {
                     ResultCompetition::Cup
                 } else {

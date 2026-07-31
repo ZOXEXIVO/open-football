@@ -847,5 +847,7 @@
   "transfer_interest_headline_terms_rejected": "Recusou a transferência por causa do acordo pessoal",
   "transfer_interest_headline_terms_rejected_named": "Recusou a transferência para o {club} por causa do acordo pessoal",
   "transfer_interest_stage_terms_agreed": "Fase: acordo pessoal fechado.",
-  "transfer_interest_stage_terms_rejected": "Fase: o jogador recusou as condições."
+  "transfer_interest_stage_terms_rejected": "Fase: o jogador recusou as condições.",
+  "event_national_team_triumph": "Venceu um torneio internacional",
+  "event_national_team_heartbreak": "Perdeu uma final internacional"
 }

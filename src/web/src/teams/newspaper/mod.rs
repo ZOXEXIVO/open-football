@@ -289,6 +289,9 @@ pub struct ResultView {
     /// more so: a supporter scanning the ruled column wants to know
     /// which of the week's midweeks was the continental one.
     pub is_continental: bool,
+    /// …and a playoff game, where the stakes rather than the opponent
+    /// are what separate it from an ordinary Saturday.
+    pub is_playoff: bool,
     /// The match record behind the scoreline (`{date}_{home}_{away}`).
     /// Empty when the paper cannot place the fixture, in which case the
     /// score is set as plain type rather than as a dead link.
@@ -727,6 +730,7 @@ impl PressDesk {
             },
             is_cup: result.is_cup(),
             is_continental: result.is_continental(),
+            is_playoff: result.is_playoff(),
             match_id: if own_team_id == 0 {
                 String::new()
             } else {
@@ -1423,6 +1427,7 @@ mod tests {
                 "newspaper_another_club",
                 "newspaper_cup_tie",
                 "newspaper_continental_night",
+                "newspaper_playoff_tie",
             ] {
                 keys.push(chrome.to_string());
             }
@@ -2458,6 +2463,7 @@ mod render_tests {
                         outcome: "d",
                         is_cup: true,
                         is_continental: false,
+                        is_playoff: false,
                         match_id: String::new(),
                     },
                     ResultView {
@@ -2468,6 +2474,7 @@ mod render_tests {
                         outcome: "w",
                         is_cup: false,
                         is_continental: false,
+                        is_playoff: false,
                         match_id: "2026-03-01_301_58".to_string(),
                     },
                 ],

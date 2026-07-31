@@ -847,5 +847,7 @@
   "transfer_interest_headline_terms_rejected": "Rechazó el traspaso por las condiciones personales",
   "transfer_interest_headline_terms_rejected_named": "Rechazó el traspaso al {club} por las condiciones personales",
   "transfer_interest_stage_terms_agreed": "Etapa: condiciones personales acordadas.",
-  "transfer_interest_stage_terms_rejected": "Etapa: el jugador rechazó las condiciones."
+  "transfer_interest_stage_terms_rejected": "Etapa: el jugador rechazó las condiciones.",
+  "event_national_team_triumph": "Ganó un torneo internacional",
+  "event_national_team_heartbreak": "Perdió una final internacional"
 }

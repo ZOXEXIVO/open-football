@@ -28,6 +28,11 @@ impl MatchDesk {
                 continue;
             }
 
+            if result.competition == ResultCompetition::Playoff {
+                Self::file_playoff(out, result, facts, team.id);
+                continue;
+            }
+
             if result.is_cup() {
                 Self::file_cup_tie(out, result, facts, team.id);
                 continue;
@@ -115,6 +120,48 @@ impl MatchDesk {
             NewsStoryKind::ContinentalNightWin
         } else {
             NewsStoryKind::ContinentalDefeat
+        };
+
+        out.push(
+            NewsStory::new(kind, result.date)
+                .against(result.opponent_team_id)
+                .about(facts.star_of(team_id, result.opponent_team_id, result.goals_for))
+                .at_home(result.is_home)
+                .with_numbers(result.goals_for as i32, result.goals_against as i32),
+        );
+    }
+
+    /// A playoff game, reported against the series rather than against
+    /// the scoreline.
+    ///
+    /// The question a playoff piece has to answer is not "did they win
+    /// today" but "are they still in it", and only the bracket knows
+    /// that. A side can lose game two of a best-of-three and be
+    /// perfectly fine; a side can win one and be out. So the series
+    /// verdict leads whenever there is one, and the game report is
+    /// what runs while the tie is still open.
+    fn file_playoff(
+        out: &mut Vec<NewsStory>,
+        result: &IssueResult,
+        facts: &WeeklyMatchFacts,
+        team_id: u32,
+    ) {
+        let tie = facts.playoff.get(&team_id).copied();
+
+        let kind = match tie {
+            // One game from everything. A larger morning than simply
+            // going through, and the only round distinction a
+            // supporter actually needs.
+            Some(tie) if tie.advanced && tie.decides_a_finalist => {
+                NewsStoryKind::PlayoffFinalReached
+            }
+            Some(tie) if tie.advanced => NewsStoryKind::PlayoffTieWon,
+            Some(tie) if tie.eliminated => NewsStoryKind::PlayoffTieLost,
+            // The series is still open, or the bracket had nothing to
+            // say about this fixture — either way today's game is the
+            // story and tomorrow's is somebody else's problem.
+            _ if result.goals_for >= result.goals_against => NewsStoryKind::PlayoffGameWin,
+            _ => NewsStoryKind::PlayoffGameDefeat,
         };
 
         out.push(

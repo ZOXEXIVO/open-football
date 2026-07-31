@@ -386,11 +386,13 @@ impl ManagerSeatRepair {
 
         // ── Nobody in the dugout — install interim cover, then search ──
         let mut caretaker: Option<u32> = None;
+        let mut cupboard_bare = false;
         if let Some(main) = club.teams.main_mut() {
             // Prefer promoting the strongest internal coach; only mint a
             // synthetic caretaker when the cupboard is completely bare.
             if !ManagerSeat::promote_best_caretaker(main, 0, today) {
                 ManagerSeat::install_emergency_caretaker(main, club_id, today);
+                cupboard_bare = true;
             }
             caretaker = main
                 .staffs
@@ -399,6 +401,13 @@ impl ManagerSeatRepair {
         }
         if let Some(staff_id) = caretaker {
             club.record_affair(ClubAffair::CaretakerAppointed { staff_id }, today);
+        }
+        // Promoting a coach is an interim appointment and reads as one.
+        // Having to invent somebody because there was nobody left to
+        // promote is a different story entirely — a club with no
+        // coaching staff at all — and it had no way onto a page.
+        if cupboard_bare {
+            club.record_affair(ClubAffair::BackroomEmpty, today);
         }
         // Don't reset an existing search clock — only open one if the board
         // wasn't already searching (e.g. a sacking that found no caretaker).

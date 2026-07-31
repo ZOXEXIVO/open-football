@@ -24,6 +24,29 @@ pub struct PlayerAttributes {
 
     //ability
     pub current_ability: u8,
+    /// Current ability the last time a mark was laid down, and the day
+    /// it was laid.
+    ///
+    /// Nothing else stores a historical ability, so nothing could say
+    /// whether a player had improved — only what he was worth today.
+    /// That made a breakthrough season, a plateau and a decline
+    /// indistinguishable to everything outside the development engine,
+    /// including the press.
+    ///
+    /// Two bytes and a date, refreshed on a slow clock: the question
+    /// "has he got better lately" is answered over months, and a
+    /// baseline that moved every week would answer it over a week and
+    /// therefore never.
+    ///
+    /// This is CURRENT ability, which clubs, coaches and the press may
+    /// all observe. It is never potential — that stays hidden from
+    /// everything that is not the engine itself.
+    pub ability_marker: u8,
+    /// Day the mark was laid, as a day count rather than a date:
+    /// 's serde support is not enabled in this build, and a
+    /// field that cannot survive a save is a field that silently stops
+    /// working. Zero means never marked.
+    pub ability_marked_on_day: i32,
     /// HIDDEN biological ceiling. Clubs, scouts, and coaches can never
     /// read this directly — AI scouting / transfer / loan / development
     /// decisions must use estimates built from observable signals only
@@ -175,6 +198,8 @@ mod tests {
             home_reputation: 60,
             world_reputation: 70,
             current_ability: 80,
+            ability_marker: 0,
+            ability_marked_on_day: 0,
             potential_ability: 90,
             international_apps: 10,
             international_goals: 5,

@@ -35,7 +35,7 @@ pub use board::BoardroomDesk;
 pub use dugout::DugoutDesk;
 pub use facts::{
     Absorbing, CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie,
-    ContinentalNight, KeeperMatchFacts, LoanWatchEntry, ManagerPursuit, MatchDramaFacts, MatchStarFacts,
+    ContinentalNight, KeeperMatchFacts, PlayoffTie, LoanWatchEntry, ManagerPursuit, MatchDramaFacts, MatchStarFacts,
     OutfieldMatchFacts, PlayerStanding, RecentEvents, SquadPulse, StandingSnapshot, TransferMove,
     TransferMotive, TransferMoveKind, WeeklyMatchFacts,
 };

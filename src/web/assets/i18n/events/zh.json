@@ -847,5 +847,7 @@
   "transfer_interest_headline_terms_rejected": "因个人条款拒绝了这次转会",
   "transfer_interest_headline_terms_rejected_named": "因个人条款拒绝了加盟{club}",
   "transfer_interest_stage_terms_agreed": "阶段：个人条款已谈妥。",
-  "transfer_interest_stage_terms_rejected": "阶段：球员拒绝了条款。"
+  "transfer_interest_stage_terms_rejected": "阶段：球员拒绝了条款。",
+  "event_national_team_triumph": "赢得国际大赛冠军",
+  "event_national_team_heartbreak": "输掉国际大赛决赛"
 }

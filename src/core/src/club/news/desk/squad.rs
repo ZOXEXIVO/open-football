@@ -5,7 +5,7 @@ use super::market::MarketDesk;
 use super::rumour::RumourDesk;
 use crate::club::news::types::{NewsStory, NewsStoryKind};
 use crate::{HappinessEventType, Person, Player, PlayerFieldPositionGroup, Team};
-use chrono::{Duration, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use rustc_hash::FxHashSet;
 
 /// Squad news: form, fitness, discipline, milestones, contracts — plus
@@ -76,6 +76,7 @@ impl SquadDesk {
 
             if senior {
                 Self::file_dressing_room_state(out, team, date);
+                Self::file_shape_change(out, team, date);
             }
 
             for player in team.players.iter() {
@@ -119,6 +120,7 @@ impl SquadDesk {
                     Self::file_move_meaning(out, player, &feed, date);
                     Self::file_life_outside_football(out, player, date);
                     Self::file_coach_verdict(out, team, player, date);
+                    Self::file_development(out, player, date);
                     Self::file_dugout_ripple(out, player, &feed, date);
                     Self::file_small_beats(out, player, &feed, date);
                     DugoutDesk::file_player(out, player, &mut pulse, date);
@@ -192,6 +194,155 @@ impl SquadDesk {
                     .weighted((social.team_chemistry - Self::KNIT_CHEMISTRY) as i32),
             );
         }
+    }
+
+    /// Movement in current ability, over a mark laid a quarter of a
+    /// season ago, before the page will call it improvement or decline.
+    ///
+    /// Deliberately not one point. Ability drifts by a point on noise
+    /// and a paper that reported that would be reporting noise; three
+    /// is a change a coaching staff would notice and talk about.
+    const DEVELOPMENT_STEP: i32 = 3;
+    /// …and the bar for saying somebody has stopped, which needs a
+    /// window to have genuinely passed with nothing in it.
+    const STALL_WINDOW_DAYS: i64 = 150;
+    /// Above this age improvement stops being expected and starts being
+    /// a story; below it, the reverse.
+    const IMPROVEMENT_EXPECTED_AGE: u8 = 23;
+    /// The age at which going backwards is the story rather than a bad
+    /// patch.
+    const DECLINE_AGE: u8 = 30;
+
+    /// Whether he is actually getting better.
+    ///
+    /// Nothing in the game stored a historical ability, so the press
+    /// could see what a player is worth today and never whether that
+    /// number had moved — which made a breakthrough, a plateau and a
+    /// decline the same thing on a page. The development tick now
+    /// leaves a mark every quarter-season, and this reads it.
+    ///
+    /// Current ability only. Potential stays hidden from everything
+    /// that is not the engine, which is why none of these can say what
+    /// a player might become — only what he has actually done.
+    fn file_development(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate) {
+        let marked_on = player.player_attributes.ability_marked_on_day;
+        if marked_on == 0 {
+            // No mark yet: the first tick lays a baseline, and a
+            // baseline is not a comparison.
+            return;
+        }
+
+        let held_for = (date.num_days_from_ce() - marked_on) as i64;
+        let moved = player.player_attributes.current_ability as i32
+            - player.player_attributes.ability_marker as i32;
+        let age = player.age(date);
+        let importance = PlayerStanding::importance(player);
+
+        if moved >= Self::DEVELOPMENT_STEP {
+            let kind = if age <= Self::IMPROVEMENT_EXPECTED_AGE {
+                NewsStoryKind::BreakthroughSeason
+            } else {
+                // Improving after the age everybody stops expecting it
+                // is rarer, and reads as a different story about the
+                // same fact.
+                NewsStoryKind::TrainingTransformation
+            };
+            out.push(
+                NewsStory::new(kind, date)
+                    .about(player.id)
+                    .with_numbers(age as i32, moved)
+                    .weighted(importance / 2 + moved * 4),
+            );
+            return;
+        }
+
+        if moved <= -Self::DEVELOPMENT_STEP && age >= Self::DECLINE_AGE {
+            out.push(
+                NewsStory::new(NewsStoryKind::PowersFading, date)
+                    .about(player.id)
+                    .with_numbers(age as i32, -moved)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+
+        // Standing still. Only news for a young player, and only once
+        // enough time has passed that the flat line is a fact rather
+        // than a short window.
+        if moved == 0
+            && age <= Self::IMPROVEMENT_EXPECTED_AGE
+            && held_for >= Self::STALL_WINDOW_DAYS
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::StalledProspect, date)
+                    .about(player.id)
+                    .with_numbers(age as i32, 0)
+                    .weighted(importance / 2),
+            );
+        }
+    }
+
+    /// Matches in the new shape before the change counts as a decision
+    /// rather than as an experiment, and matches in the old one before
+    /// it counts as having been the shape at all.
+    const SHAPE_SETTLED: usize = 2;
+    const SHAPE_ESTABLISHED: usize = 3;
+    /// Once the new shape has been used this often it is simply the
+    /// shape, and a piece about a change is a piece about old news.
+    const SHAPE_STALE: usize = 5;
+
+    /// The manager has changed the shape and stuck with it.
+    ///
+    /// Nothing about this is ever announced. The team sheet simply
+    /// stops looking like it did, and every supporter works it out in
+    /// the same week — which is exactly what this reads: the match log
+    /// records the shape each side started in, so a sustained switch is
+    /// visible without anything new being emitted anywhere.
+    ///
+    /// Both windows are load-bearing. Without the settled bar a single
+    /// away-day back three reads as a revolution; without the
+    /// established bar a club that has been rotating shapes all season
+    /// gets a piece every fortnight about nothing.
+    fn file_shape_change(out: &mut Vec<NewsStory>, team: &Team, date: NaiveDate) {
+        let shapes: Vec<_> = team
+            .match_history
+            .items()
+            .iter()
+            .rev()
+            .filter_map(|item| item.tactic_started)
+            .take(Self::SHAPE_STALE + Self::SHAPE_ESTABLISHED)
+            .collect();
+
+        if shapes.len() < Self::SHAPE_SETTLED + Self::SHAPE_ESTABLISHED {
+            return;
+        }
+
+        let current = shapes[0];
+        let settled = shapes
+            .iter()
+            .take_while(|shape| **shape == current)
+            .count();
+
+        // Long enough to be a decision, short enough to still be news.
+        if !(Self::SHAPE_SETTLED..Self::SHAPE_STALE).contains(&settled) {
+            return;
+        }
+
+        // …and the thing before it has to have been a shape rather than
+        // the previous week's experiment.
+        let previous = shapes[settled];
+        let established = shapes[settled..]
+            .iter()
+            .take_while(|shape| **shape == previous)
+            .count();
+        if established < Self::SHAPE_ESTABLISHED {
+            return;
+        }
+
+        out.push(
+            NewsStory::new(NewsStoryKind::FormationRevolution, date)
+                .with_numbers(settled as i32, 0),
+        );
     }
 
     /// What the manager privately thinks of him.
@@ -1256,6 +1407,29 @@ impl SquadDesk {
                 NewsStory::new(NewsStoryKind::NationalCallUp, date)
                     .about(player.id)
                     .with_numbers(player.player_attributes.international_apps as i32, 0),
+            );
+        }
+
+        // How the summer ended for the men who were away.
+        //
+        // The side-scoping invariant holds: this is not a club paper
+        // claiming an international performance, which it may never do.
+        // It is a club paper reporting what happened to one of its own
+        // employees — read from his feed, exactly as it reads a
+        // bereavement or a call-up.
+        if feed.happened(HappinessEventType::NationalTeamTriumph) {
+            out.push(
+                NewsStory::new(NewsStoryKind::TournamentTriumph, date)
+                    .about(player.id)
+                    .with_numbers(player.player_attributes.international_apps as i32, 0)
+                    .weighted(PlayerStanding::importance(player)),
+            );
+        } else if feed.happened(HappinessEventType::NationalTeamHeartbreak) {
+            out.push(
+                NewsStory::new(NewsStoryKind::TournamentHeartbreak, date)
+                    .about(player.id)
+                    .with_numbers(player.player_attributes.international_apps as i32, 0)
+                    .weighted(PlayerStanding::importance(player) / 2),
             );
         }
 

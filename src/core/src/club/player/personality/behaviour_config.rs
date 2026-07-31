@@ -340,6 +340,8 @@ pub struct MoraleEventCatalog {
     pub manager_departure: f32,
     pub national_team_callup: f32,
     pub national_team_dropped: f32,
+    pub national_team_triumph: f32,
+    pub national_team_heartbreak: f32,
     pub shirt_number_promotion: f32,
     pub controversy_incident: f32,
     // Match performance
@@ -671,6 +673,11 @@ impl Default for MoraleEventCatalog {
             manager_departure: 0.0,
             national_team_callup: 6.0,
             national_team_dropped: -4.0,
+            // Winning a tournament is the largest single lift a
+            // footballer ever gets, and losing one lands like a
+            // bereavement for about a fortnight.
+            national_team_triumph: 14.0,
+            national_team_heartbreak: -8.0,
             shirt_number_promotion: 2.0,
             controversy_incident: -3.0,
             // Match performance — small/medium routine events plus a
@@ -1008,6 +1015,8 @@ impl MoraleEventCatalog {
             ManagerDeparture => self.manager_departure,
             NationalTeamCallup => self.national_team_callup,
             NationalTeamDropped => self.national_team_dropped,
+            NationalTeamTriumph => self.national_team_triumph,
+            NationalTeamHeartbreak => self.national_team_heartbreak,
             ShirtNumberPromotion => self.shirt_number_promotion,
             ControversyIncident => self.controversy_incident,
             FirstClubGoal => self.first_club_goal,

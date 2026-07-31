@@ -1125,6 +1125,11 @@ impl PlayerGenerator {
                 home_reputation: (rep_factor * 800.0) as i16,
                 world_reputation: (rep_factor * 200.0) as i16,
                 current_ability,
+                // No mark yet: a baseline is laid on the first development
+                // tick, so nobody is reported as having improved before a
+                // full window has actually passed under one.
+                ability_marker: 0,
+                ability_marked_on_day: 0,
                 potential_ability,
                 international_apps: 0,
                 international_goals: 0,

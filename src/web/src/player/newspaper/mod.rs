@@ -498,6 +498,7 @@ mod tests {
                         outcome: "w",
                         is_cup: false,
                         is_continental: false,
+                        is_playoff: false,
                         match_id: "2026-02-28_301_58".to_string(),
                     },
                     ResultView {
@@ -508,6 +509,7 @@ mod tests {
                         outcome: "d",
                         is_cup: true,
                         is_continental: false,
+                        is_playoff: false,
                         match_id: String::new(),
                     },
                 ],

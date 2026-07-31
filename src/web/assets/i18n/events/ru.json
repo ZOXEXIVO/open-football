@@ -847,5 +847,7 @@
   "transfer_interest_headline_terms_rejected": "Отказался от перехода из-за личных условий",
   "transfer_interest_headline_terms_rejected_named": "Отказался от перехода в {club} из-за личных условий",
   "transfer_interest_stage_terms_agreed": "Стадия: личные условия согласованы.",
-  "transfer_interest_stage_terms_rejected": "Стадия: игрок отказался от условий."
+  "transfer_interest_stage_terms_rejected": "Стадия: игрок отказался от условий.",
+  "event_national_team_triumph": "Выиграл международный турнир",
+  "event_national_team_heartbreak": "Проиграл международный финал"
 }

@@ -847,5 +847,7 @@
   "transfer_interest_headline_terms_rejected": "Turned the move down over personal terms",
   "transfer_interest_headline_terms_rejected_named": "Turned down the move to {club} over personal terms",
   "transfer_interest_stage_terms_agreed": "Stage: personal terms agreed.",
-  "transfer_interest_stage_terms_rejected": "Stage: the player rejected the terms."
+  "transfer_interest_stage_terms_rejected": "Stage: the player rejected the terms.",
+  "event_national_team_triumph": "Won an international tournament",
+  "event_national_team_heartbreak": "Lost an international final"
 }

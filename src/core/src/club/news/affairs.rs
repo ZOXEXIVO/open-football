@@ -131,6 +131,14 @@ pub enum ClubAffair {
     /// …and the other end of the same pipeline: boys handed up out of
     /// the academy into a senior squad.
     AcademyGraduationBatch { count: u16 },
+    /// The club had nobody left to promote and had to invent an
+    /// interim coach.
+    ///
+    /// Distinct from a caretaker appointment, which is an internal
+    /// promotion and reads as one. This is a club whose coaching staff
+    /// has emptied out entirely, and until now the only trace it left
+    /// was a stranger's name on a team sheet.
+    BackroomEmpty,
 }
 
 /// Which kind of clause paid out. Kept apart from the transfer

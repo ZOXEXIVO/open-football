@@ -81,6 +81,15 @@ pub enum HappinessEventType {
     /// Dropped from the national team squad after previous caps — hurts
     /// pride more than a non-selection would.
     NationalTeamDropped,
+    /// His country won the tournament with him in the squad.
+    ///
+    /// The one thing that can happen to a footballer that his club has
+    /// nothing to do with and every one of its supporters claims a
+    /// share of anyway.
+    NationalTeamTriumph,
+    /// …and the other end of the same summer: knocked out, and home
+    /// with a month of the close season to think about it.
+    NationalTeamHeartbreak,
     /// Promoted to a prestigious shirt number (1-11, esp. #10 / #7 / #9).
     /// Small ongoing pride boost while the number holds.
     ShirtNumberPromotion,

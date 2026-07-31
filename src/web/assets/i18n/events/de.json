@@ -847,5 +847,7 @@
   "transfer_interest_headline_terms_rejected": "Hat den Wechsel an den persönlichen Bedingungen scheitern lassen",
   "transfer_interest_headline_terms_rejected_named": "Hat den Wechsel zu {club} an den persönlichen Bedingungen scheitern lassen",
   "transfer_interest_stage_terms_agreed": "Stadium: persönliche Bedingungen vereinbart.",
-  "transfer_interest_stage_terms_rejected": "Stadium: der Spieler hat die Bedingungen abgelehnt."
+  "transfer_interest_stage_terms_rejected": "Stadium: der Spieler hat die Bedingungen abgelehnt.",
+  "event_national_team_triumph": "Ein internationales Turnier gewonnen",
+  "event_national_team_heartbreak": "Ein internationales Finale verloren"
 }

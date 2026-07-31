@@ -169,10 +169,57 @@ pub enum NewsStoryKind {
     /// side that plays this football every year.
     ContinentalHiding,
 
+
+    // ── Match desk: the playoffs ──────────────────────────────────
+    //
+    // A playoff runs through an inner league the weekly gather
+    // already walks, so the football was always reported — as a
+    // routine league Saturday, because nothing carried the stakes.
+    // Read from the bracket's own series rather than from a cup
+    // tie: a best-of-three sitting at one win each has had two
+    // games this week and decided nothing.
+    /// A playoff game won, with the series still open. Worth more
+    /// than the same scoreline in April and for an obvious reason.
+    PlayoffGameWin,
+    /// …and one lost, with the series still alive. The week between
+    /// two playoff games is the longest week in football.
+    PlayoffGameDefeat,
+    /// Through. The series is settled and the club is still in it.
+    PlayoffTieWon,
+    /// Out. A season that ran to May and ended in a fortnight.
+    PlayoffTieLost,
+    /// Through to the final. One match from everything the season
+    /// was for, and the largest morning a club can have without
+    /// having won anything at all.
+    PlayoffFinalReached,
+
     // ── Squad desk ────────────────────────────────────────────────
     HatTrick,
     StarForm,
     RisingStar,
+
+
+    // ── Squad desk: whether he is actually getting better ─────────
+    //
+    // Nothing in the game stored a historical ability, so nothing
+    // outside the development engine could tell a breakthrough from
+    // a plateau from a decline — the press could see what a player
+    // is worth today and never whether that number had moved. All
+    // four read a CURRENT-ability mark laid down a quarter of a
+    // season ago. None of them reads potential, which stays hidden
+    // from everything that is not the engine.
+    /// A young player who has genuinely improved — not a good run of
+    /// form, an actual step up that has held for months.
+    BreakthroughSeason,
+    /// The same thing later in a career, where it is rarer and
+    /// therefore stranger: a player nobody expected to improve has.
+    TrainingTransformation,
+    /// A young player who has stopped getting better. The quietest
+    /// bad news in football and the hardest to say out loud.
+    StalledProspect,
+    /// A player going backwards. It happens to all of them and it is
+    /// still the hardest paragraph a local paper has to write.
+    PowersFading,
     KeeperWall,
     /// The afternoon a goalkeeper kept his side in it on his own — the
     /// one position whose best day never shows up in a scoreline.
@@ -203,6 +250,15 @@ pub enum NewsStoryKind {
     TeamOfTheWeek,
     CaptainNamed,
     NationalCallUp,
+
+    /// One of the club's players has won a tournament with his
+    /// country. The one thing that happens to a footballer which his
+    /// club had no hand in and every one of its supporters claims a
+    /// share of anyway.
+    TournamentTriumph,
+    /// …and the other end of the same summer: a month of football
+    /// and a final lost, and a man due back at training in a fortnight.
+    TournamentHeartbreak,
     GoalDrought,
     DroughtEnded,
     FormerClubGoal,
@@ -359,6 +415,11 @@ pub enum NewsStoryKind {
     /// quietest story and the one that most often precedes a run in
     /// the side.
     TrainingGroundBuzz,
+
+    /// The manager has torn up the shape and kept the new one.
+    /// Nothing is ever announced; the team sheet simply stops looking
+    /// like it did, and everybody notices in the same week.
+    FormationRevolution,
     /// …and the version nobody wants written about them.
     TrainingConcerns,
     /// He is sick of the bench and has stopped hiding it.
@@ -799,6 +860,12 @@ pub enum NewsStoryKind {
     EuropeSecured,
     AcademyPraise,
 
+    /// Nobody left to promote. A club whose coaching staff has
+    /// emptied out entirely and has had to put a stranger in charge of
+    /// training, which is a story about the institution rather than
+    /// about a dugout.
+    BackroomEmpty,
+
 
     // ── Boardroom: the academy's own calendar ─────────────────────
     //
@@ -924,7 +991,7 @@ impl NewsStoryKind {
     /// each one has a headline and a body in every translation bundle,
     /// so adding a variant without its copy fails a test rather than
     /// printing a raw key on the front page.
-    pub const ALL: [NewsStoryKind; 295] = [
+    pub const ALL: [NewsStoryKind; 308] = [
         NewsStoryKind::LeagueWin,
         NewsStoryKind::LeagueDraw,
         NewsStoryKind::GoallessDraw,
@@ -956,9 +1023,18 @@ impl NewsStoryKind {
         NewsStoryKind::ContinentalDefeat,
         NewsStoryKind::ContinentalRout,
         NewsStoryKind::ContinentalHiding,
+        NewsStoryKind::PlayoffGameWin,
+        NewsStoryKind::PlayoffGameDefeat,
+        NewsStoryKind::PlayoffTieWon,
+        NewsStoryKind::PlayoffTieLost,
+        NewsStoryKind::PlayoffFinalReached,
         NewsStoryKind::HatTrick,
         NewsStoryKind::StarForm,
         NewsStoryKind::RisingStar,
+        NewsStoryKind::BreakthroughSeason,
+        NewsStoryKind::TrainingTransformation,
+        NewsStoryKind::StalledProspect,
+        NewsStoryKind::PowersFading,
         NewsStoryKind::KeeperWall,
         NewsStoryKind::KeeperMasterclass,
         NewsStoryKind::KeeperPenaltySave,
@@ -978,6 +1054,8 @@ impl NewsStoryKind {
         NewsStoryKind::TeamOfTheWeek,
         NewsStoryKind::CaptainNamed,
         NewsStoryKind::NationalCallUp,
+        NewsStoryKind::TournamentTriumph,
+        NewsStoryKind::TournamentHeartbreak,
         NewsStoryKind::GoalDrought,
         NewsStoryKind::DroughtEnded,
         NewsStoryKind::FormerClubGoal,
@@ -1025,6 +1103,7 @@ impl NewsStoryKind {
         NewsStoryKind::BigMatchTrust,
         NewsStoryKind::ManagerDoubtsLinger,
         NewsStoryKind::TrainingGroundBuzz,
+        NewsStoryKind::FormationRevolution,
         NewsStoryKind::TrainingConcerns,
         NewsStoryKind::BenchFrustration,
         NewsStoryKind::DroppedByCountry,
@@ -1191,6 +1270,7 @@ impl NewsStoryKind {
         NewsStoryKind::CupFinalHeartbreak,
         NewsStoryKind::EuropeSecured,
         NewsStoryKind::AcademyPraise,
+        NewsStoryKind::BackroomEmpty,
         NewsStoryKind::IntakeDay,
         NewsStoryKind::GoldenGeneration,
         NewsStoryKind::GraduationDay,
@@ -1254,6 +1334,11 @@ impl NewsStoryKind {
             | NewsStoryKind::ContinentalDefeat
             | NewsStoryKind::ContinentalRout
             | NewsStoryKind::ContinentalHiding
+            | NewsStoryKind::PlayoffGameWin
+            | NewsStoryKind::PlayoffGameDefeat
+            | NewsStoryKind::PlayoffTieWon
+            | NewsStoryKind::PlayoffTieLost
+            | NewsStoryKind::PlayoffFinalReached
             | NewsStoryKind::AwayDayForm => NewsDesk::Match,
 
             NewsStoryKind::HatTrick
@@ -1366,6 +1451,13 @@ impl NewsStoryKind {
             | NewsStoryKind::CliqueConcerns
             | NewsStoryKind::BigMatchTrust
             | NewsStoryKind::ManagerDoubtsLinger
+            | NewsStoryKind::FormationRevolution
+            | NewsStoryKind::BreakthroughSeason
+            | NewsStoryKind::TrainingTransformation
+            | NewsStoryKind::StalledProspect
+            | NewsStoryKind::PowersFading
+            | NewsStoryKind::TournamentTriumph
+            | NewsStoryKind::TournamentHeartbreak
             | NewsStoryKind::RoleFrustration => NewsDesk::Squad,
 
             NewsStoryKind::ManOfTheMatch
@@ -1516,6 +1608,7 @@ impl NewsStoryKind {
             | NewsStoryKind::IntakeDay
             | NewsStoryKind::GoldenGeneration
             | NewsStoryKind::GraduationDay
+            | NewsStoryKind::BackroomEmpty
             | NewsStoryKind::MustSellBeforeBuying => NewsDesk::Boardroom,
 
             NewsStoryKind::LeagueTopScorer
@@ -1564,9 +1657,18 @@ impl NewsStoryKind {
             NewsStoryKind::ContinentalDefeat => "continental_defeat",
             NewsStoryKind::ContinentalRout => "continental_rout",
             NewsStoryKind::ContinentalHiding => "continental_hiding",
+            NewsStoryKind::PlayoffGameWin => "playoff_game_win",
+            NewsStoryKind::PlayoffGameDefeat => "playoff_game_defeat",
+            NewsStoryKind::PlayoffTieWon => "playoff_tie_won",
+            NewsStoryKind::PlayoffTieLost => "playoff_tie_lost",
+            NewsStoryKind::PlayoffFinalReached => "playoff_final_reached",
             NewsStoryKind::HatTrick => "hat_trick",
             NewsStoryKind::StarForm => "star_form",
             NewsStoryKind::RisingStar => "rising_star",
+            NewsStoryKind::BreakthroughSeason => "breakthrough_season",
+            NewsStoryKind::TrainingTransformation => "training_transformation",
+            NewsStoryKind::StalledProspect => "stalled_prospect",
+            NewsStoryKind::PowersFading => "powers_fading",
             NewsStoryKind::KeeperWall => "keeper_wall",
             NewsStoryKind::KeeperMasterclass => "keeper_masterclass",
             NewsStoryKind::KeeperPenaltySave => "keeper_penalty_save",
@@ -1586,6 +1688,8 @@ impl NewsStoryKind {
             NewsStoryKind::TeamOfTheWeek => "team_of_the_week",
             NewsStoryKind::CaptainNamed => "captain_named",
             NewsStoryKind::NationalCallUp => "national_callup",
+            NewsStoryKind::TournamentTriumph => "tournament_triumph",
+            NewsStoryKind::TournamentHeartbreak => "tournament_heartbreak",
             NewsStoryKind::GoalDrought => "goal_drought",
             NewsStoryKind::DroughtEnded => "drought_ended",
             NewsStoryKind::FormerClubGoal => "former_club_goal",
@@ -1633,6 +1737,7 @@ impl NewsStoryKind {
             NewsStoryKind::BigMatchTrust => "big_match_trust",
             NewsStoryKind::ManagerDoubtsLinger => "manager_doubts_linger",
             NewsStoryKind::TrainingGroundBuzz => "training_ground_buzz",
+            NewsStoryKind::FormationRevolution => "formation_revolution",
             NewsStoryKind::TrainingConcerns => "training_concerns",
             NewsStoryKind::BenchFrustration => "bench_frustration",
             NewsStoryKind::DroppedByCountry => "dropped_by_country",
@@ -1799,6 +1904,7 @@ impl NewsStoryKind {
             NewsStoryKind::CupFinalHeartbreak => "cup_final_heartbreak",
             NewsStoryKind::EuropeSecured => "europe_secured",
             NewsStoryKind::AcademyPraise => "academy_praise",
+            NewsStoryKind::BackroomEmpty => "backroom_empty",
             NewsStoryKind::IntakeDay => "intake_day",
             NewsStoryKind::GoldenGeneration => "golden_generation",
             NewsStoryKind::GraduationDay => "graduation_day",
@@ -1965,6 +2071,17 @@ impl NewsStoryKind {
             NewsStoryKind::ContinentalDefeat => 596,
             NewsStoryKind::ContinentalRout => 690,
             NewsStoryKind::ContinentalHiding => 664,
+            // A playoff game is worth more than the identical scoreline
+            // in April, and every supporter knows exactly why.
+            NewsStoryKind::PlayoffGameWin => 618,
+            NewsStoryKind::PlayoffGameDefeat => 606,
+            // A series settled. The whole point of a playoff, and a
+            // bigger morning than any single game inside it.
+            NewsStoryKind::PlayoffTieWon => 700,
+            NewsStoryKind::PlayoffTieLost => 686,
+            // One game from everything. The largest thing that can
+            // happen to a club without anything actually being won.
+            NewsStoryKind::PlayoffFinalReached => 780,
             NewsStoryKind::FortressHome => 446,
             // Over inside twenty minutes, and the reply that said it
             // was not. Both are shapes of an afternoon rather than
@@ -1989,6 +2106,14 @@ impl NewsStoryKind {
             // A local kid coming through is the story a town wants
             // most, and it outranks the same form from a senior pro.
             NewsStoryKind::RisingStar => 475,
+            // A young player who has visibly got better. The story a
+            // club's own supporters most want to be true.
+            NewsStoryKind::BreakthroughSeason => 462,
+            NewsStoryKind::TrainingTransformation => 418,
+            NewsStoryKind::StalledProspect => 386,
+            // A veteran going backwards. Everybody sees it before
+            // anybody says it, which is what makes it printable.
+            NewsStoryKind::PowersFading => 424,
             NewsStoryKind::UnbeatenRun => 470,
             // The club has moved for somebody else's manager, and the
             // sale that was going to change everything fell over. Both
@@ -2115,6 +2240,11 @@ impl NewsStoryKind {
             // A lad sent out to play, told from the parent's page.
             NewsStoryKind::LoanedOutToGrow => 268,
             NewsStoryKind::NationalCallUp => 345,
+            // A player of this club has won an international
+            // tournament. The largest thing that can appear on a club
+            // page that the club had nothing to do with.
+            NewsStoryKind::TournamentTriumph => 820,
+            NewsStoryKind::TournamentHeartbreak => 640,
             NewsStoryKind::MoneyWorries => 340,
             // Losing the armband is the sharper end of the captaincy
             // story, so it runs a shade above the naming of one.
@@ -2194,6 +2324,9 @@ impl NewsStoryKind {
             NewsStoryKind::RumourCools => 236,
             NewsStoryKind::GoalDrought => 235,
             NewsStoryKind::AcademyPraise => 230,
+            // A club with no coaching staff at all. Not an interim
+            // appointment — an institution with nobody left in it.
+            NewsStoryKind::BackroomEmpty => 604,
             // One morning a year, and the only day the academy is
             // visible from outside the building.
             NewsStoryKind::IntakeDay => 396,
@@ -2404,6 +2537,10 @@ impl NewsStoryKind {
             // The week's quietest story, and the one that most often
             // comes before a run in the side.
             NewsStoryKind::TrainingGroundBuzz => 213,
+            // The manager has changed the shape and stuck with it. Read
+            // off the match log rather than announced anywhere, which is
+            // also how a supporter works it out.
+            NewsStoryKind::FormationRevolution => 388,
         }
     }
 
@@ -2643,6 +2780,14 @@ impl NewsStoryKind {
             | NewsStoryKind::ContinentalDefeat
             | NewsStoryKind::ContinentalRout
             | NewsStoryKind::ContinentalHiding
+            | NewsStoryKind::PlayoffGameWin
+            | NewsStoryKind::PlayoffGameDefeat
+            | NewsStoryKind::PlayoffTieWon
+            | NewsStoryKind::PlayoffTieLost
+            | NewsStoryKind::PlayoffFinalReached
+            | NewsStoryKind::BackroomEmpty
+            | NewsStoryKind::TournamentTriumph
+            | NewsStoryKind::TournamentHeartbreak
             | NewsStoryKind::SeasonAward => NewsRecurrence::Event,
 
             // A number that moves. The paper runs it again as soon as
@@ -2796,6 +2941,11 @@ impl NewsStoryKind {
             | NewsStoryKind::CliqueConcerns
             | NewsStoryKind::BigMatchTrust
             | NewsStoryKind::ManagerDoubtsLinger
+            | NewsStoryKind::FormationRevolution
+            | NewsStoryKind::BreakthroughSeason
+            | NewsStoryKind::TrainingTransformation
+            | NewsStoryKind::StalledProspect
+            | NewsStoryKind::PowersFading
             | NewsStoryKind::LeftOutOfSquadList => NewsRecurrence::Standing,
         }
     }
@@ -2806,7 +2956,9 @@ impl NewsStoryKind {
     pub fn allows_repeat(self) -> bool {
         matches!(
             self,
-            NewsStoryKind::ContinentalNightWin
+            NewsStoryKind::PlayoffGameWin
+                |             NewsStoryKind::PlayoffGameDefeat
+                |             NewsStoryKind::ContinentalNightWin
                 |             NewsStoryKind::ContinentalDefeat
                 |             NewsStoryKind::ContinentalRout
                 |             NewsStoryKind::ContinentalHiding
@@ -3169,6 +3321,11 @@ pub enum ResultCompetition {
     /// results rail is the one place a supporter looks to check which
     /// of the three competitions a midweek scoreline belonged to.
     Continental,
+    /// A playoff game. Its own label because the stakes are the whole
+    /// point: the same 1-0 that is a routine Saturday in April decides
+    /// a season in May, and the ruled column is where a reader checks
+    /// which of the two he is looking at.
+    Playoff,
 }
 
 impl ResultCompetition {
@@ -3178,6 +3335,7 @@ impl ResultCompetition {
             ResultCompetition::League => "league",
             ResultCompetition::Cup => "cup",
             ResultCompetition::Continental => "continental",
+            ResultCompetition::Playoff => "playoff",
         }
     }
 }
@@ -3220,6 +3378,12 @@ impl IssueResult {
     /// scanning the week wants to know which midweek was which.
     pub fn is_continental(&self) -> bool {
         self.competition == ResultCompetition::Continental
+    }
+
+    /// A playoff game — a knockout by another name, and the results
+    /// column marks it as one.
+    pub fn is_playoff(&self) -> bool {
+        self.competition == ResultCompetition::Playoff
     }
 }
 

@@ -847,5 +847,7 @@
   "transfer_interest_headline_terms_rejected": "Kişisel şartlar yüzünden transferi reddetti",
   "transfer_interest_headline_terms_rejected_named": "Kişisel şartlar yüzünden {club} transferini reddetti",
   "transfer_interest_stage_terms_agreed": "Aşama: kişisel şartlarda anlaşma sağlandı.",
-  "transfer_interest_stage_terms_rejected": "Aşama: oyuncu şartları reddetti."
+  "transfer_interest_stage_terms_rejected": "Aşama: oyuncu şartları reddetti.",
+  "event_national_team_triumph": "Uluslararası bir turnuva kazandı",
+  "event_national_team_heartbreak": "Uluslararası bir final kaybetti"
 }

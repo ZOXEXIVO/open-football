@@ -280,6 +280,7 @@ impl BoardroomDesk {
                     NewsStory::new(NewsStoryKind::GraduationDay, date)
                         .with_numbers(count as i32, 0)
                 }
+                ClubAffair::BackroomEmpty => NewsStory::new(NewsStoryKind::BackroomEmpty, date),
             };
 
             out.push(story);

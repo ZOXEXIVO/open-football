@@ -236,6 +236,8 @@ impl NationalTeam {
                 home_reputation: 1000,
                 world_reputation: (ability as i16) * 3,
                 current_ability: ability,
+                ability_marker: 0,
+                ability_marked_on_day: 0,
                 potential_ability: ability,
                 international_apps: 0,
                 international_goals: 0,

@@ -847,5 +847,7 @@
   "transfer_interest_headline_terms_rejected": "個人条件が折り合わず移籍を断った",
   "transfer_interest_headline_terms_rejected_named": "個人条件が折り合わず{club}への移籍を断った",
   "transfer_interest_stage_terms_agreed": "段階：個人条件で合意。",
-  "transfer_interest_stage_terms_rejected": "段階：選手が条件を拒否。"
+  "transfer_interest_stage_terms_rejected": "段階：選手が条件を拒否。",
+  "event_national_team_triumph": "国際大会で優勝",
+  "event_national_team_heartbreak": "国際大会の決勝で敗退"
 }

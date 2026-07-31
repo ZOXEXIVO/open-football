@@ -23,7 +23,12 @@ use crate::continent::Continent;
 use crate::continent::national::NationalCompetitionFixture;
 use crate::r#match::MatchResultRaw;
 use crate::r#match::{MatchResult, MatchSquad};
-use crate::{MatchRuntime, NationalTeamLevel};
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, MatchRuntime, NationalTeamEventContext, NationalTeamEventKind,
+    NationalTeamLevel, PlayerStatusType,
+};
+use rayon::prelude::*;
 
 /// Pair a continent index with one of its national-competition
 /// fixtures so the orchestrator can fan match results back to the
@@ -53,10 +58,17 @@ impl WorldNationalCompetitions {
     pub fn simulate(continents: &mut [Continent], date: NaiveDate) -> Vec<MatchResult> {
         Self::advance_competition_cycles(continents, date);
 
+        // Who had already been crowned before today. Compared against
+        // the same set afterwards so a tournament is reported on the
+        // one day it concludes rather than on every day it stays
+        // concluded.
+        let crowned_before = Self::crowned(continents);
+
         let stamped = Self::collect_todays_fixtures(continents, date);
 
         if stamped.is_empty() {
             Self::run_phase_transitions(continents);
+            Self::report_tournament_endings(continents, &crowned_before, date);
             return Vec::new();
         }
 
@@ -73,7 +85,113 @@ impl WorldNationalCompetitions {
         }
 
         Self::run_phase_transitions(continents);
+        Self::report_tournament_endings(continents, &crowned_before, date);
         collected
+    }
+
+    /// Every tournament that currently has a champion, as
+    /// `(competition id, cycle year)`.
+    fn crowned(continents: &[Continent]) -> Vec<(u32, u16)> {
+        continents
+            .iter()
+            .flat_map(|continent| continent.national_team_competitions.competitions.iter())
+            .filter(|competition| competition.champion.is_some())
+            .map(|competition| (competition.config.id, competition.cycle_year))
+            .collect()
+    }
+
+    /// Tell the world's dressing rooms that a tournament has ended.
+    ///
+    /// A World Cup is the one thing that can happen to a footballer
+    /// which his club had nothing to do with and every one of its
+    /// supporters claims a share of anyway — and until now it left no
+    /// trace on any player anywhere. The squads are spread across every
+    /// continent (that is the whole reason this phase runs at world
+    /// level), so the sweep has to be a world sweep.
+    ///
+    /// Both halves are emitted. Reporting only the winners would make
+    /// the summer a story for one country in thirty-two and silence for
+    /// everybody who spent a month getting to a final and losing it.
+    fn report_tournament_endings(
+        continents: &mut [Continent],
+        crowned_before: &[(u32, u16)],
+        date: NaiveDate,
+    ) {
+        let mut champions: Vec<u32> = Vec::new();
+        let mut runners_up: Vec<u32> = Vec::new();
+
+        for continent in continents.iter() {
+            for competition in continent.national_team_competitions.competitions.iter() {
+                let key = (competition.config.id, competition.cycle_year);
+                if crowned_before.contains(&key) {
+                    continue;
+                }
+                if let Some((champion, runner_up)) = competition.finalists() {
+                    champions.push(champion);
+                    runners_up.push(runner_up);
+                }
+            }
+        }
+
+        if champions.is_empty() {
+            return;
+        }
+
+        continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
+                // A player's country is his own, not his club's — which
+                // is why this is keyed on the player and not on where
+                // the club happens to be.
+                for club in country.clubs.iter_mut() {
+                    for team in club.teams.iter_mut() {
+                        for player in team.players.iter_mut() {
+                            // Only men who were actually in the squad.
+                            // A tournament is not news about somebody
+                            // who watched it at home.
+                            if !player.statuses.has(PlayerStatusType::Int) {
+                                continue;
+                            }
+
+                            let (event, magnitude, kind) =
+                                if champions.contains(&player.country_id) {
+                                    (
+                                        HappinessEventType::NationalTeamTriumph,
+                                        14.0,
+                                        NationalTeamEventKind::NationalTeamRoleGrowing,
+                                    )
+                                } else if runners_up.contains(&player.country_id) {
+                                    (
+                                        HappinessEventType::NationalTeamHeartbreak,
+                                        -8.0,
+                                        NationalTeamEventKind::NationalTeamRoleGrowing,
+                                    )
+                                } else {
+                                    continue;
+                                };
+
+                            let national = NationalTeamEventContext::new(kind)
+                                .with_previous_caps(
+                                    player.player_attributes.international_apps,
+                                );
+                            let context = HappinessEventContext::new(
+                                HappinessEventCause::Other,
+                                HappinessEventSeverity::from_magnitude(magnitude),
+                                HappinessEventScope::Personal,
+                            )
+                            .with_national_team_context(national);
+
+                            player.happiness.add_event_with_context(
+                                event,
+                                magnitude,
+                                None,
+                                context,
+                            );
+                        }
+                    }
+                }
+            });
     }
 
     /// Per-continent: refresh competition cycles. Sorts countries by
