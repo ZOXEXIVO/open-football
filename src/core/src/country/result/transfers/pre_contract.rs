@@ -28,8 +28,8 @@ use crate::club::player::transfer::{MarketStage, PreContractAgreement};
 use crate::transfers::pipeline::TransferRequestStatus;
 use crate::utils::IntegerUtils;
 use crate::{
-    Country, Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerSquadStatus,
-    PlayerStatusType,
+    ClubAffair, Country, Person, Player, PlayerClubContract, PlayerFieldPositionGroup,
+    PlayerSquadStatus, PlayerStatusType,
 };
 use chrono::NaiveDate;
 use log::debug;
@@ -42,6 +42,11 @@ struct StagedPreContract {
     player_id: u32,
     agreement: PreContractAgreement,
     to_club_id: u32,
+    /// The club he is walking away from. Carried through the write
+    /// phase only so both boardroom diaries can record the day — the
+    /// club that has lost him for nothing has as much of a story as
+    /// the one that got him that way.
+    from_club_id: u32,
 }
 
 /// One expiring player worth pre-signing, lifted out of the roster scan so
@@ -107,6 +112,12 @@ impl PreContractManager {
             .map(|c| (c.id, c.name.clone()))
             .collect();
 
+        // Both boardrooms' half of each agreement, collected as the
+        // write loop confirms them and filed after it — the loop holds
+        // a mutable borrow on every roster in the country, so a club's
+        // diary cannot be written inside it.
+        let mut agreed: Vec<(u32, u32, u32)> = Vec::new();
+
         // Phase B (write): stamp the agreement onto each chosen player.
         for decision in staged {
             let to_name = club_names
@@ -146,6 +157,35 @@ impl PreContractManager {
                 "dec_pre_contract_agreed".to_string(),
                 String::new(),
             );
+            agreed.push((
+                decision.player_id,
+                decision.from_club_id,
+                decision.to_club_id,
+            ));
+        }
+
+        for (player_id, from_club_id, to_club_id) in agreed {
+            for club in country.clubs.iter_mut() {
+                if club.id == to_club_id {
+                    club.record_affair(
+                        ClubAffair::PreContractAgreed {
+                            player_id,
+                            other_club_id: from_club_id,
+                            arriving: true,
+                        },
+                        date,
+                    );
+                } else if club.id == from_club_id {
+                    club.record_affair(
+                        ClubAffair::PreContractAgreed {
+                            player_id,
+                            other_club_id: to_club_id,
+                            arriving: false,
+                        },
+                        date,
+                    );
+                }
+            }
         }
     }
 
@@ -313,6 +353,7 @@ impl PreContractManager {
         Some(StagedPreContract {
             player_id: player.player_id,
             to_club_id,
+            from_club_id: player.current_club_id,
             agreement: PreContractAgreement {
                 to_club_id,
                 to_country_id: country.id,
@@ -713,7 +754,7 @@ mod tests {
                 .transfer_market
                 .transfer_history
                 .iter()
-                .any(|t| t.to_club_id == to_club_id && t.reason == "pre_contract")
+                .any(|t| t.to_club_id == to_club_id && t.reason.key == "pre_contract")
         }
     }
 

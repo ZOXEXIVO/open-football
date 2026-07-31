@@ -85,6 +85,66 @@ pub enum ClubAffair {
     /// Deals ran out and nothing replaced them. The half of the
     /// commercial column that only gets printed when it goes wrong.
     SponsorshipLost { count: u32 },
+    /// A clause written into an old sale has just paid out — a sell-on
+    /// share, a promotion bonus, an appearance milestone.
+    ///
+    /// Money arriving because of a player the club no longer owns is
+    /// the one line on a balance sheet that is genuinely a story: it is
+    /// the day the club's patience with a clause it fought for is
+    /// vindicated, and until now it left no trace anywhere a reader
+    /// could see.
+    ClauseWindfall {
+        player_id: u32,
+        kind: ClauseWindfallKind,
+        amount: i64,
+    },
+    /// A Bosman signed months before it takes effect.
+    ///
+    /// Recorded on BOTH clubs, because it is two different stories: one
+    /// paper has news of a signing that cost nothing, and the other has
+    /// news that a player it still fields every Saturday has already
+    /// agreed to leave. The second is the one supporters take badly,
+    /// and until now neither was printed anywhere.
+    PreContractAgreed {
+        player_id: u32,
+        other_club_id: u32,
+        /// True on the buying club's diary, false on the selling one.
+        arriving: bool,
+    },
+    /// The board called everybody in. A crisis meeting is not a
+    /// decision, it is the sound a boardroom makes before one.
+    CrisisMeetingHeld,
+    /// The board has told the manager somebody has to be sold.
+    PlayerSaleDemanded,
+    /// …and the other direction: a deal the manager wanted, vetoed
+    /// upstairs.
+    TransferBlocked { player_id: u32 },
+    /// The money for the training ground was asked for and refused.
+    FacilityUpgradeRejected { facility: BoardFacility },
+    /// Intake day: the one morning a year the academy takes anybody in.
+    ///
+    /// `golden` is the recruitment department's own verdict on the
+    /// class, read off the scores it already computed. It is never a
+    /// reading of anybody's ceiling — the press may not see one, and
+    /// a paper that could would stop being a paper.
+    AcademyIntake { count: u16, golden: bool },
+    /// …and the other end of the same pipeline: boys handed up out of
+    /// the academy into a senior squad.
+    AcademyGraduationBatch { count: u16 },
+}
+
+/// Which kind of clause paid out. Kept apart from the transfer
+/// market's own trigger enum so the press is not coupled to its
+/// scheduling detail — the paper only cares what the money was for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClauseWindfallKind {
+    /// A share of the fee somebody else has just paid, or an agreed
+    /// tranche of the original one.
+    SellOn,
+    /// He went up, and the deal said that was worth something.
+    Promotion,
+    /// He played enough games, or scored enough goals, to trigger it.
+    Milestone,
 }
 
 impl ClubAffair {
@@ -137,7 +197,14 @@ impl ClubAffairLog {
     /// bad one. The press only ever reads the last seven days; the rest
     /// is kept so a future page (a board history tab) has somewhere to
     /// read from without another plumbing pass.
-    const MAX_ENTRIES: usize = 24;
+    ///
+    /// Sized against the busiest realistic week rather than the
+    /// average: the log is a ring, so an entry evicted before the
+    /// Monday read is a story that silently never happened. A club in
+    /// administration during a transfer window can file a sacking, a
+    /// takeover, a budget cut and several clause payouts inside seven
+    /// days, and all of them have to survive to press day.
+    const MAX_ENTRIES: usize = 40;
 
     pub fn new() -> Self {
         Self::default()

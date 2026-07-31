@@ -89,14 +89,12 @@ impl DugoutDesk {
             return;
         }
 
-        // Left out of the one that mattered.
-        if feed
-            .any_of(&[
-                HappinessEventType::BenchedForBigMatch,
-                HappinessEventType::FeelsSelectionFavouritism,
-            ])
-            .is_some()
-        {
+        // Left out of the one that mattered. Reads only the big-match
+        // omission now: believing the manager has favourites is a
+        // separate and more corrosive complaint, and the squad desk
+        // gives it its own line rather than letting one fixture's team
+        // sheet speak for it.
+        if feed.happened(HappinessEventType::BenchedForBigMatch) {
             out.push(
                 NewsStory::new(NewsStoryKind::DroppedForBigMatch, date)
                     .about(player.id)

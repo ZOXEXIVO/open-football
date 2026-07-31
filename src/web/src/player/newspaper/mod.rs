@@ -497,6 +497,7 @@ mod tests {
                         score: "3-1".to_string(),
                         outcome: "w",
                         is_cup: false,
+                        is_continental: false,
                         match_id: "2026-02-28_301_58".to_string(),
                     },
                     ResultView {
@@ -506,6 +507,7 @@ mod tests {
                         score: "1-1".to_string(),
                         outcome: "d",
                         is_cup: true,
+                        is_continental: false,
                         match_id: String::new(),
                     },
                 ],

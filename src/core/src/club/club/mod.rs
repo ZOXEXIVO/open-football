@@ -338,6 +338,19 @@ impl Club {
             self.academy.simulate(club_ctx.clone()),
         );
 
+        // Intake day. The academy takes boys in on one morning a year
+        // and then the only evidence is a longer squad list, so the
+        // club writes the day down while it still has a number.
+        if result.academy.intake > 0 {
+            self.record_affair(
+                ClubAffair::AcademyIntake {
+                    count: result.academy.intake,
+                    golden: result.academy.golden_intake,
+                },
+                date,
+            );
+        }
+
         if ctx.simulation.is_week_beginning() {
             if self.teams.ensure_coach_state(date) {
                 // A just-appointed head coach reviews the whole squad
@@ -419,6 +432,18 @@ impl Club {
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             let (academy_transfers, released_players) =
                 self.process_academy_graduations(date, country_code);
+            // Graduation day as one morning rather than as a handful of
+            // separate free arrivals. The market desk already reports
+            // each boy individually; this is the piece about the year
+            // group, which is what a local readership turns up for.
+            if !academy_transfers.is_empty() {
+                self.record_affair(
+                    ClubAffair::AcademyGraduationBatch {
+                        count: academy_transfers.len() as u16,
+                    },
+                    date,
+                );
+            }
             result.academy_transfers = academy_transfers;
             result.academy_released_players = released_players;
             self.trim_positional_surplus(date);

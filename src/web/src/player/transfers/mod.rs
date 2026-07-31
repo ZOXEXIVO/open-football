@@ -9,6 +9,7 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
+use core::transfers::reason::TransferReason;
 use core::transfers::{
     NegotiationPhase, NegotiationStatus, TransferListingStatus, TransferListingType,
 };
@@ -116,7 +117,49 @@ pub struct PlayerCompletedTransferDto {
     pub fee: String,
     pub date: String,
     pub transfer_type_key: String,
+    /// Why the club made the move, already localised.
     pub reason: String,
+    /// The scout verdict behind the signing, already localised. Empty
+    /// when no report backed the deal.
+    pub scout: String,
+}
+
+/// Renders a core [`TransferReason`] into the two lines a history card
+/// shows. The simulator stores the motive as an i18n key and the scout
+/// verdict as the raw numbers the report carried, so both are phrased
+/// here — in the reader's language — instead of arriving as English.
+struct TransferReasonView;
+
+impl TransferReasonView {
+    fn motive(i18n: &I18n, reason: &TransferReason) -> String {
+        if reason.key.is_empty() {
+            return String::new();
+        }
+        let motive = i18n.t(&reason.key);
+        if reason.rival {
+            format!("{} {}", motive, i18n.t("signing_reason_rival_suffix"))
+        } else {
+            motive.to_string()
+        }
+    }
+
+    fn scout(i18n: &I18n, reason: &TransferReason) -> String {
+        let Some(verdict) = reason.scout.as_ref() else {
+            return String::new();
+        };
+
+        i18n.t("scout_verdict_line")
+            .replace(
+                "{recommendation}",
+                i18n.t(verdict.recommendation.as_i18n_key()),
+            )
+            .replace("{ability}", i18n.t(verdict.ability_band().as_i18n_key()))
+            .replace(
+                "{potential}",
+                i18n.t(verdict.potential_band().as_i18n_key()),
+            )
+            .replace("{confidence}", &verdict.confidence_pct().to_string())
+    }
 }
 
 fn status_type_to_i18n_key(status: &PlayerStatusType) -> &'static str {
@@ -377,11 +420,12 @@ pub async fn player_transfers_action(
                         fee: if t.fee.amount > 0.0 {
                             FormattingUtils::format_money(t.fee.amount)
                         } else {
-                            "Free".to_string()
+                            i18n.t("fee_free").to_string()
                         },
                         date: t.transfer_date.format("%d.%m.%Y").to_string(),
                         transfer_type_key: transfer_type_key.to_string(),
-                        reason: i18n.t(&t.reason).to_string(),
+                        reason: TransferReasonView::motive(&i18n, &t.reason),
+                        scout: TransferReasonView::scout(&i18n, &t.reason),
                     },
                 )
             })
@@ -506,4 +550,160 @@ fn get_neighbor_teams(
             .map(|(_, name, slug)| (name, slug))
             .collect(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::club::player::calculators::FreeAgentReleaseReason;
+    use core::transfers::pipeline::{ScoutingRecommendation, TransferNeedReason};
+    use core::transfers::reason::{AbilityBand, ScoutVerdict};
+    use std::collections::HashMap;
+
+    fn en_map() -> HashMap<String, String> {
+        serde_json::from_str(include_str!("../../../assets/i18n/en.json"))
+            .expect("en.json is not valid JSON")
+    }
+
+    /// Every motive the simulator can stamp on a completed transfer.
+    /// The history row renders `i18n.t(reason.key)`, which returns the
+    /// key itself when the bundle has no copy for it — a missing entry
+    /// shows up as raw snake_case on the page instead of failing.
+    const FIXED_REASON_KEYS: &[&str] = &[
+        "signing_reason_loan",
+        "signing_reason_transfer",
+        "signing_reason_loan_opportunistic_upgrade",
+        "signing_reason_loan_midseason_reinforcement",
+        "signing_reason_loan_development_approach",
+        "signing_reason_loan_broadcast",
+        "signing_reason_loan_foreign_prospect",
+        "signing_reason_listing_broadcast",
+        "signing_reason_academy_graduation",
+        "signing_reason_manual",
+        "signing_reason_rival_suffix",
+        "scout_verdict_line",
+        "fee_free",
+        "pre_contract",
+        "free_agent_market_clearing",
+        "emergency_squad_fill_gk",
+        "emergency_squad_fill_def",
+        "emergency_squad_fill_mid",
+        "emergency_squad_fill_fwd",
+        "emergency_squad_fill_depth",
+    ];
+
+    const NEED_REASONS: &[TransferNeedReason] = &[
+        TransferNeedReason::FormationGap,
+        TransferNeedReason::QualityUpgrade,
+        TransferNeedReason::DepthCover,
+        TransferNeedReason::SuccessionPlanning,
+        TransferNeedReason::DevelopmentSigning,
+        TransferNeedReason::StaffRecommendation,
+        TransferNeedReason::LoanToFillSquad,
+        TransferNeedReason::ExperiencedHead,
+        TransferNeedReason::SquadPadding,
+        TransferNeedReason::CheapReinforcement,
+        TransferNeedReason::InjuryCoverLoan,
+        TransferNeedReason::OpportunisticLoanUpgrade,
+    ];
+
+    const RELEASE_REASONS: &[FreeAgentReleaseReason] = &[
+        FreeAgentReleaseReason::ContractExpired,
+        FreeAgentReleaseReason::MutualTermination,
+        FreeAgentReleaseReason::SurplusFreeRelease,
+        FreeAgentReleaseReason::FailedRenewalRelease,
+        FreeAgentReleaseReason::AcademyAgedOut,
+        FreeAgentReleaseReason::Under16Release,
+        FreeAgentReleaseReason::UnsoldListingExit,
+    ];
+
+    const ABILITY_BANDS: &[AbilityBand] = &[
+        AbilityBand::VeryPoor,
+        AbilityBand::Poor,
+        AbilityBand::BelowAverage,
+        AbilityBand::Average,
+        AbilityBand::Decent,
+        AbilityBand::Good,
+        AbilityBand::VeryGood,
+        AbilityBand::Excellent,
+        AbilityBand::WorldClass,
+        AbilityBand::Unknown,
+    ];
+
+    #[test]
+    fn every_transfer_reason_key_has_english_copy() {
+        let map = en_map();
+        let mut keys: Vec<String> = FIXED_REASON_KEYS.iter().map(|k| k.to_string()).collect();
+        keys.extend(
+            NEED_REASONS
+                .iter()
+                .map(|r| r.as_signing_reason_key().to_string()),
+        );
+        keys.extend(
+            RELEASE_REASONS
+                .iter()
+                .map(|r| r.history_reason().to_string()),
+        );
+        keys.extend(ABILITY_BANDS.iter().map(|b| b.as_i18n_key().to_string()));
+        keys.extend(
+            [
+                ScoutingRecommendation::StrongBuy,
+                ScoutingRecommendation::Buy,
+                ScoutingRecommendation::Consider,
+                ScoutingRecommendation::Pass,
+            ]
+            .iter()
+            .map(|r| r.as_i18n_key().to_string()),
+        );
+
+        let missing: Vec<&String> = keys.iter().filter(|k| !map.contains_key(*k)).collect();
+        assert!(
+            missing.is_empty(),
+            "en.json is missing {} transfer-reason key(s): {:?}",
+            missing.len(),
+            missing
+        );
+    }
+
+    #[test]
+    fn a_scouted_signing_renders_both_lines_localised() {
+        let i18n = I18n::for_test(en_map());
+        let reason =
+            TransferReason::key(TransferNeedReason::DevelopmentSigning.as_signing_reason_key())
+                .with_scout(Some(ScoutVerdict {
+                    recommendation: ScoutingRecommendation::Buy,
+                    assessed_ability: 95,
+                    assessed_potential: 110,
+                    confidence: 0.4,
+                }));
+
+        let motive = TransferReasonView::motive(&i18n, &reason);
+        let scout = TransferReasonView::scout(&i18n, &reason);
+
+        assert_eq!(
+            motive,
+            "Development signing — young prospect with high potential"
+        );
+        assert_eq!(
+            scout,
+            "Scout: Buy (ability: Average, potential: Decent, confidence: 40%)"
+        );
+        assert!(
+            !scout.contains('{'),
+            "every placeholder must be substituted: {scout}"
+        );
+    }
+
+    #[test]
+    fn a_rival_raid_is_marked_and_a_bare_reason_renders_nothing() {
+        let i18n = I18n::for_test(en_map());
+        let raid = TransferReason::key("signing_reason_transfer").as_rival();
+
+        assert_eq!(
+            TransferReasonView::motive(&i18n, &raid),
+            "Transfer signing (rival raid)"
+        );
+        assert!(TransferReasonView::scout(&i18n, &raid).is_empty());
+        assert!(TransferReasonView::motive(&i18n, &TransferReason::default()).is_empty());
+    }
 }

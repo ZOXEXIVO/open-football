@@ -12,6 +12,12 @@ use log::debug;
 use std::cmp::Ordering;
 
 impl ClubAcademy {
+    /// The score above which the recruitment staff privately think
+    /// they have signed something. Set against the scorer's own scale:
+    /// it weights potential at 0.45, so a class whose best candidate
+    /// clears this had at least one boy the department argued about.
+    const GOLDEN_INTAKE_SCORE: f32 = 145.0;
+
     pub(super) fn produce_youth_players(
         &mut self,
         ctx: GlobalContext<'_>,
@@ -123,6 +129,12 @@ impl ClubAcademy {
         // `EliteSelectionGate` for the gating policy.
         let world_class_pa = self.tuning.world_class_pa_threshold;
         let elite_pa = self.tuning.elite_pa_threshold;
+        // The recruiter's own verdict on the class it is about to
+        // sign, read off the score it already computed rather than off
+        // the players' hidden ceilings — nothing outside the engine
+        // may read a potential ability, and the press least of all.
+        let top_score = scored.first().map(|(score, _)| *score).unwrap_or(0.0);
+
         let mut gate = EliteSelectionGate::new(world_class_pa, elite_pa);
         let mut signed: Vec<Player> = Vec::with_capacity(intake_count);
         let mut rejected: Vec<Player> = Vec::new();
@@ -150,6 +162,7 @@ impl ClubAcademy {
         self.last_production_year = Some(current_year);
 
         ProduceYouthPlayersResult::new(generated_players)
+            .rated(top_score >= Self::GOLDEN_INTAKE_SCORE)
     }
 
     /// Clamp the calculated intake against the academy population cap.

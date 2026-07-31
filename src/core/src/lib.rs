@@ -70,6 +70,7 @@ pub use club::{
     ClubAffair,
     ClubAffairEntry,
     ClubAffairLog,
+    ClauseWindfallKind,
     ClubBoard,
     ClubColors,
     ClubContext,

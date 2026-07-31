@@ -1,5 +1,10 @@
+use crate::transfers::pipeline::ScoutingRecommendation;
 use crate::transfers::{CompletedTransfer, TransferType};
-use crate::{HappinessEvent, HappinessEventType, LoanSpellRecord, Player, PlayerSquadStatus};
+use crate::{
+    HappinessEvent, HappinessEventType, LifeSimulationDesireKind, LoanSpellRecord, Player,
+    PlayerSquadStatus, RegulationSlotKind, RetirementReason, SelectionOmissionReason,
+    TeammateConflictReason,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// One knockout tie a club played this week. Domestic cup results never
@@ -228,6 +233,67 @@ pub struct MatchStarFacts {
     pub team_goals: u8,
 }
 
+/// The shape of one afternoon, read off the minute each goal was
+/// scored in it.
+///
+/// A scoreline is the least interesting true thing about a football
+/// match. 2-1 covers a side that led from the eighth minute and saw it
+/// out, a side that equalised twice and won it in stoppage time, and a
+/// side that was two down at the break — and a supporter would tell you
+/// about the second and third for the rest of his life. The engine has
+/// always stamped every goal with the minute; nothing had ever read
+/// them.
+///
+/// Held per SIDE, keyed `(team, opponent)` like [`MatchStarFacts`], and
+/// pinned by `team_goals` for the same reason: a club can play the same
+/// opponent twice in a week, and one afternoon's drama printed under
+/// the other's scoreline is worse than printing no drama at all.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MatchDramaFacts {
+    /// The side's own tally in the match these were read from.
+    pub team_goals: u8,
+    /// Both sides' goals in it.
+    pub total_goals: u8,
+    /// The minute it took the lead it never gave back, when it won.
+    /// Zero when it did not.
+    pub winner_minute: u16,
+    /// The most it ever trailed by.
+    pub max_deficit: u8,
+    /// The most it was ever ahead by.
+    pub max_lead: u8,
+    /// How many of its goals came inside the opening twenty minutes.
+    pub early_goals: u8,
+    /// Minutes it took to draw level again after falling behind, when
+    /// it managed it inside the reply window. Zero when it did not —
+    /// and never zero when it did, because "level again after nought
+    /// minutes" is not a sentence.
+    pub reply_minutes: u8,
+    /// One of its players was sent off.
+    pub red_card: bool,
+    /// It won.
+    pub won: bool,
+}
+
+impl MatchDramaFacts {
+    /// Goals inside this window count as an early blitz.
+    pub const EARLY_WINDOW_MS: u64 = 20 * 60 * 1000;
+    /// A reply inside this long is a reply the ground felt.
+    pub const REPLY_WINDOW_MS: u64 = 5 * 60 * 1000;
+    /// From this minute on, a winning goal is a late winner.
+    pub const LATE_MINUTE: u16 = 85;
+    /// …and from this one it is stoppage time, whatever the fourth
+    /// official held up.
+    pub const STOPPAGE_MINUTE: u16 = 90;
+
+    /// Rank of how much of a story one afternoon was, used only to keep
+    /// the louder of two meetings when a club plays the same opponent
+    /// twice inside a week.
+    pub fn loudness(&self) -> u32 {
+        let comeback = if self.won { self.max_deficit as u32 } else { 0 };
+        comeback * 100 + self.total_goals as u32 * 10 + self.max_lead as u32
+    }
+}
+
 /// Everything the desks need to know about the week just played that
 /// they cannot read off a `Club`. Built once per Monday from the world's
 /// competitions and shared by every club in it.
@@ -261,6 +327,28 @@ pub struct WeeklyMatchFacts {
     /// the pair a match report already carries, so the desk can hand
     /// the report its protagonist without a second lookup anywhere.
     pub stars: FxHashMap<(u32, u32), MatchStarFacts>,
+    /// …and how each side's afternoon actually went, on the same key.
+    pub drama: FxHashMap<(u32, u32), MatchDramaFacts>,
+    /// Continental nights, keyed by the team that played them.
+    ///
+    /// The per-player facts from these fixtures have always reached
+    /// club papers — continental results are pushed to the same global
+    /// store this gather already walks — so a European hat-trick was
+    /// reported correctly and the match it happened in was filed as an
+    /// ordinary league game. This is the label that was missing.
+    ///
+    /// Deliberately NOT folded into `cup_ties`: a group-stage fixture
+    /// is not a knockout tie, and `CupTie::advanced()` would report
+    /// every drawn group game as an elimination.
+    pub continental: FxHashMap<u32, ContinentalNight>,
+}
+
+/// One continental fixture, from one side's point of view.
+#[derive(Debug, Clone, Copy)]
+pub struct ContinentalNight {
+    pub opponent_team_id: u32,
+    pub goals_for: u8,
+    pub goals_against: u8,
 }
 
 impl WeeklyMatchFacts {
@@ -272,6 +360,8 @@ impl WeeklyMatchFacts {
             keepers: FxHashMap::default(),
             outfield: FxHashMap::default(),
             stars: FxHashMap::default(),
+            drama: FxHashMap::default(),
+            continental: FxHashMap::default(),
         }
     }
 
@@ -347,6 +437,27 @@ impl WeeklyMatchFacts {
             .map(|star| star.player_id)
             .unwrap_or(0)
     }
+
+    /// How one specific afternoon went, on the same pin as [`Self::star_of`]
+    /// and for the same reason.
+    /// The continental night one of  played this week, if any.
+    /// Read by the match desk to label the result and to reach for the
+    /// European copy rather than the league report.
+    pub fn continental_of(&self, sides: &FxHashSet<u32>) -> Option<ContinentalNight> {
+        sides.iter().find_map(|team_id| self.continental.get(team_id).copied())
+    }
+
+    pub fn drama_of(
+        &self,
+        team_id: u32,
+        opponent_team_id: u32,
+        goals_for: u8,
+    ) -> Option<MatchDramaFacts> {
+        self.drama
+            .get(&(team_id, opponent_team_id))
+            .filter(|drama| drama.team_goals == goals_for)
+            .copied()
+    }
 }
 
 /// What kind of move a completed transfer actually was. The distinction
@@ -377,6 +488,86 @@ impl TransferMoveKind {
     }
 }
 
+/// Why a club actually made a signing, as the press can print it.
+///
+/// Every completed deal already records its motive as an i18n key, and
+/// the market desk had never opened one: a depth signing, a succession
+/// plan, a bargain and a marquee upgrade all reached the page as "the
+/// club have signed a player", which is the one thing a reader could
+/// already see from the squad list.
+///
+/// Grouped rather than mapped one-for-one, because the vocabulary was
+/// written for a transfers table and a paper does not have seven
+/// different words for cover. The seven `loan_*` keys in particular are
+/// one story from the borrowing club's point of view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransferMotive {
+    /// A hole in the shape that had to be filled.
+    FormationGap,
+    /// Straightforwardly better than what was there.
+    QualityUpgrade,
+    /// Cover, padding, an injury, a body for the bench.
+    #[default]
+    DepthCover,
+    /// Signed to replace somebody who is not finished yet.
+    Succession,
+    /// Signed for what he might become.
+    Development,
+    /// The scouting department's own recommendation.
+    ScoutFind,
+    /// Signed for the miles on him.
+    Experience,
+    /// Cheap, and the cheapness is the point.
+    Bargain,
+    /// Not signed at all — promoted out of the club's own academy.
+    AcademyPromotion,
+    /// A motive the vocabulary does not record, or a generic one
+    /// ("a transfer happened") that says nothing worth printing.
+    Unknown,
+}
+
+impl TransferMotive {
+    /// Read the motive off a completed deal's reason key.
+    ///
+    /// An unrecognised key degrades to [`TransferMotive::Unknown`],
+    /// which prints the ordinary signing report — the same page the
+    /// desk produced before any of this existed. A typo in an emitter
+    /// therefore costs a flavour, never a story; the
+    /// `every_signing_reason_key_is_understood` test is what stops it
+    /// costing a flavour quietly.
+    pub fn from_key(key: &str) -> Self {
+        match key {
+            "signing_reason_formation_gap" => TransferMotive::FormationGap,
+            "signing_reason_quality_upgrade"
+            | "signing_reason_loan_opportunistic_upgrade"
+            | "signing_reason_opportunistic_loan_upgrade" => TransferMotive::QualityUpgrade,
+            "signing_reason_depth_cover"
+            | "signing_reason_squad_padding"
+            | "signing_reason_loan_to_fill_squad"
+            | "signing_reason_injury_cover_loan"
+            | "signing_reason_loan_midseason_reinforcement" => TransferMotive::DepthCover,
+            "signing_reason_succession_planning" => TransferMotive::Succession,
+            "signing_reason_development_signing"
+            | "signing_reason_loan_development_approach"
+            | "signing_reason_loan_foreign_prospect" => TransferMotive::Development,
+            "signing_reason_staff_recommendation" => TransferMotive::ScoutFind,
+            "signing_reason_experienced_head" => TransferMotive::Experience,
+            "signing_reason_cheap_reinforcement" => TransferMotive::Bargain,
+            "signing_reason_academy_graduation" => TransferMotive::AcademyPromotion,
+            // "a loan happened", "a transfer happened", a broadcast, a
+            // manual move: true, and not worth a headline.
+            _ => TransferMotive::Unknown,
+        }
+    }
+
+    /// True when somebody borrowed the player to give him football —
+    /// which, read from the parent club's paper, is the story of a lad
+    /// being sent out to play.
+    pub fn is_development(self) -> bool {
+        self == TransferMotive::Development
+    }
+}
+
 /// One side of one completed deal, as the market desk needs it.
 #[derive(Debug, Clone, Copy)]
 pub struct TransferMove {
@@ -396,6 +587,16 @@ pub struct TransferMove {
     /// An arrival who was already here on loan — the option exercised
     /// rather than a stranger unveiled.
     pub was_loan_here: bool,
+    /// Why the buying club did it.
+    pub motive: TransferMotive,
+    /// How sure the scout who filed the report was, 0..100. Zero when
+    /// no report backed the move, which is most of them — the desk only
+    /// prints a scout's verdict when there was a scout.
+    pub scout_confidence_pct: u8,
+    /// The scout's report said sign him without hesitating.
+    pub scout_urged_it: bool,
+    /// Taken from a club this one counts as a rival.
+    pub rival: bool,
 }
 
 /// One club's slice of the week's completed transfer business.
@@ -413,27 +614,41 @@ impl ClubTransferWeek {
         let fee = transfer.fee.amount.max(0.0) as i64;
         let kind = TransferMoveKind::read(transfer, fee);
 
-        // Age and history start unresolved; the newsroom's enrichment
-        // pass fills them in for arrivals, where they decide the story.
+        // The reason is the single translation point between the
+        // transfer ledger's stringly vocabulary and the press, so it is
+        // read once here and never carried further: `TransferMove` is
+        // `Copy`, and a paper's whole shelf would otherwise hold a
+        // hundred editions' worth of duplicated key strings.
+        let scout = transfer.reason.scout.as_ref();
+        let common = TransferMove {
+            player_id: transfer.player_id,
+            other_club_id: 0,
+            fee,
+            kind,
+            // Age and history start unresolved; the newsroom's
+            // enrichment pass fills them in for arrivals, where they
+            // decide the story.
+            age: 0,
+            returning: false,
+            was_loan_here: false,
+            motive: TransferMotive::from_key(&transfer.reason.key),
+            scout_confidence_pct: scout.map(|s| s.confidence_pct()).unwrap_or(0),
+            scout_urged_it: matches!(
+                scout.map(|s| &s.recommendation),
+                Some(ScoutingRecommendation::StrongBuy)
+            ),
+            rival: transfer.reason.rival,
+        };
+
         if transfer.to_club_id == club_id {
             self.arrivals.push(TransferMove {
-                player_id: transfer.player_id,
                 other_club_id: transfer.from_club_id,
-                fee,
-                kind,
-                age: 0,
-                returning: false,
-                was_loan_here: false,
+                ..common
             });
         } else if transfer.from_club_id == club_id {
             self.departures.push(TransferMove {
-                player_id: transfer.player_id,
                 other_club_id: transfer.to_club_id,
-                fee,
-                kind,
-                age: 0,
-                returning: false,
-                was_loan_here: false,
+                ..common
             });
         }
     }
@@ -717,6 +932,68 @@ impl<'a> RecentEvents<'a> {
             .and_then(|event| event.context.as_ref())
             .and_then(|context| context.loan_context.as_ref())
             .and_then(|loan| loan.spell)
+    }
+
+    /// What a life-outside-football beat was actually about.
+    ///
+    /// The feed carries one event type for the whole of a footballer's
+    /// life away from the pitch — a bereavement, a birth, a family that
+    /// has not settled, a veteran wanting one last season at home — and
+    /// the desks could only ever see that *something* had happened.
+    /// Reading the kind back is what lets the page print the right
+    /// sentence rather than a shrug, and it is the difference between
+    /// a newspaper and a status board.
+    pub fn life_event(&self) -> Option<LifeSimulationDesireKind> {
+        self.find(HappinessEventType::LifeSimulationDesire)
+            .and_then(|event| event.context.as_ref())
+            .and_then(|context| context.life_simulation_desire_context.as_ref())
+            .map(|life| life.kind)
+    }
+
+    /// What a dressing-room row was actually about.
+    ///
+    /// The feed has always recorded this and the page has always
+    /// printed "two of them went at it" — which is true of a row over
+    /// training standards, a row between two men after the same shirt
+    /// and a senior pro pulling rank, and useless about all three.
+    pub fn conflict_reason(&self) -> Option<TeammateConflictReason> {
+        self.find(HappinessEventType::ConflictWithTeammate)
+            .and_then(|event| event.context.as_ref())
+            .and_then(|context| context.teammate_conflict_context.as_ref())
+            .map(|conflict| conflict.reason)
+    }
+
+    /// Why the manager left him out.
+    ///
+    /// The selector records a football reason for every omission —
+    /// rested, out of form, wrong profile for the opponent, being
+    /// disciplined — and the press could only report that he was not
+    /// picked. Which of those it was is the entire difference between
+    /// a routine rotation note and a story.
+    pub fn omission_reason(&self) -> Option<SelectionOmissionReason> {
+        self.find(HappinessEventType::MatchDropped)
+            .and_then(|event| event.context.as_ref())
+            .and_then(|context| context.selection_context.as_ref())
+            .map(|selection| selection.reason)
+    }
+
+    /// Why a career ended. A planned farewell and a knee that gave out
+    /// are the same line on a squad list and nothing alike on a page.
+    pub fn retirement_reason(&self) -> Option<RetirementReason> {
+        self.find(HappinessEventType::RetirementAnnounced)
+            .and_then(|event| event.context.as_ref())
+            .and_then(|context| context.career_stage_context.as_ref())
+            .and_then(|stage| stage.retirement_reason)
+    }
+
+    /// Which registration rule kept him off the list. "Left out of the
+    /// squad" is an administrative sentence; "there was no homegrown
+    /// slot left" is a story about how the club has been run.
+    pub fn regulation_slot(&self, kind: HappinessEventType) -> Option<RegulationSlotKind> {
+        self.find(kind)
+            .and_then(|event| event.context.as_ref())
+            .and_then(|context| context.regulation_context.as_ref())
+            .map(|regulation| regulation.slot_kind)
     }
 
     /// The club named by a transfer-interest event, when the emit site

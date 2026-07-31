@@ -438,7 +438,7 @@ mod tests {
             .transfer_history;
         assert_eq!(history.len(), 1, "the sweep logs exactly one departure");
         assert_eq!(
-            history[0].reason, "dec_reason_contract_expired",
+            history[0].reason.key, "dec_reason_contract_expired",
             "plain expiry must not be recorded as a mutual-agreement release"
         );
     }
@@ -507,7 +507,7 @@ mod tests {
             .transfer_history;
         assert_eq!(history.len(), 1, "the sweep logs exactly one departure");
         assert_eq!(
-            history[0].reason, "dec_reason_released_free",
+            history[0].reason.key, "dec_reason_released_free",
             "the Frt released-early marker must drive the history reason before the reset consumes it"
         );
     }

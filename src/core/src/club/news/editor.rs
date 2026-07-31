@@ -44,7 +44,16 @@ impl NewsEditor {
     /// four fifths of a five-man list, which reads as a page that ran
     /// out of room rather than as a chart. Only the league's own
     /// monthly files here.
-    const MAX_CHART_PLACES: usize = 5;
+    ///
+    /// Sized against what a monthly review page actually is. The desk
+    /// files five distinct columns — the scorers, the two individual
+    /// awards, the providers, the marks and the team of the month — and
+    /// they are correctly ranked in that order, so a small allowance
+    /// does not trim the page evenly: it prints the top of every column
+    /// and none of the rest, which is exactly the "all leaders, no
+    /// charts" front page a division's own paper must not be. Nine
+    /// leaves room for a leader plus a field behind him.
+    const MAX_CHART_PLACES: usize = 9;
 
     /// At most one player may be the subject of this many stories. A
     /// striker who scored a hat-trick, signed a new deal and was linked

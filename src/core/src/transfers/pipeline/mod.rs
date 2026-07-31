@@ -269,6 +269,28 @@ impl TransferNeedReason {
             }
         }
     }
+
+    /// i18n key for the full sentence a completed transfer shows as its
+    /// motive. [`Self::as_i18n_key`] is the short badge the request and
+    /// scouting tables use; a history row has the room to say why.
+    pub fn as_signing_reason_key(&self) -> &'static str {
+        match self {
+            TransferNeedReason::FormationGap => "signing_reason_formation_gap",
+            TransferNeedReason::QualityUpgrade => "signing_reason_quality_upgrade",
+            TransferNeedReason::DepthCover => "signing_reason_depth_cover",
+            TransferNeedReason::SuccessionPlanning => "signing_reason_succession_planning",
+            TransferNeedReason::DevelopmentSigning => "signing_reason_development_signing",
+            TransferNeedReason::StaffRecommendation => "signing_reason_staff_recommendation",
+            TransferNeedReason::LoanToFillSquad => "signing_reason_loan_to_fill_squad",
+            TransferNeedReason::ExperiencedHead => "signing_reason_experienced_head",
+            TransferNeedReason::SquadPadding => "signing_reason_squad_padding",
+            TransferNeedReason::CheapReinforcement => "signing_reason_cheap_reinforcement",
+            TransferNeedReason::InjuryCoverLoan => "signing_reason_injury_cover_loan",
+            TransferNeedReason::OpportunisticLoanUpgrade => {
+                "signing_reason_opportunistic_loan_upgrade"
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

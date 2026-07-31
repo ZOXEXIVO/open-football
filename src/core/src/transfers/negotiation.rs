@@ -1,5 +1,6 @@
 use crate::PlayerFieldPositionGroup;
 use crate::transfers::offer::TransferOffer;
+use crate::transfers::reason::TransferReason;
 use crate::utils::IntegerUtils;
 use chrono::Duration;
 use chrono::NaiveDate;
@@ -88,7 +89,7 @@ pub struct TransferNegotiation {
     /// Staff member responsible for negotiating this transfer
     pub negotiator_staff_id: Option<u32>,
     /// Reason for signing (from scout report / transfer request)
-    pub reason: String,
+    pub reason: TransferReason,
     /// Source country ID (None = same country as buying club)
     pub selling_country_id: Option<u32>,
     /// Selling country's continent_id (for geographic preference checks)
@@ -177,7 +178,7 @@ impl TransferNegotiation {
             player_ambition,
             rejection_reason: None,
             negotiator_staff_id: None,
-            reason: String::new(),
+            reason: TransferReason::default(),
             selling_country_id: None,
             selling_continent_id: None,
             selling_country_code: String::new(),

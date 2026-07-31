@@ -16,6 +16,7 @@ use crate::transfers::pipeline::plausibility::{
 };
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
 use crate::transfers::pipeline::{AvailabilityBroadcast, LoanOutStatus, TransferRequestStatus};
+use crate::transfers::reason::TransferReason;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
@@ -338,7 +339,7 @@ impl PipelineProcessor {
             player_id: u32,
             selling_club_id: u32,
             offer_amount: f64,
-            reason: String,
+            reason: TransferReason,
             /// Cold approach for a player his club never loan-listed: Pass 2
             /// fabricates a synthetic listing and tags the negotiation
             /// unsolicited so the resolver withholds the "advertised" bonus.
@@ -542,10 +543,7 @@ impl PipelineProcessor {
                     })
                     .max_by_key(|l| l.ability)
                 {
-                    let reason = format!(
-                        "Loan signing — {}",
-                        Self::transfer_need_reason_text(&request.reason)
-                    );
+                    let reason = TransferReason::key(request.reason.as_signing_reason_key());
                     actions.push(LoanScanAction {
                         club_id: club.id,
                         player_id: best.player_id,
@@ -615,7 +613,7 @@ impl PipelineProcessor {
                         player_id: opp.player_id,
                         selling_club_id: opp.club_id,
                         offer_amount: FormattingUtils::round_fee(opp.asking_price * 0.8),
-                        reason: "Loan signing — opportunistic squad upgrade".to_string(),
+                        reason: TransferReason::key("signing_reason_loan_opportunistic_upgrade"),
                         is_unsolicited: false,
                         seller_asking: opp.asking_price,
                     });
@@ -665,7 +663,7 @@ impl PipelineProcessor {
                         player_id: opp.player_id,
                         selling_club_id: opp.club_id,
                         offer_amount: FormattingUtils::round_fee(opp.asking_price * 0.8),
-                        reason: "Loan signing — January window reinforcement".to_string(),
+                        reason: TransferReason::key("signing_reason_loan_midseason_reinforcement"),
                         is_unsolicited: false,
                         seller_asking: opp.asking_price,
                     });
@@ -745,7 +743,7 @@ impl PipelineProcessor {
                         player_id: tgt.player_id,
                         selling_club_id: tgt.club_id,
                         offer_amount: FormattingUtils::round_fee(tgt.asking_price * 0.8),
-                        reason: "Loan signing — unsolicited development approach".to_string(),
+                        reason: TransferReason::key("signing_reason_loan_development_approach"),
                         is_unsolicited: true,
                         seller_asking: tgt.asking_price,
                     });
@@ -1243,7 +1241,7 @@ impl PipelineProcessor {
                 );
                 if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                     negotiation.is_loan = true;
-                    negotiation.reason = "Loan placement — parent broadcast to scouts".to_string();
+                    negotiation.reason = TransferReason::key("signing_reason_loan_broadcast");
                     negotiation.player_name = p_name;
                     negotiation.selling_club_name = sc_name;
                 }
@@ -1627,8 +1625,7 @@ impl PipelineProcessor {
                     action.selling_club_id,
                 );
                 if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.reason =
-                        "Transfer placement — club offered listed player to scouts".to_string();
+                    negotiation.reason = TransferReason::key("signing_reason_listing_broadcast");
                     negotiation.player_name = p_name;
                     negotiation.selling_club_name = sc_name;
                 }
@@ -1745,7 +1742,7 @@ impl PipelineProcessor {
             club_id: u32,
             player: PlayerSummary,
             offer_amount: f64,
-            reason: String,
+            reason: TransferReason,
         }
 
         let mut actions: Vec<ForeignLoanAction> = Vec::new();
@@ -1949,10 +1946,7 @@ impl PipelineProcessor {
                     // Same shape as the domestic request scan — the empty
                     // `format!` here dropped the request's "why" from every
                     // foreign request-driven loan's history row.
-                    let reason = format!(
-                        "Loan signing — {}",
-                        Self::transfer_need_reason_text(&request.reason)
-                    );
+                    let reason = TransferReason::key(request.reason.as_signing_reason_key());
                     actions.push(ForeignLoanAction {
                         club_id: club.id,
                         player: (*best).clone(),
@@ -2047,7 +2041,7 @@ impl PipelineProcessor {
                         club_id: club.id,
                         player: (*best).clone(),
                         offer_amount: loan_fee,
-                        reason: "Loan signing — development prospect from abroad".to_string(),
+                        reason: TransferReason::key("signing_reason_loan_foreign_prospect"),
                     });
                 }
             }

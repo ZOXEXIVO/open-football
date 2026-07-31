@@ -285,6 +285,10 @@ pub struct ResultView {
     /// Cup ties carry a competition mark; a 0-1 in a knockout round is
     /// a different result from a 0-1 on a league Saturday.
     pub is_cup: bool,
+    /// …and a European night carries its own, for the same reason and
+    /// more so: a supporter scanning the ruled column wants to know
+    /// which of the week's midweeks was the continental one.
+    pub is_continental: bool,
     /// The match record behind the scoreline (`{date}_{home}_{away}`).
     /// Empty when the paper cannot place the fixture, in which case the
     /// score is set as plain type rather than as a dead link.
@@ -722,6 +726,7 @@ impl PressDesk {
                 "l"
             },
             is_cup: result.is_cup(),
+            is_continental: result.is_continental(),
             match_id: if own_team_id == 0 {
                 String::new()
             } else {
@@ -1417,6 +1422,7 @@ mod tests {
                 "newspaper_unnamed_manager",
                 "newspaper_another_club",
                 "newspaper_cup_tie",
+                "newspaper_continental_night",
             ] {
                 keys.push(chrome.to_string());
             }
@@ -1932,6 +1938,60 @@ mod tests {
     /// to name. Each match stem therefore keeps at least one phrasing
     /// in every locale that needs no `{player}` at all.
     #[test]
+    /// The market desk reads a signing's motive off a key the transfer
+    /// pipeline writes as a string, which is a join no compiler checks.
+    ///
+    /// An emitter that invents `signing_reason_panic_buy` degrades to
+    /// the ordinary signing report — no crash, no wrong sentence, just
+    /// a flavour that silently stops appearing. This is the test that
+    /// makes the silence audible: every motive key the game ships must
+    /// either map to a [`TransferMotive`] or be listed here as one of
+    /// the deliberately generic ones ("a transfer happened").
+    #[test]
+    fn every_signing_reason_key_is_understood_by_the_market_desk() {
+        use core::club::news::TransferMotive;
+
+        /// Keys that record only that a move took place. There is no
+        /// story in them and none is wanted.
+        const GENERIC: [&str; 6] = [
+            "signing_reason_transfer",
+            "signing_reason_loan",
+            "signing_reason_manual",
+            "signing_reason_loan_broadcast",
+            "signing_reason_listing_broadcast",
+            // A modifier appended to another reason, never a reason.
+            "signing_reason_rival_suffix",
+        ];
+
+        let bundle: BTreeMap<String, String> =
+            serde_json::from_slice(include_bytes!("../../../assets/i18n/en.json"))
+                .expect("en.json is valid JSON");
+
+        let motives: Vec<&String> = bundle
+            .keys()
+            .filter(|key| key.starts_with("signing_reason_"))
+            .collect();
+
+        assert!(
+            !motives.is_empty(),
+            "the signing-reason vocabulary vanished from en.json"
+        );
+
+        for key in motives {
+            if GENERIC.contains(&key.as_str()) {
+                continue;
+            }
+            assert_ne!(
+                TransferMotive::from_key(key),
+                TransferMotive::Unknown,
+                "{} is a real signing motive the market desk cannot read; map it in \
+                 TransferMotive::from_key or add it to the generic list",
+                key
+            );
+        }
+    }
+
+    #[test]
     fn a_match_report_can_always_print_without_its_scorer() {
         for (lang, _) in BUNDLES {
             let bundle = PressKeys::bundle(lang);
@@ -2397,6 +2457,7 @@ mod render_tests {
                         score: "1-1".to_string(),
                         outcome: "d",
                         is_cup: true,
+                        is_continental: false,
                         match_id: String::new(),
                     },
                     ResultView {
@@ -2406,6 +2467,7 @@ mod render_tests {
                         score: "4-1".to_string(),
                         outcome: "w",
                         is_cup: false,
+                        is_continental: false,
                         match_id: "2026-03-01_301_58".to_string(),
                     },
                 ],

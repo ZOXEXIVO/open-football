@@ -34,6 +34,7 @@ use crate::transfers::pipeline::{
     TransferNeedReason, TransferRequest, TransferRequestSource, TransferRequestStatus,
     TransferShortlist,
 };
+use crate::transfers::reason::TransferReason;
 use crate::transfers::squad_needs::EmergencyGroupSlot;
 use chrono::NaiveDate;
 use log::debug;
@@ -140,7 +141,7 @@ pub(super) struct DepthNegotiationAction {
     pub player_age: u8,
     pub player_ambition: f32,
     pub is_global_pool: bool,
-    pub reason: String,
+    pub reason: TransferReason,
 }
 
 /// Creates the Pending negotiation for each staged depth offer and

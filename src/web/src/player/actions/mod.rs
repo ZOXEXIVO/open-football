@@ -10,6 +10,7 @@ use core::club::player::calculators::WageCalculator;
 use core::club::player::transfer::ReleaseContext;
 use core::shared::{Currency, CurrencyValue};
 use core::transfers::pipeline::PipelineProcessor;
+use core::transfers::reason::TransferReason;
 use core::transfers::{CompletedTransfer, TransferType};
 use core::{Person, PlayerClubContract, PlayerSquadStatus, SimulatorData};
 use serde::{Deserialize, Serialize};
@@ -257,7 +258,7 @@ pub(crate) fn execute_move_on_free(sim: &mut SimulatorData, player_id: u32) -> b
         CurrencyValue::new(0.0, Currency::Usd),
         TransferType::Free,
     )
-    .with_reason("dec_reason_released_free".to_string());
+    .with_reason(TransferReason::key("dec_reason_released_free"));
     sim.continents[ci].countries[coi]
         .transfer_market
         .transfer_history
@@ -635,7 +636,7 @@ pub async fn transfer_action(
                 CurrencyValue::new(fee, Currency::Usd),
                 transfer_type,
             )
-            .with_reason("Manual".to_string());
+            .with_reason(TransferReason::key("signing_reason_manual"));
 
             // Convention (matches the AI pipeline at `transfers/market.rs`):
             // a transfer-history entry lives in the *buying* country only.
@@ -660,7 +661,7 @@ pub async fn transfer_action(
                 CurrencyValue::new(0.0, Currency::Usd),
                 TransferType::Free,
             )
-            .with_reason("Manual".to_string());
+            .with_reason(TransferReason::key("signing_reason_manual"));
 
             sim.continents[dci].countries[dcoi]
                 .transfer_market
@@ -910,7 +911,7 @@ pub async fn loan_action(
             CurrencyValue::new(0.0, Currency::Usd),
             TransferType::Loan(expiration),
         )
-        .with_reason("Manual".to_string());
+        .with_reason(TransferReason::key("signing_reason_manual"));
 
         sim.continents[dest_pos.0].countries[dest_pos.1]
             .transfer_market
@@ -1140,7 +1141,7 @@ mod tests {
             .iter()
             .find(|t| t.player_id == 1)
             .expect("manual release must record transfer history");
-        assert_eq!(entry.reason, "dec_reason_released_free");
+        assert_eq!(entry.reason.key, "dec_reason_released_free");
         assert_eq!(entry.from_club_id, 100);
 
         // Same release-flavoured cleanup the automatic sweep runs.

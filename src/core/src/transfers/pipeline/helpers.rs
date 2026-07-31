@@ -9,10 +9,8 @@ use crate::transfers::pipeline::breakout::{BreakoutPerformanceSignal, LeaguePerf
 use crate::transfers::pipeline::processor::{
     PipelineProcessor, PlayerSummary, SellerPlausibilityContext,
 };
-use crate::transfers::pipeline::{
-    DetailedScoutingReport, ReportRiskFlag, ScoutingRecommendation, TransferNeedReason,
-    TransferRequest,
-};
+use crate::transfers::pipeline::{DetailedScoutingReport, ReportRiskFlag, TransferRequest};
+use crate::transfers::reason::{ScoutVerdict, TransferReason};
 use crate::transfers::window::{PlayerValuationCalculator, TransferCalendar};
 use crate::utils::FormattingUtils;
 use crate::{
@@ -93,82 +91,26 @@ impl PipelineProcessor {
         false
     }
 
-    pub fn transfer_need_reason_text(reason: &TransferNeedReason) -> &'static str {
-        match reason {
-            TransferNeedReason::FormationGap => "Formation gap — no player for required position",
-            TransferNeedReason::QualityUpgrade => {
-                "Quality upgrade — current player below squad level"
-            }
-            TransferNeedReason::DepthCover => "Squad depth — need backup for position group",
-            TransferNeedReason::SuccessionPlanning => {
-                "Succession planning — aging key player needs replacement"
-            }
-            TransferNeedReason::DevelopmentSigning => {
-                "Development signing — young prospect with high potential"
-            }
-            TransferNeedReason::StaffRecommendation => "Staff recommendation",
-            TransferNeedReason::LoanToFillSquad => "Loan to fill squad — cannot afford to buy",
-            TransferNeedReason::ExperiencedHead => {
-                "Experienced head — need senior player for leadership"
-            }
-            TransferNeedReason::SquadPadding => "Squad padding — too few players to compete",
-            TransferNeedReason::CheapReinforcement => {
-                "Cheap reinforcement — affordable quality improvement"
-            }
-            TransferNeedReason::InjuryCoverLoan => "Injury cover — loan to replace injured player",
-            TransferNeedReason::OpportunisticLoanUpgrade => {
-                "Opportunistic loan — player better than current options"
-            }
-        }
-    }
-
-    /// Build a transfer reason string from the transfer request and optional scout report.
+    /// Build the localisable transfer reason from the transfer request
+    /// and optional scout report. Both halves travel as data — the motive
+    /// as an i18n key, the verdict as the numbers the scout filed — so the
+    /// history row can be phrased in whatever language the reader picked.
     pub(super) fn build_transfer_reason(
         request: Option<&TransferRequest>,
         report: Option<&DetailedScoutingReport>,
-    ) -> String {
-        let need_reason = request.map(|r| Self::transfer_need_reason_text(&r.reason));
+    ) -> TransferReason {
+        let key = request
+            .map(|r| r.reason.as_signing_reason_key())
+            .unwrap_or_default();
 
-        let scout_reason = report.map(|r| {
-            let rec = match r.recommendation {
-                ScoutingRecommendation::StrongBuy => "Strong buy",
-                ScoutingRecommendation::Buy => "Buy",
-                ScoutingRecommendation::Consider => "Consider",
-                ScoutingRecommendation::Pass => "Pass",
-            };
-            let ability_label = Self::ability_label(r.assessed_ability);
-            let potential_label = Self::ability_label(r.assessed_potential);
-            format!(
-                "Scout: {} (ability: {}, potential: {}, confidence: {:.0}%)",
-                rec,
-                ability_label,
-                potential_label,
-                r.confidence * 100.0
-            )
+        let scout = report.map(|r| ScoutVerdict {
+            recommendation: r.recommendation.clone(),
+            assessed_ability: r.assessed_ability,
+            assessed_potential: r.assessed_potential,
+            confidence: r.confidence,
         });
 
-        match (need_reason, scout_reason) {
-            (Some(need), Some(scout)) => format!("{} — {}", need, scout),
-            (Some(need), None) => need.to_string(),
-            (None, Some(scout)) => scout,
-            (None, None) => String::new(),
-        }
-    }
-
-    /// Convert a raw assessed ability value to a qualitative label.
-    fn ability_label(value: u8) -> &'static str {
-        match value {
-            0..=30 => "Very poor",
-            31..=60 => "Poor",
-            61..=80 => "Below average",
-            81..=100 => "Average",
-            101..=120 => "Decent",
-            121..=140 => "Good",
-            141..=160 => "Very good",
-            161..=180 => "Excellent",
-            181..=200 => "World class",
-            _ => "Unknown",
-        }
+        TransferReason::key(key).with_scout(scout)
     }
 
     pub(super) fn find_player_in_country<'a>(

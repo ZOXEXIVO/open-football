@@ -188,13 +188,16 @@
                         </span>
                     </div>
                     <div class="fm-ct-meta">
-                        <span class="fm-ct-fee">{% if !t.fee.is_empty() %}{{ t.fee }}{% else %}{{ i18n.t("free") }}{% endif %}</span>
+                        <span class="fm-ct-fee">{{ t.fee }}</span>
                         {% if t.transfer_type_key != "transfer_type_free" %}<span class="fm-ct-type">{{ i18n.t(&t.transfer_type_key) }}</span>{% endif %}
                         <span class="fm-ct-date">{{ t.date }}</span>
                     </div>
                 </div>
                 {% if !t.reason.is_empty() %}
                 <div class="fm-ct-reason">{{ t.reason }}</div>
+                {% endif %}
+                {% if !t.scout.is_empty() %}
+                <div class="fm-ct-scout">{{ t.scout }}</div>
                 {% endif %}
             </div>
             {% endfor %}

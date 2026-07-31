@@ -24,6 +24,7 @@ use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferO
 use crate::transfers::pipeline::{
     PipelineProcessor, TransferNeedReason, TransferRequest, TransferRequestStatus,
 };
+use crate::transfers::reason::TransferReason;
 use crate::transfers::scouting_region::ScoutingRegion;
 use crate::transfers::squad_needs::{
     EmergencyBuyerContext, EmergencyCandidateView, EmergencyGroupSlot, EmergencyProjectedSquad,
@@ -113,7 +114,7 @@ pub struct GlobalFreeAgentSigning {
     pub player_name: String,
     pub buying_country_id: u32,
     pub buying_club_id: u32,
-    pub reason: String,
+    pub reason: TransferReason,
     /// Pre-computed annual wage + contract length + role promise. Set
     /// by the emergency pass (and any future request-driven path that
     /// stages terms upfront). `None` falls back to the calculator
@@ -239,7 +240,7 @@ pub(super) struct FreeAgentSigning {
     pub from_club_id: u32,
     pub from_club_name: String,
     pub to_club_id: u32,
-    pub reason: String,
+    pub reason: TransferReason,
     /// Optional pre-computed contract terms. Emergency pass populates
     /// this so execution installs the agreed short-deal wage / role;
     /// the legacy request-driven pass leaves it `None` and the
@@ -804,8 +805,7 @@ impl CountryResult {
                             player_age: best.age,
                             player_ambition,
                             is_global_pool: best.is_global_pool,
-                            reason: PipelineProcessor::transfer_need_reason_text(&request.reason)
-                                .to_string(),
+                            reason: TransferReason::key(request.reason.as_signing_reason_key()),
                         });
                         // One staged pursuit per request — the resolver
                         // owns it from here.
@@ -888,8 +888,7 @@ impl CountryResult {
                         }
                     }
 
-                    let reason =
-                        PipelineProcessor::transfer_need_reason_text(&request.reason).to_string();
+                    let reason = TransferReason::key(request.reason.as_signing_reason_key());
 
                     // Stage stage-aware contract terms so the installed deal
                     // matches the free agent's market stage (a long-unemployed
@@ -1042,7 +1041,7 @@ impl CountryResult {
             // Captured before `signing.reason` is moved into the history
             // row below, so the monthly diagnostics can split pre-contract
             // moves from ordinary domestic-expiry signings.
-            let is_pre_contract = signing.reason == "pre_contract";
+            let is_pre_contract = signing.reason.key == "pre_contract";
 
             // Execute first — a failed move (squad full, player not found
             // at claimed origin) must NOT leave a phantom transfer-history
@@ -1216,7 +1215,7 @@ impl CountryResult {
                         from_club_id: club.id,
                         from_club_name: club.name.clone(),
                         to_club_id: agreement.to_club_id,
-                        reason: "pre_contract".to_string(),
+                        reason: TransferReason::key("pre_contract"),
                         terms: Some(EmergencySignedTerms {
                             annual_wage: agreement.annual_wage,
                             contract_years: agreement.contract_years,
@@ -1664,7 +1663,7 @@ impl CountryResult {
                     from_club_id: best.club_id,
                     from_club_name: best.club_name.clone(),
                     to_club_id: club.id,
-                    reason: slot.reason.to_string(),
+                    reason: TransferReason::key(slot.reason),
                     terms: Some(pricing.signed_terms(best)),
                     fills_group: Some(slot.group),
                 });
@@ -2038,7 +2037,7 @@ impl CountryResult {
                 from_club_id: candidate.club_id,
                 from_club_name: candidate.club_name.clone(),
                 to_club_id: buyer.club_id,
-                reason: "free_agent_market_clearing".to_string(),
+                reason: TransferReason::key("free_agent_market_clearing"),
                 terms: Some(pricing.signed_terms(candidate)),
                 // No transfer request is being serviced — leave the
                 // request bookkeeping untouched.
@@ -3649,7 +3648,7 @@ mod emergency_fill_tests {
             "GK-deficient squad must sign at least one goalkeeper"
         );
         assert_eq!(
-            signings[0].reason, "emergency_squad_fill_gk",
+            signings[0].reason.key, "emergency_squad_fill_gk",
             "first emergency signing for a GK-deficient squad must be tagged GK"
         );
     }
@@ -3852,7 +3851,7 @@ mod emergency_fill_tests {
             from_club_id: 0,
             from_club_name: "Free Agent".to_string(),
             to_club_id: 200,
-            reason: "emergency_squad_fill_def".to_string(),
+            reason: TransferReason::key("emergency_squad_fill_def"),
             terms: None,
             fills_group: Some(PlayerFieldPositionGroup::Defender),
         }];
@@ -3958,7 +3957,7 @@ mod emergency_fill_tests {
         // The first DEF-tagged signing should be the domestic one.
         let first_def = signings
             .iter()
-            .find(|s| s.reason == "emergency_squad_fill_def");
+            .find(|s| s.reason.key == "emergency_squad_fill_def");
         assert_eq!(
             first_def.map(|s| s.player_id),
             Some(2000),
@@ -4105,7 +4104,7 @@ mod emergency_fill_tests {
         assert!(
             signings
                 .iter()
-                .any(|s| s.reason == "emergency_squad_fill_gk"),
+                .any(|s| s.reason.key == "emergency_squad_fill_gk"),
             "GK shortfall must be filled first when projected starts urgent"
         );
     }
@@ -5151,9 +5150,9 @@ mod emergency_fill_tests {
         assert!(negotiation.offered_salary.unwrap_or(0) > 0);
         assert!(negotiation.current_offer.personal_terms.is_some());
         assert_eq!(
-            negotiation.reason,
-            PipelineProcessor::transfer_need_reason_text(&TransferNeedReason::DepthCover),
-            "history reason must be the human-readable depth text, not a raw emergency tag"
+            negotiation.reason.key,
+            TransferNeedReason::DepthCover.as_signing_reason_key(),
+            "history reason must carry the depth motive, not a raw emergency tag"
         );
         assert!(
             country
@@ -5340,8 +5339,8 @@ mod emergency_fill_tests {
             assert_eq!(signing.player_id, 9000);
             assert_eq!(signing.buying_club_id, 100);
             assert_eq!(
-                signing.reason,
-                PipelineProcessor::transfer_need_reason_text(&TransferNeedReason::DepthCover)
+                signing.reason.key,
+                TransferNeedReason::DepthCover.as_signing_reason_key()
             );
             assert!(
                 signing.terms.is_some(),
@@ -5478,7 +5477,7 @@ mod emergency_fill_tests {
             player_name: "Pool P9400".to_string(),
             buying_country_id: 1,
             buying_club_id: 100,
-            reason: "Squad depth — need backup for position group".to_string(),
+            reason: TransferReason::key(TransferNeedReason::DepthCover.as_signing_reason_key()),
             terms: None,
         };
         let executed = execute_global_free_agent_signing(
@@ -5503,8 +5502,8 @@ mod emergency_fill_tests {
             "the executor is the single writer of the history row"
         );
         assert_eq!(
-            rows[0].reason,
-            "Squad depth — need backup for position group"
+            rows[0].reason.key,
+            TransferNeedReason::DepthCover.as_signing_reason_key()
         );
         assert!(
             country.clubs[0].teams.teams.iter().any(|t| t
@@ -5535,7 +5534,7 @@ mod emergency_fill_tests {
             player_name: "Pool P9400".to_string(),
             buying_country_id: 1,
             buying_club_id: 100,
-            reason: "Squad depth — need backup for position group".to_string(),
+            reason: TransferReason::key(TransferNeedReason::DepthCover.as_signing_reason_key()),
             terms: None,
         };
         let executed = execute_global_free_agent_signing(
@@ -5770,7 +5769,7 @@ mod emergency_fill_tests {
         );
         assert_eq!(signing.player_id, 8200);
         assert_eq!(signing.to_club_id, 100);
-        assert_eq!(signing.reason, "free_agent_market_clearing");
+        assert_eq!(signing.reason.key, "free_agent_market_clearing");
         assert!(
             signing.fills_group.is_none(),
             "clearing services no request — request bookkeeping must stay untouched"
@@ -5888,7 +5887,7 @@ mod emergency_fill_tests {
         let signing =
             signed.expect("soft clearing must sign a 100-day domestic backup within 400 ticks");
         assert_eq!(signing.player_id, 8500);
-        assert_eq!(signing.reason, "free_agent_market_clearing");
+        assert_eq!(signing.reason.key, "free_agent_market_clearing");
         let terms = signing
             .terms
             .expect("soft clearing stages short-deal terms");
@@ -5988,7 +5987,7 @@ mod emergency_fill_tests {
         let signing = signing.expect(
             "a useful domestic expired player must clear opportunistically within 800 ticks",
         );
-        assert_eq!(signing.reason, "free_agent_market_clearing");
+        assert_eq!(signing.reason.key, "free_agent_market_clearing");
         // No request was serviced — the opportunistic path leaves request
         // bookkeeping untouched.
         assert!(signing.fills_group.is_none());

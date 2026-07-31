@@ -401,14 +401,42 @@ impl BoardResult {
                         club.name, injection
                     );
                 }
-                // Informational / handled elsewhere.
+                // Four decisions the board really takes, which used to
+                // be discarded here and so left no trace anywhere a
+                // reader could see. Each of them is a morning a
+                // supporter would have heard about from somebody at the
+                // club, so each of them now reaches the diary the
+                // boardroom desk reads.
+                BoardDecision::HoldCrisisMeeting => {
+                    club.record_affair(ClubAffair::CrisisMeetingHeld, today);
+                }
+                BoardDecision::DemandPlayerSale { .. } => {
+                    club.record_affair(ClubAffair::PlayerSaleDemanded, today);
+                }
+                BoardDecision::BlockTransfer { player_id, .. } => {
+                    club.record_affair(
+                        ClubAffair::TransferBlocked {
+                            player_id: *player_id,
+                        },
+                        today,
+                    );
+                }
+                BoardDecision::RejectFacilityUpgrade { facility, .. } => {
+                    club.record_affair(
+                        ClubAffair::FacilityUpgradeRejected {
+                            facility: *facility,
+                        },
+                        today,
+                    );
+                }
+
+                // Informational / handled elsewhere. The backing and the
+                // warning reach the page through the board's confidence
+                // state and the ultimatum affair; the sacking is
+                // recorded by the manager market, which knows who.
                 BoardDecision::IssueManagerBacking
                 | BoardDecision::IssueFormalWarning
-                | BoardDecision::HoldCrisisMeeting
                 | BoardDecision::SackManager
-                | BoardDecision::RejectFacilityUpgrade { .. }
-                | BoardDecision::DemandPlayerSale { .. }
-                | BoardDecision::BlockTransfer { .. }
                 | BoardDecision::ApproveTransferException { .. } => {}
             }
         }

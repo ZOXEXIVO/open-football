@@ -38,7 +38,8 @@ pub use finance::{
 
 // Club press exports
 pub use news::{
-    BoardroomDesk, CareerRecord, ClubAffair, ClubAffairEntry, ClubAffairLog, ClubTransferWeek,
+    BoardroomDesk, CareerRecord, ClauseWindfallKind, ClubAffair, ClubAffairEntry, ClubAffairLog,
+    ClubTransferWeek,
     IssueResult, MarketDesk, MatchDesk, NewsDesk, NewsEditor, NewsRecurrence, NewsStory,
     NewsStoryKind, NewspaperIssue, PressMood, SquadDesk, StandingSnapshot, TableDesk, TeamNewsroom,
     WeeklyMatchFacts,

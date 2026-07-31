@@ -151,6 +151,36 @@ impl RumourDesk {
             return;
         }
 
+        // The same complaint with an address on it. "He wants more" is
+        // the general version; "he wants European nights" names the
+        // thing the club either can or cannot provide, and a supporter
+        // knows immediately which of the two his club is.
+        if feed
+            .any_of(&[
+                HappinessEventType::WantsEuropeanCompetition,
+                HappinessEventType::WantsCopaLibertadores,
+            ])
+            .is_some()
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::ContinentalAmbition, date)
+                    .about(player.id)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        // Interest from elsewhere, cashed in here. The most cynical
+        // thing in football, done constantly, and never once printed.
+        if feed.happened(HappinessEventType::UsedInterestForContractLeverage) {
+            out.push(
+                NewsStory::new(NewsStoryKind::LeverageUsed, date)
+                    .about(player.id)
+                    .weighted(importance),
+            );
+            return;
+        }
+
         if feed
             .any_of(&[
                 HappinessEventType::ContractTalksStalled,

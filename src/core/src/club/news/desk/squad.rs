@@ -74,6 +74,10 @@ impl SquadDesk {
         for team in rosters {
             let senior = team.team_type.is_own_team();
 
+            if senior {
+                Self::file_dressing_room_state(out, team, date);
+            }
+
             for player in team.players.iter() {
                 if player.is_retired() {
                     continue;
@@ -99,6 +103,7 @@ impl SquadDesk {
                         sides,
                         facts,
                         feed.happened(HappinessEventType::DerbyHero),
+                        feed.happened(HappinessEventType::SeniorDebut),
                         date,
                     );
                     Self::file_form(out, player, played_this_week, date);
@@ -111,6 +116,11 @@ impl SquadDesk {
                     Self::file_off_field(out, player, &feed, date);
                     Self::file_competition_for_places(out, player, &feed, date);
                     Self::file_contract(out, player, &feed, date);
+                    Self::file_move_meaning(out, player, &feed, date);
+                    Self::file_life_outside_football(out, player, date);
+                    Self::file_coach_verdict(out, team, player, date);
+                    Self::file_dugout_ripple(out, player, &feed, date);
+                    Self::file_small_beats(out, player, &feed, date);
                     DugoutDesk::file_player(out, player, &mut pulse, date);
                     FansDesk::file_player(out, player, &mut pulse, date);
                     MarketDesk::file_verdict(out, player, date);
@@ -120,6 +130,358 @@ impl SquadDesk {
         }
 
         pulse
+    }
+
+    /// A dressing room that has come together reads this well on the
+    /// blended chemistry axis. Below the neutral fifty it is a squad;
+    /// up here it is a group.
+    const KNIT_CHEMISTRY: f32 = 68.0;
+    /// Signings inside the ninety-day window before the churn is the
+    /// story rather than the business.
+    const TURNOVER_SIGNINGS: u8 = 5;
+    /// Factions, and how hostile they are to each other. Both bars
+    /// matter: a squad naturally forms friendship groups, and it is
+    /// only a problem when those groups dislike one another.
+    const CLIQUE_FACTIONS: u8 = 3;
+    const CLIQUE_TENSION: f32 = 0.45;
+
+    /// The state of the room, read off the weekly social snapshot the
+    /// squad already keeps.
+    ///
+    /// Every manager in football claims to be building a dressing room
+    /// and almost none of them can point at one. The simulation can:
+    /// it blends pair harmony, leadership, coach trust, integration and
+    /// turnover into a chemistry figure every week, and the press had
+    /// no way to see any of it. These are conditions rather than days,
+    /// so all three are `Standing` and wait on the back catalogue.
+    fn file_dressing_room_state(out: &mut Vec<NewsStory>, team: &Team, date: NaiveDate) {
+        let social = &team.social_snapshot;
+
+        // Churn first: it is the one a supporter can verify against the
+        // signings page, and it explains the other two.
+        if social.recent_signings_90d >= Self::TURNOVER_SIGNINGS {
+            out.push(
+                NewsStory::new(NewsStoryKind::TurnoverToll, date)
+                    .with_numbers(social.recent_signings_90d as i32, 0)
+                    .weighted(social.turnover_penalty as i32),
+            );
+            return;
+        }
+
+        // A squad forms friendship groups by nature. It is only news
+        // when those groups have stopped getting along, which is why
+        // the tension bar is required and not just the count.
+        if social.factions.faction_count >= Self::CLIQUE_FACTIONS
+            && social.factions.faction_tension >= Self::CLIQUE_TENSION
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::CliqueConcerns, date)
+                    .with_numbers(
+                        social.factions.faction_count as i32,
+                        social.factions.isolated_players as i32,
+                    )
+                    .weighted((social.factions.faction_tension * 60.0) as i32),
+            );
+            return;
+        }
+
+        if social.team_chemistry >= Self::KNIT_CHEMISTRY {
+            out.push(
+                NewsStory::new(NewsStoryKind::SquadKnitsTogether, date)
+                    .with_numbers(social.team_chemistry as i32, 0)
+                    .weighted((social.team_chemistry - Self::KNIT_CHEMISTRY) as i32),
+            );
+        }
+    }
+
+    /// What the manager privately thinks of him.
+    ///
+    /// The coach keeps a memory of every player — who he trusts in a
+    /// big match, whose mistake he has not finished forgetting — and it
+    /// decides team sheets while never being said out loud anywhere. A
+    /// press box infers exactly this from watching who plays when it
+    /// matters, so the paper is entitled to it; what it is not entitled
+    /// to do is quote anybody on it, which is why neither of these is a
+    /// quote piece.
+    fn file_coach_verdict(
+        out: &mut Vec<NewsStory>,
+        team: &Team,
+        player: &Player,
+        date: NaiveDate,
+    ) {
+        use crate::club::staff::coach::memory::CoachMemoryFlags;
+
+        let coach = team.staffs.head_coach();
+        // A vacant dugout falls back to a stub with no id, and a stub
+        // has no opinion about anybody.
+        if coach.id == 0 {
+            return;
+        }
+
+        let Some(memory) = coach.coach_memory.get(player.id) else {
+            return;
+        };
+
+        let importance = PlayerStanding::importance(player);
+
+        if memory.flags.contains(CoachMemoryFlags::STICKY_DOUBT) {
+            out.push(
+                NewsStory::new(NewsStoryKind::ManagerDoubtsLinger, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+
+        if memory.flags.contains(CoachMemoryFlags::BIG_MATCH_PROVEN) {
+            out.push(
+                NewsStory::new(NewsStoryKind::BigMatchTrust, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+        }
+    }
+
+    /// Which injury piece an absence earns.
+    ///
+    /// "Out for eleven weeks" is a squad note. "He has done his
+    /// cruciate" is news, and it is the same fact — the engine has
+    /// always recorded the injury by name and the page never printed
+    /// one. Only the three families a supporter can picture are split
+    /// out; a dead leg and a back spasm stay the generic blow, because
+    /// naming those would be precision nobody asked for.
+    pub(super) fn injury_kind(player: &Player) -> NewsStoryKind {
+        use crate::InjuryType as Hurt;
+
+        match player.player_attributes.injury_type {
+            Some(
+                Hurt::HamstringStrain
+                | Hurt::CalfStrain
+                | Hurt::QuadStrain
+                | Hurt::GroinStrain
+                | Hurt::HipFlexorStrain,
+            ) => NewsStoryKind::HamstringBlow,
+            Some(Hurt::ACLTear | Hurt::PCLTear | Hurt::MCLSprain | Hurt::TornMeniscus) => {
+                NewsStoryKind::KneeLigamentBlow
+            }
+            Some(Hurt::BrokenLeg | Hurt::StressFracture | Hurt::AchillesRupture) => {
+                NewsStoryKind::BrokenBoneBlow
+            }
+            _ => NewsStoryKind::InjuryBlow,
+        }
+    }
+
+    /// How a loan spell actually went, which the homecoming piece could
+    /// never say.
+    ///
+    /// The verdict is recorded at the moment of return — it has to be,
+    /// because the borrowing season's statistics are frozen and reset
+    /// seconds later — and the page printed the same "he is back" for a
+    /// player who started every week and one who never got off the
+    /// bench. Those are opposite outcomes for the club that sent him.
+    pub(super) fn homecoming_kind(verdict: crate::LoanSpellVerdict) -> NewsStoryKind {
+        use crate::LoanSpellVerdict as How;
+
+        match verdict {
+            How::Standout | How::Successful => NewsStoryKind::LoanReturnTriumph,
+            How::Peripheral | How::Struggled => NewsStoryKind::LoanReturnWasted,
+            // A steady spell, or one too short to read, is the plain
+            // homecoming. Inventing a verdict from a small sample is
+            // exactly what the record refuses to do.
+            How::Steady | How::Inconclusive => NewsStoryKind::LoanReturn,
+        }
+    }
+
+    /// What the move actually meant to him.
+    ///
+    /// The market desk reports a transfer with a fee and a date, which
+    /// is everything except the part a reader wants. The dressing room
+    /// has always recorded the rest — that this was the club he grew up
+    /// wanting, that the wages changed his life, that he arrived as a
+    /// senior professional and discovered he is fourth choice — and
+    /// none of it had anywhere to be printed.
+    fn file_move_meaning(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        date: NaiveDate,
+    ) {
+        let importance = PlayerStanding::importance(player);
+
+        if feed
+            .any_of(&[
+                HappinessEventType::DreamMove,
+                HappinessEventType::JoiningElite,
+            ])
+            .is_some()
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::DreamMoveComplete, date)
+                    .about(player.id)
+                    .weighted(importance),
+            );
+        }
+
+        if feed.happened(HappinessEventType::DressingRoomStatusShock) {
+            out.push(
+                NewsStory::new(NewsStoryKind::StatusShock, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+        }
+
+        // The money, both ways round. Kept as two kinds rather than one
+        // with a sign, because a supporter reads a rise and a cut as
+        // completely different stories about the same man.
+        if feed.happened(HappinessEventType::SalaryBoost) {
+            out.push(
+                NewsStory::new(NewsStoryKind::PayWindfall, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+        } else if feed.happened(HappinessEventType::SalaryShock) {
+            out.push(
+                NewsStory::new(NewsStoryKind::WageRealityCheck, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+        }
+    }
+
+    /// The life a footballer has when he is not playing football.
+    ///
+    /// All of it arrives on one event type, so the desk had no way to
+    /// tell a bereavement from a request for a language tutor and
+    /// printed neither. Reading the kind back off the context is what
+    /// makes these printable at all — and the reason this walks the
+    /// fortnight rather than the week is that none of it is over in
+    /// seven days.
+    ///
+    /// Nothing here is loud. A paper that only prints the loud things
+    /// is a results service; the quiet ones are what make a squad read
+    /// like a group of people rather than a list of assets.
+    fn file_life_outside_football(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate) {
+        use crate::LifeSimulationDesireKind as Life;
+
+        let Some(kind) = RecentEvents::fortnight(player).life_event() else {
+            return;
+        };
+
+        let importance = PlayerStanding::importance(player);
+
+        let (story, weight) = match kind {
+            // A death in the family is reported early, briefly, and
+            // without a cheerful word anywhere near it.
+            Life::BereavementLeave => (NewsStoryKind::CompassionateLeave, importance),
+            Life::FamilyBirthLeave => (NewsStoryKind::FamilyCelebration, importance / 2),
+            Life::FamilyUnsettledAbroad | Life::PartnerSchoolingConcern => {
+                (NewsStoryKind::FamilyUnsettled, importance / 2)
+            }
+            Life::WantsLanguageTutor => (NewsStoryKind::LanguageLessons, importance / 3),
+            Life::VeteranHomecomingSeason => (NewsStoryKind::VeteranHomecomingWish, importance),
+            Life::ClubLegendRefusesLeave => (NewsStoryKind::LegendWontLeave, importance),
+            Life::RefusesRivalMoveDespiteUpgrade => (NewsStoryKind::RefusesRivalMove, importance),
+            Life::WantsLowerPressureClub => (NewsStoryKind::SeeksQuieterStage, importance / 2),
+            // The rest are contract and selection asks the rumour and
+            // dugout desks already tell better, or private enough that
+            // a local paper would not have them.
+            _ => return,
+        };
+
+        out.push(NewsStory::new(story, date).about(player.id).weighted(weight));
+    }
+
+    /// What a change in the dugout does to the men who have to play for
+    /// whoever is next.
+    ///
+    /// The boardroom desk has always reported the change itself. This is
+    /// the half a supporter actually discusses: whether the squad has
+    /// picked up, and which of them were signed by the man who has gone.
+    fn file_dugout_ripple(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        date: NaiveDate,
+    ) {
+        let importance = PlayerStanding::importance(player);
+
+        if feed.happened(HappinessEventType::NewManagerBounce) {
+            out.push(
+                NewsStory::new(NewsStoryKind::NewManagerBounce, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+
+        if feed
+            .any_of(&[
+                HappinessEventType::ManagerDeparture,
+                HappinessEventType::SensesManagerChange,
+            ])
+            .is_some()
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::ManagerExitUnsettles, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+        }
+    }
+
+    /// The small human beats a week is mostly made of.
+    ///
+    /// A paper that only prints the loud things reads as a highlights
+    /// reel. These are the lines that make it read like somewhere
+    /// people work: a promise honoured, a ban served, a man on a
+    /// programme of his own, a midfielder being taught a new job.
+    fn file_small_beats(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        date: NaiveDate,
+    ) {
+        let importance = PlayerStanding::importance(player);
+
+        if feed.happened(HappinessEventType::PromiseKept) {
+            out.push(
+                NewsStory::new(NewsStoryKind::PromiseKept, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+        }
+
+        if feed.happened(HappinessEventType::SuspensionServed) {
+            out.push(NewsStory::new(NewsStoryKind::BanServed, date).about(player.id));
+        }
+
+        if feed.happened(HappinessEventType::PlayingForNewContract) {
+            out.push(
+                NewsStory::new(NewsStoryKind::PlayingForContract, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+        }
+
+        if feed.happened(HappinessEventType::PersonalTrainingPlanSet) {
+            out.push(NewsStory::new(NewsStoryKind::PersonalTrainingPlan, date).about(player.id));
+        }
+
+        if feed.happened(HappinessEventType::ManagerTacticalInstruction) {
+            out.push(NewsStory::new(NewsStoryKind::RoleRetraining, date).about(player.id));
+        }
+
+        // He thinks the manager has favourites. Its own piece rather
+        // than folded into being left out of one big match: that is a
+        // decision about a fixture, and this is a belief about the
+        // manager, which is the one that spreads.
+        if feed.happened(HappinessEventType::FeelsSelectionFavouritism) {
+            out.push(
+                NewsStory::new(NewsStoryKind::FavouritismGrumbles, date)
+                    .about(player.id)
+                    .weighted(importance),
+            );
+        }
     }
 
     /// Saves that turn a keeper's afternoon into a piece. Below this he
@@ -189,6 +551,25 @@ impl SquadDesk {
     /// Five completed dribbles in one game is a top-of-the-division
     /// afternoon; the routine wide man manages one or two.
     const DRIBBLING_DISPLAY: u16 = 5;
+    /// Two goals. A hat-trick is the squad desk's; this is the mark
+    /// above which the ratings column stops talking about the mark.
+    const BRACE_GOALS: u16 = 2;
+    /// A debut worth calling a dream needs an afternoon behind it, and
+    /// the bar sits below the masterclass on purpose: a competent hour
+    /// on a first appearance already is the story.
+    const DEBUT_JOY_RATING: i32 = 720;
+    /// The age framings. The young bar is below the masterclass because
+    /// the achievement is the age; the veteran bar is above it because
+    /// at thirty-four the surprise has to be real.
+    const TEENAGE_STAR_RATING: i32 = 760;
+    const VETERAN_AGE: u8 = 33;
+    const VETERAN_TURN_RATING: i32 = 780;
+    /// Both halves of a midfielder's job in one afternoon. Each bar is
+    /// deliberately below its own single-quality piece — this is not
+    /// the best passer or the best tackler on the pitch, it is the man
+    /// who did both, which no existing line could say.
+    const ENGINE_KEY_PASSES: u16 = 3;
+    const ENGINE_DEFENSIVE_ACTIONS: u16 = 6;
     /// Shots, and the expected goals behind them, before an afternoon
     /// counts as squandered. Both bars matter and neither works alone:
     /// six efforts from thirty yards is not a miss (the xG floor throws
@@ -229,6 +610,7 @@ impl SquadDesk {
         sides: &FxHashSet<u32>,
         facts: &WeeklyMatchFacts,
         derby_hero: bool,
+        debut: bool,
         date: NaiveDate,
     ) {
         let player_id = player.id;
@@ -238,6 +620,12 @@ impl SquadDesk {
         if week.is_routine() {
             return;
         }
+
+        let age = player.age(date);
+        let is_defender = matches!(
+            player.position().position_group(),
+            PlayerFieldPositionGroup::Defender
+        );
 
         let verdict = |kind: NewsStoryKind, a: i32, b: i32, weight: i32| {
             NewsStory::new(kind, date)
@@ -295,12 +683,94 @@ impl SquadDesk {
             return;
         }
 
+        // A debut goes both ways and a player only ever gets one, so
+        // both versions of it outrank the ordinary marks — including
+        // the masterclass, which he may also have had.
+        if debut {
+            if week.goals > 0 || week.man_of_the_match || week.best_rating >= Self::DEBUT_JOY_RATING
+            {
+                out.push(verdict(
+                    NewsStoryKind::DreamDebut,
+                    week.goals as i32,
+                    week.best_rating,
+                    week.goals as i32 * 40,
+                ));
+                return;
+            }
+            if week.worst_rating > 0 && week.worst_rating <= Self::STINKER_RATING {
+                out.push(verdict(
+                    NewsStoryKind::DebutNightmare,
+                    0,
+                    week.worst_rating,
+                    (Self::STINKER_RATING - week.worst_rating) / 4,
+                ));
+                return;
+            }
+        }
+
+        // Two goals. Below a hat-trick, which the squad desk already
+        // files, and above every mark the column can otherwise reach
+        // for — because it is usually the reason the match was won.
+        if week.goals == Self::BRACE_GOALS {
+            out.push(verdict(
+                NewsStoryKind::BraceHero,
+                week.goals as i32,
+                week.best_rating,
+                (week.best_rating - 700).max(0) / 5,
+            ));
+            return;
+        }
+
+        // The same mark means a different thing at nineteen and at
+        // thirty-four, and the column had one sentence for both.
+        if age <= Self::PROSPECT_AGE && week.best_rating >= Self::TEENAGE_STAR_RATING {
+            out.push(verdict(
+                NewsStoryKind::TeenageStarTurn,
+                age as i32,
+                week.best_rating,
+                (week.best_rating - Self::TEENAGE_STAR_RATING) / 4,
+            ));
+            return;
+        }
+        if age >= Self::VETERAN_AGE && week.best_rating >= Self::VETERAN_TURN_RATING {
+            out.push(verdict(
+                NewsStoryKind::RolledBackYears,
+                age as i32,
+                week.best_rating,
+                (week.best_rating - Self::VETERAN_TURN_RATING) / 4,
+            ));
+            return;
+        }
+
         if week.best_rating >= Self::MASTERCLASS_RATING {
             out.push(verdict(
                 NewsStoryKind::MatchMasterclass,
                 (week.goals.saturating_add(week.assists)) as i32,
                 week.best_rating,
                 (week.best_rating - Self::MASTERCLASS_RATING) / 4,
+            ));
+            return;
+        }
+
+        // A centre-half up for a corner. Rare enough that the whole
+        // ground remembers who took it.
+        if is_defender && week.goals > 0 {
+            out.push(verdict(
+                NewsStoryKind::GoalFromDefence,
+                week.goals as i32,
+                week.best_rating,
+                week.goals as i32 * 30,
+            ));
+            return;
+        }
+
+        // A hand in two goals without scoring twice in either sense.
+        if week.goals > 0 && week.assists > 0 {
+            out.push(verdict(
+                NewsStoryKind::GoalAndAssistShow,
+                (week.goals.saturating_add(week.assists)) as i32,
+                week.best_rating,
+                (week.goals.saturating_add(week.assists) as i32 - 2) * 30,
             ));
             return;
         }
@@ -429,6 +899,22 @@ impl SquadDesk {
             return;
         }
 
+        // Both jobs in the same ninety minutes. Below the two pieces
+        // that celebrate one quality outright, because the man who ran
+        // the game is rarely the best at either half of it — which is
+        // exactly why no existing line could describe him.
+        if week.key_passes >= Self::ENGINE_KEY_PASSES
+            && week.defensive_actions >= Self::ENGINE_DEFENSIVE_ACTIONS
+        {
+            out.push(verdict(
+                NewsStoryKind::MidfieldEngine,
+                (week.key_passes.saturating_add(week.defensive_actions)) as i32,
+                week.best_rating,
+                (week.defensive_actions as i32 - Self::ENGINE_DEFENSIVE_ACTIONS as i32) * 10,
+            ));
+            return;
+        }
+
         // He spent the afternoon fouling people.
         if week.fouls >= Self::FOUL_TROUBLE {
             out.push(verdict(
@@ -523,7 +1009,7 @@ impl SquadDesk {
         // knock that clears by Saturday is not news.
         if player.player_attributes.is_injured && days_out >= 14 {
             out.push(
-                NewsStory::new(NewsStoryKind::InjuryBlow, date)
+                NewsStory::new(Self::injury_kind(player), date)
                     .about(player.id)
                     .with_numbers(days_out, 0)
                     .weighted(PlayerStanding::importance(player) + (days_out.min(180) / 3)),
@@ -553,23 +1039,72 @@ impl SquadDesk {
         // for a decorated career, so walk back from the newest and stop
         // the moment the week closes rather than reading a whole career
         // for every player in the world, every week.
-        let won_pom = player
+        let mut won_pom = false;
+        let mut won_young_pom = false;
+        for entry in player
             .awards_count
             .timeline
             .iter()
             .rev()
             .take_while(|entry| entry.date >= week_start)
-            .any(|entry| {
-                entry.date <= date
-                    && matches!(
-                        entry.kind,
-                        crate::AwardReputationKind::PlayerOfTheMonth
-                            | crate::AwardReputationKind::YoungPlayerOfTheMonth
-                    )
-            });
+        {
+            if entry.date > date {
+                continue;
+            }
+            match entry.kind {
+                crate::AwardReputationKind::PlayerOfTheMonth => won_pom = true,
+                crate::AwardReputationKind::YoungPlayerOfTheMonth => won_young_pom = true,
+                _ => {}
+            }
+        }
 
-        if won_pom {
+        // The young award is its own piece rather than a line in the
+        // senior one's. A nineteen-year-old beating other
+        // nineteen-year-olds and a twenty-eight-year-old beating
+        // everybody are different achievements, and a paper that
+        // printed the same sentence for both was quietly telling its
+        // readers it had not looked.
+        if won_young_pom {
+            out.push(
+                NewsStory::new(NewsStoryKind::YoungPlayerOfMonthAward, date)
+                    .about(player.id)
+                    .with_numbers(player.age(date) as i32, 0),
+            );
+        } else if won_pom {
             out.push(NewsStory::new(NewsStoryKind::PlayerOfMonth, date).about(player.id));
+        }
+
+        // The rest of the honours ladder, none of which had anywhere to
+        // appear. A weekly award is the only one most footballers ever
+        // collect, and the young player of the season is one of the few
+        // a town remembers the year of.
+        if feed.happened(HappinessEventType::YoungPlayerOfTheSeason) {
+            out.push(
+                NewsStory::new(NewsStoryKind::YoungPlayerOfSeasonAward, date)
+                    .about(player.id)
+                    .with_numbers(player.age(date) as i32, 0)
+                    .weighted(PlayerStanding::importance(player) / 2),
+            );
+        }
+
+        if feed.happened(HappinessEventType::YoungPlayerOfTheWeek) {
+            out.push(
+                NewsStory::new(NewsStoryKind::YoungPlayerOfWeek, date)
+                    .about(player.id)
+                    .with_numbers(player.age(date) as i32, 0),
+            );
+        } else if feed.happened(HappinessEventType::PlayerOfTheWeek) {
+            out.push(NewsStory::new(NewsStoryKind::PlayerOfWeek, date).about(player.id));
+        }
+
+        if feed
+            .any_of(&[
+                HappinessEventType::TeamOfTheMonthSelection,
+                HappinessEventType::YoungTeamOfTheMonthSelection,
+            ])
+            .is_some()
+        {
+            out.push(NewsStory::new(NewsStoryKind::TeamOfMonthNod, date).about(player.id));
         }
 
         // The two honours only a goalkeeper can collect. The glove is a
@@ -695,8 +1230,15 @@ impl SquadDesk {
         }
 
         if feed.happened(HappinessEventType::RetirementAnnounced) {
+            // A knee that gave out and a planned farewell are the same
+            // line on a squad list and nothing alike on a page: one man
+            // chose the moment and the other had it chosen for him.
+            let kind = match feed.retirement_reason() {
+                Some(crate::RetirementReason::Injury) => NewsStoryKind::ForcedToRetire,
+                _ => NewsStoryKind::RetirementAnnounced,
+            };
             out.push(
-                NewsStory::new(NewsStoryKind::RetirementAnnounced, date)
+                NewsStory::new(kind, date)
                     .about(player.id)
                     .with_numbers(player.age(date) as i32, CareerRecord::appearances(player))
                     .weighted(PlayerStanding::importance(player)),
@@ -806,7 +1348,7 @@ impl SquadDesk {
                 _ => 0,
             };
             out.push(
-                NewsStory::new(NewsStoryKind::LoanReturn, date)
+                NewsStory::new(Self::homecoming_kind(spell.verdict), date)
                     .about(player.id)
                     .with_numbers(spell.appearances as i32, spell.goals as i32)
                     .weighted(weight),
@@ -1144,8 +1686,20 @@ impl SquadDesk {
         // Not injured, not dropped — ineligible. Worse than either,
         // because it takes a window to undo.
         if feed.happened(HappinessEventType::SquadRegistrationOmitted) {
+            // "Left out of the squad list" is an administrative
+            // sentence. Which rule did it is a story about how the club
+            // assembled itself, and a local readership takes the
+            // homegrown version of it personally.
+            use crate::RegulationSlotKind as Slot;
+            let kind = match feed.regulation_slot(HappinessEventType::SquadRegistrationOmitted) {
+                Some(Slot::HomegrownQuota) => NewsStoryKind::HomegrownQuotaOmission,
+                Some(Slot::NonEuQuota | Slot::InternationalRegistration) => {
+                    NewsStoryKind::ForeignQuotaOmission
+                }
+                _ => NewsStoryKind::LeftOutOfSquadList,
+            };
             out.push(
-                NewsStory::new(NewsStoryKind::LeftOutOfSquadList, date)
+                NewsStory::new(kind, date)
                     .about(player.id)
                     .weighted(importance),
             );
@@ -1295,10 +1849,27 @@ impl SquadDesk {
             return;
         }
 
-        // Two of them went at it, and it was not about football.
+        // Two of them went at it. What it was about is recorded, and
+        // the three rows a dressing room genuinely has are worth naming
+        // — a disagreement over training standards, two men after the
+        // same shirt, and a senior pro pulling rank are different
+        // stories with different consequences. Anything else falls
+        // through to the flat piece, which is the honest answer when
+        // the reason is "they do not like each other".
         if feed.happened(HappinessEventType::ConflictWithTeammate) {
+            use crate::TeammateConflictReason as Row;
+
+            let kind = match feed.conflict_reason() {
+                Some(Row::TrainingStandards) => NewsStoryKind::TrainingStandardsRow,
+                Some(Row::PositionalRivalry) => NewsStoryKind::PositionRivalryFeud,
+                Some(Row::LeadershipChallenge) => NewsStoryKind::LeadershipPowerStruggle,
+                // A row about money is the wage-envy piece, which the
+                // desk already tells better and from the right angle.
+                _ => NewsStoryKind::TeammateConflict,
+            };
+
             out.push(
-                NewsStory::new(NewsStoryKind::TeammateConflict, date)
+                NewsStory::new(kind, date)
                     .about(player.id)
                     .weighted(importance),
             );
@@ -1373,13 +1944,76 @@ impl SquadDesk {
         feed: &RecentEvents<'_>,
         date: NaiveDate,
     ) {
-        if feed
-            .any_of(&[
-                HappinessEventType::PathwayBlockedByLoanSigning,
-                HappinessEventType::UnhappyAboutBlockedHomegrown,
-            ])
-            .is_some()
-        {
+        // Why the manager left him out. The selector records a football
+        // reason for every omission and the page could only say he was
+        // not picked — which reads the same for a man being rested, a
+        // man whose profile did not suit the opponent, a man dropped on
+        // form and a man being punished. Four different stories, and
+        // only one of them is a grievance.
+        if feed.happened(HappinessEventType::MatchDropped) {
+            use crate::SelectionOmissionReason as Why;
+
+            let kind = match feed.omission_reason() {
+                Some(
+                    Why::FatigueManagement
+                    | Why::FitnessProtection
+                    | Why::MedicalRecurrenceRisk
+                    | Why::ReturningFromInjury
+                    | Why::CupRotation
+                    | Why::LowMatchImportanceRotation
+                    | Why::YouthDevelopmentRotation,
+                ) => Some(NewsStoryKind::RotationRested),
+                Some(
+                    Why::TacticalMismatch
+                    | Why::PositionFitIssue
+                    | Why::NoNaturalRoleInFormation
+                    | Why::OpponentMatchupMismatch
+                    | Why::LineupBalanceCall
+                    | Why::BenchScenarioCoverage
+                    | Why::BenchBalance
+                    | Why::TeammatePreferredForTacticalBalance,
+                ) => Some(NewsStoryKind::TacticalOmission),
+                Some(
+                    Why::PoorRecentForm
+                    | Why::LowerMatchReadiness
+                    | Why::TeammatePreferredOnForm
+                    | Why::TeammatePreferredOnAbility
+                    | Why::TeammatePreferredOnFitness,
+                ) => Some(NewsStoryKind::DroppedOnForm),
+                Some(Why::DisciplinarySelection) => Some(NewsStoryKind::DisciplinaryOmission),
+                // Trust, squad status and integration windows are the
+                // dugout desk's territory: they are about a
+                // relationship rather than about one team sheet.
+                _ => None,
+            };
+
+            if let Some(kind) = kind {
+                out.push(
+                    NewsStory::new(kind, date)
+                        .about(player.id)
+                        .weighted(PlayerStanding::importance(player) / 2),
+                );
+                return;
+            }
+        }
+
+        // Two different grievances that shared a headline for too long.
+        // A kid behind a loan signing is a complaint about the club's
+        // patience; one of our own behind an import is a complaint
+        // about where the two of them are from, and a local readership
+        // takes the second one personally in a way it does not take the
+        // first.
+        if feed.happened(HappinessEventType::UnhappyAboutBlockedHomegrown) {
+            out.push(
+                NewsStory::new(NewsStoryKind::HomegrownBlocked, date)
+                    .about(player.id)
+                    .with_numbers(player.age(date) as i32, 0)
+                    .weighted(PlayerStanding::importance(player) / 2),
+            );
+            return;
+        }
+
+        if feed.happened(HappinessEventType::PathwayBlockedByLoanSigning) {
             out.push(
                 NewsStory::new(NewsStoryKind::PathwayBlocked, date)
                     .about(player.id)

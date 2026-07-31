@@ -449,6 +449,7 @@ impl SimulatorData {
         use crate::PlayerStatusType;
         use crate::club::player::transfer::ReleaseContext;
         use crate::shared::{Currency, CurrencyValue};
+        use crate::transfers::reason::TransferReason;
         use crate::transfers::{CompletedTransfer, TransferType};
 
         let date = self.date.date();
@@ -507,20 +508,15 @@ impl SimulatorData {
                                 // didn't stamp a reason) still reads sensibly:
                                 // an Frt marker without a reason is a generic
                                 // mutual release, no marker is a plain expiry.
-                                let reason = p
-                                    .release_reason()
-                                    .map(|r| r.history_reason().to_string())
-                                    .unwrap_or_else(|| {
-                                        if released_early {
+                                let reason = TransferReason::key(
+                                    p.release_reason()
+                                        .unwrap_or(if released_early {
                                             FreeAgentReleaseReason::MutualTermination
-                                                .history_reason()
-                                                .to_string()
                                         } else {
                                             FreeAgentReleaseReason::ContractExpired
-                                                .history_reason()
-                                                .to_string()
-                                        }
-                                    });
+                                        })
+                                        .history_reason(),
+                                );
                                 new_history.push(
                                     CompletedTransfer::new(
                                         id,
@@ -1120,7 +1116,7 @@ mod free_agent_release_reason_tests {
                 .transfer_history
                 .iter()
                 .find(|t| t.player_id == player_id)
-                .map(|t| t.reason.clone())
+                .map(|t| t.reason.key.clone())
                 .unwrap_or_default()
         }
     }

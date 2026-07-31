@@ -4,6 +4,7 @@ use crate::club::academy::ClubAcademy;
 use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::language::{Language, PlayerLanguage};
 use crate::shared::{Currency, CurrencyValue};
+use crate::transfers::reason::TransferReason;
 use crate::transfers::{CompletedTransfer, TransferType};
 use crate::{PlayerStatusType, TeamType};
 use chrono::NaiveDate;
@@ -143,7 +144,7 @@ impl Club {
                             CurrencyValue::new(0.0, Currency::Usd),
                             TransferType::Free,
                         )
-                        .with_reason("Academy graduation — youth contract signed".to_string()),
+                        .with_reason(TransferReason::key("signing_reason_academy_graduation")),
                     );
                     self.teams.teams[idx].players.add(player);
                 }
@@ -179,11 +180,9 @@ impl Club {
                         CurrencyValue::new(0.0, Currency::Usd),
                         TransferType::Free,
                     )
-                    .with_reason(
-                        FreeAgentReleaseReason::AcademyAgedOut
-                            .history_reason()
-                            .to_string(),
-                    ),
+                    .with_reason(TransferReason::key(
+                        FreeAgentReleaseReason::AcademyAgedOut.history_reason(),
+                    )),
                 );
                 released_players.push(player);
             }

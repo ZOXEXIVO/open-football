@@ -1080,6 +1080,15 @@ a:active {
     padding-left: 1px;
 }
 
+/* Scout verdict sits under the club's motive — same column, quieter. */
+.fm-ct-scout {
+    margin-top: 2px;
+    font-size: 11px;
+    color: #8a8a7a;
+    line-height: 1.4;
+    padding-left: 1px;
+}
+
 .fm-transfers-row {
     display: grid;
     grid-template-columns: 1fr 1fr;

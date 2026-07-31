@@ -1,10 +1,15 @@
 use crate::club::board::manager_market::ApproachState;
 use crate::club::news::RecentEvents;
+use crate::continent::competitions::{
+    CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
+};
 use crate::club::news::{
     Absorbing, BoardroomDesk, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie, DugoutDesk,
     FansDesk, IssueResult, KeeperMatchFacts, LoanDesk, LoanWatchEntry, ManagerPursuit, MarketDesk,
-    MatchDesk, MatchStarFacts, NewsEditor, NewsStory, NewspaperIssue, OutfieldMatchFacts,
-    PressMood, ResultCompetition, SquadDesk, StandingSnapshot, TableDesk, WeeklyMatchFacts,
+    MatchDesk, MatchDramaFacts, MatchStarFacts, NewsEditor, NewsStory, NewspaperIssue,
+    ContinentalNight, OutfieldMatchFacts, PressMood, ResultCompetition, SquadDesk, StandingSnapshot, TableDesk,
+    TownMood,
+    WeeklyMatchFacts,
 };
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, MatchResult, SubstitutionReason};
@@ -147,6 +152,8 @@ impl WeeklyMatchFacts {
             self.absorb_keepers(result);
             self.absorb_outfield(result);
             self.absorb_stars(result);
+            self.absorb_drama(result);
+            self.absorb_continental(result);
 
             if knockout {
                 self.absorb_cup_tie(result);
@@ -217,6 +224,207 @@ impl WeeklyMatchFacts {
 
     fn fielded(squad: &FieldSquad, player_id: u32) -> bool {
         squad.main.contains(&player_id) || squad.substitutes.contains(&player_id)
+    }
+
+    /// Rebuild the running score from the goal feed and read the shape
+    /// of the afternoon off it for both sides.
+    ///
+    /// The one thing this cannot do naively is trust the scorer's own
+    /// squad. An own goal is recorded against the man who put it in,
+    /// who is by definition playing for the side it counts AGAINST —
+    /// so crediting goals to whoever fielded the scorer would have
+    /// every own-goal match reading as a comeback that never happened.
+    fn absorb_drama(&mut self, result: &MatchResult) {
+        let Some(details) = result.details.as_ref() else {
+            return;
+        };
+
+        // (minute stamp, whether the HOME side's tally went up)
+        let mut feed: Vec<(u64, bool)> = Vec::new();
+        let mut home_red = false;
+        let mut away_red = false;
+
+        for goal in &result.score.details {
+            let home_player = Self::fielded(&details.left_team_players, goal.player_id);
+            let away_player = Self::fielded(&details.right_team_players, goal.player_id);
+            if !home_player && !away_player {
+                // Same rule as everywhere else in the press run: a
+                // moment that cannot be placed on a side is a moment
+                // no paper may claim.
+                continue;
+            }
+
+            match goal.stat_type {
+                MatchStatisticType::Goal => {
+                    let scored_for_home = if goal.is_auto_goal {
+                        !home_player
+                    } else {
+                        home_player
+                    };
+                    feed.push((goal.time, scored_for_home));
+                }
+                MatchStatisticType::RedCard => {
+                    if home_player {
+                        home_red = true;
+                    } else {
+                        away_red = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // The feed arrives in play order, but a stored result is not a
+        // contract and the whole reading depends on the order.
+        feed.sort_by_key(|(time, _)| *time);
+
+        let home_goals = result.score.home_team.get();
+        let away_goals = result.score.away_team.get();
+        let total = home_goals.saturating_add(away_goals);
+
+        self.record_drama(
+            result.home_team_id,
+            result.away_team_id,
+            Self::read_side(&feed, true, home_goals, away_goals, total, home_red),
+        );
+        self.record_drama(
+            result.away_team_id,
+            result.home_team_id,
+            Self::read_side(&feed, false, away_goals, home_goals, total, away_red),
+        );
+    }
+
+    /// Walk the rebuilt feed once from one side's point of view.
+    fn read_side(
+        feed: &[(u64, bool)],
+        mine_is_home: bool,
+        goals_for: u8,
+        goals_against: u8,
+        total_goals: u8,
+        red_card: bool,
+    ) -> MatchDramaFacts {
+        let mut mine = 0i32;
+        let mut theirs = 0i32;
+        let mut max_deficit = 0i32;
+        let mut max_lead = 0i32;
+        let mut early = 0u8;
+        let mut lead_taken: Option<u64> = None;
+        let mut behind_since: Option<u64> = None;
+        let mut reply_minutes = 0u8;
+
+        for (time, scored_for_home) in feed {
+            let mine_scored = *scored_for_home == mine_is_home;
+            let was_ahead = mine > theirs;
+            let was_behind = mine < theirs;
+
+            if mine_scored {
+                mine += 1;
+            } else {
+                theirs += 1;
+            }
+
+            if mine_scored && *time < MatchDramaFacts::EARLY_WINDOW_MS {
+                early = early.saturating_add(1);
+            }
+
+            // The last time it went in front is the goal that won it,
+            // for a side that went on to win.
+            if mine_scored && !was_ahead && mine > theirs {
+                lead_taken = Some(*time);
+            }
+
+            // Falling behind starts the clock on a reply; drawing level
+            // stops it.
+            if !mine_scored && !was_behind && mine < theirs {
+                behind_since = Some(*time);
+            }
+            if mine_scored && was_behind && mine == theirs {
+                if let Some(since) = behind_since {
+                    let gap = time.saturating_sub(since);
+                    if gap <= MatchDramaFacts::REPLY_WINDOW_MS {
+                        // A reply forty seconds later is "within a
+                        // minute", never "within nought minutes".
+                        reply_minutes = ((gap / 60_000) as u8).max(1);
+                    }
+                }
+                behind_since = None;
+            }
+
+            max_deficit = max_deficit.max(theirs - mine);
+            max_lead = max_lead.max(mine - theirs);
+        }
+
+        let won = goals_for > goals_against;
+
+        MatchDramaFacts {
+            team_goals: goals_for,
+            total_goals,
+            winner_minute: if won {
+                lead_taken.map(|time| (time / 60_000) as u16).unwrap_or(0)
+            } else {
+                0
+            },
+            max_deficit: max_deficit.max(0) as u8,
+            max_lead: max_lead.max(0) as u8,
+            early_goals: early,
+            reply_minutes,
+            red_card,
+            won,
+        }
+    }
+
+    /// Note a continental night for both sides.
+    ///
+    /// Continental results are pushed to the same global store this
+    /// gather already walks, which is why a European hat-trick has
+    /// always been reported correctly — and why the match it happened
+    /// in was filed as an ordinary league game. The four reserved
+    /// competition ids are the whole of the fix.
+    ///
+    /// Filtered by id rather than by anything on the result, because
+    /// the global store also carries international fixtures and a
+    /// country id is not a club team id.
+    fn absorb_continental(&mut self, result: &MatchResult) {
+        const CONTINENTAL: [u32; 4] = [
+            CHAMPIONS_LEAGUE_ID,
+            EUROPA_LEAGUE_ID,
+            CONFERENCE_LEAGUE_ID,
+            COPA_LIBERTADORES_ID,
+        ];
+        if !CONTINENTAL.contains(&result.league_id) {
+            return;
+        }
+
+        let home = result.score.home_team.get();
+        let away = result.score.away_team.get();
+
+        self.continental.insert(
+            result.home_team_id,
+            ContinentalNight {
+                opponent_team_id: result.away_team_id,
+                goals_for: home,
+                goals_against: away,
+            },
+        );
+        self.continental.insert(
+            result.away_team_id,
+            ContinentalNight {
+                opponent_team_id: result.home_team_id,
+                goals_for: away,
+                goals_against: home,
+            },
+        );
+    }
+
+    /// Keep the louder of two meetings, on the same rule as `crown`.
+    fn record_drama(&mut self, team_id: u32, opponent_team_id: u32, candidate: MatchDramaFacts) {
+        let slot = self
+            .drama
+            .entry((team_id, opponent_team_id))
+            .or_insert(candidate);
+        if candidate.loudness() > slot.loudness() {
+            *slot = candidate;
+        }
     }
 
     /// Keep one side's loudest scorer for one match. The slot is keyed
@@ -471,6 +679,13 @@ impl WeeklyMatchFacts {
             let slot = self.stars.entry(key).or_insert(star);
             if (star.goals, star.team_goals) > (slot.goals, slot.team_goals) {
                 *slot = star;
+            }
+        }
+        self.continental.extend(other.continental);
+        for (key, drama) in other.drama {
+            let slot = self.drama.entry(key).or_insert(drama);
+            if drama.loudness() > slot.loudness() {
+                *slot = drama;
             }
         }
         self
@@ -872,6 +1087,13 @@ impl ClubPressRun {
         week_end: NaiveDate,
     ) -> Vec<IssueResult> {
         let cup_opponent = facts.cup_ties.get(&team.id).map(|tie| tie.opponent_team_id);
+        // A European night is labelled before a cup tie is considered:
+        // the two stores are separate and a club can play in both
+        // inside one week, but only one of them is Wednesday.
+        let continental_opponent = facts
+            .continental
+            .get(&team.id)
+            .map(|night| night.opponent_team_id);
 
         team.match_history
             .items()
@@ -885,7 +1107,9 @@ impl ClubPressRun {
                 opponent_team_id: item.rival_team_id,
                 goals_for: item.score.0.get(),
                 goals_against: item.score.1.get(),
-                competition: if cup_opponent == Some(item.rival_team_id) {
+                competition: if continental_opponent == Some(item.rival_team_id) {
+                    ResultCompetition::Continental
+                } else if cup_opponent == Some(item.rival_team_id) {
                     ResultCompetition::Cup
                 } else {
                     ResultCompetition::League
@@ -1013,7 +1237,18 @@ impl TeamPressRun<'_> {
             LoanDesk::file(&mut candidates, watch, date);
         }
         DugoutDesk::file_club(&mut candidates, &pulse, date);
-        FansDesk::file_club(&mut candidates, &pulse, date);
+        FansDesk::file_club(
+            &mut candidates,
+            &pulse,
+            TownMood {
+                supporter_pressure: self.club.board.pressure.supporter_pressure,
+                standing: self.standing,
+                results: &self.results,
+                transfers: self.transfers,
+                peak_value: self.peak_value,
+            },
+            date,
+        );
 
         // The boardroom belongs to the club, so it only ever runs in the
         // page of record — a reserve side's paper reporting the sacking
@@ -1130,7 +1365,9 @@ impl TransferSplit {
 mod tests {
     use super::{ClubPressRun, TransferSplit, WeeklyDugout, WeeklyLoanWatch, WeeklyMarket};
     use crate::academy::ClubAcademy;
-    use crate::club::news::{ClubTransferWeek, TransferMove, TransferMoveKind, WeeklyMatchFacts};
+    use crate::club::news::{
+        ClubTransferWeek, TransferMotive, TransferMove, TransferMoveKind, WeeklyMatchFacts,
+    };
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::competitions::global::GlobalCompetitions;
     use crate::continent::Continent;
@@ -1351,6 +1588,10 @@ mod tests {
                 age: 26,
                 returning: false,
                 was_loan_here: false,
+                motive: TransferMotive::Unknown,
+                scout_confidence_pct: 0,
+                scout_urged_it: false,
+                rival: false,
             }
         }
     }
@@ -1553,6 +1794,116 @@ mod tests {
             facts.star_of(10, 20, 2),
             0,
             "a tally from a different afternoon must not borrow this one's star"
+        );
+    }
+
+    /// The shape of an afternoon, rebuilt from the minute each goal was
+    /// scored in.
+    ///
+    /// The trap this pins down is the own goal. It is recorded against
+    /// the man who put it in — who plays for the side it counts
+    /// AGAINST — so a running score built from "whoever fielded the
+    /// scorer" credits it to the wrong end, and every own-goal match
+    /// comes out of the gather as a comeback that never happened.
+    #[test]
+    fn an_afternoons_shape_is_rebuilt_from_the_goal_minutes() {
+        use crate::r#match::player::statistics::MatchStatisticType;
+        use crate::r#match::{FieldSquad, GoalDetail, MatchResult, MatchResultRaw, Score};
+
+        const HOME: u32 = 10;
+        const AWAY: u32 = 20;
+        let minute = |m: u64| m * 60 * 1000;
+
+        let mut left = FieldSquad::new();
+        left.team_id = HOME;
+        left.main = vec![101, 102];
+        let mut right = FieldSquad::new();
+        right.team_id = AWAY;
+        right.main = vec![201, 202];
+
+        let mut raw = MatchResultRaw::with_match_time(94 * 60 * 1000);
+        raw.left_team_players = left;
+        raw.right_team_players = right;
+
+        let mut score = Score::new(HOME, AWAY);
+        let goal = |player_id: u32, time: u64, own: bool| GoalDetail {
+            player_id,
+            stat_type: MatchStatisticType::Goal,
+            is_auto_goal: own,
+            time,
+        };
+
+        // Away score inside ten minutes and are pegged back three
+        // minutes later, go two clear before the twentieth, are pulled
+        // back to level — one of them through their own net — and lose
+        // it to a winner in the 91st.
+        score.add_goal_detail(goal(201, minute(8), false));
+        score.add_goal_detail(goal(101, minute(11), false));
+        score.add_goal_detail(goal(202, minute(15), false));
+        score.add_goal_detail(goal(201, minute(20), false));
+        score.add_goal_detail(goal(202, minute(50), true));
+        score.add_goal_detail(goal(102, minute(63), false));
+        score.add_goal_detail(goal(102, minute(91), false));
+        for _ in 0..4 {
+            score.increment_home_goals();
+        }
+        for _ in 0..3 {
+            score.increment_away_goals();
+        }
+
+        let result = MatchResult {
+            id: "m".to_string(),
+            league_id: 1,
+            league_slug: "l".to_string(),
+            home_team_id: HOME,
+            away_team_id: AWAY,
+            details: Some(raw),
+            score,
+            friendly: false,
+        };
+
+        let mut facts = WeeklyMatchFacts::empty();
+        facts.absorb(std::iter::once(&result), false);
+
+        let home = facts
+            .drama_of(HOME, AWAY, 4)
+            .expect("the home side's afternoon was read");
+        assert!(home.won);
+        assert_eq!(
+            home.max_deficit, 2,
+            "the own goal counted for the home side, so they were never three down"
+        );
+        assert_eq!(home.winner_minute, 91, "the winner went in after the 90th");
+        assert_eq!(home.total_goals, 7);
+        assert_eq!(
+            home.early_goals, 1,
+            "only the eleventh-minute equaliser landed inside the opening twenty"
+        );
+        assert_eq!(
+            home.reply_minutes, 3,
+            "level again three minutes after first falling behind"
+        );
+
+        let away = facts
+            .drama_of(AWAY, HOME, 3)
+            .expect("the away side's afternoon was read too");
+        assert!(!away.won);
+        assert_eq!(
+            away.max_lead, 2,
+            "two clear was the most the visitors were ever ahead by"
+        );
+        assert_eq!(
+            away.early_goals, 2,
+            "the twentieth-minute goal falls outside the opening-twenty window"
+        );
+        assert_eq!(
+            away.winner_minute, 0,
+            "a side that lost never took a lead it kept"
+        );
+
+        assert!(
+            facts.drama_of(HOME, AWAY, 2).is_none(),
+            "another afternoon's tally must not borrow this one's drama"
         );
     }
 

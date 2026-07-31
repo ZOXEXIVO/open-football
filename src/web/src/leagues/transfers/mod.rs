@@ -218,7 +218,7 @@ pub async fn league_transfers_action(
                 fee: if t.fee.amount > 0.0 {
                     FormattingUtils::format_money(t.fee.amount)
                 } else {
-                    "Free".to_string()
+                    i18n.t("fee_free").to_string()
                 },
                 is_loan: matches!(&t.transfer_type, TransferType::Loan(_)),
                 date: t.transfer_date.format("%d.%m.%Y").to_string(),

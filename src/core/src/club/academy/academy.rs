@@ -180,6 +180,12 @@ impl ClubAcademy {
         self.train_academy_players(&ctx);
 
         let produce_result = self.produce_youth_players(ctx.clone());
+        // Carried out with the result so the club can write intake day
+        // into its own diary: the recruits join the academy roster on
+        // the next line, and after that the only trace of the morning
+        // is a squad list that is longer than it was.
+        let intake = produce_result.players.len() as u16;
+        let golden = produce_result.golden;
 
         for player in produce_result.players {
             self.players.add(player);
@@ -188,7 +194,7 @@ impl ClubAcademy {
         // Ensure academy always has minimum players from settings.
         self.ensure_minimum_players(ctx);
 
-        ClubAcademyResult::new(players_result)
+        ClubAcademyResult::new(players_result).with_intake(intake, golden)
     }
 
     fn run_pathway_review(&mut self, ctx: &GlobalContext<'_>) {

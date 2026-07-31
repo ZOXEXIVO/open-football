@@ -1,6 +1,7 @@
 use crate::Player;
 use crate::league::Season;
 use crate::shared::CurrencyValue;
+use crate::transfers::reason::TransferReason;
 use chrono::NaiveDate;
 
 pub struct PlayerTransfer {
@@ -27,7 +28,7 @@ pub struct CompletedTransfer {
     pub fee: CurrencyValue,
     pub transfer_type: TransferType,
     pub season_year: u16,
-    pub reason: String,
+    pub reason: TransferReason,
 }
 
 #[derive(Debug, Clone)]
@@ -64,11 +65,11 @@ impl CompletedTransfer {
             fee,
             transfer_type,
             season_year,
-            reason: String::new(),
+            reason: TransferReason::default(),
         }
     }
 
-    pub fn with_reason(mut self, reason: String) -> Self {
+    pub fn with_reason(mut self, reason: TransferReason) -> Self {
         self.reason = reason;
         self
     }

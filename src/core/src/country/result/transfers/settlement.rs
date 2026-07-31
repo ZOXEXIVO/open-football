@@ -20,8 +20,8 @@
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
-use crate::Country;
 use crate::transfers::market::{ClauseTrigger, PendingTransferClause};
+use crate::{ClauseWindfallKind, ClubAffair, Country};
 
 /// Stateless namespace for the daily clause settler. Wrapped on a unit
 /// struct rather than free `fn`s so the settlement surface reads like
@@ -66,7 +66,7 @@ impl TransferClauseSettler {
         for clause in fired {
             let seller_is_local = country.clubs.iter().any(|c| c.id == clause.selling_club_id);
             if seller_is_local {
-                let _ = Self::route_payout(country, &clause);
+                let _ = Self::route_payout(country, &clause, today);
             } else {
                 country
                     .transfer_market
@@ -88,7 +88,7 @@ impl TransferClauseSettler {
         let due = country.transfer_market.drain_due_installments(today);
         let mut foreign = Vec::new();
         for clause in due {
-            if let Some(credit) = Self::route_payout(country, &clause) {
+            if let Some(credit) = Self::route_payout(country, &clause, today) {
                 foreign.push(credit);
             }
         }
@@ -114,7 +114,7 @@ impl TransferClauseSettler {
         );
         let mut foreign = Vec::new();
         for clause in fired {
-            if let Some(credit) = Self::route_payout(country, &clause) {
+            if let Some(credit) = Self::route_payout(country, &clause, today) {
                 foreign.push(credit);
             }
         }
@@ -129,7 +129,11 @@ impl TransferClauseSettler {
     /// buyer's market); the seller may not — a cross-border deal's seller
     /// is returned as `Some((club_id, amount))` for the caller to credit
     /// globally after the country borrow ends.
-    fn route_payout(country: &mut Country, clause: &PendingTransferClause) -> Option<(u32, f64)> {
+    fn route_payout(
+        country: &mut Country,
+        clause: &PendingTransferClause,
+        today: NaiveDate,
+    ) -> Option<(u32, f64)> {
         let amount = clause.amount.max(0.0);
         if amount <= 0.0 {
             return None;
@@ -154,6 +158,25 @@ impl TransferClauseSettler {
         }
         if let Some(i) = seller_idx {
             country.clubs[i].finance.adjust_cash(amount);
+            // Money arriving because of a player the club sold years
+            // ago is the one balance-sheet line that is genuinely a
+            // story, so the seller's diary keeps the day it landed.
+            // Only the seller's: for the buyer this is an obligation
+            // falling due, which is arithmetic rather than news.
+            let windfall = match clause.trigger {
+                ClauseTrigger::Installment { .. } => ClauseWindfallKind::SellOn,
+                ClauseTrigger::Promotion => ClauseWindfallKind::Promotion,
+                ClauseTrigger::AppearanceMilestone { .. }
+                | ClauseTrigger::GoalMilestone { .. } => ClauseWindfallKind::Milestone,
+            };
+            country.clubs[i].record_affair(
+                ClubAffair::ClauseWindfall {
+                    player_id: clause.player_id,
+                    kind: windfall,
+                    amount: amount as i64,
+                },
+                today,
+            );
         }
         let label = match clause.trigger {
             ClauseTrigger::Installment { .. } => "installment",

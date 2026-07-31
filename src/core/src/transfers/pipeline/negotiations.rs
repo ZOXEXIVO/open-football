@@ -26,6 +26,7 @@ use crate::transfers::pipeline::{
     ShortlistCandidateStatus, TransferApproach, TransferNeedPriority, TransferNeedReason,
     TransferRequest, TransferRequestStatus,
 };
+use crate::transfers::reason::TransferReason;
 use crate::utils::FormattingUtils;
 use crate::{
     ClubPhilosophy, ClubTransferStrategy, Country, Person, Player, PlayerSquadStatus,
@@ -88,7 +89,7 @@ struct NegotiationAction {
     is_prospect_purchase: bool,
     shortlist_request_id: u32,
     negotiator_staff_id: Option<u32>,
-    reason: String,
+    reason: TransferReason,
     player_name: String,
     selling_club_name: String,
     player_sold_from: Option<(u32, f64)>,
@@ -761,9 +762,7 @@ impl PipelineProcessor {
                     negotiation.player_sold_from = action.player_sold_from.clone();
                     negotiation.offered_salary = Some(action.offered_annual_wage);
                     negotiation.buying_league_reputation = action.buying_league_reputation;
-                    if action.is_rival {
-                        negotiation.reason = format!("{} (rival)", negotiation.reason.trim());
-                    }
+                    negotiation.reason.rival = action.is_rival;
                 }
 
                 if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
@@ -1919,7 +1918,7 @@ impl PipelineProcessor {
             has_option_to_buy: bool,
             is_prospect_purchase: bool,
             offer: TransferOffer,
-            reason: String,
+            reason: TransferReason,
             shortlist_request_id: u32,
             selling_rep: f32,
             buying_rep: f32,
@@ -2337,9 +2336,9 @@ impl PipelineProcessor {
             let need_and_scout = Self::build_transfer_reason(request, scouting_report);
             let reason = if need_and_scout.is_empty() {
                 if is_loan {
-                    "Loan signing".to_string()
+                    TransferReason::key("signing_reason_loan")
                 } else {
-                    "Transfer signing".to_string()
+                    TransferReason::key("signing_reason_transfer")
                 }
             } else {
                 need_and_scout

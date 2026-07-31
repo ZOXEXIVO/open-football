@@ -1,5 +1,5 @@
 use super::facts::{
-    ClubTransferWeek, PlayerStanding, RecentEvents, TransferMove, TransferMoveKind,
+    ClubTransferWeek, PlayerStanding, RecentEvents, TransferMotive, TransferMove, TransferMoveKind,
 };
 use crate::club::news::types::{NewsStory, NewsStoryKind};
 use crate::{HappinessEventType, Player};
@@ -31,14 +31,24 @@ impl MarketDesk {
         let record_bar = squad_peak_value.saturating_mul(Self::RECORD_MULTIPLE);
 
         for arrival in &week.arrivals {
+            let kind = Self::arrival_kind(arrival, record_bar);
             out.push(
-                NewsStory::new(Self::arrival_kind(arrival, record_bar), date)
+                NewsStory::new(kind, date)
                     .about(arrival.player_id)
                     .against(arrival.other_club_id)
                     // The age rides in `a` so the prospect and veteran
                     // framings can print it; both are gated on a real
-                    // age, so the copy never quotes a zero.
-                    .with_numbers(i32::from(arrival.age), 0)
+                    // age, so the copy never quotes a zero. The scout's
+                    // piece is the one exception — the figure that story
+                    // is about is how sure he was.
+                    .with_numbers(
+                        if kind == NewsStoryKind::ScoutingCoup {
+                            i32::from(arrival.scout_confidence_pct)
+                        } else {
+                            i32::from(arrival.age)
+                        },
+                        0,
+                    )
                     .with_money(arrival.fee)
                     .weighted(Self::fee_weight(arrival.fee)),
             );
@@ -55,12 +65,19 @@ impl MarketDesk {
         }
     }
 
+    /// A scout who was this sure is a scout worth quoting. Below it the
+    /// report is a recommendation rather than a verdict, and the piece
+    /// would be about somebody's hunch.
+    const SCOUT_CONVICTION_PCT: u8 = 55;
+
     /// What kind of arrival this is. Precedence runs from the framings
     /// that own the whole story down to the plain fee/no-fee split:
-    /// record business dwarfs everything, then the man who was already
-    /// here on loan, then the man who has worn the shirt before, then
-    /// age — and only a stranger of unremarkable age falls through to
-    /// the ordinary signing report.
+    /// record business dwarfs everything, then a raid on a rival and
+    /// one of the club's own coming through, then the man who was
+    /// already here on loan, then the man who has worn the shirt
+    /// before, then age — and only then the club's own reason for
+    /// doing it, which is still better than the ordinary signing
+    /// report that catches everything else.
     fn arrival_kind(arrival: &TransferMove, record_bar: i64) -> NewsStoryKind {
         if arrival.kind == TransferMoveKind::Loan {
             return NewsStoryKind::LoanArrival;
@@ -76,6 +93,15 @@ impl MarketDesk {
         {
             return NewsStoryKind::RecordSigning;
         }
+        // Where he came from outranks why he was bought: a town enjoys
+        // a raid on the neighbours whatever the club's own reasoning.
+        if arrival.rival {
+            return NewsStoryKind::RivalRaid;
+        }
+        // Not a signing at all — the academy handing somebody up.
+        if arrival.motive == TransferMotive::AcademyPromotion {
+            return NewsStoryKind::AcademyGraduate;
+        }
         if arrival.was_loan_here {
             return NewsStoryKind::LoanMadePermanent;
         }
@@ -90,10 +116,54 @@ impl MarketDesk {
         if arrival.age >= Self::VETERAN_SIGNING_AGE {
             return NewsStoryKind::VeteranArrives;
         }
+        if let Some(kind) = Self::motive_kind(arrival) {
+            return kind;
+        }
         if arrival.fee <= 0 {
             return NewsStoryKind::FreeSigning;
         }
         NewsStoryKind::NewSigning
+    }
+
+    /// The club's own reason for a signing, where it is worth a
+    /// headline of its own.
+    ///
+    /// The two money framings are gated on a real fee: a free transfer
+    /// whose motive happened to be "quality upgrade" must fall through
+    /// to the free-signing report rather than reach the editor as a
+    /// piece about a fee of nothing, which the printability gate would
+    /// then drop — losing the arrival from the paper altogether.
+    fn motive_kind(arrival: &TransferMove) -> Option<NewsStoryKind> {
+        // The scout's piece quotes how sure he was, so it is only
+        // available when a report actually recorded a figure — a
+        // signing the department merely recommended, with no report
+        // behind it, would otherwise print "the scouts were 0% sure".
+        let has_verdict = arrival.scout_confidence_pct > 0;
+
+        // A scout who pushed hard and was listened to is a better story
+        // than the department's standing brief, so it is asked first.
+        if has_verdict
+            && arrival.scout_urged_it
+            && arrival.scout_confidence_pct >= Self::SCOUT_CONVICTION_PCT
+        {
+            return Some(NewsStoryKind::ScoutingCoup);
+        }
+
+        match arrival.motive {
+            TransferMotive::QualityUpgrade if arrival.fee > 0 => {
+                Some(NewsStoryKind::MarqueeUpgrade)
+            }
+            TransferMotive::Bargain if arrival.fee > 0 => Some(NewsStoryKind::BargainBuy),
+            TransferMotive::Succession => Some(NewsStoryKind::SuccessionSigning),
+            TransferMotive::FormationGap => Some(NewsStoryKind::GapPlugged),
+            TransferMotive::ScoutFind if has_verdict => Some(NewsStoryKind::ScoutingCoup),
+            TransferMotive::DepthCover => Some(NewsStoryKind::DepthSigning),
+            // Development and experience are already told by the
+            // prospect and veteran framings above, which reach the same
+            // players with a better sentence. Anything else is the
+            // ordinary report.
+            _ => None,
+        }
     }
 
     /// A departure with no fee is not a sale. Printing "the club sold
@@ -103,6 +173,14 @@ impl MarketDesk {
     /// its own kind of story.
     fn departure_kind(departure: &TransferMove, record_bar: i64) -> NewsStoryKind {
         match departure.kind {
+            // A loan out is normally furniture. It stops being
+            // furniture when the borrowing club's own stated reason for
+            // taking him was to develop him: read from this side of the
+            // deal, that is a lad going somewhere he will actually
+            // play, which is the thing his own supporters want to know.
+            TransferMoveKind::Loan if departure.motive.is_development() => {
+                NewsStoryKind::LoanedOutToGrow
+            }
             TransferMoveKind::Loan => NewsStoryKind::LoanExit,
             _ if departure.fee <= 0 => NewsStoryKind::FreeExit,
             TransferMoveKind::Free => NewsStoryKind::FreeExit,

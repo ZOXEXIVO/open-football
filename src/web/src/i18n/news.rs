@@ -5,11 +5,11 @@ use std::collections::HashMap;
 
 /// Owns the press vocabulary: `assets/i18n/news/{lang}.json`.
 ///
-/// That bundle is ~850 keys — the 154 story kinds with their phrasing
-/// variants, the seven desk kickers, the mastheads, the mood straps and the
-/// paper chrome. Only the three newspaper pages render any of it, so it is
-/// loaded and resolved apart from the page-chrome scope rather than
-/// inflating the map every other page clones per request.
+/// That bundle is a thousand keys and more — every story kind with its
+/// phrasing variants, the desk kickers, the mastheads, the mood straps
+/// and the paper chrome. Only the three newspaper pages render any of
+/// it, so it is loaded and resolved apart from the page-chrome scope
+/// rather than inflating the map every other page clones per request.
 pub struct NewsI18nManager {
     news: LocaleCatalog,
 }

@@ -3,7 +3,7 @@ use crate::Club;
 use crate::club::DistressLevel;
 use crate::club::board::decision::BoardFacility;
 use crate::club::finance::{DebtProfile, DebtStanding};
-use crate::club::news::affairs::{ClubAffair, ClubAffairLog};
+use crate::club::news::affairs::{ClauseWindfallKind, ClubAffair, ClubAffairLog};
 use crate::club::news::types::{NewsStory, NewsStoryKind};
 use chrono::NaiveDate;
 
@@ -212,6 +212,72 @@ impl BoardroomDesk {
                 }
                 ClubAffair::SponsorshipLost { count } => {
                     NewsStory::new(NewsStoryKind::SponsorshipLost, date)
+                        .with_numbers(count as i32, 0)
+                }
+                // A clause the club fought for at the time, paying out
+                // years later. It names the player it was written
+                // about, because that is the whole point of the story.
+                ClubAffair::ClauseWindfall {
+                    player_id,
+                    kind,
+                    amount,
+                } => NewsStory::new(
+                    match kind {
+                        ClauseWindfallKind::Promotion => NewsStoryKind::PromotionBonusDue,
+                        ClauseWindfallKind::SellOn | ClauseWindfallKind::Milestone => {
+                            NewsStoryKind::SellOnWindfall
+                        }
+                    },
+                    date,
+                )
+                .about(player_id)
+                .with_money(amount),
+                // The same day, filed twice and read completely
+                // differently at each end.
+                ClubAffair::PreContractAgreed {
+                    player_id,
+                    other_club_id,
+                    arriving,
+                } => NewsStory::new(
+                    if arriving {
+                        NewsStoryKind::PreContractAgreed
+                    } else {
+                        NewsStoryKind::BosmanDepartureLooms
+                    },
+                    date,
+                )
+                .about(player_id)
+                .against(other_club_id),
+                ClubAffair::CrisisMeetingHeld => {
+                    NewsStory::new(NewsStoryKind::CrisisTalks, date)
+                }
+                ClubAffair::PlayerSaleDemanded => {
+                    NewsStory::new(NewsStoryKind::BoardDemandsSale, date)
+                }
+                // Names the player, because the whole grievance is
+                // about which one.
+                ClubAffair::TransferBlocked { player_id } => {
+                    NewsStory::new(NewsStoryKind::BoardBlocksDeal, date).about(player_id)
+                }
+                ClubAffair::FacilityUpgradeRejected { facility } => {
+                    NewsStory::new(NewsStoryKind::FacilityPlanRejected, date)
+                        .with_numbers(facility as i32, 0)
+                }
+                // Intake day. The special-class framing is the
+                // recruitment department's own verdict on the boys it
+                // has just signed, never a reading of what any of them
+                // might become.
+                ClubAffair::AcademyIntake { count, golden } => NewsStory::new(
+                    if golden {
+                        NewsStoryKind::GoldenGeneration
+                    } else {
+                        NewsStoryKind::IntakeDay
+                    },
+                    date,
+                )
+                .with_numbers(count as i32, 0),
+                ClubAffair::AcademyGraduationBatch { count } => {
+                    NewsStory::new(NewsStoryKind::GraduationDay, date)
                         .with_numbers(count as i32, 0)
                 }
             };

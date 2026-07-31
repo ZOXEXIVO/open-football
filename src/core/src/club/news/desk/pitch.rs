@@ -1,6 +1,6 @@
-use super::facts::{StandingSnapshot, WeeklyMatchFacts};
+use super::facts::{MatchDramaFacts, StandingSnapshot, WeeklyMatchFacts};
 use crate::Team;
-use crate::club::news::types::{IssueResult, NewsStory, NewsStoryKind};
+use crate::club::news::types::{IssueResult, NewsStory, NewsStoryKind, ResultCompetition};
 use chrono::NaiveDate;
 use rustc_hash::FxHashSet;
 
@@ -16,6 +16,18 @@ impl MatchDesk {
         team: &Team,
     ) {
         for result in results {
+            Self::file_drama(out, result, facts, team.id);
+
+            // A European night is its own kind of evening and outranks
+            // every domestic framing bar a derby. Reported before the
+            // cup branch because the two stores are separate: a club
+            // can play in both inside one week, and only one of them
+            // is Wednesday.
+            if result.competition == ResultCompetition::Continental {
+                Self::file_continental(out, result, facts, team.id);
+                continue;
+            }
+
             if result.is_cup() {
                 Self::file_cup_tie(out, result, facts, team.id);
                 continue;
@@ -73,6 +85,47 @@ impl MatchDesk {
         }
     }
 
+    /// A margin this size in Europe is not a result, it is an evening
+    /// somebody will still be describing in a decade.
+    const CONTINENTAL_ROUT: i32 = 3;
+
+    /// A European night, told as one.
+    ///
+    /// Deliberately simpler than the domestic report: no derby framing
+    /// (a continental opponent is by definition not the neighbours) and
+    /// no table context, because the group standings are not the club's
+    /// own league. What is left is the thing a supporter actually
+    /// remembers — whether the night was good, bad or a hiding.
+    fn file_continental(
+        out: &mut Vec<NewsStory>,
+        result: &IssueResult,
+        facts: &WeeklyMatchFacts,
+        team_id: u32,
+    ) {
+        let margin = result.goals_for as i32 - result.goals_against as i32;
+
+        let kind = if margin >= Self::CONTINENTAL_ROUT {
+            NewsStoryKind::ContinentalRout
+        } else if margin <= -Self::CONTINENTAL_ROUT {
+            NewsStoryKind::ContinentalHiding
+        } else if margin >= 0 {
+            // A draw away from home in Europe is a decent night and a
+            // draw at home is a poor one, but neither is a defeat —
+            // both belong on the positive side of this split.
+            NewsStoryKind::ContinentalNightWin
+        } else {
+            NewsStoryKind::ContinentalDefeat
+        };
+
+        out.push(
+            NewsStory::new(kind, result.date)
+                .against(result.opponent_team_id)
+                .about(facts.star_of(team_id, result.opponent_team_id, result.goals_for))
+                .at_home(result.is_home)
+                .with_numbers(result.goals_for as i32, result.goals_against as i32),
+        );
+    }
+
     /// A knockout tie is reported on whether the club is still in the
     /// competition, not on the margin. Going out on penalties after a
     /// draw is the story of the week however the ninety minutes read.
@@ -100,6 +153,64 @@ impl MatchDesk {
                 .about(facts.star_of(team_id, result.opponent_team_id, result.goals_for))
                 .at_home(result.is_home)
                 .with_numbers(result.goals_for as i32, result.goals_against as i32),
+        );
+    }
+
+    /// The sidebar: how one afternoon actually went, when how it went
+    /// was worth a piece of its own.
+    ///
+    /// At most one runs per match, and it is always the biggest angle
+    /// available. A 4-3 won from two down in stoppage time with ten men
+    /// is four true stories, and a paper that printed all four would
+    /// read like a machine — it prints the one a supporter would lead
+    /// with in the pub, which is the comeback.
+    fn file_drama(
+        out: &mut Vec<NewsStory>,
+        result: &IssueResult,
+        facts: &WeeklyMatchFacts,
+        team_id: u32,
+    ) {
+        let Some(drama) = facts.drama_of(team_id, result.opponent_team_id, result.goals_for) else {
+            return;
+        };
+
+        // Ordered by how a town would rank the afternoon, not by how
+        // rare the flag is.
+        let (kind, figure) = if drama.won && drama.max_deficit >= 2 {
+            (NewsStoryKind::ComebackWin, drama.max_deficit as i32)
+        } else if !drama.won && drama.max_lead >= 2 {
+            (NewsStoryKind::LeadThrownAway, drama.max_lead as i32)
+        } else if drama.winner_minute >= MatchDramaFacts::STOPPAGE_MINUTE {
+            (
+                NewsStoryKind::StoppageTimeDrama,
+                drama.winner_minute as i32,
+            )
+        } else if drama.winner_minute >= MatchDramaFacts::LATE_MINUTE {
+            (NewsStoryKind::LateWinner, drama.winner_minute as i32)
+        } else if drama.won && drama.red_card {
+            (NewsStoryKind::TenManWin, 10)
+        } else if drama.total_goals >= 6 {
+            (NewsStoryKind::GoalFest, drama.total_goals as i32)
+        } else if drama.early_goals >= 2 {
+            (NewsStoryKind::EarlyBlitz, drama.early_goals as i32)
+        } else if drama.reply_minutes > 0 {
+            (NewsStoryKind::InstantReply, drama.reply_minutes as i32)
+        } else {
+            return;
+        };
+
+        // `a` carries the figure the piece is actually about — the
+        // minute, the deficit, the goal count — rather than the goals
+        // scored, which is what the report alongside it is for. So none
+        // of this desk's drama copy may print `{score}`: it would set
+        // "89-1" under a stoppage-time winner. The run-of-form and
+        // table pieces have used `a` this way since they were written.
+        out.push(
+            NewsStory::new(kind, result.date)
+                .against(result.opponent_team_id)
+                .about(facts.star_of(team_id, result.opponent_team_id, result.goals_for))
+                .at_home(result.is_home)
+                .with_numbers(figure, result.goals_against as i32),
         );
     }
 
@@ -171,6 +282,107 @@ impl MatchDesk {
                 NewsStory::new(NewsStoryKind::UnbeatenRun, latest.date)
                     .with_numbers(unbeaten as i32, 0)
                     .weighted((unbeaten as i32 - 6) * 20),
+            );
+        }
+
+        Self::file_scoring_runs(out, team, latest.date);
+        Self::file_ground_runs(out, team, latest.date);
+    }
+
+    /// The two runs a phone-in argues about separately. A side in a bad
+    /// month is either not scoring or not defending, and which of the
+    /// two it is decides who gets blamed for it.
+    fn file_scoring_runs(out: &mut Vec<NewsStory>, team: &Team, date: NaiveDate) {
+        let mut goalless = 0u8;
+        let mut leaky = 0u8;
+        let mut counting_goalless = true;
+        let mut counting_leaky = true;
+
+        for item in team.match_history.items().iter().rev() {
+            if counting_goalless {
+                if item.score.0.get() == 0 {
+                    goalless = goalless.saturating_add(1);
+                } else {
+                    counting_goalless = false;
+                }
+            }
+            if counting_leaky {
+                if item.score.1.get() >= 2 {
+                    leaky = leaky.saturating_add(1);
+                } else {
+                    counting_leaky = false;
+                }
+            }
+            if !counting_goalless && !counting_leaky {
+                break;
+            }
+        }
+
+        if goalless >= 3 {
+            out.push(
+                NewsStory::new(NewsStoryKind::GoalsDriedUp, date)
+                    .with_numbers(goalless as i32, 0)
+                    .weighted((goalless as i32 - 3) * 25),
+            );
+        }
+
+        if leaky >= 4 {
+            out.push(
+                NewsStory::new(NewsStoryKind::DefensiveCrisis, date)
+                    .with_numbers(leaky as i32, 0)
+                    .weighted((leaky as i32 - 4) * 25),
+            );
+        }
+    }
+
+    /// Form with an address on it. Home and away are different games and
+    /// a town talks about them as different games — "nobody wins here"
+    /// and "we cannot win away" are both said about the same season.
+    fn file_ground_runs(out: &mut Vec<NewsStory>, team: &Team, date: NaiveDate) {
+        let mut home_unbeaten = 0u8;
+        let mut away_wins = 0u8;
+        let mut counting_home = true;
+        let mut counting_away = true;
+
+        for item in team.match_history.items().iter().rev() {
+            let scored = item.score.0.get();
+            let conceded = item.score.1.get();
+
+            if item.is_home {
+                if counting_home {
+                    if scored >= conceded {
+                        home_unbeaten = home_unbeaten.saturating_add(1);
+                    } else {
+                        counting_home = false;
+                    }
+                }
+            } else if counting_away {
+                if scored > conceded {
+                    away_wins = away_wins.saturating_add(1);
+                } else {
+                    counting_away = false;
+                }
+            }
+
+            if !counting_home && !counting_away {
+                break;
+            }
+        }
+
+        if home_unbeaten >= 8 {
+            out.push(
+                NewsStory::new(NewsStoryKind::FortressHome, date)
+                    .with_numbers(home_unbeaten as i32, 0)
+                    .at_home(true)
+                    .weighted((home_unbeaten as i32 - 8) * 20),
+            );
+        }
+
+        if away_wins >= 3 {
+            out.push(
+                NewsStory::new(NewsStoryKind::AwayDayForm, date)
+                    .with_numbers(away_wins as i32, 0)
+                    .weighted((away_wins as i32 - 3) * 25),
             );
         }
     }
