@@ -329,10 +329,22 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
         return Reject(NoSquadNeed);
     }
 
-    // Improvement: a meaningful upgrade, coach-requested, or a strong
-    // market opportunity (depth / resale add).
+    // Improvement: a meaningful upgrade, coach-requested, a strong
+    // market opportunity (depth / resale add), or an heir for a starter
+    // running out of career.
+    //
+    // Succession is a bet on the future, not on this weekend. An heir is
+    // by definition below the man he will replace, so measuring him
+    // against the incumbent's CURRENT ability rejected exactly the
+    // signing succession planning exists to make: a club could see it had
+    // an ageing starter, form the need, and then refuse every young
+    // player who could actually succeed him for not being better than him
+    // today.
     let upgrade = (target.ability as i16) - (ctx.buyer_best_in_group as i16);
-    if !ctx.has_open_request && !strong_opportunity && upgrade < 3 {
+    let succession_value = ctx.has_aging_starter
+        && target.age <= 26
+        && (target.estimated_potential as i16) >= ctx.buyer_best_in_group as i16;
+    if !ctx.has_open_request && !strong_opportunity && !succession_value && upgrade < 3 {
         return Reject(NotAnUpgrade);
     }
 

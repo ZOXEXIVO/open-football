@@ -140,6 +140,41 @@ impl CupRotation {
     pub(crate) const GK_FIRST_CHOICE_EARLY_PENALTY: f32 = -0.8;
     pub(crate) const GK_FIRST_CHOICE_OPPONENT_RATIO_CAP: f32 = 1.15;
 
+    /// The cup keeper.
+    ///
+    /// Managers do not weigh a deputy against the number one round by
+    /// round in an early domestic-cup tie — they decide before the season
+    /// that the cup is the deputy's competition, and then play him. The
+    /// graded nudges above modelled it as a marginal preference instead,
+    /// and since keeper selection is dominated by ability (two score
+    /// points per ten ability points) a nudge of 2.5 was overcome by any
+    /// gap past thirteen points. The observable result was a senior
+    /// deputy making one appearance a season for a decade while the
+    /// number one played every domestic-cup round of his thirties.
+    ///
+    /// This is the designation, not a nudge: worth enough to seat a
+    /// clearly better incumbent, and bounded so a deputy more than about
+    /// thirty-four ability points adrift still does not play. It applies
+    /// only where a real manager would use it — the early rounds, against
+    /// an opponent who is no stronger, for a rested senior deputy.
+    pub(crate) const GK_CUP_DEPUTY_DESIGNATION: f32 = 6.0;
+
+    /// Whether this keeper is a senior deputy — the man who would
+    /// actually be handed the cup, rather than a youth-team third choice
+    /// making up the numbers.
+    pub(crate) fn is_senior_deputy(player: &Player) -> bool {
+        player
+            .contract
+            .as_ref()
+            .map(|c| {
+                matches!(
+                    c.squad_status,
+                    PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::FirstTeamSquadRotation
+                )
+            })
+            .unwrap_or(false)
+    }
+
     /// Whether a player's squad status is KeyPlayer or FirstTeamRegular — the
     /// "established XI" group that fitness protection and the GK adjustment
     /// treat specially.

@@ -1,4 +1,5 @@
 use crate::ContractClauseType;
+use crate::club::person::Person;
 use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
 use crate::club::player::mailbox::RejectionReason;
@@ -6,6 +7,8 @@ use crate::club::player::mailbox::handlers::contract_proposal::{
     ProcessContractHandler, RENEWAL_REJECTED_LABEL,
 };
 use crate::club::player::player::Player;
+use crate::club::player::statistics::StuckCareerScan;
+use crate::club::staff::coach::PlannedRole;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::utils::DateUtils;
 use crate::utils::FormattingUtils;
@@ -401,9 +404,19 @@ impl ContractRenewalManager {
     }
 
     fn collect_candidates(team: &Team, date: NaiveDate) -> Vec<RenewalCandidate> {
+        // The head coach's standing plan is the club's own answer to "do
+        // we want him?", and it outranks the contract clock. A player the
+        // manager has already written off is not offered fresh terms
+        // however tidily his deal is running down — which is how a club
+        // stops paying for a squad it no longer picks.
+        let plan = &team.staffs.head_coach().squad_plan;
         team.players
             .players
             .iter()
+            .filter(|player| {
+                plan.role_of(player.id)
+                    .is_none_or(|role| role != PlannedRole::NotInPlans)
+            })
             .filter_map(|player| Self::evaluate(player, date))
             .collect()
     }
@@ -511,6 +524,19 @@ impl ContractRenewalManager {
             || player.statuses.has(PlayerStatusType::Enq)
             || player.statuses.has(PlayerStatusType::Bid);
 
+        // A deal is renewed because the club wants the player, not because
+        // the calendar came round. Nothing here used to look at whether he
+        // had actually played: a squad member with one appearance a season
+        // was a renewal candidate on exactly the same terms as a
+        // thirty-eight-game starter, and since the squad-status label never
+        // demotes on appearances alone the cycle regenerated forever. A
+        // prime-age player the club has not picked for years now runs his
+        // contract down instead — a free exit, which is how these careers
+        // actually resolve.
+        if Self::renewal_has_no_football_case(player, date) {
+            return None;
+        }
+
         let effective_status = Self::effective_squad_status(player, &contract.squad_status);
         let threshold = Self::renewal_threshold_days(&effective_status);
         let final_panic = days_remaining <= FINAL_PANIC_DAYS;
@@ -535,6 +561,50 @@ impl ContractRenewalManager {
             override_attempts_cap: override_cap,
             months_remaining: (days_remaining / 30).max(0) as i32,
         })
+    }
+
+    /// True when there is no football case for another contract: a
+    /// prime-age squad player who has gone seasons at this club without
+    /// first-team football.
+    ///
+    /// Deliberately narrow. Youngsters are exempt — the development
+    /// pathway, not the contract clock, owns a blocked 21-year-old, and a
+    /// club that let every unplayed prospect walk would gut its academy.
+    /// Veterans are exempt too: a settled deputy seeing out his career is
+    /// a real role, and the veteran-keeper protection elsewhere says so.
+    /// What is left is exactly the wasted prime the club should either
+    /// start picking or stop paying.
+    fn renewal_has_no_football_case(player: &Player, date: NaiveDate) -> bool {
+        /// Below this age a blocked player is a development case.
+        const MIN_AGE: u8 = 25;
+        /// From this age a squad role is a career, not a waste.
+        const VETERAN_AGE: u8 = 33;
+        /// Consecutive seasons without first-team football before the
+        /// club stops offering fresh terms.
+        const STUCK_SEASONS: u16 = 3;
+
+        let age = player.age(date);
+        if age < MIN_AGE || age >= VETERAN_AGE {
+            return false;
+        }
+        // A manager-pinned player is wanted by definition.
+        if player.is_force_match_selection {
+            return false;
+        }
+        // Only ever applies to squad filler — a key player or regular on a
+        // quiet season is not in question.
+        let is_squad_filler = player.contract.as_ref().is_some_and(|c| {
+            matches!(
+                c.squad_status,
+                PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::NotNeeded
+            )
+        });
+        if !is_squad_filler {
+            return false;
+        }
+        StuckCareerScan::of(player, date)
+            .map(|scan| scan.stuck_years >= STUCK_SEASONS)
+            .unwrap_or(false)
     }
 
     /// Squad-importance rank for renewal prioritization (higher = keep first).

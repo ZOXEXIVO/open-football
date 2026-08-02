@@ -66,6 +66,7 @@ use std::collections::HashMap;
 
 use chrono::NaiveDate;
 
+use crate::club::player::statistics::StuckCareerScan;
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::league::Season;
 use crate::{
@@ -276,6 +277,10 @@ impl SquadAssetContext {
     /// veteran-keeper rescue — the club keeps the model professional /
     /// club servant who sets standards, not any warm body.
     const VETERAN_KEEPER_CHARACTER_FLOOR: f32 = 10.0;
+    /// Ambition ceiling (0-20) for the same rescue. Above it the player
+    /// has not made peace with deputising and should be allowed to leave
+    /// rather than be protected into a decade on the bench.
+    const VETERAN_KEEPER_AMBITION_CEILING: f32 = 12.0;
     /// Official games in the most-recent completed season at or above which
     /// the player was a genuine regular and is first-team useful regardless
     /// of his current sample.
@@ -463,10 +468,23 @@ impl SquadAssetContext {
             return SquadAssetClass::FirstTeamUseful;
         }
 
-        // Top two-three of a real position group, at his group's level.
+        // Top two-three of a real position group, at his group's level —
+        // unless his career here has stalled.
+        //
+        // Rank alone is not evidence of usefulness. In a group sitting at
+        // its depth cap EVERY member is "top three" (ranks 0, 1 and 2 in
+        // a three-man group), and the group average he is measured
+        // against is his own two peers, so "at his group's level" is
+        // nearly tautological. That combination protected all three
+        // keepers at every big club permanently. A player who has spent
+        // seasons here without first-team football holds his rank because
+        // the club never signed anyone better, not because the coach
+        // wants him — so the rank protection lapses and he falls to the
+        // ladder below, where his actual level decides.
         if group_size >= Self::MIN_GROUP_FOR_TOP_RANK
             && higher_in_group <= Self::TOP_GROUP_RANK
             && (level as i16) >= group_avg - Self::NEAR_GROUP_GAP
+            && !Self::career_stalled_at_club(player, date)
         {
             return SquadAssetClass::FirstTeamUseful;
         }
@@ -494,6 +512,17 @@ impl SquadAssetContext {
             if believed_upside || raw_benefit_of_doubt {
                 return SquadAssetClass::ProspectDevelopment;
             }
+        }
+
+        // The development pathway has been exhausted — sell, don't keep.
+        // The loan machinery stops lending a player out after his second
+        // spell on the stated grounds that he "should be sold, not loaned
+        // again", but nothing ever sold him: he simply dropped out of the
+        // one pathway he had and sat here. This is that missing half. It
+        // is deliberately narrow — a prime-age squad filler the club has
+        // both stopped picking and stopped lending out.
+        if Self::loan_pathway_exhausted(player, date) {
+            return SquadAssetClass::TrueSurplus;
         }
 
         // Near the group or squad level → useful rotation depth.
@@ -572,11 +601,63 @@ impl SquadAssetContext {
         {
             return false;
         }
+        // …and the temperament to accept the role. The profile this
+        // rescue exists for is the contented career deputy who sets
+        // standards and mentors the young keepers. An ambitious keeper is
+        // not that man: he is the one who still wants a number-one shirt
+        // somewhere, and shielding him from every disposal path only
+        // traps him on a bench for the rest of his career. Let him go and
+        // let the club carry a deputy who wants the job.
+        if player.attributes.ambition > Self::VETERAN_KEEPER_AMBITION_CEILING {
+            return false;
+        }
         player
             .attributes
             .professionalism
             .max(player.attributes.loyalty)
             >= Self::VETERAN_KEEPER_CHARACTER_FLOOR
+    }
+
+    /// Seasons at this club without first-team football, past the age at
+    /// which the development pathway owns the story. Used to withdraw
+    /// rank-based protection from a player whose standing in the depth
+    /// chart is nominal — see the top-group rule in [`Self::infer`].
+    fn career_stalled_at_club(player: &Player, date: NaiveDate) -> bool {
+        Self::stalled_scan(player, date).is_some()
+    }
+
+    /// The stuck-career read, but only for players old enough that being
+    /// unplayed is a verdict rather than a stage. Under-24s below their
+    /// group are prospects, and the ladder in [`Self::infer`] already
+    /// routes them to development rather than disposal.
+    fn stalled_scan(player: &Player, date: NaiveDate) -> Option<StuckCareerScan> {
+        if player.age(date) <= Self::PROSPECT_MAX_AGE {
+            return None;
+        }
+        StuckCareerScan::of(player, date).filter(|scan| scan.stuck_years >= 2)
+    }
+
+    /// A prime-age squad filler the club has stopped picking AND stopped
+    /// lending out. Both halves are required: a player still going out on
+    /// loan has a live pathway, and a first-team player having a quiet
+    /// season is not in question.
+    fn loan_pathway_exhausted(player: &Player, date: NaiveDate) -> bool {
+        /// Below this age the loan pathway is still open to him.
+        const MIN_AGE: u8 = 25;
+
+        if player.age(date) < MIN_AGE || player.is_force_match_selection {
+            return false;
+        }
+        let is_squad_filler = player.contract.as_ref().is_some_and(|c| {
+            matches!(
+                c.squad_status,
+                PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::NotNeeded
+            )
+        });
+        if !is_squad_filler {
+            return false;
+        }
+        Self::stalled_scan(player, date).is_some_and(|scan| scan.serial_loanee)
     }
 
     /// True when the player's reputation sits in the squad's top quartile —
@@ -760,6 +841,29 @@ mod tests {
             p.statistics.rating_weight = games as f32;
             p.statistics.average_rating = rating;
             p
+        }
+
+        /// A canonical-ledger league season, the source the stuck-career
+        /// scan reads (distinct from the legacy `season_row` items).
+        fn league_season(year: u16, starts: u16, is_loan: bool) -> crate::PlayerStatLedgerEntry {
+            crate::PlayerStatLedgerEntry {
+                seq_id: 0,
+                season_start_year: year,
+                team_slug: "t".into(),
+                team_name: "T".into(),
+                team_reputation: 8_000,
+                league_slug: "l".into(),
+                league_name: "L".into(),
+                competition_kind: crate::PlayerStatCompetitionKind::League,
+                competition_slug: "l".into(),
+                is_loan,
+                transfer_fee: None,
+                coverage_days: None,
+                statistics: PlayerStatistics {
+                    played: starts,
+                    ..Default::default()
+                },
+            }
         }
 
         fn season_row(year: u16, games: u16) -> PlayerStatisticsHistoryItem {
@@ -1135,6 +1239,142 @@ mod tests {
             .find(|p| p.id == 96)
             .unwrap();
         assert_eq!(ctx.classify(v, Fx::date()), SquadAssetClass::TrueSurplus);
+    }
+
+    /// The rescue is for the contented career deputy. An ambitious keeper
+    /// still chasing a number-one shirt is not that man, and protecting
+    /// him from every disposal path only parks him on a bench for good.
+    #[test]
+    fn ambitious_veteran_third_keeper_is_not_rescued() {
+        let second_gk = Fx::player(
+            95,
+            PlayerPositionType::Goalkeeper,
+            112,
+            27,
+            1000,
+            PlayerSquadStatus::NotYetSet,
+        );
+        let mut veteran = Fx::player(
+            96,
+            PlayerPositionType::Goalkeeper,
+            85,
+            36,
+            1000,
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        veteran.attributes.professionalism = 14.0;
+        veteran.attributes.ambition = 17.0;
+        let club = Fx::club(Fx::squad_with(vec![second_gk, veteran]));
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let v = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 96)
+            .unwrap();
+        assert_eq!(ctx.classify(v, Fx::date()), SquadAssetClass::TrueSurplus);
+    }
+
+    /// Rank is not evidence of usefulness. In a three-man group every
+    /// member is "top three" and the average he is measured against is his
+    /// own two peers, so the rule protected all three keepers at every big
+    /// club forever. Seasons without first-team football withdraw it.
+    #[test]
+    fn stalled_squad_player_loses_rank_protection() {
+        let mut squad = Vec::new();
+        for (id, ca) in [(90u32, 120u8), (91, 118), (92, 116)] {
+            squad.push(Fx::player(
+                id,
+                PlayerPositionType::Goalkeeper,
+                ca,
+                28,
+                1000,
+                PlayerSquadStatus::MainBackupPlayer,
+            ));
+        }
+        // The middle keeper: four seasons here, one league start each.
+        for year in 2022..=2025 {
+            squad[1]
+                .statistics_history
+                .season_ledger
+                .push(Fx::league_season(year, 1, false));
+        }
+        let club = Fx::club(Fx::squad_with(squad));
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let stalled = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 91)
+            .unwrap();
+        assert_ne!(
+            ctx.classify(stalled, Fx::date()),
+            SquadAssetClass::FirstTeamUseful,
+            "a nominal depth rank held for years without playing is not first-team usefulness"
+        );
+    }
+
+    /// The loan machinery stops lending a player out after his second
+    /// spell because he "should be sold, not loaned again" — but nothing
+    /// ever sold him. This is that missing half.
+    #[test]
+    fn exhausted_loan_pathway_reads_as_surplus() {
+        let mut squad = vec![
+            Fx::player(
+                90,
+                PlayerPositionType::MidfielderCenter,
+                125,
+                27,
+                1000,
+                PlayerSquadStatus::FirstTeamRegular,
+            ),
+            Fx::player(
+                91,
+                PlayerPositionType::MidfielderCenter,
+                122,
+                26,
+                1000,
+                PlayerSquadStatus::FirstTeamRegular,
+            ),
+            Fx::player(
+                92,
+                PlayerPositionType::MidfielderCenter,
+                120,
+                26,
+                1000,
+                PlayerSquadStatus::MainBackupPlayer,
+            ),
+        ];
+        // Two of the last four seasons out on loan, none of them played here.
+        squad[2]
+            .statistics_history
+            .season_ledger
+            .push(Fx::league_season(2022, 0, false));
+        squad[2]
+            .statistics_history
+            .season_ledger
+            .push(Fx::league_season(2023, 30, true));
+        squad[2]
+            .statistics_history
+            .season_ledger
+            .push(Fx::league_season(2024, 28, true));
+        squad[2]
+            .statistics_history
+            .season_ledger
+            .push(Fx::league_season(2025, 1, false));
+        let club = Fx::club(Fx::squad_with(squad));
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let stalled = club.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 92)
+            .unwrap();
+        assert_eq!(
+            ctx.classify(stalled, Fx::date()),
+            SquadAssetClass::TrueSurplus,
+            "a prime-age squad filler the club has stopped picking AND stopped lending out is surplus"
+        );
     }
 
     /// With a genuine keeper glut (more than the normal complement) the

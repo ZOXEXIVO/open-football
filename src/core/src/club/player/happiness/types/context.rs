@@ -89,6 +89,10 @@ pub enum HappinessEventCause {
     /// Dressing-room talk lift — manager team-talk that landed for this
     /// player. Used by `DressingRoomSpeech` events.
     DressingRoomLift,
+    /// The manager's standing verdict on where the player fits — the
+    /// squad-plan conversation, not a reaction to one performance. Used
+    /// by `ToldNotInPlans`.
+    ManagerVerdict,
     /// Catch-all for unstructured causes; renderer falls back to the
     /// generic i18n line. New emit sites should pick a real category.
     Other,
@@ -117,6 +121,7 @@ impl HappinessEventCause {
             HappinessEventCause::SupporterAppreciation => "cause_supporter_appreciation",
             HappinessEventCause::SupporterIdentification => "cause_supporter_identification",
             HappinessEventCause::DressingRoomLift => "cause_dressing_room_lift",
+            HappinessEventCause::ManagerVerdict => "cause_manager_verdict",
             HappinessEventCause::Other => "cause_other",
         }
     }

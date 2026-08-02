@@ -4,9 +4,10 @@ use std::collections::HashMap;
 
 use crate::club::player::contract::{AffordabilityInput, ContractStalemate, StalemateLevel};
 use crate::club::staff::perception::{EstimationContext, PotentialEstimator};
-use crate::club::team::squad::{MIN_FIRST_TEAM_SQUAD, SquadAssetContext};
+use crate::club::team::squad::{MIN_FIRST_TEAM_SQUAD, SquadAssetClass, SquadAssetContext};
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
+
 use crate::transfers::pipeline::{
     ClubTransferPlan, LoanOutCandidate, LoanOutReason, LoanOutStatus, TransferNeedPriority,
     TransferNeedReason, TransferRequest, TransferRequestStatus,
@@ -174,34 +175,87 @@ pub(in crate::transfers::pipeline) fn compute_group_needs(
 /// side-effect free so the heir logic can be unit-tested in isolation.
 pub(in crate::transfers::pipeline) struct SuccessionAudit;
 
+/// How close a first-choice player is to the end of his career, and so
+/// how hard the club should be looking for his replacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::transfers::pipeline) enum SuccessionUrgency {
+    /// Several years left — start grooming someone.
+    Watch,
+    /// The end is in sight; the heir should be at the club already.
+    Pressing,
+    /// He could stop playing any season now and there is nobody.
+    Critical,
+}
+
 impl SuccessionAudit {
-    /// Position-aware age from which a first-choice player's club starts
-    /// lining up an heir. Goalkeeper careers run years longer, so the
-    /// search starts later; centre-halves age slower than runners.
-    pub(in crate::transfers::pipeline) fn trigger_age(group: PlayerFieldPositionGroup) -> u8 {
+    /// Age by which a player of this group has stopped being first-choice
+    /// at a serious level. Goalkeeper careers run years longer — which is
+    /// exactly why a keeper's succession has to be planned from a horizon
+    /// rather than assumed to arrive with the usual decline.
+    pub(in crate::transfers::pipeline) fn career_end_age(group: PlayerFieldPositionGroup) -> u8 {
         match group {
-            PlayerFieldPositionGroup::Goalkeeper => 33,
-            PlayerFieldPositionGroup::Defender => 31,
-            PlayerFieldPositionGroup::Midfielder => 30,
-            PlayerFieldPositionGroup::Forward => 30,
+            PlayerFieldPositionGroup::Goalkeeper => 38,
+            PlayerFieldPositionGroup::Defender => 35,
+            PlayerFieldPositionGroup::Midfielder => 34,
+            PlayerFieldPositionGroup::Forward => 33,
         }
     }
 
-    /// True when the heir is already in the building: a clearly younger
-    /// squad member of the same position group who is at — or is
-    /// assessed as growing into — the incumbent's level. Reads the
-    /// scouts' ASSESSED potential, never the hidden raw PA.
+    /// How much of a first-choice career the incumbent has left, and what
+    /// the club should be doing about it. `None` means he is nowhere near
+    /// the end and there is nothing to plan for yet.
+    ///
+    /// This replaces a bare "is he past a trigger age" test. The trigger
+    /// age alone never explained what to do about a player who sailed
+    /// past it and kept playing: a keeper still starting every week at 40
+    /// read exactly like one who had just turned 33.
+    pub(in crate::transfers::pipeline) fn urgency(
+        incumbent: &SquadPlayerInfo,
+    ) -> Option<SuccessionUrgency> {
+        let group = incumbent.primary_position.position_group();
+        let remaining = Self::career_end_age(group).saturating_sub(incumbent.age);
+        match remaining {
+            0..=1 => Some(SuccessionUrgency::Critical),
+            2..=3 => Some(SuccessionUrgency::Pressing),
+            4..=5 => Some(SuccessionUrgency::Watch),
+            _ => None,
+        }
+    }
+
+    /// True when the heir is already in the building.
+    ///
+    /// The bar is deliberately strict, because this test CANCELS the
+    /// search: anything it waves through is what the club will rely on
+    /// for the next decade. It used to accept any squad-mate four years
+    /// younger and within twelve ability points, so two 29-year-old
+    /// career deputies counted as the succession plan for a 40-year-old
+    /// incumbent — and the club, believing itself covered, never looked
+    /// again. A real heir is young enough to inherit a career rather than
+    /// a season, and is assessed as actually reaching the incumbent's
+    /// level. Reads the scouts' ASSESSED potential, never the hidden raw
+    /// PA.
     pub(in crate::transfers::pipeline) fn heir_in_place(
         squad: &[SquadPlayerInfo],
         incumbent: &SquadPlayerInfo,
     ) -> bool {
+        /// Oldest a credible heir can be. Past this he is a peer who will
+        /// retire alongside the incumbent, not a successor.
+        const HEIR_MAX_AGE: u8 = 26;
+        /// Minimum age gap — the heir must have a career left when the
+        /// incumbent's ends.
+        const HEIR_MIN_AGE_GAP: u8 = 5;
+
         let group = incumbent.primary_position.position_group();
         squad.iter().any(|p| {
             p.player_id != incumbent.player_id
                 && p.primary_position.position_group() == group
-                && p.age + 4 <= incumbent.age
+                && p.age <= HEIR_MAX_AGE
+                && p.age + HEIR_MIN_AGE_GAP <= incumbent.age
+                && !matches!(p.asset_class, SquadAssetClass::TrueSurplus)
+                // Already within touching distance of the level, or
+                // credibly assessed to grow into it.
                 && (p.current_ability + 12 >= incumbent.current_ability
-                    || p.estimated_potential >= incumbent.current_ability)
+                    || p.estimated_potential + 4 >= incumbent.current_ability)
         })
     }
 }
@@ -960,15 +1014,19 @@ impl PipelineProcessor {
                     break;
                 }
                 let group = player_info.primary_position.position_group();
-                // Position-aware trigger: a 30-year-old keeper is in his
-                // prime; his heir search starts years later.
-                if player_info.age < SuccessionAudit::trigger_age(group)
-                    || player_info.current_ability < avg_ability
-                {
+                // How much first-choice career is left in him?
+                let Some(urgency) = SuccessionAudit::urgency(player_info) else {
                     continue;
-                }
+                };
                 // Only genuine first-choice players need an heir lined
                 // up — an aging backup is depth churn, not succession.
+                //
+                // The comparison is deliberately WITHIN the position
+                // group. It used to be against the squad's top-eleven
+                // ability average, which no goalkeeper passes: keepers
+                // score below outfield players on the unified ability
+                // scale by construction, so every club's number one was
+                // silently skipped and keeper succession never once ran.
                 let best_in_group = squad
                     .iter()
                     .filter(|p| p.primary_position.position_group() == group)
@@ -989,6 +1047,30 @@ impl PipelineProcessor {
                     break;
                 }
 
+                // Shop against the incumbent's own level, not the squad
+                // average — the man we are replacing IS the standard, and
+                // for a keeper the squad average is an outfield number.
+                // The target is a prospect, so the floor sits well below
+                // him: the pipeline judges these on assessed potential.
+                let incumbent_level = player_info.current_ability;
+                let (priority, min_ability) = match urgency {
+                    SuccessionUrgency::Watch => (
+                        TransferNeedPriority::Optional,
+                        incumbent_level.saturating_sub(25),
+                    ),
+                    SuccessionUrgency::Pressing => (
+                        TransferNeedPriority::Important,
+                        incumbent_level.saturating_sub(18),
+                    ),
+                    // Nobody is coming through and he could stop at any
+                    // time — the club needs someone who can actually take
+                    // the shirt, not a project.
+                    SuccessionUrgency::Critical => (
+                        TransferNeedPriority::Critical,
+                        incumbent_level.saturating_sub(10),
+                    ),
+                };
+
                 // Only if we don't already have a request for this position
                 if !requests
                     .iter()
@@ -997,10 +1079,10 @@ impl PipelineProcessor {
                     requests.push(TransferRequest::new(
                         next_id,
                         player_info.primary_position,
-                        TransferNeedPriority::Optional,
+                        priority,
                         TransferNeedReason::SuccessionPlanning,
-                        avg_ability.saturating_sub(10),
-                        avg_ability,
+                        min_ability,
+                        incumbent_level,
                         alloc,
                     ));
                     next_id += 1;
@@ -1195,6 +1277,12 @@ impl PipelineProcessor {
             // `club.academy`, not on any team roster. The band tops out at
             // the DevelopmentSigning request's own age ceiling so a groomed
             // 20-year-old still suppresses the next purchase.
+            // Note this counter answers "do we run a keeper youth project
+            // at all", which is a different question from "do we have an
+            // heir for the man in possession of the shirt". The latter is
+            // STEP 4's, and is deliberately NOT gated on this count: a
+            // teenage keeper on the books satisfies the youth-project
+            // question while doing nothing about a 38-year-old number one.
             const DEVELOPMENT_KEEPER_AGE_MAX: u8 = 21; // DevelopmentSigning band (16, 21)
             let keeper_prospect_age_max = youth_age_max.max(DEVELOPMENT_KEEPER_AGE_MAX);
             let young_keepers = club
@@ -3183,6 +3271,73 @@ mod goalkeeper_prospect_tests {
                     && r.position.position_group() == PlayerFieldPositionGroup::Goalkeeper
             })
         }
+
+        fn gk_succession_request(eval: &SquadEvaluation) -> Option<&TransferRequest> {
+            eval.requests.iter().find(|r| {
+                r.reason == TransferNeedReason::SuccessionPlanning
+                    && r.position.position_group() == PlayerFieldPositionGroup::Goalkeeper
+            })
+        }
+    }
+
+    /// The Juventus case: a club whose number one is deep into his
+    /// thirties, with nobody behind him but same-age deputies, must be
+    /// shopping for a successor.
+    ///
+    /// Keeper succession never once ran before. The audit required the
+    /// incumbent's ability to clear the squad's top-eleven average, and
+    /// keepers score below outfield players on the unified ability scale
+    /// by construction — so every club's number one was silently skipped
+    /// and the search was never even considered.
+    #[test]
+    fn ageing_number_one_triggers_keeper_succession() {
+        let mut club = GkFx::continental_club();
+        {
+            let team = &mut club.teams.teams[0];
+            team.players.players.retain(|p| p.id != 1 && p.id != 2);
+            // A 38-year-old first choice and a same-age deputy.
+            team.players
+                .add(GkFx::player(1, PlayerPositionType::Goalkeeper, 185, 38));
+            team.players
+                .add(GkFx::player(2, PlayerPositionType::Goalkeeper, 175, 37));
+        }
+
+        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None);
+        let succession = GkFx::gk_succession_request(&eval);
+        assert!(
+            succession.is_some(),
+            "a 38-year-old number one with no heir must start a succession search; got: {:?}",
+            eval.requests
+                .iter()
+                .map(|r| (r.position, r.reason.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            succession.unwrap().priority,
+            TransferNeedPriority::Critical,
+            "a season from the end with nobody behind him is as urgent as succession gets"
+        );
+    }
+
+    /// …and it stands down once a real heir is in the building.
+    #[test]
+    fn a_young_heir_stands_the_succession_search_down() {
+        let mut club = GkFx::continental_club();
+        {
+            let team = &mut club.teams.teams[0];
+            team.players.players.retain(|p| p.id != 1 && p.id != 2);
+            team.players
+                .add(GkFx::player(1, PlayerPositionType::Goalkeeper, 185, 38));
+            // A 21-year-old the scouts rate: PA is stamped at ca + 30.
+            team.players
+                .add(GkFx::player(2, PlayerPositionType::Goalkeeper, 180, 21));
+        }
+
+        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None);
+        assert!(
+            GkFx::gk_succession_request(&eval).is_none(),
+            "don't shop for what the academy already delivered"
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@ use crate::club::player::calculators::{
 use crate::club::player::contract::stalemate::{AffordabilityInput, ContractStalemate};
 use crate::club::player::happiness::PlayingTimeFrustrationConfig;
 use crate::club::player::lifecycle::CareerStageDetector;
+use crate::club::player::{RestlessnessInputs, StuckCareerScan};
 use crate::club::staff::perception::AbilityEstimator;
 use crate::context::GlobalContext;
 use crate::utils::IntegerUtils;
@@ -25,7 +26,7 @@ use crate::{
     RelationshipChange, RivalThreatResponse, TeamType, TeammateConflictContext,
     TeammateConflictReason,
 };
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Datelike, NaiveDate};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -1199,7 +1200,7 @@ impl TeamBehaviour {
             // reserves is the veteran systems' story (retirement,
             // coaching interest), not an ambition dream.
             let (_, prime_end, fade_end) =
-                BackupCareerAnxiety::career_phases(player.position().is_goalkeeper());
+                StuckCareerScan::career_phases(player.position().is_goalkeeper());
             let faded = ((age as f32 - prime_end) / (fade_end - prime_end)).clamp(0.0, 1.0);
             if faded > 0.0 && ambition / 20.0 <= faded {
                 continue;
@@ -2693,27 +2694,8 @@ struct BackupCareerAnxiety {
 impl BackupCareerAnxiety {
     /// A player must clear this desire score before the dream fires.
     const EMIT_THRESHOLD: f32 = 0.52;
-    /// A season with at most this many league starts at the parent club…
-    const STUCK_SEASON_MAX_STARTS: u16 = 8;
-    /// …and at most this many total league appearances counts as a
-    /// season without first-team football.
-    const STUCK_SEASON_MAX_APPS: u16 = 15;
-    /// How many season-years back the stuck-season scan may walk.
-    const MAX_LOOKBACK_YEARS: u16 = 6;
     /// Post-transfer settling window before a stuck-career story exists.
     const SETTLED_DAYS: i64 = 540;
-
-    /// Position-adjusted career phases: (prime_start, prime_end,
-    /// fade_end). Goalkeeper careers run ~3 years later. Shared by the
-    /// backup-anxiety score and the reserve-ambition fade so both
-    /// breakthrough dreams extinguish on the same line.
-    fn career_phases(is_goalkeeper: bool) -> (f32, f32, f32) {
-        if is_goalkeeper {
-            (27.0, 33.0, 37.0)
-        } else {
-            (26.0, 31.0, 34.0)
-        }
-    }
 
     fn evaluate(
         player: &Player,
@@ -2755,14 +2737,14 @@ impl BackupCareerAnxiety {
         // the career #2's story, never the #3's (the Pinsoglio case). A
         // younger third keeper still dreams; the reserve / prospect
         // pathways own his route out.
-        let (_, prime_end, _) = Self::career_phases(is_goalkeeper);
+        let (_, prime_end, _) = StuckCareerScan::career_phases(is_goalkeeper);
         if is_goalkeeper && keepers_clearly_ahead >= 2 && (age as f32) > prime_end {
             return None;
         }
 
         // Still settling in after a move — no stuck story yet. Homegrown
         // players (never transferred) pass.
-        if Self::club_tenure_days(player, today)
+        if StuckCareerScan::club_tenure_days(player, today)
             .map(|d| d < Self::SETTLED_DAYS)
             .unwrap_or(false)
         {
@@ -2776,8 +2758,9 @@ impl BackupCareerAnxiety {
             }
         }
 
-        let (stuck_years, serial_loanee) = Self::scan_ledger(player, today)?;
-        if stuck_years < 2 {
+        let scan = StuckCareerScan::of(player, today)?;
+        let serial_loanee = scan.serial_loanee;
+        if scan.stuck_years < 2 {
             return None;
         }
 
@@ -2802,29 +2785,9 @@ impl BackupCareerAnxiety {
         }
 
         // ── The push ──
-        let ambition01 = (player.attributes.ambition / 20.0).clamp(0.0, 1.0);
-        let determination01 = (player.skills.mental.determination / 20.0).clamp(0.0, 1.0);
-        let loyalty01 = (player.attributes.loyalty / 20.0).clamp(0.0, 1.0);
-
-        // Age urgency: ramps in from 24, saturates through the prime
-        // ("the years are slipping away"), then eases toward the
-        // late-career line as the veteran makes peace with the role.
-        let (prime_start, prime_end, fade_end) = Self::career_phases(is_goalkeeper);
-        let a = age as f32;
-        let age_urgency = if a < prime_start {
-            0.35 + 0.65 * ((a - 23.0) / (prime_start - 23.0)).clamp(0.0, 1.0)
-        } else if a <= prime_end {
-            1.0
-        } else {
-            1.0 - 0.5 * ((a - prime_end) / (fade_end - prime_end)).clamp(0.0, 1.0)
-        };
-
-        let stuck_pressure = stuck_years.min(4) as f32 / 4.0;
-        let serial_bonus = if serial_loanee { 0.15 } else { 0.0 };
-
-        // ── The comforts ──
-        // Being #2 at a genuinely big club is a career in itself —
-        // unless the player's ambition erodes the prestige.
+        // Being #2 at a genuinely big club is a career in itself — the
+        // shared restlessness curve weighs that prestige, the player's
+        // ambition and the years already lost against each other.
         let club_rep = ctx
             .club
             .as_ref()
@@ -2836,129 +2799,33 @@ impl BackupCareerAnxiety {
                 }
             })
             .unwrap_or(5_000) as f32;
-        let rep01 = ((club_rep - 4_000.0) / 4_000.0).clamp(0.0, 1.0);
-        let big_club_comfort = rep01 * 0.22 * (1.0 - 0.6 * ambition01);
+        let restlessness = scan.restlessness(RestlessnessInputs {
+            ambition: player.attributes.ambition,
+            determination: player.skills.mental.determination,
+            loyalty: player.attributes.loyalty,
+            age,
+            is_goalkeeper,
+            club_rep01: ((club_rep - 4_000.0) / 4_000.0).clamp(0.0, 1.0),
+        });
 
+        // ── The last comfort ──
         // A wage clearly above his own fair valuation is exactly why
-        // real backups sign the next extension and stay put.
+        // real backups sign the next extension and stay put. Unlike the
+        // prestige of the badge it does not fade with the years — the
+        // money arrives every month whether he plays or not.
+        let ambition01 = (player.attributes.ambition / 20.0).clamp(0.0, 1.0);
         let fair_ratio = WageFairness::assess(player, contract, today, ctx).fair_ratio;
         let wage_comfort =
             ((fair_ratio - 1.0) / 0.5).clamp(0.0, 1.0) * 0.15 * (1.0 - 0.5 * ambition01);
 
-        let loyalty_brake = loyalty01 * 0.10;
-
-        let desire = 0.40 * ambition01
-            + 0.28 * age_urgency
-            + 0.17 * stuck_pressure
-            + 0.08 * determination01
-            + serial_bonus
-            - big_club_comfort
-            - wage_comfort
-            - loyalty_brake;
-
-        if desire < Self::EMIT_THRESHOLD {
+        if restlessness.score - wage_comfort < Self::EMIT_THRESHOLD {
             return None;
         }
 
         Some(BackupCareerAnxiety {
             serial_loanee,
-            in_prime_window: a >= prime_start - 2.0 && a <= prime_end,
+            in_prime_window: restlessness.in_prime_window,
         })
-    }
-
-    /// How long the player has actually been this club's player.
-    ///
-    /// `days_since_transfer` is stamped by the loan machinery as well as
-    /// by the market, so a player who is lent out and brought home reads
-    /// as a brand-new signing twice a year — and a serial loanee, the
-    /// exact career this audit exists to give a voice to, would never
-    /// clear the settling window at all. The permanent contract's own
-    /// start date is the honest anchor for a stay; the later of the two
-    /// is taken so a renewal that re-stamps the deal cannot shorten a
-    /// long one either. `None` means no anchor at all — a homegrown
-    /// player who has never moved, and who is settled by definition.
-    fn club_tenure_days(player: &Player, today: NaiveDate) -> Option<i64> {
-        let since_move = player.days_since_transfer(today)?;
-        let since_contract = player
-            .contract
-            .as_ref()
-            .and_then(|c| c.started)
-            .map(|start| (today - start).num_days())
-            .unwrap_or(0);
-        Some(since_move.max(since_contract))
-    }
-
-    /// Walk the canonical season ledger backwards from the most recent
-    /// league season the player was at this club for. A season is
-    /// "without first-team football" when his parent-club league starts
-    /// and appearances stay under the bars — a year spent entirely out
-    /// on loan therefore counts (zero parent starts), while a real run
-    /// of starts breaks the chain. Returns `(consecutive stuck seasons,
-    /// serial-loanee flag)`, or `None` when there is no usable history.
-    fn scan_ledger(player: &Player, today: NaiveDate) -> Option<(u16, bool)> {
-        let ledger = &player.statistics_history.season_ledger;
-        // Seasons before the player joined this club say nothing about
-        // his standing here. Homegrown players have no floor.
-        let join_year_floor = Self::club_tenure_days(player, today)
-            .map(|d| (today - Duration::days(d)).year() as u16);
-        let at_club = |year: u16| join_year_floor.map_or(true, |floor| year >= floor);
-
-        let anchor = ledger
-            .iter()
-            .filter(|e| matches!(e.competition_kind, PlayerStatCompetitionKind::League))
-            .filter(|e| at_club(e.season_start_year))
-            .map(|e| e.season_start_year)
-            .max()?;
-
-        let mut stuck_years: u16 = 0;
-        for back in 0..Self::MAX_LOOKBACK_YEARS {
-            let Some(year) = anchor.checked_sub(back) else {
-                break;
-            };
-            if !at_club(year) {
-                break;
-            }
-            // Sum parent-club (non-loan) league starts / apps for the
-            // year; a year with no parent rows at all was a year the
-            // club gave him nothing.
-            let (starts, apps) = ledger
-                .iter()
-                .filter(|e| {
-                    e.season_start_year == year
-                        && !e.is_loan
-                        && matches!(e.competition_kind, PlayerStatCompetitionKind::League)
-                })
-                .fold((0u16, 0u16), |(s, a), e| {
-                    (
-                        s.saturating_add(e.statistics.played),
-                        a.saturating_add(e.statistics.played)
-                            .saturating_add(e.statistics.played_subs),
-                    )
-                });
-            if starts <= Self::STUCK_SEASON_MAX_STARTS && apps <= Self::STUCK_SEASON_MAX_APPS {
-                stuck_years += 1;
-            } else {
-                break;
-            }
-        }
-
-        // Serial loanee: two or more distinct season-years of the last
-        // four spent out on loan from this club.
-        let loan_floor = anchor.saturating_sub(3);
-        let mut loan_years: Vec<u16> = ledger
-            .iter()
-            .filter(|e| {
-                e.is_loan
-                    && matches!(e.competition_kind, PlayerStatCompetitionKind::League)
-                    && e.season_start_year >= loan_floor
-                    && at_club(e.season_start_year)
-            })
-            .map(|e| e.season_start_year)
-            .collect();
-        loan_years.sort_unstable();
-        loan_years.dedup();
-
-        Some((stuck_years, loan_years.len() >= 2))
     }
 }
 
@@ -3046,7 +2913,7 @@ impl LoanCarouselFatigue {
 
         let age = player.age(today);
         let is_goalkeeper = player.position().is_goalkeeper();
-        let (prime_start, prime_end, fade_end) = BackupCareerAnxiety::career_phases(is_goalkeeper);
+        let (prime_start, prime_end, fade_end) = StuckCareerScan::career_phases(is_goalkeeper);
         if age < Self::MIN_AGE || (age as f32) >= fade_end {
             return None;
         }
@@ -3422,7 +3289,7 @@ mod tests {
         PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatLedgerEntry, PlayerStatistics,
         TeamContext, TeamType,
     };
-    use chrono::NaiveDate;
+    use chrono::{Duration, NaiveDate};
 
     fn first_of_month(y: i32, m: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, 1).unwrap()

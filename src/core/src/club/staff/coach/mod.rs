@@ -21,6 +21,7 @@ pub mod assessment;
 pub mod bond;
 pub mod engine;
 pub mod memory;
+pub mod plan;
 pub mod reason;
 pub mod snapshot;
 pub mod strategy;
@@ -34,6 +35,7 @@ pub use engine::{CoachDecisionEngine, CoachLiveMatchContext, CoachSelectionConte
 pub use memory::{
     CoachMatchObservation, CoachMemory, CoachMemoryFlags, CoachMemoryStore, MemoryEngine,
 };
+pub use plan::{CoachSquadPlan, PlannedRole, PlayerPlanEntry, SquadDepthRanks};
 pub use reason::CoachDecisionReason;
 pub use snapshot::CoachMatchSnapshot;
 pub use strategy::{CoachStrategy, StrategyDeriver, StrategyInputs};

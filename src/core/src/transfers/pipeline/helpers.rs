@@ -1249,7 +1249,8 @@ mod tier_helper_tests {
 mod group_need_tests {
     use crate::club::team::squad::SquadAssetClass;
     use crate::transfers::pipeline::evaluation::{
-        GroupNeed, NeedKind, SuccessionAudit, compute_group_needs, group_depth_requirement,
+        GroupNeed, NeedKind, SuccessionAudit, SuccessionUrgency, compute_group_needs,
+        group_depth_requirement,
     };
     use crate::transfers::pipeline::processor::SquadPlayerInfo;
     use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
@@ -1337,15 +1338,64 @@ mod group_need_tests {
     // ── Succession audit ────────────────────────────────────────
 
     #[test]
-    fn succession_trigger_age_is_position_aware() {
-        assert_eq!(
-            SuccessionAudit::trigger_age(PlayerFieldPositionGroup::Goalkeeper),
-            33,
-            "keeper careers run longer — the heir search starts later"
-        );
+    fn succession_career_end_is_position_aware() {
         assert!(
-            SuccessionAudit::trigger_age(PlayerFieldPositionGroup::Forward)
-                < SuccessionAudit::trigger_age(PlayerFieldPositionGroup::Goalkeeper)
+            SuccessionAudit::career_end_age(PlayerFieldPositionGroup::Forward)
+                < SuccessionAudit::career_end_age(PlayerFieldPositionGroup::Goalkeeper),
+            "keeper careers run longer, so their succession horizon starts later"
+        );
+    }
+
+    /// The horizon escalates instead of latching. A keeper who sails past
+    /// the old fixed trigger age and keeps playing used to read exactly
+    /// like one who had just reached it; now the club's urgency grows as
+    /// the career it depends on runs out.
+    #[test]
+    fn succession_urgency_escalates_with_the_years_left() {
+        let keeper = |age: u8| aged_player(9, PlayerPositionType::Goalkeeper, 130, age, 130);
+        assert_eq!(SuccessionAudit::urgency(&keeper(30)), None);
+        assert_eq!(
+            SuccessionAudit::urgency(&keeper(33)),
+            Some(SuccessionUrgency::Watch)
+        );
+        assert_eq!(
+            SuccessionAudit::urgency(&keeper(35)),
+            Some(SuccessionUrgency::Pressing)
+        );
+        assert_eq!(
+            SuccessionAudit::urgency(&keeper(40)),
+            Some(SuccessionUrgency::Critical),
+            "a forty-year-old first choice is the most urgent succession a club can have"
+        );
+    }
+
+    /// The test that matters for the Juventus case: two career deputies
+    /// four years younger than a forty-year-old incumbent are not a
+    /// succession plan, and must not cancel the search.
+    #[test]
+    fn ageing_deputies_do_not_count_as_the_heir() {
+        let squad = vec![
+            aged_player(1, PlayerPositionType::Goalkeeper, 130, 40, 130),
+            aged_player(2, PlayerPositionType::Goalkeeper, 120, 29, 122),
+            aged_player(3, PlayerPositionType::Goalkeeper, 118, 29, 120),
+        ];
+        let incumbent = aged_player(1, PlayerPositionType::Goalkeeper, 130, 40, 130);
+        assert!(
+            !SuccessionAudit::heir_in_place(&squad, &incumbent),
+            "peers who will retire alongside him are not successors"
+        );
+    }
+
+    #[test]
+    fn a_genuine_young_heir_still_blocks_the_search() {
+        let squad = vec![
+            aged_player(1, PlayerPositionType::Goalkeeper, 130, 38, 130),
+            aged_player(2, PlayerPositionType::Goalkeeper, 108, 21, 132),
+        ];
+        let incumbent = aged_player(1, PlayerPositionType::Goalkeeper, 130, 38, 130);
+        assert!(
+            SuccessionAudit::heir_in_place(&squad, &incumbent),
+            "a 21-year-old assessed to reach the incumbent's level is exactly the heir"
         );
     }
 

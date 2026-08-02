@@ -2,6 +2,7 @@ use crate::club::player::adaptation::{AdaptationFailureSignals, AdaptationSquadC
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::core::player::TransferRequestReason;
 use crate::club::player::player::Player;
+use crate::club::player::{RestlessnessInputs, StuckCareerScan};
 use crate::club::{PlayerMailbox, PlayerResult, PlayerStatusType};
 use crate::context::GlobalContext;
 use crate::utils::DateUtils;
@@ -836,6 +837,15 @@ impl Player {
             active_reasons.push(TransferRequestReason::RelegationEscape);
         }
 
+        // Wants first-team football: seasons have gone by without a
+        // shirt and the player would now rather drop a level than keep
+        // watching. Every other reason above points him upward — this is
+        // the only one that points down, and it is the only route by
+        // which a perennial backup at a giant can ever become available.
+        if !recently_transferred && self.first_team_football_pressure(now, ctx, age) {
+            active_reasons.push(TransferRequestReason::WantsFirstTeamFootball);
+        }
+
         // Honeymoon overrides everything except poor behaviour. A
         // newly-signed player won't formally request a transfer in the
         // first 21 days unless their character has actually broken.
@@ -1254,6 +1264,103 @@ impl Player {
             })
             .count();
         mood_count >= 2
+    }
+
+    /// True when years without a first-team shirt have hardened into a
+    /// standing request to leave for somewhere he will actually play.
+    ///
+    /// Deliberately structural — it reads the season ledger, the squad
+    /// role and the player's own character, never a cooldowned mood
+    /// event. The perennial-backup mood audit stops firing the moment
+    /// `Req` goes up (a player already asking out isn't audited again),
+    /// so a mood-keyed request would clear itself a couple of months
+    /// later and the player would settle back into the same bench. The
+    /// facts behind this one only change when the club actually plays
+    /// him — which is precisely the resolution the request is asking
+    /// for.
+    ///
+    /// The bar sits above the mood audit's: minding is cheap, asking to
+    /// leave the biggest club you will ever play for is not.
+    fn first_team_football_pressure(
+        &self,
+        now: NaiveDate,
+        ctx: &TransferDesireContext,
+        age: u8,
+    ) -> bool {
+        /// Restlessness needed to act, against the mood's 0.52.
+        const REQUEST_THRESHOLD: f32 = 0.60;
+        /// Post-transfer settling window before a stuck story exists —
+        /// shared with the mood audit.
+        const SETTLED_DAYS: i64 = 540;
+        /// A live start share at or above this means he is breaking
+        /// through right now, whatever the ledger says about last year.
+        const BREAKING_THROUGH_SHARE: f32 = 0.40;
+        /// Matches the starter-ratio EMA needs before it is trusted over
+        /// the ledger — it sits at 0.5 until the player actually plays.
+        const MIN_TRACKED_APPS: u8 = 6;
+
+        let Some(contract) = self.contract.as_ref() else {
+            return false;
+        };
+        // A manager-pinned player IS first-team by definition, and a
+        // player the club has already written off or already listed is
+        // being handled by the listing / release systems.
+        if self.is_force_match_selection || contract.is_transfer_listed {
+            return false;
+        }
+        if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
+            return false;
+        }
+
+        let is_goalkeeper = self.position().is_goalkeeper();
+        // Under-24s belong to the development-loan pathway — the answer
+        // to a blocked 21-year-old is a loan, not a sale. Past the
+        // late-career line a squad role is a career, not a grievance.
+        let late_career_age = if is_goalkeeper { 37 } else { 34 };
+        if age < 24 || age >= late_career_age {
+            return false;
+        }
+
+        // Still settling in after a move — no stuck story yet.
+        // Homegrown players (never transferred) pass.
+        if StuckCareerScan::club_tenure_days(self, now)
+            .map(|d| d < SETTLED_DAYS)
+            .unwrap_or(false)
+        {
+            return false;
+        }
+
+        // Breaking through right now? A backup who has claimed the shirt
+        // this season is not stuck any more, whatever last year says.
+        if self.happiness.appearances_tracked >= MIN_TRACKED_APPS
+            && self.happiness.starter_ratio >= BREAKING_THROUGH_SHARE
+        {
+            return false;
+        }
+
+        let Some(scan) = StuckCareerScan::of(self, now) else {
+            return false;
+        };
+        if scan.stuck_years < 2 {
+            return false;
+        }
+
+        // Eligibility: the perennial backup by squad status, or anyone
+        // the club keeps shipping out on loan instead of playing.
+        let is_backup = matches!(contract.squad_status, PlayerSquadStatus::MainBackupPlayer);
+        if !is_backup && !scan.serial_loanee {
+            return false;
+        }
+
+        let restlessness = scan.restlessness(RestlessnessInputs {
+            ambition: self.attributes.ambition,
+            determination: self.skills.mental.determination,
+            loyalty: self.attributes.loyalty,
+            age,
+            is_goalkeeper,
+            club_rep01: ((ctx.club_reputation * 10_000.0 - 4_000.0) / 4_000.0).clamp(0.0, 1.0),
+        });
+        restlessness.score >= REQUEST_THRESHOLD
     }
 
     fn return_home_request_pressure(&self, now: NaiveDate, _ctx: &TransferDesireContext) -> bool {
@@ -1731,6 +1838,150 @@ mod career_desire_tests {
         c.squad_status = status;
         p.contract = Some(c);
         p
+    }
+
+    // ── Wants first-team football ───────────────────────────────
+
+    fn league_season(year: u16, starts: u16, is_loan: bool) -> crate::PlayerStatLedgerEntry {
+        crate::PlayerStatLedgerEntry {
+            seq_id: 0,
+            season_start_year: year,
+            team_slug: "t".into(),
+            team_name: "T".into(),
+            team_reputation: 8_000,
+            league_slug: "l".into(),
+            league_name: "L".into(),
+            competition_kind: crate::PlayerStatCompetitionKind::League,
+            competition_slug: "l".into(),
+            is_loan,
+            transfer_fee: None,
+            coverage_days: None,
+            statistics: crate::PlayerStatistics {
+                played: starts,
+                ..Default::default()
+            },
+        }
+    }
+
+    /// A settled main-squad backup with seasons of bench duty behind him
+    /// at an elite club — the career the request exists for.
+    fn parked_backup(age: u8, ambition: f32, loyalty: f32, today: NaiveDate) -> Player {
+        let mut p = with_status(
+            build(
+                age, ambition, 12.0, loyalty, 12.0, 1, 130, 5_000, 2_000, today,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        p.skills.mental.determination = 12.0;
+        for year in 2022..=2025 {
+            p.statistics_history
+                .season_ledger
+                .push(league_season(year, 1, false));
+        }
+        p
+    }
+
+    /// An elite club: reputation 8000 on the 0..10000 scale.
+    fn elite_ctx() -> TransferDesireContext {
+        TransferDesireContext {
+            club_reputation: 0.80,
+            league_reputation: 8_000,
+            ..TransferDesireContext::default()
+        }
+    }
+
+    #[test]
+    fn parked_ambitious_backup_asks_to_leave() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(27, 16.0, 8.0, today);
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(
+            p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball),
+            "four seasons of bench duty in his prime should harden into a request to go and play"
+        );
+        assert!(
+            p.statuses.has(PlayerStatusType::Req),
+            "the request must raise Req — every step-down gate downstream keys off it"
+        );
+    }
+
+    /// The whole point of the reason: it survives the next daily tick.
+    /// A request stamped by a failed manager talk used to be stripped the
+    /// following morning because no reason in the set was about minutes,
+    /// so a benched player could never actually become available.
+    #[test]
+    fn the_request_survives_the_next_tick() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(27, 16.0, 8.0, today);
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(p.statuses.has(PlayerStatusType::Req));
+
+        let tomorrow = d(2026, 6, 2);
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, tomorrow, &elite_ctx());
+        assert!(
+            p.statuses.has(PlayerStatusType::Req),
+            "nothing about his situation changed overnight, so the request must stand"
+        );
+    }
+
+    #[test]
+    fn content_loyal_backup_stays() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(27, 6.0, 17.0, today);
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball),
+            "an unambitious, loyal deputy accepts the role — that is a real career"
+        );
+    }
+
+    #[test]
+    fn breaking_through_this_season_withdraws_the_request() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(27, 16.0, 8.0, today);
+        // He has claimed the shirt this season, whatever last year says.
+        p.happiness.appearances_tracked = 20;
+        p.happiness.starter_ratio = 0.8;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball),
+            "a backup playing every week is not stuck, whatever the ledger says"
+        );
+    }
+
+    #[test]
+    fn a_blocked_youngster_is_a_loan_case_not_a_sale() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(21, 18.0, 6.0, today);
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball),
+            "the answer to a blocked 21-year-old is a development loan, not a transfer request"
+        );
+    }
+
+    #[test]
+    fn a_first_team_regular_never_raises_it() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(27, 18.0, 6.0, today);
+        p.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::FirstTeamRegular;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball),
+            "the reason is for squad fillers and serial loanees, not first-team players"
+        );
     }
 
     // ── Post-relegation exodus ──────────────────────────────────

@@ -1079,6 +1079,7 @@ impl EventContextRenderer {
             C::SupporterAppreciation => "supporter_appreciation",
             C::SupporterIdentification => "supporter_identification",
             C::DressingRoomLift => "dressing_room_lift",
+            C::ManagerVerdict => "manager_verdict",
             C::Other => "other",
         }
     }

@@ -588,7 +588,7 @@ impl TeamBehaviour {
             };
 
             let playing_time_factor =
-                ComplaintPlayingTime::deficit(player, &opp, &cfg) * frustration_mult;
+                ComplaintPlayingTime::deficit(player, &opp, &cfg, current_date) * frustration_mult;
 
             if playing_time_factor <= cfg.complaint_threshold {
                 // A young player normally asks for a development LOAN, not a
@@ -1120,16 +1120,17 @@ impl ComplaintPlayingTime {
         player: &Player,
         opp: &PlayingTimeOpportunityContext,
         cfg: &PlayingTimeFrustrationConfig,
+        date: NaiveDate,
     ) -> f32 {
         let eligible = opp.eligible_official_matches_since_join as f32;
         if eligible <= 0.0 {
             return 0.0;
         }
         let status = player.contract.as_ref().map(|c| &c.squad_status);
-        // Same record-raised bar as the morale factor — a returnee whose
-        // loan record says "starter" complains on the starter's schedule,
-        // not the prospect's, so the talk pass and the mood never disagree.
-        let expected_share = player.own_expected_start_share(status);
+        // Same bar as the morale factor — the player's own expectation of
+        // himself, so the talk pass and the mood never disagree about
+        // what he thinks he is owed.
+        let expected_share = player.own_expected_start_share(status, date);
         let expected_raw = eligible * expected_share;
         let expected = expected_raw.max(1.0);
         let actual = opp.actual_involvement_score(cfg);

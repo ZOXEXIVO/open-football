@@ -27,6 +27,7 @@ use super::MatchParticipation;
 use super::scaling;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
+use crate::club::staff::coach::PlannedRole;
 use crate::{
     BigMatchDecision, BigMatchKind, BigMatchSelectionContext, ClubDirectionContext,
     ClubDirectionEvidence, ClubDirectionKind, HappinessEventCause, HappinessEventContext,
@@ -38,6 +39,7 @@ use crate::{
     RoleStatusEventContext, RoleStatusKind, SelectionDecisionScope, SelectionOmissionReason,
     SelectionRole, SubstitutionFrustrationContext, SubstitutionFrustrationKind,
 };
+use chrono::NaiveDate;
 
 /// Result of a private-talk detection pass. The driver is "what's the
 /// dominant grievance", computed from the player's recent event history
@@ -51,6 +53,55 @@ struct PrivateTalkSignal {
 }
 
 impl Player {
+    // ───────────────────────────────────────────────────────────
+    // ToldNotInPlans
+    // ───────────────────────────────────────────────────────────
+
+    /// The manager has told the player where he stands: he is in the
+    /// shop window, or has no future here at all.
+    ///
+    /// This is the conversation the sim never used to have. A squad
+    /// player could be quietly dropped out of a manager's thinking for
+    /// years and nothing ever said so — not to him, not to the events
+    /// feed, not to the press, even though the newsroom has carried a
+    /// story for it all along. The plan is what makes the verdict
+    /// explicit, and this is where the player finds out.
+    ///
+    /// Cooldowned hard: being told once is a season-defining moment, and
+    /// being told the same thing every month is noise.
+    pub fn on_told_where_he_stands(&mut self, _date: NaiveDate, role: PlannedRole) {
+        const COOLDOWN_DAYS: u16 = 180;
+        if !role.is_exit_path() {
+            return;
+        }
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::ToldNotInPlans, COOLDOWN_DAYS)
+        {
+            return;
+        }
+        let catalog = HappinessConfig::default().catalog;
+        let magnitude = catalog.magnitude(HappinessEventType::ToldNotInPlans);
+        // Being made available is a lesser blow than being written off.
+        let magnitude = if matches!(role, PlannedRole::ShopWindow) {
+            magnitude * 0.6
+        } else {
+            magnitude
+        };
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::ManagerVerdict,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::Personal,
+        )
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+        self.happiness.add_event_with_context(
+            HappinessEventType::ToldNotInPlans,
+            magnitude,
+            None,
+            ctx,
+        );
+    }
+
     // ───────────────────────────────────────────────────────────
     // AskedForPrivateTalk
     // ───────────────────────────────────────────────────────────

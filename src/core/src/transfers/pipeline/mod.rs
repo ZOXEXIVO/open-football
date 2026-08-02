@@ -393,7 +393,16 @@ impl TransferRequest {
                 }
             }
             TransferNeedReason::DepthCover => (20, 32),
-            TransferNeedReason::SuccessionPlanning => (19, 24),
+            // An heir is normally a prospect to groom behind the
+            // incumbent. But once the incumbent is a season from the end
+            // with nobody behind him, a 19-year-old project is not a
+            // succession plan — the club needs someone who could take the
+            // shirt now, so the band opens up with the priority.
+            TransferNeedReason::SuccessionPlanning => match priority {
+                TransferNeedPriority::Critical => (21, 30),
+                TransferNeedPriority::Important => (19, 27),
+                TransferNeedPriority::Optional => (19, 24),
+            },
             TransferNeedReason::DevelopmentSigning => (16, 21),
             TransferNeedReason::StaffRecommendation => (18, 32),
             TransferNeedReason::LoanToFillSquad => (19, 33),

@@ -153,6 +153,14 @@ impl CareerStageDetector {
         if is_keeper { age >= 37 } else { age >= 34 }
     }
 
+    /// The last years of a career, where even an ever-present starter
+    /// openly weighs stopping. Three years past the window opening — a
+    /// 40-year-old keeper, a 37-year-old outfield player.
+    fn is_in_late_career_tail(player: &Player, age: u8) -> bool {
+        let is_keeper = player.position().position_group() == PlayerFieldPositionGroup::Goalkeeper;
+        if is_keeper { age >= 40 } else { age >= 37 }
+    }
+
     fn emit_considering(player: &mut Player, stage: CareerStageEventContext) {
         let magnitude = HappinessConfig::default()
             .catalog
@@ -197,13 +205,18 @@ impl CareerStageDetector {
             .map(|c| c.squad_status.clone())
             .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
 
-        // A high-professionalism regular starter is still enjoying his
-        // football — he isn't weighing retirement yet.
+        // A regular starter is still enjoying his football — he isn't
+        // weighing retirement yet. But only up to a point: an ever-present
+        // deep into the tail of his career is precisely the man whose
+        // club needs to hear him thinking about it, and suppressing the
+        // thought unconditionally meant a forty-year-old first choice
+        // gave his club no warning at all — it learned he was gone the
+        // season he went.
         let is_regular_starter = matches!(
             status,
             PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
         ) && player.happiness.starter_ratio >= 0.6;
-        if is_regular_starter {
+        if is_regular_starter && !Self::is_in_late_career_tail(player, age) {
             return false;
         }
 

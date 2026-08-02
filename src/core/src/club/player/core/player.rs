@@ -333,6 +333,17 @@ pub enum TransferRequestReason {
     /// the ambition-vs-club-size check while the league itself remains a
     /// competitive ceiling.
     WantsStrongerLeague,
+    /// Seasons have gone by without first-team football and the player
+    /// wants to go and actually play — accepting a SMALLER club if that
+    /// is where the shirt is. Every other reason points a player upward
+    /// or sideways (a bigger club, a stronger league, a continental
+    /// stage); this is the only one that points down, and without it a
+    /// perennial backup at a giant had no way to ask out at all: his
+    /// club is too big to have outgrown, his league too strong to want
+    /// to leave. The step-down machinery downstream — market resignation,
+    /// availability strength, the plausibility gates — is all reachable
+    /// only from a real request, so this variant is what opens it.
+    WantsFirstTeamFootball,
 }
 
 /// What the manager committed to. Each variant carries everything the

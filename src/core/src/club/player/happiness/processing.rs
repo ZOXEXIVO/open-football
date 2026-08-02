@@ -3,13 +3,15 @@ use crate::club::player::adaptation::ReputationGap;
 use crate::club::player::calculators::{
     ContractValuation, ValuationContext, expected_annual_value, package_inputs_from_contract,
 };
+use crate::club::player::happiness::CareerExpectation;
 use crate::club::player::interaction::InteractionTopic;
 use crate::club::player::player::Player;
+use crate::club::player::statistics::StuckCareerScan;
 use crate::club::{PlayerResult, PlayerStatusType};
 use crate::utils::DateUtils;
 use crate::{
     ContractType, HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope,
-    HappinessEventSeverity, HappinessEventType, MatchExperienceBackground, PlayerSquadStatus,
+    HappinessEventSeverity, HappinessEventType, PlayerSquadStatus,
 };
 use chrono::NaiveDate;
 
@@ -79,16 +81,35 @@ pub struct PlayingTimeOpportunityContext {
     /// currently injured). Mirrors the per-match eligibility filter.
     pub was_registered_and_fit: bool,
     pub is_loan: bool,
+    /// How much of the unused-bench involvement credit still counts,
+    /// 0..1 — see [`StuckCareerScan::bench_credit_scale`]. 1.0 for
+    /// everyone whose career is not stalled.
+    pub bench_credit_scale: f32,
 }
 
 impl PlayingTimeOpportunityContext {
+    /// Token credit for an unused-bench spot: the player at least
+    /// travelled, warmed up and was one injury from playing.
+    const BENCH_WEIGHT: f32 = 0.10;
+
     /// Weighted involvement score — starts count fully, cameos partly, an
-    /// unused-bench spot a token amount (the player at least travelled and
-    /// warmed up). Left-out matches contribute nothing.
+    /// unused-bench spot a token amount. Left-out matches contribute
+    /// nothing.
+    ///
+    /// The bench term fades for a player whose career has stalled
+    /// (`bench_credit_scale`). Sitting on the bench really is involvement
+    /// the first season; it stops being involvement when it is all he
+    /// has had for years. At full credit the bench term (0.10/match) sits
+    /// so close to a backup's own expectation bar (0.15/match) that his
+    /// deficit ratio saturates at 1/3 — mathematically short of the
+    /// complaint threshold no matter how many seasons pass, which is why
+    /// career spectators never once objected.
     pub fn actual_involvement_score(&self, cfg: &PlayingTimeFrustrationConfig) -> f32 {
         self.player_starts_since_join as f32 * cfg.start_weight
             + self.player_sub_apps_since_join as f32 * cfg.sub_app_weight
-            + self.player_unused_bench_since_join as f32 * 0.10
+            + self.player_unused_bench_since_join as f32
+                * Self::BENCH_WEIGHT
+                * self.bench_credit_scale.clamp(0.0, 1.0)
     }
 
     /// Grace ramp applied to negative (frustration) magnitudes. 0.0 inside
@@ -437,6 +458,15 @@ impl Player {
             player_left_out_since_join: left_out,
             was_registered_and_fit: !self.player_attributes.is_injured,
             is_loan: self.contract_loan.is_some(),
+            // A loanee is judged on the loan spell in front of him, not
+            // on the years he spent watching at his parent club.
+            bench_credit_scale: if self.contract_loan.is_some() {
+                1.0
+            } else {
+                StuckCareerScan::of(self, now)
+                    .map(|s| s.bench_credit_scale())
+                    .unwrap_or(1.0)
+            },
         }
     }
 
@@ -658,7 +688,7 @@ impl Player {
         let ability_factor = ((ability - 40.0) / 80.0).clamp(0.0, 1.0);
 
         let status = self.contract.as_ref().map(|c| &c.squad_status);
-        let expected_share = self.own_expected_start_share(status);
+        let expected_share = self.own_expected_start_share(status, now);
         let eligible = opp.eligible_official_matches_since_join as f32;
         let expected_raw = eligible * expected_share;
         let expected = expected_raw.max(1.0);
@@ -687,28 +717,16 @@ impl Player {
         }
     }
 
-    /// The start share this player himself expects — the squad-status
-    /// table as the club's side of the story, raised by the player's own
-    /// recent record of official starts. A young returnee who owned a
-    /// full loan season no longer accepts the prospect's 10% even though
-    /// his contract still says prospect; the record-based floor is
-    /// level-adjusted inside [`MatchExperienceBackground`] so a fourth-
-    /// tier record doesn't demand top-flight minutes. Deliberately
-    /// one-directional: a thin record never LOWERS the status-based
-    /// expectation — the status table already encodes patience.
-    pub(crate) fn own_expected_start_share(&self, status: Option<&PlayerSquadStatus>) -> f32 {
-        let base = PlayingTimeFrustrationConfig::expected_start_share(status);
-        let current_team_reputation = self
-            .statistics_history
-            .current
-            .iter()
-            .rev()
-            .find(|e| e.departed_date.is_none())
-            .map(|e| e.team_reputation)
-            .unwrap_or(0);
-        let record_floor = MatchExperienceBackground::from_player(self)
-            .expected_start_share_floor(current_team_reputation);
-        base.max(record_floor)
+    /// The start share this player himself expects. See
+    /// [`CareerExpectation`] for the three channels behind it — the
+    /// club's label, his own record, and his ambition weighted by career
+    /// stage.
+    pub(crate) fn own_expected_start_share(
+        &self,
+        status: Option<&PlayerSquadStatus>,
+        now: NaiveDate,
+    ) -> f32 {
+        CareerExpectation::of(self, status, now).expected_start_share
     }
 
     /// Salary factor uses the same `ContractValuation` as the renewal AI

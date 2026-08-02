@@ -1167,7 +1167,19 @@ impl ScoringEngine {
         } else if player.player_attributes.days_since_last_match
             >= CupRotation::GK_BACKUP_MIN_IDLE_DAYS
         {
-            stage.gk_backup()
+            // A rested senior deputy IS the cup keeper in the early
+            // rounds against an opponent who is no stronger — a decision
+            // the manager takes before the season, not a marginal
+            // preference re-weighed each tie. See
+            // [`CupRotation::GK_CUP_DEPUTY_DESIGNATION`].
+            let designated = stage == CupStage::Early
+                && cup.opponent_ratio < CupRotation::GK_FIRST_CHOICE_OPPONENT_RATIO_CAP
+                && CupRotation::is_senior_deputy(player);
+            if designated {
+                CupRotation::GK_CUP_DEPUTY_DESIGNATION
+            } else {
+                stage.gk_backup()
+            }
         } else {
             0.0
         }

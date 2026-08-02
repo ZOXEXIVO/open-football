@@ -1,6 +1,6 @@
 // Assuming rand is available
 extern crate rand;
-use crate::club::staff::CoachMemoryStore;
+use crate::club::staff::{CoachMemoryStore, CoachSquadPlan};
 use crate::club::{PersonBehaviour, StaffClubContract, StaffPosition, StaffStatus};
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
@@ -86,6 +86,14 @@ pub struct Staff {
     /// structured flags. Defaults to empty, so a freshly-generated
     /// coach behaves neutrally until enough observations accumulate.
     pub coach_memory: CoachMemoryStore,
+
+    /// The coach's standing intention for each player he manages — who
+    /// he is building around, grooming, resting for the cup, or has
+    /// stopped counting on. Revised monthly; cleared when a new manager
+    /// takes the seat, because a plan is his opinion and not the club's.
+    /// Empty by default, and every consumer falls back to its previous
+    /// behaviour on an empty plan.
+    pub squad_plan: CoachSquadPlan,
 }
 
 #[derive(Debug, Clone)]
@@ -507,6 +515,7 @@ impl Staff {
             recent_events: Vec::new(),
             specialization_days: [0; 4],
             coach_memory: CoachMemoryStore::new(),
+            squad_plan: CoachSquadPlan::new(),
         }
     }
 

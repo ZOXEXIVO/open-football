@@ -163,6 +163,40 @@ impl Team {
     fn run_monthly_pass(&mut self, date: NaiveDate) {
         SquadStatusUpdater::apply(self, date);
         CaptaincyAssigner::assign(self, date);
+        self.revise_coach_squad_plan(date);
+    }
+
+    /// Refresh the head coach's standing plan for this squad, and tell
+    /// anyone whose role changed.
+    ///
+    /// The plan lives on the coach because it is his opinion — so a
+    /// squad with no manager in the seat simply has no plan, and every
+    /// consumer falls back to its previous behaviour.
+    fn revise_coach_squad_plan(&mut self, date: NaiveDate) {
+        let Some(coach) = self.staffs.head_coach_mut() else {
+            return;
+        };
+        if !coach.squad_plan.due_for_revision(date) {
+            return;
+        }
+        let mut plan = std::mem::take(&mut coach.squad_plan);
+        let changes = plan.revise(&self.players, date);
+        if let Some(coach) = self.staffs.head_coach_mut() {
+            coach.squad_plan = plan;
+        }
+
+        // Being told where you stand is the point of the plan. Only a
+        // move onto an exit path is delivered as news — a player learns
+        // he is not in the manager's plans, which is exactly the
+        // conversation the sim never used to have.
+        for (player_id, role) in changes {
+            if !role.is_exit_path() {
+                continue;
+            }
+            if let Some(player) = self.players.players.iter_mut().find(|p| p.id == player_id) {
+                player.on_told_where_he_stands(date, role);
+            }
+        }
     }
 
     /// Weekly tick — mentorship, social decay, chemistry refresh,
