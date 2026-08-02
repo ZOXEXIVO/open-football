@@ -4,6 +4,7 @@ pub mod news;
 
 use crate::i18n::catalog::{LocaleCatalog, ScopeLookup};
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
+use std::borrow::Borrow;
 #[cfg(test)]
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -174,6 +175,50 @@ impl I18n {
 
     pub fn t<'a>(&'a self, key: &'a str) -> &'a str {
         self.translations.t(key)
+    }
+
+    /// Resolve a noun that bends to the number in front of it.
+    ///
+    /// The value carries the forms its own language needs, separated by
+    /// `|` — Russian's `"год|года|лет"` — and `n` picks one. A value with
+    /// a single form comes back whole, which covers every language whose
+    /// noun ignores the count and every locale with no reachable singular
+    /// (no footballer is 1 year old), so adding a form is opt-in per
+    /// locale rather than a key every bundle has to grow.
+    ///
+    /// The count is taken by `Borrow` because the template engine hands
+    /// every argument over as a reference.
+    pub fn plural<'a>(&'a self, key: &'a str, n: impl Borrow<u64>) -> &'a str {
+        let value = self.t(key);
+        if !value.contains('|') {
+            return value;
+        }
+        let forms: Vec<&str> = value.split('|').collect();
+        let index = Self::plural_form(&self.lang, *n.borrow()).min(forms.len() - 1);
+        forms[index]
+    }
+
+    /// Which `|`-separated form `n` selects, by the language's own rule
+    /// rather than English's one-or-many.
+    fn plural_form(lang: &str, n: u64) -> usize {
+        match lang {
+            // East-Slavic three-way: 21 год, 22 года, 25 лет — with the
+            // teens taking the last form regardless (11 лет, 14 лет).
+            "ru" => {
+                let (unit, teen) = (n % 10, n % 100);
+                if unit == 1 && teen != 11 {
+                    0
+                } else if (2..=4).contains(&unit) && !(12..=14).contains(&teen) {
+                    1
+                } else {
+                    2
+                }
+            }
+            // Nouns that never bend to a numeral: the first form is the
+            // only form.
+            "zh" | "ja" | "tr" => 0,
+            _ => usize::from(n != 1),
+        }
     }
 
     pub fn country<'a>(&'a self, code: &'a str) -> &'a str {
@@ -496,6 +541,37 @@ mod tests {
             // …and nothing reaches back the other way.
             assert_eq!(chrome.t("news_desk_match"), "news_desk_match", "{lang}");
             assert_eq!(chrome.t("event_label_cause"), "event_label_cause", "{lang}");
+        }
+    }
+
+    /// The age line reads "{n} {noun}", so a locale that spells one noun
+    /// for every number gets "31 лет" on the page. Only the locales that
+    /// ship `|`-separated forms bend; the rest must come back untouched.
+    #[test]
+    fn count_dependent_nouns_follow_their_own_language_rule() {
+        use crate::i18n::I18nManager;
+
+        let manager = I18nManager::new();
+        let ru = manager.for_lang("ru");
+
+        for (age, expected) in [
+            (21u64, "год"),
+            (31, "год"),
+            (32, "года"),
+            (24, "года"),
+            (35, "лет"),
+            (11, "лет"),
+            (14, "лет"),
+        ] {
+            assert_eq!(ru.plural("years_old", age), expected, "age {age}");
+        }
+
+        // Single-form values are returned whole, whatever the count.
+        for lang in ["en", "de", "tr", "ja"] {
+            let i18n = manager.for_lang(lang);
+            let one = i18n.plural("years_old", 31u64);
+            assert_eq!(one, i18n.t("years_old"), "{lang}");
+            assert!(!one.contains('|'), "{lang}");
         }
     }
 

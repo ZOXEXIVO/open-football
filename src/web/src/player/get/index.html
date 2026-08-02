@@ -19,7 +19,7 @@
                             <a href="/{{ lang }}/countries/{{ player.country_slug }}" class="fm-ph-flag">
                                 <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
                             </a>
-                            <span class="fm-ph-age">{{ player.age }} {{ i18n.t("years_old") }}</span>
+                            <span class="fm-ph-age">{{ player.age }} {{ i18n.plural("years_old", player.age as u64) }}</span>
                         </div>
                         <div class="fm-ph-meta">
                             <span class="fm-detail-value">{{ i18n.country(&player.country_code) }}</span>
