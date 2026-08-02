@@ -313,6 +313,10 @@ impl PipelineProcessor {
             in_debt: club.finance.balance.balance < 0,
             days_on_market: player.days_available(date).min(i16::MAX as i64) as i16,
             market_resignation: player.market_resignation(date),
+            club_matches_played: crate::club::team::squad::SquadEvidenceContext::current_season_sample(
+                date, club,
+            )
+            .club_matches_proxy(),
         };
         PlayerSummary {
             player_id: player.id,

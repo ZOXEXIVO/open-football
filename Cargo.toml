@@ -1,6 +1,6 @@
 [workspace]
 members = ["src/core", "src/database", "src/web"]
-exclude = [".dev/match", ".dev/simulate"]
+exclude = [".dev/match", ".dev/simulate", ".dev/transfers"]
 
 [workspace.package]
 version = "1.4.430"

@@ -125,6 +125,13 @@ mod processor {
         /// Snapshotted at pool-build time so foreign buyers read the same
         /// curve a domestic live lookup would.
         pub market_resignation: f32,
+        /// Official matches the selling club's busiest player has featured
+        /// in this season — the club's match count as
+        /// [`crate::club::team::squad::SquadEvidenceContext`] measures it.
+        /// Lets the importance model tell "hasn't played yet because it is
+        /// August" apart from "a full season has gone by and the coach
+        /// still doesn't pick him".
+        pub club_matches_played: u16,
     }
 
     #[allow(dead_code)]
@@ -359,7 +366,8 @@ pub struct TransferRequest {
     pub budget_allocation: f64,
     pub status: TransferRequestStatus,
     /// Coach-specified named target — skip scouting and go straight at
-    /// this player. Set by `generate_named_target_requests`. The board
+    /// this player. Stamped by the board-approval pass once a shortlist
+    /// candidate is the one being pursued, so the UI can name him. The board
     /// may still veto before scouting runs.
     pub named_target: Option<u32>,
     /// Tracks whether the board has rubber-stamped a named target. `None`

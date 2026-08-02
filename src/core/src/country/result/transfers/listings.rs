@@ -4,7 +4,7 @@ use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::contract::{AffordabilityInput, ContractStalemate};
 use crate::club::player::transfer::processing::UNHAPPY_LISTING_MIN_DAYS;
 use crate::club::staff::perception::PotentialEstimator;
-use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection};
+use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection, SquadEvidenceContext};
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
@@ -262,7 +262,18 @@ impl CountryResult {
         // drops below a minimum. Player-initiated (REQ/UNH) listings are
         // honoured even when this leaves the group short — the player
         // wants out and the club must replace him.
-        let listings_to_add = Self::enforce_position_group_minimums(country, listings_to_add);
+        let (listings_to_add, capped_out) =
+            Self::enforce_position_group_minimums(country, listings_to_add);
+
+        // A club-decided listing the depth cap refused is not a listing
+        // that happens later — it is a decision the club could not act on.
+        // Leaving `is_transfer_listed` set would strand the player: the
+        // flag blocks contract renewal and coach-agreed termination while
+        // no market row exists for anyone to buy him from, so he runs his
+        // deal down with no offers and no exit. Releasing the intent puts
+        // him back in the squad properly; the surplus sweeps re-raise it
+        // the moment the group has the depth to sell him.
+        Self::release_capped_listing_intent(country, &capped_out);
 
         if !listings_to_add.is_empty() {
             debug!(
@@ -650,10 +661,47 @@ impl CountryResult {
     /// contract-expiring paths can independently flag every goalkeeper
     /// in a club whose squad-wide CA average sits above the keepers', and
     /// the result is a team with zero recognised goalkeepers.
+    /// Clear the sell intent for players whose listing the depth cap
+    /// rejected. Returns them to normal squad handling: renewal offers,
+    /// coach evaluation and the `Lst` badge reconciliation all key off
+    /// `is_transfer_listed`, and all three are dead while it is stuck on
+    /// with no listing behind it.
+    fn release_capped_listing_intent(country: &mut Country, capped_out: &[PendingListing]) {
+        if capped_out.is_empty() {
+            return;
+        }
+        for dropped in capped_out {
+            let Some(club) = country.clubs.iter_mut().find(|c| c.id == dropped.club_id) else {
+                continue;
+            };
+            for team in club.teams.teams.iter_mut() {
+                let Some(player) = team
+                    .players
+                    .players
+                    .iter_mut()
+                    .find(|p| p.id == dropped.player_id)
+                else {
+                    continue;
+                };
+                if let Some(contract) = player.contract.as_mut() {
+                    contract.is_transfer_listed = false;
+                }
+                // The badge is the visible half of the same intent; a
+                // player the club cannot sell is not "transfer listed".
+                player.statuses.remove(PlayerStatusType::Lst);
+                break;
+            }
+        }
+    }
+
+    /// Returns `(kept, capped_out)` — the listings that survive the depth
+    /// cap, and the club-decided ones it refused. Callers must resolve the
+    /// refused intents rather than dropping them, or the player is left
+    /// flagged-for-sale with no market row.
     fn enforce_position_group_minimums(
         country: &Country,
         listings: Vec<PendingListing>,
-    ) -> Vec<PendingListing> {
+    ) -> (Vec<PendingListing>, Vec<PendingListing>) {
         use std::collections::HashMap;
 
         const EXEMPT_REASONS: &[&str] = &[
@@ -711,6 +759,7 @@ impl CountryResult {
 
         let mut result = exempt;
         result.append(&mut off_main);
+        let mut capped_out: Vec<PendingListing> = Vec::new();
 
         for ((club_id, group), mut group_listings) in groups {
             let current_count = find_main(club_id)
@@ -762,10 +811,13 @@ impl CountryResult {
             // Worst-CA players get listed first
             group_listings.sort_by_key(|l| player_ca(l.club_id, l.player_id));
 
-            result.extend(group_listings.into_iter().take(max_can_list));
+            let mut kept = group_listings;
+            let refused = kept.split_off(max_can_list.min(kept.len()));
+            result.extend(kept);
+            capped_out.extend(refused);
         }
 
-        result
+        (result, capped_out)
     }
 
     pub(crate) fn analyze_squad_needs(club: &Club, current_date: NaiveDate) -> SquadAnalysis {
@@ -1215,6 +1267,41 @@ impl CountryResult {
     /// bypass this — the club can still sell, the player can still ask
     /// out, but routine below-average/surplus/aging sweeps don't touch
     /// this tier.
+    /// Official appearances at or below which a fit player has been frozen
+    /// out rather than merely rotated.
+    const FROZEN_OUT_APPEARANCE_BAR: u16 = 3;
+
+    /// Whether a protection resting on STANDING rather than numbers — long
+    /// service, dressing-room authority, a veteran keeper's mentoring role
+    /// — is still earned.
+    ///
+    /// Each of those is a real reason clubs keep players a spreadsheet
+    /// would move on, but every one of them assumes the player is still
+    /// part of the team. Applied unconditionally they were permanent: a
+    /// six-year servant or a 30-year-old keeper stayed protected through
+    /// season after season of not playing, which blocked the routine
+    /// sweeps while the renewal and release paths were closed to him too.
+    /// Once a season has produced a readable sample and a fit player still
+    /// has essentially no minutes, the club is paying for someone it does
+    /// not use, and the sweeps should be free to move him on. Injury and
+    /// suspension are excused — being unavailable is not being unwanted.
+    fn standing_protection_still_earned(player: &Player, club: &Club, date: NaiveDate) -> bool {
+        if SquadEvidenceContext::current_season_sample(date, club).is_early_season() {
+            return true;
+        }
+        if player.player_attributes.is_injured
+            || player.player_attributes.is_banned
+            || player.player_attributes.is_in_recovery()
+        {
+            return true;
+        }
+        let appearances = player.statistics.played
+            + player.statistics.played_subs
+            + player.cup_statistics.played
+            + player.cup_statistics.played_subs;
+        appearances > Self::FROZEN_OUT_APPEARANCE_BAR
+    }
+
     fn is_squad_protected(player: &Player, club: &Club, date: NaiveDate) -> bool {
         // Central squad-asset policy: a core / first-team-useful player —
         // formally designated OR inferred from CA rank, squad-relative
@@ -1268,7 +1355,9 @@ impl CountryResult {
         // Dressing-room leader — strong leadership attribute + seasoned.
         // Skills are on the 1-20 scale; >=15 is genuine locker-room
         // authority, not just any veteran.
-        if age >= 26 && player.skills.mental.leadership >= 15.0 {
+        let standing_earned = Self::standing_protection_still_earned(player, club, date);
+
+        if age >= 26 && player.skills.mental.leadership >= 15.0 && standing_earned {
             return true;
         }
 
@@ -1300,7 +1389,7 @@ impl CountryResult {
         // data or low ratings from few appearances); the tenure+form
         // branch above punishes them unfairly. Six-year loyalty earned
         // patience from the dressing room and, typically, the boardroom.
-        if tenure_years >= 6 {
+        if tenure_years >= 6 && standing_earned {
             return true;
         }
 
@@ -1312,8 +1401,15 @@ impl CountryResult {
         // as Juventus backup without being listed. Equivalent carve-outs
         // for outfield positions aren't warranted — those roles turn
         // over much faster.
+        //
+        // Bounded by the same standing test as the branches above, and by
+        // the asset classifier's own veteran-keeper rescue, which already
+        // checks that he fits inside the club's normal keeper complement
+        // and has made peace with deputising. Unconditional, this shield
+        // protected the fourth keeper of a glut as firmly as Juventus's
+        // long-serving number two.
         let group = player.position().position_group();
-        if group == PlayerFieldPositionGroup::Goalkeeper && age >= 30 {
+        if group == PlayerFieldPositionGroup::Goalkeeper && age >= 30 && standing_earned {
             return true;
         }
 
@@ -2440,6 +2536,55 @@ mod tests {
                 .contains(&PlayerPositionType::Goalkeeper),
             "three keepers is normal depth, not surplus — saw {:?}",
             analysis.surplus_positions
+        );
+    }
+
+    /// Regression guard for the flagged-but-unlisted limbo.
+    ///
+    /// `is_transfer_listed` blocks contract renewal and coach-agreed
+    /// termination. If the depth cap then refuses to create the market row,
+    /// the player keeps the flag with nothing behind it: the club has
+    /// quietly decided to sell someone it cannot sell, cannot renew and
+    /// cannot release, so he runs his deal down with no offers and no exit.
+    /// The invariant is that the two always agree — after the listing pass,
+    /// nobody still carries the sell intent without a market row.
+    #[test]
+    fn a_capped_listing_releases_the_sell_intent() {
+        let today = Fixture::date(2026, 6, 12);
+        // A two-keeper group sits at the minimum the depth cap protects, so
+        // the club's decision to sell one of them cannot be honoured.
+        let mut keeper = TopFlightSquad::player(201, 100, 29, PlayerPositionType::Goalkeeper);
+        keeper.contract.as_mut().unwrap().is_transfer_listed = true;
+        let deputy = TopFlightSquad::player(202, 120, 27, PlayerPositionType::Goalkeeper);
+
+        let club = Fixture::club(vec![Fixture::team(
+            10,
+            "main",
+            TeamType::Main,
+            vec![keeper, deputy],
+        )]);
+        let mut country = Fixture::country(club);
+        let mut summary = TransferActivitySummary::new();
+        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+
+        let rows = country
+            .transfer_market
+            .listings
+            .iter()
+            .filter(|l| l.player_id == 201)
+            .count();
+        let still_flagged = country.clubs[0].teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 201)
+            .and_then(|p| p.contract.as_ref())
+            .map(|c| c.is_transfer_listed)
+            .unwrap_or(false);
+
+        assert!(
+            !(still_flagged && rows == 0),
+            "sell intent must never outlive its market row: flagged={still_flagged} rows={rows}"
         );
     }
 }

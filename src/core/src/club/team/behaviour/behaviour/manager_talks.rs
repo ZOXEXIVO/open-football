@@ -729,6 +729,7 @@ impl TeamBehaviour {
                 market_value,
                 annual_wage_bill,
                 asset_class: asset_ctx.classify(player, date),
+                early_season: asset_ctx.is_early_season(),
             };
             if let Some(termination) = CoachTerminationReview::evaluate(player, date, &release_ctx)
             {
@@ -1475,6 +1476,9 @@ mod coach_termination_tests {
                 market_value,
                 annual_wage_bill: 1_200_000,
                 asset_class,
+                // Existing fixtures predate the ageing-unused exception;
+                // an unreadable sample keeps them on the original gate.
+                early_season: true,
             }
         }
 

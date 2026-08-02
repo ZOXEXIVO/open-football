@@ -12,7 +12,7 @@ use crate::club::player::calculators::{
 use crate::club::player::events::transfer_social::{
     TransferContinentalPath, TransferInterestSignal,
 };
-use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection};
+use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection, SquadEvidenceContext};
 use crate::country::result::CountryResult;
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferListingStatus;
@@ -2239,6 +2239,12 @@ impl SellerFeeFloor {
     /// The low residual floor a valued player keeps even under a strong,
     /// typed distressed reason: a fire-sale is allowed, an insult is not.
     const DISTRESSED_RESIDUAL: f64 = 0.30;
+    /// Contract months at or below which the seller has effectively lost
+    /// his leverage: whatever he does not get now he gets nothing for.
+    const STRONG_DISTRESS_MONTHS: i64 = 6;
+    /// Contract months at or below which a club starts pricing to sell —
+    /// the last full window in which a fee is still realistic.
+    const MODEST_DISTRESS_MONTHS: i64 = 12;
     /// Durable-unhappiness thresholds — mirror the listing pass's
     /// `unhappiness_is_durable` so the two systems agree on what "settled,
     /// structural unhappiness" means (vs. a passing playing-time dip).
@@ -2272,8 +2278,14 @@ impl SellerFeeFloor {
         // more willing to deal. Without this a rated, long-listed player's
         // floor stayed permanently above any (decayed) bid and he could only
         // ever leave via the 365-day free exit.
-        let fraction =
-            Self::erode_for_listing_age(base_fraction, country, neg_data.player_id, date);
+        let fraction = Self::erode_for_seller_position(
+            base_fraction,
+            country,
+            player,
+            seller,
+            neg_data.player_id,
+            date,
+        );
 
         let (league_rep, club_rep) = PlayerValuationCalculator::seller_context(country, seller);
         let market_value = PlayerValueCalculator::calculate(
@@ -2311,15 +2323,49 @@ impl SellerFeeFloor {
     /// (unsolicited-approach), loan-out and end-of-contract origins, and
     /// unlisted players, hold firm, so a throwaway listing behind an
     /// unsolicited bid can't game the floor down.
-    fn erode_for_listing_age(
+    /// Share of the club's matches at or above which a player is being
+    /// used enough that the club has no reason to discount him. Below it
+    /// the willingness to deal rises continuously to full by zero minutes.
+    const INVOLVEMENT_EROSION_CEILING: f64 = 0.5;
+
+    /// How far the floor has eased, from the strongest of the seller's two
+    /// reasons to deal: a listing the market has ignored, or a player the
+    /// club has stopped picking.
+    ///
+    /// Listing age alone left the most common stuck profile untouched. A
+    /// well-rated squad player who is never listed — because the surplus
+    /// sweeps protect his class — kept his full importance premium
+    /// permanently, so no realistic bid could ever clear his floor and the
+    /// only exit he had was running his contract down. But a club that has
+    /// a player it does not play is exactly a club that will take less for
+    /// him, listed or not; that is how squad players actually move. Both
+    /// terms ease toward the same residual, so a valued asset is still
+    /// never handed over for pennies.
+    fn erode_for_seller_position(
         fraction: f64,
         country: &Country,
+        player: &Player,
+        seller: &Club,
         player_id: u32,
         date: NaiveDate,
     ) -> f64 {
         if fraction <= Self::DISTRESSED_RESIDUAL {
             return fraction;
         }
+        let listing_t = Self::listing_age_erosion(country, player_id, date);
+        let involvement_t = Self::involvement_erosion(player, seller, date);
+        let t = listing_t.max(involvement_t).clamp(0.0, 1.0);
+        if t <= 0.0 {
+            return fraction;
+        }
+        fraction - (fraction - Self::DISTRESSED_RESIDUAL) * t
+    }
+
+    /// Only a genuine `SellerListed` listing ages the floor down — synthetic
+    /// (unsolicited-approach), loan-out and end-of-contract origins hold
+    /// firm, so a throwaway listing behind an unsolicited bid can't game the
+    /// floor.
+    fn listing_age_erosion(country: &Country, player_id: u32, date: NaiveDate) -> f64 {
         let days_listed = country
             .transfer_market
             .get_listing_by_player(player_id)
@@ -2327,10 +2373,38 @@ impl SellerFeeFloor {
             .map(|l| (date - l.listed_date).num_days().max(0))
             .unwrap_or(0);
         if days_listed <= 0 {
-            return fraction;
+            return 0.0;
         }
-        let t = (days_listed as f64 / Self::FLOOR_EROSION_DAYS).clamp(0.0, 1.0);
-        fraction - (fraction - Self::DISTRESSED_RESIDUAL) * t
+        (days_listed as f64 / Self::FLOOR_EROSION_DAYS).clamp(0.0, 1.0)
+    }
+
+    /// Continuous in the share of the club's matches the player has
+    /// featured in: none of them eases the floor fully, half of them not at
+    /// all. Silent until the season has produced a readable sample, and
+    /// silent for players who were unavailable rather than unwanted — a
+    /// long-term injury is not a reason to discount someone.
+    fn involvement_erosion(player: &Player, seller: &Club, date: NaiveDate) -> f64 {
+        let evidence = SquadEvidenceContext::current_season_sample(date, seller);
+        if evidence.is_early_season() {
+            return 0.0;
+        }
+        if player.player_attributes.is_injured
+            || player.player_attributes.is_banned
+            || player.player_attributes.is_in_recovery()
+        {
+            return 0.0;
+        }
+        let club_matches = evidence.club_matches_proxy() as f64;
+        if club_matches <= 0.0 {
+            return 0.0;
+        }
+        let appearances = (player.statistics.played
+            + player.statistics.played_subs
+            + player.cup_statistics.played
+            + player.cup_statistics.played_subs) as f64;
+        let involvement = (appearances / club_matches).clamp(0.0, 1.0);
+        ((Self::INVOLVEMENT_EROSION_CEILING - involvement) / Self::INVOLVEMENT_EROSION_CEILING)
+            .clamp(0.0, 1.0)
     }
 
     /// Floor fraction for a (class, distress) pair. `None` = no floor at all
@@ -2382,8 +2456,19 @@ impl SellerFeeFloor {
                 return SellerDistress::Strong;
             }
             let months_remaining = (contract.expiration - date).num_days() / 30;
-            if months_remaining <= 6 {
+            if months_remaining <= Self::STRONG_DISTRESS_MONTHS {
                 return SellerDistress::Strong;
+            }
+            // The year before that is where selling clubs actually start
+            // moving: past the final summer window a club either renews or
+            // watches him leave for nothing, and it prices him accordingly.
+            // Jumping straight from full price at seven months to a waived
+            // premium at six left no window in which an expiring contract
+            // was cheap enough to move but still worth a fee — so those
+            // players ran their deals down instead of being sold, which is
+            // the single most avoidable way a squad loses value.
+            if months_remaining <= Self::MODEST_DISTRESS_MONTHS {
+                return SellerDistress::Modest;
             }
         }
         if seller.finance.balance.balance < 0 {

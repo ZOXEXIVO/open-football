@@ -753,7 +753,8 @@ impl ClubResult {
             // for both the keep guard and the release gate below. Inferring
             // the role here is what protects a still-`NotYetSet` but useful
             // senior from being walked for free over a salary dispute.
-            let asset_class = SquadAssetContext::build(club, date).classify(player, date);
+            let asset_ctx = SquadAssetContext::build(club, date);
+            let asset_class = asset_ctx.classify(player, date);
             let formal_key = player
                 .contract
                 .as_ref()
@@ -797,6 +798,7 @@ impl ClubResult {
                 market_value,
                 annual_wage_bill,
                 asset_class,
+                early_season: asset_ctx.is_early_season(),
             };
             let decision = match AutomaticReleaseEligibility::assess(player, &release_ctx) {
                 None => UnresolvedSalaryDecision::FreeTransfer,

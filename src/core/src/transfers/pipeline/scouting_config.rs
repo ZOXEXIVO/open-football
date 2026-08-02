@@ -943,6 +943,7 @@ mod tests {
                     in_debt: false,
                     days_on_market: self.days_on_market,
                     market_resignation: 0.0,
+                    club_matches_played: 0,
                 },
             }
         }

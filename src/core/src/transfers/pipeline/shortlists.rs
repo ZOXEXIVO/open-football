@@ -15,8 +15,9 @@ use crate::transfers::pipeline::plausibility::{
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, ReportRiskFlag, ScoutingAssignment, ScoutingRecommendation,
-    ShortlistCandidate, ShortlistCandidateStatus, TransferRequestStatus, TransferShortlist,
+    DetailedScoutingReport, PlayerSummary, ReportRiskFlag, ScoutingAssignment,
+    ScoutingRecommendation, ShortlistCandidate, ShortlistCandidateStatus, TransferRequest,
+    TransferRequestStatus, TransferShortlist,
 };
 use crate::{
     Club, Country, Person, PlayerFieldPositionGroup, StaffPosition, TeamType,
@@ -79,6 +80,34 @@ fn depth_weight(depth: &PositionDepth, candidate_ability: u8) -> f32 {
 }
 
 impl PipelineProcessor {
+    /// Value at or below which a club with no transfer budget can still
+    /// take a player on: a token payment a board signs off out of running
+    /// cash, not a transfer fee it has to find.
+    const FEE_FREE_VALUE_CEILING: f64 = 50_000.0;
+    /// Contract months at or below which the seller is in the last window
+    /// where a fee is realistic at all — a deal at nominal money rather
+    /// than losing him for nothing months later.
+    const NEAR_EXPIRY_MONTHS: i16 = 6;
+
+    /// Whether this candidate is within reach of the request's money.
+    ///
+    /// Normally that is the allocation the plan set aside. For a club with
+    /// no allocation at all it becomes the fee-free market — nominal-value
+    /// players and contracts about to expire — which is how clubs with no
+    /// transfer budget recruit in reality.
+    fn affordable_for_request(
+        request: &TransferRequest,
+        candidate: &PlayerSummary,
+        fee_free_only: bool,
+    ) -> bool {
+        if !fee_free_only {
+            return candidate.estimated_value <= request.budget_allocation * 2.0;
+        }
+        candidate.estimated_value <= Self::FEE_FREE_VALUE_CEILING
+            || (candidate.contract_months_remaining > 0
+                && candidate.contract_months_remaining <= Self::NEAR_EXPIRY_MONTHS)
+    }
+
     // ============================================================
     // Step 5: Shortlist Building
     // ============================================================
@@ -332,15 +361,21 @@ impl PipelineProcessor {
                 {
                     continue;
                 }
-                // Emergency depth requests are serviced exclusively by
-                // the free-agent matcher — a market shortlist would
-                // point the paid negotiation path at a zero-budget
-                // request. The same contract covers every zero-allocation
-                // request (empty-squad, SquadPadding, dry-pot Critical
-                // gaps).
-                if request.is_emergency_free_agent_depth() || request.budget_allocation <= 0.0 {
+                // Emergency depth requests are serviced exclusively by the
+                // free-agent matcher.
+                if request.is_emergency_free_agent_depth() {
                     continue;
                 }
+                // A request with no allocation belongs to a club that
+                // cannot pay a FEE — not one that has stopped recruiting.
+                // Such a club still shops, it just shops where fees aren't
+                // charged: players listed for a token sum and contracts
+                // about to run out. Skipping the pass outright meant a
+                // loss-making club could not open a negotiation for anyone
+                // at any price, including a player available for nothing,
+                // which is the opposite of how clubs in that position
+                // actually behave.
+                let fee_free_only = request.budget_allocation <= 0.0;
                 if existing_shortlist_request_ids.contains(&request.id) {
                     continue;
                 }
@@ -398,7 +433,7 @@ impl PipelineProcessor {
                                     && p.skill_ability >= request.min_ability
                                     && p.age >= request.preferred_age_min
                                     && p.age <= request.preferred_age_max.saturating_add(3)
-                                    && p.estimated_value <= request.budget_allocation * 2.0
+                                    && Self::affordable_for_request(&request, &p, fee_free_only)
                                 {
                                     // Plausibility veto: drop HardReject
                                     // entries, soft-dampen the rest.
@@ -571,8 +606,13 @@ impl PipelineProcessor {
                 .map(|t| t.wage_budget.max(0) as f64);
 
             for shortlist in &plan.shortlists {
-                // Skip anything already approved / vetoed / drained.
-                let Some(top) = shortlist.candidates.first() else {
+                // The candidate currently being pursued — not permanently
+                // the first name on the list. A veto advances the pursuit
+                // index so the club moves down its own shortlist; reading
+                // `first()` regardless would put the same rejected player
+                // back in front of the board every week until the list ran
+                // out, which is neither a decision nor a recruitment.
+                let Some(top) = shortlist.candidates.get(shortlist.current_pursuit_index) else {
                     continue;
                 };
                 let req = match plan
@@ -721,10 +761,40 @@ impl PipelineProcessor {
                     .iter_mut()
                     .find(|r| r.id == d.request_id)
                 {
-                    req.board_approved = Some(d.approved);
                     req.named_target = d.named_target;
-                    if !d.approved {
-                        req.status = TransferRequestStatus::Abandoned;
+                    if d.approved {
+                        req.board_approved = Some(true);
+                    } else {
+                        // The board vetoed THIS target — usually on price
+                        // or on the wage it would add — not the squad need
+                        // behind it. Abandoning the whole request treated
+                        // one refusal as a verdict on the position, so a
+                        // club knocked back over an expensive first choice
+                        // stopped looking at that position for the rest of
+                        // the window and never asked about the cheaper
+                        // names its own scouts had already filed. Real
+                        // recruitment moves down the list. The request goes
+                        // back to Pending with the vetoed candidate
+                        // dropped; only an exhausted shortlist ends it.
+                        let exhausted = club
+                            .transfer_plan
+                            .shortlists
+                            .iter_mut()
+                            .find(|s| s.transfer_request_id == d.request_id)
+                            .map(|shortlist| {
+                                shortlist.advance_to_next();
+                                shortlist.all_exhausted()
+                            })
+                            .unwrap_or(true);
+                        if exhausted {
+                            req.board_approved = Some(false);
+                            req.status = TransferRequestStatus::Abandoned;
+                        } else {
+                            // Cleared so the next candidate gets its own
+                            // hearing rather than inheriting this verdict.
+                            req.board_approved = None;
+                            req.status = TransferRequestStatus::Pending;
+                        }
                     }
                 }
 

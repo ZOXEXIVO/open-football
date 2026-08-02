@@ -700,6 +700,7 @@ mod breakout_watch_tests {
                     in_debt: false,
                     days_on_market: 0,
                     market_resignation: 0.0,
+                    club_matches_played: 0,
                 },
                 language_profile: LanguageProfile::default(),
             }

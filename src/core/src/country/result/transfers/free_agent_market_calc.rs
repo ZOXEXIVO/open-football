@@ -208,9 +208,27 @@ impl FreeAgentMarketCalculator {
     /// this much more prestigious than the buyer's region before the
     /// move is blocked. At pressure 0 only neighbours pass; at 1.0
     /// almost every region is reachable.
-    pub fn region_drop_allowed(career_pressure: f32) -> f32 {
+    pub fn region_drop_allowed(career_pressure: f32, reference_reputation: u16) -> f32 {
         let cp = career_pressure.clamp(0.0, 1.0);
-        0.10 + 0.55 * cp
+        // Standing widens the same tolerance, because a well-regarded
+        // player's options are not confined to his own neighbourhood: the
+        // leagues that recruit across regions are chasing the best names
+        // available, not the most desperate ones. Keyed to pressure alone
+        // this ran backwards — `career_pressure` carries a quality term
+        // that SUBTRACTS for good players — so the better the free agent,
+        // the narrower his reachable map became, and strong players sat
+        // unsigned in their home region while journeymen circulated freely.
+        0.10 + 0.55 * cp + 0.25 * Self::standing_reach(reference_reputation)
+    }
+
+    /// How far this player's name carries, 0..1, from his market standing
+    /// rather than his ability. Reach is a matter of who has heard of him:
+    /// reputation is what clubs and leagues abroad actually observe, and
+    /// the hidden ability digit is not something any club may read.
+    fn standing_reach(reference_reputation: u16) -> f32 {
+        const ORDINARY: f32 = 3000.0;
+        const RENOWNED: f32 = 7500.0;
+        ((reference_reputation as f32 - ORDINARY) / (RENOWNED - ORDINARY)).clamp(0.0, 1.0)
     }
 
     /// Hard cross-continent gate. A free agent stepping down across
@@ -230,6 +248,7 @@ impl FreeAgentMarketCalculator {
         buyer_region_prestige: f32,
         career_pressure: f32,
         min_pressure_to_cross: f32,
+        reference_reputation: u16,
     ) -> bool {
         if same_continent {
             return false;
@@ -238,7 +257,14 @@ impl FreeAgentMarketCalculator {
         if drop <= 0.10 {
             return false;
         }
-        career_pressure < min_pressure_to_cross
+        // Standing lowers the bar rather than raising it. The gate exists
+        // to stop an unremarkable player washing up on another continent
+        // for no reason; a well-regarded free agent is the opposite case —
+        // he is who those leagues go and sign, and they sign him while he
+        // still has options rather than only after a year unemployed.
+        let floor = (min_pressure_to_cross - 0.45 * Self::standing_reach(reference_reputation))
+            .clamp(0.15, 1.0);
+        career_pressure < floor
     }
 
     /// Minimum CA the buyer will sign at this tier, slackened by the
@@ -736,8 +762,8 @@ mod tests {
 
     #[test]
     fn region_drop_increases_with_pressure() {
-        let low = FreeAgentMarketCalculator::region_drop_allowed(0.0);
-        let high = FreeAgentMarketCalculator::region_drop_allowed(1.0);
+        let low = FreeAgentMarketCalculator::region_drop_allowed(0.0, 3000);
+        let high = FreeAgentMarketCalculator::region_drop_allowed(1.0, 3000);
         assert!(high > low + 0.40);
     }
 
@@ -746,7 +772,7 @@ mod tests {
         // EasternEurope prestige 0.50 → NorthAfrica prestige 0.25,
         // cross-continent, mid pressure. Must block.
         assert!(FreeAgentMarketCalculator::cross_continent_blocked(
-            false, 0.50, 0.25, 0.4, 0.85,
+            false, 0.50, 0.25, 0.4, 0.85, 3000,
         ));
     }
 
@@ -755,7 +781,7 @@ mod tests {
         // Same step-down but the player is on the verge of retiring
         // — gate unlocks.
         assert!(!FreeAgentMarketCalculator::cross_continent_blocked(
-            false, 0.50, 0.25, 0.90, 0.85,
+            false, 0.50, 0.25, 0.90, 0.85, 3000,
         ));
     }
 
@@ -764,7 +790,7 @@ mod tests {
         // EasternEurope 0.50 → MiddleEastEurope 0.40 is only a 0.10
         // step. Cross-continent but small drop — always allowed.
         assert!(!FreeAgentMarketCalculator::cross_continent_blocked(
-            false, 0.50, 0.40, 0.0, 0.85,
+            false, 0.50, 0.40, 0.0, 0.85, 3000,
         ));
     }
 
@@ -773,7 +799,7 @@ mod tests {
         // Big prestige drop but same continent (e.g. WesternEurope
         // 1.00 → EasternEurope 0.50) — gate stays silent.
         assert!(!FreeAgentMarketCalculator::cross_continent_blocked(
-            true, 1.00, 0.50, 0.0, 0.85,
+            true, 1.00, 0.50, 0.0, 0.85, 3000,
         ));
     }
 

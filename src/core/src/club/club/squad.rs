@@ -6,6 +6,7 @@ use crate::club::player::calculators::{
 };
 use crate::club::staff::perception::{AbilityEstimator, CoachProfile, DevelopmentFormEvidence};
 use crate::club::team::squad::SquadAssetContext;
+use crate::transfers::pipeline::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
 use crate::{
     ContractType, Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerStatusType,
     TeamType,
@@ -245,6 +246,12 @@ impl Club {
             }
         }
 
+        // Main-team players the depth cap has squeezed out who should be
+        // offered for loan. Collected here and pushed onto the transfer
+        // plan after the roster walk, so the `&mut teams` borrow above
+        // doesn't collide with `&mut transfer_plan`.
+        let mut loan_out_intents: Vec<u32> = Vec::new();
+
         for &(player_id, age) in &surplus {
             // Where can we send them? Single-team clubs (Maltese top
             // flight, San Marino, etc.) often return None here because
@@ -284,7 +291,14 @@ impl Club {
                         );
                     }
                 } else if !p.statuses.has(PlayerStatusType::Loa) {
-                    p.statuses.add(date, PlayerStatusType::Loa);
+                    // Same convention as the transfer branch above: record
+                    // the club's INTENT and let the country listing pass
+                    // own the market row and the badge. Stamping `Loa`
+                    // here instead used to trip that pass's already-listed
+                    // guard, so the badge showed on the player while no
+                    // loan listing ever existed — a surplus main-team
+                    // player advertised to nobody.
+                    loan_out_intents.push(player_id);
                 }
             }
             if let Some(dest) = demotion_target {
@@ -295,6 +309,30 @@ impl Club {
                     reason: "surplus at position",
                 });
             }
+        }
+
+        // Register the loan intents the surplus walk raised. `Identified`
+        // (not `Listed`) because the country pass is what actually puts
+        // him on the market — it re-checks depth minimums and owns the
+        // asking price. A zero fee reflects what these are: squad-clearing
+        // loans, not assets the club expects a premium for.
+        for player_id in loan_out_intents {
+            if self
+                .transfer_plan
+                .loan_out_candidates
+                .iter()
+                .any(|c| c.player_id == player_id)
+            {
+                continue;
+            }
+            self.transfer_plan
+                .loan_out_candidates
+                .push(LoanOutCandidate {
+                    player_id,
+                    reason: LoanOutReason::Surplus,
+                    status: LoanOutStatus::Identified,
+                    loan_fee: 0.0,
+                });
         }
 
         // ── Phase 2: execute moves, respecting squad-size guards ─────
@@ -728,6 +766,7 @@ impl Club {
                         market_value,
                         annual_wage_bill,
                         asset_class: asset_ctx.classify(player, date),
+                        early_season: asset_ctx.is_early_season(),
                     };
                     match AutomaticReleaseEligibility::assess(player, &release_ctx) {
                         None => {

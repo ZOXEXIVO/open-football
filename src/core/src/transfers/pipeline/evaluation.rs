@@ -14,9 +14,9 @@ use crate::transfers::pipeline::{
 };
 use crate::transfers::squad_needs::{EmergencyGroupSlot, FirstTeamSquadNeeds};
 use crate::{
-    Club, ClubPhilosophy, Country, MatchTacticType, Person, Player, PlayerFieldPositionGroup,
-    PlayerPlanRole, PlayerPositionType, PlayerStatusType, ReputationLevel, TACTICS_POSITIONS,
-    TacticsSelector,
+    Club, ClubPhilosophy, Country, LoanSpellVerdict, MatchTacticType, Person, Player,
+    PlayerFieldPositionGroup, PlayerPlanRole, PlayerPositionType, PlayerStatusType,
+    ReputationLevel, TACTICS_POSITIONS, TacticsSelector,
 };
 
 struct SquadEvaluation {
@@ -398,10 +398,23 @@ impl ProspectPathway {
             return PathwayAction::Sell;
         }
 
-        // A third loan spell isn't realistic. If he didn't qualify for a
-        // sale above, hold — no more loaning this one.
+        // A third loan spell isn't realistic. What happens instead depends
+        // on whether the first two worked.
+        //
+        // Two spells that delivered minutes mean the pathway is doing its
+        // job: he comes back and competes, and holding him is right. But a
+        // player whose loans FAILED used to get the same Hold — he dropped
+        // out of the only pathway he had and simply stayed, with nothing
+        // else ever picking him up, because every other disposal route
+        // reads him as a prospect. That is the same player the asset
+        // classifier already calls surplus once his loan pathway is
+        // exhausted; this is the decision that acts on it.
         if s.previous_loans >= 2 {
-            return PathwayAction::Hold;
+            return if s.failed_loans >= 1 {
+                PathwayAction::Sell
+            } else {
+                PathwayAction::Hold
+            };
         }
 
         // ── LOAN path — blocked, unused, worth developing, has runway ─
@@ -418,7 +431,17 @@ impl ProspectPathway {
         // narrowly behind ONE teammate (rank 1) still has a credible
         // rotation path — and a #2 keeper is squad depth, not surplus — so
         // require at least two ahead of him before treating him as stuck.
-        let blocked = s.depth_rank >= Self::BLOCKED_MIN_RANK;
+        //
+        // Unless the seasons say otherwise. "A credible rotation path" is a
+        // prediction, and after two years of no football it is one the
+        // record has already refuted: a #2 keeper who has sat behind the
+        // same man for two seasons is not rotating into anything. Left as a
+        // rank test alone this was a permanent exemption — the one depth
+        // position that could never qualify for the pathway at any age, for
+        // any number of empty seasons.
+        let stalled_behind_one =
+            s.depth_rank >= 1 && s.consecutive_zero_seasons >= 2 && s.official_appearances == 0;
+        let blocked = s.depth_rank >= Self::BLOCKED_MIN_RANK || stalled_behind_one;
 
         if !(worth_developing && blocked && s.has_loanable_depth) {
             return PathwayAction::Hold;
@@ -483,6 +506,14 @@ impl PipelineProcessor {
         let should_evaluate = is_window_start || Self::should_evaluate_for(country, date);
         let window_mgr = TransferWindowManager::for_country(country, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
+        // The mid-season checkpoint — "he still has no minutes, do
+        // something about it" — has to follow the COUNTRY's short window.
+        // Keyed on the raw calendar month it fired in January everywhere,
+        // which for an MLS (Feb-Apr), Nordic (Feb-Apr), Latam (Jun-Jul) or
+        // Asian (Jan 5-Feb 22) calendar is a date when the market is shut
+        // and this sweep may not even run — so blocked prospects in those
+        // countries got no review at all.
+        let mid_season_window = Self::is_mid_season_window_for(country, date);
 
         // Pass 1: Collect evaluations (immutable reads)
         let mut evaluations: Vec<SquadEvaluation> = Vec::new();
@@ -496,7 +527,7 @@ impl PipelineProcessor {
                 continue;
             }
 
-            let eval = Self::evaluate_single_club(club, date, current_window);
+            let eval = Self::evaluate_single_club(club, date, current_window, mid_season_window);
             evaluations.push(eval);
         }
 
@@ -537,16 +568,29 @@ impl PipelineProcessor {
                     plan.next_request_id = max_id + 1;
                 }
 
-                // Only add requests that don't duplicate an existing unfulfilled request
-                // for the same position group. Without this, each weekly re-evaluation
-                // adds duplicate requests (e.g. "need GK") that all get acted on independently,
-                // causing clubs to loan 10+ players for the same position.
+                // Don't re-raise a need the plan is already working on.
+                // Without this, each weekly re-evaluation piled another
+                // "need GK" onto the list and every copy was acted on
+                // independently, so clubs loaned in ten players for one
+                // position.
+                //
+                // Matched on (group, reason) rather than group alone. A
+                // club genuinely can need two different things from the
+                // same group — cover for a hole in the XI is not the same
+                // brief as a long-term upgrade or a youngster for the
+                // future — and collapsing them meant one live request
+                // silenced every other need at that position for the whole
+                // window: a stalled centre-back pursuit stopped the club
+                // ever asking about a full-back. The reason is what the
+                // scouts and the loan market actually recruit against, so
+                // it is the right unit of duplication.
                 let new_requests: Vec<_> = eval
                     .requests
                     .into_iter()
                     .filter(|new_req| {
                         !plan.transfer_requests.iter().any(|existing| {
                             existing.position.position_group() == new_req.position.position_group()
+                                && existing.reason == new_req.reason
                                 && existing.status != TransferRequestStatus::Fulfilled
                                 && existing.status != TransferRequestStatus::Abandoned
                         })
@@ -598,6 +642,11 @@ impl PipelineProcessor {
         club: &Club,
         date: NaiveDate,
         current_window: Option<(NaiveDate, NaiveDate)>,
+        // True inside the country's shorter (mid-season) window — the
+        // point in the calendar where a club reviews who still isn't
+        // playing. Threaded from the caller because the club alone has no
+        // country context to resolve its own transfer calendar.
+        mid_season_window: bool,
     ) -> SquadEvaluation {
         let mut requests = Vec::new();
         let mut loan_outs = Vec::new();
@@ -962,23 +1011,30 @@ impl PipelineProcessor {
 
             let alloc = (budget_per_need * mult).min(available_budget - budget_used);
             if alloc <= 0.0 {
-                // A Critical formation hole still gets its request at
-                // zero allocation — the free-agent matcher services
-                // zero-budget needs (same contract as the empty-squad
-                // and SquadPadding branches). Lower-priority needs are
-                // simply dropped when the pot is dry.
-                if priority == TransferNeedPriority::Critical {
-                    requests.push(TransferRequest::new(
-                        next_id,
-                        need.representative_pos,
-                        priority,
-                        reason,
-                        min_ca,
-                        ideal_ca,
-                        0.0,
-                    ));
-                    next_id += 1;
-                }
+                // A dry pot means the club can't pay a FEE — it does not
+                // mean the club has stopped needing players, and it is not
+                // a reason to forget the need entirely. Every zero-budget
+                // need is still recorded, at zero allocation, so the paths
+                // that cost nothing can serve it: the free-agent matcher,
+                // the loan market (whose own affordability runs off cash
+                // balance, not the transfer budget), and Bosman
+                // pre-contracts. Dropping the lower-priority ones left a
+                // loss-making club with no recorded interest in anything
+                // beyond an outright formation hole — so nobody scouted
+                // for it, no loan scan matched it, and clubs that in real
+                // football live entirely on frees and loans signed nobody
+                // at all. The paid negotiation path is unaffected: it
+                // refuses zero-allocation requests downstream.
+                requests.push(TransferRequest::new(
+                    next_id,
+                    need.representative_pos,
+                    priority,
+                    reason,
+                    min_ca,
+                    ideal_ca,
+                    0.0,
+                ));
+                next_id += 1;
                 continue;
             }
 
@@ -1468,6 +1524,7 @@ impl PipelineProcessor {
             formation_positions,
             current_window,
             asset_ctx.is_early_season(),
+            mid_season_window,
         );
 
         // Position-glut sweep: catches surplus the loan-out branches
@@ -1502,6 +1559,7 @@ impl PipelineProcessor {
             current_window,
             &mut loan_outs,
             &mut force_transfer_list,
+            mid_season_window,
         );
 
         SquadEvaluation {
@@ -1728,8 +1786,8 @@ impl PipelineProcessor {
         current_window: Option<(NaiveDate, NaiveDate)>,
         loan_outs: &mut Vec<LoanOutCandidate>,
         force_list: &mut Vec<u32>,
+        is_january: bool,
     ) {
-        let is_january = Self::is_january_window(date);
 
         for info in squad {
             let Some(player) = players.iter().find(|p| p.id == info.player_id) else {
@@ -1896,9 +1954,44 @@ impl PipelineProcessor {
             .min(u8::MAX as usize) as u8
     }
 
-    /// Loan spells that returned with negligible official minutes — the
-    /// development the loan was supposed to provide never materialised.
+    /// Loan spells that didn't deliver the development they were meant to.
+    ///
+    /// Read through [`LoanSpellVerdict`] — the same judgement the newsroom
+    /// and the player's own mood use, so "the loan didn't work" means one
+    /// thing across the game. A bare appearance count could not tell a
+    /// season spent in the team apart from one spent on its bench: a
+    /// player who came on twenty times as a substitute and never started,
+    /// or who started and played badly, scored as a *successful* spell and
+    /// so kept his place on the development pathway indefinitely. The
+    /// verdict divides the spell length out and reads the football.
+    ///
+    /// Only judgeable spells count either way; a half-season cut short by
+    /// injury is neither a success nor a failure.
     fn failed_loan_count(player: &Player) -> u8 {
+        let ledger = &player.statistics_history.season_ledger;
+        if !ledger.is_empty() {
+            return ledger
+                .iter()
+                .filter(|e| e.is_loan && e.competition_kind.counts_toward_career_history())
+                .filter(|e| {
+                    let stats = &e.statistics;
+                    let apps = stats.total_games();
+                    let verdict = LoanSpellVerdict::classify(
+                        stats.played,
+                        apps,
+                        stats.average_rating_realistic(player.position().position_group()),
+                        // Unknown coverage means the row spans its season.
+                        e.coverage_days.unwrap_or(300) as i64,
+                    );
+                    matches!(
+                        verdict,
+                        LoanSpellVerdict::Peripheral | LoanSpellVerdict::Struggled
+                    )
+                })
+                .count()
+                .min(u8::MAX as usize) as u8;
+        }
+        // Pre-ledger saves keep the original minutes-only read.
         player
             .statistics_history
             .items
@@ -2050,8 +2143,8 @@ impl PipelineProcessor {
         formation_positions: &[PlayerPositionType; 11],
         current_window: Option<(NaiveDate, NaiveDate)>,
         early_season: bool,
+        is_january: bool,
     ) {
-        let is_january = Self::is_january_window(date);
 
         // Philosophy-based loan-out aggressiveness
         let (age_threshold, ability_gap, min_appearances_pct) = match philosophy {
@@ -2691,6 +2784,7 @@ mod stalled_prospect_tests {
             None,
             &mut loan_outs,
             &mut force_list,
+            PipelineProcessor::is_january_window(date),
         );
 
         let listed = loan_outs.iter().find(|c| c.player_id == 1);
@@ -2740,6 +2834,7 @@ mod stalled_prospect_tests {
             None,
             &mut loan_outs,
             &mut force_list,
+            PipelineProcessor::is_january_window(date),
         );
 
         assert!(
@@ -2776,6 +2871,7 @@ mod stalled_prospect_tests {
             None,
             &mut loan_outs,
             &mut force_list,
+            PipelineProcessor::is_january_window(date),
         );
 
         assert!(
@@ -2824,6 +2920,7 @@ mod stalled_prospect_tests {
             None,
             &mut loan_outs,
             &mut force_list,
+            PipelineProcessor::is_january_window(date),
         );
 
         assert!(
@@ -2862,6 +2959,7 @@ mod stalled_prospect_tests {
             None,
             &mut loan_outs,
             &mut force_list,
+            PipelineProcessor::is_january_window(date),
         );
 
         assert_eq!(
@@ -3008,6 +3106,7 @@ mod stalled_prospect_tests {
             None,
             &mut loan_outs,
             &mut force_list,
+            PipelineProcessor::is_january_window(date),
         );
 
         assert!(
@@ -3050,6 +3149,7 @@ mod stalled_prospect_tests {
             &ClubPhilosophy::Balanced,
             Fx::formation(),
             None,
+            false,
             false,
         );
         loan_outs
@@ -3302,7 +3402,7 @@ mod goalkeeper_prospect_tests {
                 .add(GkFx::player(2, PlayerPositionType::Goalkeeper, 175, 37));
         }
 
-        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None);
+        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None, false);
         let succession = GkFx::gk_succession_request(&eval);
         assert!(
             succession.is_some(),
@@ -3333,7 +3433,7 @@ mod goalkeeper_prospect_tests {
                 .add(GkFx::player(2, PlayerPositionType::Goalkeeper, 180, 21));
         }
 
-        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None);
+        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None, false);
         assert!(
             GkFx::gk_succession_request(&eval).is_none(),
             "don't shop for what the academy already delivered"
@@ -3349,7 +3449,7 @@ mod goalkeeper_prospect_tests {
             ReputationLevel::Continental
         );
 
-        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None);
+        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None, false);
 
         let gk = GkFx::gk_development_request(&eval);
         assert!(
@@ -3380,7 +3480,7 @@ mod goalkeeper_prospect_tests {
                 .add(GkFx::player(2, PlayerPositionType::Goalkeeper, 140, 19));
         }
 
-        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None);
+        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None, false);
         assert!(
             GkFx::gk_development_request(&eval).is_none(),
             "a club that already has a young keeper must not sign another keeper prospect"

@@ -95,8 +95,37 @@ pub(crate) struct StaffQualitySnapshot {
 }
 
 impl Club {
+    /// Days a newly-appointed head coach gets to look at the whole squad
+    /// before the club's routine listing sweeps resume.
+    const MANAGER_REVIEW_DAYS: i64 = 45;
+
     pub fn is_rival(&self, other_club_id: u32) -> bool {
         self.rivals.contains(&other_club_id)
+    }
+
+    /// Pause club-driven listings so a just-appointed head coach can form
+    /// his own view before the previous regime's exit decisions are acted
+    /// on. Player-initiated departures (a formal request, hardened
+    /// unhappiness) are unaffected — a new manager cannot make a player
+    /// un-ask to leave.
+    ///
+    /// Deliberately does NOT extend a window that is already open. Re-arming
+    /// unconditionally meant a club cycling through managers faster than the
+    /// review lasts never listed anyone at all: each sacking pushed the
+    /// deadline out again and the freeze became permanent, which is the
+    /// opposite of how a crisis club behaves — there it is the board, not
+    /// the coach, driving players out.
+    fn open_manager_review_window(&mut self, date: NaiveDate) {
+        let review_in_progress = self
+            .transfer_plan
+            .manager_review_until
+            .map(|until| date < until)
+            .unwrap_or(false);
+        if review_in_progress {
+            return;
+        }
+        self.transfer_plan.manager_review_until =
+            Some(date + Duration::days(Self::MANAGER_REVIEW_DAYS));
     }
 
     pub fn new(
@@ -353,11 +382,7 @@ impl Club {
 
         if ctx.simulation.is_week_beginning() {
             if self.teams.ensure_coach_state(date) {
-                // A just-appointed head coach reviews the whole squad
-                // before honouring the old regime's exit decisions —
-                // pause club-driven listings while he takes his first
-                // look at everyone.
-                self.transfer_plan.manager_review_until = Some(date + Duration::days(45));
+                self.open_manager_review_window(date);
             }
             self.teams.update_all_impressions(date);
 
@@ -376,7 +401,7 @@ impl Club {
 
         if ctx.simulation.is_month_beginning() {
             if self.teams.ensure_coach_state(date) {
-                self.transfer_plan.manager_review_until = Some(date + Duration::days(45));
+                self.open_manager_review_window(date);
             }
             // Offer proactive contract renewals. Pass the chairman's wage
             // cap and league prestige so the renewal pass sizes its offers

@@ -32,6 +32,16 @@ use std::collections::{HashMap, HashSet};
 // move is request-driven or opportunistic.
 const MAX_LOAN_TARGET_AGE: u8 = 34;
 
+/// The three fields [`PipelineProcessor::loan_option_fee`] needs, so the
+/// separate per-path action structs (domestic scan, seller broadcast,
+/// foreign scan) can share one option-pricing rule instead of each
+/// growing its own copy.
+trait LoanOptionContext {
+    fn player_id(&self) -> u32;
+    fn selling_club_id(&self) -> u32;
+    fn is_unsolicited(&self) -> bool;
+}
+
 impl PipelineProcessor {
     /// Pending **incoming-loan** targets per borrowing club, resolved to
     /// `(position group, current ability)`. Folded into every borrower
@@ -334,6 +344,18 @@ impl PipelineProcessor {
         }
 
         // Collect club scanning actions (Pass 1 read)
+        impl LoanOptionContext for LoanScanAction {
+            fn player_id(&self) -> u32 {
+                self.player_id
+            }
+            fn selling_club_id(&self) -> u32 {
+                self.selling_club_id
+            }
+            fn is_unsolicited(&self) -> bool {
+                self.is_unsolicited
+            }
+        }
+
         struct LoanScanAction {
             club_id: u32,
             player_id: u32,
@@ -796,6 +818,22 @@ impl PipelineProcessor {
 
             let mut clauses = Vec::new();
 
+            // Option to buy. A loan without one is a season the borrowing
+            // club spends developing somebody else's player and hands him
+            // straight back — which is why no AI loan in the world ever
+            // became a permanent move: the conversion machinery
+            // (`decide_loan_buyout`) is driven entirely by
+            // `loan_future_fee`, and nothing on this path had ever written
+            // one. In real football most loans of players with a future
+            // carry an option, and a good loan spell is one of the main
+            // routes a squad player finds a permanent home.
+            if let Some(option_fee) = Self::loan_option_fee(country, &action, date) {
+                clauses.push(TransferClause::LoanOptionToBuy(CurrencyValue {
+                    amount: option_fee,
+                    currency: Currency::Usd,
+                }));
+            }
+
             // Add appearance fee clause for high-reputation selling clubs
             let selling_rep_level =
                 Self::get_club_reputation_level(country, action.selling_club_id);
@@ -1082,6 +1120,20 @@ impl PipelineProcessor {
             selling_club_id: u32,
             offer_amount: f64,
         }
+        // A broadcast loan is the seller's own initiative — he put the
+        // player on the loan list and is shopping him around — so an
+        // option to buy always belongs on it.
+        impl LoanOptionContext for PushAction {
+            fn player_id(&self) -> u32 {
+                self.player_id
+            }
+            fn selling_club_id(&self) -> u32 {
+                self.selling_club_id
+            }
+            fn is_unsolicited(&self) -> bool {
+                false
+            }
+        }
         let mut actions: Vec<PushAction> = Vec::new();
         // One borrower must not be handed two same-group loans in a single
         // broadcast tick: per-player `has_active_negotiation_for` and the
@@ -1206,12 +1258,20 @@ impl PipelineProcessor {
             let (p_age, p_ambition) =
                 Self::get_player_negotiation_data(country, action.player_id, date);
 
+            let mut clauses = Vec::new();
+            if let Some(option_fee) = Self::loan_option_fee(country, &action, date) {
+                clauses.push(TransferClause::LoanOptionToBuy(CurrencyValue {
+                    amount: option_fee,
+                    currency: Currency::Usd,
+                }));
+            }
+
             let offer = TransferOffer {
                 base_fee: CurrencyValue {
                     amount: action.offer_amount,
                     currency: Currency::Usd,
                 },
-                clauses: Vec::new(),
+                clauses,
                 salary_contribution: None,
                 contract_length_years: None,
                 loan_duration_months: Some(Self::loan_duration_to_season_end(
@@ -2176,6 +2236,58 @@ impl PipelineProcessor {
             is_development,
         }
         .clears_club_standing()
+    }
+
+    /// Fraction of a player's market value an option to buy is struck at.
+    /// Below his value because the borrowing club is taking the risk and
+    /// paying the wages for a season; matching the permanent path's own
+    /// option pricing.
+    const LOAN_OPTION_VALUE_FRACTION: f64 = 0.7;
+    /// Age above which a loan is squad-clearing rather than an investment,
+    /// so no option is written. Nobody buys a 31-year-old at the end of a
+    /// cover loan.
+    const LOAN_OPTION_MAX_AGE: u8 = 30;
+
+    /// Strike price for an option to buy on this loan, or `None` when the
+    /// deal isn't one an option belongs on.
+    ///
+    /// Cold, unsolicited approaches are excluded: the parent never
+    /// advertised the player, and a club that hasn't decided to sell him
+    /// doesn't hand over a purchase right as part of a loan it was talked
+    /// into. Everything else — a player his club put on the loan list — is
+    /// exactly the deal that carries one in reality.
+    fn loan_option_fee<A>(country: &Country, action: &A, date: NaiveDate) -> Option<f64>
+    where
+        A: LoanOptionContext,
+    {
+        if action.is_unsolicited() {
+            return None;
+        }
+        let selling_club = country
+            .clubs
+            .iter()
+            .find(|c| c.id == action.selling_club_id())?;
+        let player = selling_club
+            .teams
+            .teams
+            .iter()
+            .find_map(|t| t.players.players.iter().find(|p| p.id == action.player_id()))?;
+        if player.age(date) > Self::LOAN_OPTION_MAX_AGE {
+            return None;
+        }
+        let league_rep = Self::club_league_reputation(country, selling_club);
+        let club_rep = selling_club
+            .teams
+            .main()
+            .map(|t| t.reputation.world)
+            .unwrap_or(0);
+        let value = player.value(date, league_rep, club_rep);
+        if value <= 0.0 {
+            return None;
+        }
+        Some(FormattingUtils::round_fee(
+            value * Self::LOAN_OPTION_VALUE_FRACTION,
+        ))
     }
 
     /// League reputation of a club's main competition, or 0 when the club

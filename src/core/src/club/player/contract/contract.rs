@@ -140,6 +140,19 @@ impl PlayerSquadStatus {
             PlayerSquadStatus::KeyPlayer
             | PlayerSquadStatus::FirstTeamRegular
             | PlayerSquadStatus::FirstTeamSquadRotation => PlayerSquadStatus::MainBackupPlayer,
+            // An adult on a squad that doesn't own squad labels still HAS a
+            // standing — he is somebody's backup. Leaving `NotYetSet` alone
+            // made it permanent for every 20+ player on a reserve or
+            // U20-U23 roster, and "not yet evaluated" is read as protected
+            // by every disposal path there is: the asset classifier returns
+            // `UnknownNeedsEvaluation`, which blocks release, wage-relief
+            // sales, the idle-utilisation sweep and the size trim, while
+            // renewals keep firing because the no-football-case test only
+            // looks at backups and unwanted players. The result was a
+            // permanently un-moveable senior whose contract renewed forever.
+            // Backup is the right label for the same reason the arm above
+            // demotes to it: this squad does not own first-team standing.
+            PlayerSquadStatus::NotYetSet => PlayerSquadStatus::MainBackupPlayer,
             other => other.clone(),
         }
     }

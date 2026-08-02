@@ -285,6 +285,10 @@ impl SquadAssetContext {
     /// the player was a genuine regular and is first-team useful regardless
     /// of his current sample.
     const REGULAR_LAST_SEASON: u16 = 12;
+    /// Official appearances at or below which — in a season that has
+    /// already produced a readable sample — the coach is plainly not using
+    /// the player, whatever his position in the depth chart.
+    const UNUSED_APPEARANCE_BAR: u16 = 3;
 
     /// Build the classifier context from a club's senior (main) squad.
     pub fn build(club: &Club, date: NaiveDate) -> Self {
@@ -481,10 +485,25 @@ impl SquadAssetContext {
         // the club never signed anyone better, not because the coach
         // wants him — so the rank protection lapses and he falls to the
         // ladder below, where his actual level decides.
+        //
+        // Two further conditions close the same tautology from the other
+        // side. Being "top three" only means something in a group where
+        // that is a real distinction, so the rank must also sit in the top
+        // HALF — in a three-man keeper corps that leaves the #1, not all
+        // three. And rank is a claim about standing that a full season of
+        // team selection can refute: once the sample is big enough to read,
+        // a fit player the coach simply never picks is not first-team
+        // useful whatever the depth chart says. Both drop him one rung to
+        // the level ladder below, where he lands on `RotationUseful` if he
+        // is genuinely near his group — listable, but still never released
+        // for free.
+        let ranks_in_top_half = higher_in_group * 2 < group_size;
         if group_size >= Self::MIN_GROUP_FOR_TOP_RANK
             && higher_in_group <= Self::TOP_GROUP_RANK
+            && ranks_in_top_half
             && (level as i16) >= group_avg - Self::NEAR_GROUP_GAP
             && !Self::career_stalled_at_club(player, date)
+            && !self.unused_despite_rank(player)
         {
             return SquadAssetClass::FirstTeamUseful;
         }
@@ -554,6 +573,26 @@ impl SquadAssetContext {
 
         // Genuinely ambiguous — and, by design, NOT surplus.
         SquadAssetClass::UnknownNeedsEvaluation
+    }
+
+    /// The coach has had a real season's worth of team selections and has
+    /// barely used this player. Deliberately narrow: it only reads once
+    /// the club's sample is large enough to mean something
+    /// ([`SquadEvidenceContext::is_early_season`]), and it excuses players
+    /// who were unavailable rather than unwanted — an injured or suspended
+    /// first-choice must not be reclassified as surplus for missing games
+    /// he could not play.
+    fn unused_despite_rank(&self, player: &Player) -> bool {
+        if self.evidence.is_early_season() {
+            return false;
+        }
+        if player.player_attributes.is_injured
+            || player.player_attributes.is_banned
+            || player.player_attributes.is_in_recovery()
+        {
+            return false;
+        }
+        SquadEvidenceContext::official_appearances(player) <= Self::UNUSED_APPEARANCE_BAR
     }
 
     fn group_size(&self, group: PlayerFieldPositionGroup) -> usize {

@@ -84,6 +84,12 @@ pub struct ReleaseEligibilityContext {
     /// when his bare CA-vs-average maths looks releasable. This is what
     /// stops a `NotYetSet`, still-useful senior being walked for free.
     pub asset_class: SquadAssetClass,
+    /// True while the club's season is too young for its team selections
+    /// to say anything about who it wants — every player looks unused in
+    /// August. Gates the ageing-unused-filler exception below so it can
+    /// only fire once a readable sample exists. Callers pass
+    /// [`crate::club::team::squad::SquadEvidenceContext::is_early_season`].
+    pub early_season: bool,
 }
 
 /// Why an automatic mutual release was denied. Transfer-list-or-skip is
@@ -140,6 +146,13 @@ impl AutomaticReleaseEligibility {
     const MARKET_VALUE_FLOOR: f64 = 100_000.0;
     /// Above this, the player is a sellable asset at any club size.
     const MARKET_VALUE_CEILING: f64 = 2_000_000.0;
+    /// Age from which an unused squad player has stopped being an asset to
+    /// protect and become a contract to settle. Below it the player still
+    /// has a career ahead of him and belongs on the loan/sale pathways.
+    const UNUSED_FILLER_AGE: u8 = 29;
+    /// Official appearances at or below which a fit player, in a season
+    /// that has produced a readable sample, is not being used at all.
+    const UNUSED_APPEARANCE_BAR: u16 = 3;
 
     /// `None` means every hard gate passed and the caller may clear the
     /// contract + stamp `Frt`; `Some(block)` names the first gate that
@@ -171,7 +184,9 @@ impl AutomaticReleaseEligibility {
         // `NotYetSet` player whose role hasn't been assigned yet, a
         // recognised name whose ability has dipped, a useful rotation
         // option — and routes them to keep / transfer-list instead.
-        if ctx.asset_class.is_free_transfer_protected() {
+        if ctx.asset_class.is_free_transfer_protected()
+            && !Self::unused_ageing_squad_filler(player, ctx)
+        {
             return Some(AutomaticReleaseBlock::ProtectedAsset);
         }
 
@@ -200,6 +215,52 @@ impl AutomaticReleaseEligibility {
     /// Convenience wrapper: did every hard gate pass?
     pub fn can_auto_release_on_free(player: &Player, ctx: &ReleaseEligibilityContext) -> bool {
         Self::assess(player, ctx).is_none()
+    }
+
+    /// The one profile the blanket asset protection should not cover: an
+    /// ageing squad player the coach has simply stopped picking.
+    ///
+    /// Reserving free release for genuine surplus is right, but "genuine
+    /// surplus" was decided purely by the classifier, and `RotationUseful`
+    /// / `UnknownNeedsEvaluation` are sticky classes a 30-year-old who
+    /// never plays can sit in for the rest of his contract. Combined with
+    /// the listing sweeps (which protect the same players) and the renewal
+    /// gate (which keeps offering them new deals), that produced squad
+    /// members no path could ever move on. Real clubs settle those
+    /// contracts.
+    ///
+    /// Deliberately narrow — it only widens WHO is considered, never by
+    /// how much: the numeric gates that follow (clearly below team level,
+    /// not a valuable asset, affordable severance) all still have to pass,
+    /// so a useful or sellable player is still never walked for free.
+    fn unused_ageing_squad_filler(player: &Player, ctx: &ReleaseEligibilityContext) -> bool {
+        // Never the classes that represent a future or a first-team role.
+        if matches!(
+            ctx.asset_class,
+            SquadAssetClass::CorePlayer
+                | SquadAssetClass::FirstTeamUseful
+                | SquadAssetClass::ProspectDevelopment
+        ) {
+            return false;
+        }
+        if ctx.early_season {
+            return false;
+        }
+        if player.age(ctx.date) < Self::UNUSED_FILLER_AGE {
+            return false;
+        }
+        // Unavailable is not unwanted.
+        if player.player_attributes.is_injured
+            || player.player_attributes.is_banned
+            || player.player_attributes.is_in_recovery()
+        {
+            return false;
+        }
+        let appearances = player.statistics.played
+            + player.statistics.played_subs
+            + player.cup_statistics.played
+            + player.cup_statistics.played_subs;
+        appearances <= Self::UNUSED_APPEARANCE_BAR
     }
 
     /// A player the market would pay half a month of the club's total
@@ -272,6 +333,9 @@ mod tests {
                 market_value,
                 annual_wage_bill: 1_200_000,
                 asset_class,
+                // Existing fixtures predate the ageing-unused exception;
+                // an unreadable sample keeps them on the original gate.
+                early_season: true,
             }
         }
 
@@ -415,6 +479,56 @@ mod tests {
         assert_eq!(
             AutomaticReleaseEligibility::assess(&player, &Fixture::ctx(20_000.0)),
             None
+        );
+    }
+
+    #[test]
+    fn ageing_unused_filler_escapes_the_asset_protection_block() {
+        // 30 years old, cheap, clearly below team level, and — once the
+        // season has produced a readable sample — never picked. The blanket
+        // asset-protection block used to hold him forever in the sticky
+        // `RotationUseful` / `UnknownNeedsEvaluation` classes while the
+        // listing sweeps protected him and the renewal gate kept offering
+        // him new deals. He is now releasable, but only on the evidence:
+        // the same player in an early season is still blocked.
+        let player = Fixture::player(
+            60,
+            30,
+            Some(Fixture::contract(15_000, ContractType::FullTime, 3)),
+        );
+
+        let early = Fixture::ctx_with_class(20_000.0, SquadAssetClass::RotationUseful);
+        assert_eq!(
+            AutomaticReleaseEligibility::assess(&player, &early),
+            Some(AutomaticReleaseBlock::ProtectedAsset),
+            "an unreadable sample must not free anyone"
+        );
+
+        let mut readable = Fixture::ctx_with_class(20_000.0, SquadAssetClass::RotationUseful);
+        readable.early_season = false;
+        assert_eq!(
+            AutomaticReleaseEligibility::assess(&player, &readable),
+            None
+        );
+
+        // Too young for the exception — he still has a career to pursue on
+        // the loan / sale pathways.
+        let young = Fixture::player(
+            60,
+            26,
+            Some(Fixture::contract(15_000, ContractType::FullTime, 3)),
+        );
+        assert_eq!(
+            AutomaticReleaseEligibility::assess(&young, &readable),
+            Some(AutomaticReleaseBlock::ProtectedAsset)
+        );
+
+        // A first-team-useful player is never touched by it, at any age.
+        let mut useful = Fixture::ctx_with_class(20_000.0, SquadAssetClass::FirstTeamUseful);
+        useful.early_season = false;
+        assert_eq!(
+            AutomaticReleaseEligibility::assess(&player, &useful),
+            Some(AutomaticReleaseBlock::ProtectedAsset)
         );
     }
 

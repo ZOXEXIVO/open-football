@@ -333,6 +333,12 @@ pub struct TransferPlausibilityInputs {
     pub estimated_value: f64,
 
     pub player_appearances: u16,
+    /// Official matches the selling club has played this season (its
+    /// busiest player's appearance count). The denominator that turns
+    /// `player_appearances` into "share of the team's football he is
+    /// getting", and the signal that says whether the season is readable
+    /// at all.
+    pub seller_club_matches: u16,
     /// Player rank within the seller's main team at this position
     /// group, 0-indexed. 0 = #1 starter, 1 = #2, etc. Computed by
     /// callers from the seller's roster.
@@ -502,7 +508,19 @@ mod thresholds {
     pub const PRIME_AGE_MAX: u8 = 30;
     pub const BIG_SPORTING_DROP: f32 = 0.16;
     pub const HUGE_SPORTING_DROP: f32 = 0.26;
-    pub const DOMESTIC_STEP_DOWN_DROP: f32 = 0.12;
+    /// Sporting drop at which a prime-age important player resists a move
+    /// down within his own domestic market.
+    ///
+    /// A reputation tier is worth roughly 0.15-0.20 of `overall_score`,
+    /// which the 0.55 club-term weighting turns into ~0.08-0.11 of drop —
+    /// so at 0.12 a plain one-tier domestic step down was already at the
+    /// blocking line before the league term was added, and any move across
+    /// divisions cleared it comfortably. That made the single most common
+    /// transfer in football — an established player dropping a level to
+    /// play regularly — the one the model refused. Set beyond a single
+    /// tier so it blocks what it was written for (a two-tier collapse) and
+    /// leaves ordinary downward mobility to the soft penalties.
+    pub const DOMESTIC_STEP_DOWN_DROP: f32 = 0.19;
     pub const LOAN_IMPORTANCE_BLOCK: f32 = 0.65;
     pub const LOAN_REP_GAP_BLOCK: f32 = 0.10;
     /// Reputation gap at which a loan stops being a step down and becomes a
@@ -607,9 +625,46 @@ impl ImportanceFactors {
         (player / best).clamp(0.0, 1.0)
     }
 
+    /// Club matches below which the season cannot yet contradict a
+    /// standing claim. Mirrors
+    /// [`crate::club::team::squad::SquadEvidenceContext::LOW_EVIDENCE_MATCHES`].
+    const READABLE_SAMPLE_MATCHES: u16 = 8;
+    /// Share of his club's matches at which a player's appearances fully
+    /// corroborate his standing. Being a regular does not require playing
+    /// every week.
+    const FULL_CORROBORATION_SHARE: f32 = 0.4;
+    /// Floor on the corroboration multiplier. Never zero: a genuine key man
+    /// who missed the season injured is still a key man, and a club still
+    /// refuses cheap approaches for him.
+    const MIN_CORROBORATION: f32 = 0.55;
+
+    /// How far the season's team selections back up a standing-based
+    /// importance claim.
+    ///
+    /// Standing — a declared role, a depth-chart rank, being the best
+    /// ability at his position — is what the player is on paper.
+    /// Appearances are what the coach actually does. Early in a season only
+    /// the paper claim exists, so it stands unchallenged; that is the
+    /// thin-sample protection this floor was built for. But left
+    /// unchallenged FOREVER it produced the central absurdity of the
+    /// market: a nominal starter who had not played all season was defended
+    /// as an important player, and every club that approached him was
+    /// turned away on behalf of a team that was not picking him. Those are
+    /// exactly the players who move in real football.
+    fn evidence_corroboration(inputs: &TransferPlausibilityInputs) -> f32 {
+        if inputs.seller_club_matches < Self::READABLE_SAMPLE_MATCHES {
+            return 1.0;
+        }
+        let involvement =
+            (inputs.player_appearances as f32 / inputs.seller_club_matches as f32).clamp(0.0, 1.0);
+        let corroborated = (involvement / Self::FULL_CORROBORATION_SHARE).clamp(0.0, 1.0);
+        Self::MIN_CORROBORATION + (1.0 - Self::MIN_CORROBORATION) * corroborated
+    }
+
     /// Objective-evidence importance floor — the highest "he is clearly
     /// important" signal available, independent of how many minutes he has
-    /// played this season.
+    /// played this season. The corroboration taper is applied once, to the
+    /// finished importance, rather than here.
     fn evidence_floor(inputs: &TransferPlausibilityInputs) -> f32 {
         let mut floor = 0.0_f32;
         // Declared squad role.
@@ -673,8 +728,17 @@ impl TransferPlausibilityEvaluator {
         // personal-terms lifts carry the "unsold months lower his sights"
         // story, and tapering importance here would flip the important /
         // very-important gate thresholds far earlier than that ramp allows.
-        raw.max(ImportanceFactors::evidence_floor(inputs))
-            .clamp(0.0, 1.0)
+        let claimed = raw.max(ImportanceFactors::evidence_floor(inputs));
+
+        // …but once a whole season of team selections is on the record,
+        // they get a say. Status and rank together carry ~0.6 of the raw
+        // weighting and the floor holds the rest up, so on paper alone a
+        // nominal first-choice who never played was still scored as an
+        // important player — and every club that asked about him was turned
+        // away on behalf of a team that wasn't picking him. Scaling the
+        // finished claim by how far the season bears it out is what lets
+        // those players move, which is what happens in real football.
+        (claimed * ImportanceFactors::evidence_corroboration(inputs)).clamp(0.0, 1.0)
     }
 
     /// Sporting "drop" the move represents for the player. Positive when
@@ -1270,6 +1334,7 @@ impl TransferPlausibilityBuilder {
             current_salary: target.salary,
             estimated_value: target.estimated_value,
             player_appearances: target.appearances,
+            seller_club_matches: seller.club_matches_played,
             seller_position_rank: seller.position_group_rank,
             player_ca,
             best_group_ca_at_seller: best_group_ca,
@@ -1438,6 +1503,11 @@ impl TransferPlausibilityBuilder {
             current_salary,
             estimated_value,
             player_appearances: player.statistics.total_games(),
+            seller_club_matches: crate::club::team::squad::SquadEvidenceContext::current_season_sample(
+                date,
+                selling_club,
+            )
+            .club_matches_proxy(),
             seller_position_rank: rank,
             player_ca,
             best_group_ca_at_seller: best_group_ca,
@@ -1515,6 +1585,9 @@ mod tests {
             current_salary: 500_000,
             estimated_value: 5_000_000.0,
             player_appearances: 30,
+            // Unreadable sample: these fixtures predate the corroboration
+            // taper, so the standing floor applies at full strength.
+            seller_club_matches: 0,
             seller_position_rank: 0,
             player_ca: 150,
             best_group_ca_at_seller: 150,
@@ -1559,6 +1632,9 @@ mod tests {
             current_salary: 400_000,
             estimated_value: 6_000_000.0,
             player_appearances: 22,
+            // Unreadable sample: these fixtures predate the corroboration
+            // taper, so the standing floor applies at full strength.
+            seller_club_matches: 0,
             seller_position_rank: 1,
             player_ca: 140,
             best_group_ca_at_seller: 145,
@@ -1695,6 +1771,44 @@ mod tests {
         assert!(
             !TransferMovePlausibility::assess(&thin_sample)
                 .reaches(TransferMoveStage::CanShowPublicInterest)
+        );
+    }
+
+    // ── 6b. …but a full season of not being picked DOES. ──
+    #[test]
+    fn a_season_of_non_selection_erodes_the_standing_floor() {
+        // Same nominal first-choice starter as the thin-sample case above,
+        // except the club has now played 34 matches and he has featured in
+        // one of them. On paper he is still the best keeper at the club; in
+        // practice the coach does not pick him, and a club that isn't
+        // picking a player doesn't refuse every approach for him.
+        let mut frozen_out = base_inputs();
+        frozen_out.seller_club_matches = 34;
+        frozen_out.player_appearances = 1;
+
+        let importance = TransferPlausibilityEvaluator::player_importance(&frozen_out);
+        assert!(
+            importance < thresholds::IMPORTANT,
+            "a starter who hasn't played all season is not an important player: {importance}"
+        );
+
+        // The same player, playing regularly, keeps his full standing.
+        let mut regular = base_inputs();
+        regular.seller_club_matches = 34;
+        regular.player_appearances = 28;
+        assert!(
+            TransferPlausibilityEvaluator::player_importance(&regular) >= thresholds::IMPORTANT,
+            "a genuine regular is still protected"
+        );
+
+        // Early in the season the same one appearance says nothing yet, so
+        // the thin-sample protection is untouched.
+        let mut early = base_inputs();
+        early.seller_club_matches = 3;
+        early.player_appearances = 1;
+        assert!(
+            TransferPlausibilityEvaluator::player_importance(&early) >= thresholds::IMPORTANT,
+            "an unreadable sample must not strip anyone's standing"
         );
     }
 
@@ -2546,6 +2660,9 @@ mod tests {
             current_salary: 700_000,
             estimated_value: 5_000_000.0,
             player_appearances: 28,
+            // Unreadable sample: these fixtures predate the corroboration
+            // taper, so the standing floor applies at full strength.
+            seller_club_matches: 0,
             seller_position_rank: 0,
             player_ca: 150,
             best_group_ca_at_seller: 150,

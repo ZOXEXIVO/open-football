@@ -181,7 +181,20 @@ impl MarketResignation {
         }
         let urgency = Self::role_urgency(squad_status);
         let scans = (failed_scans as f32 / 12.0).clamp(0.0, 1.0);
-        (time * (0.55 + 0.35 * urgency + 0.10 * scans)).clamp(0.0, 1.0)
+        // Role and dry scans set how FAST he re-reads the market, not how
+        // far he will ever go. The ceiling used to be
+        // `0.55 + 0.35·urgency + 0.10·scans`, which for the roles that
+        // matter — a listed key man at 0.25 urgency, a first-team regular
+        // at 0.35 — topped out around 0.75 no matter how long he went
+        // unsold. Everything downstream reads resignation as a 0..1 ramp,
+        // so that quietly capped how far a listed player's sights could
+        // ever fall: the deepest step-downs stayed shut against a player
+        // who had been on the market for two years. A man nobody has bid
+        // for in that long has genuinely run out of alternatives; the
+        // slower roles simply take the full ramp to get there.
+        let pace = (0.55 + 0.35 * urgency + 0.10 * scans).clamp(0.0, 1.0);
+        let eased = time.powf(1.0 / pace.max(0.2));
+        eased.clamp(0.0, 1.0)
     }
 }
 

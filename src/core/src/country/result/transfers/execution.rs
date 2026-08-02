@@ -767,11 +767,18 @@ pub(crate) fn execute_transfer_within_country(
         // matching transfer record, or (worse) a player moves with the fee
         // never debited because the budget couldn't cover it.
         let to_info = resolve_buying_club_info(country, buying_club_id);
-        let can_accept = country
-            .clubs
-            .iter()
-            .find(|c| c.id == buying_club_id)
-            .map(|c| can_club_accept_player(c) && c.finance.can_afford_transfer(upfront))
+        // Resolve the destination slot BEFORE the irreversible half of the
+        // move runs. `complete_transfer` below installs the new contract,
+        // rewrites career history and wipes transient state — none of it
+        // undoable — so the roster the player lands on has to be known to
+        // exist first. Carrying the index forward also means the insert
+        // cannot silently miss and drop an owned `Player` on the floor.
+        let buying_club_index = country.clubs.iter().position(|c| c.id == buying_club_id);
+        let can_accept = buying_club_index
+            .map(|idx| {
+                let club = &country.clubs[idx];
+                can_club_accept_player(club) && club.finance.can_afford_transfer(upfront)
+            })
             .unwrap_or(false);
 
         if !can_accept {
@@ -860,38 +867,60 @@ pub(crate) fn execute_transfer_within_country(
         // arrival's row (which still lives inside the same Vec).
         let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
 
-        if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
-            // Only the upfront portion leaves now; deferred installment
-            // tranches are paid over time by the settlement walk. P&L spread
-            // across DEFAULT_AMORTIZATION_YEARS. Affordability was pre-checked
-            // above, so this debit always succeeds.
-            buying_club
-                .finance
-                .register_transfer_purchase(upfront, DEFAULT_AMORTIZATION_YEARS);
-            buying_club.transfer_plan.spent += upfront;
-            // Agent fee — separate one-off cash cost on top of the headline
-            // fee. A pure cash movement (not sale income), so it must not
-            // perturb the transfer budget.
-            if let Some(terms) = transfer.personal_terms.as_ref() {
-                if let Some(amount) = terms.agent_fee {
-                    if amount > 0 {
-                        buying_club.finance.adjust_cash(-(amount as f64));
-                    }
+        // `buying_club_index` was resolved above and `country.clubs` is
+        // never resized in between, so this can only be `None` if that
+        // invariant is broken. Handle it as a failed execution rather than
+        // letting the owned `player` fall out of scope: dropping him here
+        // would delete him from the world while the seller kept the fee,
+        // and the `true` return would stop the orchestrator's
+        // `compensate_failed_execution` from ever running.
+        let buying_club = buying_club_index
+            .filter(|idx| country.clubs[*idx].id == buying_club_id)
+            .map(|idx| &mut country.clubs[idx]);
+
+        let Some(buying_club) = buying_club else {
+            debug!(
+                "Transfer aborted at commit: buying club {} vanished between check and insert, \
+                 returning player {} to club {}",
+                buying_club_id, player_id, selling_club_id
+            );
+            if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
+                TransferExecution::add_to_main_team(selling_club, player);
+                selling_club.finance.add_transfer_income(-upfront);
+            }
+            return false;
+        };
+
+        // Only the upfront portion leaves now; deferred installment
+        // tranches are paid over time by the settlement walk. P&L spread
+        // across DEFAULT_AMORTIZATION_YEARS. Affordability was pre-checked
+        // above, so this debit always succeeds.
+        buying_club
+            .finance
+            .register_transfer_purchase(upfront, DEFAULT_AMORTIZATION_YEARS);
+        buying_club.transfer_plan.spent += upfront;
+        // Agent fee — separate one-off cash cost on top of the headline
+        // fee. A pure cash movement (not sale income), so it must not
+        // perturb the transfer budget.
+        if let Some(terms) = transfer.personal_terms.as_ref() {
+            if let Some(amount) = terms.agent_fee {
+                if amount > 0 {
+                    buying_club.finance.adjust_cash(-(amount as f64));
                 }
             }
-            TransferExecution::add_to_main_team(buying_club, player);
-
-            SquadReactionPass::arrival_reception(
-                buying_club,
-                player_id,
-                arrival_country_id,
-                club_country_id,
-                &club_country_code,
-                &arrival_threat,
-                fee,
-                date,
-            );
         }
+        TransferExecution::add_to_main_team(buying_club, player);
+
+        SquadReactionPass::arrival_reception(
+            buying_club,
+            player_id,
+            arrival_country_id,
+            club_country_id,
+            &club_country_code,
+            &arrival_threat,
+            fee,
+            date,
+        );
 
         country
             .transfer_market
@@ -1013,11 +1042,12 @@ fn execute_loan_within_country(
         // Check squad capacity BEFORE recording history — otherwise a rejected
         // loan creates a phantom career entry with no matching transfer record
         let to_info = resolve_buying_club_info(country, buying_club_id);
-        let can_accept = country
-            .clubs
-            .iter()
-            .find(|c| c.id == buying_club_id)
-            .map(|c| can_club_accept_player(c))
+        // Same commit-ordering rule as the permanent path: resolve the
+        // borrowing roster slot before `complete_loan` mutates the player,
+        // so the insert below cannot miss and drop him.
+        let buying_club_index = country.clubs.iter().position(|c| c.id == buying_club_id);
+        let can_accept = buying_club_index
+            .map(|idx| can_club_accept_player(&country.clubs[idx]))
             .unwrap_or(false);
 
         if !can_accept {
@@ -1096,22 +1126,37 @@ fn execute_loan_within_country(
         let club_country_id = country.id;
         let club_country_code = country.code.clone();
         let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
-        if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
-            buying_club.finance.pay_loan_fee(loan_fee);
-            TransferExecution::add_to_main_team(buying_club, player);
-            // The borrowing dressing room reacts to a loan arrival like
-            // any other signing — this path used to install him silently.
-            SquadReactionPass::arrival_reception(
-                buying_club,
-                player_id,
-                arrival_country_id,
-                club_country_id,
-                &club_country_code,
-                &arrival_threat,
-                0.0,
-                date,
+        let buying_club = buying_club_index
+            .filter(|idx| country.clubs[*idx].id == buying_club_id)
+            .map(|idx| &mut country.clubs[idx]);
+
+        let Some(buying_club) = buying_club else {
+            debug!(
+                "Loan aborted at commit: borrowing club {} vanished between check and insert, \
+                 returning player {} to club {}",
+                buying_club_id, player_id, selling_club_id
             );
-        }
+            if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
+                TransferExecution::add_to_main_team(selling_club, player);
+                selling_club.finance.refund_loan_fee(loan_fee);
+            }
+            return false;
+        };
+
+        buying_club.finance.pay_loan_fee(loan_fee);
+        TransferExecution::add_to_main_team(buying_club, player);
+        // The borrowing dressing room reacts to a loan arrival like
+        // any other signing — this path used to install him silently.
+        SquadReactionPass::arrival_reception(
+            buying_club,
+            player_id,
+            arrival_country_id,
+            club_country_id,
+            &club_country_code,
+            &arrival_threat,
+            0.0,
+            date,
+        );
 
         // Remove listing and loan-out candidate so the player can't be loaned again
         country
@@ -1337,6 +1382,36 @@ fn execute_transfer_across_countries(
         }
     }
 
+    // Resolve the destination roster slot BEFORE anything irreversible
+    // runs. `complete_transfer` below installs the new contract, rewrites
+    // career history and wipes transient state; if the buying club turned
+    // out not to exist after that, the owned `Player` would fall out of
+    // scope at the end of the function — deleting him from the world while
+    // the seller kept the fee. Resolving first means the failure is a
+    // clean return-to-seller, which is also what lets the orchestrator's
+    // `compensate_failed_execution` reopen the listing.
+    let buying_club_index = match data
+        .country(buying_country_id)
+        .and_then(|c| c.clubs.iter().position(|club| club.id == buying_club_id))
+    {
+        Some(idx) => idx,
+        None => {
+            debug!(
+                "Transfer failed: buying club {} not found in country {}",
+                buying_club_id, buying_country_id
+            );
+            return_player_to_selling_country(
+                data,
+                selling_country_id,
+                selling_club_id,
+                player,
+                upfront,
+                false,
+            );
+            return false;
+        }
+    };
+
     let buying_country = match data.country_mut(buying_country_id) {
         Some(c) => c,
         None => {
@@ -1393,11 +1468,12 @@ fn execute_transfer_across_countries(
     // Capture profile before `players.add(player)` moves ownership in.
     let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
 
-    if let Some(buying_club) = buying_country
-        .clubs
-        .iter_mut()
-        .find(|c| c.id == buying_club_id)
     {
+        // Indexed rather than re-searched: the slot was resolved before
+        // `complete_transfer` ran (see `buying_club_index`), and nothing
+        // between there and here resizes `clubs`. A fallible lookup at
+        // this point could drop the owned `player` on the floor.
+        let buying_club = &mut buying_country.clubs[buying_club_index];
         // Only the upfront portion leaves now; deferred installment tranches
         // are paid over time by the settlement walk. Affordability was
         // pre-checked above, so this debit always succeeds.
@@ -1607,6 +1683,31 @@ fn execute_loan_across_countries(
         }
     };
 
+    // Resolve the borrowing roster slot before `complete_loan` mutates the
+    // player, so a missing club is a clean return-to-parent rather than a
+    // silently dropped `Player`. See the permanent cross-country path.
+    let buying_club_index = match data
+        .country(buying_country_id)
+        .and_then(|c| c.clubs.iter().position(|club| club.id == buying_club_id))
+    {
+        Some(idx) => idx,
+        None => {
+            debug!(
+                "Loan failed: borrowing club {} not found in country {}",
+                buying_club_id, buying_country_id
+            );
+            return_player_to_selling_country(
+                data,
+                selling_country_id,
+                selling_club_id,
+                player,
+                loan_fee,
+                true,
+            );
+            return false;
+        }
+    };
+
     let buying_country = match data.country_mut(buying_country_id) {
         Some(c) => c,
         None => {
@@ -1681,11 +1782,10 @@ fn execute_loan_across_countries(
     let club_country_id = buying_country.id;
     let club_country_code = buying_country.code.clone();
     let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
-    if let Some(buying_club) = buying_country
-        .clubs
-        .iter_mut()
-        .find(|c| c.id == buying_club_id)
     {
+        // Indexed, not re-searched — the slot was resolved before
+        // `complete_loan` ran and nothing since resizes `clubs`.
+        let buying_club = &mut buying_country.clubs[buying_club_index];
         buying_club.finance.pay_loan_fee(loan_fee);
         TransferExecution::add_to_main_team(buying_club, player);
         // A foreign loanee's new dressing room reacts too — compatriot

@@ -1,0 +1,40 @@
+[package]
+name = "dev_transfers"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Transfer-market telemetry harness. Ticks the whole world exactly like
+# `.dev/simulate` but, instead of per-day timings, walks the world state
+# and reports the market: transfers per window by type, the negotiation
+# funnel, the 0-appearance census, listing lifecycle, free-agent pool
+# health, and squad turnover.
+#
+# NB: unlike `.dev/simulate` this crate does NOT default to `match-stub`.
+# Every signal the transfer pipeline reads — appearances, form, ratings,
+# breakout scores, squad-status re-ranks — comes out of played matches, so
+# a stubbed 0-0 world would report a market that cannot exist. Build with
+# `--features match-stub` only when measuring the non-match paths in
+# isolation (free-agent decay, contract expiry, listing age-out).
+core = { path = "../../src/core" }
+database = { path = "../../src/database" }
+chrono = "0.4"
+log = "0.4"
+env_logger = "0.11"
+mimalloc = "0.1"
+
+[features]
+default = []
+match-stub = ["core/match-stub"]
+
+# Match the optimized production profile: a full-season telemetry run is
+# several hundred world ticks with the real engine, which is only
+# tractable under release codegen.
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false

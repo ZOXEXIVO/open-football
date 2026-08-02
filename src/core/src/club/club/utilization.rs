@@ -70,11 +70,19 @@ impl Club {
         // promote rather than loaned away.
         let main_floor = MainPromotionFloor::snapshot(&self.teams.teams[main_idx]);
 
+        // The main squad is included. Excluding it left the club's largest
+        // roster — the one that actually holds the frozen-out senior
+        // players — outside the only sweep that reads MINUTES at all: every
+        // other main-team path keys on ability versus the squad average, so
+        // an average-CA player who simply never got picked tripped nothing.
+        // Nothing about the loop below is main-team specific, and the guards
+        // it already applies (availability, signing protection, thin sample,
+        // competitiveness with the first team, and finally the squad-asset
+        // classifier, which only lets genuine surplus and blocked prospects
+        // through) are exactly the protections a first team needs. Squad
+        // depth is protected downstream too — the country listing pass caps
+        // every club-decided listing at its position-group minimum.
         for (ti, team) in self.teams.iter().enumerate() {
-            if ti == main_idx {
-                continue;
-            }
-
             // Squads that don't play official/league football — youth sides
             // (U18..U23) AND any non-main team without a league — never
             // accumulate the official appearances the idle-days signal below
@@ -246,8 +254,9 @@ impl Club {
         // consumed it — so an over-limit squad that tripped no per-position
         // glut just bloated all season. Give that determination a consumer:
         // when over the ceiling, list the worst genuine surplus across ALL
-        // teams (including the main squad, which the idle sweep above skips),
-        // worst-first, until the excess is cleared.
+        // teams, worst-first, until the excess is cleared. Distinct from the
+        // idle sweep above: this one fires on squad SIZE regardless of how
+        // much anyone has played.
         const SIZE_TRIM_MARGIN: usize = 5;
         if total_squad > max_squad + SIZE_TRIM_MARGIN {
             let already: HashSet<u32> = loan_players

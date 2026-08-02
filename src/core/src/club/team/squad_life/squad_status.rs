@@ -486,8 +486,19 @@ mod development_squad_tests {
             PlayerSquadStatus::MainBackupPlayer,
             "a parked backup must not become Key Player of the reserves"
         );
-        // A 20-year-old senior with no label yet gets none invented for him.
-        assert_eq!(status_of(&team, 2), PlayerSquadStatus::NotYetSet);
+        // A 20-year-old senior gets the same backup label, for the same
+        // reason the veteran above does: this squad does not own first-team
+        // standing, and "backup" is what standing on it means.
+        //
+        // He used to keep `NotYetSet` indefinitely — no first-team label was
+        // invented for him, but no label was ever settled either, and that
+        // turned out to be a trap rather than neutrality. "Not yet
+        // evaluated" reads as protected everywhere it is consulted: the
+        // renewal gate's no-football-case test only considers backups and
+        // unwanted players, so his deal was renewed for as long as he
+        // stayed unlabelled. A senior parked on a reserve squad could
+        // therefore never be moved on by any path at all.
+        assert_eq!(status_of(&team, 2), PlayerSquadStatus::MainBackupPlayer);
     }
 
     /// Prospect labels are club-level assessments, not team-role claims —

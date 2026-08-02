@@ -131,6 +131,24 @@ fn apply_monitoring_update(plan: &mut ClubTransferPlan, update: MonitoringUpdate
 }
 
 impl PipelineProcessor {
+    /// Contract months at or below which a player is publicly on his way
+    /// out — clubs abroad watch expiring contracts regardless of which
+    /// league he currently plays in.
+    const OPENLY_AVAILABLE_EXPIRY_MONTHS: i16 = 12;
+
+    /// The player's own club has advertised him, or he has advertised
+    /// himself, or his deal is running out. Any of these is public
+    /// knowledge that travels past the normal direction of the market, so
+    /// it lifts the country step-down on the foreign candidate pool.
+    /// Being merely unhappy does not: that is a mood, not an advert.
+    fn is_openly_available(candidate: &PlayerSummary) -> bool {
+        candidate.is_listed
+            || candidate.is_loan_listed
+            || candidate.seller_ctx.is_transfer_requested
+            || (candidate.contract_months_remaining > 0
+                && candidate.contract_months_remaining <= Self::OPENLY_AVAILABLE_EXPIRY_MONTHS)
+    }
+
     pub fn assign_scouts(country: &mut Country, _date: NaiveDate) {
         let mut actions: Vec<ScoutAssignmentAction> = Vec::new();
 
@@ -140,18 +158,38 @@ impl PipelineProcessor {
                 continue;
             }
 
+            // Only assignments still doing work reserve their request. A
+            // completed one has filed its report and stopped scouting, so
+            // counting it as "covered" is what stranded requests: an
+            // assignment closes after its FIRST report, and if that report
+            // produced no shortlist the request sat in `ScoutingActive`
+            // with a dead assignment attached and no way to earn another —
+            // the club had an open need nobody was looking for.
             let assigned_request_ids: Vec<u32> = plan
                 .scouting_assignments
                 .iter()
+                .filter(|a| !a.completed)
                 .map(|a| a.transfer_request_id)
+                .collect();
+
+            let shortlisted_request_ids: Vec<u32> = plan
+                .shortlists
+                .iter()
+                .map(|s| s.transfer_request_id)
                 .collect();
 
             let pending_requests: Vec<&TransferRequest> = plan
                 .transfer_requests
                 .iter()
                 .filter(|r| {
-                    r.status == TransferRequestStatus::Pending
-                        && !assigned_request_ids.contains(&r.id)
+                    // A request whose scouting round produced nothing is
+                    // re-scouted; one that already has a shortlist to work
+                    // through is not.
+                    matches!(
+                        r.status,
+                        TransferRequestStatus::Pending | TransferRequestStatus::ScoutingActive
+                    ) && !assigned_request_ids.contains(&r.id)
+                        && !shortlisted_request_ids.contains(&r.id)
                         // Emergency depth requests are free-agent-only:
                         // zero budget, no scouting intent. Assigning a
                         // scout would pull them into the paid pipeline.
@@ -834,6 +872,11 @@ impl PipelineProcessor {
                 .unwrap_or(0.3);
             let seller_league_id = main_team.and_then(|t| t.league_id);
             let seller_in_debt = club.finance.balance.balance < 0;
+            // Club match count, so a foreign buyer reads the same
+            // "is this season readable yet" signal a domestic one does.
+            let seller_club_matches =
+                crate::club::team::squad::SquadEvidenceContext::current_season_sample(date, club)
+                    .club_matches_proxy();
             // One sorted-group snapshot per club replaces the per-player
             // rank/best re-sorts (same values, O(squad·log) once).
             let group_ranks = ClubGroupRanks::build(club);
@@ -922,6 +965,7 @@ impl PipelineProcessor {
                             in_debt: seller_in_debt,
                             days_on_market: player.days_available(date).min(i16::MAX as i64) as i16,
                             market_resignation: player.market_resignation(date),
+                            club_matches_played: seller_club_matches,
                         },
                     });
                 }
@@ -1008,11 +1052,20 @@ impl PipelineProcessor {
         }
         let mut foreign_by_group: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] =
             Default::default();
-        for p in foreign_players
-            .iter()
-            .copied()
-            .filter(|p| p.country_reputation <= country_reputation)
-        {
+        // The country step-down models the normal direction of the market:
+        // clubs recruit from countries at or below their own standing, and
+        // a cold approach up the pyramid isn't credible. Applied without
+        // exception, though, it made whole countries invisible to each
+        // other — a Portuguese club could not SEE an English player who was
+        // transfer-listed, had asked to leave, or was months from a free
+        // transfer, none of which depends on the buyer outranking the
+        // seller's country. Availability is precisely the signal that
+        // overrides the normal direction of travel, so it opens the pool;
+        // everything downstream (the realism band, the staged plausibility
+        // gates, reputation reach and affordability) still has to pass.
+        for p in foreign_players.iter().copied().filter(|p| {
+            p.country_reputation <= country_reputation || Self::is_openly_available(p)
+        }) {
             foreign_by_group[p.position_group.index()].push(p);
         }
 
