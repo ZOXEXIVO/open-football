@@ -2138,8 +2138,20 @@ fn reputation_weights<D: LeagueProcessAccess>(
             .league(result.league_id)
             .map(|l| l.reputation)
             .unwrap_or(500) as f32;
-        let w = (league_reputation / 1000.0 + 0.5).clamp(0.5, 1.5);
-        (w, 0.2)
+        // League reputation is a 0..10000 scale. Dividing by 1000
+        // saturated the clamp for every league above rep 1000, so a
+        // season in the Premier League and a season in a mid-tier league
+        // grew a player's fame at exactly the same rate — there was no
+        // reputational reason to ever leave a weak league.
+        let rep_norm = (league_reputation / 10_000.0).clamp(0.0, 1.0);
+        // Domestic standing rises linearly with the league's own standing.
+        let domestic_w = 0.5 + rep_norm;
+        // World fame rises CONVEXLY: recognition outside your own country
+        // is won on the biggest stages, so a top-five league is worth
+        // several times a mid-tier one abroad — while still sitting below
+        // the continental competitions handled above.
+        let world_w = 0.05 + 0.45 * rep_norm * rep_norm;
+        (domestic_w, world_w)
     }
 }
 

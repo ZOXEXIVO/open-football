@@ -23,7 +23,7 @@
 //! the player's own story about himself can never drift apart.
 
 use super::ledger::PlayerStatCompetitionKind;
-use crate::Player;
+use crate::{Player, TeamType};
 use chrono::{Datelike, Duration, NaiveDate};
 
 /// Consecutive recent seasons without first-team football at the parent
@@ -96,14 +96,49 @@ impl StuckCareerScan {
     /// Walk the canonical season ledger backwards from the most recent
     /// league season the player was at this club for. Returns `None` when
     /// there is no league history at this club to judge from.
+    ///
+    /// Assumes the player's minutes are first-team minutes. Callers that
+    /// know he is registered with a squad below the first team must use
+    /// [`Self::of_in_squad`] instead.
     pub fn of(player: &Player, today: NaiveDate) -> Option<Self> {
+        Self::of_in_squad(player, today, TeamType::Main)
+    }
+
+    /// As [`Self::of`], but aware of WHICH squad the player is registered
+    /// with.
+    ///
+    /// B and Second sides play real league football under their own brand,
+    /// so a prime-age player parked in one racks up thirty league starts a
+    /// season — and read naively that broke the stuck chain every year.
+    /// He was, by the ledger's own definition, never stuck: the club had
+    /// simply stopped picking him for the team he was signed to play for,
+    /// which is precisely the grievance this scan exists to measure.
+    ///
+    /// Minutes played for the squad he currently sits in therefore do not
+    /// count as first-team football. Rows from any other spell at the club
+    /// (i.e. the seasons he WAS in the first team) still count and still
+    /// break the chain, so a player who has dropped down reads as stuck
+    /// only for the seasons he actually spent down there.
+    pub fn of_in_squad(player: &Player, today: NaiveDate, squad_tier: TeamType) -> Option<Self> {
         let ledger = &player.statistics_history.season_ledger;
+        // The spell whose minutes are NOT first-team football, if any.
+        let below_first_team_slug = if matches!(squad_tier, TeamType::Main) {
+            None
+        } else {
+            player.statistics_history.active_team_slug()
+        };
+        let counts_as_first_team =
+            |slug: &str| below_first_team_slug.is_none_or(|parked| slug != parked);
         // Seasons before the player joined this club say nothing about
         // his standing here. Homegrown players have no floor.
         let join_year_floor = Self::club_tenure_days(player, today)
             .map(|d| (today - Duration::days(d)).year() as u16);
         let at_club = |year: u16| join_year_floor.map_or(true, |floor| year >= floor);
 
+        // The anchor deliberately still considers every league row,
+        // including the parked squad's: a player who has spent two years
+        // in the B team has a most-recent league season, and refusing to
+        // anchor on it would leave him with no scan at all.
         let anchor = ledger
             .iter()
             .filter(|e| matches!(e.competition_kind, PlayerStatCompetitionKind::League))
@@ -128,6 +163,7 @@ impl StuckCareerScan {
                     e.season_start_year == year
                         && !e.is_loan
                         && matches!(e.competition_kind, PlayerStatCompetitionKind::League)
+                        && counts_as_first_team(&e.team_slug)
                 })
                 .fold((0u16, 0u16), |(s, a), e| {
                     (

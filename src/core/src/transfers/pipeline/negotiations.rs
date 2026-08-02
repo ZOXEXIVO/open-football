@@ -95,6 +95,13 @@ struct NegotiationAction {
     player_sold_from: Option<(u32, f64)>,
     offered_annual_wage: u32,
     buying_league_reputation: u16,
+    /// The SELLER's league reputation. Paired with the buyer's so the
+    /// personal-terms resolver can tell a genuine step up in stage from a
+    /// sideways move — the difference a player chasing a bigger league
+    /// cares about more than the badge on the shirt.
+    selling_league_reputation: u16,
+    /// The player's big-stage pull, staged for the resolver.
+    player_stage_inclination: f32,
     is_rival: bool,
     /// The SELLER's own asking price for this player (seller-context
     /// valuation for a permanent move, loan fee for a loan). Captured so
@@ -386,6 +393,15 @@ impl PipelineProcessor {
                     .and_then(|c| c.teams.teams.first())
                     .map(|t| t.reputation.overall_score())
                     .unwrap_or(0.3);
+                let selling_league_reputation = country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == selling_club_id)
+                    .and_then(|c| c.teams.teams.first())
+                    .and_then(|t| t.league_id)
+                    .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                    .map(|l| l.reputation)
+                    .unwrap_or(0);
 
                 let prospect_ctx = ProspectSigningContext {
                     scout_assessed,
@@ -680,6 +696,8 @@ impl PipelineProcessor {
                         player_sold_from: player.sold_from.clone(),
                         offered_annual_wage,
                         buying_league_reputation,
+                        selling_league_reputation,
+                        player_stage_inclination: player.big_stage_inclination,
                         is_rival,
                         seller_asking: actual_asking.clone(),
                     });
@@ -762,6 +780,8 @@ impl PipelineProcessor {
                     negotiation.player_sold_from = action.player_sold_from.clone();
                     negotiation.offered_salary = Some(action.offered_annual_wage);
                     negotiation.buying_league_reputation = action.buying_league_reputation;
+                    negotiation.selling_league_reputation = action.selling_league_reputation;
+                    negotiation.player_stage_inclination = action.player_stage_inclination;
                     negotiation.reason.rival = action.is_rival;
                 }
 
@@ -1930,6 +1950,10 @@ impl PipelineProcessor {
             player_sold_from: Option<(u32, f64)>,
             offered_annual_wage: u32,
             buying_league_reputation: u16,
+            /// The SELLER's league reputation — see the domestic action.
+            selling_league_reputation: u16,
+            /// The player's big-stage pull, staged for the resolver.
+            player_stage_inclination: f32,
             /// Cold cross-border approach (target not seller-advertised).
             /// Stamped on the negotiation so the resolver applies the
             /// unsolicited base chance — the foreign path used to leave
@@ -2017,6 +2041,14 @@ impl PipelineProcessor {
                 .first()
                 .map(|t| t.reputation.world as f32 / 10000.0)
                 .unwrap_or(0.3);
+            let selling_league_reputation = sell_club
+                .teams
+                .teams
+                .first()
+                .and_then(|t| t.league_id)
+                .and_then(|lid| sell_country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| l.reputation)
+                .unwrap_or(0);
 
             let buy_country = match data.country(country_id) {
                 Some(c) => c,
@@ -2374,6 +2406,8 @@ impl PipelineProcessor {
                 player_sold_from: player.sold_from.clone(),
                 offered_annual_wage,
                 buying_league_reputation,
+                selling_league_reputation,
+                player_stage_inclination: player.big_stage_inclination,
                 is_unsolicited,
                 foreign_terms_floor_blocked,
                 foreign_seller_importance,
@@ -2433,6 +2467,8 @@ impl PipelineProcessor {
                     negotiation.staged_reservation_wage =
                         Some(((action.offered_annual_wage as f64) * 1.10) as u32);
                     negotiation.buying_league_reputation = action.buying_league_reputation;
+                    negotiation.selling_league_reputation = action.selling_league_reputation;
+                    negotiation.player_stage_inclination = action.player_stage_inclination;
                     negotiation.foreign_terms_floor_blocked = action.foreign_terms_floor_blocked;
                     negotiation.foreign_seller_importance = Some(action.foreign_seller_importance);
                 }

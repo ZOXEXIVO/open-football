@@ -178,6 +178,24 @@ impl PlayerAttributes {
         self.home_reputation = (self.home_reputation + home_delta).clamp(0, 10000);
         self.world_reputation = (self.world_reputation + world_delta).clamp(0, 10000);
     }
+
+    /// Blended standing on the 0..10000 scale — the figure to compare
+    /// against reputation thresholds instead of raw `world_reputation`.
+    ///
+    /// Fame is earned on big stages, so a genuine talent in a weak or
+    /// continentally isolated league carries a low world reputation while
+    /// being a household name at home. Reading `world_reputation` bare
+    /// therefore excludes exactly the players a step-up pull exists for.
+    /// Delegates to the market's own blend so the player-side gates and
+    /// the transfer pipeline can never drift apart.
+    pub fn effective_reputation(&self, domestic: bool) -> i16 {
+        crate::transfers::pipeline::plausibility::EffectivePlayerReputation::compute(
+            self.world_reputation,
+            self.current_reputation,
+            self.home_reputation,
+            domestic,
+        )
+    }
 }
 
 #[cfg(test)]

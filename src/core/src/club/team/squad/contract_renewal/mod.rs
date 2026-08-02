@@ -14,7 +14,7 @@ use crate::utils::DateUtils;
 use crate::utils::FormattingUtils;
 use crate::{
     PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerSquadStatus, PlayerStatusType,
-    Team,
+    Team, TeamType,
 };
 use chrono::NaiveDate;
 use log::debug;
@@ -417,12 +417,16 @@ impl ContractRenewalManager {
                 plan.role_of(player.id)
                     .is_none_or(|role| role != PlannedRole::NotInPlans)
             })
-            .filter_map(|player| Self::evaluate(player, date))
+            .filter_map(|player| Self::evaluate(player, date, team.team_type))
             .collect()
     }
 
-    fn evaluate(player: &Player, date: NaiveDate) -> Option<RenewalCandidate> {
-        Self::evaluate_inner(player, date, false)
+    fn evaluate(
+        player: &Player,
+        date: NaiveDate,
+        squad_tier: TeamType,
+    ) -> Option<RenewalCandidate> {
+        Self::evaluate_inner(player, date, false, squad_tier)
     }
 
     /// Same evaluation as [`Self::evaluate`] but skips the borrower-side
@@ -430,8 +434,12 @@ impl ContractRenewalManager {
     /// player who is currently away on loan. The permanent contract still
     /// lives on `player.contract`; the loan agreement on `contract_loan`
     /// is incidental to the renewal question.
-    fn evaluate_for_parent(player: &Player, date: NaiveDate) -> Option<RenewalCandidate> {
-        Self::evaluate_inner(player, date, true)
+    fn evaluate_for_parent(
+        player: &Player,
+        date: NaiveDate,
+        squad_tier: TeamType,
+    ) -> Option<RenewalCandidate> {
+        Self::evaluate_inner(player, date, true, squad_tier)
     }
 
     /// Expiry-day evaluation: the contract has already lapsed
@@ -489,6 +497,7 @@ impl ContractRenewalManager {
         player: &Player,
         date: NaiveDate,
         for_parent_loanee: bool,
+        squad_tier: TeamType,
     ) -> Option<RenewalCandidate> {
         // Borrower-side: a loaned-in player isn't the borrower's to renew.
         // Parent-side: the player is OUR loanee — proceed against the
@@ -533,7 +542,7 @@ impl ContractRenewalManager {
         // prime-age player the club has not picked for years now runs his
         // contract down instead — a free exit, which is how these careers
         // actually resolve.
-        if Self::renewal_has_no_football_case(player, date) {
+        if Self::renewal_has_no_football_case(player, date, squad_tier) {
             return None;
         }
 
@@ -574,7 +583,11 @@ impl ContractRenewalManager {
     /// a real role, and the veteran-keeper protection elsewhere says so.
     /// What is left is exactly the wasted prime the club should either
     /// start picking or stop paying.
-    fn renewal_has_no_football_case(player: &Player, date: NaiveDate) -> bool {
+    fn renewal_has_no_football_case(
+        player: &Player,
+        date: NaiveDate,
+        squad_tier: TeamType,
+    ) -> bool {
         /// Below this age a blocked player is a development case.
         const MIN_AGE: u8 = 25;
         /// From this age a squad role is a career, not a waste.
@@ -592,17 +605,19 @@ impl ContractRenewalManager {
             return false;
         }
         // Only ever applies to squad filler — a key player or regular on a
-        // quiet season is not in question.
+        // quiet season is not in question. Read through the squad that
+        // minted the label: being the B team's key player is not a
+        // first-team case for fresh terms, it is the situation itself.
         let is_squad_filler = player.contract.as_ref().is_some_and(|c| {
             matches!(
-                c.squad_status,
+                c.squad_status.as_first_team_designation(squad_tier),
                 PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::NotNeeded
             )
         });
         if !is_squad_filler {
             return false;
         }
-        StuckCareerScan::of(player, date)
+        StuckCareerScan::of_in_squad(player, date, squad_tier)
             .map(|scan| scan.stuck_years >= STUCK_SEASONS)
             .unwrap_or(false)
     }
@@ -886,7 +901,10 @@ impl ContractRenewalManager {
         league_reputation: u16,
         structure: &WageStructureSnapshot,
     ) -> Option<(PlayerContractProposal, String)> {
-        let candidate = Self::evaluate_for_parent(loanee, date)?;
+        // The caller establishes `parent_team` is the loanee's parent MAIN
+        // team, so his standing is read against the first team he will
+        // return to.
+        let candidate = Self::evaluate_for_parent(loanee, date, parent_team.team_type)?;
 
         let attempts = loanee
             .decision_history
@@ -1698,7 +1716,7 @@ mod loanee_evaluate_tests {
         // final-panic / bosman pressure, but borrower-side evaluate must
         // still return None because the player isn't theirs to renew.
         let p = make_loanee(d(2026, 8, 31), d(2026, 7, 31));
-        assert!(ContractRenewalManager::evaluate(&p, today).is_none());
+        assert!(ContractRenewalManager::evaluate(&p, today, TeamType::Main).is_none());
     }
 
     #[test]
@@ -1708,7 +1726,7 @@ mod loanee_evaluate_tests {
         // produce a candidate so the country-level pass can build an
         // offer at the parent's wage hierarchy.
         let p = make_loanee(d(2026, 8, 31), d(2026, 7, 31));
-        assert!(ContractRenewalManager::evaluate_for_parent(&p, today).is_some());
+        assert!(ContractRenewalManager::evaluate_for_parent(&p, today, TeamType::Main).is_some());
     }
 
     #[test]
@@ -1717,7 +1735,7 @@ mod loanee_evaluate_tests {
         // Parent contract still has ~4 years to run — well past every
         // squad-status threshold. No renewal pressure even on parent side.
         let p = make_loanee(d(2030, 6, 30), d(2027, 5, 31));
-        assert!(ContractRenewalManager::evaluate_for_parent(&p, today).is_none());
+        assert!(ContractRenewalManager::evaluate_for_parent(&p, today, TeamType::Main).is_none());
     }
 }
 
@@ -1842,7 +1860,7 @@ mod expiry_evaluate_tests {
         let mut p = ExpiryFixtures::player_with_expiration(ExpiryFixtures::d(2026, 9, 10));
         p.contract.as_mut().unwrap().is_transfer_listed = true;
         assert!(
-            ContractRenewalManager::evaluate(&p, today).is_none(),
+            ContractRenewalManager::evaluate(&p, today, TeamType::Main).is_none(),
             "players on the transfer list are never offered new contracts"
         );
     }

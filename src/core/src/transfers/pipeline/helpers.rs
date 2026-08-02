@@ -296,27 +296,43 @@ impl PipelineProcessor {
                 .unwrap_or(0.3),
             league_reputation,
             league_id: main_team.and_then(|t| t.league_id),
+            // Not in the first team's depth chart at all ⇒ ranked BEHIND
+            // it, never folded into it at rank 1. See the matching note in
+            // `collect_player_pool`.
             position_group_rank: match ranks
                 .map(|r| r.rank(player.id))
                 .unwrap_or_else(|| Self::position_group_rank(club, player.id, pos_group))
             {
-                u8::MAX => 1,
+                u8::MAX => main_team
+                    .map(|t| {
+                        t.players
+                            .players
+                            .iter()
+                            .filter(|p| p.position().position_group() == pos_group)
+                            .count()
+                            .min(u8::MAX as usize) as u8
+                    })
+                    .unwrap_or(0)
+                    .saturating_add(1),
                 r => r,
             },
             squad_status: player
                 .contract
                 .as_ref()
-                .map(|c| c.squad_status.clone())
+                .map(|c| {
+                    c.squad_status
+                        .as_first_team_designation(club.teams.squad_tier_of(player.id))
+                })
                 .unwrap_or(PlayerSquadStatus::NotYetSet),
             is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
             is_unhappy: player.statuses.has(PlayerStatusType::Unh),
             in_debt: club.finance.balance.balance < 0,
             days_on_market: player.days_available(date).min(i16::MAX as i64) as i16,
             market_resignation: player.market_resignation(date),
-            club_matches_played: crate::club::team::squad::SquadEvidenceContext::current_season_sample(
-                date, club,
-            )
-            .club_matches_proxy(),
+            club_matches_played:
+                crate::club::team::squad::SquadEvidenceContext::current_season_sample(date, club)
+                    .club_matches_proxy(),
+            big_stage_inclination: player.big_stage_inclination,
         };
         PlayerSummary {
             player_id: player.id,
@@ -852,12 +868,14 @@ impl CountryPlayerLookup {
 pub(super) struct ClubGroupRanks {
     rank_by_player: FxHashMap<u32, u8>,
     best_by_group: [u8; PlayerFieldPositionGroup::COUNT],
+    size_by_group: [u8; PlayerFieldPositionGroup::COUNT],
 }
 
 impl ClubGroupRanks {
     pub(super) fn build(club: &Club) -> Self {
         let mut rank_by_player = FxHashMap::default();
         let mut best_by_group = [0u8; PlayerFieldPositionGroup::COUNT];
+        let mut size_by_group = [0u8; PlayerFieldPositionGroup::COUNT];
         let team = club
             .teams
             .teams
@@ -873,6 +891,7 @@ impl ClubGroupRanks {
             for (group_idx, peers) in peers_by_group.iter_mut().enumerate() {
                 peers.sort_by(|a, b| b.1.cmp(&a.1));
                 best_by_group[group_idx] = peers.first().map(|(_, ca)| *ca).unwrap_or(0);
+                size_by_group[group_idx] = peers.len().min(u8::MAX as usize) as u8;
                 for (rank, (pid, _)) in peers.iter().enumerate() {
                     rank_by_player.insert(*pid, rank.min(u8::MAX as usize - 1) as u8);
                 }
@@ -881,6 +900,7 @@ impl ClubGroupRanks {
         ClubGroupRanks {
             rank_by_player,
             best_by_group,
+            size_by_group,
         }
     }
 
@@ -898,6 +918,13 @@ impl ClubGroupRanks {
     /// [`PipelineProcessor::best_ca_in_group`].
     pub(super) fn best(&self, group: PlayerFieldPositionGroup) -> u8 {
         self.best_by_group[group.index()]
+    }
+
+    /// How many first-team players occupy this position group. Lets a
+    /// caller place someone who isn't in the main-team depth chart at all
+    /// BEHIND it, rather than folding him into it at an invented rank.
+    pub(super) fn group_size(&self, group: PlayerFieldPositionGroup) -> u8 {
+        self.size_by_group[group.index()]
     }
 }
 

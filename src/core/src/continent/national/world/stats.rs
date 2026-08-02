@@ -85,7 +85,12 @@ pub fn apply_world_international_stats_for_level(
                 continue;
             }
             let country_rep = country.reputation as f32;
-            let country_weight = (country_rep / 500.0).clamp(0.5, 2.0);
+            // Country reputation is a 0..10000 scale. Dividing by 500
+            // saturated the clamp for every real footballing nation, so a
+            // San Marino cap was worth exactly as much international fame
+            // as a Brazil cap. Scale across the real range instead, with
+            // an average nation landing near 1.0.
+            let country_weight = (0.4 + 1.6 * (country_rep / 10_000.0)).clamp(0.4, 2.0);
             for s in &country.national_team.squad {
                 country_weights.insert(s.player_id, country_weight);
             }

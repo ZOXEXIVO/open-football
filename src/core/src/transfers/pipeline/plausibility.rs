@@ -1111,6 +1111,15 @@ impl TransferMovePlausibility {
             // has already re-read what level actually wants him.
             adj.player_terms_delta -= drop * 45.0 * (1.0 - 0.55 * resignation);
             adj.minimum_fee_multiplier += drop as f64 * 0.9;
+        } else {
+            // A step UP had no counterpart at all here: the model knew how
+            // to make a player refuse a lesser club and nothing about him
+            // wanting a better one, so every upward move was scored as
+            // merely neutral. Loss aversion is real and the asymmetry
+            // stays — this is deliberately half the downward slope — but a
+            // clear sporting step up should now read as something the
+            // player actively wants.
+            adj.player_terms_delta += (-drop) * 22.0;
         }
 
         if importance >= 0.75 {
@@ -1503,11 +1512,12 @@ impl TransferPlausibilityBuilder {
             current_salary,
             estimated_value,
             player_appearances: player.statistics.total_games(),
-            seller_club_matches: crate::club::team::squad::SquadEvidenceContext::current_season_sample(
-                date,
-                selling_club,
-            )
-            .club_matches_proxy(),
+            seller_club_matches:
+                crate::club::team::squad::SquadEvidenceContext::current_season_sample(
+                    date,
+                    selling_club,
+                )
+                .club_matches_proxy(),
             seller_position_rank: rank,
             player_ca,
             best_group_ca_at_seller: best_group_ca,

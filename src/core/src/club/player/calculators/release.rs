@@ -1,5 +1,5 @@
 use crate::club::team::squad::SquadAssetClass;
-use crate::{ContractType, Person, Player, PlayerSquadStatus};
+use crate::{ContractType, Person, Player, PlayerSquadStatus, TeamType};
 use chrono::NaiveDate;
 
 /// Why a player's contract ended and they entered the free-agent pool.
@@ -90,6 +90,29 @@ pub struct ReleaseEligibilityContext {
     /// only fire once a readable sample exists. Callers pass
     /// [`crate::club::team::squad::SquadEvidenceContext::is_early_season`].
     pub early_season: bool,
+    /// Which squad holds the player's registration. A `KeyPlayer` /
+    /// `FirstTeamRegular` label blocks release outright — but that label
+    /// only promises first-team football when the first team awarded it.
+    /// B and Second sides mint their own labels for dressing-room life,
+    /// and reading those as a first-team promise made every prime-age
+    /// player parked in a B squad permanently un-releasable. Defaults to
+    /// `Main` via [`Default`] so callers already scoped to the first team
+    /// keep their existing reading.
+    pub squad_tier: TeamType,
+}
+
+impl Default for ReleaseEligibilityContext {
+    fn default() -> Self {
+        ReleaseEligibilityContext {
+            date: NaiveDate::default(),
+            squad_avg_ability: 0,
+            market_value: 0.0,
+            annual_wage_bill: 0,
+            asset_class: SquadAssetClass::UnknownNeedsEvaluation,
+            early_season: false,
+            squad_tier: TeamType::Main,
+        }
+    }
 }
 
 /// Why an automatic mutual release was denied. Transfer-list-or-skip is
@@ -172,7 +195,9 @@ impl AutomaticReleaseEligibility {
             None => return Some(AutomaticReleaseBlock::NoContract),
         };
         if matches!(
-            contract.squad_status,
+            contract
+                .squad_status
+                .as_first_team_designation(ctx.squad_tier),
             PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
         ) {
             return Some(AutomaticReleaseBlock::ProtectedRole);
@@ -336,6 +361,7 @@ mod tests {
                 // Existing fixtures predate the ageing-unused exception;
                 // an unreadable sample keeps them on the original gate.
                 early_season: true,
+                squad_tier: TeamType::Main,
             }
         }
 

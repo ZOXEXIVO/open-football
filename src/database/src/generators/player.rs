@@ -1535,7 +1535,26 @@ impl PlayerGenerator {
         // can produce CA above the raw PA when skills align well with the position
         let potential_ability = potential_ability.max(current_ability);
 
-        let rep_base = (rep_factor * 3000.0) as i32;
+        // Reputation follows the same ability curve the ODB-hydration path
+        // uses, so a generated world and a recorded one speak the same
+        // language. The old `rep_factor * 3000` formula was a per-CLUB
+        // scalar: it capped world reputation at 1200 no matter how good the
+        // player was, and gave a club's star and its third-choice backup
+        // statistically identical fame — which left every procedurally
+        // generated region permanently below the thresholds the transfer,
+        // ambition and squad-hierarchy systems check.
+        let (ability_current, ability_home, ability_world) =
+            derive_reputation_from_ability(current_ability);
+        // Context still modulates *exposure* around that baseline — the same
+        // player is better known at a televised giant than at a minnow — but
+        // ability leads. World fame is the most stage-dependent axis, home
+        // fame the least: you are known at home for being good.
+        let rep_factor = rep_factor.clamp(0.0, 1.0);
+        let exposure = |lo: f32, hi: f32| lo + (hi - lo) * rep_factor;
+        let jitter = rng.float_range(0.92, 1.08);
+        let scaled = |base: i16, lo: f32, hi: f32| -> i16 {
+            (base as f32 * exposure(lo, hi) * jitter).clamp(0.0, 10_000.0) as i16
+        };
         let physical = PhysicalProfile::for_position(primary_position, country_id, rng);
         let state = FitnessState::for_age(age, rng);
 
@@ -1548,13 +1567,9 @@ impl PlayerGenerator {
             weight: physical.weight_kg,
             height: physical.height_cm,
             value: 0,
-            current_reputation: IntegerUtils::random((rep_base as f32 * 0.3) as i32, rep_base)
-                as i16,
-            home_reputation: IntegerUtils::random((rep_base as f32 * 0.5) as i32, rep_base) as i16,
-            world_reputation: IntegerUtils::random(
-                (rep_base as f32 * 0.1) as i32,
-                (rep_base as f32 * 0.4) as i32,
-            ) as i16,
+            current_reputation: scaled(ability_current, 0.80, 1.15),
+            home_reputation: scaled(ability_home, 0.85, 1.10),
+            world_reputation: scaled(ability_world, 0.55, 1.25),
             current_ability,
             ability_marker: 0,
             ability_marked_on_day: 0,

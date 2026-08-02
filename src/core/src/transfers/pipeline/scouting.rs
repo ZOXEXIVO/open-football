@@ -901,14 +901,27 @@ impl PipelineProcessor {
                             ((days / 30).min(i16::MAX as i64) as i16, c.salary)
                         })
                         .unwrap_or((0, 0));
+                    // `ClubGroupRanks` only indexes the FIRST-TEAM roster, so
+                    // everyone below it came back `u8::MAX` and was then read
+                    // as rank 1 — "the seller's second choice in his
+                    // position". That inflated every B / reserve / youth
+                    // player's market importance to near-untouchable, which
+                    // is the opposite of the truth: he is not in the first
+                    // team's depth chart at all. Rank him behind it instead.
                     let seller_rank = match group_ranks.rank(player.id) {
-                        u8::MAX => 1,
+                        u8::MAX => group_ranks
+                            .group_size(player.position().position_group())
+                            .saturating_add(1),
                         r => r,
                     };
+                    // A B / Second side's own "key player" label is standing
+                    // in that dressing room, not a first-team promise the
+                    // market should price against. Read it through the tier
+                    // that awarded it.
                     let squad_status = player
                         .contract
                         .as_ref()
-                        .map(|c| c.squad_status.clone())
+                        .map(|c| c.squad_status.as_first_team_designation(team.team_type))
                         .unwrap_or(PlayerSquadStatus::NotYetSet);
                     players.push(PlayerSummary {
                         player_id: player.id,
@@ -966,6 +979,7 @@ impl PipelineProcessor {
                             days_on_market: player.days_available(date).min(i16::MAX as i64) as i16,
                             market_resignation: player.market_resignation(date),
                             club_matches_played: seller_club_matches,
+                            big_stage_inclination: player.big_stage_inclination,
                         },
                     });
                 }
@@ -1063,9 +1077,11 @@ impl PipelineProcessor {
         // overrides the normal direction of travel, so it opens the pool;
         // everything downstream (the realism band, the staged plausibility
         // gates, reputation reach and affordability) still has to pass.
-        for p in foreign_players.iter().copied().filter(|p| {
-            p.country_reputation <= country_reputation || Self::is_openly_available(p)
-        }) {
+        for p in foreign_players
+            .iter()
+            .copied()
+            .filter(|p| p.country_reputation <= country_reputation || Self::is_openly_available(p))
+        {
             foreign_by_group[p.position_group.index()].push(p);
         }
 

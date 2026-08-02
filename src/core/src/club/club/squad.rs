@@ -728,6 +728,7 @@ impl Club {
                     continue;
                 }
                 let team_name = self.teams.teams[team_idx].name.clone();
+                let squad_tier = self.teams.teams[team_idx].team_type;
                 if let Some(player) = self.teams.teams[team_idx]
                     .players
                     .players
@@ -765,8 +766,9 @@ impl Club {
                         squad_avg_ability,
                         market_value,
                         annual_wage_bill,
-                        asset_class: asset_ctx.classify(player, date),
+                        asset_class: asset_ctx.classify_in_squad(player, date, squad_tier),
                         early_season: asset_ctx.is_early_season(),
+                        squad_tier,
                     };
                     match AutomaticReleaseEligibility::assess(player, &release_ctx) {
                         None => {

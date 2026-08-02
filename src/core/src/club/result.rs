@@ -754,13 +754,17 @@ impl ClubResult {
             // the role here is what protects a still-`NotYetSet` but useful
             // senior from being walked for free over a salary dispute.
             let asset_ctx = SquadAssetContext::build(club, date);
-            let asset_class = asset_ctx.classify(player, date);
+            // A label minted by a B / reserve squad is dressing-room
+            // standing, not a first-team promise — read it through the tier
+            // that awarded it before it protects him from the market.
+            let squad_tier = club.teams.squad_tier_of(player.id);
+            let asset_class = asset_ctx.classify_in_squad(player, date, squad_tier);
             let formal_key = player
                 .contract
                 .as_ref()
                 .map(|c| {
                     matches!(
-                        c.squad_status,
+                        c.squad_status.as_first_team_designation(squad_tier),
                         PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
                     )
                 })
@@ -799,6 +803,7 @@ impl ClubResult {
                 annual_wage_bill,
                 asset_class,
                 early_season: asset_ctx.is_early_season(),
+                squad_tier,
             };
             let decision = match AutomaticReleaseEligibility::assess(player, &release_ctx) {
                 None => UnresolvedSalaryDecision::FreeTransfer,

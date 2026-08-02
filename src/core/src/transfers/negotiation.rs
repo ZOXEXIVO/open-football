@@ -65,6 +65,19 @@ pub struct TransferNegotiation {
     /// Buying club's league reputation at negotiation start (0–10000).
     /// Anchors the player's reservation wage during PersonalTerms.
     pub buying_league_reputation: u16,
+    /// Selling club's league reputation at negotiation start (0–10000).
+    /// Paired with the buyer's so personal terms can read the move as a
+    /// step up, sideways, or down IN STAGE — which is what a player
+    /// chasing a bigger league is actually weighing, and which the club
+    /// reputations alone cannot express (a mid-table Spanish side is a
+    /// smaller club than Zenit and a far bigger stage).
+    pub selling_league_reputation: u16,
+    /// The player's big-stage pull (0..1) captured at creation. Foreign
+    /// moves cannot re-read the player at resolution time — he lives in
+    /// another country's borrow — so his appetite for a bigger stage is
+    /// staged here the same way seller importance already is. Domestic
+    /// deals recompute it live and ignore this.
+    pub player_stage_inclination: f32,
 
     // Phased negotiation fields
     pub phase: NegotiationPhase,
@@ -166,6 +179,8 @@ impl TransferNegotiation {
             has_option_to_buy: false,
             is_unsolicited: false,
             buying_league_reputation: 0,
+            selling_league_reputation: 0,
+            player_stage_inclination: 0.0,
             phase: NegotiationPhase::InitialApproach {
                 started: created_date,
             },

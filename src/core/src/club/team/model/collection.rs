@@ -111,6 +111,20 @@ impl TeamCollection {
         self.main().map(|t| t.id)
     }
 
+    /// Which squad currently holds this player's registration. Callers that
+    /// classify a player as a club ASSET need this: a squad label only
+    /// carries a first-team promise when it was minted by the first team
+    /// (see [`crate::PlayerSquadStatus::as_first_team_designation`]).
+    /// Falls back to `Main` for an unknown id so a caller that has already
+    /// resolved the player elsewhere keeps the pre-existing reading.
+    pub fn squad_tier_of(&self, player_id: u32) -> TeamType {
+        self.teams
+            .iter()
+            .find(|t| t.players.players.iter().any(|p| p.id == player_id))
+            .map(|t| t.team_type)
+            .unwrap_or(TeamType::Main)
+    }
+
     pub fn with_league(&self, league_id: u32) -> Vec<u32> {
         self.teams
             .iter()

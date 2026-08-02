@@ -944,6 +944,7 @@ mod tests {
                     days_on_market: self.days_on_market,
                     market_resignation: 0.0,
                     club_matches_played: 0,
+                    big_stage_inclination: 0.0,
                 },
             }
         }

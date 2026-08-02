@@ -15,7 +15,7 @@ use crate::transfers::{
     TransferListingType,
 };
 use crate::{
-    Club, Country, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
+    Club, ContractType, Country, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
     PlayerPositionType, PlayerSquadStatus, PlayerStatusType, ReputationLevel,
 };
 use chrono::{Datelike, NaiveDate, Weekday};
@@ -216,6 +216,64 @@ impl CountryResult {
                             }
                         }
                         continue;
+                    }
+
+                    // Player-initiated departures from a squad below the
+                    // first team. The numeric evaluation above deliberately
+                    // reads only the main roster — its triggers measure a
+                    // player against main-squad analysis and must not
+                    // auto-list reserves — but a formal request is not a
+                    // numeric trigger. It is the player's own decision, and
+                    // a senior reserve squad is exactly where the
+                    // reserve-ambition audit produces one.
+                    //
+                    // Without this the request was a closed loop: the audit
+                    // fired, the manager talk failed, `Req` was stamped, no
+                    // listing pass could see it, and the weekly desire tick
+                    // then cleared the status again for want of a live
+                    // reason. The player asked to leave every month for
+                    // years and nothing ever happened.
+                    //
+                    // Youth squads stay out of it: a boy asking for football
+                    // is a development-loan case, which the pathway owns.
+                    let is_senior_reserve = team.team_type.is_senior_reserve();
+                    let is_youth_contract = player
+                        .contract
+                        .as_ref()
+                        .map(|c| c.contract_type == ContractType::Youth)
+                        .unwrap_or(false);
+                    if is_senior_reserve && !is_youth_contract && player.contract.is_some() {
+                        let requested = player.statuses.has(PlayerStatusType::Req);
+                        let long_unhappy = player
+                            .statuses
+                            .held_for_days(PlayerStatusType::Unh, date)
+                            .is_some_and(|days| days >= UNHAPPY_LISTING_MIN_DAYS);
+                        let already_on_market = player.statuses.has(PlayerStatusType::Lst)
+                            || player.statuses.has(PlayerStatusType::Frt);
+                        if (requested || long_unhappy) && !already_on_market {
+                            let asking_price = Self::calculate_asking_price(
+                                player,
+                                club,
+                                date,
+                                price_level,
+                                league_reputation,
+                                club_reputation,
+                            );
+                            listings_to_add.push(PendingListing {
+                                player_id: player.id,
+                                club_id: club.id,
+                                team_id: team.id,
+                                asking_price,
+                                listing_type: TransferListingType::Transfer,
+                                reason: if requested {
+                                    "dec_reason_player_requested".to_string()
+                                } else {
+                                    "dec_reason_player_unhappy".to_string()
+                                },
+                                decided_by: decided_by.clone(),
+                            });
+                            continue;
+                        }
                     }
 
                     // Explicit permanent club listings: the season-start

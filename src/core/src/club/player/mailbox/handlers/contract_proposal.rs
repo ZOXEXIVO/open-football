@@ -554,12 +554,31 @@ impl ProcessContractHandler {
                     PersonBehaviourState::Good => true,
                 };
 
-                if meets_floor && behaviour_pass {
+                // "Sign, but leave me a door." A player being drawn toward
+                // a bigger competition will not put his name to a long deal
+                // that locks him in with no exit — he wants the clause that
+                // lets a top-five club come for him, and holding out for it
+                // is how these negotiations really go. Without this the
+                // ambition had no lever at renewal time at all: the club
+                // simply re-signed him and the itch went on being ignored.
+                //
+                // Only when the pull is strong AND the offer is genuinely
+                // binding: a short deal is its own exit, and a clause the
+                // club already offered needs no fight.
+                const CLAUSE_DEMAND_PULL: f32 = 0.40;
+                const BINDING_YEARS: u8 = 3;
+                let wants_an_exit = player.big_stage_inclination >= CLAUSE_DEMAND_PULL
+                    && proposal.release_clause.is_none()
+                    && proposal.years >= BINDING_YEARS;
+
+                if meets_floor && behaviour_pass && !wants_an_exit {
                     accept_and_clear(player, proposal, now);
                 } else {
                     result.contract.contract_rejected = true;
                     let reason = if !meets_floor {
                         RejectionReason::LowSalary
+                    } else if wants_an_exit {
+                        RejectionReason::NoReleaseClause
                     } else {
                         RejectionReason::AmbitionMismatch
                     };

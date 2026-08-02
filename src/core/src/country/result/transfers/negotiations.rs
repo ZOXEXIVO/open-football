@@ -207,6 +207,8 @@ impl CountryResult {
                         offered_annual_wage: n.offered_salary,
                         staged_reservation_wage: n.staged_reservation_wage,
                         buying_league_reputation: n.buying_league_reputation,
+                        selling_league_reputation: n.selling_league_reputation,
+                        player_stage_inclination: n.player_stage_inclination,
                         sell_on_percentage,
                         loan_future_fee: n.current_offer.loan_future_fee().map(
                             |(fee, obligation)| (fee.amount.max(0.0).round() as u32, obligation),
@@ -1269,6 +1271,21 @@ impl CountryResult {
                     chance += 20.0; // Unhappy — willing to move
                 }
 
+                // Does this move answer what he actually wants? A player
+                // drawn toward a bigger stage weighs the LEAGUE, not just
+                // the badge: he will stretch for a mid-table side in a top
+                // division and stall on a lateral move to a bigger club in
+                // the same kind of competition, because the second one
+                // doesn't change his career. Without this every bidder
+                // looked alike to him and he signed for whoever asked
+                // first — which is how a Russian league star ended up in
+                // Turkey while Spain was still deciding.
+                chance += StageAmbitionMatch::terms_delta(
+                    player.big_stage_inclination,
+                    neg_data.selling_league_reputation,
+                    neg_data.buying_league_reputation,
+                );
+
                 // Market-reality reset: a long-unsold listed player has
                 // watched the market decline him at his level, and the
                 // prestige / age / ambition resistance above fades as his
@@ -1299,6 +1316,15 @@ impl CountryResult {
             if rep_diff > 0.2 {
                 chance += 10.0;
             }
+            // Same stage-ambition read as the domestic branch, off the
+            // inclination staged at creation — this is the path a move from
+            // a sub-elite league to a top-five one actually travels, so it
+            // is the one that most needs to know he wants it.
+            chance += StageAmbitionMatch::terms_delta(
+                neg_data.player_stage_inclination,
+                neg_data.selling_league_reputation,
+                neg_data.buying_league_reputation,
+            );
             wage_negotiable = StagedWageAssessment::apply(neg_data, &mut chance);
         }
 
@@ -1389,8 +1415,23 @@ impl CountryResult {
 
                     chance -= base_penalty * ambition_factor * age_factor;
                 } else if prestige_drop < -0.1 {
-                    // Moving to more prestigious region — bonus
-                    chance += (-prestige_drop) * 20.0;
+                    // Moving to a MORE prestigious region. The 20× here
+                    // against 110×(×1.5) above made the model roughly eight
+                    // times as resistant to going down as it was eager to
+                    // go up: a Spaniard offered Russia lost ~82 points, a
+                    // Russian offered Spain gained ~10. Loss aversion is
+                    // real, so the asymmetry stays — but at a ratio that
+                    // still lets the upward move be a pull rather than a
+                    // rounding error, and scaled by the same ambition that
+                    // sharpens the resistance downward.
+                    let ambition_factor = if neg_data.player_ambition > 0.7 {
+                        1.3
+                    } else if neg_data.player_ambition > 0.5 {
+                        1.0
+                    } else {
+                        0.8
+                    };
+                    chance += (-prestige_drop) * 45.0 * ambition_factor;
                 }
             }
         }
@@ -2497,6 +2538,56 @@ impl SellerFeeFloor {
     }
 }
 
+/// Does this move give the player what he is chasing?
+///
+/// Everything else in the personal-terms model asks how big the buying
+/// CLUB is. That is the wrong question for the most ordinary ambition in
+/// football — a good player in a decent league wanting a better one. The
+/// club that answers it is often *smaller* than the one he is leaving: a
+/// mid-table Spanish side is a lesser club than Zenit and an
+/// incomparably bigger stage.
+///
+/// So this reads the move on the axis he cares about, scaled by how
+/// strongly he is drawn there in the first place (his stored
+/// [`crate::club::player::transfer::BigStagePull`] score). A player with
+/// no such itch is unaffected in either direction; a player consumed by it
+/// will stretch a long way for the right league and stall on a lateral
+/// move that changes nothing about his career.
+///
+/// Continuous and symmetric — nothing here blocks a move. A big enough
+/// wage, a guaranteed starting role or plain resignation can still carry
+/// a deal the player would rather not take, exactly as they do in life.
+pub(crate) struct StageAmbitionMatch;
+
+impl StageAmbitionMatch {
+    /// League-reputation gain that reads as a full step up in stage.
+    const FULL_STEP_GAIN: f32 = 1500.0;
+    /// Most a satisfying move can add to the personal-terms roll …
+    const MAX_BONUS: f32 = 22.0;
+    /// … and the most a move that ignores his ambition can subtract.
+    /// Deliberately smaller: wanting something better is a reason to say
+    /// yes to it, not a reason to refuse everything else.
+    const MAX_PENALTY: f32 = 14.0;
+
+    pub(crate) fn terms_delta(
+        inclination: f32,
+        selling_league_reputation: u16,
+        buying_league_reputation: u16,
+    ) -> f32 {
+        let pull = inclination.clamp(0.0, 1.0);
+        if pull <= 0.0 || selling_league_reputation == 0 || buying_league_reputation == 0 {
+            return 0.0;
+        }
+        let gain = buying_league_reputation as f32 - selling_league_reputation as f32;
+        let step = (gain / Self::FULL_STEP_GAIN).clamp(-1.0, 1.0);
+        if step >= 0.0 {
+            pull * step * Self::MAX_BONUS
+        } else {
+            pull * step * Self::MAX_PENALTY
+        }
+    }
+}
+
 /// Wage-gap scoring for negotiations whose player can't be re-read at
 /// resolution time (foreign moves, global-pool free agents). Mirrors the
 /// domestic reservation-wage table so the money lever behaves the same on
@@ -2640,6 +2731,54 @@ impl BuyerContinentalPathHint {
             }),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod stage_ambition_match_tests {
+    use super::StageAmbitionMatch;
+
+    /// Russian Premier League → a mid-table side in Spain. The buying club
+    /// is SMALLER, so every club-reputation term in the model reads this as
+    /// a step down; the league is 3000 points stronger, which is the whole
+    /// reason the player wants it.
+    #[test]
+    fn a_step_up_in_league_rewards_a_player_who_wants_one() {
+        let delta = StageAmbitionMatch::terms_delta(0.8, 6_500, 9_200);
+        assert!(delta > 15.0, "expected a strong pull, got {delta}");
+    }
+
+    #[test]
+    fn the_same_move_means_nothing_to_a_player_without_the_itch() {
+        assert_eq!(StageAmbitionMatch::terms_delta(0.0, 6_500, 9_200), 0.0);
+    }
+
+    /// A bigger club in an equally-strong league answers nothing he is
+    /// asking for, and he is measurably less keen than he would be on the
+    /// smaller club in the better league.
+    #[test]
+    fn a_lateral_move_reads_worse_than_a_step_up() {
+        let lateral = StageAmbitionMatch::terms_delta(0.8, 6_500, 6_500);
+        let step_up = StageAmbitionMatch::terms_delta(0.8, 6_500, 8_500);
+        assert_eq!(lateral, 0.0);
+        assert!(step_up > lateral);
+    }
+
+    #[test]
+    fn dropping_a_league_costs_him_but_less_than_climbing_one_gains() {
+        let down = StageAmbitionMatch::terms_delta(1.0, 8_500, 6_500);
+        let up = StageAmbitionMatch::terms_delta(1.0, 6_500, 8_500);
+        assert!(down < 0.0, "a step down should read worse, got {down}");
+        assert!(
+            up > -down,
+            "wanting better is a reason to say yes, not to refuse everything: {up} vs {down}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_league_on_either_side_stays_neutral() {
+        assert_eq!(StageAmbitionMatch::terms_delta(0.9, 0, 9_000), 0.0);
+        assert_eq!(StageAmbitionMatch::terms_delta(0.9, 6_000, 0), 0.0);
     }
 }
 
@@ -2950,6 +3089,8 @@ mod development_pathway_protection_tests {
                 offered_annual_wage: Some(50_000),
                 staged_reservation_wage: None,
                 buying_league_reputation: 5000,
+                selling_league_reputation: 5_000,
+                player_stage_inclination: 0.0,
                 sell_on_percentage: None,
                 loan_future_fee: None,
                 personal_terms: None,
@@ -3210,6 +3351,8 @@ mod seller_fee_floor_tests {
                 offered_annual_wage: Some(50_000),
                 staged_reservation_wage: None,
                 buying_league_reputation: 6000,
+                selling_league_reputation: 5_000,
+                player_stage_inclination: 0.0,
                 sell_on_percentage: None,
                 loan_future_fee: None,
                 personal_terms: None,
@@ -3801,6 +3944,8 @@ mod saga_visibility_tests {
                 offered_annual_wage: Some(60_000),
                 staged_reservation_wage: None,
                 buying_league_reputation: 6000,
+                selling_league_reputation: 5_000,
+                player_stage_inclination: 0.0,
                 sell_on_percentage: None,
                 loan_future_fee: None,
                 personal_terms: None,

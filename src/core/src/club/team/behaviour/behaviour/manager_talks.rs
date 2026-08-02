@@ -659,6 +659,15 @@ impl TeamBehaviour {
         // his own squad's level. Built once and shared across candidates.
         let asset_ctx = SquadAssetContext::for_squad(players);
         let squad_avg_ability = asset_ctx.squad_avg_ability();
+        // The squad this coach manages. Below the first team, a "key
+        // player" label is standing inside THIS dressing room, not a
+        // first-team promise, so it must not shield a player from the
+        // release gate the coach is applying to his own deadwood.
+        let squad_tier = ctx
+            .team
+            .as_ref()
+            .and_then(|t| t.team_type)
+            .unwrap_or(TeamType::Main);
 
         // Evidence gate. At the very start of a season — before the club has
         // played a meaningful number of official matches — the head coach has
@@ -728,8 +737,9 @@ impl TeamBehaviour {
                 squad_avg_ability,
                 market_value,
                 annual_wage_bill,
-                asset_class: asset_ctx.classify(player, date),
+                asset_class: asset_ctx.classify_in_squad(player, date, squad_tier),
                 early_season: asset_ctx.is_early_season(),
+                squad_tier,
             };
             if let Some(termination) = CoachTerminationReview::evaluate(player, date, &release_ctx)
             {
@@ -1479,6 +1489,7 @@ mod coach_termination_tests {
                 // Existing fixtures predate the ageing-unused exception;
                 // an unreadable sample keeps them on the original gate.
                 early_season: true,
+                squad_tier: TeamType::Main,
             }
         }
 

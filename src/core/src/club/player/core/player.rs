@@ -269,6 +269,19 @@ pub struct Player {
     /// least one reason is still unresolved. Cleared on transfer.
     pub transfer_request_reasons: Vec<TransferRequestReason>,
 
+    /// How strongly this player is currently drawn toward a bigger
+    /// competition, 0..1 — the score from
+    /// [`crate::club::player::transfer::BigStagePull`], refreshed by the
+    /// weekly desire tick.
+    ///
+    /// Most of the pull's effect is silent: well below the level that
+    /// produces a mood or a request, a player will still *listen* when a
+    /// stronger league comes calling, and hold out a little longer for one
+    /// when it hasn't. Storing the score is what lets the market read that
+    /// inclination instead of only ever seeing the loud cases. Cleared on
+    /// transfer — the new club is a new stage.
+    pub big_stage_inclination: f32,
+
     /// One-shot career latch: set the first time the player makes a senior
     /// competitive appearance, so the `SeniorDebut` milestone fires exactly
     /// once across the whole career. `self.statistics` / `self.cup_statistics`

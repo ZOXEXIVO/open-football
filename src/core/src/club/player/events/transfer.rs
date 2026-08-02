@@ -310,6 +310,10 @@ impl Player {
         // Transfer-request reasons evaporate when the move actually
         // happens — the wish was granted.
         self.transfer_request_reasons.clear();
+        // The big-stage pull was scored against the league he just left.
+        // The next weekly tick re-scores it against the one he joined —
+        // which, if he has just moved up, is most of the point.
+        self.big_stage_inclination = 0.0;
         // The availability-market diagnosis described the previous club's
         // market read — it must not outlive the spell it belonged to.
         self.clear_availability_state();

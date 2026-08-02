@@ -34,6 +34,7 @@
 //! pipe stdout through `grep`/`tee` into a file, which block-buffers the
 //! whole run into silence; redirect directly instead.
 
+use core::club::player::core::player::TransferRequestReason;
 use core::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use core::country::result::transfers::free_agent_audit::FreeAgentMarketAuditor;
 use core::transfers::{
@@ -144,6 +145,48 @@ struct PlayerCensus {
     /// has any market action live on them.
     expiring_12m: usize,
     expiring_12m_unlisted: usize,
+
+    // ── Big-stage ambition ────────────────────────────────────────────
+    /// Seniors whose big-stage pull has reached each of the three tiers.
+    /// The silent tier should be much the largest: most good players in a
+    /// sub-elite league would listen, few agitate, fewer still demand.
+    stage_inclined: usize,
+    stage_mood: usize,
+    stage_requesting: usize,
+    /// Inclined players by the reputation band of the league they are in,
+    /// so an inspection can tell "the mid-tier leagues are restless" from
+    /// "everybody everywhere wants out".
+    stage_inclined_by_league_band: HashMap<&'static str, usize>,
+
+    // ── Parked primes ─────────────────────────────────────────────────
+    /// Players at/over `PARKED_PRIME_AGE` sitting on a B / Second /
+    /// Reserve squad. This is the population the reserve trap used to
+    /// hold indefinitely.
+    parked_prime: usize,
+    /// Of those, how many carry any market signal at all — the share the
+    /// club or the player is actually trying to resolve.
+    parked_prime_with_availability: usize,
+}
+
+/// Age from which a senior reserve squad has stopped being development.
+/// Mirrors the club-side resolution pass.
+const PARKED_PRIME_AGE: u8 = 24;
+
+/// Tier bars, mirrored from [`core::BigStagePullConfig`] defaults so the
+/// harness reports the same three tiers the simulation acts on.
+const STAGE_INCLINED_BAR: f32 = 0.22;
+const STAGE_MOOD_BAR: f32 = 0.40;
+
+/// Coarse league-strength label for the ambition breakdown.
+fn league_band(reputation: u16) -> &'static str {
+    match reputation {
+        r if r >= 8_500 => "elite 8500+",
+        r if r >= 7_000 => "strong 7000-8499",
+        r if r >= 5_500 => "mid 5500-6999",
+        r if r >= 4_000 => "modest 4000-5499",
+        0 => "unknown",
+        _ => "weak <4000",
+    }
 }
 
 /// Moves recorded in `transfer_market.transfer_history`, deduplicated
@@ -338,6 +381,15 @@ impl MarketCensus {
                 // ---- players -----------------------------------------
                 for club in &country.clubs {
                     report.clubs += 1;
+                    // Strength of the stage this club competes on — the
+                    // yardstick the big-stage pull is measured against.
+                    let club_league_reputation = club
+                        .teams
+                        .main()
+                        .and_then(|t| t.league_id)
+                        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                        .map(|l| l.reputation)
+                        .unwrap_or(0);
                     for team in club.teams.teams.iter() {
                         let band = SquadBand::of(team.team_type);
                         // Classify against the player's own squad: that is
@@ -361,11 +413,7 @@ impl MarketCensus {
                                     _ => None,
                                 };
                                 if let Some(label) = label {
-                                    *report
-                                        .players
-                                        .status_counts
-                                        .entry(label)
-                                        .or_insert(0) += 1;
+                                    *report.players.status_counts.entry(label).or_insert(0) += 1;
                                 }
                             }
 
@@ -378,8 +426,7 @@ impl MarketCensus {
                                 report.players.loan_badge_without_listing += 1;
                             }
 
-                            let months_left =
-                                (contract.expiration - date).num_days() as f32 / 30.0;
+                            let months_left = (contract.expiration - date).num_days() as f32 / 30.0;
                             if months_left > 0.0 && months_left <= 12.0 {
                                 report.players.expiring_12m += 1;
                                 if !has_transfer_row && !has_loan_row {
@@ -397,6 +444,42 @@ impl MarketCensus {
                             report.players.senior_servable += 1;
                             if Self::live_apps(player) > 0 {
                                 report.players.live_apps_nonzero += 1;
+                            }
+
+                            // Big-stage ambition, by tier.
+                            let pull = player.big_stage_inclination;
+                            if pull >= STAGE_INCLINED_BAR {
+                                report.players.stage_inclined += 1;
+                                *report
+                                    .players
+                                    .stage_inclined_by_league_band
+                                    .entry(league_band(club_league_reputation))
+                                    .or_insert(0) += 1;
+                            }
+                            if pull >= STAGE_MOOD_BAR {
+                                report.players.stage_mood += 1;
+                            }
+                            if player
+                                .transfer_request_reasons
+                                .iter()
+                                .any(|r| matches!(r, TransferRequestReason::WantsStrongerLeague))
+                            {
+                                report.players.stage_requesting += 1;
+                            }
+
+                            // Prime-age professionals parked below the
+                            // first team, and whether anything is being
+                            // done about them.
+                            if band == SquadBand::SeniorReserve && age >= PARKED_PRIME_AGE {
+                                report.players.parked_prime += 1;
+                                let moving = player.statuses.has(PlayerStatusType::Lst)
+                                    || player.statuses.has(PlayerStatusType::Loa)
+                                    || player.statuses.has(PlayerStatusType::Req)
+                                    || listed_for_transfer.contains(&player.id)
+                                    || listed_for_loan.contains(&player.id);
+                                if moving {
+                                    report.players.parked_prime_with_availability += 1;
+                                }
                             }
 
                             let Some((_, apps)) = Self::last_season_apps(player) else {
@@ -586,7 +669,10 @@ impl ReportPrinter {
             p.zero_apps_no_availability,
             Self::pct(p.zero_apps_no_availability, p.senior_zero_apps),
         );
-        println!("  by asset class:  {}", Self::top(&p.zero_by_asset_class, 8));
+        println!(
+            "  by asset class:  {}",
+            Self::top(&p.zero_by_asset_class, 8)
+        );
         println!(
             "  by squad status: {}",
             Self::top(&p.zero_by_squad_status, 8)
@@ -598,6 +684,29 @@ impl ReportPrinter {
             .map(|(b, n)| format!("{}={}", b.label(), n))
             .collect();
         println!("  by squad band:   {}", band_line.join(", "));
+
+        println!("\n-- big-stage ambition (senior, servable) --");
+        println!(
+            "would listen {} ({:.1}%)  |  publicly restless {} ({:.1}%)  |  formally asking {} ({:.1}%)",
+            p.stage_inclined,
+            Self::pct(p.stage_inclined, p.senior_servable),
+            p.stage_mood,
+            Self::pct(p.stage_mood, p.senior_servable),
+            p.stage_requesting,
+            Self::pct(p.stage_requesting, p.senior_servable),
+        );
+        println!(
+            "  would listen, by league: {}",
+            Self::top(&p.stage_inclined_by_league_band, 6)
+        );
+
+        println!("\n-- parked primes (24+ on a B / Second / Reserve squad) --");
+        println!(
+            "total {}  |  {} being moved ({:.1}%)",
+            p.parked_prime,
+            p.parked_prime_with_availability,
+            Self::pct(p.parked_prime_with_availability, p.parked_prime),
+        );
 
         println!("\n-- limbo --");
         println!(

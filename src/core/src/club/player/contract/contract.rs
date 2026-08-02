@@ -156,6 +156,38 @@ impl PlayerSquadStatus {
             other => other.clone(),
         }
     }
+
+    /// The same label re-read as a **first-team** designation, given the
+    /// squad that minted it.
+    ///
+    /// B and Second teams deliberately own squad labels — they are branded
+    /// senior sides with their own captain, hierarchy and dressing room, and
+    /// their best midfielder genuinely is their key player. That standing is
+    /// real *inside that squad*.
+    ///
+    /// It is not a first-team promise, and every disposal and market path
+    /// reads these labels as exactly that: `KeyPlayer` short-circuits the
+    /// asset classifier to `CorePlayer`, which blocks release, the loan-out
+    /// scan, wage-relief sales, the idle sweep, the size trim and the
+    /// renewal cutoff — while telling buyers he is the seller's untouchable.
+    /// The result was a prime-age player parked in a B side forever: too
+    /// "important" to sell, too "important" to release, and never picked.
+    ///
+    /// So: standing stays with the squad that awarded it; only the first
+    /// team can promise first-team football. Development labels
+    /// (`HotProspectForTheFuture` / `DecentYoungster`) and explicit surplus
+    /// verdicts survive unchanged — those mean the same thing at any tier.
+    pub fn as_first_team_designation(&self, squad_tier: TeamType) -> PlayerSquadStatus {
+        if matches!(squad_tier, TeamType::Main) {
+            return self.clone();
+        }
+        match self {
+            PlayerSquadStatus::KeyPlayer
+            | PlayerSquadStatus::FirstTeamRegular
+            | PlayerSquadStatus::FirstTeamSquadRotation => PlayerSquadStatus::MainBackupPlayer,
+            other => other.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

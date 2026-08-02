@@ -107,6 +107,20 @@ impl PipelineProcessor {
     /// stops adding more — keeps the books from growing without bound.
     const BREAKOUT_WATCH_MONITOR_CAP: usize = 30;
 
+    /// Big-stage pull a foreign player must carry before his own transfer
+    /// request counts as a lead in its own right. Set at the visible-mood
+    /// level: he is publicly restless, not merely open to offers.
+    const TOUTED_MIN_INCLINATION: f32 = 0.40;
+    /// League-reputation gain the watching country must offer over his
+    /// current one before that lead means anything. A sideways move
+    /// answers nothing he is asking for.
+    const TOUTED_MIN_STAGE_GAIN: u16 = 1200;
+    /// He still has to be a footballer worth the call. Roughly half the
+    /// ordinary breakout bar: enough to exclude a journeyman with an
+    /// agent, low enough to surface the good defenders and holding
+    /// midfielders whose seasons produce no headline numbers at all.
+    const TOUTED_BREAKOUT_FLOOR: f32 = 22.0;
+
     /// Weekly, year-round breakout watch. Surfaces high-form players to
     /// plausible buyers as scout monitoring plus a staff recommendation
     /// (never a negotiation). See the module docs for the realism model.
@@ -228,6 +242,17 @@ impl PipelineProcessor {
         // Clubs look for talent DOWN the football ladder, the same
         // convention the scouting pass applies.
         let country_reputation = country.reputation;
+        // Strength of the best competition this country can offer. A player
+        // agitating for a bigger stage is only a lead for clubs whose stage
+        // is actually bigger.
+        let best_league_reputation = country
+            .leagues
+            .leagues
+            .iter()
+            .filter(|l| !l.friendly)
+            .map(|l| l.reputation)
+            .max()
+            .unwrap_or(0);
         for s in foreign_players
             .iter()
             .copied()
@@ -245,7 +270,27 @@ impl PipelineProcessor {
                 scoring_rank: None,
                 recent_award_points: 0.0,
             });
-            if !breakout.is_breakout() {
+            // A player who has formally asked to leave a league he has
+            // outgrown is himself a lead — that is what an agent's phone
+            // call IS, and it is how most of these moves actually begin.
+            // Output alone will never surface a defender or a holding
+            // midfielder from a sub-elite league however obviously ready he
+            // is, because the breakout signal can only read goals.
+            //
+            // It lowers the bar; it does not remove it. He still has to be
+            // wanting out, drawn strongly enough to have reached a formal
+            // request, and looking at a genuinely bigger stage than the one
+            // he is on — this country's best competition, not merely a
+            // different one.
+            let touted_by_his_own_ambition = s.seller_ctx.is_transfer_requested
+                && s.seller_ctx.big_stage_inclination >= Self::TOUTED_MIN_INCLINATION
+                && best_league_reputation
+                    >= s.seller_ctx
+                        .league_reputation
+                        .saturating_add(Self::TOUTED_MIN_STAGE_GAIN);
+            if !breakout.is_breakout()
+                && !(touted_by_his_own_ambition && breakout.score >= Self::TOUTED_BREAKOUT_FLOOR)
+            {
                 continue;
             }
             let estimated_potential = s.skill_ability
@@ -701,6 +746,7 @@ mod breakout_watch_tests {
                     days_on_market: 0,
                     market_resignation: 0.0,
                     club_matches_played: 0,
+                    big_stage_inclination: 0.0,
                 },
                 language_profile: LanguageProfile::default(),
             }

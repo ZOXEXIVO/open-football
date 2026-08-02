@@ -132,6 +132,18 @@ mod processor {
         /// August" apart from "a full season has gone by and the coach
         /// still doesn't pick him".
         pub club_matches_played: u16,
+        /// How strongly this player is drawn toward a bigger competition,
+        /// 0..1 — the stored
+        /// [`crate::club::player::transfer::BigStagePull`] score.
+        ///
+        /// Most of the pull never becomes a request: it is the quiet
+        /// willingness of a good player in a decent league to listen when a
+        /// better one calls, and the corresponding reluctance to sign for a
+        /// sideways move while he still believes the bigger stage is
+        /// coming. Carrying it here is what lets the personal-terms model
+        /// tell those two approaches apart instead of treating every bidder
+        /// as interchangeable.
+        pub big_stage_inclination: f32,
     }
 
     #[allow(dead_code)]

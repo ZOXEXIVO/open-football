@@ -99,6 +99,13 @@ pub(crate) struct NegotiationData {
     /// Buying club's league reputation (0–10000). Used to anchor the
     /// player's reservation wage and for wage installation fallback.
     pub(crate) buying_league_reputation: u16,
+    /// Selling club's league reputation (0–10000). Read alongside the
+    /// buyer's during PersonalTerms so a player chasing a bigger stage can
+    /// tell a genuine step up from a lateral move.
+    pub(crate) selling_league_reputation: u16,
+    /// The player's big-stage pull, staged at creation. Foreign moves
+    /// cannot re-read the player here; domestic ones use the live value.
+    pub(crate) player_stage_inclination: f32,
     /// Sell-on percentage pledged in the buyer's offer, owed to the current
     /// seller on the player's next sale.
     pub(crate) sell_on_percentage: Option<f32>,

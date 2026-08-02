@@ -71,7 +71,7 @@ use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::league::Season;
 use crate::{
     Club, Person, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus,
-    PlayerStatusType,
+    PlayerStatusType, TeamType,
 };
 
 /// What a player is to his club, derived from observable signals. Ordered
@@ -376,8 +376,26 @@ impl SquadAssetContext {
         self.evidence.is_early_season()
     }
 
-    /// Classify one player against this squad snapshot.
+    /// Classify one player against this squad snapshot, assuming his label
+    /// was minted by the club's first team. Use
+    /// [`Self::classify_in_squad`] when walking squads below it.
     pub fn classify(&self, player: &Player, date: NaiveDate) -> SquadAssetClass {
+        self.classify_in_squad(player, date, TeamType::Main)
+    }
+
+    /// Classify one player whose registration sits with `squad_tier`.
+    ///
+    /// A squad label only carries a first-team promise when the squad IS
+    /// the first team — see
+    /// [`PlayerSquadStatus::as_first_team_designation`]. Below it the label
+    /// is dressing-room standing, so the classification falls through to
+    /// inference instead of short-circuiting to a protected class.
+    pub fn classify_in_squad(
+        &self,
+        player: &Player,
+        date: NaiveDate,
+        squad_tier: TeamType,
+    ) -> SquadAssetClass {
         let Some(contract) = player.contract.as_ref() else {
             // A clubless player on the roster is a free agent, not a squad
             // asset — leave him for the dedicated free-agent flow.
@@ -385,7 +403,7 @@ impl SquadAssetContext {
         };
 
         // Explicit club designations win — the club has already decided.
-        match contract.squad_status {
+        match contract.squad_status.as_first_team_designation(squad_tier) {
             PlayerSquadStatus::KeyPlayer => return SquadAssetClass::CorePlayer,
             PlayerSquadStatus::FirstTeamRegular => return SquadAssetClass::FirstTeamUseful,
             // A rotation label is the monthly CA-rank pass's verdict, not a

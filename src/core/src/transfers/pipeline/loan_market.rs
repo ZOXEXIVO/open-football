@@ -258,7 +258,7 @@ impl PipelineProcessor {
                 for team in &club.teams.teams {
                     for player in team.players.iter() {
                         let age = player.age(date);
-                        let asset_class = asset_ctx.classify(player, date);
+                        let asset_class = asset_ctx.classify_in_squad(player, date, team.team_type);
                         let is_development = match UnsolicitedLoanTarget::classify(
                             player,
                             age,
@@ -2267,11 +2267,12 @@ impl PipelineProcessor {
             .clubs
             .iter()
             .find(|c| c.id == action.selling_club_id())?;
-        let player = selling_club
-            .teams
-            .teams
-            .iter()
-            .find_map(|t| t.players.players.iter().find(|p| p.id == action.player_id()))?;
+        let player = selling_club.teams.teams.iter().find_map(|t| {
+            t.players
+                .players
+                .iter()
+                .find(|p| p.id == action.player_id())
+        })?;
         if player.age(date) > Self::LOAN_OPTION_MAX_AGE {
             return None;
         }
