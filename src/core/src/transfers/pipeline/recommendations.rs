@@ -420,6 +420,19 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
 }
 
 impl PipelineProcessor {
+    /// How many standing staff recommendations a club's plan holds before
+    /// new ones are dropped. Smaller clubs carry more — their recruitment
+    /// runs on tips, while a big club's department filters harder. One
+    /// rule for every recommendation source (scout network, listed-star
+    /// sweep, breakout watch), so no channel can flood the queue.
+    pub(in crate::transfers::pipeline) fn staff_recommendation_cap(rep: ReputationLevel) -> usize {
+        match rep {
+            ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur => 10,
+            ReputationLevel::National => 8,
+            _ => 6,
+        }
+    }
+
     pub fn generate_staff_recommendations(country: &mut Country, date: NaiveDate) {
         // Only runs weekly (same schedule as should_evaluate)
         if !Self::should_evaluate_for(country, date) {
@@ -1603,13 +1616,7 @@ impl PipelineProcessor {
                     .first()
                     .map(|t| t.reputation.level())
                     .unwrap_or(ReputationLevel::Amateur);
-                let cap = match rep {
-                    ReputationLevel::Regional
-                    | ReputationLevel::Local
-                    | ReputationLevel::Amateur => 10,
-                    ReputationLevel::National => 8,
-                    _ => 6,
-                };
+                let cap = Self::staff_recommendation_cap(rep);
                 if club.transfer_plan.staff_recommendations.len() < cap {
                     let rec = action.recommendation;
                     let recommender_id = rec.recommender_staff_id;

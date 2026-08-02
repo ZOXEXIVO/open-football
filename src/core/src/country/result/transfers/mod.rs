@@ -164,15 +164,14 @@ impl CountryResult {
         // Borrow, don't clone: every country used to deep-copy the entire
         // world pool minus its own players (three `String`s per summary),
         // which dominated the per-country transfer pass. References into
-        // the shared snapshot cost nothing.
-        let foreign_players: Vec<&PlayerSummary> = if window_open {
-            world_pool
-                .iter()
-                .filter(|s| s.country_id != country_id)
-                .collect()
-        } else {
-            Vec::new()
-        };
+        // the shared snapshot cost nothing — which is also why the view
+        // exists year-round now: the breakout watch runs weekly whatever
+        // the window says (scouts don't stop watching football in
+        // October), while the negotiation-side passes stay window-gated.
+        let foreign_players: Vec<&PlayerSummary> = world_pool
+            .iter()
+            .filter(|s| s.country_id != country_id)
+            .collect();
 
         let completed_before = summary.completed_transfers;
         let mut ops = DeferredTransferOps::empty(country_id);
@@ -306,7 +305,7 @@ impl CountryResult {
         // buyers' books even with the window shut. Runs outside the window
         // block (weekly cadence enforced inside) and only records scout
         // monitoring — never a negotiation.
-        PipelineProcessor::scan_breakout_form(country, current_date);
+        PipelineProcessor::scan_breakout_form(country, &foreign_players, current_date);
         PipelineProcessor::sync_wanted_status(country);
 
         ops.completed_after = summary.completed_transfers;
@@ -515,7 +514,10 @@ impl CountryResult {
         // hot parallel path (`simulate_transfer_market_local`) has the
         // snapshot as a plain slice param and borrows it directly with no
         // copy — that's where the per-country clone actually mattered.
-        let foreign_players: Vec<PlayerSummary> = if window_open {
+        // Built year-round, like the hot path: the breakout watch keeps
+        // watching football with the window shut; only negotiation-side
+        // passes stay window-gated.
+        let foreign_players: Vec<PlayerSummary> =
             if let Some(world_pool) = data.daily_world_player_pool.as_ref() {
                 world_pool
                     .iter()
@@ -529,10 +531,7 @@ impl CountryResult {
                     .filter(|c| c.id != country_id)
                     .flat_map(|c| PipelineProcessor::collect_player_pool(c, current_date))
                     .collect()
-            }
-        } else {
-            Vec::new()
-        };
+            };
         let foreign_players: Vec<&PlayerSummary> = foreign_players.iter().collect();
 
         // Snapshot the global "Move on Free" pool. Phase C in
@@ -654,7 +653,7 @@ impl CountryResult {
 
             // Year-round breakout watch — records scout monitoring on high-form
             // players (weekly cadence enforced inside; never a negotiation).
-            PipelineProcessor::scan_breakout_form(country, current_date);
+            PipelineProcessor::scan_breakout_form(country, &foreign_players, current_date);
 
             // Prune stale `Wnt` statuses whose originating interest has
             // since been cleared (window reset, transfer completion, or

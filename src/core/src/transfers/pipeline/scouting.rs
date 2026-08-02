@@ -940,7 +940,10 @@ impl PipelineProcessor {
     /// that climbs the reputation ladder gains reach smoothly rather than
     /// flipping on at an arbitrary "Elite" line. Returned home-outward, so the
     /// caller can read it as "the regions this club reaches, nearest first".
-    fn reputation_scout_regions(home: ScoutingRegion, overall_score: f32) -> Vec<ScoutingRegion> {
+    pub(in crate::transfers::pipeline) fn reputation_scout_regions(
+        home: ScoutingRegion,
+        overall_score: f32,
+    ) -> Vec<ScoutingRegion> {
         // Home-outward ordering: own region, then trade corridors (authored
         // highest-weight-first), then any region off the corridor map.
         let mut ordered: Vec<ScoutingRegion> = Vec::with_capacity(ScoutingRegion::all().len());

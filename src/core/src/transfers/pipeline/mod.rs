@@ -905,6 +905,10 @@ pub enum RecommendationType {
     WeakSpotFix,
     /// Player stood out in a youth/reserve match observed by a scout
     YouthMatchStandout,
+    /// Form outrunning his level — goals/rating drawing eyes from clubs
+    /// above him, at home or abroad. The label the cross-border breakout
+    /// watch files its finds under.
+    PerformanceBreakout,
 }
 
 #[derive(Debug, Clone)]
