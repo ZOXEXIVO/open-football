@@ -65,12 +65,12 @@ pub use club::{
     CareerStageEvidence,
     ChangeType,
     ChemistryFactors,
+    ClauseWindfallKind,
     // Club itself
     Club,
     ClubAffair,
     ClubAffairEntry,
     ClubAffairLog,
-    ClauseWindfallKind,
     ClubBoard,
     ClubColors,
     ClubContext,

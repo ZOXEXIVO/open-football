@@ -228,10 +228,7 @@ impl MatchDesk {
         } else if !drama.won && drama.max_lead >= 2 {
             (NewsStoryKind::LeadThrownAway, drama.max_lead as i32)
         } else if drama.winner_minute >= MatchDramaFacts::STOPPAGE_MINUTE {
-            (
-                NewsStoryKind::StoppageTimeDrama,
-                drama.winner_minute as i32,
-            )
+            (NewsStoryKind::StoppageTimeDrama, drama.winner_minute as i32)
         } else if drama.winner_minute >= MatchDramaFacts::LATE_MINUTE {
             (NewsStoryKind::LateWinner, drama.winner_minute as i32)
         } else if drama.won && drama.red_card {

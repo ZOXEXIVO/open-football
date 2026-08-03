@@ -262,8 +262,11 @@ impl Club {
         board_ctx.league_size = league_sz;
         board_ctx.total_matches = total_matches;
         board_ctx.league_tier = league_tier.max(1);
-        board_ctx.trailing_annual_income = self.finance.trailing_annual_income(date);
-        board_ctx.trailing_annual_outcome = self.finance.trailing_annual_outcome(date);
+        // Annualised by funded months: in a world's first year the raw
+        // trailing sums cover only the months lived so far, and budgets or
+        // debt ratios sized off them read every young club as broke.
+        board_ctx.trailing_annual_income = self.finance.estimated_annual_income(date);
+        board_ctx.trailing_annual_outcome = self.finance.estimated_annual_outcome(date);
         board_ctx.ffp_status = if self.finance.is_ffp_breach(date) {
             FfpStatus::Breach
         } else if self.finance.is_ffp_watchlist(date) {

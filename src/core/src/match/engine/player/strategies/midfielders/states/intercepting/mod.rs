@@ -30,10 +30,13 @@ impl StateProcessingHandler for MidfielderInterceptingState {
         // has to be attacked whoever nominally "has" the ball: this is
         // the second-ball contest, and without it midfielders were the
         // only outfield role that could never head the ball.
+        // Own-corner deliveries are excluded: the discrete corner
+        // contest owns that aerial (same gate as the Running entry).
         let ball_position = ctx.tick_context.positions.ball.position;
         if ball_position.z > HEADING_HEIGHT
             && ctx.ball().distance() < HEADING_DISTANCE
             && ctx.ball().is_towards_player_with_angle(0.6)
+            && !ctx.ball().is_team_attacking_corner()
         {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Heading,

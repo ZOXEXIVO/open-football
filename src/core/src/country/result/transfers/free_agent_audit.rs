@@ -200,7 +200,8 @@ impl FreeAgentMarketAuditor {
             ScoutingRegion::from_country(nat_continent, &nat_code).league_prestige();
 
         let rep_drop = FreeAgentMarketCalculator::rep_drop_allowed(career_pressure, age, ca);
-        let region_drop = FreeAgentMarketCalculator::region_drop_allowed(career_pressure, reference_reputation);
+        let region_drop =
+            FreeAgentMarketCalculator::region_drop_allowed(career_pressure, reference_reputation);
 
         let mut eligible_country_count = 0usize;
         let mut eligible_club_count = 0usize;

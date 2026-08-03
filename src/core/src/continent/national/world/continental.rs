@@ -154,27 +154,25 @@ impl WorldNationalCompetitions {
                                 continue;
                             }
 
-                            let (event, magnitude, kind) =
-                                if champions.contains(&player.country_id) {
-                                    (
-                                        HappinessEventType::NationalTeamTriumph,
-                                        14.0,
-                                        NationalTeamEventKind::NationalTeamRoleGrowing,
-                                    )
-                                } else if runners_up.contains(&player.country_id) {
-                                    (
-                                        HappinessEventType::NationalTeamHeartbreak,
-                                        -8.0,
-                                        NationalTeamEventKind::NationalTeamRoleGrowing,
-                                    )
-                                } else {
-                                    continue;
-                                };
+                            let (event, magnitude, kind) = if champions.contains(&player.country_id)
+                            {
+                                (
+                                    HappinessEventType::NationalTeamTriumph,
+                                    14.0,
+                                    NationalTeamEventKind::NationalTeamRoleGrowing,
+                                )
+                            } else if runners_up.contains(&player.country_id) {
+                                (
+                                    HappinessEventType::NationalTeamHeartbreak,
+                                    -8.0,
+                                    NationalTeamEventKind::NationalTeamRoleGrowing,
+                                )
+                            } else {
+                                continue;
+                            };
 
                             let national = NationalTeamEventContext::new(kind)
-                                .with_previous_caps(
-                                    player.player_attributes.international_apps,
-                                );
+                                .with_previous_caps(player.player_attributes.international_apps);
                             let context = HappinessEventContext::new(
                                 HappinessEventCause::Other,
                                 HappinessEventSeverity::from_magnitude(magnitude),
@@ -182,12 +180,9 @@ impl WorldNationalCompetitions {
                             )
                             .with_national_team_context(national);
 
-                            player.happiness.add_event_with_context(
-                                event,
-                                magnitude,
-                                None,
-                                context,
-                            );
+                            player
+                                .happiness
+                                .add_event_with_context(event, magnitude, None, context);
                         }
                     }
                 }

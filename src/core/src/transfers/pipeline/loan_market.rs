@@ -3,6 +3,7 @@ use log::debug;
 
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::transfer::MarketResignation;
+use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutingRegion;
@@ -15,6 +16,7 @@ use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
 use crate::transfers::pipeline::{AvailabilityBroadcast, LoanOutStatus, TransferRequestStatus};
 use crate::transfers::reason::TransferReason;
 use crate::transfers::window::PlayerValuationCalculator;
@@ -1387,6 +1389,11 @@ impl PipelineProcessor {
             parent_tier: ReputationLevel,
             group: PlayerFieldPositionGroup,
             ability: u8,
+            /// Age and observable ceiling, carried so a responding club can
+            /// run its own squad-fit maths on the candidate. The ceiling is
+            /// the staff-free potential proxy — never the hidden PA.
+            age: u8,
+            observable_ceiling: u8,
             asking: f64,
             listed_date: NaiveDate,
         }
@@ -1437,6 +1444,8 @@ impl PipelineProcessor {
                 parent_tier: parent_team.reputation.level(),
                 group: player.position().position_group(),
                 ability: player.player_attributes.current_ability,
+                age: player.age(date),
+                observable_ceiling: PotentialEstimator::observable_ceiling(player, date),
                 asking: listing.asking_price.amount,
                 listed_date: listing.listed_date,
             });
@@ -1535,6 +1544,24 @@ impl PipelineProcessor {
         // single broadcast tick — the actions aren't negotiations yet, so
         // `has_active_negotiation_for` can't see them.
         let mut claimed: HashSet<(u32, PlayerFieldPositionGroup)> = HashSet::new();
+        // Every club's own surplus maths, per position group in play.
+        // Answering a broadcast IS a signing, so it has to clear the same
+        // fit test the scouted recruitment paths already apply: a club
+        // that would classify the arrival as surplus on day one must not
+        // buy him, because its own rebalance and release passes would
+        // move him straight back out. Built once here (the tier walk
+        // below re-reads the same clubs for every listing) and keyed by
+        // club id so the borrow stays read-only.
+        let broadcast_groups: HashSet<PlayerFieldPositionGroup> =
+            sellable.iter().map(|s| s.group).collect();
+        let mut fit_by_club_group: HashMap<(u32, PlayerFieldPositionGroup), SquadFitSnapshot> =
+            HashMap::new();
+        for club in &country.clubs {
+            for &group in &broadcast_groups {
+                fit_by_club_group
+                    .insert((club.id, group), SquadFitSnapshot::build(club, group, date));
+            }
+        }
         for s in &sellable {
             if in_negotiation.contains(&s.player_id) {
                 continue;
@@ -1626,6 +1653,22 @@ impl PipelineProcessor {
                 // Depth: no point buying into a full position line.
                 let depth = BorrowerPositionDepth::snapshot(team);
                 if !depth.has_room_for(s.group, s.ability, false) {
+                    continue;
+                }
+                // …and no point buying a player this club's own systems
+                // would classify as surplus the day he lands. The tier
+                // window above asks whether he is a plausible body at
+                // this LEVEL of football; this asks whether he is a
+                // plausible body in THIS squad, which is the question
+                // the club actually has to live with. A free keeper slot
+                // under the ideal-depth rule is not the same thing as a
+                // squad with room for him: the release pass reads the
+                // depth cap and the squad average, and if those already
+                // say "surplus" then signing him only books the churn.
+                if fit_by_club_group
+                    .get(&(club.id, s.group))
+                    .is_some_and(|fit| fit.would_be_surplus(s.ability, s.observable_ceiling, s.age))
+                {
                     continue;
                 }
                 let rep = team.reputation.world;

@@ -474,7 +474,6 @@ impl CountryResult {
             player.on_transfer_interest_signal(&sig);
         }
     }
-
 }
 
 #[cfg(test)]

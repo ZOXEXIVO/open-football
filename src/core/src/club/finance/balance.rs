@@ -435,6 +435,39 @@ impl ClubFinances {
         total
     }
 
+    /// Trailing income scaled to a full year by the number of funded
+    /// months actually inside the window.
+    ///
+    /// A world in its first year has only a handful of monthly snapshots,
+    /// and `trailing_annual_income` sums exactly those. Consumers that
+    /// treat the raw sum as "annual" — the wage-share news line, the debt
+    /// facility, the board's revenue-based budgets — understate income by
+    /// 12/N and every ratio built on top explodes: two months in, an
+    /// ordinary club paying ~100% of income in wages printed as paying
+    /// ~600%. Scaling by funded months keeps the estimate honest from the
+    /// first snapshot; at twelve or more months it is the plain sum.
+    pub fn estimated_annual_income(&self, today: NaiveDate) -> i64 {
+        Self::annualize(
+            self.trailing_annual_income(today),
+            self.monthly_history_depth(today),
+        )
+    }
+
+    /// Counterpart to [`Self::estimated_annual_income`] for expenses.
+    pub fn estimated_annual_outcome(&self, today: NaiveDate) -> i64 {
+        Self::annualize(
+            self.trailing_annual_outcome(today),
+            self.monthly_history_depth(today),
+        )
+    }
+
+    fn annualize(trailing_sum: i64, funded_months: usize) -> i64 {
+        if funded_months == 0 || funded_months >= 12 {
+            return trailing_sum;
+        }
+        trailing_sum.saturating_mul(12) / funded_months as i64
+    }
+
     /// Trailing twelve months of total operating expenses across the
     /// history snapshots — counterpart to `trailing_annual_income`.
     pub fn trailing_annual_outcome(&self, today: NaiveDate) -> i64 {
@@ -1106,6 +1139,42 @@ mod finance_tests {
         // Stale snapshot outside the window must not count.
         f.history.add(d(2023, 6), ClubFinancialBalance::new(0));
         assert_eq!(f.monthly_history_depth(d(2026, 1)), 12);
+    }
+
+    #[test]
+    fn estimated_annual_income_annualizes_a_young_history() {
+        // Two funded months at 5M each: the raw trailing sum is 10M, and
+        // any full-year figure divided by it reads six times too large —
+        // the "597% of income goes out in wages" class of headline. The
+        // estimate scales to the year the run-rate implies.
+        let mut f = ClubFinances::new(0, vec![]);
+        for month in [5u32, 6] {
+            let mut snap = ClubFinancialBalance::new(0);
+            snap.income = 5_000_000;
+            snap.outcome = 4_000_000;
+            f.history.add(d(2026, month), snap);
+        }
+        assert_eq!(f.estimated_annual_income(d(2026, 7)), 60_000_000);
+        assert_eq!(f.estimated_annual_outcome(d(2026, 7)), 48_000_000);
+    }
+
+    #[test]
+    fn estimated_annual_income_is_the_plain_sum_once_a_year_exists() {
+        let mut f = ClubFinances::new(0, vec![]);
+        for month in 1..=12u32 {
+            let mut snap = ClubFinancialBalance::new(0);
+            snap.income = 1_000_000;
+            f.history.add(d(2025, month), snap);
+        }
+        let today = d(2026, 1);
+        assert_eq!(
+            f.estimated_annual_income(today),
+            f.trailing_annual_income(today)
+        );
+        // And with no history at all it stays at zero rather than inventing
+        // a run-rate out of nothing.
+        let empty = ClubFinances::new(0, vec![]);
+        assert_eq!(empty.estimated_annual_income(today), 0);
     }
 }
 

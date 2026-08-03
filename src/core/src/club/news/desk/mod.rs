@@ -34,10 +34,10 @@ pub mod squad;
 pub use board::BoardroomDesk;
 pub use dugout::DugoutDesk;
 pub use facts::{
-    Absorbing, CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie,
-    ContinentalNight, KeeperMatchFacts, PlayoffTie, LoanWatchEntry, ManagerPursuit, MatchDramaFacts, MatchStarFacts,
-    OutfieldMatchFacts, PlayerStanding, RecentEvents, SquadPulse, StandingSnapshot, TransferMove,
-    TransferMotive, TransferMoveKind, WeeklyMatchFacts,
+    Absorbing, CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, ContinentalNight,
+    CupTie, KeeperMatchFacts, LoanWatchEntry, ManagerPursuit, MatchDramaFacts, MatchStarFacts,
+    OutfieldMatchFacts, PlayerStanding, PlayoffTie, RecentEvents, SquadPulse, StandingSnapshot,
+    TransferMotive, TransferMove, TransferMoveKind, WeeklyMatchFacts,
 };
 pub use fans::{FansDesk, TownMood};
 pub use loan::LoanDesk;
@@ -49,8 +49,8 @@ pub use squad::SquadDesk;
 #[cfg(test)]
 mod tests {
     use super::facts::{
-        ClubTransferWeek, MatchStarFacts, OutfieldMatchFacts, StandingSnapshot, TransferMove,
-        TransferMotive, TransferMoveKind, WeeklyMatchFacts,
+        ClubTransferWeek, MatchStarFacts, OutfieldMatchFacts, StandingSnapshot, TransferMotive,
+        TransferMove, TransferMoveKind, WeeklyMatchFacts,
     };
     use super::squad::SquadDesk;
     use super::{MarketDesk, MatchDesk, TableDesk};

@@ -1900,9 +1900,10 @@ impl CountryResult {
                 );
                 continue;
             }
-            let region_drop =
-                FreeAgentMarketCalculator::region_drop_allowed(candidate.career_pressure, candidate.reference_reputation)
-                    + if last_chance { 0.10 } else { 0.0 };
+            let region_drop = FreeAgentMarketCalculator::region_drop_allowed(
+                candidate.career_pressure,
+                candidate.reference_reputation,
+            ) + if last_chance { 0.10 } else { 0.0 };
             if candidate.nationality_region.league_prestige() > buyer_region_prestige + region_drop
             {
                 recorder.record(candidate.player_id, FreeAgentBlockReason::RegionPrestigeGap);
@@ -2304,7 +2305,10 @@ impl EmergencyRealismGates {
         {
             return false;
         }
-        let base = FreeAgentMarketCalculator::region_drop_allowed(candidate.career_pressure, candidate.reference_reputation);
+        let base = FreeAgentMarketCalculator::region_drop_allowed(
+            candidate.career_pressure,
+            candidate.reference_reputation,
+        );
         let strictness_extra = match buyer.strictness {
             EmergencyStrictness::Flexible => 0.20,
             EmergencyStrictness::Standard => 0.08,
@@ -2722,7 +2726,10 @@ impl RequestCandidateGates {
         // Sliding region-prestige gate. At pressure 0 this collapses
         // to the legacy 0.20 threshold; at pressure 1.0 it widens to
         // 0.65.
-        let region_drop = FreeAgentMarketCalculator::region_drop_allowed(candidate.career_pressure, candidate.reference_reputation);
+        let region_drop = FreeAgentMarketCalculator::region_drop_allowed(
+            candidate.career_pressure,
+            candidate.reference_reputation,
+        );
         if candidate.nationality_region.league_prestige() > buyer.region_prestige + region_drop {
             return Err(FreeAgentBlockReason::RegionPrestigeGap);
         }

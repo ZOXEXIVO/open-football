@@ -318,10 +318,7 @@ impl SquadDesk {
         }
 
         let current = shapes[0];
-        let settled = shapes
-            .iter()
-            .take_while(|shape| **shape == current)
-            .count();
+        let settled = shapes.iter().take_while(|shape| **shape == current).count();
 
         // Long enough to be a decision, short enough to still be news.
         if !(Self::SHAPE_SETTLED..Self::SHAPE_STALE).contains(&settled) {
@@ -354,12 +351,7 @@ impl SquadDesk {
     /// matters, so the paper is entitled to it; what it is not entitled
     /// to do is quote anybody on it, which is why neither of these is a
     /// quote piece.
-    fn file_coach_verdict(
-        out: &mut Vec<NewsStory>,
-        team: &Team,
-        player: &Player,
-        date: NaiveDate,
-    ) {
+    fn file_coach_verdict(out: &mut Vec<NewsStory>, team: &Team, player: &Player, date: NaiveDate) {
         use crate::club::staff::coach::memory::CoachMemoryFlags;
 
         let coach = team.staffs.head_coach();
@@ -539,7 +531,11 @@ impl SquadDesk {
             _ => return,
         };
 
-        out.push(NewsStory::new(story, date).about(player.id).weighted(weight));
+        out.push(
+            NewsStory::new(story, date)
+                .about(player.id)
+                .weighted(weight),
+        );
     }
 
     /// What a change in the dugout does to the men who have to play for

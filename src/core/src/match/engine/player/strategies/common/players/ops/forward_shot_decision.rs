@@ -860,11 +860,18 @@ pub fn find_cutback_to_arriving_runner(ctx: &StateProcessingContext) -> Option<M
         if td > carrier_goal_d + 25.0 {
             continue;
         }
-        // A tightly-marked runner is not a cutback target, but a single
-        // light marker is fine — a first-time strike beats one defender,
-        // and the clarity/xG of the resulting shot is handled by the
-        // box-arrival helper. Reject only genuine double-marking.
-        if ctx.tick_context.grid.opponents(t.id, 8.0).count() >= 2 {
+        // A marked runner is not a cutback target. The old gate rejected
+        // only "2 opponents within 8u" — 8u is one metre, so in practice
+        // every arriving runner qualified, and once the state repair made
+        // midfielders fitter (arriving ~50% more often) the cutback count
+        // doubled and forwards handed their best chances away wholesale
+        // (FWD conversion 6.8% → 2.9%, FWD xG/shot 0.178 → 0.118, MID
+        // goal share 29.5% → 48%). "Unmarked at the penalty spot" has to
+        // mean what it says: no defender within reach of the first-time
+        // strike (18u ≈ 2.3m — a tracking defender one stride away blocks
+        // the cutback lane or the shot). A tracked runner is exactly the
+        // case where the real forward keeps the shot himself.
+        if ctx.tick_context.grid.opponents(t.id, 18.0).count() >= 1 {
             continue;
         }
         if !ctx.player().has_clear_pass(t.id) {

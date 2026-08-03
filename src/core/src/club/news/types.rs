@@ -146,7 +146,6 @@ pub enum NewsStoryKind {
     /// side is actually any good.
     AwayDayForm,
 
-
     // ── Match desk: European nights ───────────────────────────────
     //
     // Continental results have always reached club papers — they go
@@ -168,7 +167,6 @@ pub enum NewsStoryKind {
     /// …and being taken apart in it, in front of everybody, by a
     /// side that plays this football every year.
     ContinentalHiding,
-
 
     // ── Match desk: the playoffs ──────────────────────────────────
     //
@@ -197,7 +195,6 @@ pub enum NewsStoryKind {
     HatTrick,
     StarForm,
     RisingStar,
-
 
     // ── Squad desk: whether he is actually getting better ─────────
     //
@@ -319,7 +316,6 @@ pub enum NewsStoryKind {
     /// Two of them went at it, and it was not about football.
     TeammateConflict,
 
-
     // ── Squad desk: the same beats, told specifically ─────────────
     //
     // The dressing room has always recorded WHY. The page printed
@@ -385,7 +381,6 @@ pub enum NewsStoryKind {
     /// Somebody stood up in the dressing room and said it out loud.
     DressingRoomSpeech,
 
-
     // ── Squad desk: the room itself, and what the coach thinks ────
     //
     // Two things the simulation has always known and the press
@@ -447,7 +442,6 @@ pub enum NewsStoryKind {
     /// the team of the season, a nomination among the best in the
     /// world.
     SeasonAward,
-
 
     // ── Squad desk: what a move, an award and a new manager
     //    actually do to a player ────────────────────────────────
@@ -516,7 +510,6 @@ pub enum NewsStoryKind {
     /// A different complaint from being left out of one big match,
     /// and a more corrosive one.
     FavouritismGrumbles,
-
 
     // ── Squad desk: the life around the football ──────────────────
     //
@@ -598,7 +591,6 @@ pub enum NewsStoryKind {
     /// He spent the afternoon fouling people, and the referee ran out
     /// of patience.
     FoulTrouble,
-
 
     // ── Verdicts desk: the afternoons the column had no line for ──
     //
@@ -734,7 +726,6 @@ pub enum NewsStoryKind {
     SigningNotWorking,
     SigningComesGood,
 
-
     // ── Market desk: leverage and ambition ────────────────────────
     /// He used somebody else's interest to get a better contract out
     /// of this club, and everybody involved knows it.
@@ -764,7 +755,6 @@ pub enum NewsStoryKind {
     FansAngryAtRumour,
     MediaPressure,
     MediaDarling,
-
 
     // ── Fans desk: the town, not the dressing room ────────────────
     //
@@ -866,7 +856,6 @@ pub enum NewsStoryKind {
     /// about a dugout.
     BackroomEmpty,
 
-
     // ── Boardroom: the academy's own calendar ─────────────────────
     //
     // The pathway had exactly one story — a standing piece about
@@ -925,7 +914,6 @@ pub enum NewsStoryKind {
     /// a balance sheet, and the version of it the rumour mill prints.
     MustSellBeforeBuying,
 
-
     // ── Boardroom: the decisions that used to be discarded ────────
     //
     // The board really takes these — a crisis meeting, an order to
@@ -955,7 +943,6 @@ pub enum NewsStoryKind {
     /// The men behind him on the same chart. Repeats within one edition
     /// — a scoring chart is a list, and a list of one is a result.
     LeagueScoringChase,
-
 
     // ── Charts desk: the rest of the month ────────────────────────
     //

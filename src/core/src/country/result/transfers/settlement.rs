@@ -166,8 +166,9 @@ impl TransferClauseSettler {
             let windfall = match clause.trigger {
                 ClauseTrigger::Installment { .. } => ClauseWindfallKind::SellOn,
                 ClauseTrigger::Promotion => ClauseWindfallKind::Promotion,
-                ClauseTrigger::AppearanceMilestone { .. }
-                | ClauseTrigger::GoalMilestone { .. } => ClauseWindfallKind::Milestone,
+                ClauseTrigger::AppearanceMilestone { .. } | ClauseTrigger::GoalMilestone { .. } => {
+                    ClauseWindfallKind::Milestone
+                }
             };
             country.clubs[i].record_affair(
                 ClubAffair::ClauseWindfall {

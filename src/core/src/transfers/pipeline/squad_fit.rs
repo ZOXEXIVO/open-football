@@ -216,6 +216,27 @@ mod tests {
         assert!(!fit.would_be_surplus(118, 120, 27));
     }
 
+    /// The ageing back-up keeper a big club is offered off another big
+    /// club's transfer list. Both surplus rules catch him independently,
+    /// which is the point: whichever way the buying club's squad happens
+    /// to be shaped, its own maths already says he would not last — so
+    /// recruitment must not sign him and then discover that a week later.
+    #[test]
+    fn a_veteran_reserve_keeper_reads_as_surplus_at_a_stronger_club() {
+        // Keeper line already at its cap of three, third-choice on 118.
+        let full_line = snapshot(135, 15, 3, 3, 118);
+        assert!(full_line.would_be_surplus(115, 115, 36));
+
+        // Same club a keeper short: the depth rule can't fire, but he is
+        // still well below what this squad fields.
+        let short_line = snapshot(135, 15, 2, 3, 0);
+        assert!(short_line.would_be_surplus(115, 115, 36));
+
+        // A keeper who would actually be first choice there is a normal
+        // signing — the gate rejects churn, not business.
+        assert!(!short_line.would_be_surplus(138, 138, 29));
+    }
+
     #[test]
     fn short_group_never_trips_the_depth_rule() {
         let fit = snapshot(110, 15, 4, 9, 0);

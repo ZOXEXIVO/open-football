@@ -700,6 +700,10 @@ impl Ball {
         // ~67%) on the same fixtures with the save MODEL untouched. The
         // ~32% cut to the per-tick rate restores the intended cumulative
         // per-shot conversion across the now-longer window.
+        // (A brief second notch to 0.41+0.25 was reverted: the forward
+        // conversion collapse it tried to compensate turned out to be the
+        // Finishing state's direction-as-target bug, not keeper strength.
+        // With that fixed, this level holds goals/match near 2.5.)
         let skill_mult = 0.44 + skill * 0.27;
         // Environment shifts keeper handling — heavy rain spills more,
         // wind on cross-claims has a subtler effect (the keeper still

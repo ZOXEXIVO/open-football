@@ -80,10 +80,7 @@ impl ChartsDesk {
             out.push(
                 NewsStory::new(kind, date)
                     .about(award.player_id)
-                    .with_numbers(
-                        award.goals as i32 + award.assists as i32,
-                        rating,
-                    ),
+                    .with_numbers(award.goals as i32 + award.assists as i32, rating),
             );
         }
     }
@@ -108,7 +105,10 @@ impl ChartsDesk {
             out.push(
                 NewsStory::new(kind, date)
                     .about(leader.player_id)
-                    .with_numbers(leader.assists as i32, (leader.average_rating * 100.0) as i32),
+                    .with_numbers(
+                        leader.assists as i32,
+                        (leader.average_rating * 100.0) as i32,
+                    ),
             );
         }
     }
@@ -340,11 +340,7 @@ mod tests {
         // editor without one.
         for story in &out {
             if story.kind.quotes_a_rating() {
-                assert!(
-                    story.b > 0,
-                    "{:?} would print a mark of 0.00",
-                    story.kind
-                );
+                assert!(story.b > 0, "{:?} would print a mark of 0.00", story.kind);
             }
         }
     }

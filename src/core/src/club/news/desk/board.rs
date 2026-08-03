@@ -45,9 +45,22 @@ struct ClubAccounts {
 }
 
 impl ClubAccounts {
+    /// Funded months of finance history below which the desk quotes no
+    /// ratio and sizes no facility. The wage figure it divides by is a
+    /// full-year number; setting it against one or two months' takings
+    /// printed lines like "597% of the income goes out in wages" for a
+    /// perfectly ordinary club in a young world. Three months matches the
+    /// window `trailing_avg_monthly_wages` itself reads.
+    const MIN_MEASURED_MONTHS: usize = 3;
+
     fn read(club: &Club, date: NaiveDate) -> Self {
         let balance = club.finance.balance.balance;
-        let income = club.finance.trailing_annual_income(date);
+        // Annualised by funded months, never the raw young-world sum —
+        // the wage bill on the other side of the division is a full-year
+        // figure, so the income must be one too.
+        let income = club.finance.estimated_annual_income(date);
+        let months = club.finance.monthly_history_depth(date);
+        let measurable = months >= Self::MIN_MEASURED_MONTHS;
         let wages = club
             .finance
             .trailing_avg_monthly_wages(date)
@@ -57,7 +70,8 @@ impl ClubAccounts {
         // entering it writes the balance down to something serviceable
         // and freezes the interest, so quoting the old number would be
         // reporting a problem the process has already dealt with.
-        let excess_debt = if balance < 0
+        let excess_debt = if measurable
+            && balance < 0
             && !matches!(club.finance.debt.standing, DebtStanding::Administration)
             && -balance > DebtProfile::facility_limit(income)
         {
@@ -66,7 +80,7 @@ impl ClubAccounts {
             0
         };
 
-        let wage_share = if income > 0 && wages > 0 {
+        let wage_share = if measurable && income > 0 && wages > 0 {
             (wages.saturating_mul(100) / income).min(i32::MAX as i64) as i32
         } else {
             0
@@ -248,9 +262,7 @@ impl BoardroomDesk {
                 )
                 .about(player_id)
                 .against(other_club_id),
-                ClubAffair::CrisisMeetingHeld => {
-                    NewsStory::new(NewsStoryKind::CrisisTalks, date)
-                }
+                ClubAffair::CrisisMeetingHeld => NewsStory::new(NewsStoryKind::CrisisTalks, date),
                 ClubAffair::PlayerSaleDemanded => {
                     NewsStory::new(NewsStoryKind::BoardDemandsSale, date)
                 }
@@ -277,8 +289,7 @@ impl BoardroomDesk {
                 )
                 .with_numbers(count as i32, 0),
                 ClubAffair::AcademyGraduationBatch { count } => {
-                    NewsStory::new(NewsStoryKind::GraduationDay, date)
-                        .with_numbers(count as i32, 0)
+                    NewsStory::new(NewsStoryKind::GraduationDay, date).with_numbers(count as i32, 0)
                 }
                 ClubAffair::BackroomEmpty => NewsStory::new(NewsStoryKind::BackroomEmpty, date),
             };

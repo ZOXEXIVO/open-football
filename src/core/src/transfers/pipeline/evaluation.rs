@@ -1788,7 +1788,6 @@ impl PipelineProcessor {
         force_list: &mut Vec<u32>,
         is_january: bool,
     ) {
-
         for info in squad {
             let Some(player) = players.iter().find(|p| p.id == info.player_id) else {
                 continue;
@@ -2145,7 +2144,6 @@ impl PipelineProcessor {
         early_season: bool,
         is_january: bool,
     ) {
-
         // Philosophy-based loan-out aggressiveness
         let (age_threshold, ability_gap, min_appearances_pct) = match philosophy {
             ClubPhilosophy::DevelopAndSell => (21, 5i16, 30u16), // Aggressively loan young players

@@ -280,8 +280,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         };
 
+        // Base eased 0.36 → 0.31 in the 2026-08 state-repair
+        // recalibration. 0.36 was set while the loose-ball override could
+        // still yank the winning header off the dropped ball mid-attempt;
+        // headers are committed actions now and complete every time, so
+        // the same win rate converts to ~35% more corner goals (DEF
+        // corner headers on goal 536 → 708 per 200 matches, DEF goal
+        // share 14.5% → 18.6% against the real ~10%).
         let att_win =
-            (0.36 + (att_score - best_def_score) * 0.50 - gk_command * 0.18).clamp(0.10, 0.62);
+            (0.31 + (att_score - best_def_score) * 0.50 - gk_command * 0.18).clamp(0.10, 0.62);
 
         if context.rng.bernoulli(att_win) {
             #[cfg(feature = "match-logs")]

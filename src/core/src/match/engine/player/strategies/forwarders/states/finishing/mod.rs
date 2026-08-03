@@ -83,14 +83,24 @@ impl StateProcessingHandler for ForwardFinishingState {
 impl ForwardFinishingState {
     /// Compose the strike and hand back to Running so the forward reacts
     /// to the rebound.
+    ///
+    /// The target comes from `shooting_direction()`, which — despite the
+    /// name — returns a goal-mouth POSITION with skill-aware placement
+    /// (corners for good finishers, centre-mass under pressure), the same
+    /// helper every other shooting state passes to `with_target`. The
+    /// state's original (never-reached) code built a normalized unit
+    /// DIRECTION here instead, which the shot pipeline read as a target
+    /// point one unit from the pitch origin: every finish flew toward the
+    /// corner flag and recorded floor xG. Latent while the state was
+    /// unreachable; wiring the state exposed it as a forward-conversion
+    /// collapse (FWD goals-by-line 368 → ~150 per 200 matches).
     fn strike(&self, ctx: &StateProcessingContext, reason: &'static str) -> StateChangeResult {
-        let (shooting_direction, _) = self.calculate_shooting_parameters(ctx);
         StateChangeResult::with_forward_state_and_event(
             ForwardState::Running,
             Event::PlayerEvent(PlayerEvent::Shoot(
                 ShootingEventContext::new()
                     .with_player_id(ctx.player.id)
-                    .with_target(shooting_direction)
+                    .with_target(ctx.player().shooting_direction())
                     .with_reason(reason)
                     .build(ctx),
             )),
@@ -99,25 +109,5 @@ impl ForwardFinishingState {
 
     fn is_within_shooting_range(&self, ctx: &StateProcessingContext) -> bool {
         ctx.ball().distance_to_opponent_goal() <= FINISHING_RANGE
-    }
-
-    fn calculate_shooting_parameters(&self, ctx: &StateProcessingContext) -> (Vector3<f32>, f32) {
-        let goal_position = ctx.player().opponent_goal_position();
-        // Guarded normalize. This state fires from inside the six-yard
-        // box, so "standing exactly on the aim point" is genuinely
-        // reachable in a goalmouth scramble — and a bare `normalize()` of
-        // a zero vector yields NaN, which propagates into the shot's
-        // target and then panics the shot-error sampler with an inverted
-        // (NaN) range. The bug was latent for as long as `Finishing` was
-        // unreachable; wiring the state exposed it within ~200 matches.
-        let shooting_direction = (goal_position - ctx.player.position)
-            .try_normalize(1e-4)
-            .unwrap_or_else(|| {
-                let forward_x = ctx.player.side.map_or(1.0, |side| side.forward_dir_x());
-                Vector3::new(forward_x, 0.0, 0.0)
-            });
-        let shooting_power = 1.0;
-
-        (shooting_direction, shooting_power)
     }
 }

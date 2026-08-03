@@ -197,11 +197,12 @@ impl Club {
         let funded_months = self.finance.monthly_history_depth(date);
         // Sizing the club's borrowing facility off a trailing year it hasn't
         // lived yet would read every DB-seeded debt as a bankruptcy on the
-        // first tick of a new world. Fall back to annualising the month just
-        // billed until a real year of history exists.
+        // first tick of a new world. The estimate annualises whatever months
+        // exist; the month just billed backstops the very first tick, when
+        // history is still empty.
         let trailing_income = self
             .finance
-            .trailing_annual_income(date)
+            .estimated_annual_income(date)
             .max(monthly_income.max(0).saturating_mul(12));
         let avg_wages = self.finance.trailing_avg_monthly_wages(date);
         let distress = classify_distress(self.finance.balance.balance, avg_wages);

@@ -22,6 +22,18 @@ const HEADING_DISTANCE_THRESHOLD: f32 = 2.0;
 /// attempt on goal (a late-arriving eight meeting a cross), not a
 /// knock-down.
 const ATTACKING_HEADER_RANGE: f32 = 90.0;
+/// A won aerial only becomes an attempt ON GOAL when the position makes
+/// it a genuine chance — same "true big chance" philosophy as the
+/// deterministic Tier-1 shot in `midfielders/running` (bar 0.240 there;
+/// headers carry less power/placement than a set foot shot, so the bar
+/// here stays at the earlier 0.180 rung). Below the bar the won header
+/// is still won — it becomes the knock-down, which is what a real
+/// midfielder does with an aerial ball they can't attack the goal with.
+const HEADER_ON_GOAL_XG_BAR: f32 = 0.180;
+/// Anti-monopoly parity with the Tier-1 foot-shot path: past this many
+/// attempts the aerial win is recycled as a knock-down instead of yet
+/// another attempt.
+const HEADER_SHOT_CAP: u32 = 4;
 /// Beyond this distance from our own goal a won header is a controlled
 /// knock-down to a teammate; closer than this it's an emergency
 /// clearance away from danger.
@@ -71,7 +83,9 @@ impl StateProcessingHandler for MidfielderHeadingState {
         // Won it. Where the contact goes depends on where on the pitch it
         // happened — attacking the box is a shot, deep in our own third
         // is a clearance, and everything between is a knock-down forward.
-        if ctx.ball().distance_to_opponent_goal() < ATTACKING_HEADER_RANGE {
+        if ctx.ball().distance_to_opponent_goal() < ATTACKING_HEADER_RANGE
+            && self.is_genuine_header_chance(ctx)
+        {
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Running,
                 Event::PlayerEvent(PlayerEvent::Shoot(
@@ -127,6 +141,19 @@ impl StateProcessingHandler for MidfielderHeadingState {
 }
 
 impl MidfielderHeadingState {
+    /// Is this won aerial a genuine attempt-on-goal position, or a ball
+    /// to cushion for a teammate? Reads the same skill-and-position xG
+    /// the Tier-1 foot-shot gate reads, so "what counts as a chance"
+    /// stays one concept engine-wide, plus the Tier-1 anti-monopoly cap.
+    fn is_genuine_header_chance(&self, ctx: &StateProcessingContext) -> bool {
+        if ctx.memory().shots_taken > HEADER_SHOT_CAP {
+            return false;
+        }
+        let profile = ctx.player().shooting().shot_profile();
+        let distance = ctx.ball().distance_to_opponent_goal();
+        profile.expected_xg(distance, true) >= HEADER_ON_GOAL_XG_BAR
+    }
+
     /// Aerial duel against the nearest contesting opponent.
     ///
     /// Uses the shared `aerial_outfield_*` composites (heading, jumping,

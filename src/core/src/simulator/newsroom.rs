@@ -1,17 +1,16 @@
 use crate::club::board::manager_market::ApproachState;
 use crate::club::news::RecentEvents;
-use crate::league::PlayoffRoundLabel;
+use crate::club::news::{
+    Absorbing, BoardroomDesk, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, ContinentalNight,
+    CupTie, DugoutDesk, FansDesk, IssueResult, KeeperMatchFacts, LoanDesk, LoanWatchEntry,
+    ManagerPursuit, MarketDesk, MatchDesk, MatchDramaFacts, MatchStarFacts, NewsEditor, NewsStory,
+    NewspaperIssue, OutfieldMatchFacts, PlayoffTie, PressMood, ResultCompetition, SquadDesk,
+    StandingSnapshot, TableDesk, TownMood, WeeklyMatchFacts,
+};
 use crate::continent::competitions::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
 };
-use crate::club::news::{
-    Absorbing, BoardroomDesk, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, CupTie, DugoutDesk,
-    FansDesk, IssueResult, KeeperMatchFacts, LoanDesk, LoanWatchEntry, ManagerPursuit, MarketDesk,
-    MatchDesk, MatchDramaFacts, MatchStarFacts, NewsEditor, NewsStory, NewspaperIssue,
-    ContinentalNight, OutfieldMatchFacts, PlayoffTie, PressMood, ResultCompetition, SquadDesk, StandingSnapshot, TableDesk,
-    TownMood,
-    WeeklyMatchFacts,
-};
+use crate::league::PlayoffRoundLabel;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, MatchResult, SubstitutionReason};
 use crate::simulator::SimulatorData;
@@ -1150,10 +1149,7 @@ impl ClubPressRun {
             .continental
             .get(&team.id)
             .map(|night| night.opponent_team_id);
-        let playoff_opponent = facts
-            .playoff
-            .get(&team.id)
-            .map(|tie| tie.opponent_team_id);
+        let playoff_opponent = facts.playoff.get(&team.id).map(|tie| tie.opponent_team_id);
 
         team.match_history
             .items()

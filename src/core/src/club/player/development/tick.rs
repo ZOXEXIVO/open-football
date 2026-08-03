@@ -370,8 +370,7 @@ impl Player {
     fn refresh_ability_marker(&mut self, now: NaiveDate) {
         let today = now.num_days_from_ce();
         let marked_on = self.player_attributes.ability_marked_on_day;
-        let stale =
-            marked_on == 0 || (today - marked_on) as i64 >= Self::ABILITY_MARK_DAYS;
+        let stale = marked_on == 0 || (today - marked_on) as i64 >= Self::ABILITY_MARK_DAYS;
         if stale {
             self.player_attributes.ability_marker = self.player_attributes.current_ability;
             self.player_attributes.ability_marked_on_day = today;

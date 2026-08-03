@@ -48,9 +48,15 @@ impl StateProcessingHandler for MidfielderRunningState {
         // can be played with the feet. Without it, midfielders let every
         // aerial ball bounce and the second ball always fell to whoever
         // reacted quickest after it landed.
+        // Our own corner delivery is owned by the discrete corner
+        // contest (`resolve_corner_contest`) and the CB / forward it
+        // elects — a midfielder jumping at it would re-decide an aerial
+        // the resolver already resolved. Defensive corner headers are
+        // unaffected (the origin check reads the attacking side).
         if !ctx.player.has_ball(ctx)
             && ctx.tick_context.positions.ball.position.z > AERIAL_HEADING_HEIGHT
             && ctx.ball().distance() < AERIAL_HEADING_DISTANCE
+            && !ctx.ball().is_team_attacking_corner()
         {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Heading,
@@ -209,11 +215,23 @@ impl StateProcessingHandler for MidfielderRunningState {
                 // fires deterministically — which is the realistic shape:
                 // nobody declines those. The anti-monopoly cap also
                 // tightens 6 → 4 to mirror the FWD path.
+                // Bar raised 0.180 → 0.240 in the 2026-08 state-repair
+                // recalibration. The repair made midfielders genuinely
+                // fitter (walking / recovery states now work), so they
+                // arrive in the box far more often — in-range ticks +18%,
+                // runner-in-box ticks +50% — and at 0.180 this
+                // deterministic tier tripled MID box-shots at low levels
+                // (1090 → 3120 per 200 matches), ballooning MID goal
+                // share to 54-58% (target 32%). Same ladder, same reason
+                // as every previous rung: whenever mids get more arrival
+                // supply, the no-decline bar has to describe a bigger
+                // sitter. Tier-2's willingness roll (measured flat) still
+                // owns the grey zone below the bar.
                 let clear_good = distance_to_goal <= STANDARD_SHOOTING_DISTANCE
                     && coach.shooting_reluctance() < 0.5
                     && ctx.player().has_clear_shot()
                     && ctx.player().shooting().has_good_angle()
-                    && sp.expected_xg(distance_to_goal, true) >= 0.180;
+                    && sp.expected_xg(distance_to_goal, true) >= 0.240;
                 if clear_good && ctx.memory().shots_taken <= 4 {
                     #[cfg(feature = "match-logs")]
                     {

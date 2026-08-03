@@ -474,12 +474,16 @@ impl WeeklyMatchFacts {
     /// Read by the match desk to label the result and to reach for the
     /// European copy rather than the league report.
     pub fn continental_of(&self, sides: &FxHashSet<u32>) -> Option<ContinentalNight> {
-        sides.iter().find_map(|team_id| self.continental.get(team_id).copied())
+        sides
+            .iter()
+            .find_map(|team_id| self.continental.get(team_id).copied())
     }
 
     /// The playoff tie one of the club's sides is in this week.
     pub fn playoff_of(&self, sides: &FxHashSet<u32>) -> Option<PlayoffTie> {
-        sides.iter().find_map(|team_id| self.playoff.get(team_id).copied())
+        sides
+            .iter()
+            .find_map(|team_id| self.playoff.get(team_id).copied())
     }
 
     pub fn drama_of(

@@ -124,6 +124,10 @@ pub enum AutomaticReleaseBlock {
     OnLoan,
     /// Manager pinned the player into the match-day squad.
     ForceSelected,
+    /// The club is still inside the evaluation window it committed to
+    /// when it signed him — it does not get to tear up a deal it has
+    /// only just made.
+    ProtectedSigning,
     /// No contract to terminate — that player is on the plain-expiry path,
     /// which must keep recording `dec_reason_contract_expired`.
     NoContract,
@@ -176,6 +180,13 @@ impl AutomaticReleaseEligibility {
     /// Official appearances at or below which a fit player, in a season
     /// that has produced a readable sample, is not being used at all.
     const UNUSED_APPEARANCE_BAR: u16 = 3;
+    /// Days after joining within which the club's own since-join match
+    /// counters are the authoritative read of a player's opportunity
+    /// (see [`Player::playing_time_opportunity`]). Inside this window a
+    /// zero appearance count is checked against them; outside it the
+    /// counters go cold and the lifetime season totals are the honest
+    /// measure again.
+    const ARRIVAL_WINDOW_DAYS: i64 = 60;
 
     /// `None` means every hard gate passed and the caller may clear the
     /// contract + stamp `Frt`; `Some(block)` names the first gate that
@@ -189,6 +200,17 @@ impl AutomaticReleaseEligibility {
         }
         if player.is_force_match_selection {
             return Some(AutomaticReleaseBlock::ForceSelected);
+        }
+        // A club honours the evaluation window it opened when it signed
+        // him. Every other automatic disposal path checks this before it
+        // acts (the season-start positional trim, the weekly rebalance,
+        // the idle-days audit, the country listing sweep) — but a free
+        // release is the one-way door of the set, so the invariant has to
+        // hold *here*, centrally, rather than at each call site. Without
+        // it the head-coach cleanup pass could walk a player the club had
+        // bought days earlier.
+        if player.signing_protection_active(ctx.date) {
+            return Some(AutomaticReleaseBlock::ProtectedSigning);
         }
         let contract = match player.contract.as_ref() {
             Some(c) => c,
@@ -281,6 +303,19 @@ impl AutomaticReleaseEligibility {
         {
             return false;
         }
+        // "Unused" has to mean the coach passed him over, not that he has
+        // only just walked in. `player.statistics` is drained on every
+        // transfer, so a signing from last week reads as zero appearances
+        // exactly like a player frozen out since August. Inside the
+        // arrival window the since-join counters are authoritative, so
+        // ask them how many matches he could actually have featured in;
+        // a settled player's read is unchanged.
+        let opportunity = player.playing_time_opportunity(ctx.date);
+        if opportunity.days_since_join <= Self::ARRIVAL_WINDOW_DAYS
+            && opportunity.eligible_official_matches_since_join <= Self::UNUSED_APPEARANCE_BAR
+        {
+            return false;
+        }
         let appearances = player.statistics.played
             + player.statistics.played_subs
             + player.cup_statistics.played
@@ -324,8 +359,8 @@ mod tests {
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
-        PlayerPositions, PlayerSkills,
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPlan, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills,
     };
     use chrono::{Datelike, Duration, NaiveDate};
 
@@ -556,6 +591,68 @@ mod tests {
             AutomaticReleaseEligibility::assess(&player, &useful),
             Some(AutomaticReleaseBlock::ProtectedAsset)
         );
+    }
+
+    /// The buy-then-walk case: a club that has just signed a player does
+    /// not get to tear the deal up because his brand-new appearance
+    /// counter reads zero. Every other automatic disposal path checks the
+    /// signing plan before acting; the free-release gate is the one-way
+    /// door, so it has to check it centrally.
+    #[test]
+    fn a_signing_inside_his_evaluation_window_is_never_walked_for_free() {
+        let mut player = Fixture::player(
+            60,
+            36,
+            Some(Fixture::contract(15_000, ContractType::FullTime, 3)),
+        );
+        // Bought six days ago for a small fee — an "experienced signing"
+        // plan: 10 games or six months before the club may judge him.
+        let signed = Fixture::date() - Duration::days(6);
+        player.plan = Some(PlayerPlan::from_signing(36, 120_000.0, signed));
+
+        let mut ctx = Fixture::ctx(20_000.0);
+        ctx.early_season = false;
+        assert_eq!(
+            AutomaticReleaseEligibility::assess(&player, &ctx),
+            Some(AutomaticReleaseBlock::ProtectedSigning),
+            "a club must honour the window it opened when it signed him"
+        );
+
+        // Once that window has run its course the ordinary gates decide
+        // again — the protection is a commitment, not an amnesty.
+        player.plan = Some(PlayerPlan::from_signing(
+            36,
+            120_000.0,
+            Fixture::date() - Duration::days(400),
+        ));
+        assert_eq!(AutomaticReleaseEligibility::assess(&player, &ctx), None);
+    }
+
+    /// "Unused" has to mean the coach passed him over. A transfer drains
+    /// `player.statistics`, so a new arrival reads zero appearances
+    /// exactly like a player frozen out all season — the exception must
+    /// tell those two apart on the club's own match count.
+    #[test]
+    fn a_fresh_arrival_is_not_an_unused_ageing_filler() {
+        let mut player = Fixture::player(
+            60,
+            30,
+            Some(Fixture::contract(15_000, ContractType::FullTime, 3)),
+        );
+        player.last_transfer_date = Some(Fixture::date() - Duration::days(6));
+
+        let mut ctx = Fixture::ctx_with_class(20_000.0, SquadAssetClass::RotationUseful);
+        ctx.early_season = false;
+        assert_eq!(
+            AutomaticReleaseEligibility::assess(&player, &ctx),
+            Some(AutomaticReleaseBlock::ProtectedAsset),
+            "zero appearances after six days is not evidence of anything"
+        );
+
+        // The club has since played matches he could have featured in and
+        // still hasn't picked him — now the zero means something.
+        player.happiness.eligible_official_matches_since_join = 12;
+        assert_eq!(AutomaticReleaseEligibility::assess(&player, &ctx), None);
     }
 
     #[test]
