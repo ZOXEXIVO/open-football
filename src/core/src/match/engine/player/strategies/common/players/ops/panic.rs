@@ -148,7 +148,7 @@ mod tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
-        MatchPlayer::from_player(1, &player, PlayerPositionType::DefenderCenter, false)
+        MatchPlayer::from_player(1, &player, PlayerPositionType::DefenderCenter, false, None)
     }
 
     #[test]

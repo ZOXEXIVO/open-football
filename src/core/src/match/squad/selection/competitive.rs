@@ -205,6 +205,7 @@ impl SelectionScoringContext<'_> {
                 gk,
                 PlayerPositionType::Goalkeeper,
                 false,
+                Some(self.date),
             ));
             used_ids.push(gk.id);
         } else {
@@ -215,6 +216,7 @@ impl SelectionScoringContext<'_> {
                     any,
                     PlayerPositionType::Goalkeeper,
                     false,
+                    Some(self.date),
                 ));
                 used_ids.push(any.id);
             }
@@ -231,7 +233,13 @@ impl SelectionScoringContext<'_> {
         let assignments = self.assign_outfield_slots(available, &used_ids, &outfield_slots);
 
         for (pos, player) in assignments {
-            squad.push(MatchPlayer::from_player(team_id, player, pos, false));
+            squad.push(MatchPlayer::from_player(
+                team_id,
+                player,
+                pos,
+                false,
+                Some(self.date),
+            ));
             used_ids.push(player.id);
         }
 
@@ -265,7 +273,13 @@ impl SelectionScoringContext<'_> {
             match best {
                 Some(player) => {
                     let pos = helpers::best_tactical_position(player, self.tactics);
-                    squad.push(MatchPlayer::from_player(team_id, player, pos, false));
+                    squad.push(MatchPlayer::from_player(
+                        team_id,
+                        player,
+                        pos,
+                        false,
+                        Some(self.date),
+                    ));
                     used_ids.push(player.id);
                 }
                 None => break,
@@ -291,7 +305,13 @@ impl SelectionScoringContext<'_> {
                         "Emergency fill: using {} as outfield player",
                         player.full_name
                     );
-                    squad.push(MatchPlayer::from_player(team_id, player, pos, false));
+                    squad.push(MatchPlayer::from_player(
+                        team_id,
+                        player,
+                        pos,
+                        false,
+                        Some(self.date),
+                    ));
                     used_ids.push(player.id);
                 }
                 None => break,
@@ -421,7 +441,8 @@ impl SelectionScoringContext<'_> {
                     let old_id = squad[idx].id;
                     used_ids.retain(|id| *id != old_id);
                     used_ids.push(new_player.id);
-                    squad[idx] = MatchPlayer::from_player(team_id, new_player, slot, false);
+                    squad[idx] =
+                        MatchPlayer::from_player(team_id, new_player, slot, false, Some(self.date));
                     swapped = true;
                 }
             }
@@ -491,13 +512,14 @@ impl SelectionScoringContext<'_> {
                 }
                 // Probe the swap balance.
                 let saved = squad[idx].id;
-                squad[idx] = MatchPlayer::from_player(team_id, cand, slot, false);
+                squad[idx] = MatchPlayer::from_player(team_id, cand, slot, false, Some(self.date));
                 let after = LineupBalanceScorer::score(squad, &player_by_id, objective);
                 let balance_gain = after - baseline;
                 // Restore so we make the swap only once we've picked the best.
                 let original = player_by_id.get(&saved).copied();
                 if let Some(orig) = original {
-                    squad[idx] = MatchPlayer::from_player(team_id, orig, slot, false);
+                    squad[idx] =
+                        MatchPlayer::from_player(team_id, orig, slot, false, Some(self.date));
                 }
                 if balance_gain < pass.min_balance_gain {
                     continue;
@@ -515,7 +537,8 @@ impl SelectionScoringContext<'_> {
                 let old_id = squad[idx].id;
                 used_ids.retain(|id| *id != old_id);
                 used_ids.push(new_player.id);
-                squad[idx] = MatchPlayer::from_player(team_id, new_player, slot, false);
+                squad[idx] =
+                    MatchPlayer::from_player(team_id, new_player, slot, false, Some(self.date));
             }
         }
     }
@@ -654,7 +677,8 @@ impl SelectionScoringContext<'_> {
             let slot = squad[idx].tactical_position.current_position;
             used_ids.retain(|id| *id != old_id);
             used_ids.push(new_player.id);
-            squad[idx] = MatchPlayer::from_player(team_id, new_player, slot, false);
+            squad[idx] =
+                MatchPlayer::from_player(team_id, new_player, slot, false, Some(self.date));
         }
     }
 
@@ -674,6 +698,7 @@ impl SelectionScoringContext<'_> {
                 gk,
                 PlayerPositionType::Goalkeeper,
                 false,
+                Some(self.date),
             ));
             used_ids.push(gk.id);
         }
@@ -712,7 +737,13 @@ impl SelectionScoringContext<'_> {
 
             if let Some(player) = best {
                 let pos = helpers::best_tactical_position(player, self.tactics);
-                subs.push(MatchPlayer::from_player(team_id, player, pos, false));
+                subs.push(MatchPlayer::from_player(
+                    team_id,
+                    player,
+                    pos,
+                    false,
+                    Some(self.date),
+                ));
                 used_ids.push(player.id);
             }
         }
@@ -732,7 +763,13 @@ impl SelectionScoringContext<'_> {
             match best {
                 Some(player) => {
                     let pos = helpers::best_tactical_position(player, self.tactics);
-                    subs.push(MatchPlayer::from_player(team_id, player, pos, false));
+                    subs.push(MatchPlayer::from_player(
+                        team_id,
+                        player,
+                        pos,
+                        false,
+                        Some(self.date),
+                    ));
                     used_ids.push(player.id);
                 }
                 None => break,
@@ -800,7 +837,13 @@ impl SelectionScoringContext<'_> {
                 break;
             }
             let pos = helpers::best_tactical_position(player, self.tactics);
-            subs.push(MatchPlayer::from_player(team_id, player, pos, false));
+            subs.push(MatchPlayer::from_player(
+                team_id,
+                player,
+                pos,
+                false,
+                Some(self.date),
+            ));
             used_ids.push(player.id);
         }
     }
@@ -837,6 +880,7 @@ impl SelectionScoringContext<'_> {
                 gk,
                 PlayerPositionType::Goalkeeper,
                 false,
+                Some(self.date),
             ));
             used_ids.push(gk.id);
             return;
@@ -852,7 +896,13 @@ impl SelectionScoringContext<'_> {
         let old_id = subs[idx].id;
         used_ids.retain(|id| *id != old_id);
         used_ids.push(gk.id);
-        subs[idx] = MatchPlayer::from_player(team_id, gk, PlayerPositionType::Goalkeeper, false);
+        subs[idx] = MatchPlayer::from_player(
+            team_id,
+            gk,
+            PlayerPositionType::Goalkeeper,
+            false,
+            Some(self.date),
+        );
     }
 
     /// Index of the outfield substitute most expendable for a structural need
@@ -980,7 +1030,7 @@ impl SelectionScoringContext<'_> {
             used_ids.retain(|id| *id != old_id);
             used_ids.push(new_player.id);
             let pos = helpers::best_tactical_position(new_player, self.tactics);
-            subs[idx] = MatchPlayer::from_player(team_id, new_player, pos, false);
+            subs[idx] = MatchPlayer::from_player(team_id, new_player, pos, false, Some(self.date));
         }
     }
 

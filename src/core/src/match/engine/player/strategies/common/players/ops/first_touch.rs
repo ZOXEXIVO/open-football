@@ -291,7 +291,7 @@ mod tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
-        MatchPlayer::from_player(1, &player, PlayerPositionType::ForwardCenter, false)
+        MatchPlayer::from_player(1, &player, PlayerPositionType::ForwardCenter, false, None)
     }
 
     #[test]

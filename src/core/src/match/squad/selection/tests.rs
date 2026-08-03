@@ -2980,7 +2980,7 @@ fn full_bench_replaces_lowest_outfield_sub_with_backup_gk() {
 
     let mut subs: Vec<MatchPlayer> = outfield
         .iter()
-        .map(|p| MatchPlayer::from_player(1, p, PlayerPositionType::MidfielderCenter, false))
+        .map(|p| MatchPlayer::from_player(1, p, PlayerPositionType::MidfielderCenter, false, None))
         .collect();
     let mut used_ids: Vec<u32> = subs.iter().map(|s| s.id).collect();
     assert_eq!(subs.len(), helpers::DEFAULT_BENCH_SIZE);
@@ -3050,7 +3050,7 @@ fn force_selected_outfield_sub_is_not_dropped_for_backup_gk() {
 
     let mut subs: Vec<MatchPlayer> = outfield
         .iter()
-        .map(|p| MatchPlayer::from_player(1, p, PlayerPositionType::MidfielderCenter, false))
+        .map(|p| MatchPlayer::from_player(1, p, PlayerPositionType::MidfielderCenter, false, None))
         .collect();
     let mut used_ids: Vec<u32> = subs.iter().map(|s| s.id).collect();
 

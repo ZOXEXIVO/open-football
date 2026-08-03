@@ -199,9 +199,11 @@ impl EntrySettling {
 ///
 /// Also folds in `crowd_arousal` — the home-advantage multiplier
 /// stamped at match start (±~1.5% at a default crowd, scaling with
-/// crowd intensity) — and the substitute settling factor (a sub's
-/// first minutes on the pitch run below full tempo). Living here means
-/// both shift every skill-mediated action (duels, passing, saves,
+/// crowd intensity) — the substitute settling factor (a sub's first
+/// minutes on the pitch run below full tempo), and the pre-match
+/// `settledness` stamp (transfer settling × match-readiness rustiness,
+/// see `Player::match_performance_settledness`). Living here means all
+/// of them shift every skill-mediated action (duels, passing, saves,
 /// finishing) by the same small continuous factor instead of dialling
 /// one outcome.
 pub fn effective_skill(player: &MatchPlayer, base: f32, ctx: ActionContext) -> f32 {
@@ -215,7 +217,8 @@ pub fn effective_skill(player: &MatchPlayer, base: f32, ctx: ActionContext) -> f
     let recovered = 1.0 - (1.0 - band) * (1.0 - mitigation * cap);
     let extra = late_game_mental_extra(player, ctx);
     let settling = EntrySettling::factor(player, ctx.minute);
-    (base * recovered * extra * player.crowd_arousal * settling).clamp(1.0, 20.0)
+    (base * recovered * extra * player.crowd_arousal * settling * player.settledness)
+        .clamp(1.0, 20.0)
 }
 
 /// Convenience: read a skill from the player and apply the fatigue model.
@@ -257,6 +260,9 @@ pub struct SkillBands {
     /// Substitute settling factor from [`EntrySettling`] (1.0 for
     /// starters and settled subs).
     settling: f32,
+    /// Pre-match settledness stamp (`MatchPlayer::settledness`, 1.0
+    /// for settled match-sharp players).
+    settledness: f32,
 }
 
 impl SkillBands {
@@ -285,6 +291,7 @@ impl SkillBands {
             ),
             crowd: player.crowd_arousal,
             settling: EntrySettling::factor(player, minute),
+            settledness: player.settledness,
         }
     }
 
@@ -300,7 +307,7 @@ impl SkillBands {
             SkillCategory::Mental => (self.recovered_mental, self.extra_mental),
             SkillCategory::Explosive => (self.recovered_explosive, 1.0),
         };
-        (base * recovered * extra * self.crowd * self.settling).clamp(1.0, 20.0)
+        (base * recovered * extra * self.crowd * self.settling * self.settledness).clamp(1.0, 20.0)
     }
 }
 
@@ -322,6 +329,9 @@ mod tests {
         let mut skills = PlayerSkills::default();
         skills.physical.stamina = stamina;
         skills.physical.natural_fitness = natural_fitness;
+        // Match-fit band — these fixtures test the fatigue model, not
+        // the pre-match settledness stamp (which has its own coverage).
+        skills.physical.match_readiness = 14.0;
         skills.mental.determination = 12.0;
         let player = PlayerBuilder::new()
             .id(1)
@@ -339,7 +349,13 @@ mod tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
-        MatchPlayer::from_player(1, &player, PlayerPositionType::MidfielderCenter, false)
+        MatchPlayer::from_player(
+            1,
+            &player,
+            PlayerPositionType::MidfielderCenter,
+            false,
+            None,
+        )
     }
 
     #[test]
@@ -367,12 +383,14 @@ mod tests {
         let bases: [f32; 6] = [1.0, 4.3, 7.0, 11.5, 17.0, 20.0];
         let staminas: [f32; 3] = [4.0, 12.0, 19.0];
         let crowds: [f32; 3] = [0.93, 1.0, 1.06];
+        let settlednesses: [f32; 2] = [0.92, 1.0];
 
         for &cond in &conditions {
             for &stam in &staminas {
                 let mut p = build_player(cond, stam, stam);
                 for &crowd in &crowds {
                     p.crowd_arousal = crowd;
+                    p.settledness = settlednesses[(cond as usize + crowd.to_bits() as usize) % 2];
                     for &minute in &minutes {
                         let bands = SkillBands::for_player(&p, minute);
                         for &cat in &categories {

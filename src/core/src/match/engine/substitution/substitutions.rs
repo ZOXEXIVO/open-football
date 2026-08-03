@@ -1187,7 +1187,7 @@ mod tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
-        MatchPlayer::from_player(1, &player, pos, false)
+        MatchPlayer::from_player(1, &player, pos, false, None)
     }
 
     fn today() -> NaiveDate {
@@ -1411,7 +1411,7 @@ mod tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
-        MatchPlayer::from_player(team_id, &player, pos, false)
+        MatchPlayer::from_player(team_id, &player, pos, false, None)
     }
 
     /// Stamp the player with `goals` goals and `assists` assists in

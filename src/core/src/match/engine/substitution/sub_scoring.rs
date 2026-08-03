@@ -11,7 +11,7 @@
 //! the stronger the case for the swap. The substitution loop combines
 //! a `sub_off_score` and a `sub_in_score` to choose pairs.
 
-use crate::r#match::engine::rating::RatingContext;
+use crate::r#match::engine::rating::{EngineVolumeCalibration, RatingContext};
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{MatchPlayer, engine::coach::TacticalNeed};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
@@ -62,7 +62,10 @@ impl LiveSubstitutionStats {
     ) -> Self {
         let minutes_played = player.minutes_played_at(total_match_time_ms);
         let stats = player.to_match_end_stats(minutes_played);
-        let live_rating = RatingContext::new(&stats, own_goals, opp_goals).calculate();
+        // Same engine→real volume conversion the post-match rating uses,
+        // so the live estimate and the final rating agree on scale.
+        let rating_stats = EngineVolumeCalibration::normalize(&stats);
+        let live_rating = RatingContext::new(&rating_stats, own_goals, opp_goals).calculate();
         Self {
             minutes_played,
             goals: stats.goals,

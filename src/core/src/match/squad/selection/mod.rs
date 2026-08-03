@@ -460,7 +460,13 @@ impl SquadSelector {
                     break;
                 }
                 let pos = best_tactical_position(player, tactics);
-                substitutes.push(MatchPlayer::from_player(team.id, player, pos, false));
+                substitutes.push(MatchPlayer::from_player(
+                    team.id,
+                    player,
+                    pos,
+                    false,
+                    Some(ctx.date),
+                ));
             }
         }
 
@@ -649,7 +655,13 @@ impl SquadSelector {
                     break;
                 }
                 let pos = best_tactical_position(player, tactics.borrow());
-                substitutes.push(MatchPlayer::from_player(team.id, player, pos, false));
+                substitutes.push(MatchPlayer::from_player(
+                    team.id,
+                    player,
+                    pos,
+                    false,
+                    Some(ctx.date),
+                ));
             }
         }
 

@@ -23,7 +23,7 @@ use crate::continent::competitions::{
 };
 use crate::league::Season;
 use crate::r#match::PlayerMatchEndStats;
-use crate::r#match::engine::rating::RatingContext;
+use crate::r#match::engine::rating::{EngineVolumeCalibration, RatingContext};
 use crate::r#match::engine::result::MatchResultRaw;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, MatchResult};
@@ -2002,7 +2002,10 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
             } else {
                 right_team_id
             };
-            let band = RatingContext::new(stats, 0, 0).texture_band();
+            // Same engine→real volume conversion the rating itself used —
+            // the texture band's evidence tier must agree with it.
+            let band =
+                RatingContext::new(&EngineVolumeCalibration::normalize(stats), 0, 0).texture_band();
             let tex_seed = ((*player_id as f64 * 0.754877)
                 + (date_seed * 0.569840)
                 + (player_team_id as f64 * 0.193147))

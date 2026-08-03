@@ -103,6 +103,7 @@ impl DevelopmentSelection<'_> {
                 gk,
                 PlayerPositionType::Goalkeeper,
                 false,
+                Some(self.date),
             ));
             used_ids.push(gk.id);
         } else if let Some(any) = helpers::pick_best_unused(available, &used_ids) {
@@ -113,6 +114,7 @@ impl DevelopmentSelection<'_> {
                 any,
                 PlayerPositionType::Goalkeeper,
                 false,
+                Some(self.date),
             ));
             used_ids.push(any.id);
         }
@@ -141,7 +143,13 @@ impl DevelopmentSelection<'_> {
                 .copied();
 
             if let Some(player) = best {
-                squad.push(MatchPlayer::from_player(self.team_id, player, pos, false));
+                squad.push(MatchPlayer::from_player(
+                    self.team_id,
+                    player,
+                    pos,
+                    false,
+                    Some(self.date),
+                ));
                 used_ids.push(player.id);
             }
         }
@@ -162,7 +170,13 @@ impl DevelopmentSelection<'_> {
             match best {
                 Some(player) => {
                     let pos = helpers::best_tactical_position(player, self.tactics);
-                    squad.push(MatchPlayer::from_player(self.team_id, player, pos, false));
+                    squad.push(MatchPlayer::from_player(
+                        self.team_id,
+                        player,
+                        pos,
+                        false,
+                        Some(self.date),
+                    ));
                     used_ids.push(player.id);
                 }
                 None => break,
@@ -184,7 +198,13 @@ impl DevelopmentSelection<'_> {
             match best {
                 Some(player) => {
                     let pos = helpers::best_tactical_position(player, self.tactics);
-                    squad.push(MatchPlayer::from_player(self.team_id, player, pos, false));
+                    squad.push(MatchPlayer::from_player(
+                        self.team_id,
+                        player,
+                        pos,
+                        false,
+                        Some(self.date),
+                    ));
                     used_ids.push(player.id);
                 }
                 None => break,
@@ -207,6 +227,7 @@ impl DevelopmentSelection<'_> {
                 gk,
                 PlayerPositionType::Goalkeeper,
                 false,
+                Some(self.date),
             ));
             used_ids.push(gk.id);
         }
@@ -226,7 +247,13 @@ impl DevelopmentSelection<'_> {
             match best {
                 Some(player) => {
                     let pos = helpers::best_tactical_position(player, self.tactics);
-                    subs.push(MatchPlayer::from_player(self.team_id, player, pos, false));
+                    subs.push(MatchPlayer::from_player(
+                        self.team_id,
+                        player,
+                        pos,
+                        false,
+                        Some(self.date),
+                    ));
                     used_ids.push(player.id);
                 }
                 None => break,

@@ -58,7 +58,7 @@ fn build(
         .build()
         .unwrap();
     player.traits = traits;
-    MatchPlayer::from_player(1, &player, pos, false)
+    MatchPlayer::from_player(1, &player, pos, false, None)
 }
 
 fn full_skills(value: f32) -> PlayerSkills {

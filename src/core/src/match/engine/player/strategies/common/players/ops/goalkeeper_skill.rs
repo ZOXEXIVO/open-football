@@ -576,7 +576,7 @@ mod tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
-        MatchPlayer::from_player(1, &player, PlayerPositionType::Goalkeeper, false)
+        MatchPlayer::from_player(1, &player, PlayerPositionType::Goalkeeper, false, None)
     }
 
     fn default_inputs() -> GoalkeeperSkillInputs {

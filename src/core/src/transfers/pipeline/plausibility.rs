@@ -560,6 +560,14 @@ mod thresholds {
     /// Effective player reputation this far above the buyer's reach reads
     /// as a reputation step-down the player resists in his own market.
     pub const REP_STEP_DOWN_GAP: i16 = 1500;
+    /// Extra effective-reputation gap a loan destination may sit below a
+    /// recognised (post-development-age) player's standing at FULL market
+    /// resignation, on top of [`Self::REP_STEP_DOWN_GAP`]. Fresh on the
+    /// loan list he only considers destinations within the ordinary
+    /// step-down band; months unsold widen what he'll listen to, until at
+    /// full resignation the band spans a genuinely deep drop — the last
+    /// stop before the unsold free-exit valve takes over anyway.
+    pub const LOAN_RENOWN_RESIGNATION_SPAN: f32 = 3000.0;
 
     /// Sporting drop at which even a FULLY resigned listed player stops
     /// endorsing a permanent step-down — beyond this the level gap is a
@@ -970,6 +978,36 @@ impl TransferMovePlausibility {
             && (!hard_gate_open || loan_gap_beyond_consent)
             && importance >= thresholds::LOAN_IMPORTANCE_BLOCK
             && loan_rep_gap > thresholds::LOAN_REP_GAP_BLOCK
+        {
+            return make(
+                TransferMoveStage::CanShortlistInternally,
+                Some(TransferPlausibilityReason::LoanNotCredible),
+            );
+        }
+
+        // The player's side of the same consent question. The gate above
+        // asks whether the PARENT would send an important player there;
+        // this asks whether HE would go. Importance measures standing in
+        // the current squad, so a declined veteran at a giant reads
+        // unimportant — yet his NAME is intact, and a recognised player
+        // does not spend half a season at a club whose reach is a
+        // fraction of his own standing. The effective-reputation blend
+        // already re-weights renown for cross-border moves (world leads,
+        // home fame discounts), so one continuous rule serves both
+        // markets. Development-age players are exempt: their renown is a
+        // promise rather than a status, and dropping a long way for
+        // minutes is the whole point of their loan pathway. The tolerated
+        // gap widens continuously with market resignation — every unsold
+        // month re-reads what level actually wants him — his own transfer
+        // request endorses any destination he can reach, and a forced
+        // route bypasses as everywhere else.
+        let renown_gap_tolerated = thresholds::REP_STEP_DOWN_GAP as f32
+            + resignation * thresholds::LOAN_RENOWN_RESIGNATION_SPAN;
+        if inputs.is_loan
+            && inputs.player_age > thresholds::PRIME_AGE_MIN
+            && !inputs.is_transfer_requested
+            && !matches!(strength, AvailabilityStrength::Forced)
+            && rep_drop as f32 > renown_gap_tolerated
         {
             return make(
                 TransferMoveStage::CanShortlistInternally,
@@ -2104,6 +2142,128 @@ mod tests {
         assert!(
             matches!(v, TransferPlausibilityVerdict::Allow(_)),
             "{:?}",
+            v
+        );
+    }
+
+    /// The Zobnin shape: a 300-appearance veteran at a domestic giant
+    /// whose squad standing has honestly collapsed (deep in the depth
+    /// chart, declined CA) but whose NAME is fully intact. Importance
+    /// reads him as unimportant — correctly, for the club-side gate —
+    /// which is exactly why the player-side renown floor has to exist:
+    /// without it every loan gate waves him through to a third-division
+    /// club abroad.
+    fn declined_veteran_foreign_loan_inputs() -> TransferPlausibilityInputs {
+        let mut inputs = base_inputs();
+        inputs.is_loan = true;
+        inputs.is_loan_listed = true;
+        inputs.is_unsolicited = true;
+        inputs.player_age = 33;
+        inputs.same_country = false;
+        inputs.same_league_or_division = false;
+        // Standing in the current squad is honestly gone…
+        inputs.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        inputs.seller_position_rank = 5;
+        inputs.player_ca = 98;
+        inputs.best_group_ca_at_seller = 132;
+        inputs.player_appearances = 17;
+        inputs.seller_club_matches = 19;
+        // …but the name is intact: a long career at a domestic giant.
+        inputs.player_world_rep = 3000;
+        inputs.player_current_rep = 5800;
+        inputs.player_home_rep = 6200;
+        inputs.seller_rep = 0.75;
+        inputs.seller_world_rep = 6800;
+        inputs.seller_league_rep = 6800;
+        // A third-division club abroad.
+        inputs.buyer_rep = 0.30;
+        inputs.buyer_world_rep = 900;
+        inputs.buyer_league_rep = 2500;
+        inputs
+    }
+
+    #[test]
+    fn a_recognised_veteran_refuses_a_loan_far_beneath_his_name() {
+        let inputs = declined_veteran_foreign_loan_inputs();
+        // Sanity: the club-side gate genuinely does NOT cover him — his
+        // importance is below the block line, so before the renown floor
+        // this exact move was waved through.
+        assert!(
+            TransferPlausibilityEvaluator::player_importance(&inputs)
+                < thresholds::LOAN_IMPORTANCE_BLOCK,
+            "fixture must model a player the importance gate ignores"
+        );
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(
+                v,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::LoanNotCredible
+                )
+            ),
+            "a recognised name freshly loan-listed must not land in a \
+             third division abroad; got {:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn unsold_months_widen_the_loan_destinations_a_veteran_will_hear() {
+        // A decent foreign first-division club — beneath his standing,
+        // but not another sport.
+        let mut inputs = declined_veteran_foreign_loan_inputs();
+        inputs.buyer_rep = 0.42;
+        inputs.buyer_world_rep = 2000;
+        inputs.buyer_league_rep = 3400;
+
+        // Fresh on the list he still says no…
+        let fresh = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(
+                fresh,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::LoanNotCredible
+                )
+            ),
+            "got {:?}",
+            fresh
+        );
+
+        // …but months unsold re-read what level actually wants him.
+        inputs.listing_resignation = 0.35;
+        let resigned = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(resigned, TransferPlausibilityVerdict::Allow(_)),
+            "resignation must widen the band continuously; got {:?}",
+            resigned
+        );
+    }
+
+    #[test]
+    fn the_renown_loan_floor_never_touches_the_development_pathway() {
+        // Identical name-versus-destination shape, but a development-age
+        // player: dropping a long way for minutes is the whole point of
+        // his loan, and his renown is a promise, not a status.
+        let mut inputs = declined_veteran_foreign_loan_inputs();
+        inputs.player_age = 21;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "got {:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn a_transfer_request_endorses_any_loan_he_can_reach() {
+        // The player himself asked out — his own declared exit endorses
+        // the drop, exactly as it does on the permanent path.
+        let mut inputs = declined_veteran_foreign_loan_inputs();
+        inputs.is_transfer_requested = true;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "got {:?}",
             v
         );
     }

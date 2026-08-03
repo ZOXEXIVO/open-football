@@ -443,6 +443,60 @@ impl Player {
         }
     }
 
+    /// Pre-match PERFORMANCE settledness multiplier, stamped onto
+    /// `MatchPlayer.settledness` at squad build and consumed inside the
+    /// engine's `effective_skill` (the crowd-arousal channel). Unlike
+    /// [`Player::settlement_rating_adjustment`] — which shapes the
+    /// public rating after the fact — this makes an unsettled or rusty
+    /// player genuinely PLAY worse: duels, passes and finishing all run
+    /// a few percent below their skills, and the outcome-based rating
+    /// drops on its own. The 2026-08 symptom this fixes: a cross-border
+    /// signing with no match practice, force-selected into the XI,
+    /// posting 7.6+ from his first week.
+    ///
+    /// Two continuous components, multiplied:
+    ///
+    ///   * **Transfer settling** — linear recovery across
+    ///     [`SETTLEMENT_WINDOW_DAYS`] from the move, depth scaled by
+    ///     adaptability (an adaptable pro dips ~2.5%, a poor adapter
+    ///     ~5%). `None` transfer anchor → fully settled, so academy
+    ///     players and long-tenured squads are untouched.
+    ///   * **Rustiness** — flat 1.0 while `match_readiness` is in the
+    ///     match-fit band (≥ 14, the same anchor the harness pins), then
+    ///     a linear ramp to −5% at zero sharpness. Recovery happens the
+    ///     real way: playing matches rebuilds `match_readiness`.
+    ///
+    /// Worst realistic case (day-one arrival, zero sharpness, poor
+    /// adapter) lands ≈ 0.90 — comparable to playing every match away
+    /// at a hostile ground — and recovers within weeks of minutes.
+    /// Floored at 0.90 so stacking can never exceed that.
+    ///
+    /// `now == None` (test / synthetic-squad constructors) skips the
+    /// transfer component but still reads rustiness — sharpness is
+    /// player-local state that needs no calendar.
+    pub fn match_performance_settledness(&self, now: Option<NaiveDate>) -> f32 {
+        const MATCH_FIT_READINESS: f32 = 14.0;
+        const RUSTINESS_DEPTH: f32 = 0.05;
+        const SETTLING_DEPTH: f32 = 0.05;
+
+        let readiness = self.skills.physical.match_readiness.clamp(0.0, 20.0);
+        let rusty_short = ((MATCH_FIT_READINESS - readiness) / MATCH_FIT_READINESS).clamp(0.0, 1.0);
+        let rustiness = 1.0 - RUSTINESS_DEPTH * rusty_short;
+
+        let settling = match now.and_then(|n| self.days_since_transfer(n)) {
+            Some(days) if (0..SETTLEMENT_WINDOW_DAYS).contains(&days) => {
+                let shortfall = 1.0 - days as f32 / SETTLEMENT_WINDOW_DAYS as f32;
+                // Adaptability 20 → half depth; adaptability ~2 → full.
+                let adapt_scale =
+                    1.05 - (self.attributes.adaptability.clamp(0.0, 20.0) / 20.0) * 0.55;
+                1.0 - SETTLING_DEPTH * shortfall * adapt_scale
+            }
+            _ => 1.0,
+        };
+
+        (rustiness * settling).clamp(0.90, 1.0)
+    }
+
     /// Build the public/effective rating for a single match by dampening
     /// the above-baseline portion of the engine's stat-line rating during
     /// the post-transfer settlement window. Anchored at the neutral 6.0
@@ -3228,6 +3282,87 @@ mod years_at_club_tests {
             PlayerStatisticsHistory::new()
                 .career_team_slugs()
                 .is_empty()
+        );
+    }
+
+    // ── match_performance_settledness ────────────────────────────────
+
+    /// Settled and match-sharp: no penalty at all.
+    #[test]
+    fn settled_sharp_player_plays_at_full_strength() {
+        let mut p = player_aged_28();
+        p.skills.physical.match_readiness = 16.0;
+        assert_eq!(p.match_performance_settledness(Some(d(2026, 8, 1))), 1.0);
+    }
+
+    /// The Gimenez case: a fresh cross-border signing with no match
+    /// practice must genuinely play worse — several percent off every
+    /// skill — and the two components must stack.
+    #[test]
+    fn fresh_rusty_signing_plays_measurably_worse() {
+        let mut p = player_aged_28();
+        p.skills.physical.match_readiness = 5.0;
+        p.last_transfer_date = Some(d(2026, 7, 25));
+        let s = p.match_performance_settledness(Some(d(2026, 8, 1)));
+        assert!(
+            (0.90..0.96).contains(&s),
+            "day-7 rusty signing should land well below 1.0, got {s}"
+        );
+        // Rustiness alone (no transfer anchor) is milder.
+        p.last_transfer_date = None;
+        let rust_only = p.match_performance_settledness(Some(d(2026, 8, 1)));
+        assert!(rust_only > s && rust_only < 1.0);
+    }
+
+    /// The dip recovers continuously across the settlement window and is
+    /// gone at its end.
+    #[test]
+    fn settling_recovers_across_the_window() {
+        let mut p = player_aged_28();
+        p.skills.physical.match_readiness = 16.0;
+        p.last_transfer_date = Some(d(2026, 5, 1));
+        let day10 = p.match_performance_settledness(Some(d(2026, 5, 11)));
+        let day40 = p.match_performance_settledness(Some(d(2026, 6, 10)));
+        let day90 = p.match_performance_settledness(Some(d(2026, 7, 30)));
+        assert!(day10 < day40, "penalty must shrink with time");
+        assert!(day40 < day90);
+        assert_eq!(day90, 1.0, "past the 84-day window the dip is gone");
+    }
+
+    /// Adaptable professionals dip less than poor adapters on the same
+    /// calendar.
+    #[test]
+    fn adaptability_softens_the_settling_dip() {
+        let mut poor = player_aged_28();
+        poor.skills.physical.match_readiness = 16.0;
+        poor.last_transfer_date = Some(d(2026, 7, 25));
+        poor.attributes.adaptability = 3.0;
+        let mut good = player_aged_28();
+        good.skills.physical.match_readiness = 16.0;
+        good.last_transfer_date = Some(d(2026, 7, 25));
+        good.attributes.adaptability = 19.0;
+        let now = Some(d(2026, 8, 1));
+        assert!(good.match_performance_settledness(now) > poor.match_performance_settledness(now));
+    }
+
+    /// `None` date (synthetic squads, harness fixtures) still reads
+    /// rustiness but never the transfer calendar; the combined stamp
+    /// can never drop below the 0.90 floor.
+    #[test]
+    fn settledness_floor_and_dateless_read() {
+        let mut p = player_aged_28();
+        p.skills.physical.match_readiness = 0.0;
+        p.last_transfer_date = Some(d(2026, 8, 1));
+        p.attributes.adaptability = 1.0;
+        let worst = p.match_performance_settledness(Some(d(2026, 8, 1)));
+        assert!(
+            (0.90..0.905).contains(&worst),
+            "worst case sits just above the floor, got {worst}"
+        );
+        let dateless = p.match_performance_settledness(None);
+        assert!(
+            (0.949..=0.951).contains(&dateless),
+            "rustiness-only, got {dateless}"
         );
     }
 }

@@ -64,7 +64,7 @@ fn build_test_player(skill_fill: f32, position: PlayerPositionType) -> MatchPlay
         .player_attributes(attrs)
         .build()
         .unwrap();
-    MatchPlayer::from_player(1, &player, position, false)
+    MatchPlayer::from_player(1, &player, position, false, None)
 }
 
 #[test]

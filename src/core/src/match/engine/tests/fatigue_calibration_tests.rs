@@ -110,7 +110,7 @@ fn build_player(fill: f32, condition: i16, position: PlayerPositionType) -> Matc
         .player_attributes(attrs)
         .build()
         .unwrap();
-    MatchPlayer::from_player(1, &player, position, false)
+    MatchPlayer::from_player(1, &player, position, false, None)
 }
 
 /// Build an elite-stamina variant: pump stamina/NF up while keeping

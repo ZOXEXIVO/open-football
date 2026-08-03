@@ -414,7 +414,7 @@ mod tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
-        MatchPlayer::from_player(1, &p, PlayerPositionType::DefenderCenter, false)
+        MatchPlayer::from_player(1, &p, PlayerPositionType::DefenderCenter, false, None)
     }
 
     fn attacker(dribbling: f32, technique: f32, agility: f32) -> MatchPlayer {
@@ -448,7 +448,7 @@ mod tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
-        MatchPlayer::from_player(2, &p, PlayerPositionType::ForwardCenter, false)
+        MatchPlayer::from_player(2, &p, PlayerPositionType::ForwardCenter, false, None)
     }
 
     #[test]

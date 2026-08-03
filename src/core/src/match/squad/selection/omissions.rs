@@ -347,7 +347,7 @@ impl<'a> OmissionBuilder<'a> {
             // whole-XI band the rival's profile uplifts. Cheap proxy: a
             // single-player evaluation, normalised to a comparable scale.
             let single_squad: Vec<MatchPlayer> =
-                vec![MatchPlayer::from_player(0, player, slot, false)];
+                vec![MatchPlayer::from_player(0, player, slot, false, None)];
             let mut singleton = HashMap::new();
             singleton.insert(player.id, player);
             let band = LineupBalanceScorer::evaluate(&single_squad, &singleton);

@@ -505,8 +505,10 @@ mod context;
 mod defending;
 mod expectation;
 mod scoring;
+mod volume;
 
 pub use expectation::{RatingExpectationContext, TeamRatingSummary};
+pub use volume::EngineVolumeCalibration;
 
 #[cfg(test)]
 mod season_tests;

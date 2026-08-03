@@ -466,7 +466,7 @@ fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
                     _ => {}
                 }
             }
-            MatchPlayer::from_player(team_id, &player, pos, false)
+            MatchPlayer::from_player(team_id, &player, pos, false, None)
         })
         .collect();
 
@@ -499,7 +499,7 @@ fn make_squad_viewer(
         .enumerate()
         .map(|(i, &pos)| {
             let player = generate_player(base_id + i as u32, pos, level);
-            let mp = MatchPlayer::from_player(team_id, &player, pos, false);
+            let mp = MatchPlayer::from_player(team_id, &player, pos, false, None);
             players_json.push(PlayerJson {
                 id: mp.id,
                 shirt_number: (i + 1) as u8,
@@ -531,7 +531,7 @@ fn make_squad_viewer(
         .map(|(i, &pos)| {
             let sub_id = base_id + 11 + i as u32;
             let player = generate_player(sub_id, pos, level);
-            let mp = MatchPlayer::from_player(team_id, &player, pos, true);
+            let mp = MatchPlayer::from_player(team_id, &player, pos, true, None);
             // Register the sub in PLAYERS_DATA too — that's the lookup the
             // viewer uses to build a sprite when a new id appears in
             // position chunks mid-match.
@@ -617,6 +617,128 @@ struct MatchOutcome {
     /// avoid attributing them to the wrong team in sequence analysis;
     /// own-goals are still counted in the final score).
     goal_events: Vec<(u64, bool)>,
+    /// Per-position sums of every counter the rating model reads as
+    /// VOLUME, for the RATING VOLUME PROFILE diagnostic. Index:
+    /// 0=GK 1=DEF 2=MID 3=FWD.
+    pos_volumes: [RatingVolumeAgg; 4],
+}
+
+/// Per-position per-match sums of the rating-relevant volume counters.
+/// The RATING VOLUME PROFILE diagnostic divides these by player-samples
+/// to get per-player per-match means, compared against real-football
+/// per-90 references — the calibration source for the engine→real
+/// volume conversion in the rating pipeline (rating/volume.rs). If the
+/// engine's emission rates drift, this block is where it shows first.
+#[derive(Clone, Copy, Default)]
+struct RatingVolumeAgg {
+    samples: u32,
+    tackles: u32,
+    interceptions: u32,
+    blocks: u32,
+    clearances: u32,
+    pressures: u32,
+    succ_pressures: u32,
+    key_passes: u32,
+    passes_into_box: u32,
+    prog_passes: u32,
+    prog_carries: u32,
+    dribbles: u32,
+    crosses_completed: u32,
+    shots_on_target: u32,
+    passes_attempted: u64,
+    passes_completed: u64,
+    /// Own-box + six-yard defensive actions (the `danger_actions` and
+    /// `zone_impact` family in rating/defending.rs + calibration.rs).
+    danger_zone_actions: u32,
+    ft_pressures_won: u32,
+    ft_tackles: u32,
+    mt_interceptions: u32,
+    /// Tier-ladder route counts: how many player-samples cleared the
+    /// Strong bar via routine_def >= 7 / zone_impact >= 2 (see
+    /// rating/calibration.rs). At real volumes these are rare monster
+    /// shifts; if large shares of ordinary matches clear them, the
+    /// engine's counter emission is inflating the evidence ladder.
+    routine_def_ge7: u32,
+    zone_impact_ge2: u32,
+}
+
+impl RatingVolumeAgg {
+    fn add(&mut self, s: &core::r#match::PlayerMatchEndStats) {
+        let z = &s.zone_stats;
+        self.samples += 1;
+        self.tackles += s.tackles as u32;
+        self.interceptions += s.interceptions as u32;
+        self.blocks += s.blocks as u32;
+        self.clearances += s.clearances as u32;
+        self.pressures += s.pressures as u32;
+        self.succ_pressures += s.successful_pressures as u32;
+        self.key_passes += s.key_passes as u32;
+        self.passes_into_box += s.passes_into_box as u32;
+        self.prog_passes += s.progressive_passes as u32;
+        self.prog_carries += s.progressive_carries as u32;
+        self.dribbles += s.successful_dribbles as u32;
+        self.crosses_completed += s.crosses_completed as u32;
+        self.shots_on_target += s.shots_on_target as u32;
+        self.passes_attempted += s.passes_attempted as u64;
+        self.passes_completed += s.passes_completed as u64;
+        let danger = (z.tackles_own_box
+            + z.interceptions_own_box
+            + z.blocks_own_box
+            + z.clearances_own_box
+            + z.tackles_own_six_yard
+            + z.interceptions_own_six_yard
+            + z.blocks_own_six_yard
+            + z.clearances_own_six_yard) as u32;
+        self.danger_zone_actions += danger;
+        self.ft_pressures_won += z.pressures_won_final_third as u32;
+        self.ft_tackles += z.tackles_final_third as u32;
+        self.mt_interceptions += z.interceptions_middle_third as u32;
+        let routine_def =
+            (s.tackles + s.interceptions + s.blocks + s.clearances + s.successful_pressures) as u32;
+        if routine_def >= 7 {
+            self.routine_def_ge7 += 1;
+        }
+        if danger + z.pressures_won_final_third as u32 >= 2 {
+            self.zone_impact_ge2 += 1;
+        }
+    }
+
+    fn merge(&mut self, other: &RatingVolumeAgg) {
+        self.samples += other.samples;
+        self.tackles += other.tackles;
+        self.interceptions += other.interceptions;
+        self.blocks += other.blocks;
+        self.clearances += other.clearances;
+        self.pressures += other.pressures;
+        self.succ_pressures += other.succ_pressures;
+        self.key_passes += other.key_passes;
+        self.passes_into_box += other.passes_into_box;
+        self.prog_passes += other.prog_passes;
+        self.prog_carries += other.prog_carries;
+        self.dribbles += other.dribbles;
+        self.crosses_completed += other.crosses_completed;
+        self.shots_on_target += other.shots_on_target;
+        self.passes_attempted += other.passes_attempted;
+        self.passes_completed += other.passes_completed;
+        self.danger_zone_actions += other.danger_zone_actions;
+        self.ft_pressures_won += other.ft_pressures_won;
+        self.ft_tackles += other.ft_tackles;
+        self.mt_interceptions += other.mt_interceptions;
+        self.routine_def_ge7 += other.routine_def_ge7;
+        self.zone_impact_ge2 += other.zone_impact_ge2;
+    }
+}
+
+/// Collect the per-position rating-volume sums for one match.
+fn rating_volume_profile(result: &core::r#match::MatchResultRaw) -> [RatingVolumeAgg; 4] {
+    let mut agg = [RatingVolumeAgg::default(); 4];
+    for (id, s) in result.player_stats.iter() {
+        if s.minutes_played == 0 {
+            continue;
+        }
+        agg[pos_group_of(*id) as usize].add(s);
+    }
+    agg
 }
 
 /// Position group for a player id, using the deterministic 442 slot
@@ -772,7 +894,7 @@ fn build_league_team(id: u32, name: &str, level: u8) -> LeagueTeam {
         .enumerate()
         .map(|(i, &pos)| {
             let player = generate_player(base_id + i as u32, pos, level);
-            MatchPlayer::from_player(id, &player, pos, false)
+            MatchPlayer::from_player(id, &player, pos, false, None)
         })
         .collect();
     LeagueTeam {
@@ -1178,7 +1300,7 @@ fn run_subs_experiment(n_matches: usize, level: u8) {
             .map(|(i, &pos)| {
                 let mut player = generate_player(base_id + i as u32, pos, level);
                 player.player_attributes.condition = cond(i);
-                MatchPlayer::from_player(team_id, &player, pos, false)
+                MatchPlayer::from_player(team_id, &player, pos, false, None)
             })
             .collect();
 
@@ -1197,7 +1319,7 @@ fn run_subs_experiment(n_matches: usize, level: u8) {
             .map(|(i, &pos)| {
                 let mut player = generate_player(base_id + 11 + i as u32, pos, bench_level);
                 player.player_attributes.condition = cond(11 + i).min(9800);
-                MatchPlayer::from_player(team_id, &player, pos, true)
+                MatchPlayer::from_player(team_id, &player, pos, true, None)
             })
             .collect();
 
@@ -1531,7 +1653,7 @@ fn make_squad_calibrated(team_id: u32, level: u8) -> MatchSquad {
             s.goalkeeping.reflexes = target;
             s.goalkeeping.rushing_out = target;
             s.goalkeeping.throwing = target;
-            MatchPlayer::from_player(team_id, &player, pos, false)
+            MatchPlayer::from_player(team_id, &player, pos, false, None)
         })
         .collect();
     MatchSquad {
@@ -1994,6 +2116,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 away: a,
                 per_player,
                 goal_events,
+                pos_volumes: rating_volume_profile(&result),
             }
         })
         .collect();
@@ -3220,6 +3343,186 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         println!(
             "  {:<4} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>6}",
             label, m, p50, p10, p90, n
+        );
+    }
+
+    // ── RATING VOLUME PROFILE — per-player per-match counter means ───────
+    //
+    // The counters the rating model reads as volume, per position, next
+    // to real-football per-90 references (FBref top-5-league norms).
+    // This is the calibration source for the engine→real volume
+    // conversion (rating/volume.rs): the rating model's saturation
+    // scales and evidence-tier thresholds are set for REAL volumes, so
+    // when the engine emits more raw events than a real statistician
+    // would count, this table is what the divisors are derived from.
+    // The Strong-route shares at the bottom are the tell: routine_def
+    // >= 7 is a rare monster shift in real football; if a third of
+    // ordinary player-matches clear it, ratings inflate wholesale.
+    let mut vol_by_pos = [RatingVolumeAgg::default(); 4];
+    for o in &outcomes {
+        for (i, v) in o.pos_volumes.iter().enumerate() {
+            vol_by_pos[i].merge(v);
+        }
+    }
+    println!();
+    println!("--- RATING VOLUME PROFILE (per-player per-match means) ---");
+    println!(
+        "  {:<22} {:>6} {:>6} {:>6}    real per-90 (DEF / MID)",
+        "counter", "DEF", "MID", "FWD"
+    );
+    {
+        let per = |v: &RatingVolumeAgg, x: u32| -> f32 {
+            if v.samples == 0 {
+                0.0
+            } else {
+                x as f32 / v.samples as f32
+            }
+        };
+        let d = &vol_by_pos[1];
+        let m = &vol_by_pos[2];
+        let f = &vol_by_pos[3];
+        let rows: [(&str, f32, f32, f32, &str); 14] = [
+            (
+                "tackles",
+                per(d, d.tackles),
+                per(m, m.tackles),
+                per(f, f.tackles),
+                "~1.6 / ~1.8",
+            ),
+            (
+                "interceptions",
+                per(d, d.interceptions),
+                per(m, m.interceptions),
+                per(f, f.interceptions),
+                "~1.3 / ~1.0",
+            ),
+            (
+                "blocks",
+                per(d, d.blocks),
+                per(m, m.blocks),
+                per(f, f.blocks),
+                "~0.9 / ~0.3",
+            ),
+            (
+                "clearances",
+                per(d, d.clearances),
+                per(m, m.clearances),
+                per(f, f.clearances),
+                "~3.5 / ~1.0",
+            ),
+            (
+                "pressures",
+                per(d, d.pressures),
+                per(m, m.pressures),
+                per(f, f.pressures),
+                "~11 / ~15",
+            ),
+            (
+                "succ_pressures",
+                per(d, d.succ_pressures),
+                per(m, m.succ_pressures),
+                per(f, f.succ_pressures),
+                "~3.5 / ~4.5",
+            ),
+            (
+                "key_passes",
+                per(d, d.key_passes),
+                per(m, m.key_passes),
+                per(f, f.key_passes),
+                "~0.4 / ~1.0",
+            ),
+            (
+                "passes_into_box",
+                per(d, d.passes_into_box),
+                per(m, m.passes_into_box),
+                per(f, f.passes_into_box),
+                "~0.7 / ~1.5",
+            ),
+            (
+                "prog_passes",
+                per(d, d.prog_passes),
+                per(m, m.prog_passes),
+                per(f, f.prog_passes),
+                "~4.0 / ~5.0",
+            ),
+            (
+                "prog_carries",
+                per(d, d.prog_carries),
+                per(m, m.prog_carries),
+                per(f, f.prog_carries),
+                "~1.0 / ~2.0",
+            ),
+            (
+                "succ_dribbles",
+                per(d, d.dribbles),
+                per(m, m.dribbles),
+                per(f, f.dribbles),
+                "~0.4 / ~1.0",
+            ),
+            (
+                "crosses_completed",
+                per(d, d.crosses_completed),
+                per(m, m.crosses_completed),
+                per(f, f.crosses_completed),
+                "~0.5 / ~0.7",
+            ),
+            (
+                "danger_zone_actions",
+                per(d, d.danger_zone_actions),
+                per(m, m.danger_zone_actions),
+                per(f, f.danger_zone_actions),
+                "~1.5 / ~0.3",
+            ),
+            (
+                "ft_press_won+ft_tk",
+                per(d, d.ft_pressures_won + d.ft_tackles),
+                per(m, m.ft_pressures_won + m.ft_tackles),
+                per(f, f.ft_pressures_won + f.ft_tackles),
+                "~0.5 / ~1.0",
+            ),
+        ];
+        for (label, dv, mv, fv, real) in rows {
+            println!(
+                "  {:<22} {:>6.2} {:>6.2} {:>6.2}    {}",
+                label, dv, mv, fv, real
+            );
+        }
+        let pct = |v: &RatingVolumeAgg, x: u32| -> f32 {
+            if v.samples == 0 {
+                0.0
+            } else {
+                x as f32 / v.samples as f32 * 100.0
+            }
+        };
+        println!(
+            "  pass%                  {:>5.1}% {:>5.1}% {:>5.1}%    (retention baseline 0.74)",
+            if d.passes_attempted == 0 {
+                0.0
+            } else {
+                d.passes_completed as f32 / d.passes_attempted as f32 * 100.0
+            },
+            if m.passes_attempted == 0 {
+                0.0
+            } else {
+                m.passes_completed as f32 / m.passes_attempted as f32 * 100.0
+            },
+            if f.passes_attempted == 0 {
+                0.0
+            } else {
+                f.passes_completed as f32 / f.passes_attempted as f32 * 100.0
+            },
+        );
+        println!(
+            "  Strong via routine_def>=7: DEF {:.0}% MID {:.0}% FWD {:.0}%   (real: rare, <5%)",
+            pct(d, d.routine_def_ge7),
+            pct(m, m.routine_def_ge7),
+            pct(f, f.routine_def_ge7),
+        );
+        println!(
+            "  Strong via zone_impact>=2: DEF {:.0}% MID {:.0}% FWD {:.0}%   (real: ~10-15% DEF)",
+            pct(d, d.zone_impact_ge2),
+            pct(m, m.zone_impact_ge2),
+            pct(f, f.zone_impact_ge2),
         );
     }
 

@@ -164,6 +164,18 @@ pub struct MatchPlayer {
     /// outcome.
     pub crowd_arousal: f32,
 
+    /// Pre-match performance settledness multiplier (1.0 = fully
+    /// settled and match-sharp), stamped once at construction from
+    /// `Player::match_performance_settledness`: transfer settling
+    /// (linear recovery over the 84-day window, depth scaled by
+    /// adaptability) × rustiness (`match_readiness` below the
+    /// match-fit band). Consumed inside `effective_skill` alongside
+    /// `crowd_arousal`, so an unsettled or rusty player genuinely
+    /// plays worse across every skill-mediated action and the
+    /// outcome-based rating dips on its own — no rating-side bias.
+    /// Floor 0.90.
+    pub settledness: f32,
+
     /// Memo for `skills.max_speed_with_condition(condition)` keyed on
     /// the condition value it was computed for. Skills are static
     /// in-match and condition only moves when the fatigue accumulator
@@ -327,11 +339,17 @@ impl PlayerSide {
 }
 
 impl MatchPlayer {
+    /// Build a match player from the persisted `Player`. `now` is the
+    /// matchday date, used to derive the pre-match settledness stamp
+    /// (transfer-settling needs a calendar); `None` — synthetic squads
+    /// and unit fixtures — skips the transfer component but still reads
+    /// match-readiness rustiness from the player's own state.
     pub fn from_player(
         team_id: u32,
         player: &Player,
         position: PlayerPositionType,
         use_extended_state_logging: bool,
+        now: Option<NaiveDate>,
     ) -> Self {
         MatchPlayer {
             id: player.id,
@@ -367,6 +385,7 @@ impl MatchPlayer {
             starting_condition: player.player_attributes.condition,
             starting_recovery_debt: player.load.recovery_debt,
             crowd_arousal: 1.0,
+            settledness: player.match_performance_settledness(now),
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
         }
@@ -395,6 +414,7 @@ impl MatchPlayer {
         is_force_match_selection: bool,
         starting_condition: i16,
         starting_recovery_debt: f32,
+        settledness: f32,
         use_extended_state_logging: bool,
     ) -> Self {
         MatchPlayer {
@@ -433,6 +453,10 @@ impl MatchPlayer {
             // Wire payloads predate the arousal field; the worker
             // re-stamps it at match start like the local path does.
             crowd_arousal: 1.0,
+            // The pre-match settledness stamp is derived club-side (the
+            // worker has no transfer calendar), so it crosses the wire
+            // as a plain value.
+            settledness,
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
         }
@@ -1037,7 +1061,7 @@ mod tests {
             .player_attributes(PlayerAttributes::default())
             .build()
             .unwrap();
-        MatchPlayer::from_player(1, &player, pos, false)
+        MatchPlayer::from_player(1, &player, pos, false, None)
     }
 
     #[test]

@@ -335,6 +335,7 @@ impl NationalTeam {
                 gk,
                 PlayerPositionType::Goalkeeper,
                 false,
+                None,
             ));
             used_ids.push(gk.id);
         }
@@ -364,7 +365,7 @@ impl NationalTeam {
                 });
 
             if let Some(player) = best {
-                main_squad.push(MatchPlayer::from_player(team_id, player, pos, false));
+                main_squad.push(MatchPlayer::from_player(team_id, player, pos, false, None));
                 used_ids.push(player.id);
             }
         }
@@ -383,7 +384,7 @@ impl NationalTeam {
             match best {
                 Some(player) => {
                     let pos = player.position();
-                    main_squad.push(MatchPlayer::from_player(team_id, player, pos, false));
+                    main_squad.push(MatchPlayer::from_player(team_id, player, pos, false, None));
                     used_ids.push(player.id);
                 }
                 None => break,
@@ -417,6 +418,7 @@ impl NationalTeam {
                 gk,
                 PlayerPositionType::Goalkeeper,
                 false,
+                None,
             ));
             used_ids.push(gk.id);
         }
@@ -435,7 +437,7 @@ impl NationalTeam {
 
         for player in bench_remaining.iter().take(6) {
             let pos = player.position();
-            substitutes.push(MatchPlayer::from_player(team_id, player, pos, false));
+            substitutes.push(MatchPlayer::from_player(team_id, player, pos, false, None));
         }
 
         // National teams carry no persistent captaincy hierarchy, so the
@@ -509,6 +511,7 @@ impl NationalTeam {
                 gk,
                 PlayerPositionType::Goalkeeper,
                 false,
+                None,
             ));
             used_ids.push(gk.id);
         }
@@ -525,7 +528,7 @@ impl NationalTeam {
                     p.positions.get_level(pos) as u16 + p.player_attributes.current_ability as u16
                 })
             {
-                main_squad.push(MatchPlayer::from_player(team_id, player, pos, false));
+                main_squad.push(MatchPlayer::from_player(team_id, player, pos, false, None));
                 used_ids.push(player.id);
             }
         }
@@ -537,7 +540,7 @@ impl NationalTeam {
             .take(7)
             .map(|p| {
                 let pos = p.position();
-                MatchPlayer::from_player(team_id, p, pos, false)
+                MatchPlayer::from_player(team_id, p, pos, false, None)
             })
             .collect();
 

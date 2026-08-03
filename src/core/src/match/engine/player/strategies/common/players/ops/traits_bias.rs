@@ -190,7 +190,7 @@ mod tests {
             .build()
             .unwrap();
         player.traits = traits;
-        MatchPlayer::from_player(1, &player, PlayerPositionType::ForwardLeft, false)
+        MatchPlayer::from_player(1, &player, PlayerPositionType::ForwardLeft, false, None)
     }
 
     #[test]

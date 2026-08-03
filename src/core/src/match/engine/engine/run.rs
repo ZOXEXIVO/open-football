@@ -1,7 +1,9 @@
 use super::phase_prof::PhaseProf;
 use super::*;
 use crate::r#match::engine::context::MatchEngineConfig;
-use crate::r#match::engine::rating::{RatingExpectationContext, TeamRatingSummary};
+use crate::r#match::engine::rating::{
+    EngineVolumeCalibration, RatingExpectationContext, TeamRatingSummary,
+};
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub fn new() -> Self {
@@ -365,8 +367,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 result.physical_snapshots.get(&pid),
             );
             if let Some(stats) = result.player_stats.get_mut(&pid) {
+                // Convert engine counter volumes to real-equivalent units
+                // before the rating model reads them — the model's
+                // saturation scales and evidence tiers are calibrated for
+                // real per-90 volumes (see rating/volume.rs). Persisted
+                // stats stay raw; only the rating input is converted.
+                let rating_stats = EngineVolumeCalibration::normalize(stats);
                 let (raw, contextual) = {
-                    let ctx = RatingContext::new(stats, team_goals, opponent_goals);
+                    let ctx = RatingContext::new(&rating_stats, team_goals, opponent_goals);
                     (ctx.calculate(), ctx.calculate_contextual(&expectation))
                 };
                 stats.raw_match_rating = raw;

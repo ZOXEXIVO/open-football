@@ -55,6 +55,9 @@ pub struct PlayerWire {
     pub is_force_match_selection: bool,
     pub starting_condition: i16,
     pub starting_recovery_debt: f32,
+    /// Pre-match settledness stamp (transfer settling × rustiness) —
+    /// derived club-side, so it must travel with the player.
+    pub settledness: f32,
     pub use_extended_state_logging: bool,
 }
 
@@ -100,6 +103,7 @@ impl PlayerWire {
             is_force_match_selection: p.is_force_match_selection,
             starting_condition: p.starting_condition,
             starting_recovery_debt: p.starting_recovery_debt,
+            settledness: p.settledness,
             use_extended_state_logging: p.use_extended_state_logging,
         }
     }
@@ -120,6 +124,7 @@ impl PlayerWire {
             is_force_match_selection,
             starting_condition,
             starting_recovery_debt,
+            settledness,
             use_extended_state_logging,
         } = self;
         MatchPlayer::from_inputs(
@@ -137,6 +142,7 @@ impl PlayerWire {
             is_force_match_selection,
             starting_condition,
             starting_recovery_debt,
+            settledness,
             use_extended_state_logging,
         )
     }
