@@ -136,22 +136,29 @@ impl ShotQualityEvaluator {
         // Old curve overstated the close band (0.80 at point-blank), which
         // combined with the lenient skill_factor produced ~1.7 goals/match
         // for mediocre finishers off rebounds and 1v1s.
-        if distance <= 10.0 {
+        // Breakpoints at the TRUE field scale (1u = 0.125m; the old
+        // bands assumed ~0.5m/unit — see ShotSkillProfile::expected_xg
+        // for the same correction): 6-yard line 44u, penalty spot 88u,
+        // box edge 132u, 25m = 200u.
+        if distance <= 20.0 {
             0.62
-        } else if distance <= 30.0 {
-            // Interpolate 0.62 -> 0.32
-            0.62 - (distance - 10.0) / 20.0 * 0.30
-        } else if distance <= 60.0 {
-            // Interpolate 0.32 -> 0.10
-            0.32 - (distance - 30.0) / 30.0 * 0.22
-        } else if distance <= 120.0 {
-            // Interpolate 0.10 -> 0.03
-            0.10 - (distance - 60.0) / 60.0 * 0.07
+        } else if distance <= 44.0 {
+            // Interpolate 0.62 -> 0.47
+            0.62 - (distance - 20.0) / 24.0 * 0.15
+        } else if distance <= 88.0 {
+            // Interpolate 0.47 -> 0.28
+            0.47 - (distance - 44.0) / 44.0 * 0.19
+        } else if distance <= 132.0 {
+            // Interpolate 0.28 -> 0.12
+            0.28 - (distance - 88.0) / 44.0 * 0.16
         } else if distance <= 200.0 {
-            // Interpolate 0.03 -> 0.01
-            0.03 - (distance - 120.0) / 80.0 * 0.02
+            // Interpolate 0.12 -> 0.04
+            0.12 - (distance - 132.0) / 68.0 * 0.08
+        } else if distance <= 280.0 {
+            // Interpolate 0.04 -> 0.02
+            0.04 - (distance - 200.0) / 80.0 * 0.02
         } else {
-            0.005
+            0.01
         }
     }
 
@@ -357,16 +364,18 @@ mod distance_curve_tests {
 
     #[test]
     fn penalty_spot_around_real_baseline() {
-        // Penalty spot (~22u). StatsBomb baseline 0.30-0.40.
-        let f = ShotQualityEvaluator::distance_factor(22.0);
-        assert!(f >= 0.30 && f <= 0.50, "f={f}");
+        // Penalty spot = 11m = 88u at the TRUE 0.125m/unit scale (the
+        // old pin used 22u — the 4x-compressed scale this curve was
+        // rebuilt to escape). StatsBomb baseline 0.25-0.40.
+        let f = ShotQualityEvaluator::distance_factor(88.0);
+        assert!(f >= 0.25 && f <= 0.40, "f={f}");
     }
 
     #[test]
     fn long_shot_falls_off_steeply() {
-        // 25 yards ≈ 50u. StatsBomb baseline ~0.07.
-        let f = ShotQualityEvaluator::distance_factor(50.0);
-        assert!(f >= 0.10 && f <= 0.20, "f={f}");
+        // 25 yards ≈ 23m = 184u. StatsBomb baseline ~0.05-0.07.
+        let f = ShotQualityEvaluator::distance_factor(184.0);
+        assert!(f >= 0.04 && f <= 0.10, "f={f}");
     }
 
     #[test]

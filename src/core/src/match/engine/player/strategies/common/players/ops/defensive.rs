@@ -29,7 +29,7 @@ pub enum DefensiveRole {
 }
 
 const THREAT_SCAN_DISTANCE: f32 = 100.0;
-const DANGEROUS_RUN_SPEED: f32 = 2.0;
+const DANGEROUS_RUN_SPEED: f32 = 0.40; // 5 m/s in u/tick (1u=0.125m, 10ms tick) — a genuine attacking run. Old values 1.0-3.0 exceeded human max speed (0.63 u/tick), so run-tracking never fired.
 const DANGEROUS_RUN_ANGLE: f32 = 0.5;
 
 // Coordination constants

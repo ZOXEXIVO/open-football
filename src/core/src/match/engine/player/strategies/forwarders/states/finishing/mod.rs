@@ -14,7 +14,7 @@ use nalgebra::Vector3;
 /// contact from inside or on the edge of the box, where hesitation costs
 /// the chance. Matches `POINT_BLANK_DISTANCE` in the forward running
 /// state, which is the branch that feeds this one.
-const FINISHING_RANGE: f32 = 36.0;
+const FINISHING_RANGE: f32 = 48.0;
 
 /// The close-range strike.
 ///

@@ -13,7 +13,7 @@ use nalgebra::Vector3;
 /// distance — hands off to `ForwardState::Finishing`, which carries no
 /// range-based abort gates. Kept in step with `FINISHING_RANGE` in the
 /// finishing state and `POINT_BLANK_DISTANCE` in the running state.
-const FINISHING_HANDOFF_RANGE: f32 = 36.0;
+const FINISHING_HANDOFF_RANGE: f32 = 48.0;
 
 #[derive(Default, Clone)]
 pub struct ForwardRunningInBehindState {}

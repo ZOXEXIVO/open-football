@@ -17,7 +17,12 @@ use crate::r#match::events::Event;
 const ATTACKING_HEADER_RANGE: f32 = 90.0;
 
 const HEADING_HEIGHT_THRESHOLD: f32 = 1.5; // Minimum height to consider heading (meters)
-const HEADING_DISTANCE_THRESHOLD: f32 = 1.5; // Maximum distance to the ball for heading (meters)
+// Maximum horizontal distance to the ball for heading. Field units
+// (1u = 0.125m), NOT meters: every entry gate hands off to this state
+// at 5.0u, so an internal 1.5u exit bounced the defender straight back
+// out and defensive heading was effectively unreachable. 6u = 0.75m —
+// a real attacking-header contact radius.
+const HEADING_DISTANCE_THRESHOLD: f32 = 6.0;
 #[allow(dead_code)]
 const HEADING_SUCCESS_THRESHOLD: f32 = 0.5; // Threshold for heading success based on skills
 

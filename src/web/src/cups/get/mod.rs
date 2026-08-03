@@ -95,13 +95,22 @@ pub struct CupPlayerStat {
 }
 
 /// Stage label for a knockout round, derived from the number of ties it
-/// holds: 1 → Final, 2 → Semi-finals, 4 → Quarter-finals, otherwise the
-/// "Round of N" the field size implies.
+/// holds: 1 → Final, 2 → Semi-finals, 4 → Quarter-finals, then one key per
+/// standard field size.
+///
+/// The sizes get their own keys rather than a shared "{label} N" template
+/// because languages name the stage from different numbers: English counts
+/// the field ("Round of 16"), Russian counts the bracket ("1/8 финала").
+/// A bracket that is not a power of two falls back to the numeric form.
 fn cup_round_label(i18n: &I18n, ties: usize) -> String {
     match ties {
         1 => i18n.t("final").to_string(),
         2 => i18n.t("semi_finals").to_string(),
         4 => i18n.t("quarter_finals").to_string(),
+        8 => i18n.t("round_of_16").to_string(),
+        16 => i18n.t("round_of_32").to_string(),
+        32 => i18n.t("round_of_64").to_string(),
+        64 => i18n.t("round_of_128").to_string(),
         n => format!("{} {}", i18n.t("round_of"), n * 2),
     }
 }

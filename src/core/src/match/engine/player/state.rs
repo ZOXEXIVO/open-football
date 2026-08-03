@@ -187,8 +187,18 @@ impl PlayerMatchState {
 
         // Stash the shot reason on the player. The Shooting state will
         // consume and clear this when it composes the Shoot event.
+        // A reason-less transition to any non-shot state invalidates a
+        // stale flag: every Shooting-state abort (lost ball, cooldown,
+        // range) used to leave the reason armed, so the NEXT entry into
+        // Shooting — from any path — skipped the unified shot helper
+        // entirely and fired ungated. A blocked shot must not convert
+        // into a guaranteed free shot later.
         if let Some(reason) = state_change_result.shot_reason {
             player.pending_shot_reason = Some(reason);
+        } else if let Some(new_state) = state_change_result.state {
+            if !Self::is_shot_emitting_state(new_state) {
+                player.pending_shot_reason = None;
+            }
         }
 
         if let Some(state) = state_change_result.state {
@@ -323,6 +333,23 @@ impl PlayerMatchState {
         // state via `StateChangeResult`. Routed through the single
         // transition API so the timer reset and graph audit are uniform.
         player.transition_to(state, TransitionSource::Handler);
+    }
+
+    /// States that legitimately carry a `pending_shot_reason` into a
+    /// Shoot event. A reason-less transition to any OTHER state clears
+    /// the flag (see `process`) so an aborted shot can't arm a free,
+    /// helper-bypassing shot on a later Shooting entry.
+    fn is_shot_emitting_state(state: PlayerState) -> bool {
+        matches!(
+            state,
+            PlayerState::Forward(
+                ForwardState::Shooting | ForwardState::Heading | ForwardState::Finishing
+            ) | PlayerState::Midfielder(
+                MidfielderState::Shooting
+                    | MidfielderState::DistanceShooting
+                    | MidfielderState::Heading
+            ) | PlayerState::Defender(DefenderState::Shooting | DefenderState::Heading)
+        )
     }
 }
 

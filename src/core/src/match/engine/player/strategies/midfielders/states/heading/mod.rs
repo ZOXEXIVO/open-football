@@ -29,7 +29,7 @@ const ATTACKING_HEADER_RANGE: f32 = 90.0;
 /// here stays at the earlier 0.180 rung). Below the bar the won header
 /// is still won — it becomes the knock-down, which is what a real
 /// midfielder does with an aerial ball they can't attack the goal with.
-const HEADER_ON_GOAL_XG_BAR: f32 = 0.180;
+const HEADER_ON_GOAL_XG_BAR: f32 = 0.260;
 /// Anti-monopoly parity with the Tier-1 foot-shot path: past this many
 /// attempts the aerial win is recycled as a knock-down instead of yet
 /// another attempt.
@@ -85,6 +85,8 @@ impl StateProcessingHandler for MidfielderHeadingState {
         // is a clearance, and everything between is a knock-down forward.
         if ctx.ball().distance_to_opponent_goal() < ATTACKING_HEADER_RANGE
             && self.is_genuine_header_chance(ctx)
+            && ctx.player().can_shoot()
+            && ctx.team().can_shoot()
         {
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Running,

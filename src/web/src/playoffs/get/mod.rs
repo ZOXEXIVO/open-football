@@ -127,7 +127,7 @@ fn playoff_round_label(i18n: &I18n, label: PlayoffRoundLabel) -> String {
     match label {
         PlayoffRoundLabel::WildCard => i18n.t("wild_card").to_string(),
         PlayoffRoundLabel::RoundOne => i18n.t("round_one").to_string(),
-        PlayoffRoundLabel::RoundOf16 => format!("{} 16", i18n.t("round_of")),
+        PlayoffRoundLabel::RoundOf16 => i18n.t("round_of_16").to_string(),
         PlayoffRoundLabel::QuarterFinal => i18n.t("quarter_finals").to_string(),
         PlayoffRoundLabel::SemiFinal => i18n.t("semi_finals").to_string(),
         PlayoffRoundLabel::ConferenceSemiFinal => i18n.t("conference_semi_finals").to_string(),

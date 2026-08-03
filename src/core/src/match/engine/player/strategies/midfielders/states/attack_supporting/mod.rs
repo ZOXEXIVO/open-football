@@ -224,7 +224,16 @@ impl MidfielderAttackSupportingState {
         // box-to-box #8 arrives while a deep regista holds. Depth scales
         // with ball advancement so the runner arrives late, not camping
         // offside at the penalty spot.
-        if distance_to_goal < field_width * 0.33 && self.should_make_attacking_run(ctx) {
+        // Trigger tightened (0.33 → 0.25 width, plus the ball itself
+        // must be within ~27m): the elected runner used to enter box-
+        // attack posture for the ENTIRE final-third phase of every
+        // attack (~3600 runner-in-box ticks per team-match — real box
+        // arrivals are 2-4 per match). Now the run starts only once the
+        // attack genuinely threatens the box.
+        if distance_to_goal < field_width * 0.25
+            && ctx.ball().distance_to_opponent_goal() < 220.0
+            && self.should_make_attacking_run(ctx)
+        {
             let target = self
                 .calculate_arriving_runner_target(ctx, attacking_direction, field_height)
                 .clamp_to_field(field_width, field_height);
@@ -233,7 +242,7 @@ impl MidfielderAttackSupportingState {
                 use std::sync::atomic::Ordering;
                 let goal = goal_position;
                 let center_y = field_height / 2.0;
-                let in_box_central = (goal - player_position).magnitude() < 62.0
+                let in_box_central = (goal - player_position).magnitude() < 110.0
                     && (player_position.y - center_y).abs() < field_height * 0.17;
                 if in_box_central {
                     crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::RUNNER_BOX_TICKS.fetch_add(1, Ordering::Relaxed);
@@ -351,7 +360,7 @@ impl MidfielderAttackSupportingState {
         // Defensive cover behind us? (a deeper central-mid or defender)
         let cover_behind = ctx.players().teammates().all().any(|t| {
             (t.tactical_positions.is_central_midfielder() || t.tactical_positions.is_defender())
-                && (goal - t.position).magnitude() > my_d + 8.0
+                && (goal - t.position).magnitude() > my_d + 40.0
         });
         if !cover_behind {
             return false;
@@ -406,10 +415,15 @@ impl MidfielderAttackSupportingState {
         let ball = ctx.tick_context.positions.ball.position;
         let ball_d = (ball - goal).magnitude();
 
-        // 40u (penalty spot) when the ball is deep, easing to 82u (top of
-        // the box) when the ball is at the edge of the final third.
+        // 84u (10.5m — just outside the penalty spot) when the ball is
+        // deep, easing to 132u (the 16.5m box edge) when the ball is at
+        // the edge of the final third. The previous 40→82u put the
+        // arriving runner INSIDE THE SIX-YARD BOX (5-10m) every attack —
+        // the single geometry error behind permanent midfield tap-ins
+        // (comment claimed 40u was the penalty spot; the spot is 88u at
+        // the true 0.125 m/unit scale).
         let t = ((ball_d - 55.0) / (230.0 - 55.0)).clamp(0.0, 1.0);
-        let depth = 40.0 + t * 42.0;
+        let depth = 84.0 + t * 48.0;
         let target_x = goal.x - attacking_direction * depth;
 
         // Stay central for the angle, drifting to the FAR side of the ball
@@ -747,7 +761,7 @@ impl MidfielderAttackSupportingState {
             // The run *frequency* (should_make_late_box_run) is unchanged,
             // so this deepens the few runs that already happen rather than
             // pulling extra midfielders out of shape.
-            let target_x = goal_position.x - (attacking_direction * 95.0);
+            let target_x = goal_position.x - (attacking_direction * 132.0);
             let target_y = best_channel.center_y;
 
             // Add slight curve to the run to stay onside

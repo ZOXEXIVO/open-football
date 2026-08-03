@@ -14,7 +14,7 @@ const BALL_PROXIMITY_THRESHOLD: f32 = 150.0; // React to ball from further out
 const MARKING_DISTANCE_THRESHOLD: f32 = 50.0; // Pick up attackers from further away
 const PRESSING_DISTANCE_THRESHOLD: f32 = 60.0; // Step out to press ball carrier earlier
 const DANGEROUS_RUN_SCAN_DISTANCE: f32 = 100.0; // Scan wider for dangerous runs
-const DANGEROUS_RUN_SPEED: f32 = 2.0; // Detect slower dangerous runs too
+const DANGEROUS_RUN_SPEED: f32 = 0.40; // 5 m/s in u/tick (1u=0.125m, 10ms tick) — a genuine attacking run. Old values 1.0-3.0 exceeded human max speed (0.63 u/tick), so run-tracking never fired.
 const DANGEROUS_RUN_ANGLE: f32 = 0.5; // Wider angle detection for goal-bound runs
 // Aerial-contest band — same values as the Marking / Intercepting
 // hand-offs so an incoming cross reads identically from every defensive

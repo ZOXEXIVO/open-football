@@ -270,25 +270,33 @@ impl ShotSkillProfile {
     /// in `handle_shoot_event` (which builds the same profile in-flight)
     /// so the decision-time xG and stat-time xG agree.
     pub fn expected_xg(&self, distance: f32, has_clear_shot: bool) -> f32 {
-        // Distance factor — calibrated against real Opta xG by
-        // distance:
-        //   6yd  (~12u): 0.55
-        //   12yd (~24u): 0.28
-        //   18yd (~36u): 0.14
-        //   25m  (~50u): 0.07
-        //   30m  (~60u): 0.045
-        //   35m  (~70u): 0.030
-        // After shot_quality_multiplier (0.35 → 1.30 by skill) and
-        // shooting_condition_mult (~0.95) the per-shot population xG
-        // averages ~0.10, matching real Opta.
-        let distance_factor = if distance <= 10.0 {
+        // Distance factor — calibrated against real Opta xG at the
+        // TRUE field scale: 840u = 105m → 1u = 0.125m (goal 58u=7.32m).
+        // The previous breakpoints (10/30/60/120u) were written as if
+        // 1u ≈ 0.5m — a 4× compression that flattened the curve to
+        // 0.025 for everything beyond 15m real, forced every shooting
+        // range constant in the state machine down to ≤14m, and made
+        // long-range shooting (38-40% of real shots) impossible.
+        // Anchors (before the quality/condition/pressure multipliers;
+        // an average profile multiplies by ~0.77, elite ~1.25):
+        //   tap-in  ≤2.5m  (20u): 0.72
+        //   6yd      5.5m  (44u): 0.55
+        //   pen spot  11m  (88u): 0.34
+        //   box edge 16.5m (132u): 0.15
+        //   25m           (200u): 0.05
+        //   30m+          (240u+): 0.03
+        let distance_factor = if distance <= 20.0 {
             0.72
-        } else if distance <= 30.0 {
-            0.72 - (distance - 10.0) / 20.0 * 0.40
-        } else if distance <= 60.0 {
-            0.32 - (distance - 30.0) / 30.0 * 0.22
-        } else if distance <= 120.0 {
-            0.10 - (distance - 60.0) / 60.0 * 0.07
+        } else if distance <= 44.0 {
+            0.72 - (distance - 20.0) / 24.0 * 0.17
+        } else if distance <= 88.0 {
+            0.55 - (distance - 44.0) / 44.0 * 0.21
+        } else if distance <= 132.0 {
+            0.34 - (distance - 88.0) / 44.0 * 0.19
+        } else if distance <= 200.0 {
+            0.15 - (distance - 132.0) / 68.0 * 0.10
+        } else if distance <= 280.0 {
+            0.05 - (distance - 200.0) / 80.0 * 0.02
         } else {
             0.025
         };
@@ -303,7 +311,9 @@ impl ShotSkillProfile {
 
         // Long-range cap unless the player has elite long shots
         // (encoded via execution_skill above ~0.55 implies long_shots≥16).
-        if distance > 100.0 && self.execution_skill < 0.55 {
+        // 180u = 22.5m — beyond that only a genuine long-shot specialist
+        // carries meaningful xG.
+        if distance > 180.0 && self.execution_skill < 0.55 {
             xg = xg.min(0.055);
         }
         // Low-skill conversion cap — even on easy chances a 5/20 player
@@ -326,19 +336,21 @@ pub struct ShootingOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
 }
 
-// Realistic shooting distances (field is typically 840 units)
-// Real football: most goals from within 18m (~36 units), rare from 30m+ (~60 units)
-const MAX_SHOOTING_DISTANCE: f32 = 100.0; // ~50m - absolute max for elite long shots
+// Realistic shooting distances at the true field scale: 840u = 105m,
+// 1u = 0.125m. Real football: ~60% of shots inside the 16.5m box
+// (132u), ~10% beyond 25m (200u). The previous values were written on
+// a ~0.5m/unit assumption, capping ALL shooting at ~12.5m real.
+const MAX_SHOOTING_DISTANCE: f32 = 220.0; // 27.5m - absolute max for elite long shots
 const MIN_SHOOTING_DISTANCE: f32 = 1.0;
-const VERY_CLOSE_RANGE_DISTANCE: f32 = 28.0; // ~14m - anyone can shoot
-const CLOSE_RANGE_DISTANCE: f32 = 48.0; // ~24m - close range shots
-const OPTIMAL_SHOOTING_DISTANCE: f32 = 70.0; // ~35m - ideal shooting distance
-const MEDIUM_RANGE_DISTANCE: f32 = 80.0; // ~40m - medium range shots
+const VERY_CLOSE_RANGE_DISTANCE: f32 = 60.0; // 7.5m - anyone can shoot
+const CLOSE_RANGE_DISTANCE: f32 = 100.0; // 12.5m - close range shots
+const OPTIMAL_SHOOTING_DISTANCE: f32 = 90.0; // 11.25m - ideal shooting distance
+const MEDIUM_RANGE_DISTANCE: f32 = 150.0; // 18.75m - medium range shots
 
 // Shooting decision thresholds
-const SHOOT_OVER_PASS_CLOSE_THRESHOLD: f32 = 36.0; // Always prefer shooting if closer than this
-const SHOOT_OVER_PASS_MEDIUM_THRESHOLD: f32 = 50.0; // Shoot over pass for decent finishers
-const EXCELLENT_OPPORTUNITY_CLOSE_RANGE: f32 = 60.0; // Distance for close-range excellent opportunity
+const SHOOT_OVER_PASS_CLOSE_THRESHOLD: f32 = 60.0; // Always prefer shooting if closer than this (7.5m)
+const SHOOT_OVER_PASS_MEDIUM_THRESHOLD: f32 = 100.0; // Shoot over pass for decent finishers (12.5m)
+const EXCELLENT_OPPORTUNITY_CLOSE_RANGE: f32 = 110.0; // Distance for close-range excellent opportunity
 
 // Teammate advantage thresholds (multipliers)
 const TEAMMATE_ADVANTAGE_RATIO: f32 = 0.4; // Teammate must be this much closer to prevent shot
@@ -630,8 +642,11 @@ impl<'p> ShootingOperationsImpl<'p> {
         }
 
         if distance <= OPTIMAL_SHOOTING_DISTANCE {
-            // Optimal range - linear increase to peak
-            return (distance / OPTIMAL_SHOOTING_DISTANCE).min(1.0);
+            // Anywhere inside the ideal band a striker is fully
+            // confident — the previous linear ramp INVERTED reality
+            // (a 2.5m tap-in read as low-confidence, an 11m strike as
+            // peak).
+            return 1.0;
         }
 
         if distance <= MAX_SHOOTING_DISTANCE {

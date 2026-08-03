@@ -10,7 +10,7 @@ use nalgebra::Vector3;
 
 /// A ground cross collected this close to goal is a cutback finish, not a
 /// reception. Kept in step with `FINISHING_RANGE` in the finishing state.
-const CUTBACK_FINISH_RANGE: f32 = 36.0;
+const CUTBACK_FINISH_RANGE: f32 = 48.0;
 
 #[derive(Default, Clone)]
 pub struct ForwardCrossReceivingState {}

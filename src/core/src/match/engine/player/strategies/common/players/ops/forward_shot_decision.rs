@@ -321,7 +321,7 @@ pub fn evaluate_forward_shot_decision(
     let distance = ctx.ball().distance_to_opponent_goal();
     // Anything beyond the absolute long-range cap is hopeless even
     // for elite long-shooters — keep the ball.
-    if distance > 110.0 {
+    if distance > 230.0 {
         #[cfg(feature = "match-logs")]
         helper_diag::HOLD_FAR.fetch_add(1, Ordering::Relaxed);
         return ShotDecision::Hold;
@@ -380,12 +380,20 @@ pub fn evaluate_forward_shot_decision(
     // count lands near 13/team, with the willingness roll suppressing
     // most of those cheap looks. Earlier 0.07–0.22 floors blocked 99%
     // of attempts and produced the 0-0 epidemic.
-    let distance_floor_base = if distance <= 36.0 {
+    // Bands rescaled to the true field units (1u = 0.125m): inside
+    // 7.5m almost anything goes on target pressure alone, the box
+    // band keeps a modest floor, and beyond 25m only a chance a
+    // specialist prices above ~0.03 clears. This is where the skill
+    // gradient lives: a weak finisher's long look falls under the
+    // floor, an elite one clears it.
+    let distance_floor_base = if distance <= 60.0 {
         0.090
-    } else if distance <= 60.0 {
-        0.075
+    } else if distance <= 132.0 {
+        0.055
+    } else if distance <= 200.0 {
+        0.032
     } else {
-        0.050
+        0.022
     };
     let mut min_xg = distance_floor_base - execution_skill * 0.020
         + pressure_penalty * 0.020
@@ -427,7 +435,7 @@ pub fn evaluate_forward_shot_decision(
     if hog_shots > 7 {
         min_xg += ((hog_shots - 7) as f32 * 0.010).min(0.05);
     }
-    let inside_six = distance <= 18.0;
+    let inside_six = distance <= 44.0;
     // Inside-six floor: skill-graded, so a 5/20 player floors near 0.15
     // instead of inheriting the unconditional 0.30 free pass.
     let inside_six_floor = 0.12 + execution_skill * 0.28;
@@ -493,7 +501,7 @@ pub fn evaluate_forward_shot_decision(
     let best_pass_ev = ctx
         .player()
         .passing()
-        .find_best_pass_option_with_distance(60.0)
+        .find_best_pass_option_with_distance(140.0)
         .map(|(t, _)| {
             let opp_near = ctx.tick_context.grid.opponents(t.id, 12.0).count();
             let mark_factor = if opp_near >= 2 { 0.5 } else { 1.0 };
@@ -513,13 +521,13 @@ pub fn evaluate_forward_shot_decision(
             // fired through PRIO 0.5. New scale matches the receiver-
             // xg-after-control reality (a striker with an open net
             // gets ~0.30 not 0.45; a 30u teammate gets ~0.12).
-            let pass_xg = if receiver_d < 24.0 {
+            let pass_xg = if receiver_d < 48.0 {
                 0.28
-            } else if receiver_d < 40.0 {
+            } else if receiver_d < 88.0 {
                 0.16
-            } else if receiver_d < 60.0 {
+            } else if receiver_d < 132.0 {
                 0.09
-            } else if receiver_d < 80.0 {
+            } else if receiver_d < 180.0 {
                 0.05
             } else {
                 0.03
@@ -540,7 +548,7 @@ pub fn evaluate_forward_shot_decision(
     let margin = SkillCurve::new(skills.mental.teamwork, 12.0, 0.6).lerp(0.10, 0.02);
     // Cap pass EV so a fantasy cutback doesn't talk us out of a real shot.
     let capped_pass_ev = best_pass_ev.min(0.55);
-    let point_blank = distance < 24.0 && xg >= 0.18;
+    let point_blank = distance < 48.0 && xg >= 0.18;
     if !point_blank && capped_pass_ev > xg + margin {
         #[cfg(feature = "match-logs")]
         helper_diag::PASS_DEFERRAL.fetch_add(1, Ordering::Relaxed);
@@ -636,15 +644,21 @@ pub fn evaluate_forward_shot_decision(
     // line-balance-neutral half of the rebalance (base cut only; xg_boost
     // floor untouched so the 58/32/10 share holds); the freshness gain
     // itself is realistic and kept.
+    // Rescaled ~÷4 with the true-unit geometry correction: expanded
+    // shooting ranges multiplied in-range polling time ~3x and the
+    // corrected xG curve lifted xg_boost ~1.5x — without this cut the
+    // engine produced 54 shots/team. The division lands on the BASE so
+    // the skill terms keep their relative steepness (selection remains
+    // the dominant chooser signal).
     let base_willingness =
-        0.0030 + selection * 0.0107 + composure_skill * 0.0049 + execution_skill * 0.0062;
+        0.00075 + selection * 0.0027 + composure_skill * 0.0012 + execution_skill * 0.0016;
     // xg_boost — floor 0.30 (vs prior 0.50). Mid-range chance with
     // xG=0.06 gets 0.30 boost (was 0.50 — ~40% reduction). Clear-shot
     // xG=0.10 gets 0.50 (was 0.50 — no change). High-xG xG≥0.28 gets
     // 1.40 (cap unchanged). Net effect: speculative low-xG shots cut
     // ~40%, high-xG kept intact — preserves line balance better than
     // a deep floor cut.
-    let xg_boost = (xg / 0.20).clamp(0.30, 1.40);
+    let xg_boost = (xg / 0.26).clamp(0.22, 1.40);
     let clarity_mult = 0.50 + clarity * 0.50;
     let body_control_mult = (0.65 + body_control * 0.40).clamp(0.60, 1.05);
     // Condition slope softened 0.55 → 0.25. Fatigue already hits this
@@ -686,7 +700,12 @@ pub fn evaluate_forward_shot_decision(
     if inside_six {
         // Inside-six floor scales with execution_skill so a 5/20
         // player floors near 0.15, not 0.30.
-        let inside_six_will_floor = (0.10 + execution_skill * 0.30).clamp(0.10, 0.45);
+        // Per-TICK floor: 0.02-0.08 fires within ~0.25-1s of holding
+        // the ball this close — a real release time. The old 0.10-0.45
+        // floor fired within 2-10 ticks (~0.1s), i.e. instantly, and
+        // once inside_six widened to the real 5.5m six-yard box it
+        // became the dominant shot source on the pitch.
+        let inside_six_will_floor = (0.02 + execution_skill * 0.06).clamp(0.02, 0.08);
         willingness = willingness.max(inside_six_will_floor);
     }
 
@@ -793,7 +812,7 @@ pub fn evaluate_forward_shot_decision(
     // then halved with the base coefficients (→ 0.003) so the floor
     // doesn't swallow the global trim for low-willingness rolls.
     let cap = if xg >= 0.35 { 0.44 } else { 0.34 };
-    willingness = willingness.clamp(0.0021, cap);
+    willingness = willingness.clamp(0.0005, cap);
 
     #[cfg(feature = "match-logs")]
     {
@@ -835,7 +854,7 @@ pub fn find_cutback_to_arriving_runner(ctx: &StateProcessingContext) -> Option<M
     let carrier_goal_d = (goal - ctx.player.position).magnitude();
 
     let mut best: Option<(MatchPlayerLite, f32)> = None;
-    for t in ctx.players().teammates().nearby(75.0) {
+    for t in ctx.players().teammates().nearby(90.0) {
         if !t.tactical_positions.is_central_midfielder() {
             continue;
         }
@@ -847,7 +866,7 @@ pub fn find_cutback_to_arriving_runner(ctx: &StateProcessingContext) -> Option<M
         // arriving-runner target deepens into; above 14u so it isn't a
         // pass into the keeper's hands).
         let td = (goal - t.position).magnitude();
-        if !(14.0..=66.0).contains(&td) {
+        if !(36.0..=110.0).contains(&td) {
             continue;
         }
         // Allow the classic lay-BACK to an arriving midfielder at the edge
@@ -871,7 +890,7 @@ pub fn find_cutback_to_arriving_runner(ctx: &StateProcessingContext) -> Option<M
         // strike (18u ≈ 2.3m — a tracking defender one stride away blocks
         // the cutback lane or the shot). A tracked runner is exactly the
         // case where the real forward keeps the shot himself.
-        if ctx.tick_context.grid.opponents(t.id, 18.0).count() >= 1 {
+        if ctx.tick_context.grid.opponents(t.id, 30.0).count() >= 1 {
             continue;
         }
         if !ctx.player().has_clear_pass(t.id) {

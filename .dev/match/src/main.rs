@@ -3325,6 +3325,59 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             label, m, p50, p10, p90, n
         );
     }
+    // ── RATING TAILS + MULTI-GOAL FREQUENCY ─────────────────────────────
+    //
+    // The "8.31 after 2 matches" class of report: a small-sample season
+    // average is only as realistic as the FREQUENCY of the big matches
+    // behind it. Real-football references (WhoScored-era, top leagues):
+    //   * 2+ goal player-matches: FWD ~4-5%, MID ~0.5%, DEF ~0.1%
+    //   * per-match rating ≥7.5: FWD ~8%, MID ~4-5%, DEF ~2%
+    //   * per-match rating ≥8.0: FWD ~3%, MID ~1%, DEF ~0.5%
+    // If the engine mints braces or 8.0+ matches materially more often
+    // than this, small-sample season rows on the site will routinely
+    // show 8+ averages and read as inflation even when each individual
+    // match rating is defensible.
+    {
+        let mut brace = [0u32; 4];
+        let mut ge75 = [0u32; 4];
+        let mut ge80 = [0u32; 4];
+        let mut n_pos = [0u32; 4];
+        for o in &outcomes {
+            for &(_id, goals, _sh, _xg, grp, rating, minutes, _assists) in &o.per_player {
+                if minutes == 0 {
+                    continue;
+                }
+                let gi = grp as usize;
+                n_pos[gi] += 1;
+                if goals >= 2 {
+                    brace[gi] += 1;
+                }
+                if rating >= 7.5 {
+                    ge75[gi] += 1;
+                }
+                if rating >= 8.0 {
+                    ge80[gi] += 1;
+                }
+            }
+        }
+        println!();
+        println!("--- RATING TAILS + MULTI-GOAL (per player-match) ---");
+        println!(
+            "  {:<4} {:>8} {:>8} {:>8}    real: braces FWD~4-5%/MID~0.5%; >=8.0 FWD~3%/MID~1%",
+            "pos", "2+goals", ">=7.5", ">=8.0"
+        );
+        for (i, label) in ["GK", "DEF", "MID", "FWD"].iter().enumerate() {
+            let n = n_pos[i].max(1) as f32;
+            println!(
+                "  {:<4} {:>7.2}% {:>7.2}% {:>7.2}%",
+                label,
+                brace[i] as f32 / n * 100.0,
+                ge75[i] as f32 / n * 100.0,
+                ge80[i] as f32 / n * 100.0,
+            );
+        }
+    }
+
     println!();
     println!("--- PER-PLAYER SEASON AVG (minute-weighted, like website's AV RAT) ---");
     let mut player_avgs_by_pos: [Vec<f32>; 4] = Default::default();

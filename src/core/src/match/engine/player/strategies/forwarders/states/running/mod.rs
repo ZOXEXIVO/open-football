@@ -147,17 +147,17 @@ pub mod tackle_stats {
 // Realistic shooting distances (field is 840 units)
 // Real football: most goals scored from within 18m (~36 units)
 #[allow(dead_code)]
-const MAX_SHOOTING_DISTANCE: f32 = 90.0; // ~45m - absolute max for elite long shots
+const MAX_SHOOTING_DISTANCE: f32 = 176.0; // 22m - absolute max for elite long shots (1u = 0.125m)
 #[allow(dead_code)]
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
-const POINT_BLANK_DISTANCE: f32 = 36.0; // ~18m — inside-the-box strike. Below this, the
+const POINT_BLANK_DISTANCE: f32 = 48.0; // 6m — point-blank strike zone. Below this, the
 // forward must shoot rather than dribble toward the keeper. Widened
 // from 24u (3m — practically on the 6-yard line) because at 24u the
 // forward had already run past every shot opportunity. Real football:
 // strikers fire from 16-18 yards frequently; running the ball to
 // inside 3m of the keeper is never a conscious choice.
 #[allow(dead_code)]
-const VERY_CLOSE_RANGE_DISTANCE: f32 = 36.0; // ~18m - anyone can shoot
+const VERY_CLOSE_RANGE_DISTANCE: f32 = 72.0; // 9m - anyone can shoot
 const CLOSE_RANGE_DISTANCE: f32 = 48.0; // ~24m - close range shots
 #[allow(dead_code)]
 const OPTIMAL_SHOOTING_DISTANCE: f32 = 60.0; // ~30m - ideal shooting distance
@@ -289,7 +289,15 @@ impl StateProcessingHandler for ForwardRunningState {
                     // by ~1) the gate now triggers, covering the
                     // moderate-asymmetry case the original buffer
                     // missed.
-                    if attacker_first_touch < defender_tackling - 0.5 {
+                    // Chance-quality floor: the snapshot skips the
+                    // unified helper (pending_shot_reason bypasses it in
+                    // Shooting), so it must carry its own xG bar — a
+                    // pressured snapshot is still a SHOT SELECTION, not
+                    // a reflex to fire from anywhere. 0.15 ≈ a clear
+                    // look inside ~11m for an ordinary finisher.
+                    if attacker_first_touch < defender_tackling - 0.5
+                        && ctx.player().shooting().expected_xg() >= 0.15
+                    {
                         return Some(
                             StateChangeResult::with_forward_state(ForwardState::Shooting)
                                 .with_shot_reason("FWD_SNAPSHOT_PRESSED"),
@@ -471,7 +479,7 @@ impl StateProcessingHandler for ForwardRunningState {
             // shot is good. Skill-stratified caps double-punished low-fin
             // strikers (penalised by xG already and by willingness, then
             // additionally vetoed by a hard distance cap).
-            let max_shot_distance = 90.0f32;
+            let max_shot_distance = 176.0f32;
             // GAME-MANAGEMENT SHOT SUPPRESSION (PRIO 0.5 only). The
             // unified helper does NOT scale by gm_intensity — that's a
             // tempo decision the coach makes, not the helper's
@@ -864,7 +872,7 @@ impl StateProcessingHandler for ForwardRunningState {
             if ctx.tick_context.positions.ball.position.z >= 1.5
                 && ctx.ball().is_towards_player_with_angle(0.5)
                 && ctx.ball().distance() < 40.0
-                && ctx.ball().distance_to_opponent_goal() < 200.0
+                && ctx.ball().distance_to_opponent_goal() < 96.0
             {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Heading));
             }

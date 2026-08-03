@@ -44,12 +44,10 @@ impl StateProcessingHandler for ForwardDribblingState {
             }
         }
 
-        // PRIORITY 1b: Range-based fallback with lane check.
-        if can_shoot && ctx.player().should_attempt_shot() && ctx.player().has_clear_shot() {
-            if let Some(result) = dispatch_shot(ctx, "FWD_DRIB_RANGE") {
-                return Some(result);
-            }
-        }
+        // (A separate "PRIORITY 1b" range fallback used to re-test the
+        // IDENTICAL predicate — `should_attempt_shot()` is literally
+        // `in_shooting_range()` — doubling the per-tick willingness
+        // roll to 1-(1-w)^2. One look, one roll.)
 
         // Prevent infinite dribbling - timeout after 40 ticks to reassess.
         if ctx.in_state_time > 40 {
@@ -68,7 +66,7 @@ impl StateProcessingHandler for ForwardDribblingState {
         // 17u produced Dribbling → Passing → Dribbling every few
         // ticks. Now we require two real pressers OR a long commit
         // window before abandoning the dribble.
-        let close_defenders = ctx.players().opponents().nearby(8.0).count();
+        let close_defenders = ctx.players().opponents().nearby(24.0).count();
         if close_defenders >= 2 {
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }

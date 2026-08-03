@@ -23,7 +23,7 @@ const HEADING_DISTANCE: f32 = 5.0;
 #[allow(dead_code)]
 const THREAT_SCAN_DISTANCE: f32 = 100.0; // Increased from 70.0 - earlier detection of dangerous runs
 #[allow(dead_code)]
-const DANGEROUS_RUN_SPEED: f32 = 2.5; // Reduced from 3.0 - detect slower dangerous runs too
+const DANGEROUS_RUN_SPEED: f32 = 0.40; // 5 m/s in u/tick (1u=0.125m, 10ms tick) — a genuine attacking run. Old values 1.0-3.0 exceeded human max speed (0.63 u/tick), so run-tracking never fired.
 #[allow(dead_code)]
 const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Reduced from 0.7 - wider angle detection
 

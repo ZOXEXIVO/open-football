@@ -17,9 +17,9 @@ use nalgebra::Vector3;
 use std::cmp::Ordering;
 
 // Shooting distance constants for midfielders — more conservative than forwards
-const MAX_SHOOTING_DISTANCE: f32 = 88.0; // Edge-of-box / arriving-midfielder strikes
-const STANDARD_SHOOTING_DISTANCE: f32 = 52.0; // Standard shooting range for midfielders
-const POINT_BLANK_DISTANCE: f32 = 20.0; // ~10m - must shoot, goalkeeper is right there
+const MAX_SHOOTING_DISTANCE: f32 = 160.0; // 20m — edge-of-box / arriving-midfielder strikes (1u = 0.125m)
+const STANDARD_SHOOTING_DISTANCE: f32 = 104.0; // 13m — standard shooting range for midfielders
+const POINT_BLANK_DISTANCE: f32 = 40.0; // 5m - must shoot, goalkeeper is right there
 
 // Aerial-contest band, matching the Intercepting hand-off and the
 // defender's equivalents so the same dropping ball reads identically
@@ -144,7 +144,12 @@ impl StateProcessingHandler for MidfielderRunningState {
                 if let Some(threat_id) = nearest_threat {
                     let defender_tackling = ctx.player().skills(threat_id).technical.tackling;
                     let attacker_first_touch = ctx.player.skills.technical.first_touch;
-                    if attacker_first_touch < defender_tackling - 0.5 {
+                    // Chance-quality floor — the snapshot bypasses the
+                    // unified helper via pending_shot_reason, so it
+                    // carries its own xG bar (see FWD_SNAPSHOT_PRESSED).
+                    if attacker_first_touch < defender_tackling - 0.5
+                        && ctx.player().shooting().expected_xg() >= 0.20
+                    {
                         return Some(
                             StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
                                 .with_shot_reason("MID_SNAPSHOT_PRESSED"),
@@ -227,12 +232,24 @@ impl StateProcessingHandler for MidfielderRunningState {
                 // supply, the no-decline bar has to describe a bigger
                 // sitter. Tier-2's willingness roll (measured flat) still
                 // owns the grey zone below the bar.
-                let clear_good = distance_to_goal <= STANDARD_SHOOTING_DISTANCE
+                // Post geometry-fix (2026-08, true 0.125m/unit scale)
+                // this tier stopped being deterministic-per-tick: with
+                // arriving runners now legitimately parked at 10.5-16.5m
+                // the old unconditional fire maxed the shot cap every
+                // match (~20 box shots/team from this path alone). A
+                // clear penalty-spot sitter still gets taken — the
+                // per-tick roll integrates to near-certainty over the
+                // ~half-second such a window stays open — but a mid no
+                // longer machine-guns every clear look the instant it
+                // appears. Range tightened to 11m (88u): beyond that,
+                // Tier-2's willingness roll owns the decision.
+                let clear_good = distance_to_goal <= 88.0
                     && coach.shooting_reluctance() < 0.5
                     && ctx.player().has_clear_shot()
                     && ctx.player().shooting().has_good_angle()
-                    && sp.expected_xg(distance_to_goal, true) >= 0.240;
-                if clear_good && ctx.memory().shots_taken <= 4 {
+                    && sp.expected_xg(distance_to_goal, true) >= 0.30;
+                if clear_good && ctx.memory().shots_taken <= 2 && ctx.context.rng.unit_f32() < 0.012
+                {
                     #[cfg(feature = "match-logs")]
                     {
                         use std::sync::atomic::Ordering;

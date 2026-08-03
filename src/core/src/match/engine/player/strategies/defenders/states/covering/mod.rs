@@ -13,7 +13,7 @@ const INTERCEPTION_DISTANCE: f32 = 120.0; // Increased from 100.0
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 const PUSH_UP_HYSTERESIS: f32 = 0.05;
 const THREAT_SCAN_DISTANCE: f32 = 100.0; // Increased from 70.0 - wider threat detection
-const DANGEROUS_RUN_SPEED: f32 = 2.5; // Reduced from 3.0 - detect slower runs
+const DANGEROUS_RUN_SPEED: f32 = 0.40; // 5 m/s in u/tick (1u=0.125m, 10ms tick) — a genuine attacking run. Old values 1.0-3.0 exceeded human max speed (0.63 u/tick), so run-tracking never fired.
 const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Reduced from 0.7 - wider angle
 const MIN_STATE_TIME_DEFAULT: u64 = 20; // Reduced - faster reactions
 const MIN_STATE_TIME_WITH_THREAT: u64 = 5; // Reduced - very fast reaction to threats

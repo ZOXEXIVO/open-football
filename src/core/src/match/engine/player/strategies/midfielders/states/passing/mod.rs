@@ -138,17 +138,17 @@ impl StateProcessingHandler for MidfielderPassingState {
             // to specialists in ideal conditions.
             let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
             let shot_profile = ctx.player().shooting().shot_profile();
-            return if goal_dist < 30.0
+            return if goal_dist < 60.0
                 && ctx.player().has_clear_shot()
                 && ctx.player().shooting().has_good_angle()
-                && shot_profile.expected_xg(goal_dist, true) >= 0.13
-                && mid_profile.mid_shot_selection >= 0.42
+                && shot_profile.expected_xg(goal_dist, true) >= 0.26
+                && mid_profile.mid_shot_selection >= 0.46
             {
                 Some(
                     StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
                         .with_shot_reason("MID_PASS_BAILOUT_SHOOT"),
                 )
-            } else if goal_dist < 55.0
+            } else if goal_dist < 144.0
                 && ctx.player().has_clear_shot()
                 && ctx.player().shooting().has_good_angle()
                 && mid_profile.mid_shot_selection >= 0.58

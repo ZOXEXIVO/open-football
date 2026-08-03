@@ -14,7 +14,7 @@ use nalgebra::Vector3;
 /// actually scored. Closer than the old 34u (≈8.5m, a long header at a
 /// wide angle that converted at ~1%): a CB who wins the aerial here gets a
 /// prime-distance header.
-const BOX_ATTACK_DEPTH: f32 = 24.0;
+const BOX_ATTACK_DEPTH: f32 = 56.0;
 /// A jumping attacker reaches a touch further than the 1.5u of a standing
 /// defensive header, so an arriving CB contests the cross from here.
 const HEADER_REACH: f32 = 6.0;

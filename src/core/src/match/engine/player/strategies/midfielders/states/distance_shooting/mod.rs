@@ -31,7 +31,7 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             ));
         }
 
-        if ctx.player().goal_distance() > 250.0 {
+        if ctx.player().goal_distance() > 280.0 {
             // Too far from the goal, consider other options
             if self.should_pass(ctx) {
                 return Some(StateChangeResult::with_midfielder_state(
@@ -44,9 +44,10 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             }
         }
 
-        // Close to goal — just shoot
+        // Close to goal with a clear sight — shoot (5.5m; the old 50u
+        // gate fired UNCONDITIONALLY from 6.25m with no clarity check)
         let distance_to_goal = ctx.player().goal_distance();
-        if distance_to_goal < 50.0 {
+        if distance_to_goal < 44.0 && ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Shooting,
                 Event::PlayerEvent(PlayerEvent::Shoot(
@@ -120,17 +121,17 @@ impl MidfielderDistanceShootingState {
         // from the previous specialist-only bars (0.58 / 0.72) so a
         // competent playmaker — not just a 1-in-a-squad long-range
         // specialist — drives the occasional shot from range.
-        if distance_to_goal <= 42.0 {
-            mid_profile.mid_shot_selection >= 0.40
-                && shot_profile.expected_xg(distance_to_goal, true) >= 0.08
-        } else if distance_to_goal <= 65.0 {
-            mid_profile.mid_shot_selection >= 0.46
+        if distance_to_goal <= 120.0 {
+            mid_profile.mid_shot_selection >= 0.44
+                && shot_profile.expected_xg(distance_to_goal, true) >= 0.16
+        } else if distance_to_goal <= 160.0 {
+            mid_profile.mid_shot_selection >= 0.50
                 && close_opponents <= 2
-                && shot_profile.expected_xg(distance_to_goal, true) >= 0.045
-        } else if distance_to_goal <= 80.0 {
-            mid_profile.mid_shot_selection >= 0.56
+                && shot_profile.expected_xg(distance_to_goal, true) >= 0.10
+        } else if distance_to_goal <= 200.0 {
+            mid_profile.mid_shot_selection >= 0.58
                 && shot_profile.execution_skill >= 0.50
-                && shot_profile.expected_xg(distance_to_goal, true) >= 0.035
+                && shot_profile.expected_xg(distance_to_goal, true) >= 0.055
         } else {
             false
         }

@@ -31,6 +31,19 @@ impl StateProcessingHandler for ForwardHeadingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
+        // A header ON GOAL is a shot like any other: it must respect
+        // the player + team shot cooldowns (this state used to ignore
+        // both — headed attempts fired through the 2s/7.5s windows the
+        // foot paths honour) and real headed-shot range (~12m; nobody
+        // heads for goal from 25m). Outside these, a won aerial is a
+        // knock-down, not an attempt.
+        if !ctx.player().can_shoot()
+            || !ctx.team().can_shoot()
+            || ctx.ball().distance_to_opponent_goal() > 96.0
+        {
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+        }
+
         // Corner-contest carve-out: when the discrete corner aerial
         // contest (engine `resolve_corner_contest`) has ALREADY decided
         // this player won the jump and dropped the ball on their head,

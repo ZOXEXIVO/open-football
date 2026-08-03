@@ -381,8 +381,8 @@ impl Ball {
                 // AttackingCorner keeps them there until the corner
                 // resolves, then they sprint back into shape.
                 let box_x = match side {
-                    GoalSide::Home => 26.0,
-                    GoalSide::Away => field_width - 26.0,
+                    GoalSide::Home => 52.0,
+                    GoalSide::Away => field_width - 52.0,
                 };
                 let center_y = field_height / 2.0;
                 let mut cbs: Vec<(u32, f32)> = players
