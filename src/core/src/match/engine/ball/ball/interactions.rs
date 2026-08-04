@@ -716,7 +716,11 @@ impl Ball {
         // Flatter skill slope: the steeper version gave a youth keeper
         // 58% saves vs a senior 69% (real spread is ~60-75%), so weak
         // leagues ran hot on goals.
-        let skill_mult = 0.600 + skill * 0.180;
+        // Slope flattened: keeper skill was outrunning shooter skill, so
+        // senior save% ran 73% while youth sat correctly at 67-68%. Real
+        // football holds ~67% at every level because both sides improve
+        // together.
+        let skill_mult = 0.645 + skill * 0.075;
         // Environment shifts keeper handling — heavy rain spills more,
         // wind on cross-claims has a subtler effect (the keeper still
         // sets feet under a regular shot).

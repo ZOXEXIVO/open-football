@@ -196,6 +196,107 @@ pub mod time_band_diag {
     /// happens AFTER approval — in the caller's branch or the Shooting
     /// state — from loss inside the decision itself.
     pub static APPROVED_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Queued shots destroyed: the player had a `pending_shot_reason`
+    /// (an APPROVED strike waiting for the Shooting state to run) and
+    /// was moved to a non-shot state before it could fire.
+    pub static QUEUED_SHOT_LOST: [AtomicU64; BANDS] = [ZERO; BANDS];
+
+    /// Long-range (>176u = 22m) approvals bucketed by the call-site tag
+    /// the helper was invoked with — names the caller responsible for
+    /// approvals that never become shots.
+    pub const TAGS: usize = 13;
+    pub static APPROVED_BY_TAG: [AtomicU64; TAGS] = [ZERO_ONE; TAGS];
+    const ZERO_ONE: AtomicU64 = AtomicU64::new(0);
+    pub const TAG_NAMES: [&str; TAGS] = [
+        "FWD_PRIO05",
+        "FWD_PRIO06",
+        "FWD_POINTBLANK",
+        "FWD_ANTIOSC",
+        "FWD_FINISHING",
+        "FWD_RIB",
+        "FWD_LASTMILE",
+        "FWD_DRIB/STAND",
+        "MID_SHOOT",
+        "MID_ANTIOSC",
+        "MID_PASS_FWD",
+        "MID_BAILOUT",
+        "other",
+    ];
+    #[inline]
+    pub fn tag_index(tag: &str) -> usize {
+        match tag {
+            "FWD_RUN_PRIO05_CLEAR" => 0,
+            "FWD_RUN_PRIO06_BOX" => 1,
+            "FWD_RUN_POINT_BLANK" => 2,
+            "FWD_RUN_ANTI_OSCILLATION" => 3,
+            "FWD_FINISHING" => 4,
+            "FWD_RIB_SHOT" => 5,
+            "FWD_SHOOTING_LASTMILE" => 6,
+            t if t.starts_with("FWD_DRIB") || t.starts_with("FWD_STAND") => 7,
+            "MID_SHOOT" => 8,
+            "AM_RUN_ANTI_OSC_FWD" => 9,
+            "MID_PASS_FWD" => 10,
+            "AM_PASS_BAILOUT_FWD" => 11,
+            _ => 12,
+        }
+    }
+    /// EMITTED shots in the 6-11m band (48-88u), bucketed by the reason
+    /// string the Shoot event carries. Mirror of `APPROVED_BY_TAG` — it
+    /// names the producer of the close-range over-supply that no
+    /// decision-layer gate reaches.
+    pub const ETAGS: usize = 10;
+    pub static EMITTED_MID_BAND: [AtomicU64; ETAGS] = [ZERO_ONE; ETAGS];
+    pub const ETAG_NAMES: [&str; ETAGS] = [
+        "header",
+        "snapshot",
+        "MID_CLEAR_CHANCE",
+        "finishing",
+        "distance-shoot",
+        "mid-shooting-*",
+        "fwd-shooting-*",
+        "helper FWD",
+        "helper MID",
+        "other",
+    ];
+    #[inline]
+    pub fn emit_tag_index(r: &str) -> usize {
+        if r.contains("HEAD") {
+            0
+        } else if r.contains("SNAPSHOT") {
+            1
+        } else if r == "MID_CLEAR_CHANCE" {
+            2
+        } else if r.contains("FINISH") {
+            3
+        } else if r.contains("DISTANCE") {
+            4
+        } else if r.starts_with("MID_SHOOTING") {
+            5
+        } else if r.starts_with("FWD_SHOOTING") {
+            6
+        } else if r.starts_with("FWD_") {
+            7
+        } else if r.starts_with("MID_") || r.starts_with("AM_") {
+            8
+        } else {
+            9
+        }
+    }
+    pub fn emit_tag_snapshot() -> [u64; ETAGS] {
+        let mut out = [0u64; ETAGS];
+        for i in 0..ETAGS {
+            out[i] = EMITTED_MID_BAND[i].load(Ordering::Relaxed);
+        }
+        out
+    }
+
+    pub fn tag_snapshot() -> [u64; TAGS] {
+        let mut out = [0u64; TAGS];
+        for i in 0..TAGS {
+            out[i] = APPROVED_BY_TAG[i].load(Ordering::Relaxed);
+        }
+        out
+    }
     /// Ticks the ball was OWNED by a player, bucketed by that owner's
     /// distance to the goal he is attacking. This is possession
     /// geography itself — the ground truth behind the shot mix. Real
@@ -276,8 +377,8 @@ pub mod time_band_diag {
         }
     }
 
-    /// [shots, xg_x1000, rolls, calls, possession, approved] per band.
-    pub fn distance_snapshot() -> [[u64; BANDS]; 6] {
+    /// [shots, xg, rolls, calls, possession, approved, queued_lost] per band.
+    pub fn distance_snapshot() -> [[u64; BANDS]; 7] {
         let load = |arr: &[AtomicU64; BANDS]| {
             let mut out = [0u64; BANDS];
             for (o, a) in out.iter_mut().zip(arr.iter()) {
@@ -292,6 +393,7 @@ pub mod time_band_diag {
             load(&CALLS_BY_DIST),
             load(&POSSESSION_TICKS_BY_DIST),
             load(&APPROVED_BY_DIST),
+            load(&QUEUED_SHOT_LOST),
         ]
     }
     /// Condition samples per band per position group (0=GK 1=DEF 2=MID
@@ -315,6 +417,9 @@ pub mod time_band_diag {
     }
 
     pub fn reset() {
+        for a in APPROVED_BY_TAG.iter().chain(EMITTED_MID_BAND.iter()) {
+            a.store(0, Ordering::Relaxed);
+        }
         for arr in WILL_FACTOR_SUM.iter().chain(REJECT_BY_DIST.iter()) {
             for a in arr.iter() {
                 a.store(0, Ordering::Relaxed);
@@ -331,6 +436,7 @@ pub mod time_band_diag {
             &ROLLS_BY_DIST,
             &CALLS_BY_DIST,
             &APPROVED_BY_DIST,
+            &QUEUED_SHOT_LOST,
             &POSSESSION_TICKS_BY_DIST,
         ] {
             for a in arr.iter() {
@@ -831,7 +937,7 @@ pub fn evaluate_forward_shot_decision(
     // the skill terms keep their relative steepness (selection remains
     // the dominant chooser signal).
     let base_willingness =
-        0.00034 + selection * 0.00072 + composure_skill * 0.00032 + execution_skill * 0.00044;
+        0.00043 + selection * 0.00092 + composure_skill * 0.00041 + execution_skill * 0.00056;
     // xg_boost — floor 0.30 (vs prior 0.50). Mid-range chance with
     // xG=0.06 gets 0.30 boost (was 0.50 — ~40% reduction). Clear-shot
     // xG=0.10 gets 0.50 (was 0.50 — no change). High-xG xG≥0.28 gets
@@ -1070,6 +1176,11 @@ pub fn evaluate_forward_shot_decision(
         #[cfg(feature = "match-logs")]
         time_band_diag::APPROVED_BY_DIST[time_band_diag::band_for_distance(distance)]
             .fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "match-logs")]
+        if distance > 176.0 {
+            time_band_diag::APPROVED_BY_TAG[time_band_diag::tag_index(tag)]
+                .fetch_add(1, Ordering::Relaxed);
+        }
         ShotDecision::Shoot { reason: tag }
     } else {
         ShotDecision::Hold

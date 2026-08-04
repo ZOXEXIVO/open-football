@@ -306,7 +306,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // corner headers on goal 536 → 708 per 200 matches, DEF goal
         // share 14.5% → 18.6% against the real ~10%).
         let att_win =
-            (0.19 + (att_score - best_def_score) * 0.50 - gk_command * 0.18).clamp(0.06, 0.48);
+            (0.135 + (att_score - best_def_score) * 0.50 - gk_command * 0.18).clamp(0.05, 0.42);
 
         if context.rng.bernoulli(att_win) {
             #[cfg(feature = "match-logs")]

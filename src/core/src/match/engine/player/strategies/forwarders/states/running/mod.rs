@@ -295,8 +295,15 @@ impl StateProcessingHandler for ForwardRunningState {
                     // pressured snapshot is still a SHOT SELECTION, not
                     // a reflex to fire from anywhere. 0.15 ≈ a clear
                     // look inside ~11m for an ordinary finisher.
+                    // Probability gate: this path bypasses the unified
+                    // helper entirely (it tags a reason, so Shooting
+                    // skips the roll), and its window spans 8 ticks —
+                    // so without one it fires essentially every time
+                    // its conditions hold. A pressured snapshot is a
+                    // real football action, not an automatic one.
                     if attacker_first_touch < defender_tackling - 0.5
                         && ctx.player().shooting().expected_xg() >= 0.15
+                        && ctx.context.rng.unit_f32() < 0.10
                     {
                         return Some(
                             StateChangeResult::with_forward_state(ForwardState::Shooting)
@@ -542,11 +549,17 @@ impl StateProcessingHandler for ForwardRunningState {
             // GM suppression is applied as a probability gate on top of
             // the helper's Shoot decision so a leading-late team still
             // game-manages without dropping the helper's calibration.
+            // NB no `has_clear_shot()` here. It was a hard veto on the
+            // forward's main shot path while the midfielder's equivalent
+            // (MID_SHOOT, Tier-2) has no such gate — so midfielders got
+            // far more shot DECISIONS than forwards and ended up taking
+            // 46-54% of all shots (real ~32%). Lane quality is priced
+            // continuously by `clarity_mult` inside the helper; the
+            // helper also still rejects a genuinely blocked lane.
             let pre_gate_passed = has_settled
                 && can_shoot
                 && !defer_to_teammate
-                && distance_to_goal <= max_shot_distance
-                && ctx.player().has_clear_shot();
+                && distance_to_goal <= max_shot_distance;
 
             if pre_gate_passed {
                 let _decision = evaluate_forward_shot_decision(ctx, "FWD_RUN_PRIO05_CLEAR");

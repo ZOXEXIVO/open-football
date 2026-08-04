@@ -197,6 +197,19 @@ impl PlayerMatchState {
             player.pending_shot_reason = Some(reason);
         } else if let Some(new_state) = state_change_result.state {
             if !Self::is_shot_emitting_state(new_state) {
+                #[cfg(feature = "match-logs")]
+                if player.pending_shot_reason.is_some() {
+                    let goal_x = match player.side {
+                        Some(crate::r#match::PlayerSide::Left) => context.field_size.width as f32,
+                        _ => 0.0,
+                    };
+                    let dx = player.position.x - goal_x;
+                    let dy = player.position.y - context.field_size.height as f32 / 2.0;
+                    let d = (dx * dx + dy * dy).sqrt();
+                    crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag::QUEUED_SHOT_LOST
+                        [crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag::band_for_distance(d)]
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 player.pending_shot_reason = None;
             }
         }

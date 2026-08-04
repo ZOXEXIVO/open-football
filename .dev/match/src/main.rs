@@ -2994,7 +2994,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         // sitters: xG/shot inflates, forwards post huge ratings off
         // tap-ins, and shot VOLUME has to be suppressed artificially to
         // keep the scoreline sane.
-        let [dshots, dxg, drolls, dcalls, dposs, dappr] = core::time_band_diag::distance_snapshot();
+        let [dshots, dxg, drolls, dcalls, dposs, dappr, dlost] =
+            core::time_band_diag::distance_snapshot();
         let rolltotal: u64 = drolls.iter().sum();
         let calltotal: u64 = dcalls.iter().sum();
         let posstotal: u64 = dposs.iter().sum();
@@ -3013,7 +3014,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         for (i, (label, real)) in dlabels.iter().enumerate() {
             let s = dshots[i].max(1) as f64;
             println!(
-                "  {}  {:>8} {:>6.1}%    {:>6.3} {:>5.1}%  {:>5.1}%  {:>5.1}% {:>7} {:>5.0}%   {}",
+                "  {}  {:>8} {:>6.1}%    {:>6.3} {:>5.1}%  {:>5.1}%  {:>5.1}% {:>7} {:>5.0}% {:>7}   {}",
                 label,
                 dshots[i],
                 dshots[i] as f64 / dtotal.max(1) as f64 * 100.0,
@@ -3023,9 +3024,40 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 drolls[i] as f64 / rolltotal.max(1) as f64 * 100.0,
                 dappr[i],
                 dshots[i] as f64 / dappr[i].max(1) as f64 * 100.0,
+                dlost[i],
                 real,
             );
         }
+        let et = core::time_band_diag::emit_tag_snapshot();
+        let ettotal: u64 = et.iter().sum();
+        println!();
+        println!("  6-11m EMITTED shots by reason (the close-range over-supply):");
+        for (i, name) in core::time_band_diag::ETAG_NAMES.iter().enumerate() {
+            if et[i] > 0 {
+                println!(
+                    "    {:<18} {:>7}  {:>5.1}%",
+                    name,
+                    et[i],
+                    et[i] as f64 / ettotal.max(1) as f64 * 100.0
+                );
+            }
+        }
+
+        let tg = core::time_band_diag::tag_snapshot();
+        let tgtotal: u64 = tg.iter().sum();
+        println!();
+        println!("  long-range (>22m) APPROVALS by call-site tag:");
+        for (i, name) in core::time_band_diag::TAG_NAMES.iter().enumerate() {
+            if tg[i] > 0 {
+                println!(
+                    "    {:<16} {:>7}  {:>5.1}%",
+                    name,
+                    tg[i],
+                    tg[i] as f64 / tgtotal.max(1) as f64 * 100.0
+                );
+            }
+        }
+
         let rj = core::time_band_diag::reject_snapshot();
         let rnames = ["far", "min_xg", "six_xg", "no_clear", "pass_def"];
         println!();

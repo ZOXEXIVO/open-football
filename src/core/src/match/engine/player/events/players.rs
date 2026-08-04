@@ -2900,6 +2900,11 @@ impl PlayerEventDispatcher {
                 .fetch_add((xg * 1000.0) as u64, Ordering::Relaxed);
             let dband = time_band_diag::band_for_distance(horizontal_distance);
             time_band_diag::SHOTS_BY_DIST[dband].fetch_add(1, Ordering::Relaxed);
+            if dband == 1 {
+                time_band_diag::EMITTED_MID_BAND
+                    [time_band_diag::emit_tag_index(shoot_event_model.reason)]
+                .fetch_add(1, Ordering::Relaxed);
+            }
             time_band_diag::XG_X1000_BY_DIST[dband]
                 .fetch_add((xg * 1000.0) as u64, Ordering::Relaxed);
         }

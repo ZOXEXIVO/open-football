@@ -60,15 +60,27 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             ));
         }
 
-        // Evaluate shooting opportunity
-        if self.is_favorable_shooting_opportunity(ctx) {
+        // An APPROVED strike is authoritative. `MidfielderRunningState`
+        // routes every helper-approved shot beyond 13m here rather than
+        // to `Shooting`, so re-running this state's own ABSOLUTE skill
+        // bars (mid_shot_selection >= 0.44/0.50/0.58) discarded the
+        // decision — measured: 93.6% of all long-range approvals arrive
+        // through this path and only ~9% ever became a shot. The bars
+        // are absolute, so a youth league clears them essentially never,
+        // which is why senior football reached an 18% outside-box share
+        // while youth sat at 2.5% on identical code.
+        if ctx.player.pending_shot_reason.is_some() || self.is_favorable_shooting_opportunity(ctx) {
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Shooting,
                 Event::PlayerEvent(PlayerEvent::Shoot(
                     ShootingEventContext::new()
                         .with_player_id(ctx.player.id)
                         .with_target(ctx.player().shooting_direction())
-                        .with_reason("MID_DISTANCE_SHOOTING")
+                        .with_reason(
+                            ctx.player
+                                .pending_shot_reason
+                                .unwrap_or("MID_DISTANCE_SHOOTING"),
+                        )
                         .build(ctx),
                 )),
             ));

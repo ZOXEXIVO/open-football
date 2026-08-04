@@ -323,12 +323,21 @@ a:active {
 
 /* Nav labels are league/competition names — a long one wraps onto a
    second line rather than being clipped, so the sidebar always shows
-   the name in full. */
-.fm-nav-section li a span {
+   the name in full. The language row is a <div>, not an <a>, so it needs
+   naming separately or it stays the one label in the rail that can't wrap. */
+.fm-nav-section li a span:not(.flag),
+.fm-sidebar-lang-toggle span:not(.flag) {
     white-space: normal;
     overflow-wrap: anywhere;
     line-height: 1.25;
     min-width: 0;
+}
+
+/* Flags are fixed 20px artwork, not text. Both rows are flex containers,
+   so without this a long label squeezes the flag instead of wrapping. */
+.fm-nav-section li a .flag,
+.fm-sidebar-lang-toggle .flag {
+    flex-shrink: 0;
 }
 
 .fm-nav-section li a:hover {
@@ -7056,6 +7065,9 @@ a:active {
         left: 0;
         bottom: 0;
         height: auto !important;
+        /* Same right gutter as the root rule, restated so the drawer's
+           sizing reads in one place. */
+        padding: 0 1em 0 0 !important;
         /* Same content-driven width as the desktop rail, with a wider
            floor for touch targets and a viewport cap so the overlay
            behind the drawer stays tappable. */

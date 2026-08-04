@@ -154,7 +154,13 @@ impl ForwardHeadingState {
         let jumping_skill = ctx.player.skills.physical.jumping / 20.0;
         let overall_skill = (heading_skill + jumping_skill) / 2.0;
 
+        // A won aerial becomes an attempt ON GOAL far less often than
+        // half the time: real headed shots follow ~25-30% of won
+        // attacking headers, the rest are knock-downs, flicks and
+        // misdirected contacts. The bare skill roll here was a major
+        // deterministic close-range shot source (emit% ~200% at 6-11m,
+        // i.e. the non-helper paths matched the whole decision layer).
         let random_value: f32 = ctx.context.rng.unit_f32();
-        random_value < overall_skill
+        random_value < overall_skill * 0.55
     }
 }

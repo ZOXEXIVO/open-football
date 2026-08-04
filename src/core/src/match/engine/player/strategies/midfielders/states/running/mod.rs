@@ -147,8 +147,11 @@ impl StateProcessingHandler for MidfielderRunningState {
                     // Chance-quality floor — the snapshot bypasses the
                     // unified helper via pending_shot_reason, so it
                     // carries its own xG bar (see FWD_SNAPSHOT_PRESSED).
+                    // Same probability gate as the forward snapshot — this
+                    // path tags a reason and so bypasses the helper roll.
                     if attacker_first_touch < defender_tackling - 0.5
                         && ctx.player().shooting().expected_xg() >= 0.20
+                        && ctx.context.rng.unit_f32() < 0.10
                     {
                         return Some(
                             StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
@@ -248,7 +251,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                     && ctx.player().has_clear_shot()
                     && ctx.player().shooting().has_good_angle()
                     && sp.expected_xg(distance_to_goal, true) >= 0.30;
-                if clear_good && ctx.memory().shots_taken <= 2 && ctx.context.rng.unit_f32() < 0.012
+                if clear_good && ctx.memory().shots_taken <= 2 && ctx.context.rng.unit_f32() < 0.003
                 {
                     #[cfg(feature = "match-logs")]
                     {

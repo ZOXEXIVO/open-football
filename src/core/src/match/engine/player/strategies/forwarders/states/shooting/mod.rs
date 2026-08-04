@@ -35,6 +35,16 @@ impl StateProcessingHandler for ForwardShootingState {
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
+        // An APPROVED strike is authoritative: when the transition into
+        // this state carried a `pending_shot_reason`, the unified helper
+        // already weighed distance, clarity, chance quality and skill
+        // THIS tick. Re-running range/clarity vetoes here only discards
+        // it — measured, only 6% of approved 22-30m strikes ever reached
+        // an event. Possession, offside and the shot cooldowns above
+        // still apply: those are facts about the world, not second
+        // opinions about the decision.
+        let approved = ctx.player.pending_shot_reason.is_some();
+
         // Abort for very long range with no clear shot
         // These aborts run AFTER the unified helper already weighed
         // distance, clarity, chance quality and skill. Re-vetoing on a
@@ -43,13 +53,17 @@ impl StateProcessingHandler for ForwardShootingState {
         // have finishing below 0.5 and a fully clear lane is rare at
         // range. Kept only as a backstop for genuinely hopeless
         // efforts.
-        if distance_to_goal > 300.0 && !ctx.player().has_clear_shot() {
+        if !approved && distance_to_goal > 300.0 && !ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         // Medium-long range: need decent finishing or clear shot to commit
         let finishing = ctx.player.skills.technical.finishing / 20.0;
-        if distance_to_goal > 260.0 && finishing < 0.30 && !ctx.player().has_clear_shot() {
+        if !approved
+            && distance_to_goal > 260.0
+            && finishing < 0.30
+            && !ctx.player().has_clear_shot()
+        {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 

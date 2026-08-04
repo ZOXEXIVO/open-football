@@ -48,7 +48,12 @@ impl StateProcessingHandler for MidfielderShootingState {
         // Backstop only — the helper (or the Tier-1 gate) already
         // approved this strike; 80u = 10m re-vetoed nearly every
         // midfield shot from range.
-        if distance_to_goal > 240.0 && !ctx.player().has_clear_shot() {
+        // Approved strikes are authoritative — see the forward Shooting
+        // state for why re-vetoing here silently discards them.
+        if ctx.player.pending_shot_reason.is_none()
+            && distance_to_goal > 240.0
+            && !ctx.player().has_clear_shot()
+        {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));

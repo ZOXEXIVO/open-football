@@ -28,7 +28,14 @@ use nalgebra::Vector3;
 /// actually recalibrated. Measured on its own, moving this constant
 /// 3.0 → 3.8 was within run-to-run noise; it is corrected because it is
 /// now the honest number, not because it moved the aggregate.
-const EXPECTED_SAVE_TICKS: f32 = 3.8;
+/// CORRECTED 3.8 → 38: the early-return at the top of `process`
+/// holds the keeper in Catching for the ENTIRE shot flight, so the
+/// per-shot→per-tick conversion was dividing by a residency ~10x
+/// shorter than the real one and the save was rolled 30-110 times.
+/// That made this the DOMINANT save path (population save% sat at
+/// 77.7% vs real 67% even after the physics roll was latched to one
+/// roll per shot) and made every `skill_mult` retune inert.
+const EXPECTED_SAVE_TICKS: f32 = 38.0;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperCatchingState {}
