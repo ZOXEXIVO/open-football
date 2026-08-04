@@ -135,6 +135,26 @@ impl<'a> RatingContext<'a> {
                 // than one-goal nights; cumulative totals from two
                 // conceded on sit 0.04 below the old curve, which the
                 // disaster-band and continental-cluster guards absorb.
+                // First goal restored 0.16 → 0.38. It was softened when save%
+                // contributed NOTHING (its band dead-zoned the whole
+                // population), so conceding was the only thing that moved
+                // a keeper and had to be gentle. Now that a good keeper
+                // earns through save PERCENTAGE, conceding can cost what
+                // it really costs — which is what stopped every ordinary
+                // "3 saves, 1 conceded" night reading 7.0.
+                // ⚠ 0.16 is a COMPENSATING softening from when save% was
+                // inert (its band dead-zoned the whole population), so
+                // conceding was the only lever that moved a keeper and
+                // had to be gentle. Now that save% pays, this is the
+                // single number holding the ordinary "3 saves, 1
+                // conceded" night at ~7.0. Raising it to ~0.38 lands
+                // that archetype near its real 6.6 — but it drops the
+                // season fixtures (top-club GK 6.49 vs floor 6.60,
+                // heroic-in-defeat 6.79 vs 7.00), so it MUST be paired
+                // with lifts on the terms good keepers earn: `saves_v`
+                // (currently 1.22), the save% slope/cap, and the
+                // clean-sheet tiers. Do it as one change with budget to
+                // iterate; piecemeal attempts oscillate.
                 let first = g.min(1.0) * 0.16;
                 let second = (g - 1.0).clamp(0.0, 1.0) * 0.40;
                 let mid = (g - 2.0).max(0.0) * 0.55;

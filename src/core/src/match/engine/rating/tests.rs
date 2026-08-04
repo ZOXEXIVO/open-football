@@ -3938,3 +3938,146 @@ fn favorite_forward_held_to_higher_expectation_than_underdog() {
         r_und
     );
 }
+
+// =====================================================================
+// GOALKEEPER LIFE — archetype ladder
+// =====================================================================
+//
+// Real goalkeeping is the position where doing NOTHING is most easily
+// mistaken for doing well: a keeper behind a dominant defence can go 90
+// minutes without a meaningful action. Punditry rates that shift as
+// ordinary (~6.5), not good — the clean sheet belongs mostly to the back
+// four. These fixtures pin the whole ladder from "never tested" to
+// "single-handedly won it", so a keeper cannot reach the good band on
+// clean-sheet bookkeeping alone. Reference points are WhoScored/FM
+// per-match bands for the same stat lines.
+//
+// This ladder exists because the population collapsed to ~7.0 for EVERY
+// keeper regardless of what they did — see gk_rating_flat_population.
+
+/// A keeper who was never tested keeps a clean sheet he did not earn.
+/// Real football: ordinary shift, ~6.4-6.8. Must NOT reach the good band.
+#[test]
+fn untested_keeper_clean_sheet_is_ordinary_not_good() {
+    let gk = make_gk(0, 0);
+    let r = RatingContext::new(&gk, 1, 0).calculate();
+    assert!(
+        (6.30..=6.85).contains(&r),
+        "untested keeper on a clean sheet should read ORDINARY (6.30-6.85), got {r:.2} — \
+         a keeper who never touched a shot has not earned the good band"
+    );
+}
+
+/// Two routine saves and a clean sheet — did the job, nothing more.
+#[test]
+fn routine_clean_sheet_keeper_is_solid() {
+    let gk = make_gk(2, 2);
+    let r = RatingContext::new(&gk, 1, 0).calculate();
+    assert!(
+        (6.70..=7.30).contains(&r),
+        "2-save clean sheet should read SOLID (6.70-7.30), got {r:.2}"
+    );
+}
+
+/// A busy shutout is the genuine keeper performance.
+#[test]
+fn busy_shutout_keeper_clears_the_good_band() {
+    let gk = make_gk(6, 6);
+    let r = RatingContext::new(&gk, 1, 0).calculate();
+    assert!(
+        r >= 7.40,
+        "6-save clean sheet is a match-winning keeper display, expected >= 7.40, got {r:.2}"
+    );
+}
+
+/// The debutant's ordinary afternoon: beaten once, a couple of stops.
+/// This is the single most common young-keeper line and it must read
+/// ORDINARY — young keepers do not walk into 7s.
+#[test]
+fn keeper_beaten_once_with_routine_saves_is_ordinary() {
+    let gk = make_gk(2, 3);
+    let r = RatingContext::new(&gk, 1, 1).calculate();
+    assert!(
+        (6.00..=6.70).contains(&r),
+        "2 saves / 1 conceded should read ORDINARY (6.00-6.70), got {r:.2} — \
+         a young keeper's routine outing must not reach the good band"
+    );
+}
+
+/// Beaten repeatedly. Some saves do not redeem a leaky afternoon.
+#[test]
+fn keeper_conceding_three_stays_below_ordinary() {
+    let gk = make_gk(3, 6);
+    let r = RatingContext::new(&gk, 0, 3).calculate();
+    assert!(
+        r <= 6.20,
+        "3 conceded from 6 on target should read POOR (<= 6.20), got {r:.2}"
+    );
+}
+
+/// A keeper whose own error produced a goal has defined the match.
+#[test]
+fn keeper_error_to_goal_is_a_bad_day() {
+    let mut gk = make_gk(2, 4);
+    gk.errors_leading_to_goal = 1;
+    let r = RatingContext::new(&gk, 1, 2).calculate();
+    assert!(
+        r <= 5.80,
+        "keeper error leading to a goal is a defining failure, expected <= 5.80, got {r:.2}"
+    );
+}
+
+/// Heroic in defeat still rates well — volume of genuine intervention
+/// is the keeper's currency, and a loss must not erase it.
+#[test]
+fn heroic_keeper_in_defeat_still_rates_well() {
+    let gk = make_gk(8, 10);
+    let r = RatingContext::new(&gk, 0, 2).calculate();
+    assert!(
+        r >= 7.00,
+        "8 saves conceding 2 is a standout losing display, expected >= 7.00, got {r:.2}"
+    );
+}
+
+/// The whole point: an untested keeper must never out-rate one who
+/// actually made saves, and the ladder must be strictly ordered.
+#[test]
+fn keeper_archetypes_order_strictly_by_intervention() {
+    let untested = RatingContext::new(&make_gk(0, 0), 1, 0).calculate();
+    let routine = RatingContext::new(&make_gk(2, 2), 1, 0).calculate();
+    let busy = RatingContext::new(&make_gk(6, 6), 1, 0).calculate();
+    assert!(
+        untested < routine && routine < busy,
+        "clean-sheet keepers must order by intervention: untested {untested:.2} \
+         < routine {routine:.2} < busy {busy:.2}"
+    );
+}
+
+/// THE most common keeper line in a 2.7-goal league: beaten twice,
+/// a few stops, team loses or draws. Real football rates this 6.2-6.6.
+/// If this reads 7.x the whole population inflates, because most
+/// keeper-matches look like this — not like clean sheets.
+#[test]
+fn keeper_beaten_twice_with_saves_is_below_solid() {
+    let gk = make_gk(3, 5);
+    let r = RatingContext::new(&gk, 1, 2).calculate();
+    assert!(
+        (6.00..=6.60).contains(&r),
+        "3 saves / 2 conceded is the commonest keeper line in a 2.7-goal \
+         league and must read 6.00-6.60, got {r:.2}"
+    );
+}
+
+/// Same workload, one goal conceded, team wins. Still ordinary — the
+/// keeper did not decide this match.
+#[test]
+fn keeper_one_conceded_in_a_win_is_ordinary() {
+    let gk = make_gk(3, 4);
+    let r = RatingContext::new(&gk, 2, 1).calculate();
+    // 3 of 4 is a 75% save rate — genuinely decent, so the ceiling is
+    // the good band's floor rather than mid-ordinary.
+    assert!(
+        (6.20..=7.05).contains(&r),
+        "3 saves / 1 conceded in a win should read 6.20-7.05, got {r:.2}"
+    );
+}
