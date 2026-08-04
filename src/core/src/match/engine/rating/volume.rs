@@ -160,6 +160,10 @@ impl GroupDivisors {
     }
 }
 
+/// Engine xG → real xG. Engine population xG/shot measures ~0.31
+/// against a real ~0.11 and against its own ~9% conversion rate.
+const XG_TO_REAL: f32 = 0.36;
+
 pub struct EngineVolumeCalibration;
 
 impl EngineVolumeCalibration {
@@ -176,6 +180,21 @@ impl EngineVolumeCalibration {
     pub fn normalize(stats: &PlayerMatchEndStats) -> PlayerMatchEndStats {
         let d = GroupDivisors::for_group(stats.position_group);
         let mut s = stats.clone();
+        // xG is the one "decisive" field that is NOT already in real
+        // units. The engine's shot-quality model reports ~0.31 xG per
+        // shot while those same shots convert at ~9%, i.e. it overstates
+        // chance quality ~3x against its own outcomes. The rating model
+        // is calibrated on real xG, so unconverted it reads every
+        // forward as permanently wasteful — the wasted-xG drags and the
+        // attacking-role-expectation lane fire constantly while the
+        // clinical (goals-over-xG) bonus can never pay, holding FWD
+        // season means ~0.3 below their band. Scaled here rather than in
+        // the shot model so gameplay gates (min_xg floors, willingness
+        // quality pull, the Tier bars) keep their calibration.
+        s.xg *= XG_TO_REAL;
+        s.xg_prevented *= XG_TO_REAL;
+        s.xg_chain *= XG_TO_REAL;
+        s.xg_buildup *= XG_TO_REAL;
         s.saves = Self::scale(s.saves, d.gk_volume);
         s.shots_faced = Self::scale(s.shots_faced, d.gk_volume);
         s.tackles = Self::scale(s.tackles, d.tackles);
@@ -301,7 +320,8 @@ mod tests {
         assert_eq!(n.zone_stats.clearances_own_box, 1);
     }
 
-    /// Decisive outcomes and pass accuracy pass through untouched.
+    /// Decisive outcomes and pass accuracy pass through untouched —
+    /// except xG, which is unit-converted (see XG_TO_REAL).
     #[test]
     fn decisive_outcomes_are_identity() {
         let mut s = stats_with(PlayerFieldPositionGroup::Forward);
@@ -319,7 +339,13 @@ mod tests {
         assert_eq!(n.assists, 1);
         assert_eq!(n.shots_total, 5);
         assert_eq!(n.shots_on_target, 3);
-        assert_eq!(n.xg, 1.7);
+        // xG is deliberately NOT identity — it is converted from the
+        // engine's ~3x-hot shot model to real units (see XG_TO_REAL).
+        assert!(
+            (n.xg - 1.7 * XG_TO_REAL).abs() < 1e-6,
+            "xg should convert to real units, got {}",
+            n.xg
+        );
         assert_eq!(n.saves, 4);
         assert_eq!(n.passes_attempted, 40);
         assert_eq!(n.passes_completed, 33);
