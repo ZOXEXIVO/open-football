@@ -145,6 +145,13 @@ impl GroupDivisors {
     /// save credit the model was calibrated for (season means hit 7.7
     /// vs the 6.65-7.10 band). `saves` and `shots_faced` scale together
     /// so save PERCENTAGE — the quality signal — is untouched.
+    /// gk_volume back to 1.0: it was 1.9 when the engine put ~8 shots on
+    /// target per team against a real ~4.3. Shot volume is now REAL
+    /// (13.5 shots/team, ~4.1 on target), so halving `shots_faced` here
+    /// made every keeper look untested — dropping them under the
+    /// `dominant_defense` shots_faced<3 gate, which handed out the
+    /// protected-shutout bonus on ordinary clean sheets and parked the
+    /// whole population just above 7.0.
     const GOALKEEPER: GroupDivisors = GroupDivisors {
         gk_volume: 1.9,
         ..Self::IDENTITY

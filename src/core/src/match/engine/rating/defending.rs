@@ -97,11 +97,22 @@ impl<'a> RatingContext<'a> {
 
         // Per-save credit — saturates so a 10-save shift isn't 10× a
         // single save.
-        let saves_v = RatingMath::sat(s.saves as f32, 2.8) * 1.35;
+        // Trimmed 1.35 → 1.12: with save% previously inert (see below),
+        // this volume term WAS the keeper rating, and it saturates so
+        // fast that every keeper facing a normal workload collected the
+        // same ~1.08 — parking the whole population just above 7.0.
+        let saves_v = RatingMath::sat(s.saves as f32, 2.8) * 1.22;
 
-        // Save percentage band — relative to a 70% baseline. We use a
-        // hard zero in the 50%-70% dead-zone to keep a "made the saves
-        // they were supposed to" keeper at baseline.
+        // Save percentage band, centred on the REAL population save rate
+        // (~67%). The old band was a hard zero across 50-70% — which is
+        // exactly where the entire population sits, so save PERCENTAGE
+        // (the only genuine quality signal a keeper has) contributed
+        // nothing and every keeper converged on the same volume-driven
+        // rating: measured season spread was 0.09 (p10 6.95, p90 7.04)
+        // where outfield lines span ~0.5. A keeper who stops 78% must
+        // out-rate one who stops 56%.
+        let baseline_pct = 0.67;
+        let dead_zone = 0.030;
         let shots_faced = self.shots_faced();
         // Positive slope lifted 2.7 → 3.0 (FM-parity season calibration)
         // so a genuinely high save percentage under real volume pays a
@@ -109,10 +120,16 @@ impl<'a> RatingContext<'a> {
         // toward the quiet-clean-sheet keeper once CS credit was lifted.
         let save_pct_v = if shots_faced >= 3 {
             let pct = s.saves as f32 / shots_faced as f32;
-            if pct > 0.70 {
-                ((pct - 0.70) * 3.0).min(0.80)
-            } else if pct < 0.50 {
-                ((pct - 0.50) * 2.0).max(-0.80)
+            let delta = pct - baseline_pct;
+            if delta > dead_zone {
+                ((delta - dead_zone) * 5.2).min(1.05)
+            } else if delta < -dead_zone && shots_faced >= 5 {
+                // The negative side needs a real sample. A keeper in a
+                // dominant side who concedes one of the three shots he
+                // faced has a 67% save rate and did nothing wrong —
+                // punishing that is what collapsed elite-keeper seasons
+                // when this band was first re-centred.
+                ((delta + dead_zone) * 3.2).max(-0.95)
             } else {
                 0.0
             }
@@ -162,7 +179,7 @@ impl<'a> RatingContext<'a> {
         // protected-shutout calibration pass.
         let dominant_defense = if self.opponent_goals == 0 {
             let shot_taper = (1.0 - shots_faced as f32 / 3.0).max(0.0);
-            0.62 * shot_taper
+            0.52 * shot_taper
         } else {
             0.0
         };

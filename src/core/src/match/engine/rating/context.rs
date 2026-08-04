@@ -65,12 +65,16 @@ impl<'a> RatingContext<'a> {
                 // sheet is the GK's headline season currency — repeated
                 // CS credit, not save volume, is what separates a
                 // 12-CS league row from a 9-conceded continental row.
+                // Trimmed 0.34/0.29/0.26: these are FLAT per-clean-sheet
+                // credits that every keeper collects equally, and with
+                // save% previously inert they were most of what set the
+                // keeper population level (mean 7.01, band top 7.10).
                 if saves >= 4 || command >= 2 || xg_prev > 0.5 {
-                    0.34
+                    0.30
                 } else if saves >= 2 || command >= 1 || xg_prev > 0.0 {
-                    0.29
+                    0.25
                 } else {
-                    0.26
+                    0.22
                 }
             }
             PlayerFieldPositionGroup::Defender => {
