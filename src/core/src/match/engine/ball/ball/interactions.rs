@@ -720,7 +720,7 @@ impl Ball {
         // senior save% ran 73% while youth sat correctly at 67-68%. Real
         // football holds ~67% at every level because both sides improve
         // together.
-        let skill_mult = 0.645 + skill * 0.075;
+        let skill_mult = 0.667 + skill * 0.032;
         // Environment shifts keeper handling — heavy rain spills more,
         // wind on cross-claims has a subtler effect (the keeper still
         // sets feet under a regular shot).

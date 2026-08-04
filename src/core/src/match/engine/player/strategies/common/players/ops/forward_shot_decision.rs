@@ -180,6 +180,19 @@ pub mod time_band_diag {
     /// inflated xG/shot and inflated rating tails no matter how the
     /// willingness dials are set.
     pub static SHOTS_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Emitted shots split by POSITION GROUP x distance band
+    /// (0=GK 1=DEF 2=MID 3=FWD). Answers "do midfielders shoot from
+    /// different places than forwards" — the aggregate mix cannot.
+    pub static SHOTS_BY_POS_DIST: [[AtomicU64; BANDS]; 4] = [ZERO_BAND; 4];
+    pub fn pos_dist_snapshot() -> [[u64; BANDS]; 4] {
+        let mut out = [[0u64; BANDS]; 4];
+        for g in 0..4 {
+            for b in 0..BANDS {
+                out[g][b] = SHOTS_BY_POS_DIST[g][b].load(Ordering::Relaxed);
+            }
+        }
+        out
+    }
     pub static XG_X1000_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
     /// Willingness rolls that REACHED the RNG, by distance band. Read
     /// against SHOTS_BY_DIST this separates "the ball is never out
@@ -420,7 +433,11 @@ pub mod time_band_diag {
         for a in APPROVED_BY_TAG.iter().chain(EMITTED_MID_BAND.iter()) {
             a.store(0, Ordering::Relaxed);
         }
-        for arr in WILL_FACTOR_SUM.iter().chain(REJECT_BY_DIST.iter()) {
+        for arr in WILL_FACTOR_SUM
+            .iter()
+            .chain(REJECT_BY_DIST.iter())
+            .chain(SHOTS_BY_POS_DIST.iter())
+        {
             for a in arr.iter() {
                 a.store(0, Ordering::Relaxed);
             }
@@ -937,7 +954,7 @@ pub fn evaluate_forward_shot_decision(
     // the skill terms keep their relative steepness (selection remains
     // the dominant chooser signal).
     let base_willingness =
-        0.00043 + selection * 0.00092 + composure_skill * 0.00041 + execution_skill * 0.00056;
+        0.00054 + selection * 0.00085 + composure_skill * 0.00038 + execution_skill * 0.00052;
     // xg_boost — floor 0.30 (vs prior 0.50). Mid-range chance with
     // xG=0.06 gets 0.30 boost (was 0.50 — ~40% reduction). Clear-shot
     // xG=0.10 gets 0.50 (was 0.50 — no change). High-xG xG≥0.28 gets

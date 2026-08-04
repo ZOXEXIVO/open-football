@@ -26,6 +26,15 @@ pub struct PlayerFieldMetadata {
     /// the ball instead of yanking a diving keeper or a player already
     /// in the air out of their action.
     pub chase_eligible: bool,
+    /// True for forwards. Strikers gamble on loose balls and rebounds —
+    /// it is a defining part of the role — so they get a small
+    /// effective-distance edge in the loose-ball chase. Without it the
+    /// table is pure proximity, and at youth level (where a forward's
+    /// pace and finishing edge is smallest) midfielders were winning
+    /// the six-yard-box scraps: measured 28.2% of youth MID shots came
+    /// from <6m vs forwards' 17.5%, exactly inverted from senior
+    /// (8.0% vs 25.0%).
+    pub is_forward: bool,
 }
 
 impl Default for PlayerFieldMetadata {
@@ -37,6 +46,7 @@ impl Default for PlayerFieldMetadata {
             position: Vector3::zeros(),
             velocity: Vector3::zeros(),
             chase_eligible: true,
+            is_forward: false,
         }
     }
 }
@@ -155,6 +165,8 @@ impl PlayerFieldData {
                     position: p.position,
                     velocity: p.velocity,
                     chase_eligible: !p.state.is_committed_action(),
+                    is_forward: p.tactical_position.current_position.position_group()
+                        == crate::PlayerFieldPositionGroup::Forward,
                 };
                 self.insert_slot(p.id, idx as u8);
                 self.len += 1;

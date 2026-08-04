@@ -725,7 +725,16 @@ impl PlayerEventDispatcher {
                 // this snapshot, the clear below races the buildup read.
                 let shooter_id = shoot_event_model.from_player_id;
                 let now_tick = context.current_tick();
-                const KEY_PASS_WINDOW_TICKS: u64 = 300;
+                // Opta's key-pass definition has NO time window: it is simply
+                // the last pass before a shot. A 3s cap excluded every
+                // receive-turn-carry-shoot sequence — the engine's
+                // dominant chance shape — so only ~1.2 key passes per
+                // TEAM were tagged against a real ~9, starving the
+                // creative credit that keeps forwards and midfielders in
+                // their rating bands. 12s still bounds it to one
+                // possession phase; the possession-change nulls below do
+                // the real work.
+                const KEY_PASS_WINDOW_TICKS: u64 = 1200;
                 let shooter_team = field.get_player(shooter_id).map(|p| p.team_id);
                 let mut direct_assister_id: Option<u32> = None;
                 if let (Some(passer_id), Some(receiver_id)) = (
@@ -746,9 +755,14 @@ impl PlayerEventDispatcher {
                     }
                     // Single-credit guarantee: even if the shot resolves
                     // into a goal that fires another event, the link is
-                    // gone after the first read.
-                    field.ball.last_completed_pass_passer_id = None;
-                    field.ball.last_completed_pass_receiver_id = None;
+                    // gone after the first read. Only clear on a SUCCESSFUL
+                    // credit — clearing after a failed test meant one
+                    // rebound or blocked effort destroyed the link for the
+                    // genuine next attempt in the same phase.
+                    if direct_assister_id.is_some() {
+                        field.ball.last_completed_pass_passer_id = None;
+                        field.ball.last_completed_pass_receiver_id = None;
+                    }
                 }
                 // ── Error leading to shot/goal ────────────────────────
                 // If an opponent gave the ball away within the response
@@ -1578,7 +1592,20 @@ impl PlayerEventDispatcher {
         // football where crosses are a notoriously low-percentage skill.
         let max_position_error = if was_cross {
             let crossing_shortfall = (1.0 - skills.crossing).clamp(0.0, 1.0);
-            let cross_multiplier = 1.0 + crossing_shortfall.powf(1.2) * 1.2;
+            // A CORNER is not an open-play cross. It is struck from a
+            // stationary ball, unpressured, with the taker free to pick
+            // their spot — so it should not inherit the full open-play
+            // crossing penalty. It did, and because that penalty scales
+            // with skill it hit youth football hardest: only 11.6% of
+            // youth corner deliveries reached a centre-back's heading
+            // range vs 19.3% at senior level (targeting was fine at both
+            // — 99% were aimed AT a CB), which is most of why youth
+            // defenders scored 4% of goals against a real ~10%.
+            let cross_multiplier = if field.ball.pass_origin_restart == PassOriginRestart::Corner {
+                1.0 + crossing_shortfall.powf(1.2) * 0.35
+            } else {
+                1.0 + crossing_shortfall.powf(1.2) * 1.2
+            };
             base_max_position_error * cross_multiplier
         } else if event_model.reason == "DEF_COUNTER_ATTACK" {
             // Counter-attack outlet: the passer just won the ball and
@@ -2879,9 +2906,46 @@ impl PlayerEventDispatcher {
         // make a save). That's why `last_shot_xg` uses the on-target
         // adjustment — it's the value the keeper can earn or lose, not
         // the value attributed to the shooter.
+        // Convert to REAL xG units for recording. The decision-time curve
+        // deliberately runs ~3x hot (every gameplay gate — min_xg floors,
+        // the willingness quality pull, the Tier bars — is calibrated
+        // against it), but the RECORDED stat feeds player pages, the
+        // rating model and the calibration harness, all of which expect
+        // real Opta units where population xG/shot is ~0.11 and xG
+        // tracks actual conversion. Scaling here keeps gameplay bit-for
+        // bit identical while making every reported figure honest.
+        // 0.41 makes recorded xG track ACTUAL conversion per position
+        // (FWD 0.113 xG vs 10.2% conv, MID 0.066 vs 6.6%) — the property
+        // that defines a calibrated xG model, and what stops the rating
+        // layer charging forwards for chances they did not really have.
+        const XG_REPORT_SCALE: f32 = 0.45;
+        // Angle discrimination. The profile at this site is built with
+        // `shot_clarity: 1.0, has_clear_shot: true`, so the recorded xG
+        // was pure DISTANCE — a byline effort from 6m priced identically
+        // to a central one. Real xG falls off hard with the shooting
+        // angle, and without it forwards (who take the tight-angle
+        // chances) read as permanently wasteful while central arriving
+        // midfielders read as clinical. Pure geometry, available here:
+        // the share of the goal mouth actually visible from the ball.
+        let angle_factor = {
+            let x_dist = ball_to_goal_vector.x.abs().max(1.0);
+            let y_off = ball_to_goal_vector.y.abs();
+            const HALF_GOAL: f32 = 29.0;
+            let near = (y_off - HALF_GOAL).max(0.0);
+            let far = y_off + HALF_GOAL;
+            let visible = (far / x_dist).atan() - (near / x_dist).atan();
+            let central = 2.0 * (HALF_GOAL / x_dist).atan();
+            if central > 1e-4 {
+                (visible / central).clamp(0.0, 1.0).powf(0.7)
+            } else {
+                1.0
+            }
+        };
         let base_xg = profile
             .expected_xg(horizontal_distance, true)
-            .clamp(0.0, 0.82);
+            .clamp(0.0, 0.82)
+            * angle_factor
+            * XG_REPORT_SCALE;
         let xg = base_xg;
         let prevented_xg = if on_target { base_xg } else { base_xg * 0.15 };
         if let Some(shooter) = field.get_player_mut(shoot_event_model.from_player_id) {
@@ -2900,6 +2964,15 @@ impl PlayerEventDispatcher {
                 .fetch_add((xg * 1000.0) as u64, Ordering::Relaxed);
             let dband = time_band_diag::band_for_distance(horizontal_distance);
             time_band_diag::SHOTS_BY_DIST[dband].fetch_add(1, Ordering::Relaxed);
+            if let Some(sh) = field.get_player(shoot_event_model.from_player_id) {
+                let g = match sh.tactical_position.current_position.position_group() {
+                    crate::PlayerFieldPositionGroup::Goalkeeper => 0,
+                    crate::PlayerFieldPositionGroup::Defender => 1,
+                    crate::PlayerFieldPositionGroup::Midfielder => 2,
+                    crate::PlayerFieldPositionGroup::Forward => 3,
+                };
+                time_band_diag::SHOTS_BY_POS_DIST[g][dband].fetch_add(1, Ordering::Relaxed);
+            }
             if dband == 1 {
                 time_band_diag::EMITTED_MID_BAND
                     [time_band_diag::emit_tag_index(shoot_event_model.reason)]

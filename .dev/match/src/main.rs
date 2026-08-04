@@ -3028,6 +3028,25 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 real,
             );
         }
+        let pd = core::time_band_diag::pos_dist_snapshot();
+        println!();
+        println!("  shot distance mix BY POSITION (row = share of that line's shots):");
+        println!(
+            "  {:<5} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+            "pos", "<6m", "6-11", "11-16.5", "16.5-22", "22-30", "30m+"
+        );
+        for (g, label) in ["GK", "DEF", "MID", "FWD"].iter().enumerate() {
+            let tot: u64 = pd[g].iter().sum();
+            if tot == 0 {
+                continue;
+            }
+            print!("  {:<5}", label);
+            for b in 0..6 {
+                print!(" {:>6.1}%", pd[g][b] as f64 / tot as f64 * 100.0);
+            }
+            println!();
+        }
+
         let et = core::time_band_diag::emit_tag_snapshot();
         let ettotal: u64 = et.iter().sum();
         println!();

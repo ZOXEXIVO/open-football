@@ -304,7 +304,7 @@ impl<'a> RatingContext<'a> {
             // discounts a goalless forward riding the team's win (no
             // full credit), and a true passenger stays at the 0.50
             // tier base below this cap.
-            return base.min(0.65);
+            return base.min(0.80);
         }
         base
     }

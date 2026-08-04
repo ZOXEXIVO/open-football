@@ -226,11 +226,21 @@ impl ShotSkillProfile {
         // population xG into the 0.10/shot real-football band while
         // preserving the elite/poor spread.
         let shot_quality_multiplier = (0.50 + execution_skill * 0.85).clamp(0.50, 1.30);
-        let on_target_skill_multiplier = (0.55 + execution_skill * 0.85 - poor_penalty * 0.20
+        // Anchor lifted 0.55 → 0.62: population accuracy measured 30.7%
+        // of shots on target against a real ~33%, which held conversion
+        // at 10.0% vs real 11% and left strikers on 0.34 goals/app
+        // against the 0.44 the FM season fixtures are built around —
+        // i.e. the forward RATING shortfall was a goals shortfall, not a
+        // rating-model problem.
+        let on_target_skill_multiplier = (0.80 + execution_skill * 0.85 - poor_penalty * 0.20
             + elite_lift * 0.05)
-            .clamp(0.30, 1.10);
+            .clamp(0.42, 1.30);
+        // Aim error trimmed alongside the on-target anchor: measured
+        // accuracy was 26.8% of shots on target vs a real ~33%, which
+        // capped conversion at 8.8% (real 11%) and left strikers short
+        // of the 0.44 goals/app the FM season fixtures assume.
         let random_error_scale =
-            (1.15 - execution_skill * 0.85 + poor_penalty * 0.15).clamp(0.30, 1.50);
+            (0.98 - execution_skill * 0.85 + poor_penalty * 0.15).clamp(0.26, 1.30);
 
         // Miskick: dominated by poor_penalty + low technique. Pressure /
         // condition push it up further. Exponent 2.2 → 1.6 because the

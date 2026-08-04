@@ -35,7 +35,7 @@ use nalgebra::Vector3;
 /// That made this the DOMINANT save path (population save% sat at
 /// 77.7% vs real 67% even after the physics roll was latched to one
 /// roll per shot) and made every `skill_mult` retune inert.
-const EXPECTED_SAVE_TICKS: f32 = 38.0;
+const EXPECTED_SAVE_TICKS: f32 = 54.0;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperCatchingState {}

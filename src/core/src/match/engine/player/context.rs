@@ -387,8 +387,12 @@ impl LooseBallChase {
             if !meta.chase_eligible {
                 continue;
             }
+            // Striker gamble: forwards read rebounds early and commit,
+            // so they win loose balls a real midfielder at the same
+            // distance would not. 0.82 on dist_sq is ~10% on distance.
+            let raw = (ball_pos - meta.position).norm_squared();
             let entry = ChaseEntry {
-                dist_sq: (ball_pos - meta.position).norm_squared(),
+                dist_sq: if meta.is_forward { raw * 0.82 } else { raw },
                 id: meta.player_id,
             };
             let slots = match meta.side {

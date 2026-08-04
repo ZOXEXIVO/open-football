@@ -162,7 +162,10 @@ impl GroupDivisors {
 
 /// Engine xG → real xG. Engine population xG/shot measures ~0.31
 /// against a real ~0.11 and against its own ~9% conversion rate.
-const XG_TO_REAL: f32 = 0.36;
+/// Identity: the engine→real xG conversion now happens upstream at
+/// the recording site (`handle_shoot_event`), so `stats.xg` already
+/// arrives in real units and must not be scaled twice.
+const XG_TO_REAL: f32 = 1.0;
 
 pub struct EngineVolumeCalibration;
 

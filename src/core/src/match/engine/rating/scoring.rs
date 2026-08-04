@@ -35,7 +35,13 @@ impl<'a> RatingContext<'a> {
         // lifting passengers. The OneGoalLowVolume soft cap absorbs
         // most of the single-match effect, so per-match bands move by
         // hundredths while the season aggregate gains the difference.
-        let goal_raw = RatingMath::sat(g, 1.6) * 2.95;
+        // Compressed 2.95 → 2.60 with the goalless drags eased below. The
+        // spread was too WIDE at both ends: a single-goal forward rated
+        // ~7.9 (real ~7.3, giving a 9% >=8.0 tail vs a real ~3%) while
+        // the season mean still sat at 6.31, under the 6.80-7.10 band —
+        // i.e. scoring matches over-paid and goalless ones over-punished.
+        // Narrowing both keeps the season average while fixing the tail.
+        let goal_raw = RatingMath::sat(g, 1.6) * 2.60;
         // Assists ≈ 55% of a goal — decisive but not as decisive as
         // putting it in. Lifted 1.55 → 1.65 in tandem for the same
         // reason (assist-match rating proportional to goal-match).
@@ -134,7 +140,7 @@ impl<'a> RatingContext<'a> {
         if s.shots_total >= 3 {
             let xg_per_shot = s.xg / s.shots_total as f32;
             if xg_per_shot < 0.10 {
-                let spam_coef = if is_forward { 0.40 } else { 0.30 };
+                let spam_coef = if is_forward { 0.26 } else { 0.22 };
                 shooting -= RatingMath::sat(s.shots_total as f32 - 2.0, 4.0) * spam_coef;
             }
         }
@@ -146,7 +152,12 @@ impl<'a> RatingContext<'a> {
         // quiet-forward shifts in the 5.5s instead of the FM-style
         // "poor/quiet ≈ 6.0" anchor.
         if s.goals == 0 && s.shots_on_target == 0 && s.shots_total >= 2 {
-            let nosot_coef = if is_forward { 0.24 } else { 0.25 };
+            // Softened: the engine forward takes ~3.4 shots with ~1.1 on
+            // target, so a 0-SOT match is common and these drags fired
+            // far more often than on the real stat lines the season
+            // fixtures are built from — holding FWD season means ~0.3
+            // under band while the goal-scoring tail was already tamed.
+            let nosot_coef = if is_forward { 0.15 } else { 0.18 };
             shooting -= RatingMath::sat(s.shots_total as f32 - 1.0, 3.0) * nosot_coef;
         }
 
@@ -387,7 +398,7 @@ impl<'a> RatingContext<'a> {
         // damping) already hold an anonymous forward below baseline —
         // a zero-footprint 90 still loses ≈ −0.06 here plus the rest.
         let shortfall = (1.0 - footprint).max(0.0);
-        let lack_penalty = -RatingMath::sat(shortfall, 2.0) * 0.15;
+        let lack_penalty = -RatingMath::sat(shortfall, 2.0) * 0.10;
 
         // Wasted big-chance drag (ARE lane, separate from shooting()).
         // Threshold 0.8, coef cut 0.30 → 0.20 — the 200-match benchmark
