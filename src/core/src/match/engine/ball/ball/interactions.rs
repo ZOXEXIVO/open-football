@@ -579,6 +579,10 @@ impl Ball {
             save_accounting_stats::SAVE_TICKS_OUT_OF_REACH.fetch_add(1, Ordering::Relaxed);
             return;
         }
+        // One shot, one roll — see `ShotTarget::save_rolled`.
+        if shot_target.save_rolled {
+            return;
+        }
         #[cfg(feature = "match-logs")]
         save_accounting_stats::SAVE_TICKS_REACHED.fetch_add(1, Ordering::Relaxed);
 
@@ -704,14 +708,29 @@ impl Ball {
         // conversion collapse it tried to compensate turned out to be the
         // Finishing state's direction-as-target bug, not keeper strength.
         // With that fixed, this level holds goals/match near 2.5.)
-        let skill_mult = 0.44 + skill * 0.27;
+        // Per-SHOT save probability (single roll — see `save_rolled`).
+        // Calibrated so a centred shot against an average keeper saves
+        // ~66%, a weak keeper ~53% and an elite one ~79% — the real
+        // save%-on-target band. The old 0.44+0.27 was a per-TICK rate
+        // whose meaning changed every time state timing moved.
+        // Flatter skill slope: the steeper version gave a youth keeper
+        // 58% saves vs a senior 69% (real spread is ~60-75%), so weak
+        // leagues ran hot on goals.
+        let skill_mult = 0.600 + skill * 0.180;
         // Environment shifts keeper handling — heavy rain spills more,
         // wind on cross-claims has a subtler effect (the keeper still
         // sets feet under a regular shot).
         let env_mod = context.environment.modifiers();
         let env_handling_delta = env_mod.goalkeeper_handling;
         let save_prob =
-            ((base - speed_penalty) * skill_mult + env_handling_delta).clamp(0.05, 0.55);
+            ((base - speed_penalty) * skill_mult + env_handling_delta).clamp(0.08, 0.92);
+
+        // Latch BEFORE rolling: whatever this roll decides is final for
+        // this shot, so a beaten keeper doesn't get a second chance on
+        // the next tick of the same flight.
+        if let Some(t) = self.cached_shot_target.as_mut() {
+            t.save_rolled = true;
+        }
 
         #[cfg(feature = "match-logs")]
         save_accounting_stats::SAVE_PHYSICS_FIRED.fetch_add(1, Ordering::Relaxed);

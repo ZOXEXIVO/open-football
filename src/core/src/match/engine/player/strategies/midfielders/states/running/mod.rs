@@ -17,7 +17,7 @@ use nalgebra::Vector3;
 use std::cmp::Ordering;
 
 // Shooting distance constants for midfielders — more conservative than forwards
-const MAX_SHOOTING_DISTANCE: f32 = 160.0; // 20m — edge-of-box / arriving-midfielder strikes (1u = 0.125m)
+const MAX_SHOOTING_DISTANCE: f32 = 208.0; // 26m — edge-of-box / arriving-midfielder strikes
 const STANDARD_SHOOTING_DISTANCE: f32 = 104.0; // 13m — standard shooting range for midfielders
 const POINT_BLANK_DISTANCE: f32 = 40.0; // 5m - must shoot, goalkeeper is right there
 

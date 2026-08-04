@@ -149,7 +149,10 @@ mod alloc_count {
         let mut rows: Vec<(String, u64)> = map.into_iter().collect();
         rows.sort_by(|a, b| b.1.cmp(&a.1));
         let total: u64 = rows.iter().map(|r| r.1).sum();
-        println!("ALLOC SITES (sampled 1/{}, {} samples):", SAMPLE_EVERY, total);
+        println!(
+            "ALLOC SITES (sampled 1/{}, {} samples):",
+            SAMPLE_EVERY, total
+        );
         for (site, count) in rows.into_iter().take(n) {
             println!(
                 "  {:>6.2}%  {}",
@@ -281,17 +284,55 @@ impl LevelSkillCurve {
         let m = &skills.mental;
         let p = &skills.physical;
         let g = &skills.goalkeeping;
-        let total = s.corners + s.crossing + s.dribbling + s.finishing + s.first_touch
-            + s.free_kicks + s.heading + s.long_shots + s.long_throws + s.marking
-            + s.passing + s.penalty_taking + s.tackling + s.technique
-            + m.aggression + m.anticipation + m.bravery + m.composure + m.concentration
-            + m.decisions + m.determination + m.flair + m.leadership + m.off_the_ball
-            + m.positioning + m.teamwork + m.vision + m.work_rate
-            + p.acceleration + p.agility + p.balance + p.jumping + p.natural_fitness
-            + p.pace + p.stamina + p.strength
-            + g.aerial_reach + g.command_of_area + g.communication + g.eccentricity
-            + g.first_touch + g.handling + g.kicking + g.one_on_ones + g.passing
-            + g.punching + g.reflexes + g.rushing_out + g.throwing;
+        let total = s.corners
+            + s.crossing
+            + s.dribbling
+            + s.finishing
+            + s.first_touch
+            + s.free_kicks
+            + s.heading
+            + s.long_shots
+            + s.long_throws
+            + s.marking
+            + s.passing
+            + s.penalty_taking
+            + s.tackling
+            + s.technique
+            + m.aggression
+            + m.anticipation
+            + m.bravery
+            + m.composure
+            + m.concentration
+            + m.decisions
+            + m.determination
+            + m.flair
+            + m.leadership
+            + m.off_the_ball
+            + m.positioning
+            + m.teamwork
+            + m.vision
+            + m.work_rate
+            + p.acceleration
+            + p.agility
+            + p.balance
+            + p.jumping
+            + p.natural_fitness
+            + p.pace
+            + p.stamina
+            + p.strength
+            + g.aerial_reach
+            + g.command_of_area
+            + g.communication
+            + g.eccentricity
+            + g.first_touch
+            + g.handling
+            + g.kicking
+            + g.one_on_ones
+            + g.passing
+            + g.punching
+            + g.reflexes
+            + g.rushing_out
+            + g.throwing;
         // 14 technical + 14 mental + 8 physical (excluding match_readiness)
         // + 13 goalkeeping.
         total / (14 + 14 + 8 + 13) as f32
@@ -1192,8 +1233,8 @@ impl Bench {
         let secs = start.elapsed().as_secs_f64();
         #[cfg(feature = "alloc-count")]
         {
-            let calls = alloc_count::ALLOC_CALLS.load(std::sync::atomic::Ordering::Relaxed)
-                - allocs_before;
+            let calls =
+                alloc_count::ALLOC_CALLS.load(std::sync::atomic::Ordering::Relaxed) - allocs_before;
             let bytes =
                 alloc_count::ALLOC_BYTES.load(std::sync::atomic::Ordering::Relaxed) - bytes_before;
             println!(
@@ -1251,10 +1292,18 @@ fn print_usage() {
     eprintln!(
         "                                      defaults: 20 teams, 2 rounds (38 games), levels 8–18"
     );
-    eprintln!("  dev_match audit_levels [N]      generator diagnostic: mean outfield skills per level (default 200 squads)");
-    eprintln!("  dev_match audit_engine_gap [N] [lvlA] [lvlB]  engine diagnostic: direct-skill matches at supplied gap");
-    eprintln!("                                      bypasses generator; reveals engine-only response to skill gap");
-    eprintln!("  dev_match subs [N] [level]      substitution-usage diagnostic: per-team subs distribution by result");
+    eprintln!(
+        "  dev_match audit_levels [N]      generator diagnostic: mean outfield skills per level (default 200 squads)"
+    );
+    eprintln!(
+        "  dev_match audit_engine_gap [N] [lvlA] [lvlB]  engine diagnostic: direct-skill matches at supplied gap"
+    );
+    eprintln!(
+        "                                      bypasses generator; reveals engine-only response to skill gap"
+    );
+    eprintln!(
+        "  dev_match subs [N] [level]      substitution-usage diagnostic: per-team subs distribution by result"
+    );
     eprintln!();
     eprintln!(
         "Random level range: {}–{} inclusive.",
@@ -1405,7 +1454,11 @@ fn run_subs_experiment(n_matches: usize, level: u8) {
     );
     println!("subs-count distribution (per team-match):");
     for (k, v) in dist.iter().enumerate() {
-        let label = if k == 6 { ">5".to_string() } else { k.to_string() };
+        let label = if k == 6 {
+            ">5".to_string()
+        } else {
+            k.to_string()
+        };
         println!(
             "  {:>2}: {:>4}  ({:.0}%)",
             label,
@@ -2293,8 +2346,14 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         let pens = core::mid_run_diag::PENALTY_AWARDED.load(Ordering::Relaxed);
         let dfks = core::mid_run_diag::DIRECT_FK_AWARDED.load(Ordering::Relaxed);
         let corners = core::mid_run_diag::CORNERS_AWARDED.load(Ordering::Relaxed);
-        println!("penalties/match     : {:.3}  (real ~0.25-0.30)", pens as f32 / n);
-        println!("direct FKs/match    : {:.1}  (real ~20-24 total FKs)", dfks as f32 / n);
+        println!(
+            "penalties/match     : {:.3}  (real ~0.25-0.30)",
+            pens as f32 / n
+        );
+        println!(
+            "direct FKs/match    : {:.1}  (real ~20-24 total FKs)",
+            dfks as f32 / n
+        );
         println!(
             "corners per team    : {:.1}  (real ~10-11)",
             corners as f32 / (2.0 * n)
@@ -2321,12 +2380,14 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     //   - 2-2 inflation → back-and-forth correlation (both keep responding)
     let mut scoreline_counts: std::collections::BTreeMap<(u8, u8), u32> =
         std::collections::BTreeMap::new();
-    let mut draws_by_total: std::collections::BTreeMap<u8, u32> =
-        std::collections::BTreeMap::new();
+    let mut draws_by_total: std::collections::BTreeMap<u8, u32> = std::collections::BTreeMap::new();
     for o in &outcomes {
         // Bucket as (lower, higher) so 2-1 and 1-2 land in same row —
         // we care about scoreline shape, not which team scored.
-        let key = (o.home_goals.min(o.away_goals), o.home_goals.max(o.away_goals));
+        let key = (
+            o.home_goals.min(o.away_goals),
+            o.home_goals.max(o.away_goals),
+        );
         *scoreline_counts.entry(key).or_default() += 1;
         if o.home_goals == o.away_goals {
             *draws_by_total.entry(o.home_goals).or_default() += 1;
@@ -2334,14 +2395,15 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     }
     println!();
     println!("--- SCORELINE distribution (sorted by frequency) ---");
-    let mut scoreline_sorted: Vec<((u8, u8), u32)> =
-        scoreline_counts.into_iter().collect();
+    let mut scoreline_sorted: Vec<((u8, u8), u32)> = scoreline_counts.into_iter().collect();
     scoreline_sorted.sort_by(|a, b| b.1.cmp(&a.1));
     let total_n = n_matches as f32;
     for ((lo, hi), count) in scoreline_sorted.iter().take(15) {
         let pct = *count as f32 / total_n * 100.0;
         let kind = if lo == hi { "DRAW" } else { "DEC " };
-        let bar: String = std::iter::repeat('#').take((pct.round() as usize).min(40)).collect();
+        let bar: String = std::iter::repeat('#')
+            .take((pct.round() as usize).min(40))
+            .collect();
         println!(
             "  {}-{}  {}  {:>4} ({:>5.1}%) {}",
             lo, hi, kind, count, pct, bar
@@ -2507,14 +2569,22 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     println!();
     println!("--- GOAL TIMELINE diagnostics (draw-correlation hunt) ---");
     let bucket_labels = [
-        "0-15  min", "15-30 min", "30-45 min", "45-60 min", "60-75 min", "75-90 min",
+        "0-15  min",
+        "15-30 min",
+        "30-45 min",
+        "45-60 min",
+        "60-75 min",
+        "75-90 min",
     ];
     let bucket_refs = [25, 24, 20, 15, 10, 6];
     println!("  First-goal time distribution (real PL reference):");
     for (i, label) in bucket_labels.iter().enumerate() {
         let n = first_goal_buckets[i];
         let pct = n as f32 / total_matches_with_goals.max(1) as f32 * 100.0;
-        println!("    {} : {:>4} ({:>5.1}%)  ref ~{}%", label, n, pct, bucket_refs[i]);
+        println!(
+            "    {} : {:>4} ({:>5.1}%)  ref ~{}%",
+            label, n, pct, bucket_refs[i]
+        );
     }
     println!(
         "    no goal   : {:>4} ({:>5.1}%)",
@@ -2592,8 +2662,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             if min < 15 {
                 goals_by_early_minute[min] += 1;
             }
-            let since_kickoff_min = (time.saturating_sub(prev_kickoff_ms)) as f32
-                / TICKS_PER_MIN as f32;
+            let since_kickoff_min =
+                (time.saturating_sub(prev_kickoff_ms)) as f32 / TICKS_PER_MIN as f32;
             let b = if since_kickoff_min < 1.0 {
                 0
             } else if since_kickoff_min < 2.0 {
@@ -2624,9 +2694,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     println!("  goals in minutes 0-14, per minute:");
     let early_total: u32 = goals_by_early_minute.iter().sum();
     for (m, nb) in goals_by_early_minute.iter().enumerate() {
-        let bar: String = std::iter::repeat('#')
-            .take((*nb as usize) / 3)
-            .collect();
+        let bar: String = std::iter::repeat('#').take((*nb as usize) / 3).collect();
         println!(
             "    min {:>2} : {:>4} ({:>4.1}% of all goals) {}",
             m,
@@ -2688,9 +2756,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         let var_a = sum_aa / n_m - mean_a * mean_a;
         let cov = sum_ha / n_m - mean_h * mean_a;
         let rho = cov / (var_h * var_a).sqrt().max(1e-9);
-        let indep_draws: f64 = (0..12)
-            .map(|k| (h_marg[k] / n_m) * (a_marg[k] / n_m))
-            .sum();
+        let indep_draws: f64 = (0..12).map(|k| (h_marg[k] / n_m) * (a_marg[k] / n_m)).sum();
         let observed_draws = outcomes
             .iter()
             .filter(|o| o.home_goals == o.away_goals)
@@ -2698,10 +2764,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             / n_m;
         println!();
         println!("--- SCORE CORRELATION (draw-machine fingerprint) ---");
-        println!(
-            "  team-goal correlation rho : {:+.3}  (real ~0.00)",
-            rho
-        );
+        println!("  team-goal correlation rho : {:+.3}  (real ~0.00)", rho);
         println!(
             "  variance/mean  home {:.2}  away {:.2}  (Poisson = 1.00, real ~1.0-1.1)",
             var_h / mean_h.max(1e-9),
@@ -2756,7 +2819,9 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             }
             cov / (vx * vy).sqrt().max(1e-9)
         };
-        println!("  cross-half decomposition (response → within high / cross ~0; shared factor → all similar):");
+        println!(
+            "  cross-half decomposition (response → within high / cross ~0; shared factor → all similar):"
+        );
         println!(
             "    within-half : rho(H1a,H1b)={:+.3}  rho(H2a,H2b)={:+.3}",
             pearson(&h1a, &h1b),
@@ -2796,20 +2861,24 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             let mut h = 0i32;
             let mut a = 0i32;
             let mut prev_t = 0u64;
-            let mut add_segment = |from: u64,
-                                   to: u64,
-                                   idx_home: usize,
-                                   time_in: &mut [[f64; 2]; 3]| {
-                // split [from, to) at the gate boundary
-                let pre = to.min(GATE_MS).saturating_sub(from.min(GATE_MS)) as f64;
-                let post = to.max(GATE_MS).saturating_sub(from.max(GATE_MS)) as f64;
-                time_in[idx_home][0] += pre;
-                time_in[2 - idx_home][0] += pre;
-                time_in[idx_home][1] += post;
-                time_in[2 - idx_home][1] += post;
-            };
+            let mut add_segment =
+                |from: u64, to: u64, idx_home: usize, time_in: &mut [[f64; 2]; 3]| {
+                    // split [from, to) at the gate boundary
+                    let pre = to.min(GATE_MS).saturating_sub(from.min(GATE_MS)) as f64;
+                    let post = to.max(GATE_MS).saturating_sub(from.max(GATE_MS)) as f64;
+                    time_in[idx_home][0] += pre;
+                    time_in[2 - idx_home][0] += pre;
+                    time_in[idx_home][1] += post;
+                    time_in[2 - idx_home][1] += post;
+                };
             for &(t, home_scored) in &o.goal_events {
-                let idx_home = if h > a { 0 } else if h == a { 1 } else { 2 };
+                let idx_home = if h > a {
+                    0
+                } else if h == a {
+                    1
+                } else {
+                    2
+                };
                 add_segment(prev_t, t, idx_home, &mut time_in);
                 let era = if t < GATE_MS { 0 } else { 1 };
                 if home_scored {
@@ -2821,7 +2890,13 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 }
                 prev_t = t;
             }
-            let idx_home = if h > a { 0 } else if h == a { 1 } else { 2 };
+            let idx_home = if h > a {
+                0
+            } else if h == a {
+                1
+            } else {
+                2
+            };
             add_segment(prev_t, FULL_MS, idx_home, &mut time_in);
         }
         println!();
@@ -2894,9 +2969,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         let [shots_b, on_target_b, xg_b, goals_b, rolls_b] = bands;
         println!();
         println!("--- PRODUCTION BY 15-MIN BAND (volume vs quality vs conversion) ---");
-        println!(
-            "  band       rolls    shots  on-tgt%   xG/shot  goals  goals/shot  conv-on-tgt%"
-        );
+        println!("  band       rolls    shots  on-tgt%   xG/shot  goals  goals/shot  conv-on-tgt%");
         for i in 0..6 {
             let shots = shots_b[i].max(1) as f64;
             println!(
@@ -2912,6 +2985,100 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 goals_b[i] as f64 / on_target_b[i].max(1) as f64 * 100.0,
             );
         }
+        // ── SHOT MIX BY DISTANCE ─────────────────────────────────────
+        // The single most diagnostic view of "is this real football".
+        // Real Opta shot distribution is ~15 / 25 / 22 / 20 / 13 / 5 %
+        // across these bands — roughly 40% of all shots come from
+        // OUTSIDE the 16.5m box, and population xG/shot is ~0.11. An
+        // engine clustered in the first two bands is manufacturing
+        // sitters: xG/shot inflates, forwards post huge ratings off
+        // tap-ins, and shot VOLUME has to be suppressed artificially to
+        // keep the scoreline sane.
+        let [dshots, dxg, drolls, dcalls, dposs, dappr] = core::time_band_diag::distance_snapshot();
+        let rolltotal: u64 = drolls.iter().sum();
+        let calltotal: u64 = dcalls.iter().sum();
+        let posstotal: u64 = dposs.iter().sum();
+        let dtotal: u64 = dshots.iter().sum();
+        println!();
+        println!("--- SHOT MIX BY DISTANCE (where chances actually come from) ---");
+        println!("  band            shots   share    xG/shot   rolls%  fire/1k   real share");
+        let dlabels = [
+            ("<6m      ", "~15%"),
+            ("6-11m    ", "~25%"),
+            ("11-16.5m ", "~22%"),
+            ("16.5-22m ", "~20%"),
+            ("22-30m   ", "~13%"),
+            ("30m+     ", "~5%"),
+        ];
+        for (i, (label, real)) in dlabels.iter().enumerate() {
+            let s = dshots[i].max(1) as f64;
+            println!(
+                "  {}  {:>8} {:>6.1}%    {:>6.3} {:>5.1}%  {:>5.1}%  {:>5.1}% {:>7} {:>5.0}%   {}",
+                label,
+                dshots[i],
+                dshots[i] as f64 / dtotal.max(1) as f64 * 100.0,
+                dxg[i] as f64 / 1000.0 / s,
+                dposs[i] as f64 / posstotal.max(1) as f64 * 100.0,
+                dcalls[i] as f64 / calltotal.max(1) as f64 * 100.0,
+                drolls[i] as f64 / rolltotal.max(1) as f64 * 100.0,
+                dappr[i],
+                dshots[i] as f64 / dappr[i].max(1) as f64 * 100.0,
+                real,
+            );
+        }
+        let rj = core::time_band_diag::reject_snapshot();
+        let rnames = ["far", "min_xg", "six_xg", "no_clear", "pass_def"];
+        println!();
+        println!("  shot-decision REJECTIONS by distance band (% of calls in band):");
+        println!(
+            "  {:<10} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
+            "reason", "<6m", "6-11", "11-16.5", "16.5-22", "22-30", "30m+"
+        );
+        for (r, name) in rnames.iter().enumerate() {
+            print!("  {:<10}", name);
+            for b in 0..6 {
+                print!(
+                    " {:>7.1}%",
+                    rj[r][b] as f64 / dcalls[b].max(1) as f64 * 100.0
+                );
+            }
+            println!();
+        }
+
+        let wf = core::time_band_diag::will_factor_snapshot();
+        let wnames = [
+            "base",
+            "xg_boost",
+            "clarity",
+            "body_ctl",
+            "condition",
+            "gk_ctx",
+            "balance",
+            "psych",
+            "FINAL",
+        ];
+        println!();
+        println!("  willingness factor MEANS by distance band (roll samples):");
+        println!(
+            "  {:<10} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
+            "factor", "<6m", "6-11", "11-16.5", "16.5-22", "22-30", "30m+"
+        );
+        for (i, name) in wnames.iter().enumerate() {
+            print!("  {:<10}", name);
+            for b in 0..6 {
+                let n = drolls[b].max(1);
+                print!(" {:>8.5}", wf[i][b] as f64 / 1_000_000.0 / n as f64);
+            }
+            println!();
+        }
+
+        let all_xg: u64 = dxg.iter().sum();
+        println!(
+            "  population xG/shot: {:.3}  (real ~0.11)   outside-box share: {:.1}%  (real ~40%)",
+            all_xg as f64 / 1000.0 / dtotal.max(1) as f64,
+            (dshots[3] + dshots[4] + dshots[5]) as f64 / dtotal.max(1) as f64 * 100.0,
+        );
+
         let cond = core::time_band_diag::condition_snapshot();
         println!();
         println!("  avg condition%% by band (GK / DEF / MID / FWD):");
@@ -2989,7 +3156,9 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             label, n, h_xg, a_xg, xg_diff, h_sh, a_sh,
         );
     }
-    println!("  (if draws have similar xG-spread as decisive matches, the engine's xG→goal step is too noisy)");
+    println!(
+        "  (if draws have similar xG-spread as decisive matches, the engine's xG→goal step is too noisy)"
+    );
 
     // ── HOME ADVANTAGE (equal-level matches only) ─────────────────────
     // Real-football reference at equal strength: ~45% home wins / ~25%
@@ -3702,8 +3871,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         for e in &edges {
             *by_source.entry(e.source.as_tag()).or_insert(0) += 1;
         }
-        let src_summary: Vec<String> =
-            by_source.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        let src_summary: Vec<String> = by_source.iter().map(|(k, v)| format!("{k}={v}")).collect();
         println!("  by source: {}", src_summary.join("  "));
 
         // Structural invariants over the OBSERVED graph. Entry = the four
@@ -3712,7 +3880,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         let mut entry = core::r#match::player::state::PlayerState::entry_states().to_vec();
         entry.extend(core::r#match::player::state::PlayerState::reserved_states());
         let terminal = core::r#match::player::state::PlayerState::reserved_states().to_vec();
-        let violations = core::r#match::TransitionGraph::audit(&edges, &universe, &entry, &terminal);
+        let violations =
+            core::r#match::TransitionGraph::audit(&edges, &universe, &entry, &terminal);
 
         // Only flag states actually exercised this run — an unreached
         // state is "not observed", not a structural dead-end.
@@ -3731,7 +3900,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         if real.is_empty() {
             println!("  invariants: OK (no observed unreachable / dead-end states)");
         } else {
-            println!("  invariants: {} violation(s) among observed states:", real.len());
+            println!(
+                "  invariants: {} violation(s) among observed states:",
+                real.len()
+            );
             for v in &real {
                 println!("    {v:?}");
             }

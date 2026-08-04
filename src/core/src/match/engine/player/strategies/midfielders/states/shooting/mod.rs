@@ -45,7 +45,10 @@ impl StateProcessingHandler for MidfielderShootingState {
 
         // Only abort for long range with no clear shot
         // Close and medium range: take the shot
-        if distance_to_goal > 80.0 && !ctx.player().has_clear_shot() {
+        // Backstop only — the helper (or the Tier-1 gate) already
+        // approved this strike; 80u = 10m re-vetoed nearly every
+        // midfield shot from range.
+        if distance_to_goal > 240.0 && !ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));

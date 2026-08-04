@@ -343,6 +343,15 @@ pub struct ShotTarget {
     /// Goal the ball is heading for — left (x=0) or right (x=field_w).
     /// Used so the correct keeper reads the cache.
     pub defending_side: PlayerSide,
+    /// True once the physics save roll has been resolved for THIS
+    /// shot. The roll used to run on every tick the ball sat inside the
+    /// keeper's reach window (~2-3 ticks), compounding to ~88% per shot
+    /// from a 0.55 per-tick cap — which is why `skill_mult` needed five
+    /// successive empirical retunes whenever state-machine timing moved
+    /// the window length. One shot, one roll: the probability below is
+    /// now a genuine per-shot save chance calibrated straight against
+    /// real save% (~67% of shots on target).
+    pub save_rolled: bool,
     /// Set when the shot took a deflection off a body in the lane.
     /// Catching/Diving states damp the save probability — the keeper
     /// was set for the original trajectory and the redirected ball is

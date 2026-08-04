@@ -36,13 +36,20 @@ impl StateProcessingHandler for ForwardShootingState {
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
         // Abort for very long range with no clear shot
-        if distance_to_goal > 240.0 && !ctx.player().has_clear_shot() {
+        // These aborts run AFTER the unified helper already weighed
+        // distance, clarity, chance quality and skill. Re-vetoing on a
+        // clear lane at 18m (144u) discarded ~94% of the long-range
+        // shots the decision layer had just approved — most players
+        // have finishing below 0.5 and a fully clear lane is rare at
+        // range. Kept only as a backstop for genuinely hopeless
+        // efforts.
+        if distance_to_goal > 300.0 && !ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         // Medium-long range: need decent finishing or clear shot to commit
         let finishing = ctx.player.skills.technical.finishing / 20.0;
-        if distance_to_goal > 144.0 && finishing < 0.5 && !ctx.player().has_clear_shot() {
+        if distance_to_goal > 260.0 && finishing < 0.30 && !ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 

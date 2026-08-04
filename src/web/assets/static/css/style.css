@@ -209,15 +209,24 @@ a:active {
 
 .fm-sidebar {
     background: #151c22;
-    padding: 0 !important;
+    padding: 0 1em 0 0 !important;
     position: sticky;
     top: 0;
     height: 100vh;
     display: flex;
     flex-direction: column;
     border-right: 1px solid #1f2a32;
-    flex: 0 0 16%;
-    max-width: 16%;
+    /* Width follows the longest menu label instead of a fixed column
+       fraction. The menu differs per page and per locale (competition
+       names, club names), so any single percentage either clips labels
+       on a 1440px screen or wastes a strip of it on a 2560px one.
+       Clamped both ways: a short menu still reads as a sidebar, and one
+       very long competition name can't take the page over — past the cap
+       the label wraps, as it already does. */
+    flex: 0 0 auto;
+    width: max-content;
+    min-width: 200px;
+    max-width: 340px;
 }
 
 .fm-sidebar-scroll {
@@ -265,12 +274,16 @@ a:active {
     background: rgba(255, 255, 255, 0.03);
 }
 
+/* Absolutely positioned, so it doesn't feed the sidebar's content width —
+   it sizes to its own language names and matches the rail at minimum. */
 .fm-sidebar-lang-menu {
     display: none;
     position: absolute;
     bottom: 100%;
     left: 0;
-    right: 0;
+    right: auto;
+    width: max-content;
+    min-width: 100%;
     background: #1c2830;
     border: 1px solid #263340;
     border-radius: 4px;
@@ -7020,15 +7033,6 @@ a:active {
     font-size: 12px;
 }
 
-/* Tablet: sidebar visible but narrow — give it a usable fixed width */
-
-@media (min-width: 1200px) and (max-width: 1439.98px) {
-    .fm-sidebar {
-        flex: 0 0 200px;
-        max-width: 200px;
-    }
-}
-
 /* Short viewport: flip language menu downward so it doesn't clip above screen */
 
 @media (max-height: 500px) {
@@ -7052,8 +7056,12 @@ a:active {
         left: 0;
         bottom: 0;
         height: auto !important;
-        width: 270px !important;
-        max-width: 80vw;
+        /* Same content-driven width as the desktop rail, with a wider
+           floor for touch targets and a viewport cap so the overlay
+           behind the drawer stays tappable. */
+        width: max-content !important;
+        min-width: 240px;
+        max-width: min(340px, 80vw);
         z-index: 1050;
         transform: translateX(-100%);
         transition: transform 0.25s ease;

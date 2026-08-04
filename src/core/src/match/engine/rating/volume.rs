@@ -62,6 +62,9 @@ struct GroupDivisors {
     zone_box_def: f32,
     /// Final-third pressures-won / tackles, middle-third interceptions.
     zone_field: f32,
+    /// GK save volume: `saves` AND `shots_faced` together, so save%
+    /// is preserved while the volume-driven credit is normalised.
+    gk_volume: f32,
 }
 
 impl GroupDivisors {
@@ -75,6 +78,7 @@ impl GroupDivisors {
         crosses: 1.0,
         zone_box_def: 1.0,
         zone_field: 1.0,
+        gk_volume: 1.0,
     };
 
     /// Engine ~3.4 tackles vs real ~1.6; ~2.0 ints vs ~1.3 — the back
@@ -99,6 +103,7 @@ impl GroupDivisors {
         crosses: 6.0,
         zone_box_def: 1.5,
         zone_field: 1.0,
+        gk_volume: 1.0,
     };
 
     /// The pedestal group: ~5.7 tackles vs ~1.8, ~10 ints vs ~1.0
@@ -115,6 +120,7 @@ impl GroupDivisors {
         crosses: 1.5,
         zone_box_def: 3.3,
         zone_field: 5.0,
+        gk_volume: 1.0,
     };
 
     /// Engine forwards lead every loose-ball chase: ~10 tackles vs
@@ -130,13 +136,23 @@ impl GroupDivisors {
         crosses: 1.0,
         zone_box_def: 1.0,
         zone_field: 16.0,
+        gk_volume: 1.0,
+    };
+
+    /// Claims and command actions are real-scale, but SAVE VOLUME is
+    /// not: the engine puts ~8 shots on target per team per match
+    /// against a real ~4.3, so a keeper accumulates roughly double the
+    /// save credit the model was calibrated for (season means hit 7.7
+    /// vs the 6.65-7.10 band). `saves` and `shots_faced` scale together
+    /// so save PERCENTAGE — the quality signal — is untouched.
+    const GOALKEEPER: GroupDivisors = GroupDivisors {
+        gk_volume: 1.9,
+        ..Self::IDENTITY
     };
 
     fn for_group(group: PlayerFieldPositionGroup) -> &'static GroupDivisors {
         match group {
-            // GK counters (saves, claims, command actions) are already
-            // real-scale — the save pipeline is calibrated directly.
-            PlayerFieldPositionGroup::Goalkeeper => &Self::IDENTITY,
+            PlayerFieldPositionGroup::Goalkeeper => &Self::GOALKEEPER,
             PlayerFieldPositionGroup::Defender => &Self::DEFENDER,
             PlayerFieldPositionGroup::Midfielder => &Self::MIDFIELDER,
             PlayerFieldPositionGroup::Forward => &Self::FORWARD,
@@ -160,6 +176,8 @@ impl EngineVolumeCalibration {
     pub fn normalize(stats: &PlayerMatchEndStats) -> PlayerMatchEndStats {
         let d = GroupDivisors::for_group(stats.position_group);
         let mut s = stats.clone();
+        s.saves = Self::scale(s.saves, d.gk_volume);
+        s.shots_faced = Self::scale(s.shots_faced, d.gk_volume);
         s.tackles = Self::scale(s.tackles, d.tackles);
         s.interceptions = Self::scale(s.interceptions, d.interceptions);
         s.passes_into_box = Self::scale(s.passes_into_box, d.box_service);

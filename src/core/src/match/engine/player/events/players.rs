@@ -1803,18 +1803,23 @@ impl PlayerEventDispatcher {
         // So v0 = distance * 0.015 for ground passes
         // Lofted passes experience air drag (proportional to v²) which bleeds much more speed,
         // plus 5% horizontal loss on each bounce — so longer passes need more overshoot
-        const GROUND_FRICTION: f32 = 0.015;
+        const GROUND_FRICTION: f32 = 0.006;
 
         // Distance-dependent overshoot: short passes need little extra,
         // long passes need significantly more to compensate for air drag and bounce losses
+        // Overshoot scaled by 1.56 alongside the 2.5x friction cut so
+        // ground-pass FLIGHT TIME is unchanged (t = -ln(1-1/overshoot)/k)
+        // while the reachable distance rises from 23m to ~37m. The ball
+        // now also arrives with real residual pace (~44% of strike speed
+        // rather than 13%), so receptions are contestable.
         let overshoot = if distance < 50.0 {
-            1.15 // Short: ground friction only
+            1.79 // Short: ground friction only
         } else if distance < 100.0 {
-            1.25 // Medium: slight air drag on lofted balls
+            1.95 // Medium: slight air drag on lofted balls
         } else if distance < 200.0 {
-            1.45 // Long: significant air drag compensation
+            2.26 // Long: significant air drag compensation
         } else {
-            1.65 // Very long: heavy air drag + multiple bounces
+            2.57 // Very long: heavy air drag + multiple bounces
         };
 
         let needed_velocity = distance * GROUND_FRICTION * overshoot;
@@ -2893,6 +2898,10 @@ impl PlayerEventDispatcher {
             }
             time_band_diag::XG_X1000_BY_BAND[band]
                 .fetch_add((xg * 1000.0) as u64, Ordering::Relaxed);
+            let dband = time_band_diag::band_for_distance(horizontal_distance);
+            time_band_diag::SHOTS_BY_DIST[dband].fetch_add(1, Ordering::Relaxed);
+            time_band_diag::XG_X1000_BY_DIST[dband]
+                .fetch_add((xg * 1000.0) as u64, Ordering::Relaxed);
         }
 
         // ── xG chain / buildup distribution ──────────────────────────
@@ -3008,6 +3017,7 @@ impl PlayerEventDispatcher {
                     goal_line_z,
                     defending_side,
                     deflected,
+                    save_rolled: false,
                 });
             } else {
                 field.ball.cached_shot_target = None;

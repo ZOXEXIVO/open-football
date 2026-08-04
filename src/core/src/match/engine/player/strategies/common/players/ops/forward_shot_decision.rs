@@ -170,6 +170,130 @@ pub mod time_band_diag {
     /// Willingness-roll attempts reaching the RNG in the forward shot
     /// helper — the volume signal BEFORE gates fire.
     pub static ROLL_REACHED_BY_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
+
+    /// Shots / xG / goals bucketed by DISTANCE from goal rather than
+    /// minute. Bands (1u = 0.125m): 0 = <6m, 1 = 6-11m, 2 = 11-16.5m
+    /// (box edge), 3 = 16.5-22m, 4 = 22-30m, 5 = 30m+. Real Opta shot
+    /// mix is roughly 15 / 25 / 22 / 20 / 13 / 5 %, i.e. ~40% of shots
+    /// come from OUTSIDE the box. An engine that concentrates its shots
+    /// in bands 0-1 is manufacturing sitters, which shows up as
+    /// inflated xG/shot and inflated rating tails no matter how the
+    /// willingness dials are set.
+    pub static SHOTS_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static XG_X1000_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Willingness rolls that REACHED the RNG, by distance band. Read
+    /// against SHOTS_BY_DIST this separates "the ball is never out
+    /// there in a shooting posture" (rolls concentrated close) from
+    /// "players decline long shots" (rolls spread, shots close).
+    pub static ROLLS_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Helper CALLS by distance, counted before any gate. Read against
+    /// ROLLS_BY_DIST this separates "no shot decision is even offered
+    /// out here" (calls low) from "offered but gated" (calls high,
+    /// rolls low).
+    pub static CALLS_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Shot decisions the helper APPROVED, by band. Compared against
+    /// SHOTS_BY_DIST (shots actually emitted) this isolates loss that
+    /// happens AFTER approval — in the caller's branch or the Shooting
+    /// state — from loss inside the decision itself.
+    pub static APPROVED_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Ticks the ball was OWNED by a player, bucketed by that owner's
+    /// distance to the goal he is attacking. This is possession
+    /// geography itself — the ground truth behind the shot mix. Real
+    /// football spends most of its possession outside 22m; if this
+    /// histogram is bottom-heavy the shot mix cannot be fixed by any
+    /// shot-side dial.
+    pub static POSSESSION_TICKS_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+
+    /// Per-distance-band sums (x1000) of each multiplicative factor in
+    /// the willingness product, so the distance-correlated suppressor
+    /// can be READ rather than guessed at. Order:
+    /// 0 base, 1 xg_boost, 2 clarity_mult, 3 body_control_mult,
+    /// 4 condition_mult, 5 gk_context_mult, 6 balance_factor,
+    /// 7 psychology, 8 final willingness.
+    pub const WFACTORS: usize = 9;
+    const ZERO_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static WILL_FACTOR_SUM: [[AtomicU64; BANDS]; WFACTORS] = [ZERO_BAND; WFACTORS];
+
+    /// Why a shot decision was rejected, PER DISTANCE BAND. Aggregate
+    /// waterfall totals hide band-specific blockers: a reason that is
+    /// 8% of all rejections can still be 90% of them at 22-30m.
+    /// Order: 0 far, 1 min_xg, 2 inside_six_xg, 3 no_clear, 4 pass_defer.
+    pub const REASONS: usize = 5;
+    pub static REJECT_BY_DIST: [[AtomicU64; BANDS]; REASONS] = [ZERO_BAND; REASONS];
+
+    #[inline]
+    pub fn record_reject(reason: usize, distance: f32) {
+        REJECT_BY_DIST[reason][band_for_distance(distance)].fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn reject_snapshot() -> [[u64; BANDS]; REASONS] {
+        let mut out = [[0u64; BANDS]; REASONS];
+        for r in 0..REASONS {
+            for b in 0..BANDS {
+                out[r][b] = REJECT_BY_DIST[r][b].load(Ordering::Relaxed);
+            }
+        }
+        out
+    }
+
+    /// Record one sample of the willingness factor vector.
+    #[inline]
+    pub fn record_will_factors(band: usize, f: [f32; WFACTORS]) {
+        for (i, v) in f.iter().enumerate() {
+            // x1e6: willingness values run ~1e-4, so a x1000 scale
+            // truncated them to zero and made weak-team factor tables
+            // unreadable.
+            WILL_FACTOR_SUM[i][band].fetch_add((v * 1_000_000.0) as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// Mean of each factor per band (divide by the band's roll count).
+    pub fn will_factor_snapshot() -> [[u64; BANDS]; WFACTORS] {
+        let mut out = [[0u64; BANDS]; WFACTORS];
+        for i in 0..WFACTORS {
+            for b in 0..BANDS {
+                out[i][b] = WILL_FACTOR_SUM[i][b].load(Ordering::Relaxed);
+            }
+        }
+        out
+    }
+
+    /// Distance band for a goal-distance in field units.
+    #[inline]
+    pub fn band_for_distance(units: f32) -> usize {
+        if units < 48.0 {
+            0
+        } else if units < 88.0 {
+            1
+        } else if units < 132.0 {
+            2
+        } else if units < 176.0 {
+            3
+        } else if units < 240.0 {
+            4
+        } else {
+            5
+        }
+    }
+
+    /// [shots, xg_x1000, rolls, calls, possession, approved] per band.
+    pub fn distance_snapshot() -> [[u64; BANDS]; 6] {
+        let load = |arr: &[AtomicU64; BANDS]| {
+            let mut out = [0u64; BANDS];
+            for (o, a) in out.iter_mut().zip(arr.iter()) {
+                *o = a.load(Ordering::Relaxed);
+            }
+            out
+        };
+        [
+            load(&SHOTS_BY_DIST),
+            load(&XG_X1000_BY_DIST),
+            load(&ROLLS_BY_DIST),
+            load(&CALLS_BY_DIST),
+            load(&POSSESSION_TICKS_BY_DIST),
+            load(&APPROVED_BY_DIST),
+        ]
+    }
     /// Condition samples per band per position group (0=GK 1=DEF 2=MID
     /// 3=FWD): summed condition (0..10000) and sample count. Sampled at
     /// a coarse cadence from the engine loop so the harness can print
@@ -191,12 +315,23 @@ pub mod time_band_diag {
     }
 
     pub fn reset() {
+        for arr in WILL_FACTOR_SUM.iter().chain(REJECT_BY_DIST.iter()) {
+            for a in arr.iter() {
+                a.store(0, Ordering::Relaxed);
+            }
+        }
         for arr in [
             &SHOTS_BY_BAND,
             &ON_TARGET_BY_BAND,
             &XG_X1000_BY_BAND,
             &GOALS_BY_BAND,
             &ROLL_REACHED_BY_BAND,
+            &SHOTS_BY_DIST,
+            &XG_X1000_BY_DIST,
+            &ROLLS_BY_DIST,
+            &CALLS_BY_DIST,
+            &APPROVED_BY_DIST,
+            &POSSESSION_TICKS_BY_DIST,
         ] {
             for a in arr.iter() {
                 a.store(0, Ordering::Relaxed);
@@ -319,11 +454,16 @@ pub fn evaluate_forward_shot_decision(
     }
 
     let distance = ctx.ball().distance_to_opponent_goal();
+    #[cfg(feature = "match-logs")]
+    time_band_diag::CALLS_BY_DIST[time_band_diag::band_for_distance(distance)]
+        .fetch_add(1, Ordering::Relaxed);
     // Anything beyond the absolute long-range cap is hopeless even
     // for elite long-shooters — keep the ball.
-    if distance > 230.0 {
+    if distance > 320.0 {
         #[cfg(feature = "match-logs")]
         helper_diag::HOLD_FAR.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "match-logs")]
+        time_band_diag::record_reject(0, distance);
         return ShotDecision::Hold;
     }
 
@@ -361,6 +501,15 @@ pub fn evaluate_forward_shot_decision(
     // attempts are rejected outright; the inside-six bypass below
     // applies a skill-graded floor instead of letting any tap-in pass.
     let xg = profile.expected_xg(distance, ctx.player().has_clear_shot());
+    // Chance value used by the min_xg GATE. `expected_xg` multiplies by
+    // 0.35 when the lane is not clear — correct for the chance itself,
+    // but the gate asks a different question: "is this a shooting
+    // POSITION worth using?" Obstruction is already priced twice
+    // downstream (clarity_mult on willingness, and `xg` itself feeding
+    // quality_pull), so charging it a third time against the floor
+    // rejected 89.6% of all decisions at 22-30m — measured, and the
+    // single largest remaining reason the engine takes no long shots.
+    let location_xg = profile.expected_xg(distance, true);
     // Skill-graded xG floor — heavy penalty for poor finishers, soft
     // ceiling for elites. The floor must accommodate THREE distance
     // bands: inside-box (<= 36u, xG 0.10–0.40), mid-range (36..60u,
@@ -391,17 +540,24 @@ pub fn evaluate_forward_shot_decision(
     } else if distance <= 132.0 {
         0.055
     } else if distance <= 200.0 {
-        0.032
+        0.018
     } else {
-        0.022
+        0.008
     };
-    let mut min_xg = distance_floor_base - execution_skill * 0.020
-        + pressure_penalty * 0.020
-        + sprint_penalty_term * 0.015
-        + low_condition_penalty * 0.015;
-    // Selection nudge: a high-selection player demands a slightly
-    // higher floor (better chooser); a low-selection player gambles.
-    min_xg += (selection - 0.5) * 0.018;
+    // Situational adjustments are PROPORTIONAL, not absolute. As fixed
+    // constants they summed to as much as +0.06 on a long-range base of
+    // 0.008, so at 25m — where a real chance is worth ~0.04 xG — the
+    // floor routinely exceeded the chance itself and rejected 86% of
+    // shot decisions out there before any roll. "How much better than
+    // the floor must this chance be" is a ratio, not a fixed quantity.
+    // Selection nudge: a high-selection player demands a higher floor
+    // (better chooser); a low-selection player gambles.
+    let situational = 1.0 - execution_skill * 0.25
+        + pressure_penalty * 0.25
+        + sprint_penalty_term * 0.20
+        + low_condition_penalty * 0.20
+        + (selection - 0.5) * 0.22;
+    let mut min_xg = distance_floor_base * situational.clamp(0.55, 1.85);
     // Clamp by skill tier (distance-relative).
     let (lo, hi) = if execution_skill < 0.25 {
         if distance > 60.0 {
@@ -439,22 +595,44 @@ pub fn evaluate_forward_shot_decision(
     // Inside-six floor: skill-graded, so a 5/20 player floors near 0.15
     // instead of inheriting the unconditional 0.30 free pass.
     let inside_six_floor = 0.12 + execution_skill * 0.28;
-    if !inside_six && xg < min_xg {
+    if !inside_six && location_xg < min_xg {
         #[cfg(feature = "match-logs")]
         helper_diag::HOLD_XG.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "match-logs")]
+        time_band_diag::record_reject(1, distance);
         return ShotDecision::Hold;
     }
     if inside_six && xg < (inside_six_floor.min(min_xg)) {
         #[cfg(feature = "match-logs")]
         helper_diag::HOLD_INSIDE_SIX_XG.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "match-logs")]
+        time_band_diag::record_reject(2, distance);
         return ShotDecision::Hold;
     }
 
     // ── Clear shot ────────────────────────────────────────────────────
+    // Clarity is a CONTINUOUS signal, not a veto. Requiring a fully
+    // clear lane rejected ~95% of long-range decisions (measured: at
+    // 22-30m the helper was called on 8.9% of all calls but only 0.4%
+    // reached the roll), which is why the engine produced literally
+    // zero shots from outside the box against a real ~40% share. Real
+    // players strike from 25m through traffic — the deflection risk is
+    // priced into the chance, not used to forbid the attempt. Only a
+    // genuinely blocked lane (a defender basically standing in front
+    // of the ball) still vetoes; everything else is handled by
+    // `clarity_mult` scaling willingness below.
     let clarity = ctx.player().shot_clarity();
-    if !ctx.player().has_clear_shot() && !inside_six {
+    // Threshold sits just above `shot_clarity`'s own blind-shot early
+    // return: clarity blends the goal's VISIBLE ANGLE (which shrinks
+    // with distance by geometry — 0.18-0.25 at 22-30m before any
+    // defender is involved) with lane occlusion, so any meaningful
+    // threshold here silently vetoes long range. Occlusion is priced
+    // through `clarity_mult` on willingness instead.
+    if clarity < 0.06 && !inside_six {
         #[cfg(feature = "match-logs")]
         helper_diag::HOLD_NO_CLEAR.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "match-logs")]
+        time_band_diag::record_reject(3, distance);
         return ShotDecision::Hold;
     }
 
@@ -552,6 +730,8 @@ pub fn evaluate_forward_shot_decision(
     if !point_blank && capped_pass_ev > xg + margin {
         #[cfg(feature = "match-logs")]
         helper_diag::PASS_DEFERRAL.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "match-logs")]
+        time_band_diag::record_reject(4, distance);
         return ShotDecision::Pass;
     }
 
@@ -651,14 +831,56 @@ pub fn evaluate_forward_shot_decision(
     // the skill terms keep their relative steepness (selection remains
     // the dominant chooser signal).
     let base_willingness =
-        0.00075 + selection * 0.0027 + composure_skill * 0.0012 + execution_skill * 0.0016;
+        0.00034 + selection * 0.00072 + composure_skill * 0.00032 + execution_skill * 0.00044;
     // xg_boost — floor 0.30 (vs prior 0.50). Mid-range chance with
     // xG=0.06 gets 0.30 boost (was 0.50 — ~40% reduction). Clear-shot
     // xG=0.10 gets 0.50 (was 0.50 — no change). High-xG xG≥0.28 gets
     // 1.40 (cap unchanged). Net effect: speculative low-xG shots cut
     // ~40%, high-xG kept intact — preserves line balance better than
     // a deep floor cut.
-    let xg_boost = (xg / 0.26).clamp(0.22, 1.40);
+    // Flattened (was clamp 0.22-1.40): the steep version made a 6m look
+    // six times likelier per tick than a 20m look, and since the ball
+    // already spends far more ticks close to goal the two compounded
+    // into a shot mix of 86% inside 11m. Real shot selection varies far
+    // less by distance than xG does — what varies is how often each
+    // opportunity ARISES.
+    //
+    // Even flattened, a pure-xG pull collapsed the fire rate 27x from
+    // the six-yard box to the edge of the D (measured: 16.2 shots per
+    // 1000 rolls at <6m vs 0.6 at 16.5-22m) while chance quality only
+    // falls 5x — so the engine produced ZERO attempts from outside the
+    // box against a real ~40% share. The missing half of the decision
+    // is that long-range shooting is not an xG judgement at all: a
+    // player 22m out with the lane open and a shot in his locker
+    // strikes it, and that is exactly the shot real football rewards
+    // with the spectacular goals. Model it as two additive pulls —
+    // chance quality, which dominates near goal, plus a range pull
+    // that grows with distance and is gated by SPACE and the player's
+    // own striking ability. The skill gate is what keeps this honest:
+    // a poor long-shooter gets a quarter of the range pull an elite
+    // one does, so weak players don't spray 25-yarders.
+    let range_ratio = (distance / 132.0).clamp(0.0, 2.0);
+    let quality_pull = (xg / 0.26).clamp(0.0, 1.15);
+    // NB: deliberately NOT multiplied by `clarity` — that value blends
+    // the goal's visible angle, which shrinks with distance by pure
+    // geometry, so scaling the range term by it made the term
+    // self-cancelling. Lane occlusion is already priced by
+    // `clarity_mult` below; this term is about range and striking
+    // ability only.
+    // Superlinear in range: an attack that ENDS in a strike from 20m
+    // never carries on into the six-yard box, so this term is also the
+    // lever on possession geography, not just on the mix. Measured:
+    // 13.2% of all possession sat 6-11m from goal (real football ~3-5%)
+    // because attacks kept advancing until someone was close enough to
+    // satisfy a quality-only shot preference. Still skill-gated, so a
+    // poor striker does not spray 25-yarders.
+    // Constant term raised / slope lowered: the previous 1.05+2.90 split
+    // left a youth-level striker (execution ~0.2) with barely half the
+    // range pull of a senior pro, so L6 outside-box share collapsed to
+    // 2% while L14 reached 15%. Skill should make a long shot BETTER,
+    // not decide whether the option exists at all.
+    let range_pull = range_ratio.powf(1.8) * (1.85 + execution_skill * 1.90);
+    let xg_boost = (quality_pull + range_pull).clamp(0.30, 5.00);
     let clarity_mult = 0.50 + clarity * 0.50;
     let body_control_mult = (0.65 + body_control * 0.40).clamp(0.60, 1.05);
     // Condition slope softened 0.55 → 0.25. Fatigue already hits this
@@ -705,7 +927,7 @@ pub fn evaluate_forward_shot_decision(
         // floor fired within 2-10 ticks (~0.1s), i.e. instantly, and
         // once inside_six widened to the real 5.5m six-yard box it
         // became the dominant shot source on the pitch.
-        let inside_six_will_floor = (0.02 + execution_skill * 0.06).clamp(0.02, 0.08);
+        let inside_six_will_floor = (0.002 + execution_skill * 0.006).clamp(0.002, 0.008);
         willingness = willingness.max(inside_six_will_floor);
     }
 
@@ -818,6 +1040,22 @@ pub fn evaluate_forward_shot_decision(
     {
         use std::sync::atomic::Ordering;
         helper_diag::REACHED_ROLL.fetch_add(1, Ordering::Relaxed);
+        let dband = time_band_diag::band_for_distance(distance);
+        time_band_diag::ROLLS_BY_DIST[dband].fetch_add(1, Ordering::Relaxed);
+        time_band_diag::record_will_factors(
+            dband,
+            [
+                base_willingness,
+                xg_boost,
+                clarity_mult,
+                body_control_mult,
+                condition_mult,
+                gk_context_mult,
+                balance_factor,
+                Psychology::initiative_for(&ctx.context.psychology, ctx.player.id),
+                willingness,
+            ],
+        );
         helper_diag::SUM_XG_X1000.fetch_add((xg * 1000.0) as u64, Ordering::Relaxed);
         helper_diag::SUM_WILLINGNESS_X1000
             .fetch_add((willingness * 1000.0) as u64, Ordering::Relaxed);
@@ -829,6 +1067,9 @@ pub fn evaluate_forward_shot_decision(
     if ctx.context.rng.unit_f32() < willingness {
         #[cfg(feature = "match-logs")]
         helper_diag::ROLL_PASSED.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "match-logs")]
+        time_band_diag::APPROVED_BY_DIST[time_band_diag::band_for_distance(distance)]
+            .fetch_add(1, Ordering::Relaxed);
         ShotDecision::Shoot { reason: tag }
     } else {
         ShotDecision::Hold

@@ -31,7 +31,13 @@ impl Ball {
 
         // Ground friction: affects rolling balls (proportional to v for smooth deceleration)
         // A real football on grass decelerates at about 0.5-1.5 m/s² depending on grass conditions
-        const GROUND_FRICTION_COEFFICIENT: f32 = 0.015; // Smooth velocity-proportional friction
+        // Velocity-proportional rolling decay per 10ms tick. 0.015 meant a
+        // 78% speed loss PER SECOND (real grass: ~15%), which capped any
+        // ground pass at v0/k = 26m and forced every attack to advance by
+        // carrying — the root cause of 86% of shots coming from inside 11m.
+        // 0.006 lifts the ceiling to ~37m with the pass-power inversion in
+        // `calculate_horizontal_velocity` rescaled in step.
+        const GROUND_FRICTION_COEFFICIENT: f32 = 0.006;
 
         // CRITICAL: Global velocity sanity check - prevent cosmic-speed balls
         // Check for NaN or infinity and reset to zero
