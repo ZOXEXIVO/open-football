@@ -24,6 +24,7 @@
 //! manager's selection choices.
 
 use super::age_curve::*;
+use super::ceilings::maturation_group;
 use super::coaching::CoachingEffect;
 use super::maturity::MaturityModel;
 use super::modifiers::*;
@@ -31,6 +32,7 @@ use super::position_weights::*;
 use super::rolls::{RollSource, ThreadRolls};
 use super::skills_array::*;
 
+use crate::club::player::maturation::SkillMaturation;
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
 use chrono::{Datelike, NaiveDate};
@@ -205,8 +207,17 @@ impl Player {
             let peak_offset = individual_peak_offset(i);
             let effective_age = (age as i16 - peak_offset as i16).clamp(14, 45) as u8;
 
-            // Per-skill ceiling: position weight determines how high this skill can go.
-            let skill_ceiling = (base_ceiling * dev_weights[i]).clamp(1.0, 20.0);
+            // Per-skill ceiling: position weight determines how high this
+            // skill can go, and maturation determines how much of that a
+            // player this age has grown into. Potential says where he
+            // finishes; it never said when. Without the age term a boy
+            // grew his decisions and composure to a finished
+            // professional's level while still in an academy — the same
+            // player the generator would have built at 0.55 of it — and
+            // then played, and rated, like the man he had not become.
+            // Both halves now read `SkillMaturation`.
+            let maturity = SkillMaturation::ratio(age as u32, maturation_group(cat));
+            let skill_ceiling = (base_ceiling * dev_weights[i] * maturity).clamp(1.0, 20.0);
 
             // Per-skill gap factor (replaces global PA-CA gap).
             let gap = DevelopmentModifiers::skill_gap_factor(skills[i], skill_ceiling);

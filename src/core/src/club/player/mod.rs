@@ -10,6 +10,7 @@ pub mod happiness;
 pub mod injury;
 pub mod lifecycle;
 pub mod mailbox;
+pub mod maturation;
 pub mod personality;
 pub mod squad;
 pub mod statistics;

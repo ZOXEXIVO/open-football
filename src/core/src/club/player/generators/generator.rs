@@ -1,6 +1,7 @@
 use crate::Goalkeeping;
 use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::load::PlayerLoad;
+use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
 use crate::club::player::rapport::PlayerRapport;
 use crate::shared::FullName;
 use crate::utils::IntegerUtils;
@@ -1288,34 +1289,14 @@ impl PlayerGenerator {
         // PA → target skill level at peak (PA 1→1, PA 100→10.5, PA 200→20)
         let pa_final = (pa - 1.0) / 199.0 * 19.0 + 1.0;
 
-        // Age-dependent development ratio per skill group
-        let tech_age_ratio = match age {
-            0..=17 => 0.75,
-            18..=19 => 0.82,
-            20..=22 => 0.90,
-            23..=26 => 0.95,
-            27..=29 => 1.0,
-            30..=32 => 0.97,
-            _ => 0.93,
-        };
-        let mental_age_ratio = match age {
-            0..=17 => 0.55,
-            18..=19 => 0.62,
-            20..=22 => 0.72,
-            23..=26 => 0.85,
-            27..=29 => 0.95,
-            30..=32 => 1.0,
-            _ => 1.0,
-        };
-        let physical_age_ratio = match age {
-            0..=17 => 0.70,
-            18..=19 => 0.78,
-            20..=22 => 0.88,
-            23..=26 => 0.95,
-            27..=29 => 1.0,
-            30..=32 => 0.93,
-            _ => 0.82,
-        };
+        // Age-dependent development ratio per skill group. The table lives
+        // on `SkillMaturation` so the development tick's per-skill ceiling
+        // reads the SAME curve — the two used to disagree, and an academy
+        // player could be developed to a full adult mind years before the
+        // generator would have built him one.
+        let tech_age_ratio = SkillMaturation::ratio(age, MaturationGroup::Technical);
+        let mental_age_ratio = SkillMaturation::ratio(age, MaturationGroup::Mental);
+        let physical_age_ratio = SkillMaturation::ratio(age, MaturationGroup::Physical);
 
         // Group means: pure PA-driven
         let tech_mean = pa_final * tech_age_ratio;

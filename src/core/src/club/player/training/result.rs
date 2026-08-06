@@ -116,7 +116,10 @@ impl PlayerTrainingResult {
             // push a skill past the profile the tick would allow. A value
             // already above its ceiling (import, legacy state) is frozen at
             // its current level, never cut.
-            let ceilings = PositionalSkillCeilings::for_player(player);
+            let ceilings = PositionalSkillCeilings::for_player(
+                player,
+                DateUtils::age(player.birth_date, current_date) as u32,
+            );
             let raise = |current: f32, gain: f32, key: SkillKey| -> f32 {
                 let ceiling = ceilings.get(key).max(current);
                 (current + gain * growth_factor)

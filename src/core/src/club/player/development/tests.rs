@@ -1,3 +1,4 @@
+use super::ceilings::PositionalSkillCeilings;
 use super::coaching::CoachingEffect;
 use super::modifiers::*;
 use super::position_weights::*;
@@ -1309,4 +1310,120 @@ fn friendly_only_play_is_not_worse_than_no_play() {
         official_only > friendly_only,
         "competitive football must outrank friendlies"
     );
+}
+
+// ── Maturation: potential says where, not when ────────────────────
+//
+// The live symptom these pin: a seventeen-year-old with no career
+// appearances, loaned abroad, playing at a settled senior standard from
+// his first match — because the per-skill ceiling read potential alone
+// and let an academy grow him a finished professional's mind.
+
+#[test]
+fn teenage_ceiling_holds_the_mind_back_but_not_the_body() {
+    let boy = make_player(
+        d(2009, 1, 1),
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        180,
+        PersonAttributes::default(),
+    );
+    let young = PositionalSkillCeilings::for_player(&boy, 17);
+    let peak = PositionalSkillCeilings::for_player(&boy, 28);
+
+    let mind_young = young.get(SkillKey::Decisions);
+    let mind_peak = peak.get(SkillKey::Decisions);
+    let body_young = young.get(SkillKey::Pace);
+    let body_peak = peak.get(SkillKey::Pace);
+
+    assert!(
+        mind_young < mind_peak * 0.65,
+        "a 17-year-old's decision-making ceiling must sit far below his peak — \
+         {mind_young} vs {mind_peak}"
+    );
+    // The body is much closer to finished than the mind at the same age.
+    let mind_share = mind_young / mind_peak;
+    let body_share = body_young / body_peak;
+    assert!(
+        body_share > mind_share,
+        "legs mature before the head — body at {body_share:.2} of peak, \
+         mind at {mind_share:.2}"
+    );
+}
+
+/// Ceilings gate growth, they never confiscate. An existing save whose
+/// teenager is already above the new age ceiling keeps every point.
+#[test]
+fn age_ceiling_never_cuts_what_a_player_already_has() {
+    let mut skills = baseline_skills();
+    skills.mental.decisions = 17.0;
+    let prodigy = make_player(
+        d(2009, 1, 1),
+        PlayerPositionType::MidfielderCenter,
+        skills,
+        180,
+        PersonAttributes::default(),
+    );
+    let ceilings = PositionalSkillCeilings::for_player(&prodigy, 17);
+    let ceiling = ceilings.get(SkillKey::Decisions);
+    assert!(
+        ceiling < 17.0,
+        "the age ceiling should sit below his current 17.0"
+    );
+    // This is the contract every caller applies (`ceiling.max(current)`):
+    // the effective bound is his existing level, so he freezes, not falls.
+    assert_eq!(ceiling.max(17.0), 17.0);
+}
+
+/// A keeper's craft matures latest of all — the reported player was a
+/// seventeen-year-old goalkeeper.
+#[test]
+fn teenage_keeper_cannot_reach_a_senior_handling_ceiling() {
+    // PA kept clear of the absolute 20.0 clamp: a keeper's handling
+    // weight would otherwise peg both ends at 20 and hide the curve.
+    let boy = make_player(
+        d(2009, 1, 1),
+        PlayerPositionType::Goalkeeper,
+        gk_skills(),
+        120,
+        PersonAttributes::default(),
+    );
+    let young = PositionalSkillCeilings::for_player(&boy, 17).get(SkillKey::GkHandling);
+    let peak = PositionalSkillCeilings::for_player(&boy, 31).get(SkillKey::GkHandling);
+    assert!(
+        young < peak * 0.7,
+        "a 17-year-old keeper's handling ceiling must trail his peak — {young} vs {peak}"
+    );
+}
+
+/// Diagnostic: the per-skill ceiling a given potential allows at each
+/// age, so a calibration pass can see the maturation curve in real
+/// attribute points rather than as a ratio.
+///
+/// `cargo test -p core --lib dump_maturation_ceilings -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn dump_maturation_ceilings() {
+    let cm = make_player(
+        d(2009, 1, 1),
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        160,
+        PersonAttributes::default(),
+    );
+    println!("PA 160 central midfielder — ceiling by age");
+    println!(
+        "{:>4} {:>10} {:>10} {:>10}",
+        "age", "decisions", "passing", "pace"
+    );
+    for age in [16u32, 17, 19, 21, 24, 28, 31] {
+        let c = PositionalSkillCeilings::for_player(&cm, age);
+        println!(
+            "{:>4} {:>10.2} {:>10.2} {:>10.2}",
+            age,
+            c.get(SkillKey::Decisions),
+            c.get(SkillKey::Passing),
+            c.get(SkillKey::Pace),
+        );
+    }
 }
