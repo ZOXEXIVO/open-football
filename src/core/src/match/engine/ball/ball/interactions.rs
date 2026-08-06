@@ -19,6 +19,79 @@ use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
 
+/// The physics-layer shot-stopping curve.
+///
+/// Kept on a struct rather than inline in [`Ball::try_save_shot`] so the
+/// live path and the spread regression test read the SAME numbers. The
+/// inline version was flattened to a 4.8%-wide skill band at one point
+/// and nothing caught it: no test pinned the slope, and equal-level
+/// harness runs can't see it (both keepers are equally good, so the
+/// population save% is unchanged whatever the slope is). The gap only
+/// shows when quality differs — which is the normal case on the live
+/// site, and the reason youth keepers were performing like
+/// internationals.
+pub(crate) struct SaveModel;
+
+impl SaveModel {
+    /// Geometric ceiling for a dead-centre shot. Pure geometry — the
+    /// keeper is standing where the ball is going.
+    const CENTRED_BASE: f32 = 0.88;
+    /// How much of that ceiling a full-stretch shot gives away.
+    const STRETCH_PENALTY: f32 = 0.58;
+    /// Save probability for the worst keeper alive on a centred shot,
+    /// before geometry: `SKILL_FLOOR`. Real weak top-flight keepers save
+    /// ~58% of what they face across a season; elite ones ~78%.
+    const SKILL_FLOOR: f32 = 0.54;
+    /// Width of the keeper-quality band. Mean skill (0.5) lands on
+    /// 0.68 — the multiplier the ~67% population save rate is
+    /// calibrated on — so restoring the spread is calibration-neutral
+    /// at the population mean while the tails move where they should.
+    const SKILL_SLOPE: f32 = 0.28;
+    const MIN_SAVE: f32 = 0.08;
+    const MAX_SAVE: f32 = 0.92;
+
+    /// Geometric save chance by how far the keeper has to stretch
+    /// (0 = shot straight at him, 1 = at the limit of his reach).
+    #[inline]
+    pub(crate) fn geometric_base(reach_ratio: f32) -> f32 {
+        let r = reach_ratio.clamp(0.0, 1.0);
+        Self::CENTRED_BASE - r * r * Self::STRETCH_PENALTY
+    }
+
+    /// Keeper-quality multiplier on the geometric chance. `skill` is the
+    /// `gk_shot_stopping` composite in 0..1.
+    ///
+    /// Level-to-level parity (~67% save rate in every division) must
+    /// come from shot quality scaling with the shooters — placement and
+    /// power both feed the geometry and speed terms — NOT from deleting
+    /// the keeper axis. A flat multiplier buys parity by making every
+    /// keeper the same keeper.
+    #[inline]
+    pub(crate) fn skill_multiplier(skill: f32) -> f32 {
+        Self::SKILL_FLOOR + skill.clamp(0.0, 1.0) * Self::SKILL_SLOPE
+    }
+
+    /// Full per-shot save probability for the physics roll.
+    #[inline]
+    pub(crate) fn save_probability(
+        reach_ratio: f32,
+        speed_penalty: f32,
+        skill: f32,
+        env_handling_delta: f32,
+    ) -> f32 {
+        ((Self::geometric_base(reach_ratio) - speed_penalty) * Self::skill_multiplier(skill)
+            + env_handling_delta)
+            .clamp(Self::MIN_SAVE, Self::MAX_SAVE)
+    }
+
+    /// Reference point for the spread guard: an ordinary centred shot,
+    /// no speed penalty, no weather.
+    #[inline]
+    pub(crate) fn centred_save_probability(skill: f32) -> f32 {
+        Self::save_probability(0.0, 0.0, skill, 0.0)
+    }
+}
+
 impl Ball {
     /// Opposing players near the ball's flight path can intercept passes.
     /// Interception chance depends on tackling, anticipation, positioning skills
@@ -650,84 +723,45 @@ impl Ball {
         // Base save chance. Centered shot ~0.88; full-stretch ~0.30.
         // Skill handles the rest; this curve is purely geometry.
         let reach_ratio = (lateral_error / reach).clamp(0.0, 1.0);
-        let base = 0.88 - reach_ratio * reach_ratio * 0.58;
 
         // Shot-speed penalty — elite shots beat keepers more often.
         let ball_speed = self.velocity.norm();
         let speed_excess = (ball_speed - 3.0).max(0.0);
         let speed_penalty = (speed_excess * 0.08 * (1.0 - scaled_reflexes * 0.5)).min(0.40);
 
-        // Skill multiplier. Floor 0.72 so a 1.0-skill keeper still saves
-        // ~60% of centred shots (real weak keepers save 55-65% overall).
-        // Old `0.6 + skill*0.5` gave a 40% floor, pushing youth matches
-        // with hnd=1.0 / ref=1.0 GKs into 10-goal blowouts. At 0.72 →
-        // 1.07, skill matters (10-pt skill gap = ~30% save-rate gap)
-        // but weak keepers can't single-handedly lose 13-4.
-        //
-        // The composite blend (`gk_shot_stopping`) feeds reflexes,
-        // handling, agility, positioning, concentration, anticipation
-        // and one_on_ones through `effective_skill` so a tired keeper
-        // late in the match plays worse — drop-in replacement for the
-        // legacy 3-skill blend, magnitude tuned to the same band.
+        // Keeper quality. The composite blend (`gk_shot_stopping`) feeds
+        // reflexes, handling, agility, positioning, concentration,
+        // anticipation and one_on_ones through `effective_skill`, so a
+        // tired keeper late in the match plays worse.
         let skill = sc::gk_shot_stopping(keeper, minute_for_effective);
-        // Per-tick save rate. This save check runs every tick the ball
-        // is within reach of the goal line, AND the GK state-machine
-        // (Catching, Diving) runs its OWN per-tick save roll. Both
-        // compound across the 5-15 ticks of shot flight.
-        //
-        // Calibration target: per-shot conversion ~12-15% (real Opta
-        // ~12% of shots are goals, ~33% on target with 30-35% of those
-        // being saves). Earlier `0.45 + 0.35*skill` clamped at 0.55
-        // produced top-scorer rates of 1.5+ goals/match — too generous.
-        // New `0.55 + 0.40*skill` clamped at 0.68 lifts the per-tick
-        // floor for any GK on the pitch (a Reflexes-5 keeper still
-        // makes routine saves) and raises the ceiling so elite GKs
-        // stop the centred power shots they're paid to stop. Skill
-        // gap stays 10pt → ~30% save-rate gap.
-        // Trimmed `0.55 + skill*0.40` → `0.50 + skill*0.30` after
-        // dev_match audits showed population save% at 79% vs real ~67%
-        // AND elite-keeper save% at extreme skill gaps inflated to ~91%
-        // (real ~75-80%), driving the gap-9+ upset rate to 0% vs real
-        // ~9%. The previous 0.36 coefficient on the skill term was the
-        // dominant lever crushing weak-team conversion. Pulling it to
-        // 0.30 narrows the strong-vs-weak save spread while leaving the
-        // equal-skill baseline (skill_mult ≈ 0.65 at skill 0.5) in the
-        // same band as before.
-        // Retrimmed `0.52 + skill*0.32` → `0.36 + skill*0.22`. This roll
-        // compounds once per tick the keeper is within reach, so its
-        // calibration is a function of how many ticks that is — and the
-        // state-machine repair lengthened that window on both ends: a
-        // keeper committed to a dive is no longer yanked away by the
-        // loose-ball override mid-save, and one chasing a loose ball
-        // moves at the `Active` speed band instead of the idle one.
-        // Measured population saves/on-target went 74.9% → 83.8% (real
-        // ~67%) on the same fixtures with the save MODEL untouched. The
-        // ~32% cut to the per-tick rate restores the intended cumulative
-        // per-shot conversion across the now-longer window.
-        // (A brief second notch to 0.41+0.25 was reverted: the forward
-        // conversion collapse it tried to compensate turned out to be the
-        // Finishing state's direction-as-target bug, not keeper strength.
-        // With that fixed, this level holds goals/match near 2.5.)
         // Per-SHOT save probability (single roll — see `save_rolled`).
-        // Calibrated so a centred shot against an average keeper saves
-        // ~66%, a weak keeper ~53% and an elite one ~79% — the real
-        // save%-on-target band. The old 0.44+0.27 was a per-TICK rate
-        // whose meaning changed every time state timing moved.
-        // Flatter skill slope: the steeper version gave a youth keeper
-        // 58% saves vs a senior 69% (real spread is ~60-75%), so weak
-        // leagues ran hot on goals.
-        // Slope flattened: keeper skill was outrunning shooter skill, so
-        // senior save% ran 73% while youth sat correctly at 67-68%. Real
-        // football holds ~67% at every level because both sides improve
-        // together.
-        let skill_mult = 0.667 + skill * 0.032;
+        // The curve lives on `SaveModel` so it can be pinned by test.
+        //
+        // History worth keeping: this slope has been flattened twice to
+        // buy level-to-level save% parity, ending at `0.667 + 0.032·skill`
+        // — a 4.8%-wide band between the worst keeper alive and the best.
+        // That does hold ~67% at every level, but only by making keeper
+        // ability irrelevant: a 17-year-old debutant saved shots like an
+        // international and rated like one. Parity has to come from shot
+        // quality scaling with the shooters (placement feeds `reach_ratio`,
+        // power feeds `speed_penalty` — both already do), not from
+        // deleting the axis. Restored to a real spread; the population
+        // mean is unchanged because mean skill lands mid-band.
+        //
+        // NB the save path is LAYERED: this roll compounds with the GK
+        // state machine's own `GkProfile::save_probability` sigmoid
+        // (goalkeeper_skill.rs, deliberately compressed to steepness
+        // 1.40). Keeper quality is restored at THIS boundary only —
+        // cranking both is what caused the oscillation the comment
+        // history in both files records.
+        //
         // Environment shifts keeper handling — heavy rain spills more,
         // wind on cross-claims has a subtler effect (the keeper still
         // sets feet under a regular shot).
         let env_mod = context.environment.modifiers();
         let env_handling_delta = env_mod.goalkeeper_handling;
         let save_prob =
-            ((base - speed_penalty) * skill_mult + env_handling_delta).clamp(0.08, 0.92);
+            SaveModel::save_probability(reach_ratio, speed_penalty, skill, env_handling_delta);
 
         // Latch BEFORE rolling: whatever this roll decides is final for
         // this shot, so a beaten keeper doesn't get a second chance on
@@ -925,5 +959,62 @@ impl Ball {
         self.claim_cooldown = 0;
         self.record_touch(keeper_id, keeper_team, tick, false);
         events.add_ball_event(BallEvent::Intercepted(keeper_id, self.previous_owner));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SaveModel;
+
+    /// The keeper-quality axis must stay wide enough that a youth keeper
+    /// and an international are visibly different players.
+    ///
+    /// This guard exists because the slope was silently flattened to a
+    /// 4.8-point band and no test noticed: equal-level harness runs can't
+    /// see it (both keepers are equally good, so the population save rate
+    /// is identical whatever the slope is), and every other GK test feeds
+    /// hand-built stat lines that never touch this curve. Real
+    /// within-league season save rates run ~58% for the worst regular
+    /// starter to ~78% for an elite one — a ~20-point spread.
+    #[test]
+    fn keeper_skill_spread_stays_wide() {
+        let worst = SaveModel::centred_save_probability(0.0);
+        let best = SaveModel::centred_save_probability(1.0);
+        let spread = best - worst;
+        assert!(
+            spread >= 0.15,
+            "keeper quality must move the save rate by >= 15 points on a centred shot; \
+             worst {worst:.3} best {best:.3} spread {spread:.3}"
+        );
+        assert!(
+            best > worst,
+            "save probability must increase with keeper skill"
+        );
+    }
+
+    /// The restored spread must not move the POPULATION save rate: a
+    /// mid-skill keeper is what the ~67% saves/on-target calibration is
+    /// built on, and every goals-per-match number depends on it.
+    #[test]
+    fn mid_skill_keeper_holds_the_calibrated_band() {
+        let mid = SaveModel::skill_multiplier(0.5);
+        assert!(
+            (0.66..=0.70).contains(&mid),
+            "mean-skill multiplier must stay in the calibrated 0.66-0.70 band, got {mid:.3}"
+        );
+    }
+
+    /// Geometry still dominates placement: a shot at the limit of the
+    /// keeper's reach must be much harder than one hit at him, whoever
+    /// is in goal.
+    #[test]
+    fn stretch_beats_an_elite_keeper_more_than_skill_saves_him() {
+        let elite_stretched = SaveModel::save_probability(1.0, 0.0, 1.0, 0.0);
+        let weak_centred = SaveModel::save_probability(0.0, 0.0, 0.0, 0.0);
+        assert!(
+            elite_stretched < weak_centred,
+            "a full-stretch shot must beat an elite keeper more often than a centred one \
+             beats a weak keeper; elite {elite_stretched:.3} weak {weak_centred:.3}"
+        );
     }
 }
