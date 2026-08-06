@@ -6,9 +6,9 @@ use crate::r#match::engine::psychology::{NegativeEvent, PositiveEvent};
 use crate::r#match::engine::set_pieces::{FreeKickBand, wall_block_prob, wall_size_for};
 use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::events::Event;
+use crate::r#match::player::events::gk_claim::GkClaimContest;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::events::gk_claim::gk_claim_diag;
-use crate::r#match::player::events::gk_claim::GkClaimContest;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::player::strategies::players::ShotSkillInputs;
@@ -798,8 +798,7 @@ impl PlayerEventDispatcher {
                         }
                         direct_assister_id = Some(passer_id);
                         #[cfg(feature = "match-logs")]
-                        key_pass_diag::CREDITED
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        key_pass_diag::CREDITED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     #[cfg(feature = "match-logs")]
                     {
@@ -859,8 +858,7 @@ impl PlayerEventDispatcher {
                     #[cfg(feature = "match-logs")]
                     gk_claim_diag::FLAP_SHOTS_SEEN
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let in_window = now_tick
-                        .saturating_sub(field.ball.pending_failed_claim_tick)
+                    let in_window = now_tick.saturating_sub(field.ball.pending_failed_claim_tick)
                         <= FAILED_CLAIM_WINDOW_TICKS;
                     let gk_team = field.get_player(gk_id).map(|p| p.team_id);
                     if in_window && gk_team.is_some() && gk_team != shooter_team {

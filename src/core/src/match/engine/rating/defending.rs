@@ -138,8 +138,8 @@ impl<'a> RatingContext<'a> {
         // a genuine barrage keeps most of his claim (8-of-10 reads 76%).
         const PRIOR_SHOTS: f32 = 4.0;
         let save_pct_v = if shots_faced >= 3 {
-            let shrunk = (s.saves as f32 + PRIOR_SHOTS * baseline_pct)
-                / (shots_faced as f32 + PRIOR_SHOTS);
+            let shrunk =
+                (s.saves as f32 + PRIOR_SHOTS * baseline_pct) / (shots_faced as f32 + PRIOR_SHOTS);
             let delta = shrunk - baseline_pct;
             if delta > dead_zone {
                 ((delta - dead_zone) * 6.5).min(1.05)

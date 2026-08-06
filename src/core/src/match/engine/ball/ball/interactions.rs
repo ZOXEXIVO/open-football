@@ -297,7 +297,11 @@ impl Ball {
                 self.record_touch(interceptor_id, interceptor_team, tick, true);
                 self.offside_snapshot = None;
                 self.pass_origin_restart = PassOriginRestart::OpenPlay;
-                events.add_ball_event(BallEvent::Intercepted(interceptor_id, self.previous_owner, was_live_shot));
+                events.add_ball_event(BallEvent::Intercepted(
+                    interceptor_id,
+                    self.previous_owner,
+                    was_live_shot,
+                ));
             }
         }
     }
@@ -540,7 +544,11 @@ impl Ball {
             self.current_owner = Some(blocker_id);
             self.flags.in_flight_state = 0;
             self.claim_cooldown = 25;
-            events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner, false));
+            events.add_ball_event(BallEvent::Intercepted(
+                blocker_id,
+                self.previous_owner,
+                false,
+            ));
             return;
         }
 
@@ -1031,7 +1039,11 @@ impl Ball {
         self.flags.in_flight_state = 10;
         self.claim_cooldown = 0;
         self.record_touch(keeper_id, keeper_team, tick, false);
-        events.add_ball_event(BallEvent::Intercepted(keeper_id, self.previous_owner, false));
+        events.add_ball_event(BallEvent::Intercepted(
+            keeper_id,
+            self.previous_owner,
+            false,
+        ));
     }
 }
 

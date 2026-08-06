@@ -135,7 +135,11 @@ impl GkClaimContest {
         let ball_speed = field.ball.velocity.norm();
         let from_cross = field.ball.pending_pass_was_cross;
 
-        let gk_team = field.players.iter().find(|p| p.id == gk_id).map(|p| p.team_id);
+        let gk_team = field
+            .players
+            .iter()
+            .find(|p| p.id == gk_id)
+            .map(|p| p.team_id);
 
         // Traffic: opponents close enough to challenge. Saturating so a
         // crowded six-yard box doesn't run away with the weight.
@@ -183,7 +187,12 @@ impl GkClaimContest {
     /// `minute` routes the composites through `effective_skill`, so a
     /// tired keeper late in the game is more likely to spill — the same
     /// fatigue channel the save model uses.
-    pub fn failure_probability(field: &MatchField, gk_id: u32, situation: &ClaimSituation, minute: u32) -> f32 {
+    pub fn failure_probability(
+        field: &MatchField,
+        gk_id: u32,
+        situation: &ClaimSituation,
+        minute: u32,
+    ) -> f32 {
         let Some(keeper) = field.players.iter().find(|p| p.id == gk_id) else {
             return 0.0;
         };
@@ -198,14 +207,12 @@ impl GkClaimContest {
         // drops balls his reach says he should hold.
         let craft = sc::gk_claim_cross(keeper, minute);
         let mental_ctx = EffSkillCtx::mental(minute);
-        let composure = (effective_skill(keeper, keeper.skills.mental.composure, mental_ctx) / 20.0)
+        let composure = (effective_skill(keeper, keeper.skills.mental.composure, mental_ctx)
+            / 20.0)
             .clamp(0.0, 1.0);
-        let concentration = (effective_skill(
-            keeper,
-            keeper.skills.mental.concentration,
-            mental_ctx,
-        ) / 20.0)
-        .clamp(0.0, 1.0);
+        let concentration =
+            (effective_skill(keeper, keeper.skills.mental.concentration, mental_ctx) / 20.0)
+                .clamp(0.0, 1.0);
         let skill = (craft * 0.62 + composure * 0.20 + concentration * 0.18).clamp(0.0, 1.0);
 
         let shortfall = (1.0 - skill).powf(Self::FAILURE_EXPONENT);
