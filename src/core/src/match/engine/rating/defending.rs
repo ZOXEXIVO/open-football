@@ -114,21 +114,36 @@ impl<'a> RatingContext<'a> {
         let baseline_pct = 0.67;
         let dead_zone = 0.030;
         let shots_faced = self.shots_faced();
-        // Positive slope lifted 2.7 → 3.0 (FM-parity season calibration)
-        // so a genuinely high save percentage under real volume pays a
-        // touch more — the busy-keeper-in-a-loss archetype was compressing
-        // toward the quiet-clean-sheet keeper once CS credit was lifted.
+        // The rate is shrunk toward the population baseline by the size of
+        // the sample it was measured on — the standard empirical-Bayes
+        // estimator, `(saves + K·baseline) / (faced + K)`.
+        //
+        // Shrinkage replaces an ASYMMETRY that was quietly protecting the
+        // population: the positive branch opened at `shots_faced >= 3`
+        // while the negative one needed `>= 5`. A typical engine keeper
+        // faces 3-5 shots, so a good save rate was paid and a bad one was
+        // not — the busy keeper who lets in two of five collected volume
+        // credit with no quality debit, which is precisely how a weak
+        // keeper stayed level with a good one.
+        //
+        // The `>= 5` gate existed for a real case the memory calls
+        // load-bearing: a keeper in a dominant side who concedes one of
+        // the three shots he faced reads as 67% and did nothing wrong.
+        // Shrinkage handles that case properly rather than by rule — over
+        // three shots the estimate barely leaves the baseline — so both
+        // branches can now open at the same honest sample size.
+        //
+        // K = 4 shots: a 3-of-3 night reads 78% rather than 100%, a
+        // 2-of-5 night reads 52% rather than 40%, and a keeper who faced
+        // a genuine barrage keeps most of his claim (8-of-10 reads 76%).
+        const PRIOR_SHOTS: f32 = 4.0;
         let save_pct_v = if shots_faced >= 3 {
-            let pct = s.saves as f32 / shots_faced as f32;
-            let delta = pct - baseline_pct;
+            let shrunk = (s.saves as f32 + PRIOR_SHOTS * baseline_pct)
+                / (shots_faced as f32 + PRIOR_SHOTS);
+            let delta = shrunk - baseline_pct;
             if delta > dead_zone {
-                ((delta - dead_zone) * 5.2).min(1.05)
-            } else if delta < -dead_zone && shots_faced >= 5 {
-                // The negative side needs a real sample. A keeper in a
-                // dominant side who concedes one of the three shots he
-                // faced has a 67% save rate and did nothing wrong —
-                // punishing that is what collapsed elite-keeper seasons
-                // when this band was first re-centred.
+                ((delta - dead_zone) * 6.5).min(1.05)
+            } else if delta < -dead_zone {
                 ((delta + dead_zone) * 3.2).max(-0.95)
             } else {
                 0.0
@@ -150,7 +165,16 @@ impl<'a> RatingContext<'a> {
         let xg_prev_v = RatingMath::sat(xg_prev, 1.5) * 0.90;
 
         // Workload absorbed: showing up under a barrage. Capped via sat.
-        let workload = RatingMath::sat((shots_faced as f32 - 2.0).max(0.0), 6.0) * 0.35;
+        // Lifted 0.35 → 0.42 alongside the save-rate shrinkage. Shrinking
+        // the rate toward the baseline necessarily costs the keeper who
+        // faced a genuine barrage most — his 8-of-10 is pulled back
+        // toward 67% like everyone else's — and the barrage is exactly
+        // the case where the raw rate was the MOST trustworthy. Paying it
+        // through the term that already means "how much did this keeper
+        // have to deal with" restores the heroic-in-defeat archetype
+        // (`heroic_keeper_in_defeat_still_rates_well`) without touching
+        // the ordinary 3-5 shot night, which moves by ~0.02.
+        let workload = RatingMath::sat((shots_faced as f32 - 2.0).max(0.0), 6.0) * 0.48;
 
         // Command-zone actions (cross claims, sweeper interventions).
         let command = RatingMath::sat(z.gk_command_actions as f32, 4.0) * 0.30;
@@ -177,6 +201,22 @@ impl<'a> RatingContext<'a> {
         // second bonus to the moderate-workload keeper, who is already
         // paid by saves. Lifted 0.30 → 0.62 and reshaped in the
         // protected-shutout calibration pass.
+        // ⚠ Known consequence of `gk_volume` 1.9 → 1.0, deliberately left
+        // as-is. This divisor is expressed in the units the rating model
+        // RECEIVES, not in real shots: while `shots_faced` arrived halved,
+        // "three" meant a real ~5.7, and restoring true save volume
+        // narrowed the credit to keepers facing 0-2 real shots. Widening
+        // it to 4 or 5 is the arithmetically consistent re-derivation and
+        // does lift the under-worked keeper at a dominant club (the case
+        // this credit exists for), but it also pays the keeper who faced
+        // two and saved both — who was not protected, he dealt with
+        // everything — on top of his full save credit. That double-pay
+        // trips `routine_clean_sheet_keeper_is_solid` (7.31 against a
+        // 7.30 ceiling), and the base cannot be trimmed to compensate
+        // without dropping `dominant_defense_gk_season` through its 6.75
+        // floor. The right fix is a credit that tapers on how little the
+        // keeper had to EARN rather than on shots faced; that is a
+        // separate piece of work.
         let dominant_defense = if self.opponent_goals == 0 {
             let shot_taper = (1.0 - shots_faced as f32 / 3.0).max(0.0);
             0.52 * shot_taper

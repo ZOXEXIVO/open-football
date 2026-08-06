@@ -145,15 +145,24 @@ impl GroupDivisors {
     /// save credit the model was calibrated for (season means hit 7.7
     /// vs the 6.65-7.10 band). `saves` and `shots_faced` scale together
     /// so save PERCENTAGE — the quality signal — is untouched.
-    /// gk_volume back to 1.0: it was 1.9 when the engine put ~8 shots on
-    /// target per team against a real ~4.3. Shot volume is now REAL
-    /// (13.5 shots/team, ~4.1 on target), so halving `shots_faced` here
-    /// made every keeper look untested — dropping them under the
-    /// `dominant_defense` shots_faced<3 gate, which handed out the
-    /// protected-shutout bonus on ordinary clean sheets and parked the
-    /// whole population just above 7.0.
+    /// gk_volume 1.9 → 1.0 (2026-08 keeper-quality pass). The divisor was
+    /// set when the engine put ~8 shots on target per team against a real
+    /// ~4.3. Shot volume is now REAL — 13.4 shots/team, ~3.7 on target —
+    /// so a keeper who genuinely faced 3.5 shots was arriving at the
+    /// rating model having faced 2, and that is below the `shots_faced`
+    /// sample gate on the save-percentage band. The one genuine quality
+    /// signal a keeper has was therefore inert for the typical match:
+    /// whatever he saved, the model saw a keeper too untested to judge.
+    ///
+    /// An earlier attempt at 1.0 was reverted for making the population
+    /// mean WORSE (7.01 → 7.23). That measurement no longer applies — it
+    /// was taken when `gk_command_actions` fired ~15 times a match, so
+    /// every keeper was classified `GkBusy` and collected the top
+    /// clean-sheet tier regardless of workload. With the claim producer
+    /// corrected, restoring real save volume pays the keeper who actually
+    /// saves rather than the keeper who happens to be busy.
     const GOALKEEPER: GroupDivisors = GroupDivisors {
-        gk_volume: 1.9,
+        gk_volume: 1.0,
         ..Self::IDENTITY
     };
 

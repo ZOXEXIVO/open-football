@@ -233,6 +233,15 @@ impl<'a> RatingContext<'a> {
             // Keeping the barrage keeper's headroom above the
             // well-protected shutout preserves the "earned vs
             // organised" ordering FM shows.
+            // Tried and reverted (save-rate shrinkage pass): 1.52 → 1.55
+            // / 1.58, to give the barrage keeper back what shrinkage
+            // costs him. The cap is also what sets the SIZE of the
+            // GkModest → GkBusy step at the fourth save, and lifting it
+            // pushed that step past the boundary guard
+            // (`protected_shutout_curve_is_smooth_and_monotonic`, 0.63
+            // and 0.65 against a 0.62 ceiling). The barrage is paid
+            // through `workload` instead, which does not sit on a tier
+            // boundary.
             EvidenceTier::GkBusy => RatingMath::soft_cap(positive_delta, 1.52, 0.35),
             EvidenceTier::GkModest => RatingMath::soft_cap(positive_delta, 0.92, 0.30),
             // GkPassenger cap lifted 0.62 → 0.70 (FM-parity season

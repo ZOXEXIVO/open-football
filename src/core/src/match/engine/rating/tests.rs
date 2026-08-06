@@ -4081,3 +4081,25 @@ fn keeper_one_conceded_in_a_win_is_ordinary() {
         "3 saves / 1 conceded in a win should read 6.20-7.05, got {r:.2}"
     );
 }
+
+/// Diagnostic twin of `dump_season_calibration_values`, for the
+/// per-match keeper ladder. Prints the archetypes the GOALKEEPER LIFE
+/// guards bracket, so a calibration pass can see where each one sits
+/// inside its band instead of only whether it is inside.
+///
+/// `cargo test -p core --lib dump_gk_archetypes -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn dump_gk_archetypes() {
+    for (saves, faced, tg, og, label) in [
+        (3u16, 4u16, 2u8, 1u8, "3sv/1con win"),
+        (2, 2, 1, 0, "2sv clean sheet"),
+        (0, 0, 1, 0, "untested CS"),
+        (8, 10, 1, 2, "heroic in defeat"),
+        (2, 5, 1, 3, "leaky 3 conceded"),
+    ] {
+        let gk = make_gk(saves, faced);
+        let r = RatingContext::new(&gk, tg, og).calculate();
+        println!("{label:22} -> {r:.3}");
+    }
+}
