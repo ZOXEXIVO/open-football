@@ -1427,3 +1427,46 @@ fn dump_maturation_ceilings() {
         );
     }
 }
+
+/// Diagnostic: what the maturation curve allows a genuine wonderkid.
+/// The question it answers — does an age term flatten young stars into
+/// their peers, or does potential still separate them?
+///
+/// `cargo test -p core --lib dump_wonderkid_ceilings -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn dump_wonderkid_ceilings() {
+    let star = make_player(
+        d(2009, 1, 1),
+        PlayerPositionType::MidfielderLeft,
+        baseline_skills(),
+        190,
+        PersonAttributes::default(),
+    );
+    let ordinary = make_player(
+        d(2009, 1, 1),
+        PlayerPositionType::MidfielderLeft,
+        baseline_skills(),
+        120,
+        PersonAttributes::default(),
+    );
+    for (label, p) in [("PA 190 wonderkid", &star), ("PA 120 squad player", &ordinary)] {
+        println!("\n{label} — wide midfielder");
+        println!(
+            "{:>4} {:>9} {:>9} {:>7} {:>9} {:>9}",
+            "age", "dribbling", "technique", "pace", "decisions", "composure"
+        );
+        for age in [17u32, 19, 21, 24, 28] {
+            let c = PositionalSkillCeilings::for_player(p, age);
+            println!(
+                "{:>4} {:>9.2} {:>9.2} {:>7.2} {:>9.2} {:>9.2}",
+                age,
+                c.get(SkillKey::Dribbling),
+                c.get(SkillKey::Technique),
+                c.get(SkillKey::Pace),
+                c.get(SkillKey::Decisions),
+                c.get(SkillKey::Composure),
+            );
+        }
+    }
+}

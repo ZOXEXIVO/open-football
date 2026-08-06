@@ -1266,6 +1266,28 @@ impl PlayerGenerator {
         }
     }
 
+    /// Map one generator skill slot onto its maturation family. The
+    /// generator and the development tick index skills differently (37
+    /// slots vs 50), so they share the CURVE via [`SkillMaturation`]
+    /// rather than a layout — this is the generator's half of that
+    /// bridge.
+    ///
+    /// The explosive split sits inside the physical group: speed, leap
+    /// and balance are close to finished in the late teens while strength
+    /// and stamina still need years, which is why a quick
+    /// seventeen-year-old is quick and a strong one is rare.
+    fn maturation_group(idx: usize) -> MaturationGroup {
+        match skill_group(idx) {
+            0 => MaturationGroup::Technical,
+            1 => MaturationGroup::Mental,
+            _ => match idx {
+                SK_ACCELERATION | SK_AGILITY | SK_BALANCE | SK_JUMPING | SK_NATURAL_FITNESS
+                | SK_PACE => MaturationGroup::Explosive,
+                _ => MaturationGroup::Physical,
+            },
+        }
+    }
+
     /// PA-anchored skill generation (same model as database generator).
     ///
     /// PA maps to a "fully developed" skill level. Position weights create
@@ -1289,20 +1311,6 @@ impl PlayerGenerator {
         // PA → target skill level at peak (PA 1→1, PA 100→10.5, PA 200→20)
         let pa_final = (pa - 1.0) / 199.0 * 19.0 + 1.0;
 
-        // Age-dependent development ratio per skill group. The table lives
-        // on `SkillMaturation` so the development tick's per-skill ceiling
-        // reads the SAME curve — the two used to disagree, and an academy
-        // player could be developed to a full adult mind years before the
-        // generator would have built him one.
-        let tech_age_ratio = SkillMaturation::ratio(age, MaturationGroup::Technical);
-        let mental_age_ratio = SkillMaturation::ratio(age, MaturationGroup::Mental);
-        let physical_age_ratio = SkillMaturation::ratio(age, MaturationGroup::Physical);
-
-        // Group means: pure PA-driven
-        let tech_mean = pa_final * tech_age_ratio;
-        let mental_mean = pa_final * mental_age_ratio;
-        let phys_mean = pa_final * physical_age_ratio;
-
         // Position spread: how much key/weak skills deviate from group mean.
         // Ensures differentiation at ALL ability levels including youth:
         //   PA 50 (pa_final ~5.7): spread ~2.8 → key ~8, weak ~3
@@ -1325,11 +1333,20 @@ impl PlayerGenerator {
         let mut skills = [0.0f32; SKILL_COUNT];
 
         for i in 0..SKILL_COUNT {
-            let (group_mean, noise) = match skill_group(i) {
-                0 => (tech_mean, tech_noise),
-                1 => (mental_mean, mental_noise),
-                _ => (phys_mean, phys_noise),
+            let noise = match skill_group(i) {
+                0 => tech_noise,
+                1 => mental_noise,
+                _ => phys_noise,
             };
+            // Age-dependent maturity, per skill rather than per group: the
+            // explosive attributes mature years before strength does, so a
+            // quick teenager is quick while still being weak. The table
+            // lives on `SkillMaturation` and the development tick's
+            // per-skill ceiling reads the SAME curve — the two used to
+            // disagree, and an academy player could be developed to a full
+            // adult mind years before the generator would have built him
+            // one.
+            let group_mean = pa_final * SkillMaturation::ratio(age, Self::maturation_group(i));
 
             // Additive position spread: key skills (w>1) get bonus, weak (w<1) get penalty
             let pos_mean = group_mean + (pos_w[i] - 1.0) * spread;

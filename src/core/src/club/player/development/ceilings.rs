@@ -6,7 +6,10 @@
 //! already sits above it (imports, legacy states).
 
 use super::position_weights::{pos_group_from, position_dev_weights};
-use super::skills_array::{SKILL_COUNT, SkillCategory, SkillKey, skill_category};
+use super::skills_array::{
+    SK_ACCELERATION, SK_AGILITY, SK_BALANCE, SK_JUMPING, SK_NATURAL_FITNESS, SK_PACE, SKILL_COUNT,
+    SkillCategory, SkillKey, skill_category,
+};
 use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
 use crate::club::player::player::Player;
 
@@ -38,7 +41,7 @@ impl PositionalSkillCeilings {
         let weights = position_dev_weights(pos_group_from(player.position()));
         let mut arr = [1.0f32; SKILL_COUNT];
         for i in 0..SKILL_COUNT {
-            let maturity = SkillMaturation::ratio(age, maturation_group(skill_category(i)));
+            let maturity = SkillMaturation::ratio(age, Self::maturation_group(i));
             arr[i] = (base_ceiling * weights[i] * maturity).clamp(1.0, 20.0);
         }
         PositionalSkillCeilings { arr }
@@ -47,16 +50,28 @@ impl PositionalSkillCeilings {
     pub fn get(&self, key: SkillKey) -> f32 {
         self.arr[key.idx()]
     }
-}
 
-/// Bridge the development tick's skill categories onto the shared
-/// maturation families. Separate enums on purpose — the generator and the
-/// tick index skills differently, so they share the curve, not a layout.
-pub(super) fn maturation_group(cat: SkillCategory) -> MaturationGroup {
-    match cat {
-        SkillCategory::Technical => MaturationGroup::Technical,
-        SkillCategory::Mental => MaturationGroup::Mental,
-        SkillCategory::Physical => MaturationGroup::Physical,
-        SkillCategory::Goalkeeping => MaturationGroup::Goalkeeping,
+    /// Bridge one skill onto its maturation family. Separate enums on
+    /// purpose — the generator and the tick index skills differently, so
+    /// they share the curve, not a layout.
+    ///
+    /// Keyed on the skill rather than on its category because the
+    /// explosive split lives INSIDE `SkillCategory::Physical`: speed and
+    /// leap mature years before strength and stamina do.
+    pub(super) fn maturation_group(idx: usize) -> MaturationGroup {
+        match skill_category(idx) {
+            SkillCategory::Technical => MaturationGroup::Technical,
+            SkillCategory::Mental => MaturationGroup::Mental,
+            SkillCategory::Goalkeeping => MaturationGroup::Goalkeeping,
+            SkillCategory::Physical => match idx {
+                // The generator's own earliest-peaking band (18-24).
+                // `match_readiness` is match sharpness, not a grown
+                // physical quality, so it stays with the slow-maturing
+                // group where the tick has always treated it.
+                SK_ACCELERATION | SK_PACE | SK_AGILITY | SK_JUMPING | SK_BALANCE
+                | SK_NATURAL_FITNESS => MaturationGroup::Explosive,
+                _ => MaturationGroup::Physical,
+            },
+        }
     }
 }

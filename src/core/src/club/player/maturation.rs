@@ -33,7 +33,21 @@
 pub enum MaturationGroup {
     Technical,
     Mental,
+    /// Strength, stamina — the physical qualities that need a grown body
+    /// and years of loading.
     Physical,
+    /// Speed, acceleration, agility, balance, leap. Split off from
+    /// [`MaturationGroup::Physical`] because they mature far earlier than
+    /// strength does: a seventeen-year-old can be the fastest man on the
+    /// pitch, and cannot be the strongest. Treating them alike made every
+    /// quick teenage winger slower than he should be — a PA 190 wide
+    /// midfielder capped at 13.3 pace at seventeen.
+    ///
+    /// This is the project's own existing belief, not a new one: the
+    /// generator's `age_curve` already puts acceleration / pace / agility
+    /// / jumping / balance / natural fitness in the earliest-peaking
+    /// band (18-24) and leaves strength out of it.
+    Explosive,
     Goalkeeping,
 }
 
@@ -76,6 +90,18 @@ impl SkillMaturation {
                 27..=29 => 1.00,
                 30..=32 => 0.93,
                 _ => 0.82,
+            },
+            // Sprinters peak around 20-25 and are already close to it in
+            // their late teens; the decline is later and gentler than
+            // strength's, but it is the axis that visibly goes first.
+            MaturationGroup::Explosive => match age {
+                0..=15 => 0.78,
+                16..=17 => 0.88,
+                18..=19 => 0.94,
+                20..=24 => 1.00,
+                25..=28 => 0.97,
+                29..=31 => 0.90,
+                _ => 0.80,
             },
             MaturationGroup::Goalkeeping => match age {
                 0..=17 => 0.62,
@@ -140,6 +166,37 @@ mod tests {
         assert_eq!(
             SkillMaturation::ratio(31, MaturationGroup::Goalkeeping),
             1.0
+        );
+    }
+
+    /// A teenager can be the fastest man on the pitch and cannot be the
+    /// strongest. Lumping speed in with strength capped every quick young
+    /// winger — a PA 190 wide midfielder was held to 13.3 pace at 17.
+    #[test]
+    fn speed_arrives_years_before_strength() {
+        for age in 15..=20 {
+            let explosive = SkillMaturation::ratio(age, MaturationGroup::Explosive);
+            let physical = SkillMaturation::ratio(age, MaturationGroup::Physical);
+            assert!(
+                explosive > physical,
+                "speed must lead strength at {age} — explosive {explosive}, \
+                 physical {physical}"
+            );
+        }
+        // Close to finished in the late teens, unlike the rest of the body.
+        assert!(SkillMaturation::ratio(17, MaturationGroup::Explosive) >= 0.85);
+    }
+
+    /// And it goes first. A 31-year-old has lost a yard while his
+    /// decision-making is at its peak.
+    #[test]
+    fn speed_declines_before_the_mind_does() {
+        let explosive = SkillMaturation::ratio(31, MaturationGroup::Explosive);
+        let mental = SkillMaturation::ratio(31, MaturationGroup::Mental);
+        assert!(
+            explosive < mental,
+            "a 31-year-old should be losing pace while his head peaks — \
+             explosive {explosive}, mental {mental}"
         );
     }
 

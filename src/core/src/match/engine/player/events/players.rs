@@ -26,6 +26,8 @@ use crate::r#match::{
 };
 #[cfg(feature = "match-logs")]
 use crate::match_log_info;
+#[cfg(feature = "match-logs")]
+use std::sync::atomic::Ordering;
 use log::debug;
 use nalgebra::Vector3;
 
@@ -777,9 +779,9 @@ impl PlayerEventDispatcher {
                 let mut direct_assister_id: Option<u32> = None;
                 #[cfg(feature = "match-logs")]
                 {
-                    key_pass_diag::SHOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    key_pass_diag::SHOTS.fetch_add(1, Ordering::Relaxed);
                     if field.ball.last_completed_pass_receiver_id.is_none() {
-                        key_pass_diag::NO_LINK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        key_pass_diag::NO_LINK.fetch_add(1, Ordering::Relaxed);
                     }
                 }
                 if let (Some(passer_id), Some(receiver_id)) = (
@@ -798,16 +800,16 @@ impl PlayerEventDispatcher {
                         }
                         direct_assister_id = Some(passer_id);
                         #[cfg(feature = "match-logs")]
-                        key_pass_diag::CREDITED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        key_pass_diag::CREDITED.fetch_add(1, Ordering::Relaxed);
                     }
                     #[cfg(feature = "match-logs")]
                     {
                         if !receiver_is_shooter {
                             key_pass_diag::WRONG_RECEIVER
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                .fetch_add(1, Ordering::Relaxed);
                         } else if !in_window {
                             key_pass_diag::STALE_WINDOW
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                .fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     // Single-credit guarantee: even if the shot resolves
@@ -857,7 +859,7 @@ impl PlayerEventDispatcher {
                 if let Some(gk_id) = field.ball.pending_failed_claim_gk_id {
                     #[cfg(feature = "match-logs")]
                     gk_claim_diag::FLAP_SHOTS_SEEN
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        .fetch_add(1, Ordering::Relaxed);
                     let in_window = now_tick.saturating_sub(field.ball.pending_failed_claim_tick)
                         <= FAILED_CLAIM_WINDOW_TICKS;
                     let gk_team = field.get_player(gk_id).map(|p| p.team_id);
@@ -868,13 +870,13 @@ impl PlayerEventDispatcher {
                             }
                             #[cfg(feature = "match-logs")]
                             gk_claim_diag::FLAP_TO_SHOT
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                .fetch_add(1, Ordering::Relaxed);
                             field.ball.pending_failed_claim_charged = true;
                         }
                     } else {
                         #[cfg(feature = "match-logs")]
                         gk_claim_diag::FLAP_DROPPED
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            .fetch_add(1, Ordering::Relaxed);
                         field.ball.pending_failed_claim_gk_id = None;
                         field.ball.pending_failed_claim_charged = false;
                     }
@@ -937,11 +939,11 @@ impl PlayerEventDispatcher {
             #[cfg(feature = "match-logs")]
             {
                 save_accounting_stats::ON_TARGET_FROM_GOAL
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    .fetch_add(1, Ordering::Relaxed);
                 let band =
                     time_band_diag::band_for_minute(sc::minute_from_ms(context.total_match_time));
                 time_band_diag::GOALS_BY_BAND[band]
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    .fetch_add(1, Ordering::Relaxed);
             }
         }
 
@@ -3366,7 +3368,7 @@ impl PlayerEventDispatcher {
 
         let situation = GkClaimContest::assess(field, player_id);
         #[cfg(feature = "match-logs")]
-        gk_claim_diag::GATHERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        gk_claim_diag::GATHERS.fetch_add(1, Ordering::Relaxed);
         // Does this gather read as a command-of-area moment at all? The
         // weight IS the probability — no threshold, so a half-contested
         // ball counts half the time.
@@ -3376,7 +3378,7 @@ impl PlayerEventDispatcher {
             return false;
         }
         #[cfg(feature = "match-logs")]
-        gk_claim_diag::COMMAND_MOMENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        gk_claim_diag::COMMAND_MOMENTS.fetch_add(1, Ordering::Relaxed);
 
         let minute = sc::minute_from_ticks(field.ball.current_tick_cached);
         let failure = GkClaimContest::failure_probability(field, player_id, &situation, minute);
@@ -3387,7 +3389,7 @@ impl PlayerEventDispatcher {
             return false;
         }
         #[cfg(feature = "match-logs")]
-        gk_claim_diag::FLAPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        gk_claim_diag::FLAPS.fetch_add(1, Ordering::Relaxed);
 
         // Flapped it. The ball has to end up somewhere an attacker can
         // reach: a spill that dies at the keeper's feet is one he simply

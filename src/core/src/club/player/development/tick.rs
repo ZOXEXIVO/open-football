@@ -24,7 +24,7 @@
 //! manager's selection choices.
 
 use super::age_curve::*;
-use super::ceilings::maturation_group;
+use super::ceilings::PositionalSkillCeilings;
 use super::coaching::CoachingEffect;
 use super::maturity::MaturityModel;
 use super::modifiers::*;
@@ -216,7 +216,8 @@ impl Player {
             // player the generator would have built at 0.55 of it — and
             // then played, and rated, like the man he had not become.
             // Both halves now read `SkillMaturation`.
-            let maturity = SkillMaturation::ratio(age as u32, maturation_group(cat));
+            let maturity =
+                SkillMaturation::ratio(age as u32, PositionalSkillCeilings::maturation_group(i));
             let skill_ceiling = (base_ceiling * dev_weights[i] * maturity).clamp(1.0, 20.0);
 
             // Per-skill gap factor (replaces global PA-CA gap).
