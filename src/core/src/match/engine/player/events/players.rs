@@ -6,6 +6,9 @@ use crate::r#match::engine::psychology::{NegativeEvent, PositiveEvent};
 use crate::r#match::engine::set_pieces::{FreeKickBand, wall_block_prob, wall_size_for};
 use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::events::Event;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::events::gk_claim::gk_claim_diag;
+use crate::r#match::player::events::gk_claim::GkClaimContest;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::player::strategies::players::ShotSkillInputs;
@@ -791,10 +794,42 @@ impl PlayerEventDispatcher {
                 } else {
                     field.ball.pending_error_to_shot_player_id = None;
                 }
+                // ── Failed claim leading to shot ──────────────────────
+                // A keeper who has just flapped a cross is charged the
+                // moment the attacking side gets a shot away from it.
+                // Held on the ball (not promoted into the error lanes)
+                // so the rating bills this incident exactly once.
+                const FAILED_CLAIM_WINDOW_TICKS: u64 = 600; // ~6s
+                if let Some(gk_id) = field.ball.pending_failed_claim_gk_id {
+                    #[cfg(feature = "match-logs")]
+                    gk_claim_diag::FLAP_SHOTS_SEEN
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let in_window = now_tick
+                        .saturating_sub(field.ball.pending_failed_claim_tick)
+                        <= FAILED_CLAIM_WINDOW_TICKS;
+                    let gk_team = field.get_player(gk_id).map(|p| p.team_id);
+                    if in_window && gk_team.is_some() && gk_team != shooter_team {
+                        if !field.ball.pending_failed_claim_charged {
+                            if let Some(gk) = field.get_player_mut(gk_id) {
+                                gk.statistics.note_gk_failed_claim_to_shot();
+                            }
+                            #[cfg(feature = "match-logs")]
+                            gk_claim_diag::FLAP_TO_SHOT
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            field.ball.pending_failed_claim_charged = true;
+                        }
+                    } else {
+                        #[cfg(feature = "match-logs")]
+                        gk_claim_diag::FLAP_DROPPED
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        field.ball.pending_failed_claim_gk_id = None;
+                        field.ball.pending_failed_claim_charged = false;
+                    }
+                }
                 Self::handle_shoot_event(shoot_event_model, field, context, direct_assister_id);
             }
             PlayerEvent::CaughtBall(player_id) => {
-                Self::handle_caught_ball_event(player_id, field);
+                Self::handle_caught_ball_event(player_id, field, context);
             }
             PlayerEvent::ParriedBall(player_id) => {
                 Self::handle_parried_ball_event(player_id, field);
@@ -899,9 +934,26 @@ impl PlayerEventDispatcher {
                     }
                 }
             }
+            // Promote a pending failed claim into a failed-claim-to-goal.
+            // NB deliberately NOT also stamping `errors_leading_to_goal`:
+            // the rating de-dups nested mistake counters, and billing one
+            // flapped cross through both lanes is the triple-counting bug
+            // that once buried a one-conceded keeper in the disaster band.
+            if let Some(gk_id) = field.ball.pending_failed_claim_gk_id {
+                let conceding_side = scorer_team_id
+                    .and_then(|t| field.get_player(gk_id).map(|p| p.team_id != t))
+                    .unwrap_or(false);
+                if conceding_side {
+                    if let Some(gk) = field.get_player_mut(gk_id) {
+                        gk.statistics.note_gk_failed_claim_to_goal();
+                    }
+                }
+            }
         }
         field.ball.clear_shot_metadata();
         field.ball.pending_error_to_shot_player_id = None;
+        field.ball.pending_failed_claim_gk_id = None;
+        field.ball.pending_failed_claim_charged = false;
         field.ball.clear_giveaway();
 
         context.score.add_goal_detail(GoalDetail {
@@ -3161,7 +3213,7 @@ impl PlayerEventDispatcher {
         field.ball.cached_shot_target = None;
     }
 
-    fn handle_caught_ball_event(player_id: u32, field: &mut MatchField) {
+    fn handle_caught_ball_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
         // Detect saves: ball was moving and came from an opponent
         let ball_was_moving = field.ball.velocity.norm_squared() > 0.25;
         let last_owner_team = field.ball.previous_owner.and_then(|prev_id| {
@@ -3208,18 +3260,13 @@ impl PlayerEventDispatcher {
                 let _ = shooter_found;
                 field.ball.clear_shot_metadata();
                 field.ball.pending_error_to_shot_player_id = None;
-            } else {
-                // Non-shot catch from an opponent ball (cross claim,
-                // through-ball collected, aerial gathered) — the GK
-                // commanded the box without a save. Counts as a small
-                // command-zone credit, NOT a save.
-                if let Some(gk) = field.get_player_mut(player_id) {
-                    if gk.tactical_position.current_position.position_group()
-                        == PlayerFieldPositionGroup::Goalkeeper
-                    {
-                        gk.statistics.note_gk_command_action();
-                    }
-                }
+            } else if Self::handle_gk_claim(player_id, field, context) {
+                // Claim flapped — the keeper does NOT get the ball. The
+                // spill is already staged on the ball, so fall through
+                // without taking ownership; `GoalkeeperHoldingState`
+                // drops him back to Standing next tick when it finds he
+                // has nothing in his hands.
+                return;
             }
         }
 
@@ -3235,6 +3282,114 @@ impl PlayerEventDispatcher {
         // Shot is dead — clear the projected intercept so the keeper
         // doesn't keep chasing a ghost target next tick.
         field.ball.cached_shot_target = None;
+    }
+
+    /// Resolve a goalkeeper's attempt to claim a non-shot ball from the
+    /// opposition — a cross, a high ball into the box, a through-ball he
+    /// comes to collect.
+    ///
+    /// Returns `true` if the claim was FLAPPED, in which case the ball has
+    /// been spilled and the caller must not hand the keeper possession.
+    ///
+    /// Two things happen here that used to be unconditional. The command-
+    /// action credit is now earned rather than granted (see
+    /// [`GkClaimContest`] on why ~15 gathers a match were being counted as
+    /// commanding the box), and the claim can fail — which is what makes
+    /// `gk_failed_claims_to_shot` / `_to_goal` reachable at last.
+    fn handle_gk_claim(player_id: u32, field: &mut MatchField, context: &MatchContext) -> bool {
+        let is_keeper = field
+            .players
+            .iter()
+            .find(|p| p.id == player_id)
+            .map(|p| {
+                p.tactical_position.current_position.position_group()
+                    == PlayerFieldPositionGroup::Goalkeeper
+            })
+            .unwrap_or(false);
+        if !is_keeper {
+            return false;
+        }
+
+        let situation = GkClaimContest::assess(field, player_id);
+        #[cfg(feature = "match-logs")]
+        gk_claim_diag::GATHERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Does this gather read as a command-of-area moment at all? The
+        // weight IS the probability — no threshold, so a half-contested
+        // ball counts half the time.
+        let is_command_moment = context.rng.unit_f32() < situation.command_weight;
+        if !is_command_moment {
+            // Routine collection: no credit, no contest, keeper gathers.
+            return false;
+        }
+        #[cfg(feature = "match-logs")]
+        gk_claim_diag::COMMAND_MOMENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        let minute = sc::minute_from_ticks(field.ball.current_tick_cached);
+        let failure = GkClaimContest::failure_probability(field, player_id, &situation, minute);
+        if context.rng.unit_f32() >= failure {
+            if let Some(gk) = field.get_player_mut(player_id) {
+                gk.statistics.note_gk_command_action();
+            }
+            return false;
+        }
+        #[cfg(feature = "match-logs")]
+        gk_claim_diag::FLAPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        // Flapped it. The ball has to end up somewhere an attacker can
+        // reach: a spill that dies at the keeper's feet is one he simply
+        // picks up again, which is what made the first version of this
+        // contest produce flaps that never led to a single shot.
+        //
+        // So it is pushed 10-26u (1.2-3.2m) OUT from the goal — the
+        // punched-cross trajectory, landing around the six-yard line and
+        // the penalty spot where the box contest actually happens — with
+        // the keeper as last toucher so `try_intercept` treats the loose
+        // ball as an attacking opportunity rather than a keeper's pass.
+        let (keeper_pos, keeper_team, keeper_side) = field
+            .players
+            .iter()
+            .find(|p| p.id == player_id)
+            .map(|p| (p.position, p.team_id, p.side))
+            .unwrap_or((field.ball.position, 0, None));
+        let tick = field.ball.current_tick_cached;
+        let out_distance = context.rng.range_f32(10.0, 26.0);
+        let lateral = context.rng.range_f32(-14.0, 14.0);
+        let out_x = match keeper_side {
+            Some(PlayerSide::Left) => keeper_pos.x + out_distance,
+            Some(PlayerSide::Right) => keeper_pos.x - out_distance,
+            None => keeper_pos.x,
+        };
+        let drop = Vector3::new(out_x, keeper_pos.y + lateral, 0.0);
+        // Above 1.0 u/tick on purpose: `try_intercept` ignores balls
+        // whose speed² is under 1.0, so a slower spill is not a loose
+        // ball anybody can attack — it just rolls until the nearest
+        // player (usually the keeper himself) picks it up.
+        let drop_speed = context.rng.range_f32(1.1, 1.8);
+        let ball = &mut field.ball;
+        let dx = drop.x - keeper_pos.x;
+        let dy = drop.y - keeper_pos.y;
+        let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+        ball.position = keeper_pos;
+        ball.position.z = 0.0;
+        ball.velocity.x = dx / dist * drop_speed;
+        ball.velocity.y = dy / dist * drop_speed;
+        ball.velocity.z = 0.0;
+        ball.current_owner = None;
+        ball.previous_owner = Some(player_id);
+        ball.pass_target_player_id = None;
+        ball.pending_pass_passer = None;
+        ball.pending_pass_was_cross = false;
+        ball.flags.in_flight_state = 10;
+        ball.claim_cooldown = 0;
+        // Arm the rebound window so the follow-up shot isn't killed by
+        // the team shot-spacing gate, and stamp the pending failed claim
+        // so a shot / goal from this possession is charged to the keeper.
+        ball.last_rebound_tick = tick;
+        ball.pending_failed_claim_gk_id = Some(player_id);
+        ball.pending_failed_claim_tick = tick;
+        ball.pending_failed_claim_charged = false;
+        ball.record_touch(player_id, keeper_team, tick, false);
+        true
     }
 
     fn handle_move_player_event(player_id: u32, position: Vector3<f32>, field: &mut MatchField) {
@@ -3969,10 +4124,17 @@ impl PlayerEventDispatcher {
                     if let Some(zone) = zone {
                         clearer.statistics.note_clearance_zone(zone);
                     }
-                    // GK sweeper / routine clear-out is a command-zone
-                    // action — counted alongside the clearance so the
-                    // box-commanding GK gets the small per-event credit.
-                    if zone.map_or(false, |z| z.is_own_box())
+                    // Sweeper credit: a keeper who clears the ball from
+                    // OUTSIDE his own box has come out to sweep, which is
+                    // command of the area. A clearance from inside the box
+                    // is not — that is a keeper using his feet, and it was
+                    // the dominant producer of `gk_command_actions`
+                    // (~12/match against a real-football 1-3). It mattered
+                    // well beyond its own small credit: `>= 3` promotes the
+                    // keeper to the `GkBusy` evidence tier and `>= 2` to the
+                    // top clean-sheet tier, so every keeper cleared both
+                    // bars every week no matter how he played.
+                    if zone.map_or(false, |z| !z.is_own_box())
                         && clearer.tactical_position.current_position.position_group()
                             == PlayerFieldPositionGroup::Goalkeeper
                     {

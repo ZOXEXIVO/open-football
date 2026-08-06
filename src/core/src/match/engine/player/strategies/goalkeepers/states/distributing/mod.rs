@@ -96,6 +96,9 @@ impl GoalkeeperDistributingState {
 
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
+        // Every legal option, kept so a keeper who loses his head can
+        // actually pick a bad one. See `rushed_choice` below.
+        let mut options: Vec<MatchPlayerLite> = Vec::new();
 
         for teammate in ctx.players().teammates().nearby(max_search) {
             if teammate.tactical_positions.position_group() == PlayerFieldPositionGroup::Goalkeeper
@@ -180,9 +183,45 @@ impl GoalkeeperDistributingState {
                 best_score = score;
                 best_option = Some(teammate);
             }
+            options.push(teammate);
         }
 
+        // Does the keeper actually find his best option? `turnover_risk`
+        // already models how likely this keeper is to lose the ball
+        // playing out — distribution skill, condition, pressure — but it
+        // was only ever used to SCORE targets, so it made a weak keeper
+        // choose more conservatively and never made him get it wrong. A
+        // model of risk with no execution consequence is why senior and
+        // youth keepers posted identical error rates (0.164 vs 0.161
+        // errors-to-shot per match) despite an eight-point skill gap.
+        //
+        // Under pressure, a keeper with poor distribution / composure /
+        // decisions rushes it: he hits the first man he sees rather than
+        // the right one. The consequence is emergent — a pass to a
+        // covered teammate in his own third is far likelier to be
+        // intercepted, and the existing giveaway machinery then stamps
+        // the dangerous turnover and (if a shot follows) the error.
+        // Nothing about the punishment is hardcoded here.
+        if let Some(best) = best_option {
+            if options.len() > 1 {
+                let pressure = Self::pressure_on_keeper(ctx);
+                let rushed = prof.turnover_risk(0.45, pressure, 0.0);
+                if ctx.context.rng.unit_f32() < rushed {
+                    let idx = ctx.context.rng.range_u64(0, options.len() as u64) as usize;
+                    return options.get(idx).copied().or(Some(best));
+                }
+            }
+            return Some(best);
+        }
         best_option
+    }
+
+    /// How closed-down the keeper is right now, 0..1. Saturating so a
+    /// swarm doesn't read as infinitely worse than two players.
+    fn pressure_on_keeper(ctx: &StateProcessingContext) -> f32 {
+        const PRESS_RADIUS: f32 = 90.0;
+        let close = ctx.players().opponents().nearby(PRESS_RADIUS).count() as f32;
+        1.0 - (-close / 1.8).exp()
     }
 
     pub fn calculate_pass_power(&self, teammate_id: u32, ctx: &StateProcessingContext) -> f64 {

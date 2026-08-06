@@ -316,6 +316,24 @@ pub struct Ball {
     /// resolves; if the shot becomes a goal we also bump
     /// `errors_leading_to_goal` on this player.
     pub pending_error_to_shot_player_id: Option<u32>,
+    /// Goalkeeper who has just flapped a claim — dropped a cross, punched
+    /// it back into the box, missed the ball entirely. Held until the
+    /// possession resolves so a shot that follows can be charged to the
+    /// keeper as `gk_failed_claims_to_shot` (and, if it goes in,
+    /// `gk_failed_claims_to_goal`).
+    ///
+    /// Deliberately SEPARATE from `pending_error_to_shot_player_id`: the
+    /// rating de-dups nested mistake counters (see `errors_and_cards`),
+    /// and a failed claim that also stamped `errors_leading_to_goal`
+    /// would bill one incident through two lanes — the triple-counting
+    /// bug that once dropped a one-conceded keeper to ~3.9.
+    pub pending_failed_claim_gk_id: Option<u32>,
+    pub pending_failed_claim_tick: u64,
+    /// Set once the flap has been charged as `gk_failed_claims_to_shot`.
+    /// The id survives so a goal from the same scramble can still be
+    /// promoted, but a second shot in the same possession must not bill
+    /// the keeper twice for one mistake.
+    pub pending_failed_claim_charged: bool,
 
     /// Carry tracking. `carry_owner` is the player currently dribbling /
     /// running with the ball; `carry_start_position` is where the carry
@@ -437,6 +455,9 @@ impl Ball {
             last_giveaway_tick: 0,
             last_giveaway_was_own_box: false,
             pending_error_to_shot_player_id: None,
+            pending_failed_claim_gk_id: None,
+            pending_failed_claim_tick: 0,
+            pending_failed_claim_charged: false,
             carry_owner: None,
             carry_start_position: Vector3::new(x, y, 0.0),
         }
@@ -477,6 +498,8 @@ impl Ball {
         self.offside_snapshot = None;
         self.pending_save_credit = None;
         self.pending_error_to_shot_player_id = None;
+        self.pending_failed_claim_gk_id = None;
+        self.pending_failed_claim_charged = false;
         self.last_shot_xg = 0.0;
         self.last_shot_shooter_id = None;
     }

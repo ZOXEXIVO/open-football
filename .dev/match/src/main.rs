@@ -559,6 +559,21 @@ impl SkillComposite {
             + s.physical.acceleration * 0.08
     }
 
+    /// Shift every skill so the player's position composite lands
+    /// EXACTLY on `target`, preserving the generated shape.
+    ///
+    /// Works because every composite above is a convex combination
+    /// (weights sum to 1.0): shifting all skills by δ shifts the
+    /// composite by δ. This is what makes the mixed-quality spotlight
+    /// reproducible across runs — `LevelSkillCurve::retarget` pins the
+    /// MEAN of 49 attributes, which still leaves the seven that matter
+    /// for the position swinging by ±2 between draws, and a before/after
+    /// comparison can't survive that much x-axis noise.
+    fn pin(skills: &mut PlayerSkills, pos_group: u8, target: f32) {
+        let delta = target - Self::for_group(skills, pos_group);
+        LevelSkillCurve::shift_all(skills, delta);
+    }
+
     /// Snapshot every starter's composite so the caller can join skills
     /// onto the post-match stat rows. Taken BEFORE the squad is moved
     /// into the engine.
@@ -1602,7 +1617,6 @@ impl SpotlightAgg {
     }
 
     fn merge(&mut self, o: SpotlightAgg) {
-        self.skill = if self.skill > 0.0 { self.skill } else { o.skill };
         self.ratings.extend(o.ratings);
         self.minutes += o.minutes;
         self.saves += o.saves;
@@ -1673,13 +1687,26 @@ impl MixedQualityHarness {
     const SENIOR_MEAN: f32 = 15.0;
     const YOUTH_MEAN: f32 = 7.0;
 
+    /// How many independent squad draws the run is averaged over. The
+    /// ten non-spotlight players are built once per draw and reused for
+    /// that draw's matches (so the spotlight rating really is a season
+    /// average in a stable team), but a SINGLE draw bakes one random
+    /// supporting cast into every number — enough to swamp the effect
+    /// being measured. Six draws costs nothing and makes before/after
+    /// comparisons attributable.
+    const DRAWS: usize = 6;
+
     fn run(n_matches: usize, level: u8, slot: SpotlightSlot) {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error")).init();
         let n_threads = rayon::current_num_threads();
+        let per_draw = (n_matches / Self::DRAWS).max(1);
+        let total = per_draw * Self::DRAWS;
         println!(
-            "Mixed-quality: {} matches, both XIs level {}, spotlight slot {} \
-             (Team 1 senior mean {:.0} vs Team 2 youth mean {:.0})  (parallel: {} threads)",
-            n_matches,
+            "Mixed-quality: {} matches ({} draws x {}), both XIs level {}, spotlight slot {} \
+             (Team 1 senior {:.0} vs Team 2 youth {:.0})  (parallel: {} threads)",
+            total,
+            Self::DRAWS,
+            per_draw,
             level,
             slot.label(),
             Self::SENIOR_MEAN,
@@ -1689,11 +1716,8 @@ impl MixedQualityHarness {
         println!();
 
         core::save_accounting_stats::reset();
+        core::gk_claim_diag::reset();
 
-        // Built once, cloned per match — these two players must be the
-        // SAME players all season for the rating means to be season means.
-        let senior = Self::build_team(1, level, slot, Self::SENIOR_MEAN);
-        let youth = Self::build_team(2, level, slot, Self::YOUTH_MEAN);
         let senior_slot_id = 100 + slot.slot_index() as u32;
         let youth_slot_id = 200 + slot.slot_index() as u32;
 
@@ -1706,60 +1730,76 @@ impl MixedQualityHarness {
             away_goals: u32,
         }
 
-        let rows: Vec<Row> = (0..n_matches)
-            .into_par_iter()
-            .map(|_| {
-                let home = Self::squad(&senior, 1);
-                let away = Self::squad(&youth, 2);
-                let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
-                let score = result.score.as_ref().unwrap();
-                let hg = score.home_team.get() as u32;
-                let ag = score.away_team.get() as u32;
-                let mut row = Row {
-                    senior_gk: SpotlightAgg::default(),
-                    youth_gk: SpotlightAgg::default(),
-                    senior_slot: SpotlightAgg::default(),
-                    youth_slot: SpotlightAgg::default(),
-                    home_goals: hg,
-                    away_goals: ag,
-                };
-                // Team 1 concedes the away goals and vice versa.
-                if let Some(s) = result.player_stats.get(&100) {
-                    row.senior_gk.add(s, ag);
-                }
-                if let Some(s) = result.player_stats.get(&200) {
-                    row.youth_gk.add(s, hg);
-                }
-                if !slot.is_goalkeeper() {
-                    if let Some(s) = result.player_stats.get(&senior_slot_id) {
-                        row.senior_slot.add(s, ag);
-                    }
-                    if let Some(s) = result.player_stats.get(&youth_slot_id) {
-                        row.youth_slot.add(s, hg);
-                    }
-                }
-                row
-            })
-            .collect();
-
         let mut senior_gk = SpotlightAgg::default();
         let mut youth_gk = SpotlightAgg::default();
         let mut senior_slot = SpotlightAgg::default();
         let mut youth_slot = SpotlightAgg::default();
         let mut home_goals = 0u32;
         let mut away_goals = 0u32;
-        for r in rows {
-            senior_gk.merge(r.senior_gk);
-            youth_gk.merge(r.youth_gk);
-            senior_slot.merge(r.senior_slot);
-            youth_slot.merge(r.youth_slot);
-            home_goals += r.home_goals;
-            away_goals += r.away_goals;
+        let mut skills = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+
+        for _ in 0..Self::DRAWS {
+            // Built once per draw, cloned per match — the spotlight
+            // player must be the SAME player all season for his rating
+            // mean to be a season mean.
+            let senior = Self::build_team(1, level, slot, Self::SENIOR_MEAN);
+            let youth = Self::build_team(2, level, slot, Self::YOUTH_MEAN);
+            skills.0 += Self::skill_of(&senior, 0);
+            skills.1 += Self::skill_of(&youth, 0);
+            skills.2 += Self::skill_of(&senior, slot.slot_index());
+            skills.3 += Self::skill_of(&youth, slot.slot_index());
+
+            let rows: Vec<Row> = (0..per_draw)
+                .into_par_iter()
+                .map(|_| {
+                    let home = Self::squad(&senior, 1);
+                    let away = Self::squad(&youth, 2);
+                    let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
+                    let score = result.score.as_ref().unwrap();
+                    let hg = score.home_team.get() as u32;
+                    let ag = score.away_team.get() as u32;
+                    let mut row = Row {
+                        senior_gk: SpotlightAgg::default(),
+                        youth_gk: SpotlightAgg::default(),
+                        senior_slot: SpotlightAgg::default(),
+                        youth_slot: SpotlightAgg::default(),
+                        home_goals: hg,
+                        away_goals: ag,
+                    };
+                    // Team 1 concedes the away goals and vice versa.
+                    if let Some(s) = result.player_stats.get(&100) {
+                        row.senior_gk.add(s, ag);
+                    }
+                    if let Some(s) = result.player_stats.get(&200) {
+                        row.youth_gk.add(s, hg);
+                    }
+                    if !slot.is_goalkeeper() {
+                        if let Some(s) = result.player_stats.get(&senior_slot_id) {
+                            row.senior_slot.add(s, ag);
+                        }
+                        if let Some(s) = result.player_stats.get(&youth_slot_id) {
+                            row.youth_slot.add(s, hg);
+                        }
+                    }
+                    row
+                })
+                .collect();
+
+            for r in rows {
+                senior_gk.merge(r.senior_gk);
+                youth_gk.merge(r.youth_gk);
+                senior_slot.merge(r.senior_slot);
+                youth_slot.merge(r.youth_slot);
+                home_goals += r.home_goals;
+                away_goals += r.away_goals;
+            }
         }
-        senior_gk.skill = Self::skill_of(&senior, 0);
-        youth_gk.skill = Self::skill_of(&youth, 0);
-        senior_slot.skill = Self::skill_of(&senior, slot.slot_index());
-        youth_slot.skill = Self::skill_of(&youth, slot.slot_index());
+        let draws = Self::DRAWS as f32;
+        senior_gk.skill = skills.0 / draws;
+        youth_gk.skill = skills.1 / draws;
+        senior_slot.skill = skills.2 / draws;
+        youth_slot.skill = skills.3 / draws;
+        let n_matches = total;
 
         let n = n_matches.max(1) as f32;
         println!(
@@ -1823,6 +1863,27 @@ impl MixedQualityHarness {
             youth.failed_claims_shot as f32 / youth.apps(),
             youth.failed_claims_goal as f32 / youth.apps(),
         );
+        let (gathers, moments, flaps) = core::gk_claim_diag::snapshot();
+        let (flap_shots_seen, flap_charged, flap_dropped) = core::gk_claim_diag::resolution();
+        let matches = (senior.apps() + youth.apps()).max(1.0);
+        println!(
+            "  claim contest (both keepers): {:.2} gathers/m, {:.2} command moments/m, \
+             {:.3} flaps/m ({:.1}% of moments)   real: ~1-3 claims/m, a handful of \
+             flapped crosses a SEASON",
+            gathers as f32 / matches * 2.0,
+            moments as f32 / matches * 2.0,
+            flaps as f32 / matches * 2.0,
+            if moments == 0 {
+                0.0
+            } else {
+                flaps as f32 / moments as f32 * 100.0
+            },
+        );
+        println!(
+            "  flap resolution (totals): {} flaps, {} shots seen while pending, \
+             {} charged to-shot, {} dropped (late / own side)",
+            flaps, flap_shots_seen, flap_charged, flap_dropped,
+        );
         println!(
             "  real reference: within-league keeper save% spread ~58% (poor) → ~78% (elite); \
              errors→goal 0-1/season elite vs 3-6 weak young"
@@ -1880,21 +1941,27 @@ impl MixedQualityHarness {
         );
     }
 
-    /// Eleven players at `level`, with `slot` retargeted to `slot_mean`.
+    /// Eleven players at `level`, with `slot`'s position composite
+    /// pinned exactly to `slot_skill`.
     fn build_team(
         team_id: u32,
         level: u8,
         slot: SpotlightSlot,
-        slot_mean: f32,
+        slot_skill: f32,
     ) -> Vec<MatchPlayer> {
         let base_id = team_id * 100;
         POSITIONS_442
             .iter()
             .enumerate()
             .map(|(i, &pos)| {
-                let mut player = generate_player(base_id + i as u32, pos, level);
+                let id = base_id + i as u32;
+                let mut player = generate_player(id, pos, level);
                 if i == slot.slot_index() {
-                    LevelSkillCurve::retarget(&mut player.skills, slot_mean);
+                    // Retarget the overall level first (so the whole
+                    // player is youth / senior, not just his headline
+                    // attributes), then pin the composite exactly.
+                    LevelSkillCurve::retarget(&mut player.skills, slot_skill);
+                    SkillComposite::pin(&mut player.skills, pos_group_of(id), slot_skill);
                 }
                 MatchPlayer::from_player(team_id, &player, pos, false, None)
             })
