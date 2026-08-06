@@ -442,6 +442,198 @@ fn generate_player(id: u32, position: PlayerPositionType, level: u8) -> Player {
     player
 }
 
+/// Optional within-squad quality spread, in skill points of standard
+/// deviation, read once from `SQUAD_SPREAD`.
+///
+/// `make_squad_simple` retargets EVERY player to exactly
+/// `LevelSkillCurve::target_mean(level)`, so a uniform squad's only
+/// intra-team variation is skill SHAPE (a player with higher passing has
+/// correspondingly lower everything else). That makes any rating-vs-skill
+/// correlation structurally ~0 for reasons that have nothing to do with
+/// the engine — there is no quality axis to correlate against.
+///
+/// Real squads are not uniform: a mid-table top-flight XI runs from ~14
+/// (the stars) to ~9 (the role players). `SQUAD_SPREAD=2` reproduces that
+/// so the RATING vs SKILL CORRELATION block measures something real.
+///
+/// Default 0.0 — every historical calibration number in the project was
+/// measured on uniform squads, and this must not silently move them.
+struct SquadSpread;
+
+impl SquadSpread {
+    fn sd() -> f32 {
+        static SD: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+        *SD.get_or_init(|| {
+            std::env::var("SQUAD_SPREAD")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.0)
+                .clamp(0.0, 5.0)
+        })
+    }
+
+    /// Triangular jitter (sum of two uniforms) — bell-ish without needing
+    /// a normal sampler, and bounded so no player leaves the 1..20 band.
+    fn jitter() -> f32 {
+        let sd = Self::sd();
+        if sd <= 0.0 {
+            return 0.0;
+        }
+        let mut rng = rand::rng();
+        let u: f32 = rng.random_range(-1.0..1.0);
+        let v: f32 = rng.random_range(-1.0..1.0);
+        (u + v) * sd
+    }
+
+    /// Apply the spread to an already-retargeted player.
+    fn apply(skills: &mut PlayerSkills, level: u8) {
+        if Self::sd() <= 0.0 {
+            return;
+        }
+        let target = (LevelSkillCurve::target_mean(level) + Self::jitter()).clamp(2.0, 18.5);
+        LevelSkillCurve::retarget(skills, target);
+    }
+}
+
+/// Position-relevant RAW skill composite (1..20) for the rating-vs-skill
+/// diagnostics. Mirrors the weights the engine's own composites use
+/// (`ops::skill_composites`) so the number means the same thing the
+/// engine acts on, but reads the raw attributes: the question these
+/// diagnostics ask is "does a better player produce a better stat line",
+/// which must not be confounded by fatigue / match-state the way
+/// `effective_skill` is.
+///
+/// Wrapped on a zero-sized struct rather than left as loose helpers so
+/// the composite definitions live in one place — they are the x-axis of
+/// every correlation the harness prints.
+struct SkillComposite;
+
+impl SkillComposite {
+    /// `pos_group` uses the harness convention: 0 GK, 1 DEF, 2 MID, 3 FWD.
+    fn for_group(s: &PlayerSkills, pos_group: u8) -> f32 {
+        match pos_group {
+            0 => Self::goalkeeper(s),
+            1 => Self::defender(s),
+            2 => Self::midfielder(s),
+            _ => Self::forward(s),
+        }
+    }
+
+    /// Shot-stopping weights from `sc::gk_shot_stopping`.
+    fn goalkeeper(s: &PlayerSkills) -> f32 {
+        s.goalkeeping.reflexes * 0.30
+            + s.goalkeeping.handling * 0.18
+            + s.physical.agility * 0.16
+            + s.mental.positioning * 0.10
+            + s.mental.concentration * 0.10
+            + s.mental.anticipation * 0.08
+            + s.goalkeeping.one_on_ones * 0.08
+    }
+
+    fn defender(s: &PlayerSkills) -> f32 {
+        s.technical.marking * 0.24
+            + s.technical.tackling * 0.22
+            + s.mental.positioning * 0.16
+            + s.mental.anticipation * 0.14
+            + s.technical.heading * 0.10
+            + s.physical.strength * 0.08
+            + s.mental.decisions * 0.06
+    }
+
+    fn midfielder(s: &PlayerSkills) -> f32 {
+        s.technical.passing * 0.24
+            + s.mental.vision * 0.18
+            + s.technical.technique * 0.14
+            + s.mental.decisions * 0.14
+            + s.technical.first_touch * 0.12
+            + s.mental.work_rate * 0.10
+            + s.mental.anticipation * 0.08
+    }
+
+    fn forward(s: &PlayerSkills) -> f32 {
+        s.technical.finishing * 0.32
+            + s.mental.off_the_ball * 0.20
+            + s.technical.technique * 0.14
+            + s.mental.composure * 0.14
+            + s.technical.first_touch * 0.12
+            + s.physical.acceleration * 0.08
+    }
+
+    /// Snapshot every starter's composite so the caller can join skills
+    /// onto the post-match stat rows. Taken BEFORE the squad is moved
+    /// into the engine.
+    fn snapshot(squad: &MatchSquad) -> Vec<(u32, f32)> {
+        squad
+            .main_squad
+            .iter()
+            .map(|p| (p.id, Self::for_group(&p.skills, pos_group_of(p.id))))
+            .collect()
+    }
+}
+
+/// Streaming Pearson-r accumulator. Kept as a struct (not a pass over a
+/// stored sample vector) so the per-position correlations can be merged
+/// across the parallel match loop the same way the volume aggregates are.
+#[derive(Clone, Copy, Default)]
+struct Correlation {
+    n: u32,
+    sx: f64,
+    sy: f64,
+    sxx: f64,
+    syy: f64,
+    sxy: f64,
+}
+
+impl Correlation {
+    fn push(&mut self, x: f32, y: f32) {
+        let (x, y) = (x as f64, y as f64);
+        self.n += 1;
+        self.sx += x;
+        self.sy += y;
+        self.sxx += x * x;
+        self.syy += y * y;
+        self.sxy += x * y;
+    }
+
+    fn r(&self) -> f32 {
+        if self.n < 3 {
+            return 0.0;
+        }
+        let n = self.n as f64;
+        let cov = self.sxy - self.sx * self.sy / n;
+        let vx = self.sxx - self.sx * self.sx / n;
+        let vy = self.syy - self.sy * self.sy / n;
+        if vx <= 0.0 || vy <= 0.0 {
+            return 0.0;
+        }
+        (cov / (vx * vy).sqrt()) as f32
+    }
+
+    fn mean_x(&self) -> f32 {
+        if self.n == 0 {
+            0.0
+        } else {
+            (self.sx / self.n as f64) as f32
+        }
+    }
+
+    fn sd_x(&self) -> f32 {
+        Self::sd(self.n, self.sx, self.sxx)
+    }
+
+    fn sd_y(&self) -> f32 {
+        Self::sd(self.n, self.sy, self.syy)
+    }
+
+    fn sd(n: u32, s: f64, ss: f64) -> f32 {
+        if n < 2 {
+            return 0.0;
+        }
+        let n = n as f64;
+        ((ss - s * s / n) / (n - 1.0)).max(0.0).sqrt() as f32
+    }
+}
+
 fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
     let base_id = team_id * 100;
     // STAR_HOG=1 reproduces a lone-striker shape: one elite forward
@@ -507,6 +699,10 @@ fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
                     _ => {}
                 }
             }
+            // Opt-in within-squad quality spread (default off). Applied
+            // after the playmaker overrides so an explicitly-shaped
+            // player keeps his shape, just at a jittered level.
+            SquadSpread::apply(&mut player.skills, lvl);
             MatchPlayer::from_player(team_id, &player, pos, false, None)
         })
         .collect();
@@ -662,6 +858,11 @@ struct MatchOutcome {
     /// VOLUME, for the RATING VOLUME PROFILE diagnostic. Index:
     /// 0=GK 1=DEF 2=MID 3=FWD.
     pos_volumes: [RatingVolumeAgg; 4],
+    /// `(player_id, raw skill composite)` for both starting XIs, taken
+    /// before kickoff. Joined onto `per_player` to measure whether the
+    /// engine turns player QUALITY into a better stat line — the
+    /// RATING vs SKILL CORRELATION block.
+    per_player_skill: Vec<(u32, f32)>,
 }
 
 /// Per-position per-match sums of the rating-relevant volume counters.
@@ -1280,6 +1481,450 @@ impl Bench {
     }
 }
 
+// ── gap: mixed-quality diagnostic ──────────────────────────────────────
+//
+// The `stats` harness only ever plays two squads of the SAME quality, so
+// the scenario the live site actually reports — a weak young player in an
+// otherwise senior XI — was unmeasured. Every calibration number the
+// project owns describes equal-level football, where "keeper skill does
+// nothing" is invisible because both keepers are equally good.
+//
+// `gap N level [slot]` builds two identical level-`level` XIs and then
+// replaces ONE slot: Team 1 gets a senior-quality player in it, Team 2 a
+// youth-quality one. Everything else — formation, tactics, the other ten
+// players' level — is the same on both sides, so the difference between
+// the two spotlight rows is attributable to the quality gap alone.
+//
+// Squads are built ONCE and cloned per match (like the league harness),
+// so the rating means printed are genuine SEASON averages of two fixed
+// players, not an average over freshly-drawn ones.
+
+/// Which slot the harness downgrades on Team 2 / upgrades on Team 1.
+#[derive(Clone, Copy, PartialEq)]
+enum SpotlightSlot {
+    Goalkeeper,
+    CentreBack,
+    CentreMid,
+    Forward,
+}
+
+impl SpotlightSlot {
+    fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "gk" | "keeper" | "goalkeeper" => Some(Self::Goalkeeper),
+            "cb" | "def" | "defender" => Some(Self::CentreBack),
+            "cm" | "mid" | "midfielder" => Some(Self::CentreMid),
+            "fw" | "st" | "fwd" | "forward" => Some(Self::Forward),
+            _ => None,
+        }
+    }
+
+    /// Index into `POSITIONS_442` — also the player's id offset.
+    fn slot_index(self) -> usize {
+        match self {
+            Self::Goalkeeper => 0,
+            Self::CentreBack => 2,  // DefenderCenterLeft
+            Self::CentreMid => 6,   // MidfielderCenterLeft
+            Self::Forward => 9,     // ForwardLeft
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Goalkeeper => "GK",
+            Self::CentreBack => "CB",
+            Self::CentreMid => "CM",
+            Self::Forward => "FW",
+        }
+    }
+
+    fn is_goalkeeper(self) -> bool {
+        self == Self::Goalkeeper
+    }
+}
+
+/// Per-player season accumulator for the spotlight rows.
+#[derive(Default)]
+struct SpotlightAgg {
+    skill: f32,
+    ratings: Vec<f32>,
+    minutes: u32,
+    // Keeper lanes.
+    saves: u32,
+    shots_faced: u32,
+    conceded: u32,
+    command_actions: u32,
+    failed_claims_shot: u32,
+    failed_claims_goal: u32,
+    // Shared mistake lanes.
+    errors_to_shot: u32,
+    errors_to_goal: u32,
+    // Outfield lanes.
+    passes_attempted: u32,
+    passes_completed: u32,
+    miscontrols: u32,
+    heavy_touches: u32,
+    dribbles_ok: u32,
+    dribbles_try: u32,
+    key_passes: u32,
+    def_actions: u32,
+    goals: u32,
+    assists: u32,
+}
+
+impl SpotlightAgg {
+    fn add(&mut self, s: &core::r#match::PlayerMatchEndStats, conceded: u32) {
+        if s.minutes_played == 0 {
+            return;
+        }
+        let z = &s.zone_stats;
+        self.ratings.push(s.match_rating);
+        self.minutes += s.minutes_played as u32;
+        self.saves += s.saves as u32;
+        self.shots_faced += s.shots_faced as u32;
+        self.conceded += conceded;
+        self.command_actions += z.gk_command_actions as u32;
+        self.failed_claims_shot += z.gk_failed_claims_to_shot as u32;
+        self.failed_claims_goal += z.gk_failed_claims_to_goal as u32;
+        self.errors_to_shot += s.errors_leading_to_shot as u32;
+        self.errors_to_goal += s.errors_leading_to_goal as u32;
+        self.passes_attempted += s.passes_attempted as u32;
+        self.passes_completed += s.passes_completed as u32;
+        self.miscontrols += s.miscontrols as u32;
+        self.heavy_touches += s.heavy_touches as u32;
+        self.dribbles_ok += s.successful_dribbles as u32;
+        self.dribbles_try += s.attempted_dribbles as u32;
+        self.key_passes += s.key_passes as u32;
+        self.def_actions +=
+            (s.tackles + s.interceptions + s.blocks + s.clearances + s.successful_pressures) as u32;
+        self.goals += s.goals as u32;
+        self.assists += s.assists as u32;
+    }
+
+    fn merge(&mut self, o: SpotlightAgg) {
+        self.skill = if self.skill > 0.0 { self.skill } else { o.skill };
+        self.ratings.extend(o.ratings);
+        self.minutes += o.minutes;
+        self.saves += o.saves;
+        self.shots_faced += o.shots_faced;
+        self.conceded += o.conceded;
+        self.command_actions += o.command_actions;
+        self.failed_claims_shot += o.failed_claims_shot;
+        self.failed_claims_goal += o.failed_claims_goal;
+        self.errors_to_shot += o.errors_to_shot;
+        self.errors_to_goal += o.errors_to_goal;
+        self.passes_attempted += o.passes_attempted;
+        self.passes_completed += o.passes_completed;
+        self.miscontrols += o.miscontrols;
+        self.heavy_touches += o.heavy_touches;
+        self.dribbles_ok += o.dribbles_ok;
+        self.dribbles_try += o.dribbles_try;
+        self.key_passes += o.key_passes;
+        self.def_actions += o.def_actions;
+        self.goals += o.goals;
+        self.assists += o.assists;
+    }
+
+    fn apps(&self) -> f32 {
+        self.ratings.len().max(1) as f32
+    }
+
+    /// (mean, p10, p90) of the season's per-match ratings.
+    fn rating_dist(&self) -> (f32, f32, f32) {
+        if self.ratings.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+        let mut v = self.ratings.clone();
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mean = v.iter().sum::<f32>() / v.len() as f32;
+        let p = |q: f32| -> f32 {
+            let idx = ((v.len() as f32 - 1.0) * q).round() as usize;
+            v[idx.min(v.len() - 1)]
+        };
+        (mean, p(0.10), p(0.90))
+    }
+
+    fn save_pct(&self) -> f32 {
+        if self.shots_faced == 0 {
+            0.0
+        } else {
+            self.saves as f32 / self.shots_faced as f32 * 100.0
+        }
+    }
+
+    fn pass_pct(&self) -> f32 {
+        if self.passes_attempted == 0 {
+            0.0
+        } else {
+            self.passes_completed as f32 / self.passes_attempted as f32 * 100.0
+        }
+    }
+}
+
+struct MixedQualityHarness;
+
+impl MixedQualityHarness {
+    /// Target mean skill for the two spotlight players. Chosen to bracket
+    /// the realistic senior band: a first-choice top-flight player sits
+    /// ~14-16 across his relevant attributes, an academy graduate thrown
+    /// in at 17-18 years old sits ~6-8. Both are retargeted with the same
+    /// `LevelSkillCurve::retarget` shift the rest of the harness uses, so
+    /// the position SHAPE (a keeper stays keeper-shaped) is preserved.
+    const SENIOR_MEAN: f32 = 15.0;
+    const YOUTH_MEAN: f32 = 7.0;
+
+    fn run(n_matches: usize, level: u8, slot: SpotlightSlot) {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error")).init();
+        let n_threads = rayon::current_num_threads();
+        println!(
+            "Mixed-quality: {} matches, both XIs level {}, spotlight slot {} \
+             (Team 1 senior mean {:.0} vs Team 2 youth mean {:.0})  (parallel: {} threads)",
+            n_matches,
+            level,
+            slot.label(),
+            Self::SENIOR_MEAN,
+            Self::YOUTH_MEAN,
+            n_threads
+        );
+        println!();
+
+        core::save_accounting_stats::reset();
+
+        // Built once, cloned per match — these two players must be the
+        // SAME players all season for the rating means to be season means.
+        let senior = Self::build_team(1, level, slot, Self::SENIOR_MEAN);
+        let youth = Self::build_team(2, level, slot, Self::YOUTH_MEAN);
+        let senior_slot_id = 100 + slot.slot_index() as u32;
+        let youth_slot_id = 200 + slot.slot_index() as u32;
+
+        struct Row {
+            senior_gk: SpotlightAgg,
+            youth_gk: SpotlightAgg,
+            senior_slot: SpotlightAgg,
+            youth_slot: SpotlightAgg,
+            home_goals: u32,
+            away_goals: u32,
+        }
+
+        let rows: Vec<Row> = (0..n_matches)
+            .into_par_iter()
+            .map(|_| {
+                let home = Self::squad(&senior, 1);
+                let away = Self::squad(&youth, 2);
+                let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
+                let score = result.score.as_ref().unwrap();
+                let hg = score.home_team.get() as u32;
+                let ag = score.away_team.get() as u32;
+                let mut row = Row {
+                    senior_gk: SpotlightAgg::default(),
+                    youth_gk: SpotlightAgg::default(),
+                    senior_slot: SpotlightAgg::default(),
+                    youth_slot: SpotlightAgg::default(),
+                    home_goals: hg,
+                    away_goals: ag,
+                };
+                // Team 1 concedes the away goals and vice versa.
+                if let Some(s) = result.player_stats.get(&100) {
+                    row.senior_gk.add(s, ag);
+                }
+                if let Some(s) = result.player_stats.get(&200) {
+                    row.youth_gk.add(s, hg);
+                }
+                if !slot.is_goalkeeper() {
+                    if let Some(s) = result.player_stats.get(&senior_slot_id) {
+                        row.senior_slot.add(s, ag);
+                    }
+                    if let Some(s) = result.player_stats.get(&youth_slot_id) {
+                        row.youth_slot.add(s, hg);
+                    }
+                }
+                row
+            })
+            .collect();
+
+        let mut senior_gk = SpotlightAgg::default();
+        let mut youth_gk = SpotlightAgg::default();
+        let mut senior_slot = SpotlightAgg::default();
+        let mut youth_slot = SpotlightAgg::default();
+        let mut home_goals = 0u32;
+        let mut away_goals = 0u32;
+        for r in rows {
+            senior_gk.merge(r.senior_gk);
+            youth_gk.merge(r.youth_gk);
+            senior_slot.merge(r.senior_slot);
+            youth_slot.merge(r.youth_slot);
+            home_goals += r.home_goals;
+            away_goals += r.away_goals;
+        }
+        senior_gk.skill = Self::skill_of(&senior, 0);
+        youth_gk.skill = Self::skill_of(&youth, 0);
+        senior_slot.skill = Self::skill_of(&senior, slot.slot_index());
+        youth_slot.skill = Self::skill_of(&youth, slot.slot_index());
+
+        let n = n_matches.max(1) as f32;
+        println!(
+            "Team 1 (senior {}) scored {:.2}/m, conceded {:.2}/m   |   \
+             Team 2 (youth {}) scored {:.2}/m, conceded {:.2}/m",
+            slot.label(),
+            home_goals as f32 / n,
+            away_goals as f32 / n,
+            slot.label(),
+            away_goals as f32 / n,
+            home_goals as f32 / n,
+        );
+
+        Self::print_keeper_table(&senior_gk, &youth_gk, slot);
+        if !slot.is_goalkeeper() {
+            Self::print_outfield_table(&senior_slot, &youth_slot, slot);
+        }
+    }
+
+    fn print_keeper_table(senior: &SpotlightAgg, youth: &SpotlightAgg, slot: SpotlightSlot) {
+        println!();
+        if slot.is_goalkeeper() {
+            println!("--- KEEPER SPOTLIGHT (the quality gap under test) ---");
+        } else {
+            println!("--- KEEPERS (both at squad level — context row) ---");
+        }
+        println!(
+            "  {:<8} {:>6} {:>7} {:>6} {:>6} {:>7} {:>8} {:>8} {:>8} {:>8} {:>8}",
+            "side", "skill", "rating", "p10", "p90", "save%", "conc/m", "saves/m", "faced/m",
+            "cmd/m", "err→gl"
+        );
+        for (label, a) in [("senior", senior), ("youth", youth)] {
+            let (mean, p10, p90) = a.rating_dist();
+            let apps = a.apps();
+            println!(
+                "  {:<8} {:>6.1} {:>7.2} {:>6.2} {:>6.2} {:>6.1}% {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>8.3}",
+                label,
+                a.skill,
+                mean,
+                p10,
+                p90,
+                a.save_pct(),
+                a.conceded as f32 / apps,
+                a.saves as f32 / apps,
+                a.shots_faced as f32 / apps,
+                a.command_actions as f32 / apps,
+                a.errors_to_goal as f32 / apps,
+            );
+        }
+        println!(
+            "  mistake lanes per match — senior: err→shot {:.3} failed-claim→shot {:.3} \
+             failed-claim→goal {:.3}",
+            senior.errors_to_shot as f32 / senior.apps(),
+            senior.failed_claims_shot as f32 / senior.apps(),
+            senior.failed_claims_goal as f32 / senior.apps(),
+        );
+        println!(
+            "                            youth : err→shot {:.3} failed-claim→shot {:.3} \
+             failed-claim→goal {:.3}",
+            youth.errors_to_shot as f32 / youth.apps(),
+            youth.failed_claims_shot as f32 / youth.apps(),
+            youth.failed_claims_goal as f32 / youth.apps(),
+        );
+        println!(
+            "  real reference: within-league keeper save% spread ~58% (poor) → ~78% (elite); \
+             errors→goal 0-1/season elite vs 3-6 weak young"
+        );
+    }
+
+    fn print_outfield_table(senior: &SpotlightAgg, youth: &SpotlightAgg, slot: SpotlightSlot) {
+        println!();
+        println!(
+            "--- {} SPOTLIGHT (the quality gap under test) ---",
+            slot.label()
+        );
+        println!(
+            "  {:<8} {:>6} {:>7} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+            "side",
+            "skill",
+            "rating",
+            "p10",
+            "p90",
+            "pass%",
+            "misc/m",
+            "drib%",
+            "kp/m",
+            "def/m",
+            "G+A/m",
+            "err/m"
+        );
+        for (label, a) in [("senior", senior), ("youth", youth)] {
+            let (mean, p10, p90) = a.rating_dist();
+            let apps = a.apps();
+            let drib = if a.dribbles_try == 0 {
+                0.0
+            } else {
+                a.dribbles_ok as f32 / a.dribbles_try as f32 * 100.0
+            };
+            println!(
+                "  {:<8} {:>6.1} {:>7.2} {:>6.2} {:>6.2} {:>6.1}% {:>7.2} {:>6.1}% {:>7.2} {:>7.2} {:>7.2} {:>7.3}",
+                label,
+                a.skill,
+                mean,
+                p10,
+                p90,
+                a.pass_pct(),
+                a.miscontrols as f32 / apps,
+                drib,
+                a.key_passes as f32 / apps,
+                a.def_actions as f32 / apps,
+                (a.goals + a.assists) as f32 / apps,
+                a.errors_to_shot as f32 / apps,
+            );
+        }
+        println!(
+            "  weak-player drag lanes to watch: pass% below ~74, miscontrols accumulating, \
+             failed dribbles, engagement penalty"
+        );
+    }
+
+    /// Eleven players at `level`, with `slot` retargeted to `slot_mean`.
+    fn build_team(
+        team_id: u32,
+        level: u8,
+        slot: SpotlightSlot,
+        slot_mean: f32,
+    ) -> Vec<MatchPlayer> {
+        let base_id = team_id * 100;
+        POSITIONS_442
+            .iter()
+            .enumerate()
+            .map(|(i, &pos)| {
+                let mut player = generate_player(base_id + i as u32, pos, level);
+                if i == slot.slot_index() {
+                    LevelSkillCurve::retarget(&mut player.skills, slot_mean);
+                }
+                MatchPlayer::from_player(team_id, &player, pos, false, None)
+            })
+            .collect()
+    }
+
+    fn squad(players: &[MatchPlayer], team_id: u32) -> MatchSquad {
+        MatchSquad {
+            team_id,
+            team_name: format!("Team {}", team_id),
+            tactics: Tactics::new(MatchTacticType::T442),
+            main_squad: players.to_vec(),
+            substitutes: Vec::new(),
+            captain_id: None,
+            vice_captain_id: None,
+            penalty_taker_id: None,
+            free_kick_taker_id: None,
+            selection_omissions: Vec::new(),
+            coach_snapshot: None,
+        }
+    }
+
+    fn skill_of(players: &[MatchPlayer], idx: usize) -> f32 {
+        players
+            .get(idx)
+            .map(|p| SkillComposite::for_group(&p.skills, pos_group_of(p.id)))
+            .unwrap_or(0.0)
+    }
+}
+
 fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  dev_match                       open browser viewer (random squad levels)");
@@ -1303,6 +1948,12 @@ fn print_usage() {
     );
     eprintln!(
         "  dev_match subs [N] [level]      substitution-usage diagnostic: per-team subs distribution by result"
+    );
+    eprintln!(
+        "  dev_match gap [N] [level] [slot]  mixed-quality diagnostic: identical XIs except one slot"
+    );
+    eprintln!(
+        "                                      slot = gk (default) | cb | cm | fw; Team 1 senior vs Team 2 youth"
     );
     eprintln!();
     eprintln!(
@@ -1537,6 +2188,20 @@ fn main() {
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(100);
             let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);
             run_subs_experiment(n, level);
+        }
+        // Mixed-quality diagnostic: two identical XIs except one slot,
+        // where Team 1 fields a senior-quality player and Team 2 a
+        // youth-quality one. The only harness mode that can see whether
+        // player QUALITY reaches the stat line (and therefore the
+        // rating) — `stats` only ever plays equal-quality squads.
+        "gap" | "stats-gap" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(200);
+            let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);
+            let slot = args
+                .get(4)
+                .and_then(|s| SpotlightSlot::parse(s))
+                .unwrap_or(SpotlightSlot::Goalkeeper);
+            MixedQualityHarness::run(n, level, slot);
         }
         "--help" | "-h" | "help" => {
             print_usage();
@@ -2138,6 +2803,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         .map(|(i, &(match_level_a, match_level_b))| {
             let home = make_squad_simple(1, match_level_a);
             let away = make_squad_simple(2, match_level_b);
+            // Skills must be read before the squads are moved into the
+            // engine; the post-match result carries stats, not attributes.
+            let mut per_player_skill = SkillComposite::snapshot(&home);
+            per_player_skill.extend(SkillComposite::snapshot(&away));
             let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
             let score = result.score.as_ref().unwrap();
             let hg = score.home_team.get();
@@ -2170,6 +2839,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 per_player,
                 goal_events,
                 pos_volumes: rating_volume_profile(&result),
+                per_player_skill,
             }
         })
         .collect();
@@ -3616,6 +4286,72 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         println!(
             "  {:<4} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>6}",
             label, m, p50, p10, p90, n
+        );
+    }
+
+    // ── RATING vs SKILL CORRELATION ─────────────────────────────────────
+    //
+    // The rating layer is ability-blind by contract, so player QUALITY can
+    // only reach a rating through the ENGINE producing a quality-dependent
+    // stat line. This block measures whether it does: Pearson r between a
+    // player's raw position composite (`SkillComposite`) and the rating he
+    // earned, over every player-match in the run.
+    //
+    // Samples are player-MATCHES, not season means: squads are regenerated
+    // per match, so an id is a fresh player each time — which is exactly
+    // what makes this a clean measurement of the engine channel (the same
+    // id spans 400 independently drawn players at the same level). Single-
+    // match outcome noise is large and real, so healthy is r ≈ 0.30-0.50,
+    // not 0.9. r ≈ 0 for a position means the engine is emitting the same
+    // stat line regardless of who is playing — a producer bug, never
+    // something to fix in the rating.
+    //
+    // At fixed levels the skill spread is generator noise within one level
+    // (sd ≈ 0.5-1.0), so `skill sd` is printed alongside: a near-zero
+    // spread would make r meaningless, and random-level runs (no level
+    // args) widen it deliberately.
+    let mut skill_corr = [Correlation::default(); 4];
+    {
+        let mut by_id: std::collections::HashMap<u32, f32> = std::collections::HashMap::new();
+        for o in &outcomes {
+            by_id.clear();
+            by_id.extend(o.per_player_skill.iter().copied());
+            for (id, _g, _sh, _xg, grp, rating, minutes, _a) in &o.per_player {
+                if *minutes == 0 {
+                    continue;
+                }
+                if let Some(skill) = by_id.get(id) {
+                    skill_corr[*grp as usize].push(*skill, *rating);
+                }
+            }
+        }
+    }
+    println!();
+    println!(
+        "--- RATING vs SKILL CORRELATION (player-match samples, SQUAD_SPREAD={:.1}) ---",
+        SquadSpread::sd()
+    );
+    if SquadSpread::sd() <= 0.0 {
+        println!(
+            "  (uniform squads: every player is retargeted to the same mean, so the only\n   \
+             variation is skill SHAPE — r is structurally ~0 here regardless of the engine.\n   \
+             Run with SQUAD_SPREAD=2 for a real quality axis.)"
+        );
+    }
+    println!(
+        "  {:<4} {:>7} {:>8} {:>10} {:>10} {:>7}    healthy r ~0.30-0.50",
+        "pos", "r", "n", "skill mean", "skill sd", "rat sd"
+    );
+    for (i, label) in ["GK", "DEF", "MID", "FWD"].iter().enumerate() {
+        let c = &skill_corr[i];
+        println!(
+            "  {:<4} {:>7.3} {:>8} {:>10.2} {:>10.2} {:>7.2}",
+            label,
+            c.r(),
+            c.n,
+            c.mean_x(),
+            c.sd_x(),
+            c.sd_y(),
         );
     }
 
