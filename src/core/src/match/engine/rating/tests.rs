@@ -4097,6 +4097,12 @@ fn dump_gk_archetypes() {
         (0, 0, 1, 0, "untested CS"),
         (8, 10, 1, 2, "heroic in defeat"),
         (2, 5, 1, 3, "leaky 3 conceded"),
+        // The two-conceded ladder — the reported symptom.
+        (2, 4, 1, 2, "2sv/2con loss"),
+        (3, 5, 2, 2, "3sv/2con draw"),
+        (4, 6, 2, 2, "4sv/2con draw"),
+        (5, 7, 3, 2, "5sv/2con win"),
+        (6, 8, 1, 2, "6sv/2con loss"),
     ] {
         let gk = make_gk(saves, faced);
         let r = RatingContext::new(&gk, tg, og).calculate();
