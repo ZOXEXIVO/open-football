@@ -2823,6 +2823,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::shot_gate_stats::reset();
     core::tackle_stats::reset();
     core::save_accounting_stats::reset();
+    core::key_pass_diag::reset();
+    core::block_diag::reset();
     core::helper_diag::reset();
     core::mid_run_diag::reset();
     core::time_band_diag::reset();
@@ -4557,6 +4559,47 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 "~0.5 / ~1.0",
             ),
         ];
+        // Why key passes under-emit: is the shot-assist TAGGING missing
+        // them, or do the engine's shots genuinely not arrive from a pass
+        // to the shooter? Opta's key pass is "the last pass before a
+        // shot", so the second case is a possession-model property, not a
+        // stat bug, and no divisor may compensate for it.
+        {
+            let (shots, no_link, wrong_receiver, stale, credited) = core::key_pass_diag::snapshot();
+            let pct = |x: u64| {
+                if shots == 0 {
+                    0.0
+                } else {
+                    x as f32 / shots as f32 * 100.0
+                }
+            };
+            println!(
+                "  key-pass tagging: {} shots — credited {:.1}%, no completed pass on record \
+                 {:.1}%, pass went to someone else {:.1}%, outside window {:.1}%   \
+                 (real: ~55-60% of shots have a key pass)",
+                shots,
+                pct(credited),
+                pct(no_link),
+                pct(wrong_receiver),
+                pct(stale),
+            );
+            let (seen, too_high, candidates, fired) = core::block_diag::snapshot();
+            let bpct = |x: u64| {
+                if seen == 0 {
+                    0.0
+                } else {
+                    x as f32 / seen as f32 * 100.0
+                }
+            };
+            println!(
+                "  block window: {} shots reached the check — above blocking height {:.1}%, \
+                 defender in the lane {:.1}%, blocked {:.1}%   (real: ~18-22% of shots blocked)",
+                seen,
+                bpct(too_high),
+                bpct(candidates),
+                bpct(fired),
+            );
+        }
         for (label, dv, mv, fv, real) in rows {
             println!(
                 "  {:<22} {:>6.2} {:>6.2} {:>6.2}    {}",

@@ -30,6 +30,40 @@ use std::sync::atomic::Ordering;
 /// shows when quality differs — which is the normal case on the live
 /// site, and the reason youth keepers were performing like
 /// internationals.
+/// Why shot blocks don't happen. `blocks` reads ~0.01 per defender per
+/// match against a real ~0.9, and the counter alone cannot say whether
+/// the shot never reaches the check, no defender is ever in the lane, or
+/// the roll simply fails. `match-logs` only.
+#[cfg(feature = "match-logs")]
+pub mod block_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// `try_block_shot` reached with a live shot in flight.
+    pub static SHOTS_SEEN: AtomicU64 = AtomicU64::new(0);
+    /// Rejected because the ball was above blocking height.
+    pub static TOO_HIGH: AtomicU64 = AtomicU64::new(0);
+    /// A defender was found inside the lane.
+    pub static CANDIDATES: AtomicU64 = AtomicU64::new(0);
+    /// The roll succeeded.
+    pub static FIRED: AtomicU64 = AtomicU64::new(0);
+
+    pub fn reset() {
+        for c in [&SHOTS_SEEN, &TOO_HIGH, &CANDIDATES, &FIRED] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// `(shots_seen, too_high, candidates, fired)`
+    pub fn snapshot() -> (u64, u64, u64, u64) {
+        (
+            SHOTS_SEEN.load(Ordering::Relaxed),
+            TOO_HIGH.load(Ordering::Relaxed),
+            CANDIDATES.load(Ordering::Relaxed),
+            FIRED.load(Ordering::Relaxed),
+        )
+    }
+}
+
 pub(crate) struct SaveModel;
 
 impl SaveModel {
@@ -247,6 +281,12 @@ impl Ball {
                 // opponent (a long pass that loops to them), the stale
                 // shot flag credits a phantom save and inflates the
                 // saves/on-target ratio above 100%.
+                //
+                // Note what was extinguished: if this was a live shot the
+                // defender did not intercept a pass, he blocked a strike,
+                // and that is what the stat sheet should say. Captured
+                // before the flag is cleared and carried on the event.
+                let was_live_shot = self.cached_shot_target.is_some();
                 self.cached_shot_target = None;
                 let interceptor_team = players
                     .iter()
@@ -257,7 +297,7 @@ impl Ball {
                 self.record_touch(interceptor_id, interceptor_team, tick, true);
                 self.offside_snapshot = None;
                 self.pass_origin_restart = PassOriginRestart::OpenPlay;
-                events.add_ball_event(BallEvent::Intercepted(interceptor_id, self.previous_owner));
+                events.add_ball_event(BallEvent::Intercepted(interceptor_id, self.previous_owner, was_live_shot));
             }
         }
     }
@@ -280,16 +320,24 @@ impl Ball {
         events: &mut EventCollection,
     ) {
         // Only live shots — no cache means no shot in flight, no block.
-        let _shot_target = match self.cached_shot_target {
+        let shot_target = match self.cached_shot_target {
             Some(t) => t,
             None => return,
         };
         if self.current_owner.is_some() || self.flags.in_flight_state == 0 {
             return;
         }
+        // One shot, one roll — see `ShotTarget::block_rolled`.
+        if shot_target.block_rolled {
+            return;
+        }
+        #[cfg(feature = "match-logs")]
+        block_diag::SHOTS_SEEN.fetch_add(1, Ordering::Relaxed);
         // Ball above defender reach — aerial shots aren't blocked at
         // chest height, only grounders and waist-high strikes.
         if self.position.z > 2.0 {
+            #[cfg(feature = "match-logs")]
+            block_diag::TOO_HIGH.fetch_add(1, Ordering::Relaxed);
             return;
         }
 
@@ -314,13 +362,25 @@ impl Ball {
 
         // Block window. Widened from 30u lookahead + 4u corridor so
         // defenders near the shot line have a real chance to get a
-        // leg/body in — previously many "close-but-not-perfect"
-        // positions fell just outside the corridor and the shot flew
-        // through unopposed. Real football blocks ~18-22% of shots
-        // (2-3 blocks per team per match from ~13 shots); we were
-        // below that with the tight window.
-        const BLOCK_LOOKAHEAD: f32 = 40.0; // was 30u
-        const BLOCK_CORRIDOR: f32 = 7.0; // was 4u — body + stretched leg
+        // leg/body in. Real football blocks ~18-22% of shots (2-3 per
+        // team per match from ~13 shots); the engine emits ~0.01 blocks
+        // per defender per match.
+        //
+        // ⚠ That gap is NOT this window. Measured with `block_diag`
+        // (2026-08, n=400 at L14): of 246k shot-ticks reaching the
+        // check, 28% are above blocking height and **0.1% ever find a
+        // defender in the lane at all** — so the roll below almost never
+        // gets to happen. Widening the lookahead to 120u (15m, the
+        // distance shots are really taken from) and the corridor to 16u
+        // (2m, a committed lunge rather than a standing body) moved
+        // candidates from 0.0% to 0.1% and blocks not at all. Defenders
+        // are simply not between the ball and the goal while a shot is
+        // in flight, which is a positioning property of the engine and a
+        // separate piece of work from the block model. Both constants
+        // are therefore left where they were rather than carrying an
+        // unmeasured widening for no benefit.
+        const BLOCK_LOOKAHEAD: f32 = 40.0;
+        const BLOCK_CORRIDOR: f32 = 7.0; // body + stretched leg (~0.9m)
 
         let mut best_blocker: Option<u32> = None;
         let mut best_chance: f32 = 0.0;
@@ -410,10 +470,23 @@ impl Ball {
         // RNG threshold instead of deterministic cutoff: a 30% block
         // chance still allows the shot through 70% of the time, which
         // is what we want — defenders block but don't always block.
+        //
+        // Latch BEFORE rolling so a shot that survives the best-placed
+        // defender is not re-offered to him (or to a worse one) on the
+        // next tick.
+        if best_blocker.is_some() {
+            #[cfg(feature = "match-logs")]
+            block_diag::CANDIDATES.fetch_add(1, Ordering::Relaxed);
+            if let Some(t) = self.cached_shot_target.as_mut() {
+                t.block_rolled = true;
+            }
+        }
         let blocker_id = match best_blocker {
             Some(id) if context.rng.unit_f32() < best_chance.clamp(0.03, 0.38) => id,
             _ => return,
         };
+        #[cfg(feature = "match-logs")]
+        block_diag::FIRED.fetch_add(1, Ordering::Relaxed);
 
         // Outcome distribution. Real blocks rarely produce clean
         // possession — they produce loose balls, deflections wide for a
@@ -467,7 +540,7 @@ impl Ball {
             self.current_owner = Some(blocker_id);
             self.flags.in_flight_state = 0;
             self.claim_cooldown = 25;
-            events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner));
+            events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner, false));
             return;
         }
 
@@ -958,7 +1031,7 @@ impl Ball {
         self.flags.in_flight_state = 10;
         self.claim_cooldown = 0;
         self.record_touch(keeper_id, keeper_team, tick, false);
-        events.add_ball_event(BallEvent::Intercepted(keeper_id, self.previous_owner));
+        events.add_ball_event(BallEvent::Intercepted(keeper_id, self.previous_owner, false));
     }
 }
 

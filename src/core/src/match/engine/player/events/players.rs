@@ -37,6 +37,41 @@ use nalgebra::Vector3;
 // missed (shooter not found, etc.) or where saves are double-credited.
 // match-logs feature only.
 // ───────────────────────────────────────────────────────────────────────────
+/// Why a shot did or didn't produce a key pass. The engine emits ~2 key
+/// passes per team per match against a real ~7-8, and the counter alone
+/// cannot say whether the TAGGING is broken or whether the engine's shots
+/// genuinely don't arrive from a pass to the shooter. These split the
+/// two: `SHOTS` vs `NO_LINK` (no completed pass on record at all) vs
+/// `WRONG_RECEIVER` (a pass completed, but to someone other than the
+/// player who ended up shooting) vs `CREDITED`.
+#[cfg(feature = "match-logs")]
+pub mod key_pass_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub static SHOTS: AtomicU64 = AtomicU64::new(0);
+    pub static NO_LINK: AtomicU64 = AtomicU64::new(0);
+    pub static WRONG_RECEIVER: AtomicU64 = AtomicU64::new(0);
+    pub static STALE_WINDOW: AtomicU64 = AtomicU64::new(0);
+    pub static CREDITED: AtomicU64 = AtomicU64::new(0);
+
+    pub fn reset() {
+        for c in [&SHOTS, &NO_LINK, &WRONG_RECEIVER, &STALE_WINDOW, &CREDITED] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// `(shots, no_link, wrong_receiver, stale_window, credited)`
+    pub fn snapshot() -> (u64, u64, u64, u64, u64) {
+        (
+            SHOTS.load(Ordering::Relaxed),
+            NO_LINK.load(Ordering::Relaxed),
+            WRONG_RECEIVER.load(Ordering::Relaxed),
+            STALE_WINDOW.load(Ordering::Relaxed),
+            CREDITED.load(Ordering::Relaxed),
+        )
+    }
+}
+
 #[cfg(feature = "match-logs")]
 pub mod save_accounting_stats {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -740,6 +775,13 @@ impl PlayerEventDispatcher {
                 const KEY_PASS_WINDOW_TICKS: u64 = 1200;
                 let shooter_team = field.get_player(shooter_id).map(|p| p.team_id);
                 let mut direct_assister_id: Option<u32> = None;
+                #[cfg(feature = "match-logs")]
+                {
+                    key_pass_diag::SHOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if field.ball.last_completed_pass_receiver_id.is_none() {
+                        key_pass_diag::NO_LINK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
                 if let (Some(passer_id), Some(receiver_id)) = (
                     field.ball.last_completed_pass_passer_id,
                     field.ball.last_completed_pass_receiver_id,
@@ -755,6 +797,19 @@ impl PlayerEventDispatcher {
                             passer.statistics.add_key_pass();
                         }
                         direct_assister_id = Some(passer_id);
+                        #[cfg(feature = "match-logs")]
+                        key_pass_diag::CREDITED
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    #[cfg(feature = "match-logs")]
+                    {
+                        if !receiver_is_shooter {
+                            key_pass_diag::WRONG_RECEIVER
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        } else if !in_window {
+                            key_pass_diag::STALE_WINDOW
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                     }
                     // Single-credit guarantee: even if the shot resolves
                     // into a goal that fires another event, the link is
@@ -3148,6 +3203,7 @@ impl PlayerEventDispatcher {
                     defending_side,
                     deflected,
                     save_rolled: false,
+                    block_rolled: false,
                 });
             } else {
                 field.ball.cached_shot_target = None;

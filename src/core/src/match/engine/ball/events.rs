@@ -16,8 +16,21 @@ pub enum BallEvent {
     /// Emitted by `try_pass_target_claim` so pass-completion stats
     /// can be credited exactly once per successful pass.
     PassCompleted(u32, u32),
-    /// Pass intercepted by opponent: (interceptor_id, passer_id)
-    Intercepted(u32, Option<u32>),
+    /// Pass intercepted by opponent: `(interceptor_id, passer_id,
+    /// was_live_shot)`.
+    ///
+    /// `was_live_shot` reclassifies the STAT, never the mechanism. The
+    /// interception path also swallows shots — `try_intercept` runs
+    /// before `try_block_shot` and explicitly extinguishes any in-flight
+    /// shot it takes control of — so a defender who got his body in front
+    /// of a strike was being credited with an interception. Opta calls
+    /// that a block, and the engine's `blocks` counter read 0.01 per
+    /// defender per match against a real ~0.9 because of it. The
+    /// interception MECHANISM is deliberately untouched: it is
+    /// load-bearing noise the rest of the engine is calibrated against
+    /// (see the interception memo), and this is exactly the
+    /// counter-level reclassification that memo prescribes.
+    Intercepted(u32, Option<u32>, bool),
     /// Shot blocked by an outfielder: `(blocker_id, ball_position)`.
     /// Emitted by `Ball::try_block_shot` whenever a block resolves
     /// (irrespective of the deflection outcome — controlled,
@@ -83,7 +96,7 @@ impl BallEventDispatcher {
         if context.logging_enabled {
             match event {
                 BallEvent::TakeMe(_) | BallEvent::Claimed(_) => {}
-                BallEvent::Intercepted(pid, _) => {
+                BallEvent::Intercepted(pid, _, _) => {
                     debug!("Ball event: Intercepted by player {}", pid);
                 }
                 _ => debug!("Ball event: {:?}", event),
@@ -147,7 +160,7 @@ impl BallEventDispatcher {
                 );
                 remaining_events.add(Event::PlayerEvent(PlayerEvent::ClaimBall(receiver_id)));
             }
-            BallEvent::Intercepted(interceptor_id, passer_id) => {
+            BallEvent::Intercepted(interceptor_id, passer_id, was_live_shot) => {
                 // Credit the interceptor. Opponent touch ends the pass
                 // window — accuracy was NOT earned.
                 let ball_pos = field.ball.position;
@@ -214,11 +227,17 @@ impl BallEventDispatcher {
                 field.ball.pressers_at_pass_count = 0;
 
                 if let Some(player) = field.get_player_mut(interceptor_id) {
-                    player.statistics.interceptions += 1;
-                    if let Some(zone) =
-                        PlayerEventDispatcher::zone_for_player(player, ball_pos, context)
-                    {
-                        player.statistics.note_interception_zone(zone);
+                    let zone = PlayerEventDispatcher::zone_for_player(player, ball_pos, context);
+                    if was_live_shot {
+                        player.statistics.add_block();
+                        if let Some(zone) = zone {
+                            player.statistics.note_block_zone(zone);
+                        }
+                    } else {
+                        player.statistics.interceptions += 1;
+                        if let Some(zone) = zone {
+                            player.statistics.note_interception_zone(zone);
+                        }
                     }
                 }
                 remaining_events.add(Event::PlayerEvent(PlayerEvent::ClaimBall(interceptor_id)));

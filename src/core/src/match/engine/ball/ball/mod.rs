@@ -12,7 +12,7 @@
 //! | [`stall`]       | Position-anchor stall detector + snapshot diagnostics        |
 
 mod goal;
-mod interactions;
+pub mod interactions;
 mod motion;
 mod ownership;
 mod restart;
@@ -370,6 +370,12 @@ pub struct ShotTarget {
     /// now a genuine per-shot save chance calibrated straight against
     /// real save% (~67% of shots on target).
     pub save_rolled: bool,
+    /// True once the block roll has been resolved for THIS shot — the
+    /// same one-shot-one-roll discipline `save_rolled` enforces. Without
+    /// it, widening the block window means rolling once per tick the
+    /// defender stays in the lane, so the block rate becomes a function
+    /// of flight timing rather than of the model.
+    pub block_rolled: bool,
     /// Set when the shot took a deflection off a body in the lane.
     /// Catching/Diving states damp the save probability — the keeper
     /// was set for the original trajectory and the redirected ball is
