@@ -513,6 +513,76 @@ impl SeasonFixture {
         f
     }
 
+    /// Three keepers, ONE club. The season the whole keeper-quality
+    /// campaign exists to separate: same side, same 34 matches, the same
+    /// shots faced and the same goals scored at the other end — only the
+    /// save rate and the mistakes differ.
+    ///
+    /// Every other GK fixture varies the club as well as the keeper
+    /// (a top-flight side vs a continental underdog vs a dominant
+    /// lower-division defence), so none of them can answer the question
+    /// the live site actually asked: does a young keeper thrown into a
+    /// senior team rate like the international he replaced? Holding the
+    /// club fixed is what makes `keeper_quality_orders_strictly` a real
+    /// test rather than a test of three different situations.
+    ///
+    /// `save_rate` sets how many of the fixed shots he keeps out;
+    /// conceded goals follow from it (with a fractional carry so the
+    /// season total matches the rate exactly), and the results follow
+    /// from the goals. `errors` is the count of matches carrying a
+    /// mistake — a giveaway that became a shot, half of them a goal,
+    /// plus a flapped cross. Real reference: an elite keeper makes 0-1
+    /// errors leading to a goal in a season, a weak young one 3-6.
+    fn keeper_at_one_club(save_rate: f32, errors: usize) -> Self {
+        let mut f = SeasonFixture {
+            matches: Vec::new(),
+            team_shot_share: 0.55,
+            team_possession: 0.54,
+        };
+        // Fixed club context: what the opposition put on target, and what
+        // this keeper's own team scored, in each of 34 matches.
+        const FACED: [u16; 34] = [
+            3, 4, 2, 5, 3, 4, 3, 2, 6, 4, 3, 5, 2, 4, 3, 3, 5, 4, 2, 3, 4, 6, 3, 2, 4, 3, 5, 4, 3,
+            2, 4, 3, 5, 4,
+        ];
+        const TEAM_GOALS: [u8; 34] = [
+            2, 1, 3, 1, 2, 0, 2, 1, 1, 2, 3, 1, 2, 0, 1, 2, 2, 1, 3, 2, 1, 0, 2, 1, 2, 3, 1, 2, 1,
+            2, 0, 1, 2, 2,
+        ];
+        // Command claims are a keeper-quality signal in their own right,
+        // but they are not what is under test here — held identical so
+        // the only moving parts are the save rate and the mistakes.
+        const COMMAND: [u16; 34] = [
+            1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0,
+            0, 1, 0, 1, 0,
+        ];
+        let mut carry = 0.0f32;
+        let mut errors_left = errors;
+        for i in 0..34 {
+            let faced = FACED[i];
+            let want = faced as f32 * (1.0 - save_rate) + carry;
+            let conceded = want.floor().max(0.0) as u16;
+            carry = want - conceded as f32;
+            let conceded = conceded.min(faced);
+            let saves = faced - conceded;
+            let mut line = LineFactory::gk(saves, faced, COMMAND[i]);
+            // Mistakes land on matches the keeper actually conceded in —
+            // an error leading to a goal in a clean sheet is not a stat
+            // line the engine can produce, and pinning a band against an
+            // impossible one measures nothing. `errors_leading_to_goal`
+            // stays the subset of `errors_leading_to_shot`, which is the
+            // nesting the rating's de-dup is built around.
+            if errors_left > 0 && conceded > 0 {
+                line.errors_leading_to_shot = 1;
+                line.errors_leading_to_goal = 1;
+                line.zone_stats.gk_failed_claims_to_shot = 1;
+                errors_left -= 1;
+            }
+            f.push(line, TEAM_GOALS[i], conceded as u8);
+        }
+        f
+    }
+
     /// Perin-like Champions League cluster: 6 apps, 9 conceded, 1 clean
     /// sheet, few saves, underdog context, group-stage-exit result mix
     /// (1W 1D 4L — the win is the lone shutout).
@@ -1631,6 +1701,138 @@ fn top_gk_league_season_lands_in_fm_band() {
          FM band is 6.60..=7.00\n{}",
         avg,
         f.breakdown()
+    );
+}
+
+// ===========================================================
+// Keeper quality at one club — the campaign contract
+// ===========================================================
+//
+// The live report was "young keepers play 7.x in their first official
+// matches". These three fixtures are the same club and the same 34
+// matches; only the keeper changes. If they ever converge again, the
+// quality channel has been broken somewhere between the engine's save
+// model and the rating's credit balance.
+
+/// Save rates are the real within-league band: an elite top-flight
+/// keeper stops ~75% of what he faces across a season, a weak young one
+/// ~57%. See `gk_rating_flat_population` for how far apart they were
+/// allowed to drift while both still rated ~7.0.
+const ELITE_SAVE_RATE: f32 = 0.75;
+const AVERAGE_SAVE_RATE: f32 = 0.67;
+const YOUNG_SAVE_RATE: f32 = 0.57;
+
+/// NB on the bands below. They sit slightly under the engine-population
+/// targets for the same descriptions (elite 6.9-7.2, weak 6.2-6.5,
+/// measured with `dev_match gap`) because this club is a harsher one
+/// than the population average: a mid-table side at 0.55 shot share,
+/// where the keeper faces 3.6 on target a match and the weak one ships
+/// 51 goals across 34 games with four errors leading to a goal. That
+/// season is genuinely worse than the engine's equal-teams average, and
+/// the bands are what a correct model returns for these stat lines
+/// rather than what would make the two contexts agree.
+#[test]
+fn elite_keeper_season_at_one_club_lands_in_the_good_band() {
+    let f = SeasonFixture::keeper_at_one_club(ELITE_SAVE_RATE, 1);
+    let avg = f.average();
+    assert!(
+        (6.75..=7.10).contains(&avg),
+        "an elite keeper (75% saves, one error all season) averaged {:.3} — \
+         expected 6.75..=7.10\n{}",
+        avg,
+        f.breakdown()
+    );
+}
+
+#[test]
+fn young_keeper_first_senior_season_reads_as_a_struggle() {
+    let f = SeasonFixture::keeper_at_one_club(YOUNG_SAVE_RATE, 4);
+    let avg = f.average();
+    assert!(
+        (5.95..=6.30).contains(&avg),
+        "a young keeper's first senior season (57% saves, four errors leading to a \
+         goal) averaged {:.3} — expected 5.95..=6.30. This is the number the whole \
+         campaign is about: at 6.8+ a teenager thrown into a first team reads like \
+         the international he replaced\n{}",
+        avg,
+        f.breakdown()
+    );
+}
+
+#[test]
+fn keeper_quality_orders_strictly_at_the_same_club() {
+    let young = SeasonFixture::keeper_at_one_club(YOUNG_SAVE_RATE, 4).average();
+    let average = SeasonFixture::keeper_at_one_club(AVERAGE_SAVE_RATE, 3).average();
+    let elite = SeasonFixture::keeper_at_one_club(ELITE_SAVE_RATE, 1).average();
+    assert!(
+        young < average && average < elite,
+        "keeper season averages must order strictly by quality in identical team \
+         context — young {young:.3}, average {average:.3}, elite {elite:.3}"
+    );
+    assert!(
+        elite - young >= 0.50,
+        "the gap between a weak young keeper and an elite one over a season must be \
+         at least 0.50 of rating — young {young:.3}, elite {elite:.3}. A narrower \
+         spread than this is the flat-population symptom returning"
+    );
+}
+
+/// The outfield half of the same contract. Two central midfielders at
+/// one club over 34 matches, neither scoring: one solid, one struggling.
+/// The stat lines are the shapes the engine produces for each — the weak
+/// one keeps possession less well, progresses the ball less, creates
+/// less and gives it away more — so this pins that a low-quality starter
+/// cannot average what a solid one does purely by turning up.
+#[test]
+fn outfield_quality_orders_strictly_at_the_same_club() {
+    fn cm_season(
+        passes: u16,
+        completed: u16,
+        prog: u16,
+        key: u16,
+        miscontrols: u16,
+        errors: u16,
+    ) -> SeasonFixture {
+        let mut f = SeasonFixture {
+            matches: Vec::new(),
+            team_shot_share: 0.55,
+            team_possession: 0.54,
+        };
+        const TEAM_GOALS: [u8; 34] = [
+            2, 1, 3, 1, 2, 0, 2, 1, 1, 2, 3, 1, 2, 0, 1, 2, 2, 1, 3, 2, 1, 0, 2, 1, 2, 3, 1, 2, 1,
+            2, 0, 1, 2, 2,
+        ];
+        const CONCEDED: [u8; 34] = [
+            1, 2, 0, 1, 0, 1, 1, 0, 2, 1, 0, 1, 1, 1, 0, 2, 1, 0, 1, 1, 2, 1, 0, 1, 1, 0, 2, 1, 1,
+            0, 1, 2, 0, 1,
+        ];
+        for i in 0..34 {
+            let mut line = LineFactory::cm_recycler(passes, completed, prog, key);
+            line.miscontrols = miscontrols;
+            // A giveaway that became a shot in roughly every third match
+            // for the weak profile, rare for the solid one.
+            if errors > 0 && i % (34 / errors.max(1) as usize).max(1) == 0 {
+                line.errors_leading_to_shot = 1;
+            }
+            f.push(line, TEAM_GOALS[i], CONCEDED[i]);
+        }
+        f
+    }
+
+    // Solid: 46 of 55 passes (84%), real progression and the occasional
+    // chance created. Weak: 26 of 38 (68% — under the 0.74 retention
+    // baseline), little progression, nothing created, ball lost often.
+    let solid = cm_season(55, 46, 5, 1, 1, 2).average();
+    let weak = cm_season(38, 26, 1, 0, 4, 11).average();
+    assert!(
+        weak < solid,
+        "a struggling midfielder's season must average below a solid one's at the \
+         same club — weak {weak:.3}, solid {solid:.3}"
+    );
+    assert!(
+        solid - weak >= 0.25,
+        "the gap between a struggling midfielder and a solid one over a season must \
+         be at least 0.25 of rating — weak {weak:.3}, solid {solid:.3}"
     );
 }
 

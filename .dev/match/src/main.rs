@@ -1150,7 +1150,12 @@ fn build_league_team(id: u32, name: &str, level: u8) -> LeagueTeam {
         .iter()
         .enumerate()
         .map(|(i, &pos)| {
-            let player = generate_player(base_id + i as u32, pos, level);
+            let mut player = generate_player(base_id + i as u32, pos, level);
+            // Opt-in within-squad quality spread, same as `make_squad_simple`.
+            // Without it every player at a level is identical in overall
+            // quality and the season rating-vs-skill correlation has no
+            // quality axis to correlate against.
+            SquadSpread::apply(&mut player.skills, level);
             MatchPlayer::from_player(id, &player, pos, false, None)
         })
         .collect();
@@ -1383,6 +1388,64 @@ fn run_league(n_teams: usize, rounds: usize, min_lvl: u8, max_lvl: u8) {
         );
     }
     println!("  real-life outfield share ≈ FWD 58% / MID 32% / DEF 10%");
+
+    // ── RATING vs SKILL CORRELATION, at SEASON granularity ──────────────
+    //
+    // The same diagnostic `stats` prints, but the number that actually
+    // matters. In `stats` the squads are rebuilt every match, so the only
+    // correlation available is per player-MATCH — and single-match rating
+    // noise (sd 0.6-0.9) swamps the quality signal at realistic
+    // within-level skill spreads, especially for keepers, whose per-match
+    // rating swings hardest on one goal conceded. Here the clubs are
+    // built once and every player plays the whole season, so this is the
+    // correlation between a player's quality and his AV RAT — which is
+    // what the site displays and what the campaign is judged on.
+    {
+        let mut season: std::collections::HashMap<u32, (f32, f32)> =
+            std::collections::HashMap::new();
+        for m in &played {
+            for &(id, _g, _sh, _xg, _grp, rating, minutes, _a) in &m.per_player {
+                if minutes == 0 {
+                    continue;
+                }
+                let e = season.entry(id).or_insert((0.0, 0.0));
+                e.0 += rating * minutes as f32;
+                e.1 += minutes as f32;
+            }
+        }
+        let mut corr = [Correlation::default(); 4];
+        for t in &teams {
+            for p in &t.players {
+                if let Some((points, weight)) = season.get(&p.id) {
+                    if *weight <= 0.0 {
+                        continue;
+                    }
+                    let grp = pos_group_of(p.id);
+                    corr[grp as usize].push(
+                        SkillComposite::for_group(&p.skills, grp),
+                        points / weight,
+                    );
+                }
+            }
+        }
+        println!("\n--- RATING vs SKILL CORRELATION (season averages) ---");
+        println!(
+            "  {:<4} {:>7} {:>6} {:>10} {:>10} {:>8}    healthy r ~0.30-0.50",
+            "pos", "r", "n", "skill mean", "skill sd", "season sd"
+        );
+        for (i, label) in ["GK", "DEF", "MID", "FWD"].iter().enumerate() {
+            let c = &corr[i];
+            println!(
+                "  {:<4} {:>7.3} {:>6} {:>10.2} {:>10.2} {:>8.2}",
+                label,
+                c.r(),
+                c.n,
+                c.mean_x(),
+                c.sd_x(),
+                c.sd_y(),
+            );
+        }
+    }
     println!("\n  (Gls = full-season tally; includes penalties / set-pieces the engine produced.)");
 }
 
