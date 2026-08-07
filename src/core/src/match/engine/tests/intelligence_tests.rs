@@ -407,9 +407,12 @@ fn match_rating_penalises_error_leading_to_goal() {
 #[test]
 fn gk_rating_reads_the_difficulty_of_the_shots_faced() {
     use crate::r#match::engine::result::PlayerMatchEndStats;
-    // Mirrors  — the engine population
-    // mean pre-shot xG of a shot on target.
-    const ORDINARY_CHANCE_XG: f32 = 0.1136;
+    // Mirrors `keeper::REF_XGOT_PER_ON_TARGET` — the engine population
+    // mean POST-shot expected goal of a shot on target, i.e. what a
+    // league-average keeper concedes from an ordinary strike. Pre-shot xG
+    // (the 0.1136 this used to carry) scores the chance the defence
+    // conceded, not the strike the keeper had to stop.
+    const ORDINARY_CHANCE_XGOT: f32 = 0.562;
     let mut base = PlayerMatchEndStats {
         shots_on_target: 0,
         shots_total: 0,
@@ -454,21 +457,25 @@ fn gk_rating_reads_the_difficulty_of_the_shots_faced() {
         own_goals: 0,
         zone_stats: Default::default(),
     };
-    // `xg_faced` is the chance value of the shots the keeper dealt with,
-    // and it sets what an ordinary keeper would have been expected to
-    // concede from them. Same saves, same goals, harder shots ⇒ a better
+    // `xg_faced` is what a league-average keeper would have conceded from
+    // the strikes this one dealt with, and it sets the bar his outcome is
+    // measured against. Same saves, same goals, harder strikes ⇒ a better
     // afternoon.
     //
-    // The old model read `xg_prevented` instead, as an upside-only
-    // credit — it took the positive half and discarded the negative one,
-    // so conceding cheap goals was invisible. That is no longer a
-    // consideration: the goals-prevented model reads the outcome
-    // directly, so there is nothing to protect the rating from.
-    base.xg_faced = 6.0 * ORDINARY_CHANCE_XG;
+    // Multipliers stay inside what `expected_goal_on_target` can actually
+    // produce: a single strike is bounded to [1 − MAX_SAVE, 1 − MIN_SAVE]
+    // = [0.08, 0.92], so the per-shot mean cannot exceed 1.64× the
+    // reference. Feeding 2× (as this fixture used to, in pre-shot units
+    // where it was reachable) asks the model a question the engine can
+    // never pose, and the answer — a keeper credited with an expectation
+    // above one goal per shot on target — is meaningless.
+    const HARD: f32 = 1.5; // per-shot 0.843, just under the 0.92 ceiling
+    const EASY: f32 = 0.45; // per-shot 0.253, a tame afternoon
+    base.xg_faced = 6.0 * ORDINARY_CHANCE_XGOT;
     let ordinary = RatingContext::new(&base, 1, 1).calculate();
-    base.xg_faced = 6.0 * ORDINARY_CHANCE_XG * 2.0;
+    base.xg_faced = 6.0 * ORDINARY_CHANCE_XGOT * HARD;
     let hard = RatingContext::new(&base, 1, 1).calculate();
-    base.xg_faced = 6.0 * ORDINARY_CHANCE_XG * 0.4;
+    base.xg_faced = 6.0 * ORDINARY_CHANCE_XGOT * EASY;
     let easy = RatingContext::new(&base, 1, 1).calculate();
     assert!(
         hard > ordinary && ordinary > easy,
@@ -476,13 +483,15 @@ fn gk_rating_reads_the_difficulty_of_the_shots_faced() {
          < ordinary {ordinary:.3} < hard {hard:.3}"
     );
     // And it conditions the expectation without ever overturning the
-    // outcome: facing the hardest chances the clamp allows does not buy
-    // a keeper who shipped three the rating of one who shipped one from
-    // the easiest.
-    base.xg_faced = 6.0 * ORDINARY_CHANCE_XG * 0.4;
+    // outcome: facing the hardest strikes the model can produce does not
+    // buy a keeper who shipped three the rating of one who shipped one
+    // from the tamest. `DEFENSIVE_OUTCOME` is what guarantees this — it
+    // reads goals conceded against a league-average night, and no
+    // difficulty multiplier touches it.
+    base.xg_faced = 6.0 * ORDINARY_CHANCE_XGOT * EASY;
     base.saves = 5;
     let one_conceded_easy = RatingContext::new(&base, 1, 1).calculate();
-    base.xg_faced = 6.0 * ORDINARY_CHANCE_XG * 2.0;
+    base.xg_faced = 6.0 * ORDINARY_CHANCE_XGOT * HARD;
     base.saves = 3;
     let three_conceded_hard = RatingContext::new(&base, 1, 3).calculate();
     assert!(

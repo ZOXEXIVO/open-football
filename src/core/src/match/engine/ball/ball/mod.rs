@@ -281,12 +281,20 @@ pub struct Ball {
     pub pressers_at_pass: [u32; 4],
     pub pressers_at_pass_count: u8,
 
-    /// Most-recent shot's xG and shooter id, used to credit the
-    /// conceding goalkeeper with `xg_prevented` when the shot is saved
-    /// (positive credit) or scored (negative credit). Cleared on
-    /// resolution (save / goal / wide / over) and on any non-shot
-    /// ownership change.
-    pub last_shot_xg: f32,
+    /// Most-recent shot's **post-shot** expected goal — the probability a
+    /// league-average keeper concedes it, from
+    /// [`SaveModel::expected_goal_on_target`]. Booked against the
+    /// defending keeper by `note_shot_faced` as both the expectation his
+    /// goals-prevented is measured against and the sign of his
+    /// `xg_prevented` ledger. Cleared on resolution (save / goal / wide /
+    /// over) and on any non-shot ownership change.
+    ///
+    /// Post-shot, not pre-shot, and the distinction is the whole point:
+    /// the pre-shot value describes the SITUATION the defence conceded,
+    /// so charging the keeper's expectation with it made a keeper behind
+    /// a good defence look like one facing league-average chances however
+    /// tame the strikes actually were. This value describes the STRIKE.
+    pub last_shot_xgot: f32,
     pub last_shot_shooter_id: Option<u32>,
 
     /// Tick of the most recent live rebound — a dangerous GK parry or
@@ -466,7 +474,7 @@ impl Ball {
             last_completed_pass_tick: 0,
             pressers_at_pass: [0; 4],
             pressers_at_pass_count: 0,
-            last_shot_xg: 0.0,
+            last_shot_xgot: 0.0,
             last_shot_shooter_id: None,
             last_rebound_tick: 0,
             last_giveaway_player_id: None,
@@ -519,7 +527,7 @@ impl Ball {
         self.pending_error_to_shot_player_id = None;
         self.pending_failed_claim_gk_id = None;
         self.pending_failed_claim_charged = false;
-        self.last_shot_xg = 0.0;
+        self.last_shot_xgot = 0.0;
         self.last_shot_shooter_id = None;
     }
 
@@ -598,8 +606,8 @@ impl Ball {
             }
         }
         // Pending shot xG and shooter id are kept in lock-step.
-        if self.last_shot_xg > 0.0 && self.last_shot_shooter_id.is_none() {
-            return Err("last_shot_xg without last_shot_shooter_id");
+        if self.last_shot_xgot > 0.0 && self.last_shot_shooter_id.is_none() {
+            return Err("last_shot_xgot without last_shot_shooter_id");
         }
         // Pending pass envelope: any leg must imply the rest.
         if self.pending_pass_passer.is_some()
@@ -923,7 +931,7 @@ impl Ball {
     /// the shot resolves (save / goal / wide / over / opponent claim).
     #[inline]
     pub fn clear_shot_metadata(&mut self) {
-        self.last_shot_xg = 0.0;
+        self.last_shot_xgot = 0.0;
         self.last_shot_shooter_id = None;
     }
 

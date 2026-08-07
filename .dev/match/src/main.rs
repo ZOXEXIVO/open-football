@@ -4974,6 +4974,36 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 bpct(candidates),
                 bpct(fired),
             );
+            let (opp, behind, beyond, wide, in_win, mean_perp) = core::block_diag::lane_snapshot();
+            let opct = |x: u64| {
+                if opp == 0 {
+                    0.0
+                } else {
+                    x as f32 / opp as f32 * 100.0
+                }
+            };
+            let (struck, goalside, near_line) = core::block_diag::strike_snapshot();
+            println!(
+                "  at the strike: {} shots — opposition outfielders goal-side of the ball \
+                 {:.2}/shot, of those within 30u of the ball's line to goal {:.2}/shot   \
+                 (real: 2-4 goal-side, ~1 in the lane)",
+                struck, goalside, near_line,
+            );
+            println!(
+                "  block lane: {} opponent-samples — behind the ball {:.1}%, \
+                 beyond lookahead {:.1}%, in window {:.1}% (of those, wider than the corridor \
+                 {:.1}%; mean perp {:.1}u)",
+                opp,
+                opct(behind),
+                opct(beyond),
+                opct(in_win),
+                if in_win == 0 {
+                    0.0
+                } else {
+                    wide as f32 / in_win as f32 * 100.0
+                },
+                mean_perp,
+            );
         }
         for (label, dv, mv, fv, real) in rows {
             println!(

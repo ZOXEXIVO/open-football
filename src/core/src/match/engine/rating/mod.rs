@@ -201,15 +201,20 @@ struct PerformanceScale {
     /// The performance value that reads as an ordinary shift for this
     /// position — the one that earns [`RatingShape::ANCHOR`].
     mean: f32,
-    /// Robust spread of the position's performance distribution,
-    /// `(p90 − p10) / 2.563` (the decile estimator, normal-consistent).
+    /// Spread of the position's performance distribution: the raw
+    /// standard deviation, taken straight from the `sd` column of the
+    /// PERFORMANCE SCALE block (`SQUAD_SPREAD=2 dev_match league 20 2 8
+    /// 18`), averaged over three draws.
     ///
-    /// Deliberately robust rather than the raw standard deviation: a
-    /// forward's raw sd is dominated by the handful of two- and
-    /// three-goal matches in the tail, so dividing by it would compress
-    /// the other ninety-five per cent of his season into nothing. The
-    /// robust estimator describes the bulk, and the shape's ceiling
-    /// handles the tail.
+    /// This doc used to specify the robust decile estimator
+    /// `(p90 − p10) / 2.563` while the harness has only ever printed
+    /// `var.sqrt()`, and the two disagree by enough to matter — for
+    /// forwards, 0.83 against 1.00. A reader following the old text would
+    /// have divided by the smaller number and widened the forward tail
+    /// past every band it is pinned to (a two-goal match reaches ~9.1
+    /// instead of ~8.5). Corrected to describe what is actually measured;
+    /// the harness column and this field are the same quantity, which is
+    /// the property that makes the re-derivation workflow mechanical.
     sd: f32,
     /// How far this line's ratings spread in real football, relative to
     /// the shape's reference calibration. Not measurable from the
@@ -230,22 +235,48 @@ impl PerformanceScale {
     /// value swings on whole goals: one concession moves him two thirds
     /// of a goal in a single event.
     const KEEPER: PerformanceScale = PerformanceScale {
-        // Zero by construction: a keeper who neither prevents nor
-        // concedes beyond what the chances were worth had an ordinary
-        // afternoon. The measured population mean confirms it (0.04).
-        mean: 0.00,
-        sd: 0.88,
-        sensitivity: 0.88,
+        // Near-zero by construction: a keeper who neither prevents nor
+        // concedes beyond what the strikes he faced were worth had an
+        // ordinary afternoon. Measured −0.068 (3 draws, 2026-08-08).
+        mean: -0.07,
+        sd: 1.20,
+        // Raised 0.88 → 1.20 alongside the sd. The two move together on
+        // purpose: `sd` widened because the expectation now varies with
+        // the difficulty of the strikes faced rather than sitting on a
+        // per-shot constant, and standardising by the wider spread would
+        // otherwise hand back the resolution that change bought. What
+        // the pair must preserve is the REAL keeper season spread
+        // (~0.55), not the raw z, and the ladder is checked against it
+        // directly — see the KEEPER SEASON LADDER block.
+        sensitivity: 1.20,
     };
     /// The tightest line. A defender's shift is made of many small
     /// actions and almost never contains a goal, so the distribution is
     /// narrow and nearly symmetric — which is exactly why defender
     /// ratings cluster in real life too.
+    // DEFENDER `mean` / `sd` re-measured 2026-08-08 (3 draws of
+    // `SQUAD_SPREAD=2 league 20 2 8 18`). `sensitivity` is deliberately
+    // NOT re-derived alongside them — it is the one field the engine
+    // cannot measure, and it carries the cross-position ordering that
+    // several invariants read (a forward straying offside must cost more
+    // than a midfielder doing the same). Moving DEF/MID sensitivity with
+    // their sd inverted that ordering by 0.004 of a rating point.
     const DEFENDER: PerformanceScale = PerformanceScale {
-        mean: 0.46,
-        sd: 0.44,
+        mean: 0.42,
+        sd: 0.56,
         sensitivity: 0.52,
     };
+    /// Measured 0.33 / 0.64 on the same run, and NOT adopted. Both
+    /// invariants that compare a midfielder against another line —
+    /// `forward_offsides_penalised_more_than_midfielder` and
+    /// `passenger_context_credit_halved_but_loss_drag_full` — fail on
+    /// the measured pair, the first by 0.004 of a rating point. The
+    /// measurement is not wrong; it is taken on a levels-8-18 league with
+    /// `SQUAD_SPREAD=2`, which is a wider population than the fixtures
+    /// describe, and midfielders sit close enough to the other lines that
+    /// a 14% spread difference reorders them. Left where the fixtures put
+    /// it until the reference run and the fixtures describe the same
+    /// population.
     const MIDFIELDER: PerformanceScale = PerformanceScale {
         mean: 0.26,
         sd: 0.56,
@@ -258,6 +289,24 @@ impl PerformanceScale {
     /// slightly below par rather than as a failure — his position's
     /// average *includes* the goals he is expected to score.
     const FORWARD: PerformanceScale = PerformanceScale {
+        // DELIBERATELY NOT re-measured, unlike the other three. The
+        // 2026-08-08 measurement puts the forward distribution at
+        // mean 0.34-0.37, sd 1.00-1.07 (3 draws) — a long way from these
+        // constants, and standardising on it breaks the position's
+        // pinned contract at both ends: at 0.34 / 1.00 the population
+        // lands 6.48 against a 6.55-7.15 reference AND a two-goal match
+        // reaches 8.84 against 7.5-8.5, while trimming `mean` to lift the
+        // bulk pushes `eleven_goal_league_scorer_...` (7.74 against 7.70)
+        // and `goalless_forward_near_strong_line_...` (6.96 against 6.95)
+        // through their ceilings.
+        //
+        // That is what a strongly right-skewed distribution does: one
+        // (mean, sd) pair cannot describe both the goalless bulk and the
+        // multi-goal tail, so the measured pair and the fixtures give
+        // different answers and the fixtures are the contract. Left where
+        // the FM-parity season bands put them. Re-deriving FORWARD needs
+        // the skew handled explicitly — separate limb scales, or a
+        // median-anchored standardiser — not a fresh pair of numbers.
         mean: 0.13,
         sd: 1.17,
         sensitivity: 1.17,
@@ -326,11 +375,49 @@ impl Profile {
                 defensive: 0.85,
             },
             PlayerFieldPositionGroup::Forward => Profile {
-                // Forward weights skew hard toward decisive output:
-                // goals / assists / direct goal threat. Routine creation,
-                // progression, retention, and defensive work register but
-                // can't carry a forward into the good-rating band on
-                // their own — that's the spec's role expectation.
+                // Forward weights skew toward decisive output: goals,
+                // assists, direct goal threat. Creation, progression,
+                // retention and defensive work register but cannot carry
+                // a forward into the good-rating band on their own —
+                // that is the role expectation, and the goalless-winger
+                // regressions exist to keep it that way.
+                //
+                // Creation / progression / retention re-weighted 2026-08
+                // (0.60 / 0.45 / 0.30). Measured on `dev_match gap 240 14
+                // fw`, an elite forward (pinned composite 15) and a youth
+                // one (7) rated **6.63 vs 6.37** — 0.033 rating per skill
+                // point, by a wide margin the least responsive line in
+                // the game (GK 0.086, CB 0.071, CM 0.100). Decomposed
+                // against the `RATINGS BY GOAL COUNT` slice, the whole
+                // 0.26 was goal FREQUENCY: both forwards collected the
+                // same ~0.13 above their goal-tier baseline, so the
+                // elite man's 0.62 key passes against 0.26, his 42%
+                // take-on success against 20%, and his 0.07 miscontrols
+                // against 0.91 were together worth approximately nothing.
+                // A forward's quality was a lottery on whether the ball
+                // went in.
+                //
+                // Raising creation / progression / retention to 0.72 /
+                // 0.55 / 0.42 was tried and REVERTED, and the reason is
+                // worth leaving here because the next reader will have
+                // the same idea. Those are the components a forward's
+                // non-scoring quality lives in, so raising them does
+                // widen the axis (measured 0.26 → 0.32 on `gap 480 14
+                // fw`) — but it walks straight into three pinned
+                // fixtures at once: `goalless_forward_near_strong_line_
+                // stays_below_good_band` (6.96 against a 6.95 ceiling),
+                // `eleven_goal_league_scorer_season_average_clears_six_
+                // nine` (7.74 against 7.70) and
+                // `passenger_context_credit_halved_but_loss_drag_full`.
+                //
+                // That is not an accident of tuning. Those fixtures ARE
+                // the position's contract — a busy goalless forward must
+                // stay under 6.95 — and the contract is what caps how
+                // wide the forward axis can be. The axis cannot be
+                // widened from here; it can only be widened by deciding
+                // that a forward's link play should count for more than
+                // the contract currently allows, which is a judgement
+                // about the game and not a calibration.
                 scoring: 1.00,
                 shooting: 1.05,
                 creation: 0.60,

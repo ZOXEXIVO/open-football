@@ -949,7 +949,7 @@ impl PlayerEventDispatcher {
         // the keeper, but a 0.05 xG worldie barely dents the keeper's
         // rating because there's nothing to prevent.
         if !is_auto_goal {
-            let shot_xg = field.ball.last_shot_xg;
+            let shot_xg = field.ball.last_shot_xgot;
             if let Some(scoring_team) = scorer_team_id {
                 let conceding_gk_id = field
                     .players
@@ -2475,7 +2475,7 @@ impl PlayerEventDispatcher {
             field.ball.previous_owner = Some(shoot_event_model.from_player_id);
             field.ball.current_owner = None;
             field.ball.cached_shot_target = None;
-            field.ball.last_shot_xg = 0.0;
+            field.ball.last_shot_xgot = 0.0;
             field.ball.last_shot_shooter_id = None;
             // Restart origin is consumed by the wall — return to
             // open play so the next tick doesn't repeat the block.
@@ -2998,12 +2998,11 @@ impl PlayerEventDispatcher {
         // goals-vs-xG dramatically because actual conversion ran on
         // the unweighted shot count.
         //
-        // The keeper's `xg_prevented` ledger is a different concept: a
-        // GK only "prevents" goals from shots that threatened the goal.
-        // Off-target shots produce no prevented xG (the keeper didn't
-        // make a save). That's why `last_shot_xg` uses the on-target
-        // adjustment — it's the value the keeper can earn or lose, not
-        // the value attributed to the shooter.
+        // The keeper's ledger is a different concept entirely and no
+        // longer derives from this number at all: a GK is measured on
+        // what a league-average keeper would have conceded from the
+        // strike that actually arrived, which is stamped separately as
+        // `last_shot_xgot` once the shot's crossing point is projected.
         // Convert to REAL xG units for recording. The decision-time curve
         // deliberately runs ~3x hot (every gameplay gate — min_xg floors,
         // the willingness quality pull, the Tier bars — is calibrated
@@ -3045,7 +3044,6 @@ impl PlayerEventDispatcher {
             * angle_factor
             * XG_REPORT_SCALE;
         let xg = base_xg;
-        let prevented_xg = if on_target { base_xg } else { base_xg * 0.15 };
         if let Some(shooter) = field.get_player_mut(shoot_event_model.from_player_id) {
             shooter.memory.record_shot(shoot_event_model.tick);
             shooter.memory.record_shot_xg(shoot_event_model.tick, xg);
@@ -3118,13 +3116,17 @@ impl PlayerEventDispatcher {
             }
         }
 
-        // Stash the in-flight shot's xG and shooter so the GK xG-prevented
-        // hook (in save / catch / parry / goal handlers) can credit /
-        // debit the keeper without re-deriving the value. Use the
-        // target-adjusted value here — an off-target shot doesn't
-        // require the keeper to save anything.
-        field.ball.last_shot_xg = prevented_xg;
+        // Stash the shooter so the GK ledger hooks (save / catch / parry
+        // / goal handlers) can resolve him without re-deriving. The
+        // per-shot expectation itself is stamped below, once the shot's
+        // projected crossing point is known — it is a function of WHERE
+        // the ball is going, which this point in the handler does not
+        // know yet.
         field.ball.last_shot_shooter_id = Some(shoot_event_model.from_player_id);
+        // Cleared here so a shot whose target cannot be projected (the
+        // `else` arm below) can never leave the previous shot's value on
+        // the ball for the next keeper credit to pick up.
+        field.ball.last_shot_xgot = 0.0;
 
         field.ball.previous_owner = Some(shoot_event_model.from_player_id);
         field.ball.current_owner = None;
@@ -3197,6 +3199,57 @@ impl PlayerEventDispatcher {
                     .get_player(shoot_event_model.from_player_id)
                     .map(|p| sc::shot_threat(p, minute))
                     .unwrap_or(SaveModel::NEUTRAL_THREAT);
+                // Post-shot expectation for the keeper ledger: what a
+                // league-average keeper concedes from THIS strike. Built
+                // from the projected crossing point, the ball's speed and
+                // its height — the strike, not the man in goal — so the
+                // rating can ask "how many did he keep out that an
+                // ordinary keeper wouldn't have" instead of assuming
+                // every shot on target was worth a league-average chance.
+                // Placement is measured from the goal CENTRE, never from
+                // the keeper's own position: reading where he stood would
+                // let good positioning shrink his own expectation and
+                // cancel the advantage it earned him.
+                field.ball.last_shot_xgot = SaveModel::expected_goal_on_target(
+                    goal_line_y - field.size.height as f32 * 0.5,
+                    final_velocity.norm(),
+                    goal_line_z,
+                );
+                #[cfg(feature = "match-logs")]
+                {
+                    // Defensive picture at the strike — see `block_diag`.
+                    let ball_x = field.ball.position.x;
+                    let ball_y = field.ball.position.y;
+                    let (mut goalside, mut near_line) = (0u64, 0u64);
+                    for p in &field.players {
+                        if p.side != Some(defending_side)
+                            || p.tactical_position.current_position.position_group()
+                                == PlayerFieldPositionGroup::Goalkeeper
+                        {
+                            continue;
+                        }
+                        let is_goalside = match defending_side {
+                            PlayerSide::Left => p.position.x < ball_x,
+                            PlayerSide::Right => p.position.x > ball_x,
+                        };
+                        if !is_goalside {
+                            continue;
+                        }
+                        goalside += 1;
+                        // Perpendicular offset from the straight line the
+                        // ball is taking to its target.
+                        let span_x = goal_line_x - ball_x;
+                        let span_y = goal_line_y - ball_y;
+                        let span = (span_x * span_x + span_y * span_y).sqrt().max(1.0);
+                        let cross =
+                            ((p.position.x - ball_x) * span_y - (p.position.y - ball_y) * span_x)
+                                .abs();
+                        if cross / span <= 30.0 {
+                            near_line += 1;
+                        }
+                    }
+                    crate::block_diag::note_strike(goalside, near_line);
+                }
                 field.ball.cached_shot_target = Some(ShotTarget {
                     goal_line_y,
                     goal_line_z,
@@ -3244,7 +3297,7 @@ impl PlayerEventDispatcher {
             return;
         }
         let shooter_id = field.ball.previous_owner;
-        let shot_xg = field.ball.last_shot_xg;
+        let shot_xg = field.ball.last_shot_xgot;
         if let Some(gk) = field.get_player_mut(player_id) {
             gk.statistics.note_shot_faced(shot_xg, true);
         }
@@ -3293,7 +3346,7 @@ impl PlayerEventDispatcher {
             let was_shot = field.ball.cached_shot_target.is_some();
             if was_shot {
                 let shooter_id = field.ball.previous_owner;
-                let shot_xg = field.ball.last_shot_xg;
+                let shot_xg = field.ball.last_shot_xgot;
                 if let Some(player) = field.get_player_mut(player_id) {
                     player.statistics.note_shot_faced(shot_xg, true);
                 }

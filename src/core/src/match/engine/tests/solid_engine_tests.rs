@@ -257,7 +257,7 @@ fn clear_open_play_metadata_makes_invariants_hold_after_set_piece_restart() {
     // on every emitted pass — the invariant requires the trio.
     ball.pending_pass_origin = Some(Vector3::new(100.0, 200.0, 0.0));
     ball.pending_pass_target = Some(Vector3::new(400.0, 200.0, 0.0));
-    ball.last_shot_xg = 0.22;
+    ball.last_shot_xgot = 0.22;
     ball.last_shot_shooter_id = Some(9);
     // The invariants should hold here: shot + previous_owner, pass +
     // pending_passer are both internally consistent.
@@ -274,7 +274,7 @@ fn clear_open_play_metadata_makes_invariants_hold_after_set_piece_restart() {
     assert!(ball.pending_pass_passer.is_none());
     assert!(ball.offside_snapshot.is_none());
     assert!(ball.pending_save_credit.is_none());
-    assert_eq!(ball.last_shot_xg, 0.0);
+    assert_eq!(ball.last_shot_xgot, 0.0);
     assert!(ball.last_shot_shooter_id.is_none());
     assert!(ball.check_invariants().is_ok());
 }

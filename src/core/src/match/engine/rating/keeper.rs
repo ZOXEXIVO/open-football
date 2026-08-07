@@ -94,40 +94,74 @@ use crate::r#match::engine::zones::ZoneCoeffs;
 /// the keeper ladder if the engine's shot or save model moves.
 const ON_TARGET_CONVERSION: f32 = 0.345;
 
-/// Engine population mean of pre-shot xG per shot **on target**
-/// (measured alongside `ON_TARGET_CONVERSION`, same run). Used only as
-/// the denominator of the difficulty ratio, so the ratio is 1.0 for a
-/// keeper facing ordinary chances regardless of the absolute xG scale.
-const REF_XG_PER_ON_TARGET: f32 = 0.1136;
+/// Engine population mean **post-shot** expected goal per shot on target
+/// — `SaveModel::expected_goal_on_target` averaged over the shots keepers
+/// actually face. Used only as the denominator of the difficulty ratio,
+/// so the ratio is 1.0 for a keeper facing ordinary strikes and the
+/// anchor is untouched.
+///
+/// Re-derive from the `xG/shot` column of the KEEPER SEASON LADDER
+/// (`SQUAD_SPREAD=2 dev_match league 20 2 8 18`). Measured 2026-08-08
+/// across levels 8-18: **0.532 – 0.592, mean 0.562** — a 1.11× spread
+/// where the pre-shot values this replaced ran 0.082 – 0.133, a 1.6×
+/// spread that tracked the division. That flatness is the property the
+/// whole design turns on: it is what lets [`DIFFICULTY_WEIGHT`] carry
+/// real weight without dragging a division off the anchor.
+///
+/// It sits well above the population concede rate (~34%) because the
+/// reference keeper is modelled standing at the goal centre while real
+/// keepers track the ball, so his stretch is larger for the same strike.
+/// That is a constant offset, and dividing by it removes it — the ratio
+/// is what the model reads, never the absolute.
+const REF_XGOT_PER_ON_TARGET: f32 = 0.562;
 
 /// How much of the chance-quality difference is charged to the keeper's
-/// expectation. 1.0 would condition fully on xG — the FBref
-/// "PSxG − GA" convention — but the engine reports *pre-shot* xG, which
-/// carries the situation and not the strike, and conditioning fully on
-/// it would erase the credit a keeper at a well-organised side earns for
-/// the shots his defence forced wide. Partial conditioning keeps the real
-/// effect (a keeper who faces tap-ins is expected to concede more) while
-/// leaving the outcome as the dominant term.
+/// expectation. This is the term that separates a keeper from the
+/// defence in front of him, and it can now carry most of the weight
+/// because the engine measures the difficulty of the STRIKE rather than
+/// of the situation.
 ///
-/// Cut 0.50 → 0.25 once the cross-division bias was measured. The ratio
-/// below is taken against a **global** constant, but chance quality is a
-/// property of the division: lower-division keepers face ~0.08 xG per
-/// shot on target against a top flight's ~0.11, so every one of them was
-/// judged to be facing easy chances and had his expectation cut ~15%,
-/// while his own save rate was lower too. Measured mean keeper rating ran
-/// 6.71 in the top flight against 6.46 two divisions down, and zeroing
-/// this weight closed about 60% of that gap — the term was the cause.
-/// Real ratings are computed within a league and carry no such step.
-const DIFFICULTY_WEIGHT: f32 = 0.25;
+/// History worth keeping. It ran at 0.25 with a 0.82–1.22 clamp, against
+/// a ratio built from **pre-shot** xG. Two things were wrong with that
+/// and only one of them was the weight. Pre-shot xG describes the chance
+/// the defence conceded — where the shot was taken from, under what
+/// pressure — so a keeper behind a well-organised side, facing tame
+/// strikes from good positions, was still judged to have faced
+/// league-average shots; the term could not do the job it existed for.
+/// And because the ratio was taken against a global constant while
+/// pre-shot chance quality is a property of the division (lower divisions
+/// ~0.08 xG per shot on target against a top flight's ~0.11), turning the
+/// weight up dragged whole divisions off the anchor — which is why it was
+/// cut to 0.25 and the clamp tightened, and why the term was then too
+/// weak to matter. `SaveModel::expected_goal_on_target` removes the
+/// second problem at the source: it reads placement, power and height
+/// through the same contest-normalised save curve at every level, so the
+/// population mean is flat across divisions and the weight is free to
+/// carry the signal.
+const DIFFICULTY_WEIGHT: f32 = 0.90;
 
-/// Bounds on the difficulty multiplier. A keeper cannot have his
-/// expectation moved more than a fifth by chance quality alone — beyond
-/// that the sample is telling us about his defence, or about his
-/// division, and not about him. Tightened from 0.65/1.50 for the same
-/// reason the weight was cut: these bounds are what caps how far a whole
-/// division can drift off the anchor.
-const DIFFICULTY_MIN: f32 = 0.82;
-const DIFFICULTY_MAX: f32 = 1.22;
+/// Bounds on the difficulty multiplier. Wide, because the quantity is now
+/// a genuine per-shot measurement rather than a proxy: a keeper who spent
+/// the afternoon catching tame strikes down the middle really was asked
+/// for less than one picking corner-bound shots out of the top corner,
+/// and the model should say so.
+///
+/// The ceiling is the model's OWN maximum, not a taste judgement.
+/// `expected_goal_on_target` is bounded above by `1 − SaveModel::MIN_SAVE`
+/// (0.92), so the hardest possible average strike gives a ratio of
+/// `0.92 / 0.562 = 1.637` and a multiplier of `1 + 0.90·0.637 = 1.573`.
+/// Setting the clamp there means it never binds on anything the engine
+/// can actually produce — and, just as importantly, it means a hand-built
+/// fixture cannot feed the model an impossible chance value and buy a
+/// keeper who shipped three the rating of one who shipped one.
+///
+/// The floor is deliberately tighter than the model's own minimum (0.228,
+/// from `1 − MAX_SAVE`). It is small-sample protection: on a one-shot
+/// night the mean IS that shot, and a collapsed expectation would make
+/// the single concession catastrophic. The asymmetry is intentional —
+/// the downside case is the one that produces absurd ratings.
+const DIFFICULTY_MIN: f32 = 0.45;
+const DIFFICULTY_MAX: f32 = 1.55;
 
 // There is deliberately no separate clean-sheet bonus. The shutout is
 // just the `conceded == 0` end of `DEFENSIVE_OUTCOME`, which already
@@ -294,18 +328,28 @@ impl<'a> RatingContext<'a> {
         expected - conceded as f32
     }
 
-    /// How hard the shots faced were, relative to a league-average shot
-    /// on target. `1.0` when the engine didn't record chance values
+    /// How hard the strikes he faced were, relative to a league-average
+    /// shot on target. `1.0` when the engine didn't record chance values
     /// (hand-built fixtures, stat lines from before the counter existed),
     /// which leaves the count-based expectation — and both monotonicity
     /// invariants — fully intact.
+    ///
+    /// `stats.xg_faced` accumulates
+    /// [`SaveModel::expected_goal_on_target`](crate::r#match::engine::ball::interactions::SaveModel)
+    /// per shot: the probability a league-average keeper concedes that
+    /// exact strike, from its placement, power and height. Averaging it
+    /// and re-expressing it as a ratio (rather than using the sum
+    /// directly as the expectation) keeps the model anchored on
+    /// [`ON_TARGET_CONVERSION`] — the constant that makes a
+    /// league-average keeper score exactly zero goals prevented — so the
+    /// population level does not move when the save model is re-tuned.
     fn chance_difficulty(&self, faced: u16) -> f32 {
-        let xg_faced = self.stats.xg_faced;
-        if xg_faced <= 0.0 {
+        let xgot_faced = self.stats.xg_faced;
+        if xgot_faced <= 0.0 {
             return 1.0;
         }
-        let per_shot = xg_faced / faced as f32;
-        let ratio = per_shot / REF_XG_PER_ON_TARGET;
+        let per_shot = xgot_faced / faced as f32;
+        let ratio = per_shot / REF_XGOT_PER_ON_TARGET;
         (1.0 + DIFFICULTY_WEIGHT * (ratio - 1.0)).clamp(DIFFICULTY_MIN, DIFFICULTY_MAX)
     }
 

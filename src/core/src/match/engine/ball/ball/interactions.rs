@@ -6,7 +6,7 @@
 use super::Ball;
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
-use crate::r#match::engine::goal::GOAL_WIDTH;
+use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
 use crate::r#match::events::EventCollection;
@@ -47,8 +47,83 @@ pub mod block_diag {
     /// The roll succeeded.
     pub static FIRED: AtomicU64 = AtomicU64::new(0);
 
+    // ── Per-opponent rejection lanes ────────────────────────────────
+    //
+    // `CANDIDATES` alone says "no defender in the lane" without saying
+    // WHY, and the three possible causes want opposite fixes: defenders
+    // standing behind the ball is a positioning problem, defenders past
+    // the lookahead is a window problem, defenders goal-side but wide is
+    // a corridor-width problem. These split the rejection so the next
+    // reader doesn't have to re-derive it.
+    /// Opposition outfielders examined across all shot-ticks.
+    pub static OPP_SEEN: AtomicU64 = AtomicU64::new(0);
+    /// Rejected: level with or behind the ball along the shot line.
+    pub static BEHIND_BALL: AtomicU64 = AtomicU64::new(0);
+    /// Rejected: goal-side but further than `BLOCK_LOOKAHEAD` ahead.
+    pub static BEYOND_LOOKAHEAD: AtomicU64 = AtomicU64::new(0);
+    /// Rejected: inside the lookahead window but wider than the corridor.
+    pub static OUTSIDE_CORRIDOR: AtomicU64 = AtomicU64::new(0);
+    /// Sum of perpendicular distances for opponents inside the lookahead
+    /// window, x100 — divided by `IN_WINDOW` it gives the mean miss
+    /// distance, which is what says whether the corridor is merely too
+    /// narrow or the defenders are nowhere near the line.
+    pub static PERP_SUM_X100: AtomicU64 = AtomicU64::new(0);
+    /// Opponents inside the lookahead window (the `PERP_SUM_X100` denom).
+    pub static IN_WINDOW: AtomicU64 = AtomicU64::new(0);
+
+    // ── At the moment of the strike ─────────────────────────────────
+    //
+    // The per-tick counters above sample the whole flight, which biases
+    // "behind the ball" upward: a defender the ball has already passed
+    // counts as behind on every remaining tick. These sample ONCE, when
+    // the shot is struck, and answer the football question directly —
+    // was anybody between the shooter and the goal at all?
+    /// Shots struck with a projected target (one sample each).
+    pub static SHOTS_STRUCK: AtomicU64 = AtomicU64::new(0);
+    /// Opposition outfielders goal-side of the ball at the strike,
+    /// summed over `SHOTS_STRUCK`.
+    pub static GOALSIDE_AT_STRIKE: AtomicU64 = AtomicU64::new(0);
+    /// Of those, the ones also within 30u of the ball's line to goal —
+    /// i.e. actually in a position to get a body in the way.
+    pub static GOALSIDE_NEAR_LINE: AtomicU64 = AtomicU64::new(0);
+
+    /// Sample the defensive picture at the moment a shot is struck.
+    /// `goalside` / `near_line` are counts for this one strike.
+    pub fn note_strike(goalside: u64, near_line: u64) {
+        SHOTS_STRUCK.fetch_add(1, Ordering::Relaxed);
+        GOALSIDE_AT_STRIKE.fetch_add(goalside, Ordering::Relaxed);
+        GOALSIDE_NEAR_LINE.fetch_add(near_line, Ordering::Relaxed);
+    }
+
+    /// `(shots_struck, goalside_per_shot, near_line_per_shot)`
+    pub fn strike_snapshot() -> (u64, f32, f32) {
+        let n = SHOTS_STRUCK.load(Ordering::Relaxed);
+        if n == 0 {
+            return (0, 0.0, 0.0);
+        }
+        (
+            n,
+            GOALSIDE_AT_STRIKE.load(Ordering::Relaxed) as f32 / n as f32,
+            GOALSIDE_NEAR_LINE.load(Ordering::Relaxed) as f32 / n as f32,
+        )
+    }
+
     pub fn reset() {
-        for c in [&SHOTS_SEEN, &TOO_HIGH, &CANDIDATES, &FIRED] {
+        for c in [
+            &SHOTS_SEEN,
+            &TOO_HIGH,
+            &CANDIDATES,
+            &FIRED,
+            &OPP_SEEN,
+            &BEHIND_BALL,
+            &BEYOND_LOOKAHEAD,
+            &OUTSIDE_CORRIDOR,
+            &PERP_SUM_X100,
+            &IN_WINDOW,
+            &SHOTS_STRUCK,
+            &GOALSIDE_AT_STRIKE,
+            &GOALSIDE_NEAR_LINE,
+        ] {
             c.store(0, Ordering::Relaxed);
         }
     }
@@ -60,6 +135,25 @@ pub mod block_diag {
             TOO_HIGH.load(Ordering::Relaxed),
             CANDIDATES.load(Ordering::Relaxed),
             FIRED.load(Ordering::Relaxed),
+        )
+    }
+
+    /// `(opp_seen, behind_ball, beyond_lookahead, outside_corridor,
+    ///   in_window, mean_perp)`
+    pub fn lane_snapshot() -> (u64, u64, u64, u64, u64, f32) {
+        let in_window = IN_WINDOW.load(Ordering::Relaxed);
+        let mean_perp = if in_window == 0 {
+            0.0
+        } else {
+            PERP_SUM_X100.load(Ordering::Relaxed) as f32 / 100.0 / in_window as f32
+        };
+        (
+            OPP_SEEN.load(Ordering::Relaxed),
+            BEHIND_BALL.load(Ordering::Relaxed),
+            BEYOND_LOOKAHEAD.load(Ordering::Relaxed),
+            OUTSIDE_CORRIDOR.load(Ordering::Relaxed),
+            in_window,
+            mean_perp,
         )
     }
 }
@@ -188,6 +282,80 @@ impl SaveModel {
     pub(crate) fn centred_save_probability(skill: f32) -> f32 {
         Self::save_probability(0.0, 0.0, skill, Self::NEUTRAL_THREAT, 0.0)
     }
+
+    // ── Post-shot expectation (xGoT) ────────────────────────────────
+    //
+    // What a *league-average* keeper would have conceded from this exact
+    // strike. The rating model needs it to separate a keeper from the
+    // defence in front of him: `goals_prevented` is only an honest
+    // measure of shot-stopping if the expectation it subtracts knows
+    // whether the shots were corner-bound rockets or tame efforts down
+    // the middle. Every input below is a property of the STRIKE — where
+    // it is going, how fast, how high — and none of them is a property
+    // of the keeper, which is what makes the resulting expectation
+    // something he can be measured against rather than something he
+    // moves by playing well.
+
+    /// Reach of a population-mean keeper, in game units. The live model
+    /// is `20 + agility01·8 + reflexes01·4` (see [`Ball::try_save_shot`]);
+    /// at the mid-band agility/reflexes generated squads carry (~0.55
+    /// normalised) that lands on ~26u. Fixed rather than read from the
+    /// keeper on purpose — a keeper with elite reach would otherwise
+    /// lower his own expectation and cancel his own advantage.
+    const REFERENCE_REACH: f32 = 26.0;
+
+    /// Normalised reflexes of that same reference keeper, feeding the
+    /// speed penalty exactly as the live path does.
+    const REFERENCE_REFLEXES: f32 = 0.55;
+
+    /// Multiplier an evenly-matched duel resolves to — the contest's own
+    /// definition of "ordinary keeper against the striker who hit it"
+    /// ([`Self::skill_multiplier`] with `edge == 0`). Using it here is
+    /// what keeps the expectation level-invariant: it is the same
+    /// relative bar in every division, so a lower-division keeper is not
+    /// judged against a top-flight keeper's hands.
+    const NEUTRAL_MULTIPLIER: f32 = Self::SKILL_FLOOR + Self::SKILL_SLOPE * 0.5;
+
+    /// Probability that a league-average keeper concedes this strike —
+    /// the engine's own post-shot expected-goal value for one shot on
+    /// target.
+    ///
+    /// `lateral` is the shot's placement measured from the GOAL CENTRE
+    /// (not from where the keeper happens to be standing), `speed` the
+    /// ball's velocity magnitude, `height` its projected height at the
+    /// line. Deliberately built from [`Self::geometric_base`] and the
+    /// same speed penalty the live roll uses, so the expectation and the
+    /// outcome are produced by one model: whatever calibration moves the
+    /// save rate moves the bar it is measured against by the same
+    /// amount.
+    pub(crate) fn expected_goal_on_target(lateral: f32, speed: f32, height: f32) -> f32 {
+        // Beyond a league-average keeper's dive there is no save to
+        // make — the live path returns before rolling in exactly this
+        // case, so the expectation has to agree.
+        if lateral.abs() > Self::REFERENCE_REACH {
+            return 1.0 - Self::MIN_SAVE;
+        }
+        let reach_ratio = (lateral.abs() / Self::REFERENCE_REACH).clamp(0.0, 1.0);
+        let speed_excess = (speed - 3.0).max(0.0);
+        let speed_penalty =
+            (speed_excess * 0.08 * (1.0 - Self::REFERENCE_REFLEXES * 0.5)).min(0.40);
+        // Height is not in the live geometric term (the save model is
+        // lateral-only), but a ball lifted toward the angle is measurably
+        // harder and ignoring it would let a keeper's expectation read
+        // the same for a rolling shot and one under the bar. Kept small
+        // so the lateral geometry stays dominant.
+        let height_penalty = (height / GOAL_HEIGHT).clamp(0.0, 1.0) * Self::HEIGHT_PENALTY;
+        let save = ((Self::geometric_base(reach_ratio) - speed_penalty - height_penalty)
+            * Self::NEUTRAL_MULTIPLIER)
+            .clamp(Self::MIN_SAVE, Self::MAX_SAVE);
+        1.0 - save
+    }
+
+    /// How much of the geometric ceiling a shot lifted to the crossbar
+    /// gives away for the reference keeper. Small next to
+    /// `STRETCH_PENALTY` (0.58) — going wide beats a keeper far more
+    /// often than going high.
+    const HEIGHT_PENALTY: f32 = 0.10;
 }
 
 impl Ball {
@@ -466,6 +634,9 @@ impl Ball {
                 continue;
             }
 
+            #[cfg(feature = "match-logs")]
+            block_diag::OPP_SEEN.fetch_add(1, Ordering::Relaxed);
+
             // Project defender position onto the shot line.
             let dx = player.position.x - self.position.x;
             let dy = player.position.y - self.position.y;
@@ -473,14 +644,28 @@ impl Ball {
             // Must be ahead of the ball along the shot line, within
             // the lookahead window. 1u minimum so a defender level
             // with the ball (who's already been passed) doesn't count.
-            if projection < 1.0 || projection > BLOCK_LOOKAHEAD {
+            if projection < 1.0 {
+                #[cfg(feature = "match-logs")]
+                block_diag::BEHIND_BALL.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            if projection > BLOCK_LOOKAHEAD {
+                #[cfg(feature = "match-logs")]
+                block_diag::BEYOND_LOOKAHEAD.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
             // Perpendicular distance to the line.
             let perp =
                 (dx - projection * shot_dir_x).powi(2) + (dy - projection * shot_dir_y).powi(2);
             let perp_dist = perp.sqrt();
+            #[cfg(feature = "match-logs")]
+            {
+                block_diag::IN_WINDOW.fetch_add(1, Ordering::Relaxed);
+                block_diag::PERP_SUM_X100.fetch_add((perp_dist * 100.0) as u64, Ordering::Relaxed);
+            }
             if perp_dist > BLOCK_CORRIDOR {
+                #[cfg(feature = "match-logs")]
+                block_diag::OUTSIDE_CORRIDOR.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
 
@@ -1223,5 +1408,78 @@ mod tests {
             "a full-stretch shot must beat an elite keeper more often than a centred one \
              beats a weak keeper; elite {elite_stretched:.3} weak {weak_centred:.3}"
         );
+    }
+
+    // ── Post-shot expectation ───────────────────────────────────────
+
+    /// The keeper's expectation must READ the strike. A corner-bound
+    /// shot, a rocket and a ball lifted under the bar each have to be
+    /// worth more than the tame equivalent, or `goals_prevented` is back
+    /// to assuming every shot on target was the same shot — which is the
+    /// bug the whole post-shot model exists to remove.
+    #[test]
+    fn expected_goal_on_target_reads_placement_power_and_height() {
+        let tame = SaveModel::expected_goal_on_target(0.0, 4.0, 0.2);
+        let corner = SaveModel::expected_goal_on_target(22.0, 4.0, 0.2);
+        let rocket = SaveModel::expected_goal_on_target(0.0, 8.0, 0.2);
+        let lifted = SaveModel::expected_goal_on_target(0.0, 4.0, 2.2);
+        assert!(
+            corner > tame,
+            "placement must raise the expectation: tame {tame:.3} corner {corner:.3}"
+        );
+        assert!(
+            rocket > tame,
+            "power must raise the expectation: tame {tame:.3} rocket {rocket:.3}"
+        );
+        assert!(
+            lifted > tame,
+            "height must raise the expectation: tame {tame:.3} lifted {lifted:.3}"
+        );
+        // Placement is the dominant axis — that is what `STRETCH_PENALTY`
+        // (0.58) against `HEIGHT_PENALTY` (0.10) says, and it is what
+        // real post-shot models find too.
+        assert!(
+            corner - tame > lifted - tame,
+            "placement must move the expectation more than height; \
+             corner {corner:.3} lifted {lifted:.3} tame {tame:.3}"
+        );
+    }
+
+    /// Bounded by construction, and the rating's difficulty clamp is
+    /// derived from these bounds — if they move, `keeper::DIFFICULTY_MAX`
+    /// has to move with them.
+    #[test]
+    fn expected_goal_on_target_stays_within_the_save_models_own_bounds() {
+        for lateral in [0.0f32, 5.0, 15.0, 25.9, 26.1, 40.0] {
+            for speed in [0.0f32, 3.0, 6.0, 12.0] {
+                for height in [0.0f32, 1.0, 2.44, 4.0] {
+                    let x = SaveModel::expected_goal_on_target(lateral, speed, height);
+                    assert!(
+                        (1.0 - SaveModel::MAX_SAVE..=1.0 - SaveModel::MIN_SAVE).contains(&x),
+                        "xGoT out of the save model's own range at \
+                         lateral={lateral} speed={speed} height={height}: {x:.3}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// It must not read the KEEPER. Nothing in the signature can carry
+    /// him, and that is the point being pinned: the moment the
+    /// expectation moves with the man it is measuring, a well-positioned
+    /// keeper shrinks his own bar and cancels the advantage his
+    /// positioning earned. Sign is measured from the goal CENTRE, so
+    /// mirrored placements are worth exactly the same.
+    #[test]
+    fn expected_goal_on_target_is_symmetric_about_the_goal_centre() {
+        for lateral in [1.0f32, 9.0, 18.0, 27.0] {
+            let left = SaveModel::expected_goal_on_target(-lateral, 5.0, 1.0);
+            let right = SaveModel::expected_goal_on_target(lateral, 5.0, 1.0);
+            assert_eq!(
+                left.to_bits(),
+                right.to_bits(),
+                "mirrored strikes must be worth the same at lateral {lateral}"
+            );
+        }
     }
 }

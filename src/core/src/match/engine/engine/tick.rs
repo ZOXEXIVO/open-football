@@ -400,7 +400,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         if keeper_team == shooter_team {
             return;
         }
-        let shot_xg = field.ball.last_shot_xg;
+        let shot_xg = field.ball.last_shot_xgot;
         {
             let gk = &mut field.players[keeper_idx];
             // The GK denied a shot worth `shot_xg` xG — books the save,
