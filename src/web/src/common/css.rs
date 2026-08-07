@@ -274,6 +274,67 @@ mod tests {
         }
     }
 
+    /// The lift a cutting is drawn on is sized off the column's box, not
+    /// off the words in it — so a column that pads on its left for a
+    /// gutter rule has nothing at all between its last word and the edge
+    /// of the paper that word is printed on. Justified copy puts every
+    /// line there, and the story reads as one the lift clipped rather
+    /// than one it lifted. The columns that end a row answer that with a
+    /// reach, which carries the lift on into the margin beyond them.
+    ///
+    /// Stacked, there is no margin beyond them — past a story on a phone
+    /// is 18px of sheet edge — so the narrow block takes the reach
+    /// straight back and pads the copy instead. Both rules score (0,4,0),
+    /// which a media query does nothing to change, so the reset wins on
+    /// source order alone: set the reach after it and every marked story
+    /// on a phone hangs off the side of the page.
+    #[test]
+    fn the_newspaper_cutting_reach_is_taken_back_on_a_narrow_screen() {
+        let css = Bundle::without_comments(&Bundle::text());
+        let flat: String = css.chars().filter(|c| !c.is_whitespace()).collect();
+        let block_at = |at: usize| -> &str {
+            flat[at..]
+                .split_once('}')
+                .map(|(head, _)| head)
+                .unwrap_or_default()
+        };
+
+        let reach_at = flat
+            .find(".np-run>.np-split.np-cut:nth-child(3n)")
+            .expect("the last column of the run no longer asks for a reach");
+        assert!(
+            block_at(reach_at).contains("--np-cut-reach:var(--np-cut-air)"),
+            "the run's last column pads left for its gutter and not at all on the \
+             right, so without the reach its copy ends on the lift's own edge"
+        );
+
+        let reset_at = flat
+            .find(".np-run>.np-split.np-cut:nth-child(n)")
+            .expect("the stacked break no longer clears the reach");
+        assert!(
+            block_at(reset_at).contains("--np-cut-reach:0px"),
+            "a stacked cutting keeps a reach it has nowhere to spend: the sheet's \
+             own edge is 18px away and the lift stands half off the page"
+        );
+        assert!(
+            reset_at > reach_at,
+            "the stacked reset is set before the reach it undoes: they carry the \
+             same specificity, so the reach wins and a phone prints every marked \
+             story overhanging the sheet"
+        );
+
+        // The lead is the one cutting that is not in a column, so the
+        // reset above passes it by and it carries its own.
+        let lead_at = flat
+            .rfind(".np-lead.np-cut")
+            .expect("the lead no longer styles its cutting at all");
+        assert!(
+            block_at(lead_at).contains("--np-cut-reach:0px"),
+            "the stacked lead is the last `.np-lead.np-cut` in the sheet and must \
+             be the one that gives the reach back"
+        );
+    }
+
     /// The masthead is the same wall from the other side. On a player's
     /// page the nameplate links to the club's own paper, and it must
     /// stay plain type: a rule under a masthead reads as a printing

@@ -4476,11 +4476,15 @@ a:active {
    table's own width is definite, which is why nothing here sets
    `width: max-content` on the table.
 
-   The shares add up to 100% (20 club + 12 nat + 20 league + 6 fee + 5x8.4
+   The shares add up to 100% (26 club + 16 nat + 28 league + 7 fee + 5x4.6
    stat). That total is load-bearing: anything under 100% leaves a remainder,
    and the remainder lands on Season — the one column with no share — which
    is exactly the drift the fixed rail is there to prevent. Re-balance the
-   shares against each other, never by lowering the total. */
+   shares against each other, never by lowering the total.
+
+   The split favours the name columns because they are the ones that gain
+   from width. A stat cell holds one or two digits, so past its floor extra
+   width only pushes the numbers apart — hence the small stat share. */
 .fm-history-table th.sq-season,
 .fm-history-table td.sq-season {
     width: 100px;
@@ -4491,12 +4495,33 @@ a:active {
 /* `nowrap` on the name columns is what turns their `min-width` into a real
    floor: a table never shrinks a column below its min-content width, so a
    long club or competition name overflows the panel and scrolls rather than
-   folding — the behaviour the rest of the site's wide tables have. */
-.fm-history-table th.sq-club,
+   folding — the behaviour the rest of the site's wide tables have.
+
+   Centred, against the left-aligned `.fm-stats .sq-club` house rule, and the
+   padding evened up so the centring is true. Every column here except Season
+   is centred; a lone left-aligned one in a column this wide leaves all its
+   slack on one side, which reads as the name having drifted off the row.
+   Season stays left because it labels the row rather than carrying data. */
+.fm-history-table thead th.sq-club,
 .fm-history-table td.sq-club {
-    width: 20%;
-    min-width: 140px;
+    width: 26%;
+    padding-left: 8px;
+    text-align: center;
     white-space: nowrap;
+}
+
+/* The names share a left edge while the block of them stays centred in the
+   column. Centring the cell alone centres each name on its own length, so
+   Bari and Fiorentina start at different offsets and the column reads
+   ragged; centring a box of one fixed width instead, with the name
+   left-aligned inside it, gives every row the same left edge. A name wider
+   than the box just widens it and stays centred, so nothing is ever clipped.
+   The width is in px, not em, because the header sets 10px against the
+   body's 14px and the two edges have to line up. */
+.fm-history-table .sq-club-name {
+    display: inline-block;
+    min-width: 148px;
+    text-align: left;
 }
 
 .fm-history-table thead th.sq-nat {
@@ -4513,12 +4538,12 @@ a:active {
 
 .fm-history-table th.sq-nat,
 .fm-history-table td.sq-nat {
-    width: 12%;
+    width: 16%;
 }
 
 .fm-history-table th.sq-fee,
 .fm-history-table td.sq-fee {
-    width: 6%;
+    width: 7%;
 }
 
 .fm-history-table td.sq-nat {
@@ -4541,7 +4566,7 @@ a:active {
    enough for them before the first click and nothing moves. */
 .fm-history-table th.sq-league,
 .fm-history-table td.sq-league {
-    width: 20%;
+    width: 28%;
     white-space: nowrap;
     min-width: 168px;
 }
@@ -4564,15 +4589,19 @@ a:active {
     white-space: nowrap;
 }
 
-/* The stat block stretches with everything else, on a 72px floor that fits
-   the widest label (AV RAT). The header and body cells used to declare
-   different em widths against different font sizes and the larger won —
-   84px per column, frozen at that size however wide the table got, which is
-   what left the numbers stranded on the right edge. `max-width` was doing no
-   work here either: the automatic table algorithm ignores it on cells. */
+/* The stat block stays compact: a small share on a 72px floor, which is what
+   the widest label (AV RAT) needs. It grows a little with the table so the
+   block doesn't detach from the columns feeding it, but nowhere near its
+   share of an ultrawide screen — five one-digit cells spread over 800px read
+   as five separate things rather than one row of numbers.
+
+   The header and body cells used to declare different em widths against
+   different font sizes and the larger won, giving a flat 84px. `max-width`
+   was doing no work here either: the automatic table algorithm ignores it
+   on cells. */
 .fm-history-table th.sq-stat,
 .fm-history-table td.sq-stat {
-    width: 8.4%;
+    width: 4.6%;
     min-width: 72px;
 }
 
@@ -7488,9 +7517,17 @@ a:active {
         min-width: 84px;
     }
 
-    .fm-history-table th.sq-club,
+    /* Narrower name box on mobile — 12px type, and the column is close
+       enough to the box that the centring reads as left-aligned anyway.
+       The padding matches the 6px this breakpoint puts on the right, so the
+       box still sits dead centre. */
+    .fm-history-table .sq-club-name {
+        min-width: 118px;
+    }
+
+    .fm-history-table thead th.sq-club,
     .fm-history-table td.sq-club {
-        min-width: 128px;
+        padding-left: 6px;
     }
 
     .fm-history-table th.sq-stat,
@@ -12806,6 +12843,14 @@ a.np-result-score:hover {
        has air under it. Named because the run has to hold the space it
        carries for the row beneath clear of exactly this much. */
     --np-cut-air: 14px;
+    /* The same air past the last word, and nothing by default: most
+       columns already pad away from their own right edge for the
+       gutter, so the lift drawn out to that edge is standing in paper
+       the column has paid for. The ones that pad the other way have
+       none to stand in — their type ends on the lift's own edge, and
+       every line of it does, because the copy is justified. Those hand
+       this the reach. */
+    --np-cut-reach: 0px;
     position: relative;
     isolation: isolate;
 }
@@ -12825,7 +12870,7 @@ a.np-result-score:hover {
     content: "";
     position: absolute;
     z-index: -1;
-    inset: -12px 0 calc(var(--np-cut-air) * -1);
+    inset: -12px calc(var(--np-cut-reach) * -1) calc(var(--np-cut-air) * -1) 0;
     pointer-events: none;
     background-color: var(--np-paper-hi);
     background-image: linear-gradient(
@@ -12881,6 +12926,27 @@ a.np-result-score:hover {
 .np-splits > .np-split.np-cut:nth-child(2n),
 .np-run > .np-split.np-cut:not(:nth-child(3n + 1)) {
     --np-cut-margin: 26px;
+}
+
+/* Every cutting that ends a row, plus the lead — which is set to the
+   whole of the main column and so ends one by itself. A column pads on
+   the side its gutter rule is on, and these have theirs on the left:
+   there is no padding at all between their last word and the edge of
+   the paper it is printed on, which is the one way a cutting can read
+   as having clipped the story rather than lifted it.
+
+   So the air comes from the margin beyond the column instead, and each
+   of these has one to take it from: `.np-main`'s 28px gutter to the
+   rail for the three inside it, and the sheet's own 34px for the last
+   column of the run. A cutting is a piece of paper laid on the page —
+   overhanging the gutter is what one does. Crossing into the next
+   column of type is not, which is why the columns that pad right are
+   left flush and take their air from that padding. */
+.np-lead.np-cut,
+.np-splits > .np-split.np-cut:nth-child(2n),
+.np-splits > .np-split.np-cut:only-child,
+.np-run > .np-split.np-cut:nth-child(3n) {
+    --np-cut-reach: var(--np-cut-air);
 }
 
 .np-lead.np-cut {
@@ -13171,14 +13237,30 @@ a.np-prose-link.np-mark:focus-visible,
     }
 
     /* One column has no gutter, so the stroke's margin goes back to the
-       measure it was taken from. Weighted to (0,4,0) for the same reason
-       the gutter reset above it carries `:nth-child(n)`: a media query
-       adds nothing to specificity, and the wide-screen rules these undo
-       score (0,3,0). */
+       measure it was taken from — and the air on the right comes out of
+       it too rather than being reached for. There is nothing to reach
+       into here: past a stacked story is the edge of the sheet, 18px of
+       it, and a lift standing in that stands half off the page. The two
+       insets match instead, which is what makes a stacked cutting read
+       as a card rather than as a column that lost its right edge.
+
+       Weighted to (0,4,0) for the same reason the gutter reset above it
+       carries `:nth-child(n)`: a media query adds nothing to
+       specificity, and the wide-screen rules these undo score (0,3,0). */
     .np-splits > .np-split.np-cut:nth-child(n),
     .np-run > .np-split.np-cut:nth-child(n) {
         --np-cut-margin: 0px;
+        --np-cut-reach: 0px;
         padding-left: 17px;
+        padding-right: 17px;
+    }
+
+    /* The lead is the one cutting that is not in a column, so the reset
+       above passes it by — but stacked it runs the same measure as the
+       rest, with the same sheet edge and nothing else beyond it. */
+    .np-lead.np-cut {
+        --np-cut-reach: 0px;
+        padding-right: 17px;
     }
 
     /* A stacked story rules off from the one above it, and that rule is
