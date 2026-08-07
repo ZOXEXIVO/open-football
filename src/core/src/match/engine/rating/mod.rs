@@ -7,32 +7,37 @@ use crate::r#match::engine::zones::ZoneStats;
 // Public API
 // =====================================================================
 //
-// Player match ratings (1.0 ..= 10.0, neutral baseline 6.0) computed
-// from a [`PlayerMatchEndStats`] snapshot. The model is component-based:
+// Player match ratings (1.0 ..= 10.0) computed from a
+// [`PlayerMatchEndStats`] snapshot. Build a context with
+// [`RatingContext::new`] and call [`RatingContext::calculate`].
 //
-//   rating = BASE
-//          + compress(positive routine + scoring event) [soft-cap by profile]
-//          + negative routine deltas
-//          + always-on contextual deltas (result, clean sheet, conceded,
-//            errors, cards, discipline, GK exceptional negatives)
-//          + final clamp [1, 10]
+// The model has three moving parts and nothing else:
 //
-// Each component evaluates to a small signed "impact" value driven by
-// smooth saturation curves (`sat`, `signed_sat`). Routine on-the-ball
-// signal is always confidence-damped by minutes. Direct event deltas
-// (goals, errors-to-goal, red cards, own goals, failed claims) keep
-// most of their bite even from a cameo via `event_minutes_factor`.
+//   1. a **performance value** — each position group folds its stat
+//      line into one signed number, in whatever units suit the role
+//      (goals prevented for a keeper, goal-denominated contribution
+//      for an outfielder);
+//   2. a **scale** — that number standardised against the position's
+//      own population mean and spread ([`PerformanceScale`]);
+//   3. a **shape** — one curve, shared by every position, turning the
+//      standardised score into a rating ([`RatingShape`]).
 //
-// A cross-component compression and contribution-aware soft caps keep
-// the rating distribution realistic: an anonymous starter stays under
-// ~7.1, a one-goal-only finisher under ~7.6, and a hat-trick scorer
-// is uncapped. Distinct ratings still register because positive
-// components stack inside the cap rather than hard-clamping.
+// Events a match report would lead with — an error that became a goal,
+// a red card, an own goal — are applied as rating points *after* the
+// shape, so a single catastrophe still reaches the disaster band
+// instead of being compressed away with everything else.
 //
-// Build a context with [`RatingContext::new`] and call
-// [`RatingContext::calculate`].
+// Splitting scale from shape is what makes the model hold its
+// calibration. Component weights decide what counts as good; the scale
+// decides what counts as normal; the shape decides how far off-normal
+// moves the rating. Change a weight and only the first is affected —
+// the population level is a property of the anchor alone.
+//
+// The rating never reads ability, current_ability, reputation or any
+// hidden attribute. A player has a good rating because the match
+// produced a good stat line for him. Everything about *who* he is
+// belongs upstream, in what the engine lets him do.
 
-const BASE_RATING: f32 = 6.0;
 const RATING_MIN: f32 = 1.0;
 const RATING_MAX: f32 = 10.0;
 
@@ -91,72 +96,186 @@ impl RatingMath {
     fn event_minutes_factor(conf: f32) -> f32 {
         0.70 + 0.30 * conf
     }
+}
 
-    /// Compress excessive cumulative positive upside. Below the knee passes
-    /// through unchanged; above, each extra unit is damped to `SLOPE`
-    /// contribution. Knee is set so that ordinary stat lines (typical
-    /// per-match routine sum 0.6-1.0) pass through, but accumulated routine
-    /// stacking past ~1.0 starts to hit diminishing returns — keeps a
-    /// volume passer / busy worker from drifting into the elite band on
-    /// routine alone, without flattening genuinely top-tier performances.
+// ── The shape ────────────────────────────────────────────────────────
+//
+// One curve for every position. It takes a **standardised** performance
+// (see `PerformanceScale` below) — how many population standard
+// deviations off the positional average this shift was — and returns a
+// rating movement. Because the input is standardised, a forward's goal
+// and a keeper's clean sheet arrive on the same scale even though one is
+// worth four times the other in goals, which is what lets a single
+// shape serve all four lines instead of four hand-tuned ladders that
+// drift apart.
+//
+// Fitted to published reference ratings, in z units:
+//
+// ```text
+//   z   reference performance                          rating
+//  +3.5 forward hat-trick                                9.2
+//  +2.3 forward brace / keeper seven-save shutout        8.4-8.7
+//  +1.1 forward goal / keeper four-save shutout          7.3-7.5
+//   0.0 ordinary shift                                   6.72
+//  -0.6 goalless forward / keeper beaten by his one shot 6.3
+//  -1.9 keeper who shipped three of four                 5.2
+// ```
+//
+// Both exponents exceed 1, so the curve is flat through the middle: a
+// shift half a deviation off average is not a performance, it is noise,
+// and it should not move the rating much. That flat middle is what a
+// hard-capped additive model cannot produce — its caps flatten the
+// middle by clipping, which also flattens everything above the cap and
+// leaves the distribution bimodal.
+//
+// The down limb is steeper than the up limb through the ordinary range
+// (0.69 vs 0.63 at z = 1) and the up limb overtakes it past z ≈ 2. That
+// is the real asymmetry of football judgement: mistakes are punished
+// faster than merit is rewarded, but genuine brilliance still outruns
+// everything.
+
+struct RatingShape;
+
+impl RatingShape {
+    /// Rating a positionally average shift earns. Real-football
+    /// reference: WhoScored / Sofascore per-match means sit at 6.6–6.8
+    /// in every position.
+    const ANCHOR: f32 = 6.72;
+
+    const UP_GAIN: f32 = 0.63;
+    const UP_EXPONENT: f32 = 1.34;
+    const UP_CEILING: f32 = 3.00;
+    const DOWN_GAIN: f32 = 0.69;
+    const DOWN_EXPONENT: f32 = 1.23;
+    const DOWN_CEILING: f32 = 2.60;
+
+    /// Map a standardised performance onto a rating.
     #[inline]
-    fn compress_positive_delta(delta: f32) -> f32 {
-        const KNEE: f32 = 1.0;
-        const SLOPE: f32 = 0.40;
-        if delta <= KNEE {
-            delta
+    fn rate(z: f32) -> f32 {
+        Self::ANCHOR + Self::delta(z)
+    }
+
+    /// The signed rating movement for a standardised performance.
+    /// Strictly increasing in `z` — a positive power and `tanh` are
+    /// both monotone — which is what lets the position models state
+    /// their invariants in performance units and have them hold as
+    /// rating invariants.
+    #[inline]
+    fn delta(z: f32) -> f32 {
+        if z >= 0.0 {
+            Self::limb(z, Self::UP_GAIN, Self::UP_EXPONENT, Self::UP_CEILING)
         } else {
-            KNEE + (delta - KNEE) * SLOPE
+            -Self::limb(-z, Self::DOWN_GAIN, Self::DOWN_EXPONENT, Self::DOWN_CEILING)
         }
     }
 
-    /// Soft cap: below `cap`, passes through; above, the excess is
-    /// compressed by `slope_after`. Cheaper than a hard clamp because
-    /// the relative ordering of "great vs very great" survives.
+    /// One limb: a power law soft-limited to `ceiling`. `x` ≥ 0.
     #[inline]
-    fn soft_cap(value: f32, cap: f32, slope_after: f32) -> f32 {
-        if value <= cap {
-            value
-        } else {
-            cap + (value - cap) * slope_after
+    fn limb(x: f32, gain: f32, exponent: f32, ceiling: f32) -> f32 {
+        if x <= 0.0 {
+            return 0.0;
         }
+        ceiling * (gain * x.powf(exponent) / ceiling).tanh()
     }
 }
 
-// =====================================================================
-// Evidence tier — drives soft caps, context-bonus damping, and
-// engagement-penalty gating from a single stat-line classification.
-// Pure stat-line read: never inspects ability, CA, or any hidden flag.
-// =====================================================================
+// ── The scale ────────────────────────────────────────────────────────
+//
+// Per position: where the population sits and how widely it spreads, in
+// that position's own performance units. Dividing by these is what
+// standardises the score, and it is the only place a position's
+// *distribution* is described — the component weights describe what
+// counts as good, this describes what counts as normal.
+//
+// Both numbers are measured, not chosen: `dev_match league` prints the
+// per-position mean and sd of the raw performance value (PERFORMANCE
+// SCALE block). Re-derive them there whenever component weights or
+// engine emission move; nothing else needs re-tuning when they do,
+// because the anchor and the shape are independent of them. That
+// separation is the whole point — under the old additive model every
+// coefficient change moved the population level and had to be paid for
+// with a compensating change somewhere else.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EvidenceTier {
-    /// 3+ goals or 3+ G/A — no cap, full team-result credit.
-    HatTrick,
-    /// 2 goals or G+A — cap +2.3, full team-result credit.
-    TwoGoals,
-    /// One goal with low all-around volume — cap +1.6.
-    OneGoalLowVolume,
-    /// Cameo (<30 min) with no decisive event — cap +0.7.
-    QuietCameo,
-    /// Strong evidence: multi-action decisive footprint (zone work,
-    /// multiple key passes / dribbles). Cap +1.3.
-    Strong,
-    /// Modest evidence: at least one decisive creative event. Cap +0.95.
-    Modest,
-    /// Passenger: routine volume only, no decisive evidence. Tight cap
-    /// + halved team-result credit + engagement penalty if low touches.
-    Passenger,
-    /// Anonymous edge case (60+ min, very low total volume). Cap +1.1.
-    AnonymousStarter,
-    /// Goalkeeper-specific tiers — separate ladder because save / claim
-    /// activity reads as decisive there in a way it doesn't elsewhere.
-    GkBusy,
-    GkModest,
-    GkPassenger,
-    /// Player had a scoring or G/A footprint that the simple ladders
-    /// don't pre-classify — uncapped positive_delta passes through.
-    Uncapped,
+#[derive(Clone, Copy)]
+struct PerformanceScale {
+    /// The performance value that reads as an ordinary shift for this
+    /// position — the one that earns [`RatingShape::ANCHOR`].
+    mean: f32,
+    /// Robust spread of the position's performance distribution,
+    /// `(p90 − p10) / 2.563` (the decile estimator, normal-consistent).
+    ///
+    /// Deliberately robust rather than the raw standard deviation: a
+    /// forward's raw sd is dominated by the handful of two- and
+    /// three-goal matches in the tail, so dividing by it would compress
+    /// the other ninety-five per cent of his season into nothing. The
+    /// robust estimator describes the bulk, and the shape's ceiling
+    /// handles the tail.
+    sd: f32,
+    /// How far this line's ratings spread in real football, relative to
+    /// the shape's reference calibration. Not measurable from the
+    /// engine — it is a property of how observers judge each position,
+    /// and every published rating source shows the same ordering:
+    /// forwards swing hardest (their contribution is lumpy and visible),
+    /// defenders least (a good defensive shift looks much like an
+    /// ordinary one), keepers and midfielders in between. Without it,
+    /// standardising alone would give all four lines the same rating
+    /// spread, and defenders would clear 7.5 five times as often as
+    /// they do in life.
+    sensitivity: f32,
+}
+
+impl PerformanceScale {
+    /// Goals prevented plus the small secondary terms — see [`keeper`].
+    /// The spread is the widest of the four lines because a keeper's
+    /// value swings on whole goals: one concession moves him two thirds
+    /// of a goal in a single event.
+    const KEEPER: PerformanceScale = PerformanceScale {
+        // Zero by construction: a keeper who neither prevents nor
+        // concedes beyond what the chances were worth had an ordinary
+        // afternoon. The measured population mean confirms it (0.04).
+        mean: 0.00,
+        sd: 0.88,
+        sensitivity: 0.88,
+    };
+    /// The tightest line. A defender's shift is made of many small
+    /// actions and almost never contains a goal, so the distribution is
+    /// narrow and nearly symmetric — which is exactly why defender
+    /// ratings cluster in real life too.
+    const DEFENDER: PerformanceScale = PerformanceScale {
+        mean: 0.46,
+        sd: 0.44,
+        sensitivity: 0.52,
+    };
+    const MIDFIELDER: PerformanceScale = PerformanceScale {
+        mean: 0.26,
+        sd: 0.56,
+        sensitivity: 0.62,
+    };
+    /// Strongly right-skewed: the median forward shift (0.10) sits well
+    /// below the mean (0.51) because most of the value is concentrated
+    /// in the minority of matches containing a goal. Standardising
+    /// against the mean is what makes a goalless forward read as
+    /// slightly below par rather than as a failure — his position's
+    /// average *includes* the goals he is expected to score.
+    const FORWARD: PerformanceScale = PerformanceScale {
+        mean: 0.13,
+        sd: 1.17,
+        sensitivity: 1.17,
+    };
+
+    /// Turn a raw performance value into a rating.
+    #[inline]
+    fn rate(&self, raw: f32) -> f32 {
+        RatingShape::ANCHOR + self.sensitivity * RatingShape::delta(self.standardise(raw))
+    }
+
+    #[inline]
+    fn standardise(&self, raw: f32) -> f32 {
+        if self.sd <= 0.0 {
+            return 0.0;
+        }
+        (raw - self.mean) / self.sd
+    }
 }
 
 // =====================================================================
@@ -174,12 +293,14 @@ struct Profile {
     progression: f32,
     retention: f32,
     defensive: f32,
-    goalkeeping: f32,
 }
 
 impl Profile {
     fn for_position(pos: PlayerFieldPositionGroup) -> Self {
         match pos {
+            // Never consulted — goalkeepers return from `calculate`
+            // before the profile is read (see `keeper.rs`). Kept as a
+            // neutral row so the match stays exhaustive.
             PlayerFieldPositionGroup::Goalkeeper => Profile {
                 scoring: 1.0,
                 shooting: 0.5,
@@ -187,7 +308,6 @@ impl Profile {
                 progression: 0.2,
                 retention: 0.4,
                 defensive: 0.4,
-                goalkeeping: 1.0,
             },
             PlayerFieldPositionGroup::Defender => Profile {
                 scoring: 1.10,
@@ -196,7 +316,6 @@ impl Profile {
                 progression: 0.7,
                 retention: 0.8,
                 defensive: 1.00,
-                goalkeeping: 0.0,
             },
             PlayerFieldPositionGroup::Midfielder => Profile {
                 scoring: 1.05,
@@ -205,7 +324,6 @@ impl Profile {
                 progression: 1.00,
                 retention: 0.90,
                 defensive: 0.85,
-                goalkeeping: 0.0,
             },
             PlayerFieldPositionGroup::Forward => Profile {
                 // Forward weights skew hard toward decisive output:
@@ -219,7 +337,6 @@ impl Profile {
                 progression: 0.45,
                 retention: 0.30,
                 defensive: 0.20,
-                goalkeeping: 0.0,
             },
         }
     }
@@ -257,113 +374,34 @@ impl<'a> RatingContext<'a> {
         }
     }
 
-    /// Calculate the match rating (1.0 - 10.0, base 6.0).
+    /// Calculate the match rating (1.0..=10.0).
     ///
-    /// Routine components are always damped by minute confidence so a
-    /// short cameo of small touches doesn't farm a high rating. Direct
-    /// event deltas (goals + clinical/decisive bonuses) keep most of
-    /// their bite even from a cameo via `event_minutes_factor`.
-    ///
-    /// The positive sum is then compressed (a single decisive moment
-    /// shouldn't combine with five tiny bonuses to reach elite band)
-    /// and gated by contribution-aware soft caps: anonymous starters
-    /// stay around 7.1, one-goal-only finishers around 7.6, multi-goal
-    /// scorers are uncapped. Negative events (errors-to-goal, reds,
-    /// own goals, conceded penalty, GK failed claims) stay at full
-    /// strength so a defining moment of failure always lands.
+    /// Two models, one shape. Each position group turns its stat line
+    /// into a signed performance value in its own units, that value is
+    /// standardised against the position's population (see
+    /// [`PerformanceScale`]) and pushed through [`RatingShape`], and
+    /// the events a match report leads with are applied afterwards so
+    /// they can still reach the disaster band through the compression.
     pub fn calculate(&self) -> f32 {
-        let p = self.profile;
-        let conf = self.confidence;
-        let ev_factor = RatingMath::event_minutes_factor(conf);
-
-        // Routine on-the-ball signal — minute-confidence damped.
-        let routine = p.shooting * self.shooting()
-            + p.creation * self.creation()
-            + p.progression * self.progression()
-            + p.retention * self.retention()
-            + p.defensive * self.defensive()
-            + p.goalkeeping * self.goalkeeping();
-        let routine_damped = routine * conf;
-
-        // Direct event delta — goals, decisive/clinical bonus. Softer
-        // minute policy so a 5-minute winner keeps most of its credit.
-        let event_pos = p.scoring * self.scoring_event();
-        let event_damped = event_pos * ev_factor;
-
-        // Split positive/negative pieces so compression only fires on
-        // the upside. Routine positives get cross-component compression;
-        // event positives are kept intact (one decisive moment should
-        // not be sanded down by the same curve that bounds spam).
-        //
-        // Goalkeepers skip routine compression: every save is decisive
-        // evidence in a way an outfield interception isn't, and the
-        // gk_busy / gk_modest / passenger tiers in `apply_soft_caps`
-        // already gate the upside. Without this exemption a barrage
-        // keeper's two-plus rating units get sanded down before the
-        // tier cap even sees them.
-        let raw_pos_routine = routine_damped.max(0.0);
-        let positive_routine = if self.is_goalkeeper() {
-            raw_pos_routine
+        let rating = if self.is_goalkeeper() {
+            self.keeper_rating()
         } else {
-            RatingMath::compress_positive_delta(raw_pos_routine)
+            self.outfield_rating()
         };
-        let negative_routine = routine_damped.min(0.0);
-        let positive_event = event_damped.max(0.0);
-        let negative_event = event_damped.min(0.0);
-
-        // Contribution-aware soft caps on the combined positive total.
-        // The `distinctiveness_bonus` rides INSIDE the cap on purpose: a
-        // passenger (cap +0.20) has its tiny texture absorbed so the
-        // "did nothing" verdict holds, while a Modest / Strong line has
-        // headroom for the varied-performance lift to register. This is
-        // the continuous, stat-derived half of the spec's de-clustering
-        // — it breaks identical-tier stat lines apart by how varied and
-        // role-complete the actual work was, never by ability.
-        let tier = self.evidence_tier();
-        let positive_total = self.apply_soft_caps_for(
-            positive_routine + positive_event + self.distinctiveness_bonus(),
-            tier,
-        );
-
-        let mut rating = BASE_RATING + positive_total + negative_routine + negative_event;
-        // Positive team-result credit (win bonus, clean-sheet bonus) is
-        // damped when the player did nothing decisive — a passenger
-        // doesn't earn the full team-result credit. Negative results
-        // (a loss, goals conceded) still apply in full — being on the
-        // losing side hits everyone equally regardless of tier.
-        // Evidence-based: read from the same tier classification, never
-        // from CA / skills.
-        let context_factor = self.context_credit_factor(tier);
-        let result = self.result_context();
-        rating += if result > 0.0 {
-            result * context_factor
-        } else {
-            result
-        };
-        rating += self.clean_sheet_context() * context_factor;
-        rating += self.conceded_context();
-        rating += self.discipline();
-        rating += self.errors_and_cards();
-        rating += self.gk_exceptional_negatives();
-        // Engagement gate — a 60+ min outfield starter whose touches per
-        // minute fall well below the position-typical floor visibly
-        // didn't engage with the match. Pure stat-line signal that real
-        // punditry catches: "anonymous shift". Limited to passenger /
-        // anonymous-starter tiers so a decisive moment (G/A or zone
-        // work) is never overridden by a low-touch underlying stat line.
-        if matches!(
-            tier,
-            EvidenceTier::Passenger | EvidenceTier::AnonymousStarter
-        ) {
-            rating += self.engagement_penalty();
-        }
-        // Forward role-expectation drag: a forward who played meaningful
-        // minutes without G/A and without enough goal threat / creative
-        // footprint hasn't done their primary job. Pure stat-line read,
-        // smooth penalty (no hard cap), self-zero outside the gate.
-        rating += self.attacking_role_expectation();
-
         rating.clamp(RATING_MIN, RATING_MAX)
+    }
+
+    /// The raw, un-standardised performance value for this stat line.
+    /// Exposed for the calibration harness, which measures the
+    /// per-position mean and sd that [`PerformanceScale`] is built
+    /// from — the constants must be derived from the same expression
+    /// the rating consumes, never estimated separately.
+    pub fn performance_value(&self) -> f32 {
+        if self.is_goalkeeper() {
+            self.keeper_performance()
+        } else {
+            self.outfield_performance()
+        }
     }
 
     #[inline]
@@ -379,131 +417,13 @@ impl<'a> RatingContext<'a> {
             .shots_faced
             .max(self.stats.saves + self.opponent_goals as u16)
     }
-
-    /// Continuous, stat-derived "texture of a varied shift" lift, clamped
-    /// to 0..=0.12 (spec Section A). Three signals, none of which read
-    /// ability:
-    ///
-    ///   * `unique_positive_action_types` — how many *different* kinds of
-    ///     positive action the player registered. A one-note line (only
-    ///     clearances) scores low; a player who tackled, intercepted,
-    ///     progressed and created scores high. Logarithmic so the first
-    ///     few distinct actions matter most.
-    ///   * `role_core_action_balance` — did the player do *both* halves
-    ///     of their role (defend AND build, create AND finish)? Rewards a
-    ///     complete shift over a lopsided one.
-    ///   * `high_value_zone_share` — share of the player's actions that
-    ///     happened in high-danger / high-value zones.
-    ///
-    /// Damped by minute confidence so a cameo doesn't farm texture, and
-    /// (because it rides inside the tier soft cap upstream) a passenger's
-    /// lift is absorbed rather than lifting the "did nothing" verdict.
-    fn distinctiveness_bonus(&self) -> f32 {
-        let types = self.unique_positive_action_types() as f32;
-        // 0.04 · ln(1 + n): 0 at n=0, ≈0.044 at n=2, ≈0.083 at n=6.
-        let unique = 0.04 * (1.0 + types).ln();
-        let role_core = 0.03 * self.role_core_action_balance();
-        let high_value = 0.02 * self.high_value_zone_share();
-        ((unique + role_core + high_value) * self.confidence).clamp(0.0, 0.12)
-    }
-
-    /// Count of distinct *role dimensions* the player was active in —
-    /// finishing, creating, carrying, progressing, defending, keeping.
-    /// Measures the *breadth* of a performance (did the player do several
-    /// different KINDS of football?) rather than raw counter variety, so
-    /// a busy-but-one-note shift — e.g. a CB who only tackled and cleared —
-    /// reads as a single dimension, not five. This is what keeps routine
-    /// volume from buying a distinctiveness lift it hasn't earned.
-    fn unique_positive_action_types(&self) -> u32 {
-        let s = self.stats;
-        let z = s.zone_stats;
-        let dimensions = [
-            // finishing / direct goal threat
-            s.goals > 0 || s.assists > 0 || s.shots_on_target > 0,
-            // chance creation
-            s.key_passes > 0 || s.passes_into_box > 0 || s.crosses_completed > 0,
-            // ball-carrying
-            s.successful_dribbles > 0 || s.progressive_carries > 0,
-            // progressive passing
-            s.progressive_passes > 0,
-            // defending
-            s.tackles > 0
-                || s.interceptions > 0
-                || s.blocks > 0
-                || s.clearances > 0
-                || s.successful_pressures > 0,
-            // goalkeeping
-            s.saves > 0 || z.gk_command_actions > 0,
-        ];
-        dimensions.iter().filter(|d| **d).count() as u32
-    }
-
-    /// 0..1 measure of whether the player did both halves of their role.
-    /// `2·min / (a+b)` peaks at 1.0 when the two halves are balanced and
-    /// falls toward 0 for a one-sided contribution (or no contribution).
-    fn role_core_action_balance(&self) -> f32 {
-        let s = self.stats;
-        let (a, b) = match self.pos {
-            PlayerFieldPositionGroup::Forward => (
-                (s.goals + s.assists + s.shots_on_target) as f32,
-                (s.key_passes + s.passes_into_box + s.successful_dribbles) as f32,
-            ),
-            PlayerFieldPositionGroup::Midfielder => (
-                (s.key_passes + s.passes_into_box + s.progressive_passes + s.progressive_carries)
-                    as f32,
-                (s.tackles + s.interceptions + s.successful_pressures) as f32,
-            ),
-            PlayerFieldPositionGroup::Defender => (
-                (s.tackles + s.interceptions + s.blocks + s.clearances) as f32,
-                (s.progressive_passes + s.progressive_carries + s.passes_into_box) as f32,
-            ),
-            PlayerFieldPositionGroup::Goalkeeper => {
-                (s.saves as f32, s.zone_stats.gk_command_actions as f32)
-            }
-        };
-        let sum = a + b;
-        if sum <= 0.0 {
-            0.0
-        } else {
-            (2.0 * a.min(b) / sum).clamp(0.0, 1.0)
-        }
-    }
-
-    /// Share of the player's countable actions that happened in
-    /// high-value zones (own box / six-yard for defending, into-box /
-    /// final-third creation for attacking). `+1.0` in the denominator
-    /// keeps a low-volume line from reading as a misleading 100% share.
-    fn high_value_zone_share(&self) -> f32 {
-        let s = self.stats;
-        let z = s.zone_stats;
-        let high_value = (z.tackles_own_box
-            + z.tackles_own_six_yard
-            + z.interceptions_own_box
-            + z.interceptions_own_six_yard
-            + z.blocks_own_box
-            + z.blocks_own_six_yard
-            + z.clearances_own_box
-            + z.clearances_own_six_yard
-            + z.carries_into_box
-            + z.half_space_passes_into_box
-            + z.central_passes_into_box
-            + z.pressures_won_final_third
-            + z.tackles_final_third) as f32;
-        let baseline = (s.tackles
-            + s.interceptions
-            + s.blocks
-            + s.clearances
-            + s.passes_into_box
-            + s.key_passes
-            + s.successful_pressures) as f32;
-        (high_value / (high_value + baseline + 1.0)).clamp(0.0, 1.0)
-    }
 }
 
-mod calibration;
 mod context;
 mod defending;
 mod expectation;
+mod keeper;
+mod outfield;
 mod scoring;
 mod volume;
 

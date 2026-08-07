@@ -26,10 +26,10 @@ use crate::r#match::{
 };
 #[cfg(feature = "match-logs")]
 use crate::match_log_info;
-#[cfg(feature = "match-logs")]
-use std::sync::atomic::Ordering;
 use log::debug;
 use nalgebra::Vector3;
+#[cfg(feature = "match-logs")]
+use std::sync::atomic::Ordering;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Save-accounting diagnostic counters. Trace each save event's credit pair
@@ -805,11 +805,9 @@ impl PlayerEventDispatcher {
                     #[cfg(feature = "match-logs")]
                     {
                         if !receiver_is_shooter {
-                            key_pass_diag::WRONG_RECEIVER
-                                .fetch_add(1, Ordering::Relaxed);
+                            key_pass_diag::WRONG_RECEIVER.fetch_add(1, Ordering::Relaxed);
                         } else if !in_window {
-                            key_pass_diag::STALE_WINDOW
-                                .fetch_add(1, Ordering::Relaxed);
+                            key_pass_diag::STALE_WINDOW.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     // Single-credit guarantee: even if the shot resolves
@@ -858,8 +856,7 @@ impl PlayerEventDispatcher {
                 const FAILED_CLAIM_WINDOW_TICKS: u64 = 600; // ~6s
                 if let Some(gk_id) = field.ball.pending_failed_claim_gk_id {
                     #[cfg(feature = "match-logs")]
-                    gk_claim_diag::FLAP_SHOTS_SEEN
-                        .fetch_add(1, Ordering::Relaxed);
+                    gk_claim_diag::FLAP_SHOTS_SEEN.fetch_add(1, Ordering::Relaxed);
                     let in_window = now_tick.saturating_sub(field.ball.pending_failed_claim_tick)
                         <= FAILED_CLAIM_WINDOW_TICKS;
                     let gk_team = field.get_player(gk_id).map(|p| p.team_id);
@@ -869,14 +866,12 @@ impl PlayerEventDispatcher {
                                 gk.statistics.note_gk_failed_claim_to_shot();
                             }
                             #[cfg(feature = "match-logs")]
-                            gk_claim_diag::FLAP_TO_SHOT
-                                .fetch_add(1, Ordering::Relaxed);
+                            gk_claim_diag::FLAP_TO_SHOT.fetch_add(1, Ordering::Relaxed);
                             field.ball.pending_failed_claim_charged = true;
                         }
                     } else {
                         #[cfg(feature = "match-logs")]
-                        gk_claim_diag::FLAP_DROPPED
-                            .fetch_add(1, Ordering::Relaxed);
+                        gk_claim_diag::FLAP_DROPPED.fetch_add(1, Ordering::Relaxed);
                         field.ball.pending_failed_claim_gk_id = None;
                         field.ball.pending_failed_claim_charged = false;
                     }
@@ -938,12 +933,10 @@ impl PlayerEventDispatcher {
             player.memory.credit_shot_on_target();
             #[cfg(feature = "match-logs")]
             {
-                save_accounting_stats::ON_TARGET_FROM_GOAL
-                    .fetch_add(1, Ordering::Relaxed);
+                save_accounting_stats::ON_TARGET_FROM_GOAL.fetch_add(1, Ordering::Relaxed);
                 let band =
                     time_band_diag::band_for_minute(sc::minute_from_ms(context.total_match_time));
-                time_band_diag::GOALS_BY_BAND[band]
-                    .fetch_add(1, Ordering::Relaxed);
+                time_band_diag::GOALS_BY_BAND[band].fetch_add(1, Ordering::Relaxed);
             }
         }
 
@@ -968,10 +961,7 @@ impl PlayerEventDispatcher {
                     .map(|p| p.id);
                 if let Some(gk_id) = conceding_gk_id {
                     if let Some(gk) = field.get_player_mut(gk_id) {
-                        gk.statistics.shots_faced += 1;
-                        if shot_xg > 0.0 {
-                            gk.statistics.record_xg_prevented(-shot_xg);
-                        }
+                        gk.statistics.note_shot_faced(shot_xg, false);
                     }
                 }
             }
@@ -3245,11 +3235,7 @@ impl PlayerEventDispatcher {
         let shooter_id = field.ball.previous_owner;
         let shot_xg = field.ball.last_shot_xg;
         if let Some(gk) = field.get_player_mut(player_id) {
-            gk.statistics.saves += 1;
-            gk.statistics.shots_faced += 1;
-            if shot_xg > 0.0 {
-                gk.statistics.record_xg_prevented(shot_xg);
-            }
+            gk.statistics.note_shot_faced(shot_xg, true);
         }
         field.ball.clear_shot_metadata();
         field.ball.pending_error_to_shot_player_id = None;
@@ -3298,11 +3284,7 @@ impl PlayerEventDispatcher {
                 let shooter_id = field.ball.previous_owner;
                 let shot_xg = field.ball.last_shot_xg;
                 if let Some(player) = field.get_player_mut(player_id) {
-                    player.statistics.saves += 1;
-                    player.statistics.shots_faced += 1;
-                    if shot_xg > 0.0 {
-                        player.statistics.record_xg_prevented(shot_xg);
-                    }
+                    player.statistics.note_shot_faced(shot_xg, true);
                 }
                 let mut shooter_found = false;
                 if let Some(sid) = shooter_id {

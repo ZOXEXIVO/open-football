@@ -1,30 +1,13 @@
-//! Always-on contextual deltas: result, clean sheet, goals conceded,
-//! discipline, and errors/cards. Applied at full strength (no minute
-//! damping) because they are scoreline/team signals, not on-the-ball work.
+//! Outfield contextual deltas: clean sheet, shared blame for goals
+//! conceded, and discipline. Applied at full strength (no minute
+//! damping) because they are scoreline/team signals, not on-the-ball
+//! work. Goalkeeper equivalents live in [`super::keeper`].
 
 use super::{RatingContext, RatingMath};
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::zones::ZoneCoeffs;
 
 impl<'a> RatingContext<'a> {
-    /// Win / loss nudge. Win credit lifted 0.12 → 0.16 in the FM-parity
-    /// season calibration (see `season_tests.rs`): accumulated over a
-    /// 30+ match season the team-result share of an FM-style rating is
-    /// larger than a 0.12 nudge produced — high-output players at
-    /// winning clubs were averaging 0.2-0.4 below the believable band.
-    /// The passenger / goalless-forward damping in
-    /// `context_credit_factor` still discounts unearned result credit,
-    /// and losses stay at full -0.15 for everyone.
-    pub(super) fn result_context(&self) -> f32 {
-        if self.team_goals > self.opponent_goals {
-            0.16
-        } else if self.team_goals < self.opponent_goals {
-            -0.15
-        } else {
-            0.0
-        }
-    }
-
     /// Position-aware clean-sheet bonus.
     ///
     /// Defenders get a tiered credit based on stat-line evidence of
@@ -40,43 +23,9 @@ impl<'a> RatingContext<'a> {
             return 0.0;
         }
         match self.pos {
-            PlayerFieldPositionGroup::Goalkeeper => {
-                // Tiered like the defender bonus: evidence-based, not
-                // unconditional. A keeper who made real interventions
-                // (saves, command claims, xG prevented) gets full credit;
-                // a quiet shutout that the defence handled gets a
-                // softened bonus — still meaningful because a keeper
-                // organising a CS without a save IS doing the job
-                // (positioning, sweeping, command without claim event),
-                // just not the headline kind. Tiers loosened from the
-                // 2026-04 over-tightening (0.10/0.18) — that pass pulled
-                // TOP-GK season averages to ~6.3 vs the 6.8-7.0 reference
-                // band — while keeping the busy-keeper premium intact.
-                let s = self.stats;
-                let z = s.zone_stats;
-                let saves = s.saves;
-                let command = z.gk_command_actions;
-                let xg_prev = s.xg_prevented;
-                // Tiers lifted 0.30/0.22/0.18 → 0.34/0.29/0.26 in the
-                // FM-parity season calibration: a 35-start keeper with
-                // 12 clean sheets was accumulating to ~6.46 (below the
-                // believable 6.6-7.0 band) because the engine's typical
-                // quiet shutout carried too little credit. The clean
-                // sheet is the GK's headline season currency — repeated
-                // CS credit, not save volume, is what separates a
-                // 12-CS league row from a 9-conceded continental row.
-                // Trimmed 0.34/0.29/0.26: these are FLAT per-clean-sheet
-                // credits that every keeper collects equally, and with
-                // save% previously inert they were most of what set the
-                // keeper population level (mean 7.01, band top 7.10).
-                if saves >= 4 || command >= 2 || xg_prev > 0.5 {
-                    0.30
-                } else if saves >= 2 || command >= 1 || xg_prev > 0.0 {
-                    0.25
-                } else {
-                    0.22
-                }
-            }
+            // Keepers never reach here —  owns their
+            // clean-sheet credit, in goal units.
+            PlayerFieldPositionGroup::Goalkeeper => 0.0,
             PlayerFieldPositionGroup::Defender => {
                 let z = self.stats.zone_stats;
                 let high_value = (z.tackles_own_box
@@ -116,51 +65,16 @@ impl<'a> RatingContext<'a> {
         }
     }
 
-    /// Goals-conceded penalty for goalkeepers and (lightly) defenders.
+    /// Shared back-line blame for goals conceded.
     /// Smooth growth: gentle through the first two, steeper from the
     /// third, slows again past the sixth (so a 10-shipping disaster
     /// stays in the disaster band rather than pinning to the floor).
     pub(super) fn conceded_context(&self) -> f32 {
         match self.pos {
-            PlayerFieldPositionGroup::Goalkeeper => {
-                let g = self.opponent_goals as f32;
-                // First goal softened 0.30 → 0.16, second steepened to
-                // 0.40 (FM-parity season calibration). Shipping exactly
-                // one goal is the most common keeper match by far, and
-                // at -0.30 it cancelled the entire save credit of a
-                // routine 2-1 win — over 35 starts that single constant
-                // dragged a 0.83-conceded-per-start season to ~6.4.
-                // The marginal cost of the second goal rises (0.30 →
-                // 0.40) so multi-concession nights stay clearly worse
-                // than one-goal nights; cumulative totals from two
-                // conceded on sit 0.04 below the old curve, which the
-                // disaster-band and continental-cluster guards absorb.
-                // First goal restored 0.16 → 0.38. It was softened when save%
-                // contributed NOTHING (its band dead-zoned the whole
-                // population), so conceding was the only thing that moved
-                // a keeper and had to be gentle. Now that a good keeper
-                // earns through save PERCENTAGE, conceding can cost what
-                // it really costs — which is what stopped every ordinary
-                // "3 saves, 1 conceded" night reading 7.0.
-                // ⚠ 0.16 is a COMPENSATING softening from when save% was
-                // inert (its band dead-zoned the whole population), so
-                // conceding was the only lever that moved a keeper and
-                // had to be gentle. Now that save% pays, this is the
-                // single number holding the ordinary "3 saves, 1
-                // conceded" night at ~7.0. Raising it to ~0.38 lands
-                // that archetype near its real 6.6 — but it drops the
-                // season fixtures (top-club GK 6.49 vs floor 6.60,
-                // heroic-in-defeat 6.79 vs 7.00), so it MUST be paired
-                // with lifts on the terms good keepers earn: `saves_v`
-                // (currently 1.22), the save% slope/cap, and the
-                // clean-sheet tiers. Do it as one change with budget to
-                // iterate; piecemeal attempts oscillate.
-                let first = g.min(1.0) * 0.16;
-                let second = (g - 1.0).clamp(0.0, 1.0) * 0.40;
-                let mid = (g - 2.0).max(0.0) * 0.55;
-                let heavy = (g - 5.0).max(0.0) * 0.20;
-                -(first + second + mid + heavy)
-            }
+            // Keepers never reach here — the goals-prevented model in
+            //  charges concessions directly, at −(1 − CONV)
+            // of a goal each.
+            PlayerFieldPositionGroup::Goalkeeper => 0.0,
             PlayerFieldPositionGroup::Defender if self.opponent_goals >= 2 => {
                 // Defenders share blame from the 2nd goal onward,
                 // smoothly (gate moved 3 → 2 in the FM-parity DEF
@@ -178,9 +92,9 @@ impl<'a> RatingContext<'a> {
         }
     }
 
-    /// Fouls, offsides, own-goals, penalty-foul-conceded. Position-
-    /// sensitive (forwards live with offsides; back-line players are
-    /// extra penalised for own-third fouls).
+    /// Fouls and offsides. Own goals and conceded penalties are NOT
+    /// here — they are defining moments and are billed once, after the
+    /// shape curve, by the position model.
     pub(super) fn discipline(&self) -> f32 {
         let s = self.stats;
         let z = s.zone_stats;
@@ -197,40 +111,12 @@ impl<'a> RatingContext<'a> {
         } else {
             0.0
         };
-        let penalty_foul = z.penalty_fouls_conceded as f32 * ZoneCoeffs::FOUL_PENALTY;
-
         let (per, scale) = match self.pos {
             PlayerFieldPositionGroup::Forward => (0.08, 4.0),
             _ => (0.06, 3.0),
         };
         let offsides = -RatingMath::sat(s.offsides as f32, scale) * per * scale; // ≈ per-event ≤ scale*per
 
-        let own_goals =
-            s.own_goals as f32 * (ZoneCoeffs::OWN_GOAL_BASE + ZoneCoeffs::OWN_GOAL_OWN_BOX_EXTRA);
-
-        fouls + own_third_extra + penalty_foul + offsides + own_goals
-    }
-
-    /// Errors that led to a shot or goal + yellow/red cards. Errors-
-    /// to-goal hit hard per event — a single mistake is a defining
-    /// moment. Always at full strength so a cameo error still lands.
-    pub(super) fn errors_and_cards(&self) -> f32 {
-        let s = self.stats;
-        // A shot-error that converts is promoted to `errors_leading_to_goal`
-        // at goal time, but the engine never clears the shot counter — so
-        // the same mistake sits in BOTH counters. Bill only the shot-errors
-        // that stayed shot-errors; the ones that became goals are punished,
-        // far more harshly, through `err_goal` below. Without this a single
-        // own-box giveaway-to-goal was charged as a shot-error AND a
-        // goal-error (AND an own-box extra), triple-counting one mistake and
-        // dropping a 1-conceded keeper into the disaster band.
-        let non_goal_shot_errors = s
-            .errors_leading_to_shot
-            .saturating_sub(s.errors_leading_to_goal);
-        let err_shot = RatingMath::sat(non_goal_shot_errors as f32, 1.0) * -0.55;
-        let err_goal = RatingMath::sat(s.errors_leading_to_goal as f32, 1.2) * -2.40;
-        let yellow = s.yellow_cards as f32 * -0.15;
-        let red = s.red_cards as f32 * -1.50;
-        err_shot + err_goal + yellow + red
+        fouls + own_third_extra + offsides
     }
 }

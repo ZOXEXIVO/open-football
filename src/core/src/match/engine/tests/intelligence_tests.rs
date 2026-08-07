@@ -393,6 +393,7 @@ fn match_rating_penalises_error_leading_to_goal() {
         errors_leading_to_shot: 0,
         errors_leading_to_goal: 0,
         xg_prevented: 0.0,
+        xg_faced: 0.0,
         offsides: 0,
         own_goals: 0,
         zone_stats: Default::default(),
@@ -404,8 +405,11 @@ fn match_rating_penalises_error_leading_to_goal() {
 }
 
 #[test]
-fn gk_rating_uses_xg_prevented() {
+fn gk_rating_reads_the_difficulty_of_the_shots_faced() {
     use crate::r#match::engine::result::PlayerMatchEndStats;
+    // Mirrors  — the engine population
+    // mean pre-shot xG of a shot on target.
+    const ORDINARY_CHANCE_XG: f32 = 0.1136;
     let mut base = PlayerMatchEndStats {
         shots_on_target: 0,
         shots_total: 0,
@@ -445,24 +449,46 @@ fn gk_rating_uses_xg_prevented() {
         errors_leading_to_shot: 0,
         errors_leading_to_goal: 0,
         xg_prevented: 0.0,
+        xg_faced: 0.0,
         offsides: 0,
         own_goals: 0,
         zone_stats: Default::default(),
     };
-    let baseline = RatingContext::new(&base, 1, 1).calculate();
-    base.xg_prevented = 1.0;
-    let lifted = RatingContext::new(&base, 1, 1).calculate();
-    assert!(lifted > baseline);
-    // Negative xg_prevented is the live ledger after conceding goals.
-    // It must NOT subtract from the rating: the conceded-goal penalty
-    // and low-save% bonus already cover bad shifts, and double-
-    // counting was flooring blowout keepers at 1.0.
-    base.xg_prevented = -1.0;
-    let neutral = RatingContext::new(&base, 1, 1).calculate();
+    // `xg_faced` is the chance value of the shots the keeper dealt with,
+    // and it sets what an ordinary keeper would have been expected to
+    // concede from them. Same saves, same goals, harder shots ⇒ a better
+    // afternoon.
+    //
+    // The old model read `xg_prevented` instead, as an upside-only
+    // credit — it took the positive half and discarded the negative one,
+    // so conceding cheap goals was invisible. That is no longer a
+    // consideration: the goals-prevented model reads the outcome
+    // directly, so there is nothing to protect the rating from.
+    base.xg_faced = 6.0 * ORDINARY_CHANCE_XG;
+    let ordinary = RatingContext::new(&base, 1, 1).calculate();
+    base.xg_faced = 6.0 * ORDINARY_CHANCE_XG * 2.0;
+    let hard = RatingContext::new(&base, 1, 1).calculate();
+    base.xg_faced = 6.0 * ORDINARY_CHANCE_XG * 0.4;
+    let easy = RatingContext::new(&base, 1, 1).calculate();
     assert!(
-        (neutral - baseline).abs() < 0.01,
-        "negative xg_prevented must be upside-only — got {} vs baseline {}",
-        neutral,
-        baseline
+        hard > ordinary && ordinary > easy,
+        "chance difficulty must order the same stat line: easy {easy:.3} \
+         < ordinary {ordinary:.3} < hard {hard:.3}"
+    );
+    // And it conditions the expectation without ever overturning the
+    // outcome: facing the hardest chances the clamp allows does not buy
+    // a keeper who shipped three the rating of one who shipped one from
+    // the easiest.
+    base.xg_faced = 6.0 * ORDINARY_CHANCE_XG * 0.4;
+    base.saves = 5;
+    let one_conceded_easy = RatingContext::new(&base, 1, 1).calculate();
+    base.xg_faced = 6.0 * ORDINARY_CHANCE_XG * 2.0;
+    base.saves = 3;
+    let three_conceded_hard = RatingContext::new(&base, 1, 3).calculate();
+    assert!(
+        one_conceded_easy > three_conceded_hard,
+        "chance difficulty must not overturn the outcome: one conceded \
+         from easy chances {one_conceded_easy:.3} must beat three from \
+         hard ones {three_conceded_hard:.3}"
     );
 }

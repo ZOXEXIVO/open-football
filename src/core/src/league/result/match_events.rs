@@ -1968,20 +1968,20 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
         // handful of shared levels instead of a per-identity spread.
         let date_seed = now.num_days_from_ce() as f64;
 
-        // Consistency × professionalism drive match-to-match volatility.
-        // High consistency narrows the swing; high professionalism narrows
-        // it further (a pro keeps a routine even on off days). Band tuned
-        // to ×0.45 (spec Section D — was ×0.9, which read as decorative on
-        // top of the new contextual seed) so streaky players still swing
-        // but the contextual model does the primary separating.
-        let cons_band = (1.0 - (consistency / 20.0)).clamp(0.0, 1.0);
-        let prof_factor = (1.05 - (professionalism / 20.0) * 0.20).clamp(0.85, 1.05);
-        let variance_band = cons_band * prof_factor * 0.45;
-        if variance_band > 0.01 {
-            let seed = ((*player_id as f64 * 0.618033) + (date_seed * 0.381966)).fract() as f32;
-            let swing = (seed - 0.5) * 2.0 * variance_band;
-            adjusted += swing;
-        }
+        // Match-to-match volatility now lives where the performance is
+        // produced, not here: `MatchdayForm` stamps a form multiplier on
+        // the match player at kickoff and `effective_skill` folds it into
+        // every duel, pass and shot, so a streaky player genuinely has a
+        // worse afternoon and the stat line says so. Re-applying a
+        // consistency swing to the finished rating would double-count the
+        // same attribute — and, worse, would move the number away from
+        // the match it describes.
+        //
+        // What stays is a much smaller residue: two players can turn in
+        // the same stat line and still be written up differently. That is
+        // the texture band below, which scales with how much actually
+        // happened and is far too small to reorder anything.
+        let _ = (consistency, professionalism);
 
         // Routine texture (spec Section A) — a tiny, deterministic
         // per-identity jitter that breaks otherwise-identical stat lines
@@ -2666,6 +2666,7 @@ mod potm_tests {
                 errors_leading_to_shot: 0,
                 errors_leading_to_goal: 0,
                 xg_prevented: 0.0,
+                xg_faced: 0.0,
                 offsides: 0,
                 own_goals: 0,
                 zone_stats: ZoneStats::default(),
@@ -2774,6 +2775,7 @@ mod canonical_rating_tests {
                 errors_leading_to_shot: 0,
                 errors_leading_to_goal: 0,
                 xg_prevented: 0.0,
+                xg_faced: 0.0,
                 offsides: 0,
                 own_goals: 0,
                 zone_stats: ZoneStats::default(),

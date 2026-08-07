@@ -217,7 +217,13 @@ pub fn effective_skill(player: &MatchPlayer, base: f32, ctx: ActionContext) -> f
     let recovered = 1.0 - (1.0 - band) * (1.0 - mitigation * cap);
     let extra = late_game_mental_extra(player, ctx);
     let settling = EntrySettling::factor(player, ctx.minute);
-    (base * recovered * extra * player.crowd_arousal * settling * player.settledness)
+    (base
+        * recovered
+        * extra
+        * player.crowd_arousal
+        * settling
+        * player.settledness
+        * player.matchday_form)
         .clamp(1.0, 20.0)
 }
 
@@ -263,6 +269,9 @@ pub struct SkillBands {
     /// Pre-match settledness stamp (`MatchPlayer::settledness`, 1.0
     /// for settled match-sharp players).
     settledness: f32,
+    /// Pre-match form draw (`MatchPlayer::matchday_form`, 1.0 on an
+    /// ordinary day).
+    matchday_form: f32,
 }
 
 impl SkillBands {
@@ -292,6 +301,7 @@ impl SkillBands {
             crowd: player.crowd_arousal,
             settling: EntrySettling::factor(player, minute),
             settledness: player.settledness,
+            matchday_form: player.matchday_form,
         }
     }
 
@@ -307,7 +317,14 @@ impl SkillBands {
             SkillCategory::Mental => (self.recovered_mental, self.extra_mental),
             SkillCategory::Explosive => (self.recovered_explosive, 1.0),
         };
-        (base * recovered * extra * self.crowd * self.settling * self.settledness).clamp(1.0, 20.0)
+        (base
+            * recovered
+            * extra
+            * self.crowd
+            * self.settling
+            * self.settledness
+            * self.matchday_form)
+            .clamp(1.0, 20.0)
     }
 }
 

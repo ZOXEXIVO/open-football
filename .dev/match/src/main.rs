@@ -1189,6 +1189,79 @@ struct LeagueMatch {
     home_goals: u8,
     away_goals: u8,
     per_player: Vec<(u32, u16, u16, f32, u8, f32, u16, u16)>,
+    keepers: Vec<GkRow>,
+    /// `(position_group, raw performance value)` per played player —
+    /// the input side of the rating model, before standardising. This
+    /// is what `PerformanceScale`'s mean / sd constants are derived
+    /// from, and it must come from the same expression the rating
+    /// consumes, hence `RatingContext::performance_value`.
+    perf: Vec<(u8, f32)>,
+}
+
+/// Per-player raw performance values for one match, normalised through
+/// the same engine→real volume conversion the rating call site uses.
+fn perf_rows(result: &core::r#match::MatchResultRaw, home_goals: u8, away_goals: u8) -> Vec<(u8, f32)> {
+    use core::r#match::engine::rating::{EngineVolumeCalibration, RatingContext};
+    let mut rows = Vec::new();
+    for (id, s) in result.player_stats.iter() {
+        if s.minutes_played == 0 {
+            continue;
+        }
+        let is_left = result.left_team_players.main.contains(id);
+        let (tg, og) = if is_left {
+            (home_goals, away_goals)
+        } else {
+            (away_goals, home_goals)
+        };
+        let n = EngineVolumeCalibration::normalize(s);
+        rows.push((
+            pos_group_of(*id),
+            RatingContext::new(&n, tg, og).performance_value(),
+        ));
+    }
+    rows
+}
+
+/// One keeper's line from one match — the columns the live site's
+/// goalkeeper history table shows, plus the rating inputs behind them.
+/// Collected per match so the season ladder can answer the question the
+/// site poses directly: does a keeper who concedes more rate lower?
+#[derive(Clone, Copy)]
+struct GkRow {
+    id: u32,
+    conceded: u8,
+    saves: u16,
+    shots_faced: u16,
+    command: u16,
+    xg_prevented: f32,
+    xg_faced: f32,
+    errors_to_goal: u16,
+    rating: f32,
+    minutes: u16,
+}
+
+fn keeper_rows(result: &core::r#match::MatchResultRaw, home_goals: u8, away_goals: u8) -> Vec<GkRow> {
+    let mut rows = Vec::new();
+    for (id, s) in result.player_stats.iter() {
+        if pos_group_of(*id) != 0 {
+            continue;
+        }
+        let is_left = result.left_team_players.main.contains(id);
+        let conceded = if is_left { away_goals } else { home_goals };
+        rows.push(GkRow {
+            id: *id,
+            conceded,
+            saves: s.saves,
+            shots_faced: s.shots_faced,
+            command: s.zone_stats.gk_command_actions,
+            xg_prevented: s.xg_prevented,
+            xg_faced: s.xg_faced,
+            errors_to_goal: s.errors_leading_to_goal,
+            rating: s.match_rating,
+            minutes: s.minutes_played,
+        });
+    }
+    rows
 }
 
 #[derive(Clone, Default)]
@@ -1254,12 +1327,15 @@ fn run_league(n_teams: usize, rounds: usize, min_lvl: u8, max_lvl: u8) {
             let away = league_squad(&teams[a]);
             let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
             let score = result.score.as_ref().unwrap();
+            let (hg, ag) = (score.home_team.get(), score.away_team.get());
             LeagueMatch {
                 home_idx: h,
                 away_idx: a,
-                home_goals: score.home_team.get(),
-                away_goals: score.away_team.get(),
+                home_goals: hg,
+                away_goals: ag,
                 per_player: per_player_rows(&result),
+                keepers: keeper_rows(&result, hg, ag),
+                perf: perf_rows(&result, hg, ag),
             }
         })
         .collect();
@@ -1446,7 +1522,174 @@ fn run_league(n_teams: usize, rounds: usize, min_lvl: u8, max_lvl: u8) {
             );
         }
     }
+    print_performance_scale(&played);
+    print_keeper_season_ladder(&played, &teams);
+
     println!("\n  (Gls = full-season tally; includes penalties / set-pieces the engine produced.)");
+}
+
+// ── PERFORMANCE SCALE ───────────────────────────────────────────────────
+//
+// The measured per-position mean and standard deviation of the rating
+// model's raw performance value. These two numbers per position ARE
+// `PerformanceScale` in `rating/mod.rs`: the model standardises against
+// them, so if they drift the whole band drifts with them. Re-derive
+// here after any change to component weights or engine emission — it is
+// the only re-tuning the model needs, because the anchor and the shape
+// are independent of the scale.
+fn print_performance_scale(played: &[LeagueMatch]) {
+    let mut vals: [Vec<f32>; 4] = Default::default();
+    for m in played {
+        for &(grp, v) in &m.perf {
+            vals[grp as usize].push(v);
+        }
+    }
+    println!("\n--- PERFORMANCE SCALE (raw rating input, per player-match) ---");
+    println!(
+        "  {:<4} {:>8} {:>8} {:>8} {:>8} {:>8} {:>7}    -> PerformanceScale {{ mean, sd }}",
+        "pos", "mean", "sd", "p10", "p50", "p90", "n"
+    );
+    for (i, label) in ["GK", "DEF", "MID", "FWD"].iter().enumerate() {
+        let v = &mut vals[i];
+        if v.is_empty() {
+            continue;
+        }
+        let n = v.len() as f32;
+        let mean = v.iter().sum::<f32>() / n;
+        let var = v.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>() / n;
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let p = |q: f32| v[(((v.len() - 1) as f32) * q).round() as usize];
+        println!(
+            "  {:<4} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>7}",
+            label,
+            mean,
+            var.sqrt(),
+            p(0.10),
+            p(0.50),
+            p(0.90),
+            v.len()
+        );
+    }
+}
+
+// ── KEEPER SEASON LADDER ────────────────────────────────────────────────
+//
+// The live site's goalkeeper history table, reproduced from engine data:
+// one row per keeper with apps / conceded / clean sheets / AV RAT, sorted
+// by goals conceded per game. The invariant it exists to check is the one
+// a reader applies instinctively — a keeper who ships 1.5 a game must not
+// out-rate one who ships 0.8 at a comparable club. Rating is the engine's
+// `match_rating` (Stage 1+2+3); the site additionally applies the
+// personality/morale shape, bounded to [-0.55, +0.40].
+fn print_keeper_season_ladder(played: &[LeagueMatch], teams: &[LeagueTeam]) {
+    #[derive(Default, Clone)]
+    struct GkSeason {
+        apps: u32,
+        conceded: u32,
+        clean_sheets: u32,
+        saves: u32,
+        faced: u32,
+        command: u32,
+        xg_prevented: f32,
+        xg_faced: f32,
+        errors: u32,
+        rating_points: f32,
+        rating_weight: f32,
+        best: f32,
+        worst: f32,
+    }
+    let mut by_gk: std::collections::HashMap<u32, GkSeason> = std::collections::HashMap::new();
+    for m in played {
+        for r in &m.keepers {
+            if r.minutes == 0 {
+                continue;
+            }
+            let e = by_gk.entry(r.id).or_insert(GkSeason {
+                best: f32::MIN,
+                worst: f32::MAX,
+                ..Default::default()
+            });
+            e.apps += 1;
+            e.conceded += r.conceded as u32;
+            if r.conceded == 0 {
+                e.clean_sheets += 1;
+            }
+            e.saves += r.saves as u32;
+            e.faced += r.shots_faced.max(r.saves + r.conceded as u16) as u32;
+            e.command += r.command as u32;
+            e.xg_prevented += r.xg_prevented;
+            e.xg_faced += r.xg_faced;
+            e.errors += r.errors_to_goal as u32;
+            let w = (r.minutes as f32 / 90.0).max(0.65);
+            e.rating_points += r.rating * w;
+            e.rating_weight += w;
+            e.best = e.best.max(r.rating);
+            e.worst = e.worst.min(r.rating);
+        }
+    }
+    let mut rows: Vec<(u32, GkSeason)> = by_gk.into_iter().collect();
+    rows.sort_by(|a, b| {
+        let ka = a.1.conceded as f32 / a.1.apps.max(1) as f32;
+        let kb = b.1.conceded as f32 / b.1.apps.max(1) as f32;
+        ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    println!("\n--- KEEPER SEASON LADDER (sorted by conceded per game — AV RAT must fall as you go down) ---");
+    println!(
+        "  {:<12} {:>3} {:>4} {:>4} {:>4} {:>6} {:>5} {:>5} {:>6} {:>6} {:>7} {:>4} {:>7} {:>6} {:>6}",
+        "club", "lvl", "Aps", "Con", "Cln", "con/g", "Sv", "Fcd", "save%", "xGp", "xG/shot", "Err",
+        "AV RAT", "best", "worst"
+    );
+    // Spearman between conceded-per-game and season rating: −1.0 is a
+    // perfectly ordered ladder, 0 is noise, positive means the model pays
+    // keepers for being scored against.
+    let mut xs: Vec<f32> = Vec::new();
+    let mut ys: Vec<f32> = Vec::new();
+    for (id, s) in &rows {
+        if s.rating_weight <= 0.0 {
+            continue;
+        }
+        let team_idx = (*id / 100).saturating_sub(1) as usize;
+        let (club, lvl) = teams
+            .get(team_idx)
+            .map(|t| (t.name.as_str(), t.level))
+            .unwrap_or(("?", 0));
+        let av = s.rating_points / s.rating_weight;
+        let cpg = s.conceded as f32 / s.apps.max(1) as f32;
+        let save_pct = if s.faced > 0 {
+            s.saves as f32 / s.faced as f32 * 100.0
+        } else {
+            0.0
+        };
+        let xg_per_shot = if s.faced > 0 {
+            s.xg_faced / s.faced as f32
+        } else {
+            0.0
+        };
+        println!(
+            "  {:<12} {:>3} {:>4} {:>4} {:>4} {:>6.2} {:>5} {:>5} {:>5.1}% {:>6.2} {:>7.3} {:>4} {:>7.2} {:>6.2} {:>6.2}",
+            club, lvl, s.apps, s.conceded, s.clean_sheets, cpg, s.saves, s.faced, save_pct,
+            s.xg_prevented, xg_per_shot, s.errors, av, s.best, s.worst
+        );
+        xs.push(cpg);
+        ys.push(av);
+    }
+    if xs.len() >= 3 {
+        let mut c = Correlation::default();
+        for i in 0..xs.len() {
+            c.push(xs[i], ys[i]);
+        }
+        println!(
+            "  r(conceded/game, AV RAT) = {:+.3}   spread p90-p10 = {:.2}   (real football: r ≈ −0.6..−0.8)",
+            c.r(),
+            {
+                let mut v = ys.clone();
+                v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let p = |q: f32| v[(((v.len() - 1) as f32) * q).round() as usize];
+                p(0.9) - p(0.1)
+            }
+        );
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────

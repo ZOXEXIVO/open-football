@@ -155,6 +155,13 @@ pub struct PlayerMatchEndStats {
     /// (GK) Post-shot xG faced minus goals conceded. Positive values
     /// indicate above-expectation shot-stopping.
     pub xg_prevented: f32,
+    /// (GK) Chance value of every shot on target the keeper had to deal
+    /// with, saved or conceded — the expectation term of the rating's
+    /// goals-prevented model. `0.0` on stat lines written before the
+    /// counter existed (and on hand-built fixtures), in which case the
+    /// rating falls back to a flat per-shot conversion baseline.
+    #[serde(default)]
+    pub xg_faced: f32,
     /// Offside calls against this player.
     pub offsides: u16,
     /// Auto-goals scored by this player. Treated as a -1.0 base

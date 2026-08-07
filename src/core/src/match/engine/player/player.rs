@@ -176,6 +176,19 @@ pub struct MatchPlayer {
     /// Floor 0.90.
     pub settledness: f32,
 
+    /// Pre-match form multiplier (1.0 = an ordinary day), stamped once
+    /// at construction from `Player::matchday_form`. Mean 1.0 for every
+    /// player; only its SPREAD varies, widened by youth and by low
+    /// consistency / concentration / professionalism / composure.
+    ///
+    /// Consumed inside `effective_skill` alongside `settledness`, so a
+    /// player having a bad day genuinely misplaces passes and loses
+    /// duels rather than merely printing a lower number — and the
+    /// outcome-based rating follows the stat line it always follows.
+    /// See `club::player::personality::form` for why this belongs here
+    /// and not at the rating layer.
+    pub matchday_form: f32,
+
     /// Memo for `skills.max_speed_with_condition(condition)` keyed on
     /// the condition value it was computed for. Skills are static
     /// in-match and condition only moves when the fatigue accumulator
@@ -386,6 +399,7 @@ impl MatchPlayer {
             starting_recovery_debt: player.load.recovery_debt,
             crowd_arousal: 1.0,
             settledness: player.match_performance_settledness(now),
+            matchday_form: player.matchday_form(now),
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
         }
@@ -415,6 +429,7 @@ impl MatchPlayer {
         starting_condition: i16,
         starting_recovery_debt: f32,
         settledness: f32,
+        matchday_form: f32,
         use_extended_state_logging: bool,
     ) -> Self {
         MatchPlayer {
@@ -457,6 +472,9 @@ impl MatchPlayer {
             // worker has no transfer calendar), so it crosses the wire
             // as a plain value.
             settledness,
+            // Same for the form draw: it needs the matchday calendar,
+            // which only the club side has.
+            matchday_form,
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
         }
@@ -507,6 +525,7 @@ impl MatchPlayer {
             errors_leading_to_shot: self.statistics.errors_leading_to_shot,
             errors_leading_to_goal: self.statistics.errors_leading_to_goal,
             xg_prevented: self.statistics.xg_prevented,
+            xg_faced: self.statistics.xg_faced,
             offsides: self.statistics.offsides,
             own_goals: self.statistics.own_goals_count(),
             zone_stats: self.statistics.zone_stats,

@@ -35,7 +35,7 @@
 //! league pipeline (`compute_effective_ratings`); this module is the
 //! deterministic, match-data-only half of the model.
 
-use super::{EvidenceTier, RATING_MAX, RATING_MIN, RatingContext, RatingMath};
+use super::{RATING_MAX, RATING_MIN, RatingContext, RatingMath};
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::events::PositionLoad;
 use crate::r#match::PlayerMatchEndStats;
@@ -250,6 +250,17 @@ impl<'a> RatingContext<'a> {
     /// and the team's behaviour demanded; negative when they coasted on
     /// the team's dominance.
     pub(super) fn context_delta(&self, ctx: &RatingExpectationContext) -> f32 {
+        // Goalkeepers are exempt. This layer asks "did the player do
+        // more than his role and the team's shape demanded", and for a
+        // keeper that question is already the whole model: his
+        // expectation is the chance value of the shots that actually
+        // reached him, which is a strictly better measure of defensive
+        // load than the team's shot share. Running both layers paid a
+        // busy keeper twice for being busy — half of the inversion the
+        // goals-prevented rebuild set out to remove.
+        if self.is_goalkeeper() {
+            return 0.0;
+        }
         // A short cameo hasn't had time to build a representative
         // contribution index, so the delta would be noise — fade it in
         // with the same minute confidence the routine signal uses.
@@ -493,21 +504,34 @@ impl<'a> RatingContext<'a> {
             + z.clearances_own_six_yard) as f32
     }
 
-    /// Deterministic per-identity texture band for this stat line's
-    /// evidence tier. The downstream pipeline multiplies a seeded signed
-    /// hash of `(player_id, date, team_id)` by this band to break
-    /// identical-looking stat lines apart without changing the verdict.
-    /// Wider for decisive performances (a goal day has room to vary),
-    /// tightest for passengers and keepers.
+    /// Deterministic per-identity texture band for this stat line. The
+    /// downstream pipeline multiplies a seeded signed hash of
+    /// `(player_id, date, team_id)` by this band so two players with
+    /// identical-looking lines on the same scoreline don't print the
+    /// same robotic number.
+    ///
+    /// The band scales with how much genuinely happened: a cameo or an
+    /// uneventful shift has no room to vary — inventing a swing there
+    /// would be inventing the verdict — while a match with goals in it
+    /// legitimately reads differently to different observers. Never
+    /// large enough to reorder anything.
     pub fn texture_band(&self) -> f32 {
-        match self.evidence_tier() {
-            EvidenceTier::Passenger | EvidenceTier::AnonymousStarter | EvidenceTier::QuietCameo => {
-                0.03
-            }
-            EvidenceTier::Modest => 0.06,
-            EvidenceTier::Strong | EvidenceTier::OneGoalLowVolume => 0.08,
-            EvidenceTier::GkBusy | EvidenceTier::GkModest | EvidenceTier::GkPassenger => 0.04,
-            EvidenceTier::TwoGoals | EvidenceTier::HatTrick | EvidenceTier::Uncapped => 0.08,
+        let s = self.stats;
+        if s.minutes_played < 30 {
+            return 0.02;
         }
+        if self.is_goalkeeper() {
+            return 0.04;
+        }
+        let decisive = (s.goals + s.assists) as f32;
+        let involvement = (s.shots_on_target
+            + s.key_passes
+            + s.passes_into_box
+            + s.successful_dribbles
+            + s.tackles
+            + s.interceptions
+            + s.blocks
+            + s.clearances) as f32;
+        (0.03 + 0.02 * decisive.min(2.0) + 0.005 * involvement.min(4.0)).min(0.08)
     }
 }

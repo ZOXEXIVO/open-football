@@ -9,61 +9,6 @@ use super::{RatingContext, RatingMath};
 use crate::PlayerFieldPositionGroup;
 
 impl<'a> RatingContext<'a> {
-    /// Direct decisive-event impact: goals + assists + clinical (over-xG)
-    /// + decisive (the contribution won the match). Saturates so a
-    /// hat-trick or multi-assist game is rewarded but not 3× a single
-    /// event.
-    ///
-    /// Assists live here (not in creation()) because they are the same
-    /// kind of decisive moment a goal is — punditry treats them as the
-    /// primary creator's output. Routing the credit through the
-    /// `scoring` profile weight makes the per-position dial coherent:
-    /// the same dial that pays a striker for finishing pays a
-    /// midfielder for setting one up.
-    pub(super) fn scoring_event(&self) -> f32 {
-        let s = self.stats;
-        let g = s.goals as f32;
-        let a = s.assists as f32;
-        if g <= 0.0 && a <= 0.0 {
-            return 0.0;
-        }
-        // sat(1, 1.6) ≈ 0.46; sat(2) ≈ 0.71; sat(3) ≈ 0.85.
-        // Coefficient lifted 2.80 → 2.95 in the FM-parity season
-        // calibration (see season_tests.rs): a 15-21 goal season has to
-        // accumulate to 6.8-7.2 against ~60% goalless matches, and the
-        // goal event is the only lever that lifts scorers without
-        // lifting passengers. The OneGoalLowVolume soft cap absorbs
-        // most of the single-match effect, so per-match bands move by
-        // hundredths while the season aggregate gains the difference.
-        // Compressed 2.95 → 2.60 with the goalless drags eased below. The
-        // spread was too WIDE at both ends: a single-goal forward rated
-        // ~7.9 (real ~7.3, giving a 9% >=8.0 tail vs a real ~3%) while
-        // the season mean still sat at 6.31, under the 6.80-7.10 band —
-        // i.e. scoring matches over-paid and goalless ones over-punished.
-        // Narrowing both keeps the season average while fixing the tail.
-        let goal_raw = RatingMath::sat(g, 1.6) * 2.60;
-        // Assists ≈ 55% of a goal — decisive but not as decisive as
-        // putting it in. Lifted 1.55 → 1.65 in tandem for the same
-        // reason (assist-match rating proportional to goal-match).
-        let assist_raw = RatingMath::sat(a, 1.6) * 1.65;
-        let raw = goal_raw + assist_raw;
-
-        // Clinical-finisher bonus: goals beyond xG → premium for
-        // converting tougher chances or being lethal in front of goal.
-        let over = (g - s.xg).max(0.0);
-        let clinical = RatingMath::sat(over, 1.0) * 0.15;
-
-        // Decisive-event nudge — the goal or assist mattered to the
-        // scoreline.
-        let decisive = if self.team_goals > self.opponent_goals {
-            0.08
-        } else {
-            0.0
-        };
-
-        raw + clinical + decisive
-    }
-
     /// Shooting threat: xG generated, shots on target, with a wasted-
     /// xG penalty for high-quality chances missed and a shot-spam
     /// penalty for high-volume low-quality attempts.
@@ -81,12 +26,13 @@ impl<'a> RatingContext<'a> {
 
         let is_forward = self.pos == PlayerFieldPositionGroup::Forward;
 
-        // xG credit lifted 0.38 → 0.46 (FM-parity season calibration) —
-        // chance creation is the active forward's secondary positive
-        // signal when goals don't come. A 16-goal striker's blank
-        // matches still carry 0.4-0.8 xG; those shifts have to read
-        // ordinary (6.3-6.6), not poor, for the season band to hold.
-        let xg_value = RatingMath::sat(s.xg, 1.8) * 0.46;
+        // Chance VOLUME only — getting into positions to score is worth
+        // something on its own. Deliberately smaller than it once was
+        // (0.46): conversion is now priced separately and in full by
+        // , and at the old weight the two nearly
+        // cancelled, leaving a striker who burned 2.5 xG sitting on the
+        // population mean.
+        let xg_value = RatingMath::sat(s.xg, 1.8) * 0.30;
         // SoT credit lifted 0.34 → 0.42 in the same pass — putting a
         // shot on target IS the headline forward action even without
         // scoring. Together with the xG lift this moves an active
@@ -95,31 +41,9 @@ impl<'a> RatingContext<'a> {
         let sot_value = RatingMath::sat(s.shots_on_target as f32, 2.5) * 0.42;
         let mut shooting = xg_value + sot_value;
 
-        // Wasted high xG: created premium chances, scored nothing.
-        // Forwards: lower threshold (0.40) + heavier coefficient — a
-        // striker squandering decent chances is the canonical bad
-        // forward shift. Other positions: a stray 0.6+ xG miss still
-        // drags, but proportionally to how unusual it is.
-        if s.goals == 0 {
-            // Forward threshold 0.75, coef 0.35 — final calibration
-            // (was 0.40/0.90 → 0.55/0.70 → 0.55/0.50 → 0.75/0.35). The
-            // dev_match 200-match benchmark showed forwards' goalless
-            // tier at 5.65 average vs the 6.2 real-football reference;
-            // the wasted-xG drag in shooting was firing for ~half of
-            // goalless matches at any xg > 0.55. Reserve this drag for
-            // genuine sitter-miss shifts (xg > 0.75 unconverted) and
-            // keep the coef in line with the non-forward 0.55 so a
-            // single bad finishing match doesn't double-bite via this
-            // *and* the ARE wasted lane.
-            let (threshold, coef) = if is_forward {
-                (0.75, 0.35)
-            } else {
-                (0.60, 0.55)
-            };
-            if s.xg > threshold {
-                shooting -= RatingMath::sat(s.xg - threshold, 1.2) * coef;
-            }
-        }
+        // Wasted high-xG chances are NOT charged here — `finishing` in
+        // `outfield.rs` owns goals-minus-xG, once. Charging the
+        // misses here as well as there double-billed the same afternoon.
 
         // Shot accuracy band — small lift for hitting the target.
         // Gated to 2+ attempts: accuracy from a single shot is not a
@@ -321,96 +245,5 @@ impl<'a> RatingContext<'a> {
         // low-first-touch players visibly drop, gentle enough that one
         // mishit doesn't define the match.
         -RatingMath::sat(m + h, 5.0) * 0.85
-    }
-
-    /// Forward role expectation drag — applied at the rating layer
-    /// (alongside the team-result context and discipline deltas) for a
-    /// forward who played meaningful minutes without producing a goal
-    /// or an assist. Returns a non-positive value; outside the gate it
-    /// returns 0 so other positions are unaffected.
-    ///
-    /// Pure stat-line read, smooth saturation. Two components:
-    ///
-    /// 1. **Lack-of-impact penalty** — a forward's primary job is
-    ///    decisive attacking output. Without G/A we look for the
-    ///    secondary footprint that real punditry rewards: shots on
-    ///    target, xG generated, key passes, passes into the box,
-    ///    successful dribbles. When that footprint is small, the
-    ///    forward visibly hasn't done their job.
-    ///
-    /// 2. **Wasted high-xG penalty** — a forward who racked up clear
-    ///    chances and converted none is the signature failed-striker
-    ///    shift. This stacks with the wasted-xG drag inside
-    ///    [`Self::shooting`]: that drag bites the *shooting* component
-    ///    on its own scale; this one bites the *role expectation* on
-    ///    the rating's scale.
-    ///
-    /// Calibration target (pure stat-line, no ability read):
-    /// - anonymous forward (0/0/0/0 attacking evidence, 90 min): ≈ −0.85
-    /// - creative no-G/A forward (3 KP + 3 PB + 3 drib, xG buildup):
-    ///   ≈ −0.30 (only partly saturated — the creative line doesn't
-    ///   substitute for a goal contribution)
-    /// - wasteful high-xG no-goal striker (xG 2.5, 2 SOT): ≈ −0.50
-    pub(super) fn attacking_role_expectation(&self) -> f32 {
-        if self.pos != PlayerFieldPositionGroup::Forward {
-            return 0.0;
-        }
-        let s = self.stats;
-        if s.goals > 0 || s.assists > 0 {
-            return 0.0;
-        }
-        let minutes = s.minutes_played;
-        if minutes < 30 {
-            return 0.0;
-        }
-        // Time-on-pitch factor — full strength from 90 minutes, ramps in
-        // smoothly from 30. A short cameo with no G/A isn't a failed
-        // shift; an 80-minute starter without a touch on goal is.
-        let minute_factor = ((minutes as f32 - 30.0) / 60.0).clamp(0.0, 1.0);
-
-        let sot = s.shots_on_target as f32;
-        let xg = s.xg.max(0.0);
-        let kp = s.key_passes as f32;
-        let pbox = s.passes_into_box as f32;
-        let dribs = s.successful_dribbles as f32;
-
-        // Goal-threat evidence — what punditry calls "looked like
-        // scoring": SOT and meaningful xG. These are the strongest
-        // markers of a forward actually attempting their job.
-        let threat = sot * 0.7 + xg * 1.0;
-        // Creative evidence — secondary forward output. Lower weight
-        // than threat, but not zero: a forward who repeatedly broke
-        // the line for teammates has done something.
-        let creative = kp * 0.5 + pbox * 0.3 + dribs * 0.3;
-        // Combined footprint, with creative work counted at ~70% of
-        // direct threat.
-        let footprint = threat + creative * 0.7;
-
-        // Final calibration anchored to .dev/match 200-match benchmark.
-        // The 2.0 threshold from prior round only lifted goalless mean
-        // by +0.09 (5.65 → 5.74); the dominant drag was the *stack*
-        // of ARE + shot-spam + no-SoT spam + wasted-xG. Threshold cut
-        // to 1.0 so any forward with even one SoT or 0.3 xG clears the
-        // gate completely; ARE only fires for genuinely zero-footprint
-        // shifts. Coef cut 0.20 → 0.15 in the FM-parity season pass:
-        // the FM-style anchor for a quiet shift is "poor ≈ 6.0", and
-        // the remaining drag lanes (no-SoT spam, accuracy, context
-        // damping) already hold an anonymous forward below baseline —
-        // a zero-footprint 90 still loses ≈ −0.06 here plus the rest.
-        let shortfall = (1.0 - footprint).max(0.0);
-        let lack_penalty = -RatingMath::sat(shortfall, 2.0) * 0.10;
-
-        // Wasted big-chance drag (ARE lane, separate from shooting()).
-        // Threshold 0.8, coef cut 0.30 → 0.20 — the 200-match benchmark
-        // showed even this minor lane stacking with the shooting()
-        // wasted-xG drag on the same xg signal. Reserve this for
-        // 1.0+ xG unconverted (clear sitter case).
-        let wasted = if xg > 0.8 {
-            -RatingMath::sat(xg - 0.8, 1.2) * 0.20
-        } else {
-            0.0
-        };
-
-        (lack_penalty + wasted) * minute_factor
     }
 }

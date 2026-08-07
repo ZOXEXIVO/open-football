@@ -92,6 +92,7 @@ fn stats(
         errors_leading_to_shot: 0,
         errors_leading_to_goal: 0,
         xg_prevented: 0.0,
+        xg_faced: 0.0,
         offsides: 0,
         own_goals: 0,
         zone_stats: Default::default(),

@@ -58,6 +58,10 @@ pub struct PlayerWire {
     /// Pre-match settledness stamp (transfer settling × rustiness) —
     /// derived club-side, so it must travel with the player.
     pub settledness: f32,
+    /// Pre-match form draw — the day-to-day performance multiplier.
+    /// Derived club-side (it needs the matchday calendar and the
+    /// persisted `Player`), so it crosses the wire as a plain value.
+    pub matchday_form: f32,
     pub use_extended_state_logging: bool,
 }
 
@@ -104,6 +108,7 @@ impl PlayerWire {
             starting_condition: p.starting_condition,
             starting_recovery_debt: p.starting_recovery_debt,
             settledness: p.settledness,
+            matchday_form: p.matchday_form,
             use_extended_state_logging: p.use_extended_state_logging,
         }
     }
@@ -125,6 +130,7 @@ impl PlayerWire {
             starting_condition,
             starting_recovery_debt,
             settledness,
+            matchday_form,
             use_extended_state_logging,
         } = self;
         MatchPlayer::from_inputs(
@@ -143,6 +149,7 @@ impl PlayerWire {
             starting_condition,
             starting_recovery_debt,
             settledness,
+            matchday_form,
             use_extended_state_logging,
         )
     }

@@ -57,6 +57,14 @@ pub struct MatchPlayerStatistics {
     /// (GK) Post-shot xG faced minus goals conceded — positive = above
     /// expectation save performance.
     pub xg_prevented: f32,
+    /// (GK) Sum of the chance value of every shot on target this keeper
+    /// had to deal with, saved or conceded. Unlike [`Self::xg_prevented`]
+    /// — which nets saves against goals and so mostly measures *how many*
+    /// shots arrived — this measures how HARD they were, and it is the
+    /// denominator the rating's goals-prevented model needs: a keeper's
+    /// expected concession is a function of the chances he faced, not of
+    /// the saves he happened to make.
+    pub xg_faced: f32,
     /// Total miscontrols recorded by the first-touch resolver. The
     /// rating helper consumes this counter with a live coefficient;
     /// the live PRODUCER is intentionally deferred until receiver-state
@@ -104,6 +112,7 @@ impl MatchPlayerStatistics {
             xg_chain: 0.0,
             xg_buildup: 0.0,
             xg_prevented: 0.0,
+            xg_faced: 0.0,
             miscontrols: 0,
             heavy_touches: 0,
             zone_stats: ZoneStats::default(),
@@ -190,6 +199,31 @@ impl MatchPlayerStatistics {
     /// be a goal (post-shot xG) was saved; negative otherwise.
     pub fn record_xg_prevented(&mut self, delta: f32) {
         self.xg_prevented += delta;
+    }
+
+    /// Book one shot on target against this goalkeeper. Every site that
+    /// resolves a shot the keeper had to deal with — the three save
+    /// paths and the conceded-goal path — goes through here so the three
+    /// linked counters can never drift apart: `shots_faced` is the
+    /// denominator of save percentage, `xg_faced` is the chance value the
+    /// keeper was asked to deny (the goals-prevented model's expectation
+    /// term), and `xg_prevented` is the saved-minus-conceded ledger.
+    ///
+    /// Keeping them together is not tidiness: the rating's central
+    /// invariant — a keeper who concedes more from the same chances must
+    /// rate lower — only holds while `xg_faced` counts the conceded shots
+    /// as well as the saved ones. A save-only accumulator would pay a
+    /// keeper for the shots he stopped and charge him nothing for the
+    /// ones he didn't.
+    pub fn note_shot_faced(&mut self, shot_xg: f32, saved: bool) {
+        self.shots_faced = self.shots_faced.saturating_add(1);
+        if shot_xg > 0.0 {
+            self.xg_faced += shot_xg;
+            self.xg_prevented += if saved { shot_xg } else { -shot_xg };
+        }
+        if saved {
+            self.saves = self.saves.saturating_add(1);
+        }
     }
 
     pub fn is_empty(&self) -> bool {

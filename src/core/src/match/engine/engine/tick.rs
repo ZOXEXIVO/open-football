@@ -403,14 +403,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let shot_xg = field.ball.last_shot_xg;
         {
             let gk = &mut field.players[keeper_idx];
-            gk.statistics.saves += 1;
-            gk.statistics.shots_faced += 1;
-            // The GK denied a shot worth `shot_xg` xG — full credit goes
-            // to xG prevented. Saves an above-baseline keeper from being
-            // capped by the synthetic-proxy fallback in the rating helper.
-            if shot_xg > 0.0 {
-                gk.statistics.record_xg_prevented(shot_xg);
-            }
+            // The GK denied a shot worth `shot_xg` xG — books the save,
+            // the shot faced, and both xG ledgers in one call so they
+            // cannot drift apart (see `note_shot_faced`).
+            gk.statistics.note_shot_faced(shot_xg, true);
         }
         field.players[shooter_idx].memory.credit_shot_on_target();
         // Shot has resolved (saved). Drop the metadata so any
