@@ -1,4 +1,5 @@
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::engine::ball::ball::interactions::SaveModel;
 use crate::r#match::engine::flow::context::PendingAdvantage;
 use crate::r#match::engine::flow::rng::MatchRng;
 use crate::r#match::engine::officiating::referee::{ContactLocation, FoulCallContext};
@@ -3187,6 +3188,15 @@ impl PlayerEventDispatcher {
                 let goal_line_z = (field.ball.position.z + final_velocity.z * ticks_to_goal
                     - 0.5 * 0.157 * ticks_to_goal * ticks_to_goal)
                     .max(0.0);
+                // Stamp who struck it, in the units the save contest
+                // scores. Read here rather than at save time: the save
+                // resolves several ticks downstream, where the shooter
+                // is no longer the ball's `previous_owner` on every
+                // path and his fatigue bands have already moved on.
+                let shooter_threat = field
+                    .get_player(shoot_event_model.from_player_id)
+                    .map(|p| sc::shot_threat(p, minute))
+                    .unwrap_or(SaveModel::NEUTRAL_THREAT);
                 field.ball.cached_shot_target = Some(ShotTarget {
                     goal_line_y,
                     goal_line_z,
@@ -3194,6 +3204,7 @@ impl PlayerEventDispatcher {
                     deflected,
                     save_rolled: false,
                     block_rolled: false,
+                    shooter_threat,
                 });
             } else {
                 field.ball.cached_shot_target = None;

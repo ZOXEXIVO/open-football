@@ -177,6 +177,36 @@ pub fn shooting_close(player: &MatchPlayer, minute: u32) -> f32 {
     clamp_composite(v)
 }
 
+/// How hard this player's strike is to keep out, as the *opposing side*
+/// of [`gk_shot_stopping`].
+///
+/// `finishing*0.30 + technique*0.18 + composure*0.16 + long_shots*0.10
+///  + first_touch*0.10 + decisions*0.08 + balance*0.08`
+///
+/// Deliberately **linear** — no `curve()` — unlike `shooting_close` /
+/// `shooting_medium`. Those are curved because they answer "how likely
+/// is this to go in", where a concave response to skill is right. This
+/// one is subtracted from `gk_shot_stopping` to decide a duel, so the
+/// two have to live on the same scale: curving one side and not the
+/// other hands every keeper a constant advantage that grows with the
+/// division's absolute quality, which is the bias the contest exists to
+/// remove. Weights mirror `gk_shot_stopping`'s shape (one dominant
+/// technical skill at 0.30, a technical second, then mentals) so the
+/// population means track each other as squads scale with level.
+pub fn shot_threat(player: &MatchPlayer, minute: u32) -> f32 {
+    let b = SkillBands::for_player(player, minute);
+    let s = &player.skills;
+    let v = (n(b.apply(s.technical.finishing, TECH)) * 0.30
+        + n(b.apply(s.technical.technique, TECH)) * 0.18
+        + n(b.apply(s.mental.composure, MENT)) * 0.16
+        + n(b.apply(s.technical.long_shots, TECH)) * 0.10
+        + n(b.apply(s.technical.first_touch, TECH)) * 0.10
+        + n(b.apply(s.mental.decisions, MENT)) * 0.08
+        + n(b.apply(s.physical.balance, TECH)) * 0.08)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
 /// Medium-range shooting composite (skill-curved).
 /// `finishing^1.65*0.30 + technique^1.55*0.22 + long_shots^1.65*0.18
 ///  + composure^1.45*0.14 + decisions^1.35*0.10 + balance^1.25*0.06`
@@ -718,7 +748,13 @@ mod tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
-        MatchPlayer::from_player(1, &player, PlayerPositionType::MidfielderCenter, false, None)
+        MatchPlayer::from_player(
+            1,
+            &player,
+            PlayerPositionType::MidfielderCenter,
+            false,
+            None,
+        )
     }
 
     #[test]

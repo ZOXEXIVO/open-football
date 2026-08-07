@@ -2082,10 +2082,15 @@ fn single_keeper_blunder_is_not_triple_counted() {
 
     // And the absolute rating reads as a clear keeper howler, not a
     // worse-than-seven-conceded disaster.
+    // Band top lifted 5.30 → 5.40 with `DEFENSIVE_OUTCOME`: conceding one
+    // is a below-average concession night against a population that ships
+    // 1.31 per 90, so the term correctly hands this line a few hundredths
+    // back. The howler verdict is carried by the defining moment, not by
+    // this bound, and by the no-triple-billing assertion above.
     assert!(
-        (4.30..=5.30).contains(&triple_r),
+        (4.30..=5.40).contains(&triple_r),
         "a single self-inflicted goal in a draw should read as a keeper \
-         howler (4.30..=5.30), not a multi-goal disaster — got {triple_r:.3}",
+         howler (4.30..=5.40), not a multi-goal disaster — got {triple_r:.3}",
     );
 }
 
@@ -2137,8 +2142,12 @@ fn untested_conceding_keeper_is_not_buried() {
     let mut untested = make_gk(0, 1);
     untested.minutes_played = 90;
     let untested_r = RatingContext::new(&untested, 1, 1).calculate();
+    // Band top lifted 6.35 → 6.45 with `DEFENSIVE_OUTCOME` — see the note
+    // on the blunder test: one conceded is below the 1.31 population
+    // average, so this line legitimately gains a little. The ordering
+    // assertion below (a save beats facing nothing) is the real pin.
     assert!(
-        (5.95..=6.35).contains(&untested_r),
+        (5.95..=6.45).contains(&untested_r),
         "0-save 1-conceded keeper in a draw rated {untested_r:.3} — an \
          untested keeper beaten by the one shot he faced should read as an \
          ordinary game, not a sub-six failure",

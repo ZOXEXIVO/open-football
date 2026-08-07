@@ -381,6 +381,19 @@ pub struct ShotTarget {
     /// was set for the original trajectory and the redirected ball is
     /// arriving on a new line they haven't committed to.
     pub deflected: bool,
+    /// The striker's `shot_threat` composite (0..1) at the moment he hit
+    /// it. Carried on the shot rather than looked up at save time
+    /// because the save resolves several ticks later, by which point
+    /// `previous_owner` may have moved on and the shooter's fatigue
+    /// bands have drifted.
+    ///
+    /// `SaveModel` reads this to score the save as a CONTEST against the
+    /// man who struck the ball instead of against an absolute bar — see
+    /// `SaveModel::skill_multiplier`. Defaults to
+    /// `SaveModel::NEUTRAL_THREAT` on the paths that synthesise a shot
+    /// target without a shooter, which reproduces the old
+    /// absolute-quality behaviour exactly for those cases.
+    pub shooter_threat: f32,
 }
 
 #[derive(Default, Clone)]

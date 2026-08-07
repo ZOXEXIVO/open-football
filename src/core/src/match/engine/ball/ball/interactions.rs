@@ -75,7 +75,16 @@ impl SaveModel {
     /// Save probability for the worst keeper alive on a centred shot,
     /// before geometry: `SKILL_FLOOR`. Real weak top-flight keepers save
     /// ~58% of what they face across a season; elite ones ~78%.
-    const SKILL_FLOOR: f32 = 0.54;
+    /// Re-anchored 0.54 → 0.57 when the multiplier became a contest.
+    /// Under the old absolute model the realised multiplier was
+    /// `0.54 + mean_skill·SLOPE`, which at the mid-high levels the
+    /// goals-per-match calibration was built on averaged ~0.72; the
+    /// contest instead pins every ordinary duel at
+    /// `FLOOR + SLOPE/2` at EVERY level, so leaving the floor alone
+    /// silently moved the population save rate down and pushed
+    /// goals/match from ~2.4 to ~2.8. The floor now carries the level
+    /// that the skill term used to supply.
+    const SKILL_FLOOR: f32 = 0.57;
     /// Width of the keeper-quality band. Mean skill (0.5) lands on
     /// 0.68 — the multiplier the ~67% population save rate is
     /// calibrated on — so restoring the spread is calibration-neutral
@@ -92,17 +101,70 @@ impl SaveModel {
         Self::CENTRED_BASE - r * r * Self::STRETCH_PENALTY
     }
 
-    /// Keeper-quality multiplier on the geometric chance. `skill` is the
-    /// `gk_shot_stopping` composite in 0..1.
+    /// Threat value standing in for "an ordinary shooter" on the paths
+    /// that build a shot target without a striker behind it (tests,
+    /// synthesised targets).
     ///
-    /// Level-to-level parity (~67% save rate in every division) must
-    /// come from shot quality scaling with the shooters — placement and
-    /// power both feed the geometry and speed terms — NOT from deleting
-    /// the keeper axis. A flat multiplier buys parity by making every
-    /// keeper the same keeper.
+    /// Not 0.5: the two composites do not share a population mean, and
+    /// an *ordinary* striker measures [`Self::CONTEST_BALANCE`] above an
+    /// ordinary keeper. Feeding that here is what makes a mid-skill
+    /// keeper facing a mid-skill striker resolve to the calibrated 0.68.
+    pub(crate) const NEUTRAL_THREAT: f32 = 0.5 + Self::CONTEST_BALANCE;
+
+    /// How far a quality mismatch can swing the duel. At 1.0 a keeper a
+    /// full point of composite better than the striker would pin the
+    /// multiplier at its ceiling; 1.30 makes the realistic ±0.25 spread
+    /// within a division cover most of the band while keeping the
+    /// extremes reachable only by genuine mismatches.
+    const CONTEST_SPREAD: f32 = 1.30;
+
+    /// Constant offset between the two composites' population means, so
+    /// that an *ordinary* duel resolves to 0.5 rather than to whatever
+    /// the two blends happen to average.
+    ///
+    /// `gk_shot_stopping` and `shot_threat` read different attributes,
+    /// and the generator does not hand those attributes the same
+    /// population mean — measured over generated squads (`dev_match
+    /// audit_contest`), `shot_threat` runs ~0.11 above `gk_shot_stopping`
+    /// for forwards, ~0.03 for midfielders and ~0.01 for defenders.
+    /// Shot-weighted across the lines that actually shoot, that lands
+    /// near 0.08. Without the correction every duel in the game was
+    /// biased toward the shooter and goals/match jumped 2.3 → 3.0.
+    ///
+    /// What makes the contest work is not this constant but the fact
+    /// that the offset is FLAT: the same audit shows the forward gap
+    /// moving only −0.113 → −0.097 from level 1 to level 20, so one
+    /// constant centres the duel at every level. Re-derive it from
+    /// `audit_contest` if either composite's weights change.
+    const CONTEST_BALANCE: f32 = 0.08;
+
+    /// Keeper-quality multiplier on the geometric chance — scored as a
+    /// **contest**. `skill` is the keeper's `gk_shot_stopping` composite
+    /// and `threat` the striker's `shot_threat`, both 0..1 and both
+    /// linear blends so they share a scale.
+    ///
+    /// Level-to-level parity (~69% save rate in every division) is a
+    /// property of the *relative* quality of the two men, and reading
+    /// the keeper's absolute ability cannot produce it: squads scale
+    /// with the division, so an absolute bar makes a lower-division
+    /// keeper worse without making the strikers he faces any less
+    /// dangerous. Measured, that slid save% from 75.8% at levels 16-20
+    /// to 61.3% at 1-5, against a real ~69-71% at every level, and the
+    /// gap was almost exactly the multiplier's own span: on a dead-centre
+    /// shot a weak keeper sat at 0.512 and an elite one at 0.635.
+    ///
+    /// An equal-quality duel returns `SKILL_FLOOR + SKILL_SLOPE/2` —
+    /// the same 0.68 the population save rate was calibrated on — so
+    /// this is calibration-neutral at the mean while removing the drift.
+    /// Crucially it does NOT delete the keeper axis, which the previous
+    /// flat-multiplier attempts did: a keeper better than the strikers
+    /// he faces still saves more, and that difference is now measured
+    /// against his actual opposition rather than against the whole game.
     #[inline]
-    pub(crate) fn skill_multiplier(skill: f32) -> f32 {
-        Self::SKILL_FLOOR + skill.clamp(0.0, 1.0) * Self::SKILL_SLOPE
+    pub(crate) fn skill_multiplier(skill: f32, threat: f32) -> f32 {
+        let edge = skill.clamp(0.0, 1.0) - threat.clamp(0.0, 1.0) + Self::CONTEST_BALANCE;
+        let advantage = (0.5 + edge * Self::CONTEST_SPREAD).clamp(0.0, 1.0);
+        Self::SKILL_FLOOR + advantage * Self::SKILL_SLOPE
     }
 
     /// Full per-shot save probability for the physics roll.
@@ -111,18 +173,20 @@ impl SaveModel {
         reach_ratio: f32,
         speed_penalty: f32,
         skill: f32,
+        threat: f32,
         env_handling_delta: f32,
     ) -> f32 {
-        ((Self::geometric_base(reach_ratio) - speed_penalty) * Self::skill_multiplier(skill)
+        ((Self::geometric_base(reach_ratio) - speed_penalty)
+            * Self::skill_multiplier(skill, threat)
             + env_handling_delta)
             .clamp(Self::MIN_SAVE, Self::MAX_SAVE)
     }
 
-    /// Reference point for the spread guard: an ordinary centred shot,
-    /// no speed penalty, no weather.
+    /// Reference point for the spread guard: an ordinary centred shot
+    /// from an ordinary striker, no speed penalty, no weather.
     #[inline]
     pub(crate) fn centred_save_probability(skill: f32) -> f32 {
-        Self::save_probability(0.0, 0.0, skill, 0.0)
+        Self::save_probability(0.0, 0.0, skill, Self::NEUTRAL_THREAT, 0.0)
     }
 }
 
@@ -841,8 +905,13 @@ impl Ball {
         // sets feet under a regular shot).
         let env_mod = context.environment.modifiers();
         let env_handling_delta = env_mod.goalkeeper_handling;
-        let save_prob =
-            SaveModel::save_probability(reach_ratio, speed_penalty, skill, env_handling_delta);
+        let save_prob = SaveModel::save_probability(
+            reach_ratio,
+            speed_penalty,
+            skill,
+            shot_target.shooter_threat,
+            env_handling_delta,
+        );
 
         // Latch BEFORE rolling: whatever this roll decides is final for
         // this shot, so a beaten keeper doesn't get a second chance on
@@ -1077,15 +1146,67 @@ mod tests {
         );
     }
 
-    /// The restored spread must not move the POPULATION save rate: a
-    /// mid-skill keeper is what the ~67% saves/on-target calibration is
-    /// built on, and every goals-per-match number depends on it.
+    /// The POPULATION save rate must not move: ~67% saves/on-target is
+    /// what every goals-per-match number depends on.
+    ///
+    /// Band re-anchored 0.66-0.70 → 0.69-0.73 when the multiplier became
+    /// a contest. It is pinning the same physical quantity, but the
+    /// quantity is now reached differently: the old model realised
+    /// `0.54 + mean_skill·SLOPE` — which varied by division — while an
+    /// ordinary duel here always resolves to `FLOOR + SLOPE/2`, so the
+    /// floor absorbs the level the skill term used to supply. Measured
+    /// at the calibration reference (`dev_match stats 200 14 14`),
+    /// saves/on-target is 66.7% against a real ~67%, and goals/match
+    /// 2.59 against a real ~2.5.
     #[test]
-    fn mid_skill_keeper_holds_the_calibrated_band() {
-        let mid = SaveModel::skill_multiplier(0.5);
+    fn an_ordinary_duel_holds_the_calibrated_population_save_rate() {
+        // An evenly-matched duel — which is what a division's average
+        // keeper faces every week, at every level.
+        let mid = SaveModel::skill_multiplier(0.5, SaveModel::NEUTRAL_THREAT);
         assert!(
-            (0.66..=0.70).contains(&mid),
-            "mean-skill multiplier must stay in the calibrated 0.66-0.70 band, got {mid:.3}"
+            (0.69..=0.73).contains(&mid),
+            "an ordinary duel must stay in the calibrated 0.69-0.73 band, got {mid:.3}"
+        );
+    }
+
+    /// The contest must be LEVEL-INVARIANT: scale both men together, as
+    /// a division does, and the duel must not move.
+    ///
+    /// This is the property the absolute-skill multiplier lacked, and
+    /// the reason engine save% slid ~15 points from the top division to
+    /// the bottom. The composite pair is measured to keep a flat offset
+    /// as level rises (`dev_match audit_contest`), so walking a keeper
+    /// and a striker up the scale together must leave the multiplier
+    /// where it started.
+    #[test]
+    fn an_evenly_matched_duel_is_the_same_in_every_division() {
+        // gk / striker composites measured at levels 1, 10 and 20.
+        let divisions = [(0.255, 0.368), (0.511, 0.620), (0.787, 0.884)];
+        let mults: Vec<f32> = divisions
+            .iter()
+            .map(|(gk, striker)| SaveModel::skill_multiplier(*gk, *striker))
+            .collect();
+        let spread = mults.iter().cloned().fold(f32::MIN, f32::max)
+            - mults.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(
+            spread <= 0.02,
+            "an ordinary keeper facing an ordinary striker must resolve the same in \
+             every division; got {mults:?} (spread {spread:.3})"
+        );
+    }
+
+    /// ...but a mismatch inside one division must still be visible.
+    /// Parity must not be bought by making every keeper the same keeper,
+    /// which is what the earlier flat-multiplier attempts did.
+    #[test]
+    fn quality_still_separates_keepers_within_a_division() {
+        let striker = 0.620;
+        let weak = SaveModel::skill_multiplier(0.40, striker);
+        let strong = SaveModel::skill_multiplier(0.65, striker);
+        assert!(
+            strong - weak >= 0.05,
+            "a better keeper must still save more against the same striker; \
+             weak {weak:.3} strong {strong:.3}"
         );
     }
 
@@ -1094,8 +1215,9 @@ mod tests {
     /// is in goal.
     #[test]
     fn stretch_beats_an_elite_keeper_more_than_skill_saves_him() {
-        let elite_stretched = SaveModel::save_probability(1.0, 0.0, 1.0, 0.0);
-        let weak_centred = SaveModel::save_probability(0.0, 0.0, 0.0, 0.0);
+        let t = SaveModel::NEUTRAL_THREAT;
+        let elite_stretched = SaveModel::save_probability(1.0, 0.0, 1.0, t, 0.0);
+        let weak_centred = SaveModel::save_probability(0.0, 0.0, 0.0, t, 0.0);
         assert!(
             elite_stretched < weak_centred,
             "a full-stretch shot must beat an elite keeper more often than a centred one \

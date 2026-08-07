@@ -44,6 +44,25 @@
 //! the old model lacked and the reason it had to be re-tuned every time
 //! anything moved.
 //!
+//! # Why shot-stopping is not the whole rating
+//!
+//! `goals_prevented` divides through by workload by construction — the
+//! expectation it subtracts is proportional to shots faced. That makes
+//! it the right measure of *shot-stopping skill*, and the wrong measure
+//! of a keeper's night on its own: a keeper behind a sieve is judged
+//! against a sieve's expectation, so the extra goals cancel and the
+//! rating stops reading the scoreline at all. Measured over a full
+//! season it flattened the entire middle of the ladder — 0.79 goals
+//! against per game rating *below* 1.66 — with a season spread of 0.20
+//! where real keeper ratings spread ~0.55.
+//!
+//! So the performance is shot-stopping **plus** a smaller
+//! [`DEFENSIVE_OUTCOME`] term that reads goals conceded against a
+//! league-average night rather than against this keeper's own workload.
+//! Both halves are needed and neither is sufficient: the first is what
+//! separates a keeper from his defence, the second is what stops the
+//! model pretending he is independent of it.
+//!
 //! A protected shutout (0 shots faced, 0 conceded) scores exactly zero
 //! goals prevented and lands on the anchor — "did his job, nothing to
 //! judge" — instead of needing the bespoke `dominant_defense` credit the
@@ -86,24 +105,69 @@ const REF_XG_PER_ON_TARGET: f32 = 0.1136;
 /// "PSxG − GA" convention — but the engine reports *pre-shot* xG, which
 /// carries the situation and not the strike, and conditioning fully on
 /// it would erase the credit a keeper at a well-organised side earns for
-/// the shots his defence forced wide. Half-conditioning keeps the real
+/// the shots his defence forced wide. Partial conditioning keeps the real
 /// effect (a keeper who faces tap-ins is expected to concede more) while
 /// leaving the outcome as the dominant term.
-const DIFFICULTY_WEIGHT: f32 = 0.50;
+///
+/// Cut 0.50 → 0.25 once the cross-division bias was measured. The ratio
+/// below is taken against a **global** constant, but chance quality is a
+/// property of the division: lower-division keepers face ~0.08 xG per
+/// shot on target against a top flight's ~0.11, so every one of them was
+/// judged to be facing easy chances and had his expectation cut ~15%,
+/// while his own save rate was lower too. Measured mean keeper rating ran
+/// 6.71 in the top flight against 6.46 two divisions down, and zeroing
+/// this weight closed about 60% of that gap — the term was the cause.
+/// Real ratings are computed within a league and carry no such step.
+const DIFFICULTY_WEIGHT: f32 = 0.25;
 
 /// Bounds on the difficulty multiplier. A keeper cannot have his
-/// expectation more than halved or more than half again by chance
-/// quality alone — beyond that the sample is telling us about his
-/// defence, not about him.
-const DIFFICULTY_MIN: f32 = 0.65;
-const DIFFICULTY_MAX: f32 = 1.50;
+/// expectation moved more than a fifth by chance quality alone — beyond
+/// that the sample is telling us about his defence, or about his
+/// division, and not about him. Tightened from 0.65/1.50 for the same
+/// reason the weight was cut: these bounds are what caps how far a whole
+/// division can drift off the anchor.
+const DIFFICULTY_MIN: f32 = 0.82;
+const DIFFICULTY_MAX: f32 = 1.22;
 
-/// Clean sheet, in goals. Keeping the ball out of the net is the
-/// keeper's headline currency and the counters can't see the half of it
-/// he does with positioning and organisation — but it stays small
-/// enough that it can never reorder the ladder, because a keeper who
-/// concedes less collects more of them anyway.
-const CLEAN_SHEET: f32 = 0.18;
+// There is deliberately no separate clean-sheet bonus. The shutout is
+// just the `conceded == 0` end of `DEFENSIVE_OUTCOME`, which already
+// pays it continuously; a discrete bonus on top billed it twice (a
+// 1-save shutout reached 7.21, above the guard that keeps protected
+// keepers from averaging 7.0+) and put a cliff between conceding one
+// and conceding none that no other step on the ladder has.
+
+/// League-average goals conceded per 90, measured from the same keeper
+/// ladder as [`ON_TARGET_CONVERSION`]. Re-derive it alongside.
+const REF_CONCEDED_PER_90: f32 = 1.31;
+
+/// Weight on the defensive outcome — goals conceded measured against a
+/// league-average night instead of against this keeper's own workload.
+///
+/// [`Self::goals_prevented`] on its own is a pure save-rate measure:
+/// the expectation it subtracts scales *linearly with shots faced*, so
+/// a keeper behind a sieve is judged against a sieve's expectation and
+/// the extra goals he ships cancel out exactly. Measured over a full
+/// season, that left the whole middle of the ladder flat — 1.66 goals
+/// against per game out-rating 0.79 on save volume alone, which is the
+/// same blindness the old save-count model had, one level removed.
+///
+/// This term puts the scoreline at his end back in the rating, which is
+/// what every real rating provider does with a keeper. It stays
+/// deliberately secondary to the shot-stopping: conceding is his
+/// defence's night as much as his, so it moves the rating about a third
+/// as hard as a save-rate difference of the same size.
+///
+/// Calibrated against two numbers at once, which is what fixes its
+/// value: it has to lift the keeper season spread to real football's
+/// ~0.55 *without* driving `r(conceded/game, rating)` past −0.8. Those
+/// pull opposite ways — at 0.30 the spread was right but `r` reached
+/// −0.94, a league where a good keeper at a bad club could no longer
+/// rate well, which is the realism the term was added to protect. 0.18
+/// is where the per-match top also settles: at 0.22 a three-save shutout
+/// reached 7.70 against a WhoScored/FM reference of 7.2-7.5, because the
+/// shutout credit stacks on shot-stopping that already paid for the
+/// saves which produced it.
+const DEFENSIVE_OUTCOME: f32 = 0.18;
 
 /// Team result, in goals. Deliberately tiny: a keeper is on the same
 /// pitch as ten other players and the scoreline at the other end is not
@@ -158,9 +222,12 @@ impl<'a> RatingContext<'a> {
         // Result / clean sheet — scaled by time on the pitch so a keeper
         // who came on at 80 minutes doesn't bank a full shutout.
         let share = self.minute_share();
-        if self.opponent_goals == 0 {
-            value += CLEAN_SHEET * share;
-        }
+
+        // The scoreline at his end, against a league-average night. This
+        // is the only term that reads goals conceded without dividing by
+        // the workload that produced them — see `DEFENSIVE_OUTCOME` for
+        // why the model is blind in the middle of the ladder without it.
+        value += DEFENSIVE_OUTCOME * (REF_CONCEDED_PER_90 * share - self.keeper_conceded() as f32);
         value += if self.team_goals > self.opponent_goals {
             WIN * share
         } else if self.team_goals < self.opponent_goals {

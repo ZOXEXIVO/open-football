@@ -4,7 +4,9 @@ use core::club::player::PlayerPositionType;
 use core::club::team::tactics::{MatchTacticType, Tactics};
 use core::r#match::FootballEngine;
 use core::r#match::MatchSquad;
+use core::PlayerFieldPositionGroup;
 use core::r#match::player::MatchPlayer;
+use core::r#match::player::strategies::players::ops::skill_composites as sc;
 use core::staff_contract_mod::NaiveDate;
 use core::{
     AcademyGenerationContext, MatchRuntime, PeopleNameGeneratorData, PlayerGenerator, PlayerSkills,
@@ -2544,6 +2546,17 @@ fn main() {
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(200);
             run_audit_levels(n);
         }
+        // Save-contest diagnostic: dumps the two composites `SaveModel`
+        // differences — the keeper's `gk_shot_stopping` and the
+        // shooter's `shot_threat` — per level. They must TRACK each
+        // other as the level rises, because the save model scores their
+        // difference; a constant offset between them biases every duel
+        // in the game, and a diverging one reintroduces the
+        // cross-division save% drift the contest exists to remove.
+        "audit_contest" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(60);
+            run_audit_contest(n);
+        }
         // Engine diagnostic: directly assigns per-level skills (bypassing
         // the generator) and runs N matches at the supplied gap. Lets us
         // tell engine response apart from generator behaviour. See
@@ -2609,6 +2622,62 @@ fn main() {
 // `ca_floor_score()` and nothing to the PA-ceiling-driving `ecosystem_score()`.
 // All other reputation / facility / coaching inputs default to "average".
 // Empirically this collapses lvl 1 vs lvl 20 finishing to ~0.1 points apart.
+/// Dump the two sides of the save contest per level. `gk` is the mean
+/// `gk_shot_stopping` over generated keepers; the rest are mean
+/// `shot_threat` over outfield players by line. `gap` is `gk − FWD`,
+/// the number the save multiplier actually reads for the shots that
+/// matter most — it must stay FLAT across levels for save% to be
+/// level-invariant.
+fn run_audit_contest(n: usize) {
+    println!(
+        "Generating {n} squads per level (1..20). Save-contest composites — \
+         `gap` must stay flat.\n"
+    );
+    println!(
+        "{:>3} {:>7} {:>7} {:>7} {:>7} {:>8}",
+        "lvl", "gk", "FWD", "MID", "DEF", "gap"
+    );
+    for level in 1u8..=20 {
+        let (mut gk, mut gk_n) = (0.0f32, 0u32);
+        let mut thr = [0.0f32; 3];
+        let mut thr_n = [0u32; 3];
+        for team_id in 0..n {
+            let squad = make_squad_simple((team_id + 1) as u32, level);
+            for mp in &squad.main_squad {
+                match mp.tactical_position.current_position.position_group() {
+                    PlayerFieldPositionGroup::Goalkeeper => {
+                        gk += sc::
+                            gk_shot_stopping(mp, 45);
+                        gk_n += 1;
+                    }
+                    group => {
+                        let i = match group {
+                            PlayerFieldPositionGroup::Forward => 0,
+                            PlayerFieldPositionGroup::Midfielder => 1,
+                            _ => 2,
+                        };
+                        thr[i] += sc::shot_threat(mp, 45);
+                        thr_n[i] += 1;
+                    }
+                }
+            }
+        }
+        let gk_mean = gk / gk_n.max(1) as f32;
+        let m: Vec<f32> = (0..3)
+            .map(|i| thr[i] / thr_n[i].max(1) as f32)
+            .collect();
+        println!(
+            "{:>3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>+8.3}",
+            level,
+            gk_mean,
+            m[0],
+            m[1],
+            m[2],
+            gk_mean - m[0]
+        );
+    }
+}
+
 fn run_audit_levels(n: usize) {
     println!(
         "Generating {} squads at each level (1..20), dumping avg outfield skill bands.\n",
