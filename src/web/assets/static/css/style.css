@@ -4417,28 +4417,112 @@ a:active {
 
 /* --- Player History Table --- */
 
+/* Panels that hold a table too wide to fold: the table keeps its natural
+   column widths and the panel scrolls sideways.
+
+   This is deliberately not keyed to a viewport width. The sidebar appears
+   at 1200px and takes ~330px out of the content column, so the table has
+   *less* room to work with at 1200px than at 1199px — a viewport-keyed
+   scroll rule switches the safety net off exactly where it is needed most.
+   Below 1200px the wider `.fm-panel` mobile rule hides the scrollbar; here
+   it stays visible, because a pointer user has no swipe to fall back on. */
+.fm-panel--scrollx {
+    display: grid;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: #2f4150 transparent;
+}
+
+.fm-panel--scrollx::-webkit-scrollbar {
+    height: 8px;
+}
+
+.fm-panel--scrollx::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.fm-panel--scrollx::-webkit-scrollbar-thumb {
+    background: #2f4150;
+    border-radius: 4px;
+}
+
+.fm-panel--scrollx::-webkit-scrollbar-thumb:hover {
+    background: #3b5064;
+}
+
+/* The heading is pinned to the viewport edge so it stays readable while
+   the table scrolls underneath it. */
+.fm-panel--scrollx > .fm-panel-head {
+    position: sticky;
+    left: 0;
+}
+
+/* Column model: Season is a fixed rail; every other column takes a share of
+   the width proportional to how much of the story it carries.
+
+   Left to itself the automatic table algorithm hands spare width to whichever
+   columns happen to have the widest content, which went wrong at both ends of
+   the range. Wide: Season stretched to 197px while the stat block stayed at
+   its em width, so the row broke into islands with a void between them.
+   Narrow: Season dropped below one line and the year fell onto a second row
+   under the toggle arrow, and club names folded in half.
+
+   Percentages fix both. In an auto-layout table they act as a preferred
+   share rather than a hard size — min-content still wins — so the columns
+   stretch together when there is room and hold their natural widths when
+   there isn't, at which point the panel scrolls. They only work while the
+   table's own width is definite, which is why nothing here sets
+   `width: max-content` on the table.
+
+   The shares add up to 100% (20 club + 12 nat + 20 league + 6 fee + 5x8.4
+   stat). That total is load-bearing: anything under 100% leaves a remainder,
+   and the remainder lands on Season — the one column with no share — which
+   is exactly the drift the fixed rail is there to prevent. Re-balance the
+   shares against each other, never by lowering the total. */
+.fm-history-table th.sq-season,
+.fm-history-table td.sq-season {
+    width: 100px;
+    min-width: 100px;
+    white-space: nowrap;
+}
+
+/* `nowrap` on the name columns is what turns their `min-width` into a real
+   floor: a table never shrinks a column below its min-content width, so a
+   long club or competition name overflows the panel and scrolls rather than
+   folding — the behaviour the rest of the site's wide tables have. */
+.fm-history-table th.sq-club,
+.fm-history-table td.sq-club {
+    width: 20%;
+    min-width: 140px;
+    white-space: nowrap;
+}
+
 .fm-history-table thead th.sq-nat {
     white-space: nowrap;
-    text-align: left;
 }
 
 .fm-history-table thead th.sq-league {
-    text-align: left;
     min-width: 168px;
 }
 
 .fm-history-table thead th.sq-fee {
-    text-align: center;
     white-space: nowrap;
 }
 
-.fm-history-table thead th.sq-stat {
-    width: 7em;
+.fm-history-table th.sq-nat,
+.fm-history-table td.sq-nat {
+    width: 12%;
+}
+
+.fm-history-table th.sq-fee,
+.fm-history-table td.sq-fee {
+    width: 6%;
 }
 
 .fm-history-table td.sq-nat {
     white-space: nowrap;
-    text-align: left;
 }
 
 .fm-history-table td.sq-nat .flag {
@@ -4455,8 +4539,9 @@ a:active {
    other column. The season row carries a zero-height `.sq-league-sizer`
    copy of each of its breakdown labels, so the column is already wide
    enough for them before the first click and nothing moves. */
+.fm-history-table th.sq-league,
 .fm-history-table td.sq-league {
-    text-align: left;
+    width: 20%;
     white-space: nowrap;
     min-width: 168px;
 }
@@ -4479,10 +4564,16 @@ a:active {
     white-space: nowrap;
 }
 
+/* The stat block stretches with everything else, on a 72px floor that fits
+   the widest label (AV RAT). The header and body cells used to declare
+   different em widths against different font sizes and the larger won —
+   84px per column, frozen at that size however wide the table got, which is
+   what left the numbers stranded on the right edge. `max-width` was doing no
+   work here either: the automatic table algorithm ignores it on cells. */
+.fm-history-table th.sq-stat,
 .fm-history-table td.sq-stat {
-    width: 6em;
-    min-width: 52px;
-    max-width: 52px;
+    width: 8.4%;
+    min-width: 72px;
 }
 
 .fm-history-table .fm-totals-row td {
@@ -7228,7 +7319,12 @@ a:active {
         min-width: 100%;
     }
 
+    /* Opt out of the `max-content` sizing above: this table's own column
+       shares decide its width, and against a `max-content` table those
+       percentages are resolved as `auto`, which drops the whole column
+       model. */
     .fm-history-table {
+        width: 100%;
         min-width: 100%;
     }
 
@@ -7382,10 +7478,25 @@ a:active {
         font-size: 12px;
     }
 
-    /* History table: compact columns on mobile — flag-only nat, league name
-       kept in full (wrapped, never truncated) */
-    .fm-history-table {
-        min-width: 554px;
+    /* History table: compact columns on mobile — flag-only nat, league and
+       club names kept in full on one line, panel scrolls to reach them.
+       Every column keeps a floor, so the sum of the floors is the table's
+       narrowest state and nothing folds. */
+    .fm-history-table th.sq-season,
+    .fm-history-table td.sq-season {
+        width: 84px;
+        min-width: 84px;
+    }
+
+    .fm-history-table th.sq-club,
+    .fm-history-table td.sq-club {
+        min-width: 128px;
+    }
+
+    .fm-history-table th.sq-stat,
+    .fm-history-table td.sq-stat {
+        width: 52px;
+        min-width: 52px;
     }
 
     .fm-history-table td.sq-nat a {

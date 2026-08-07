@@ -4,14 +4,14 @@
 
 {% block content %}
 <div class="fm-page">
-    <section class="fm-panel">
+    <section class="fm-panel fm-panel--scrollx">
         <div class="fm-panel-head">
             <h3>{{ i18n.t("career_statistics") }}</h3>
         </div>
         <table class="fm-stats fm-history-table">
             <thead>
                 <tr>
-                    <th>{{ i18n.t("season") }}</th>
+                    <th class="sq-season">{{ i18n.t("season") }}</th>
                     <th class="sq-club">{{ i18n.t("club") }}</th>
                     <th class="sq-nat">{{ i18n.t("nat") }}</th>
                     <th class="sq-league">{{ i18n.t("league") }}</th>
@@ -31,7 +31,7 @@
             <tbody>
                 {% for item in items %}
                 <tr class="fm-history-row{% if !item.breakdown.is_empty() %} fm-history-row--has-breakdown{% endif %}"{% if !item.breakdown.is_empty() %} tabindex="0" role="button" aria-expanded="false"{% endif %}>
-                    <td>
+                    <td class="sq-season">
                         {% if !item.breakdown.is_empty() %}<span class="fm-history-row-toggle" aria-hidden="true"></span>{% endif %}
                         {{ item.season }}
                     </td>
@@ -53,7 +53,7 @@
                 {% if !item.breakdown.is_empty() %}
                 {% for comp in item.breakdown %}
                 <tr class="fm-history-breakdown-row{% if loop.last %} fm-history-breakdown-row--last{% endif %}" hidden>
-                    <td></td>
+                    <td class="sq-season"></td>
                     <td class="sq-club"></td>
                     <td class="sq-nat"></td>
                     <td class="sq-league">{{ comp.label }}</td>
@@ -73,7 +73,7 @@
                 {% endif %}
                 {% endfor %}
                 <tr class="fm-totals-row">
-                    <td></td>
+                    <td class="sq-season"></td>
                     <td class="sq-club"></td>
                     <td class="sq-nat"></td>
                     <td class="sq-league"></td>
