@@ -4498,10 +4498,10 @@ a:active {
    folding — the behaviour the rest of the site's wide tables have.
 
    Centred, against the left-aligned `.fm-stats .sq-club` house rule, and the
-   padding evened up so the centring is true. Every column here except Season
-   is centred; a lone left-aligned one in a column this wide leaves all its
-   slack on one side, which reads as the name having drifted off the row.
-   Season stays left because it labels the row rather than carrying data. */
+   padding evened up so the centring is true. What is centred is the name box
+   below, not the name — see `.sq-club-name`. Season, Nat and League stay
+   left-aligned; Club is the one column wide enough that flush-left would
+   strand the name at the far edge of its own cell. */
 .fm-history-table thead th.sq-club,
 .fm-history-table td.sq-club {
     width: 26%;
@@ -4539,6 +4539,7 @@ a:active {
 .fm-history-table th.sq-nat,
 .fm-history-table td.sq-nat {
     width: 16%;
+    text-align: left;
 }
 
 .fm-history-table th.sq-fee,
@@ -4569,6 +4570,7 @@ a:active {
     width: 28%;
     white-space: nowrap;
     min-width: 168px;
+    text-align: left;
 }
 
 /* Width-only stand-in for the breakdown labels. `visibility: hidden`
