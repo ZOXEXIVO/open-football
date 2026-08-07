@@ -4945,8 +4945,8 @@ a:active {
     align-items: center;
     gap: 6px;
     padding: 6px 12px;
-    background: linear-gradient(160deg, #00453eb8 0%, #10433e 100%);
-    border: 1px solid #165953;
+    background: linear-gradient(160deg, #006462b8 0%, #07393a 100%);
+    border: 1px solid #1d6660;
     border-radius: 6px;
     text-decoration: none;
     transition:
@@ -5235,8 +5235,8 @@ a:active {
     text-transform: uppercase;
     text-decoration: none;
     color: #fff;
-    background: linear-gradient(160deg, #2c7463 0%, #064c46 100%);
-        border: 1px solid #288f76;
+    background: linear-gradient(160deg, #0b686b 0%, #055455 100%);
+    border: 1px solid #145d59e0;
     border-radius: 6px;
     white-space: nowrap;
     box-shadow:
