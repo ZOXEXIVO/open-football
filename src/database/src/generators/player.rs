@@ -1891,6 +1891,11 @@ fn build_statistics_history(
                 average_rating: h.rating,
                 rating_points: 0.0,
                 rating_weight: 0.0,
+                // Imported career history carries a season average, not
+                // per-match ratings. Both ledgers stay empty and their
+                // accessors fall back to `average_rating`.
+                rating_sum: 0.0,
+                rating_matches: 0,
                 conceded: 0,
                 clean_sheets: 0,
             };

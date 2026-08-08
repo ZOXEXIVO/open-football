@@ -240,24 +240,27 @@ pub async fn player_history_action(
     // `player_history_rows` groups on so each main row can find its
     // own per-competition lines. Pre-build the i18n labels here so the
     // template only renders strings.
-    // Sample-size-regressed, not raw. `display_average_rating` is the
-    // documented preferred API for table rendering precisely so a tiny
-    // sample can't shout: at `RELIABILITY_GAMES = 12` a three-match run
-    // keeps only 3/15 of its distance from the positional neutral, so a
-    // keeper who kept one clean sheet in three stopped reading 7.34 and
-    // reads 6.79 — the number a reader would actually stand behind.
+    // Plain arithmetic mean over rated appearances, like FM's `Av Rat`.
+    // These rows sit directly above the match list they summarise, so
+    // the printed average has to reconcile against it: three matches of
+    // 7.2 / 8.0 / 7.4 must read 7.53. It used to render the
+    // sample-size-regressed value and printed 6.79, because at
+    // `RELIABILITY_GAMES = 12` a three-match run keeps only 3/15 of its
+    // distance from the positional neutral — four fifths of the number
+    // on screen was the neutral, not the player.
     //
-    // This row was silently using the raw value while `teams/stats` and
-    // `leagues/get` used the regressed one, so the SAME player showed
-    // two different averages depending on which page you opened.
-    let position_group = player.position().position_group();
+    // Cross-page consistency (the reason the regressed value was wired
+    // in here) is preserved: every display surface now calls the same
+    // `display_average_rating`. Small-sample protection moved to where
+    // FM puts it — the minimum-appearance gate and the regressed sort
+    // key on ranking surfaces.
     let to_history_stats = move |stats: &PlayerStatistics| PlayerHistoryStats {
         played: stats.played,
         played_subs: stats.played_subs,
         goals: stats.goals,
         assists: stats.assists,
         player_of_the_match: stats.player_of_the_match,
-        average_rating: stats.display_average_rating(position_group),
+        average_rating: stats.display_average_rating(),
         conceded: stats.conceded,
         clean_sheets: stats.clean_sheets,
     };

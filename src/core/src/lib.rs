@@ -424,6 +424,8 @@ pub use crate::r#match::engine::ball::ball::assist_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::interactions::block_diag;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::ball::ball::ownership::reception_diag;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::events::gk_claim::gk_claim_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::events::players::key_pass_diag;

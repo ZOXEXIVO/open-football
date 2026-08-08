@@ -1,4 +1,5 @@
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::engine::ball::ball::PossessionSource;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::interactions::block_diag::BlockDiag;
 use crate::r#match::engine::ball::ball::interactions::SaveModel;
@@ -60,11 +61,33 @@ pub mod key_pass_diag {
     pub static WRONG_RECEIVER: AtomicU64 = AtomicU64::new(0);
     pub static STALE_WINDOW: AtomicU64 = AtomicU64::new(0);
     pub static CREDITED: AtomicU64 = AtomicU64::new(0);
+    /// Shots by how the shooter acquired the ball, indexed by
+    /// `PossessionSource::index()`. Answers what feeds shots when a pass
+    /// doesn't.
+    pub static SUPPLY: [AtomicU64; crate::r#match::engine::ball::ball::PossessionSource::COUNT] = [
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+    ];
 
     pub fn reset() {
         for c in [&SHOTS, &NO_LINK, &WRONG_RECEIVER, &STALE_WINDOW, &CREDITED] {
             c.store(0, Ordering::Relaxed);
         }
+        for c in SUPPLY.iter() {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Shot counts per `PossessionSource`, in `PossessionSource::NAMES` order.
+    pub fn supply_snapshot() -> [u64; crate::r#match::engine::ball::ball::PossessionSource::COUNT] {
+        let mut out = [0u64; crate::r#match::engine::ball::ball::PossessionSource::COUNT];
+        for (i, c) in SUPPLY.iter().enumerate() {
+            out[i] = c.load(Ordering::Relaxed);
+        }
+        out
     }
 
     /// `(shots, no_link, wrong_receiver, stale_window, credited)`
@@ -595,6 +618,30 @@ impl PlayerEventDispatcher {
                 Self::handle_ball_owner_change_event(player_id, field);
             }
             PlayerEvent::PassTo(pass_event_model) => {
+                // You can only kick a ball you can reach. Without this a
+                // player in a passing state rewrote the ball's velocity
+                // from anywhere on the pitch — see `KICKABLE_DISTANCE`.
+                // Ownership isn't required: a first-time pass off a ball
+                // arriving at your feet is legal, and the ball snaps to
+                // its owner anyway, so reach covers both.
+                {
+                    let ball_pos = field.ball.position;
+                    let in_reach = field
+                        .get_player(pass_event_model.from_player_id)
+                        .map(|p| {
+                            let d = p.position - ball_pos;
+                            d.x * d.x + d.y * d.y
+                                <= crate::r#match::engine::ball::ball::KICKABLE_DISTANCE
+                                    * crate::r#match::engine::ball::ball::KICKABLE_DISTANCE
+                        })
+                        .unwrap_or(false);
+                    if !in_reach {
+                        #[cfg(feature = "match-logs")]
+                        crate::r#match::engine::ball::ball::ownership::reception_diag::OUT_OF_REACH
+                            .fetch_add(1, Ordering::Relaxed);
+                        return remaining_events;
+                    }
+                }
                 // Build (but don't yet fire) the offside snapshot. The
                 // resolver fires only when the receiver becomes active —
                 // touches the ball, claims, or actively challenges. This
@@ -664,6 +711,14 @@ impl PlayerEventDispatcher {
                 // accounting. Lives for a short window (150 ticks)
                 // and is cleared on opponent touch — see ball.rs
                 // `pending_pass_passer` docs.
+                #[cfg(feature = "match-logs")]
+                {
+                    use crate::r#match::engine::ball::ball::ownership::reception_diag;
+                    reception_diag::EMITTED.fetch_add(1, Ordering::Relaxed);
+                    if field.ball.pending_pass_passer.is_some() {
+                        reception_diag::SUPERSEDED.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
                 field.ball.pending_pass_passer = Some(passer_id);
                 field.ball.pending_pass_set_tick = context.current_tick();
                 field.ball.pending_pass_origin = Some(passer_position);
@@ -694,7 +749,7 @@ impl PlayerEventDispatcher {
                 Self::handle_move_ball_event(player_id, ball_velocity, field);
             }
             PlayerEvent::GainBall(player_id) => {
-                Self::handle_gain_ball_event(player_id, field);
+                Self::handle_gain_ball_event(player_id, field, context);
             }
             PlayerEvent::Shoot(shoot_event_model) => {
                 // Capture field dimensions up-front so the log block
@@ -788,6 +843,11 @@ impl PlayerEventDispatcher {
                     if field.ball.last_completed_pass_receiver_id.is_none() {
                         key_pass_diag::NO_LINK.fetch_add(1, Ordering::Relaxed);
                     }
+                    // How the shooter came by the ball. The key-pass
+                    // counter says a pass DIDN'T feed this shot; this
+                    // says what did instead.
+                    key_pass_diag::SUPPLY[field.ball.possession_source.index()]
+                        .fetch_add(1, Ordering::Relaxed);
                 }
                 if let (Some(passer_id), Some(receiver_id)) = (
                     field.ball.last_completed_pass_passer_id,
@@ -899,7 +959,7 @@ impl PlayerEventDispatcher {
                 Self::handle_clear_ball_event(velocity, field, context);
             }
             PlayerEvent::RequestBallReceive(player_id) => {
-                Self::handle_request_ball_receive(player_id, field);
+                Self::handle_request_ball_receive(player_id, field, context);
             }
             PlayerEvent::CommitFoul(fouler_id, severity) => {
                 Self::handle_commit_foul_event(fouler_id, severity, field, context);
@@ -1113,6 +1173,11 @@ impl PlayerEventDispatcher {
         if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
             field.ball.note_possession(team_id);
         }
+        // The one acquisition that never passes through the ball-event
+        // dispatcher, so it labels itself.
+        field
+            .ball
+            .note_possession_source(player_id, PossessionSource::Tackle);
     }
 
     fn handle_ball_owner_change_event(player_id: u32, field: &mut MatchField) {
@@ -2365,39 +2430,7 @@ impl PlayerEventDispatcher {
         }
 
         // No current owner - normal claim.
-        //
-        // Pass-accuracy accounting: if the ball is within an active
-        // pass window (`pending_pass_passer` set by the pass emit and
-        // not yet cleared by an opponent touch), and this claimant is
-        // a teammate of that passer, credit the pass as completed.
-        // Using `pending_pass_passer` instead of `pass_target_player_id`
-        // because the target flag gets cleared in many unrelated paths
-        // (set-pieces, clearances, save handoffs) and was masking
-        // legitimate same-team receptions. The dedicated passer flag
-        // persists through the real pass window (~150 ticks).
-        if let Some(passer_id) = field.ball.pending_pass_passer {
-            let same_team = field
-                .players
-                .iter()
-                .find(|p| p.id == player_id)
-                .and_then(|claimant| {
-                    field
-                        .players
-                        .iter()
-                        .find(|p| p.id == passer_id)
-                        .map(|passer| claimant.team_id == passer.team_id)
-                })
-                .unwrap_or(false);
-            if same_team && passer_id != player_id {
-                // Same single completion path as `BallEvent::PassCompleted`
-                // — increments `passes_completed`, classifies progressive
-                // / cross / box-entry, and clears the metadata.
-                Self::credit_completed_pass(player_id, passer_id, field, context);
-            } else if !same_team {
-                // Opponent won the pass — accuracy window ends.
-                field.ball.clear_pending_pass_metadata();
-            }
-        }
+        Self::resolve_pending_pass_on_control(player_id, field, context);
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
         field.ball.pass_target_player_id = None;
@@ -2413,7 +2446,8 @@ impl PlayerEventDispatcher {
         field.ball.velocity = ball_velocity;
     }
 
-    fn handle_gain_ball_event(player_id: u32, field: &mut MatchField) {
+    fn handle_gain_ball_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
+        Self::resolve_pending_pass_on_control(player_id, field, context);
         Self::secure_ball_for(player_id, field);
         if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
             field.ball.note_possession(team_id);
@@ -2421,10 +2455,70 @@ impl PlayerEventDispatcher {
         field.ball.flags.in_flight_state = 100;
     }
 
+    /// Settle the live pass window against a player who has just taken
+    /// control of the ball.
+    ///
+    /// A teammate of the passer completes the pass — whether or not they
+    /// were the intended target, and whichever route they took to the
+    /// ball. This used to live only in the `ClaimBall` handler, so the
+    /// other two ways a player gains control (`GainBall`, `TakeBall`)
+    /// silently booked the pass as a failure: they set ownership and
+    /// nulled `pass_target_player_id` without ever looking at the pass
+    /// window. With deliveries no longer credited on contact at 100u,
+    /// those two routes carry a large share of real receptions, and the
+    /// omission was the single biggest term in the measured pass
+    /// accuracy.
+    ///
+    /// Keys off `pending_pass_passer` rather than `pass_target_player_id`
+    /// because the target flag gets nulled by many unrelated paths
+    /// (set-pieces, clearances, save handoffs) while the passer flag
+    /// tracks the real pass window.
+    pub(crate) fn resolve_pending_pass_on_control(
+        player_id: u32,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        let Some(passer_id) = field.ball.pending_pass_passer else {
+            return;
+        };
+        if passer_id == player_id {
+            return;
+        }
+        let same_team = field
+            .players
+            .iter()
+            .find(|p| p.id == player_id)
+            .and_then(|claimant| {
+                field
+                    .players
+                    .iter()
+                    .find(|p| p.id == passer_id)
+                    .map(|passer| claimant.team_id == passer.team_id)
+            })
+            .unwrap_or(false);
+        if same_team {
+            // Single completion path, shared with `BallEvent::PassCompleted`
+            // — increments `passes_completed`, classifies progressive /
+            // cross / box-entry, and clears the metadata.
+            Self::credit_completed_pass(player_id, passer_id, field, context);
+            field
+                .ball
+                .note_possession_source(player_id, PossessionSource::PassReception);
+        } else {
+            // Opponent won the pass — accuracy window ends.
+            field.ball.clear_pending_pass_metadata();
+        }
+    }
+
     // Snaps the ball to the winner's feet and zeros velocity — prevents
     // residual velocity from carrying it into the winner's own goal
     // after a tackle/interception/block.
     fn secure_ball_for(player_id: u32, field: &mut MatchField) {
+        #[cfg(feature = "match-logs")]
+        if field.ball.cached_shot_target.is_some() {
+            crate::r#match::engine::ball::ball::ownership::reception_diag::SHOT_CLAIMED
+                .fetch_add(1, Ordering::Relaxed);
+        }
         if let Some(player) = field.players.iter().find(|p| p.id == player_id) {
             field.ball.position = player.position;
             field.ball.position.z = 0.0;
@@ -3214,6 +3308,7 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
         // the ball is going, which this point in the handler does not
         // know yet.
         field.ball.last_shot_shooter_id = Some(shoot_event_model.from_player_id);
+        field.ball.last_shot_struck_tick = context.current_tick();
         // Cleared here so a shot whose target cannot be projected (the
         // `else` arm below) can never leave the previous shot's value on
         // the ball for the next keeper credit to pick up.
@@ -3264,6 +3359,25 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
             // and the cache would mislead the keeper.
             if (dx > 0.0 && vx > 0.1) || (dx < 0.0 && vx < -0.1) {
                 let ticks_to_goal = (dx / vx).abs();
+                // Keep the strike live for its whole flight.
+                //
+                // The flat 40 ticks set above is shorter than most shots
+                // take to reach the line: at typical struck speeds a
+                // 92u (11.5 m) effort is 45-60 ticks in the air. Once
+                // the window lapsed, `check_ball_ownership` resumed and
+                // any player within 5u simply picked the shot out of the
+                // air in open play — no save, no block, no goal, no shot
+                // going out. Measured: only 23% of shots ever resolved
+                // as a save or a goal, against ~80% that were struck
+                // between the posts, and the missing ~58% left no trace
+                // in any outcome counter.
+                //
+                // A struck ball has to resolve AS a shot: saved, blocked,
+                // in, or out of play. The 1.3 margin covers the drag and
+                // gravity the constant-velocity projection ignores; the
+                // floor keeps tap-ins protected and the ceiling stops a
+                // mishit dribbling toward goal from freezing possession.
+                field.ball.flags.in_flight_state = ((ticks_to_goal * 1.8) as usize).clamp(40, 320);
                 let goal_line_y = if deflected {
                     // GK reads the ORIGINAL trajectory until the
                     // deflection happens; the redirect arrives after
@@ -3415,8 +3529,15 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
                     shooter_threat,
                 });
             } else {
+                #[cfg(feature = "match-logs")]
+                crate::r#match::engine::ball::ball::ownership::reception_diag::SHOT_NO_TARGET
+                    .fetch_add(1, Ordering::Relaxed);
                 field.ball.cached_shot_target = None;
             }
+        } else {
+            #[cfg(feature = "match-logs")]
+            crate::r#match::engine::ball::ball::ownership::reception_diag::SHOT_NO_TARGET
+                .fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -3663,7 +3784,7 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
         }
     }
 
-    fn handle_request_ball_receive(player_id: u32, field: &mut MatchField) {
+    fn handle_request_ball_receive(player_id: u32, field: &mut MatchField, context: &MatchContext) {
         // Only allow if ball is close and either unowned or this player is the target
         let is_target = field.ball.pass_target_player_id == Some(player_id);
         let is_unowned = field.ball.current_owner.is_none();
@@ -3685,6 +3806,9 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
         let distance = (dx * dx + dy * dy).sqrt();
 
         if distance < 3.5 && ball_pos.z <= 2.8 {
+            // Taking control settles the live pass window — see
+            // `resolve_pending_pass_on_control`.
+            Self::resolve_pending_pass_on_control(player_id, field, context);
             field.ball.previous_owner = field.ball.current_owner;
             field.ball.current_owner = Some(player_id);
             field.ball.pass_target_player_id = None;

@@ -3211,6 +3211,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::save_accounting_stats::reset();
     core::key_pass_diag::reset();
     core::assist_diag::reset();
+    core::reception_diag::reset();
     BlockDiag::reset();
     core::helper_diag::reset();
     core::mid_run_diag::reset();
@@ -5100,6 +5101,70 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 pct(wrong_receiver),
                 pct(stale),
             );
+            // What actually feeds the engine's shots. Real football:
+            // a clear majority of shots are struck by the player who
+            // was just passed to; loose balls and turnovers are the
+            // minority. If `pass` here is small, the possession model —
+            // not the key-pass tagging — is what caps key passes and
+            // assists.
+            {
+                let supply = core::key_pass_diag::supply_snapshot();
+                let total: u64 = supply.iter().sum::<u64>().max(1);
+                let names = core::r#match::engine::ball::ball::PossessionSource::NAMES;
+                let mut parts: Vec<String> = Vec::new();
+                for (i, n) in names.iter().enumerate() {
+                    parts.push(format!(
+                        "{} {:.1}%",
+                        n,
+                        supply[i] as f32 / total as f32 * 100.0
+                    ));
+                }
+                println!(
+                    "  shot supply (how the shooter got the ball): {}   (real: pass ~55-60%)",
+                    parts.join(", "),
+                );
+            }
+            // Where the ball actually is when a pass is booked received.
+            // `move_to` drops ownership past 15u, so anything credited
+            // beyond that band is a completed pass the receiver never
+            // actually got — it reads as accuracy and plays as a loose ball.
+            {
+                let (bands, too_far) = core::reception_diag::snapshot();
+                let total: u64 = bands.iter().sum::<u64>().max(1);
+                let names = core::reception_diag::BAND_NAMES;
+                let mut parts: Vec<String> = Vec::new();
+                for (i, n) in names.iter().enumerate() {
+                    parts.push(format!("{} {:.1}%", n, bands[i] as f32 / total as f32 * 100.0));
+                }
+                println!(
+                    "  reception distance (receiver→ball at claim): {}   \
+                     ball-tracking cutoff is 15u",
+                    parts.join(", "),
+                );
+                println!(
+                    "  ownership dropped by move_to (owner >15u away): {} ({:.2}/match)",
+                    too_far,
+                    too_far as f32 / n_matches as f32,
+                );
+                let (sw, so, sc_, snt, grj) = core::reception_diag::shot_fate_snapshot();
+                println!(
+                    "  shot fate: wide {}, over the bar {}, claimed mid-flight {}, \
+                     no projected target {}, goal REJECTED at the line {}   \
+                     (vs saves+goals = the credited on-target count)",
+                    sw, so, sc_, snt, grj,
+                );
+                let (emitted, superseded, dead, out_of_reach) =
+                    core::reception_diag::pass_outcome_snapshot();
+                println!(
+                    "  pass outcomes: emitted {} — superseded while unresolved {:.1}%, \
+                     died on a dead ball {:.1}%; rejected as out of reach {} ({:.2}/match)",
+                    emitted,
+                    superseded as f32 / emitted.max(1) as f32 * 100.0,
+                    dead as f32 / emitted.max(1) as f32 * 100.0,
+                    out_of_reach,
+                    out_of_reach as f32 / n_matches as f32,
+                );
+            }
             let (seen, too_high, candidates, fired) = BlockDiag::snapshot();
             let bpct = |x: u64| {
                 if seen == 0 {

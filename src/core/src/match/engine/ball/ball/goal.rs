@@ -60,7 +60,24 @@ impl Ball {
                         })
                         .unwrap_or(false);
                     let shot_in_flight = self.cached_shot_target.is_some();
-                    if !recent_shot && !shot_in_flight {
+                    // Whether the BALL was struck as a shot recently, no
+                    // matter who has touched it since. The two tests above
+                    // both ask about the player being credited, and that
+                    // is the wrong subject once anyone else intervenes: a
+                    // keeper who gets a hand to a shot becomes the ball's
+                    // `previous_owner`, has taken no shot himself, and
+                    // clears `cached_shot_target` on the way — so a
+                    // parried or deflected effort crossing the line failed
+                    // both and was waved away. Measured at 2604 refused
+                    // goals per 300 matches, 34% of every shot taken.
+                    // 400 ticks (~4 s) comfortably covers a strike, a
+                    // deflection and the ball rolling over the line.
+                    let ball_came_from_a_shot = self.last_shot_struck_tick > 0
+                        && current_tick.saturating_sub(self.last_shot_struck_tick) < 400;
+                    if !recent_shot && !shot_in_flight && !ball_came_from_a_shot {
+                        #[cfg(feature = "match-logs")]
+                        super::ownership::reception_diag::GOAL_REJECTED
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         // Not a shot — treat as ball out of play, not a goal.
                         return;
                     }
@@ -174,6 +191,12 @@ impl Ball {
             None => return,
         };
 
+        #[cfg(feature = "match-logs")]
+        if self.cached_shot_target.is_some() {
+            super::ownership::reception_diag::SHOT_OVER
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+
         // Determine which side's goalkeeper defends this goal
         // GoalSide::Home = left goal (x=0) → defended by PlayerSide::Left
         // GoalSide::Away = right goal (x=field_width) → defended by PlayerSide::Right
@@ -213,6 +236,10 @@ impl Ball {
             // for a shot that never reached the keeper.
             self.cached_shot_target = None;
             self.recent_passers.clear();
+            // Dead ball: drop every open-play window in one place so a
+            // pass that was live when the ball went out cannot survive the
+            // restart and swallow the restart pass.
+            self.clear_open_play_metadata();
             self.pass_origin_restart = PassOriginRestart::GoalKick;
             self.offside_snapshot = None;
             self.record_touch(gk_id, gk_team, self.current_tick_cached, true);
@@ -261,6 +288,12 @@ impl Ball {
             Some(s) => s,
             None => return,
         };
+
+        #[cfg(feature = "match-logs")]
+        if self.cached_shot_target.is_some() {
+            super::ownership::reception_diag::SHOT_WIDE
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
 
         let defending_side = match side {
             GoalSide::Home => PlayerSide::Left,
@@ -341,6 +374,10 @@ impl Ball {
                 // a phantom save (see check_over_goal for the full bug
                 // explanation).
                 self.cached_shot_target = None;
+                // Dead ball: drop every open-play window in one place so a
+                // pass that was live when the ball went out cannot survive the
+                // restart and swallow the restart pass.
+                self.clear_open_play_metadata();
                 self.pass_origin_restart = PassOriginRestart::Corner;
                 // Pick the corner routine via the SetPieceHistory-aware
                 // helper so repeated identical routines (with no chance
@@ -446,6 +483,10 @@ impl Ball {
             // target so the eventual GK clearance can't false-credit a
             // save for a shot that ended out of play.
             self.cached_shot_target = None;
+            // Dead ball: drop every open-play window in one place so a
+            // pass that was live when the ball went out cannot survive the
+            // restart and swallow the restart pass.
+            self.clear_open_play_metadata();
             self.pass_origin_restart = PassOriginRestart::GoalKick;
             self.offside_snapshot = None;
             self.record_touch(gk_id, gk_team, self.current_tick_cached, true);

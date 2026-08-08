@@ -13,6 +13,9 @@ use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use core::utils::FormattingUtils;
+// Aliased: this module defines its own `PlayerStatistics` DTO, and the
+// two would otherwise collide.
+use core::PlayerStatistics as SeasonStatistics;
 use core::{
     DomesticCupOverride, LiveCupSlice, Person, Player, PlayerLiveStatsInput, PlayerPositionType,
     PlayerSquadStatus, PlayerStatCompetitionKind, PlayerStatisticsProjection, PlayerStatusType,
@@ -806,13 +809,14 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
     /// name when the projection pinned a single source, the generic kind
     /// label otherwise.
     ///
-    /// The per-player Overview shows the *raw* minutes-weighted average
-    /// (see [`PlayerStatistics::average_rating_str`]). Sample-size
-    /// regression is reserved for aggregate ranking surfaces (squad
-    /// list, top-rated, scouting, awards) where small-sample inflation
-    /// distorts comparisons.
+    /// The rating column is the plain arithmetic mean over rated
+    /// appearances — FM's `Av Rat` — via
+    /// [`PlayerStatistics::display_average_rating`]. Sample-size
+    /// regression is a sort key and a decision currency, never a printed
+    /// number: this panel sits on the same page as the player's match
+    /// list, so an average that doesn't reconcile against it is a bug no
+    /// matter how well-calibrated the shrinkage is.
     fn build(&self, player: &Player, team: Option<&Team>) -> Vec<CompetitionStatisticsRow> {
-        let position_group = player.position().position_group();
         let domestic_override = self.domestic_cup_override(player);
         let live_cups: Vec<LiveCupSlice<'_>> = player
             .cup_statistics_by_competition
@@ -853,7 +857,7 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
                             &row.competition_name,
                             "league",
                         ),
-                        stats: Self::to_dto(&row.statistics, position_group),
+                        stats: Self::to_dto(&row.statistics),
                     });
                 }
                 PlayerStatCompetitionKind::Friendly => {
@@ -863,14 +867,14 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
                             "",
                             "friendly",
                         ),
-                        stats: Self::to_dto(&row.statistics, position_group),
+                        stats: Self::to_dto(&row.statistics),
                     });
                 }
                 PlayerStatCompetitionKind::DomesticCup
                 | PlayerStatCompetitionKind::ContinentalCup => {
                     cups.push(CompetitionStatisticsRow {
                         competition_name: row.competition_name,
-                        stats: Self::to_dto(&row.statistics, position_group),
+                        stats: Self::to_dto(&row.statistics),
                     });
                 }
             }
@@ -889,7 +893,7 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
         // reader which competition the player is registered for.
         ordered.push(league.unwrap_or_else(|| CompetitionStatisticsRow {
             competition_name: self.i18n.t("league").to_string(),
-            stats: Self::empty_dto(position_group),
+            stats: Self::empty_dto(),
         }));
         ordered
     }
@@ -966,10 +970,7 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
         }
     }
 
-    fn to_dto(
-        s: &core::PlayerStatistics,
-        position_group: core::PlayerFieldPositionGroup,
-    ) -> PlayerStatistics {
+    fn to_dto(s: &SeasonStatistics) -> PlayerStatistics {
         PlayerStatistics {
             played: s.played,
             played_subs: s.played_subs,
@@ -982,14 +983,14 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
             shots_on_target: s.shots_on_target,
             tackling: s.tackling,
             passes: s.passes,
-            average_rating: s.display_average_rating(position_group),
+            average_rating: s.display_average_rating(),
             conceded: s.conceded,
             clean_sheets: s.clean_sheets,
         }
     }
 
-    fn empty_dto(position_group: core::PlayerFieldPositionGroup) -> PlayerStatistics {
-        Self::to_dto(&core::PlayerStatistics::default(), position_group)
+    fn empty_dto() -> PlayerStatistics {
+        Self::to_dto(&SeasonStatistics::default())
     }
 }
 

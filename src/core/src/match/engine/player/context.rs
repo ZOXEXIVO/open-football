@@ -720,6 +720,19 @@ pub struct BallMetadata {
     /// block deflection). Read by the team shot gate to suspend the
     /// shot-spacing cooldown during box scrambles. 0 = none yet.
     pub last_rebound_tick: u64,
+
+    /// Who the live pass is meant for, if one is in the air.
+    ///
+    /// The claim rules already give this player sole right to take the
+    /// ball while it is in flight, but nothing told him to go and get
+    /// it: the loose-ball chase designation went to whichever teammate
+    /// happened to be nearest the landing spot. When that was somebody
+    /// else — which it often is, because a pass is played AHEAD of its
+    /// target — the only man allowed to receive it was not moving to it
+    /// and the only man moving to it was not allowed to receive it, so
+    /// the pass ran through to nobody. Read by the receiving override in
+    /// `PlayerFieldPositionGroup::process`.
+    pub pass_target: Option<u32>,
 }
 
 impl BallMetadata {
@@ -759,6 +772,7 @@ impl BallMetadata {
         self.cached_shot_target = field.ball.cached_shot_target;
         self.pass_origin_restart = field.ball.pass_origin_restart;
         self.last_rebound_tick = field.ball.last_rebound_tick;
+        self.pass_target = field.ball.pass_target_player_id;
     }
 }
 
@@ -777,6 +791,7 @@ impl From<&MatchField> for BallMetadata {
             cached_shot_target: None,
             pass_origin_restart: PassOriginRestart::OpenPlay,
             last_rebound_tick: 0,
+            pass_target: None,
         };
         meta.update(field);
         meta

@@ -1,3 +1,4 @@
+use crate::r#match::engine::ball::ball::PossessionSource;
 use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::player::events::PlayerEvent;
@@ -103,6 +104,33 @@ impl BallEventDispatcher {
             }
         }
 
+        // Every acquisition of the ball arrives here as exactly one
+        // event, which makes this the one place that can label HOW the
+        // new carrier got it without threading a reason through the ~20
+        // sites that assign `current_owner`. `Tackle` is stamped in the
+        // player dispatcher, the only acquisition that isn't a ball event.
+        match event {
+            BallEvent::PassCompleted(receiver_id, _) => {
+                field
+                    .ball
+                    .note_possession_source(receiver_id, PossessionSource::PassReception);
+            }
+            BallEvent::Intercepted(interceptor_id, _, _) => {
+                field
+                    .ball
+                    .note_possession_source(interceptor_id, PossessionSource::Interception);
+            }
+            // `Claimed` covers restarts and every uncontrolled ball; the
+            // pass-target claim paths emit `PassCompleted` whenever there
+            // was a passer, so nothing that arrives here is a reception.
+            BallEvent::Claimed(player_id) | BallEvent::Gained(player_id) => {
+                field
+                    .ball
+                    .note_possession_source(player_id, PossessionSource::LooseBall);
+            }
+            _ => {}
+        }
+
         match event {
             BallEvent::Goal(metadata) => {
                 // Determine which team scored based on the goalscorer's team, not goal position.
@@ -143,6 +171,18 @@ impl BallEventDispatcher {
                 field.reset_players_positions();
             }
             BallEvent::Claimed(player_id) => {
+                // Settle the pass window HERE rather than leaving it to
+                // the `ClaimBall` handler. The ball has already assigned
+                // `current_owner` by the time this event is dispatched,
+                // but the handler bails out early in several situations
+                // (ball still flagged in-flight, a different player is
+                // the nominated target). When it bailed, the claimant
+                // ended up on the ball with the previous pass still
+                // marked live — and the next pass they played
+                // overwrote it, so the delivery that actually reached
+                // them was booked as a failure. That accounted for 58%
+                // of all passes.
+                PlayerEventDispatcher::resolve_pending_pass_on_control(player_id, field, context);
                 remaining_events.add(Event::PlayerEvent(PlayerEvent::ClaimBall(player_id)));
             }
             BallEvent::PassCompleted(receiver_id, passer_id) => {
@@ -253,6 +293,8 @@ impl BallEventDispatcher {
                 }
             }
             BallEvent::Gained(player_id) => {
+                // Same reasoning as `Claimed` above.
+                PlayerEventDispatcher::resolve_pending_pass_on_control(player_id, field, context);
                 remaining_events.add(Event::PlayerEvent(PlayerEvent::GainBall(player_id)));
             }
             BallEvent::TakeMe(player_id) => {

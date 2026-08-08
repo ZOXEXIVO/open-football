@@ -14,7 +14,7 @@
 mod goal;
 pub mod interactions;
 mod motion;
-mod ownership;
+pub mod ownership;
 mod restart;
 mod stall;
 
@@ -182,6 +182,42 @@ pub mod assist_diag {
     }
 }
 
+/// How close a player must be to the ball to take control of it, in game
+/// units (1u = 0.125 m, so this is 1.5 m — one stride, a real first-touch
+/// distance).
+///
+/// This MUST stay at or below [`MAX_OWNER_TRACK_DISTANCE`]. The two used
+/// to be independent numbers that disagreed by a factor of six: the
+/// pass-target claim granted ownership at 100u while `Ball::move_to`
+/// refused to track the ball to an owner beyond 15u and dropped the
+/// ownership again. The effect was that a pass was booked COMPLETED on
+/// the first tick of its flight — the receiver is within 100u of the
+/// ball the moment it leaves the passer's foot — and then instantly
+/// released, so the ball flew its whole course as a loose ball with no
+/// owner and no intended receiver (the claim had already consumed
+/// `pass_target_player_id`). Measured: 100% of receptions landed beyond
+/// the tracking cap, `move_to` dropped ownership 5.4k times a match, and
+/// 86% of all shots were struck off loose balls against a real ~15%.
+/// Pass accuracy read 87% the whole time — the metric counted claims,
+/// not deliveries.
+pub const CONTROL_DISTANCE: f32 = 12.0;
+
+/// Hard cap on how far the ball will track to its owner before ownership
+/// is treated as impossible and dropped (1.9 m). See [`CONTROL_DISTANCE`].
+pub const MAX_OWNER_TRACK_DISTANCE: f32 = 15.0;
+
+/// How close the ball has to be for a player to kick it (1.9 m — within
+/// reach at a stretch, which is what makes a first-time pass legal).
+///
+/// `PlayerEvent::PassTo` had no such check: any player in a passing state
+/// rewrote the ball's velocity from anywhere on the pitch, whether or not
+/// they had the ball. 59% of all passes were emitted on top of a pass
+/// that was still in the air, which is why the engine recorded ~1150
+/// passes a team against a real ~500 — the surplus was players kicking a
+/// ball that was 40 m away, and each one destroyed the pass already in
+/// flight.
+pub const KICKABLE_DISTANCE: f32 = MAX_OWNER_TRACK_DISTANCE;
+
 /// How long a pass stays assist-eligible, in ticks (100 ticks ≈ 1 s).
 ///
 /// An assist is the pass that *led to* the goal, so the two have to be
@@ -192,6 +228,47 @@ pub mod assist_diag {
 /// later. The same-possession rule in `assist_for_goal` does most of the
 /// work; this is the backstop for a phase that never changes hands.
 pub const ASSIST_WINDOW_TICKS: u64 = 600;
+
+/// How the current ball carrier came by the ball.
+///
+/// Stamped at the event-dispatch choke point (every acquisition emits
+/// exactly one ball event), so it stays correct without threading a
+/// reason through the ~20 sites that assign `current_owner`. Read at
+/// shot time by `shot_supply_diag`: in real football roughly 55-60% of
+/// shots are struck by the player who was just passed to, and this is
+/// the counter that says whether the engine feeds its shooters or lets
+/// them scavenge.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PossessionSource {
+    /// No acquisition recorded since the last restart.
+    Unknown,
+    /// Received a teammate's pass — the one that should dominate.
+    PassReception,
+    /// Won an uncontrolled ball: rebound, spill, deflection, failed
+    /// first touch, or a clearance that dropped to them.
+    LooseBall,
+    /// Picked off an opponent's pass.
+    Interception,
+    /// Took it off an opponent in a challenge.
+    Tackle,
+}
+
+impl PossessionSource {
+    pub const COUNT: usize = 5;
+
+    pub fn index(self) -> usize {
+        match self {
+            PossessionSource::Unknown => 0,
+            PossessionSource::PassReception => 1,
+            PossessionSource::LooseBall => 2,
+            PossessionSource::Interception => 3,
+            PossessionSource::Tackle => 4,
+        }
+    }
+
+    pub const NAMES: [&'static str; Self::COUNT] =
+        ["unknown", "pass", "loose", "intercept", "tackle"];
+}
 
 /// One kick in the current possession's pass chain.
 ///
@@ -240,6 +317,11 @@ pub struct Ball {
     pub pending_pass_passer: Option<u32>,
     pub pending_pass_set_tick: u64,
     pub recent_passers: VecDeque<PassChainEntry>,
+    /// How `current_owner` came by the ball. See [`PossessionSource`].
+    pub possession_source: PossessionSource,
+    /// Who `possession_source` describes, so a repeat event for the
+    /// player who already has the ball can't relabel their acquisition.
+    pub possession_source_for: Option<u32>,
     pub contested_claim_count: u32,
     pub unowned_ticks: u32,
     /// Snapshot captured at the moment the ball became uncontrolled — ball
@@ -392,6 +474,15 @@ pub struct Ball {
     /// tame the strikes actually were. This value describes the STRIKE.
     pub last_shot_xgot: f32,
     pub last_shot_shooter_id: Option<u32>,
+    /// Tick the ball was last STRUCK as a shot, whoever has touched it
+    /// since. `check_goal` needs a property of the BALL here, not of
+    /// whoever happens to be its `previous_owner` when it crosses the
+    /// line: a keeper who gets a hand to a shot becomes the previous
+    /// owner, and the shot-provenance test then failed on him and
+    /// refused the goal. Measured 2026-08: 2604 balls per 300 matches
+    /// crossed the line and were rejected — 34% of all shots, and the
+    /// single largest reason the engine scored 1.6 goals a game.
+    pub last_shot_struck_tick: u64,
 
     /// Tick of the most recent live rebound — a dangerous GK parry or
     /// a loose shot-block deflection that left the ball contestable in
@@ -539,6 +630,8 @@ impl Ball {
             pending_pass_passer: None,
             pending_pass_set_tick: 0,
             recent_passers: VecDeque::with_capacity(5),
+            possession_source: PossessionSource::Unknown,
+            possession_source_for: None,
             contested_claim_count: 0,
             unowned_ticks: 0,
             stall_start_snapshot: None,
@@ -572,6 +665,7 @@ impl Ball {
             pressers_at_pass_count: 0,
             last_shot_xgot: 0.0,
             last_shot_shooter_id: None,
+            last_shot_struck_tick: 0,
             last_rebound_tick: 0,
             last_giveaway_player_id: None,
             last_giveaway_team_id: None,
@@ -612,6 +706,11 @@ impl Ball {
     /// rather than zeroing individual fields, so a future field added
     /// to the open-play set is reset automatically.
     pub fn clear_open_play_metadata(&mut self) {
+        #[cfg(feature = "match-logs")]
+        if self.pending_pass_passer.is_some() {
+            use std::sync::atomic::Ordering;
+            ownership::reception_diag::DIED_DEAD_BALL.fetch_add(1, Ordering::Relaxed);
+        }
         self.cached_shot_target = None;
         self.pass_target_player_id = None;
         self.pending_pass_passer = None;
@@ -625,6 +724,9 @@ impl Ball {
         self.pending_failed_claim_charged = false;
         self.last_shot_xgot = 0.0;
         self.last_shot_shooter_id = None;
+        // A dead ball ends the shot: without this a stale strike would
+        // let the next pass that rolls over the line stand as a goal.
+        self.last_shot_struck_tick = 0;
     }
 
     /// Soft invariant check on the ball's lifecycle flags. Returns the
@@ -938,6 +1040,8 @@ impl Ball {
         self.flags.reset();
         self.pass_target_player_id = None;
         self.clear_pass_history();
+        self.possession_source = PossessionSource::Unknown;
+        self.possession_source_for = None;
         self.contested_claim_count = 0;
         self.unowned_ticks = 0;
         self.cached_landing_position = self.position;
@@ -958,6 +1062,7 @@ impl Ball {
         self.last_completed_pass_passer_id = None;
         self.last_completed_pass_receiver_id = None;
         self.last_completed_pass_tick = 0;
+        self.last_shot_struck_tick = 0;
     }
 
     /// Snapshot the most-recent completed pass so the shot-handler
@@ -1086,6 +1191,26 @@ impl Ball {
         self.recent_passers.clear();
     }
 
+    /// Label how `player_id` came by the ball.
+    ///
+    /// Ignores repeat events for a player who already has it: `Claimed`
+    /// fires to re-affirm existing ownership as well as to acquire, so
+    /// without this guard a receiver's `PassReception` was relabelled
+    /// `LooseBall` a second later while the ball was still at his feet —
+    /// which read as 97% of shots coming from loose balls.
+    /// For the same carrier only a MORE SPECIFIC label may overwrite: a
+    /// repeat `Claimed` must not downgrade a reception to a loose ball,
+    /// but the pass-completion credit that lands just after a bare
+    /// `Claimed` (a teammate other than the intended target collected
+    /// it) must be allowed to upgrade it.
+    pub fn note_possession_source(&mut self, player_id: u32, source: PossessionSource) {
+        if self.possession_source_for == Some(player_id) && source == PossessionSource::LooseBall {
+            return;
+        }
+        self.possession_source_for = Some(player_id);
+        self.possession_source = source;
+    }
+
     /// Note that `team_id` now has the ball, dropping the pass chain only
     /// if the ball genuinely changed hands.
     ///
@@ -1121,6 +1246,9 @@ impl Ball {
     pub fn clear_shot_metadata(&mut self) {
         self.last_shot_xgot = 0.0;
         self.last_shot_shooter_id = None;
+        // A dead ball ends the shot: without this a stale strike would
+        // let the next pass that rolls over the line stand as a goal.
+        self.last_shot_struck_tick = 0;
     }
 
     /// Stamp the giveaway tracker for the player who just lost the ball

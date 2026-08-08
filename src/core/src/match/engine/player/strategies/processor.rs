@@ -124,6 +124,20 @@ impl PlayerFieldPositionGroup {
         }
     }
 
+    /// Which side a player is on, from the live position store. Returns
+    /// `None` for an id that isn't on the pitch, which compares unequal
+    /// to any real side — the safe answer for the receiving override.
+    #[inline]
+    fn side_of(player_id: u32, tick_context: &GameTickContext) -> Option<PlayerSide> {
+        tick_context
+            .positions
+            .players
+            .as_slice()
+            .iter()
+            .find(|e| e.player_id == player_id)
+            .map(|e| e.side)
+    }
+
     /// True when this player is in TakeBall but another teammate is
     /// strictly-closer to the ball. Releases the chase so the pack doesn't
     /// accumulate ex-chasers who overshot or got passed by the ball.
@@ -154,6 +168,20 @@ impl PlayerFieldPositionGroup {
         // handle the transition to Running. Don't front-run it.
         if tick_context.ball.is_owned {
             return false;
+        }
+        // Mirror of the receiving rule in `should_force_takeball`: the
+        // intended receiver holds the chase however close a teammate
+        // gets, and his teammates drop it. The two must agree or a
+        // player oscillates between being forced in and yielded out.
+        if tick_context.ball.is_in_flight_state > 0 {
+            if let Some(target_id) = tick_context.ball.pass_target {
+                if target_id == player.id {
+                    return false;
+                }
+                if Self::side_of(target_id, tick_context) == player.side {
+                    return true;
+                }
+            }
         }
         let Some(my_side) = player.side else {
             return false;
@@ -257,6 +285,22 @@ impl PlayerFieldPositionGroup {
         // Ball must actually be loose.
         if tick_context.ball.is_owned {
             return false;
+        }
+
+        // A pass in the air belongs to its target — see the deadlock
+        // described on `BallMetadata::pass_target`. He is his side's
+        // chaser and his teammates stand off; the defending side keeps
+        // its normal designation so it can contest the ball the moment
+        // it comes free.
+        if tick_context.ball.is_in_flight_state > 0 {
+            if let Some(target_id) = tick_context.ball.pass_target {
+                if target_id == player.id {
+                    return true;
+                }
+                if Self::side_of(target_id, tick_context) == player.side {
+                    return false;
+                }
+            }
         }
 
         // See `should_yield_takeball` for why landing position is

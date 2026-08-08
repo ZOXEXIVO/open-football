@@ -35,6 +35,18 @@ use nalgebra::Vector3;
 /// That made this the DOMINANT save path (population save% sat at
 /// 77.7% vs real 67% even after the physics roll was latched to one
 /// roll per shot) and made every `skill_mult` retune inert.
+/// LEFT AT 54 after the 2026-08 possession fix, deliberately. Shots now
+/// stay live for their projected flight rather than a flat 40 ticks, so
+/// the keeper's residency here did grow and the population save rate rose
+/// with it (79.7% against a real ~67%). Re-deriving the constant upward
+/// was tried and REVERTED: 54 → 75 → 110 cut the save rate as expected
+/// but did not add a single goal, because the shots the keeper stops
+/// catching were not goal-bound — they miss instead. All it moved was the
+/// engine's on-target rate, which is defined as (saves + goals) and so
+/// falls one-for-one with saves. 54 measures on-target at 33.5% against a
+/// real 33%; 75 gives 29.4% and 110 gives 24.3%, for the same goals.
+/// Treat the save-rate gap as a symptom of the keeper collecting shots
+/// that were missing anyway, not as a lever on the scoreline.
 const EXPECTED_SAVE_TICKS: f32 = 54.0;
 
 #[derive(Default, Clone)]

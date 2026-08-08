@@ -108,11 +108,14 @@ impl TeamOfTheYearTick {
                         matches_played: agg.matches_played,
                         goals: agg.goals,
                         assists: agg.assists,
-                        // Team-of-the-Year is a calendar-year XI: the
-                        // regressed value protects the listing from the
-                        // small-sample late-season callup who happens
-                        // to top the raw board.
-                        average_rating: agg.realistic_average_rating(),
+                        // Printed value is the plain mean, matching the
+                        // weekly / monthly award tables and the player
+                        // pages. Protection against the small-sample
+                        // late-season callup who tops the raw board is
+                        // already applied where it belongs: the
+                        // `min_apps` gate above, and the regressed
+                        // `score` that picked this XI.
+                        average_rating: agg.average_rating(),
                     });
                 }
                 Some(PendingTeamOfYear {

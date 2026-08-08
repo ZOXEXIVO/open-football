@@ -13,6 +13,116 @@ use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
 use crate::match_log_debug;
 use nalgebra::Vector3;
 
+/// Where the ball actually is when a pass is booked as received, and
+/// how often the delivery is then thrown away.
+///
+/// `try_pass_target_claim` grants ownership at up to 100u, but
+/// `Ball::move_to` only tracks the ball to an owner within 15u and
+/// drops ownership beyond that. Any reception in the gap is credited
+/// as a completed pass and then immediately released as a loose ball.
+#[cfg(feature = "match-logs")]
+pub mod reception_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub const BANDS: usize = 5;
+    /// Upper bound of each band, in game units (1u = 0.125m).
+    pub const BAND_EDGES: [f32; BANDS] = [2.0, 15.0, 30.0, 60.0, f32::MAX];
+    pub const BAND_NAMES: [&str; BANDS] = ["<2u", "2-15u", "15-30u", "30-60u", ">60u"];
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    /// Receptions by receiver-to-ball distance at claim time.
+    pub static AT_DISTANCE: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Ownership dropped by `move_to` because the owner was >15u away.
+    pub static OWNER_TOO_FAR: AtomicU64 = AtomicU64::new(0);
+    /// Passes emitted.
+    pub static EMITTED: AtomicU64 = AtomicU64::new(0);
+    /// Passes emitted while a previous pass was still unresolved — the
+    /// earlier one can never be credited, so it books as a failure.
+    pub static SUPERSEDED: AtomicU64 = AtomicU64::new(0);
+    /// Pass window ended because the ball went dead (out of play, foul,
+    /// restart) with nobody having taken control.
+    pub static DIED_DEAD_BALL: AtomicU64 = AtomicU64::new(0);
+    /// `PassTo` events rejected because the ball was out of the
+    /// passer's reach.
+    pub static OUT_OF_REACH: AtomicU64 = AtomicU64::new(0);
+
+    // ── Shot fate ────────────────────────────────────────────────────
+    // ~80% of shots are AIMED between the posts (`on_target` at emit),
+    // yet only ~23% ever resolve as a save or a goal. These say where
+    // the rest end up.
+    /// Shot crossed the endline outside the posts.
+    pub static SHOT_WIDE: AtomicU64 = AtomicU64::new(0);
+    /// Shot crossed inside the posts but over the bar.
+    pub static SHOT_OVER: AtomicU64 = AtomicU64::new(0);
+    /// Somebody took control of the ball while the shot was still live.
+    pub static SHOT_CLAIMED: AtomicU64 = AtomicU64::new(0);
+    /// Shot emitted with NO projected goal-line target — the keeper can
+    /// never engage it and no save/goal accounting reaches it.
+    pub static SHOT_NO_TARGET: AtomicU64 = AtomicU64::new(0);
+    /// Ball crossed the goal line but `check_goal` refused it (no recent
+    /// shot on record and no live shot target).
+    pub static GOAL_REJECTED: AtomicU64 = AtomicU64::new(0);
+
+    pub fn shot_fate_snapshot() -> (u64, u64, u64, u64, u64) {
+        (
+            SHOT_WIDE.load(Ordering::Relaxed),
+            SHOT_OVER.load(Ordering::Relaxed),
+            SHOT_CLAIMED.load(Ordering::Relaxed),
+            SHOT_NO_TARGET.load(Ordering::Relaxed),
+            GOAL_REJECTED.load(Ordering::Relaxed),
+        )
+    }
+
+    pub fn band_for(distance: f32) -> usize {
+        BAND_EDGES
+            .iter()
+            .position(|&e| distance < e)
+            .unwrap_or(BANDS - 1)
+    }
+
+    pub fn record(distance: f32) {
+        AT_DISTANCE[band_for(distance)].fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn reset() {
+        for c in AT_DISTANCE.iter() {
+            c.store(0, Ordering::Relaxed);
+        }
+        for c in [
+            &OWNER_TOO_FAR,
+            &EMITTED,
+            &SUPERSEDED,
+            &DIED_DEAD_BALL,
+            &OUT_OF_REACH,
+            &SHOT_WIDE,
+            &SHOT_OVER,
+            &SHOT_CLAIMED,
+            &SHOT_NO_TARGET,
+            &GOAL_REJECTED,
+        ] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// `(per-band reception counts, owner-too-far drops)`
+    pub fn snapshot() -> ([u64; BANDS], u64) {
+        let mut out = [0u64; BANDS];
+        for (i, c) in AT_DISTANCE.iter().enumerate() {
+            out[i] = c.load(Ordering::Relaxed);
+        }
+        (out, OWNER_TOO_FAR.load(Ordering::Relaxed))
+    }
+
+    /// `(emitted, superseded, died_dead_ball, out_of_reach)`
+    pub fn pass_outcome_snapshot() -> (u64, u64, u64, u64) {
+        (
+            EMITTED.load(Ordering::Relaxed),
+            SUPERSEDED.load(Ordering::Relaxed),
+            DIED_DEAD_BALL.load(Ordering::Relaxed),
+            OUT_OF_REACH.load(Ordering::Relaxed),
+        )
+    }
+}
+
 /// Result of the first-touch resolution at the moment a pass target
 /// receives the ball. `Clean` keeps the legacy instant-control flow;
 /// the other two leave the ball live and contestable.
@@ -200,32 +310,28 @@ impl Ball {
         // Check if pass target can claim the ball
         if let Some(target_id) = self.pass_target_player_id {
             if let Some(target_player) = players.iter().find(|p| p.id == target_id) {
-                // Use cached landing position for aerial balls, current position for ground balls
-                let effective_ball_pos = if self.is_aerial() {
-                    self.cached_landing_position
-                } else {
-                    self.position
-                };
-
-                let dx = target_player.position.x - effective_ball_pos.x;
-                let dy = target_player.position.y - effective_ball_pos.y;
+                // Distance to the BALL, not to where it is going to land.
+                // The landing-point variant let the intended receiver take
+                // ownership while the ball was still in the air on the far
+                // side of the pass — see `CONTROL_DISTANCE`. His priority
+                // over the delivery is enforced by `pass_target_player_id`
+                // plus the in-flight window, which is where it belongs;
+                // taking CONTROL has to wait for the ball to arrive.
+                let dx = target_player.position.x - self.position.x;
+                let dy = target_player.position.y - self.position.y;
                 let dist_sq = dx * dx + dy * dy;
 
-                // Receiver claim radius. Historical tuning showed the
-                // accuracy metric rose monotonically with this radius
-                // (14u→21%, 20u→38%, 26u→47%, 32u→72%, 40u→85%) BEFORE
-                // an unrelated lengthening of ball physics flight time —
-                // friction 0.985/tick and overshoot 1.15-1.65 now mean
-                // the ball takes 60-140 ticks to arrive vs the legacy
-                // 30-60. The receiver's predicted landing point drifts
-                // over those extra ticks (lead estimate ÷ actual time
-                // ratio shifted), so the same stride radius captures
-                // fewer arrivals. Lifted 40 → 100u (~12.5m, four strides)
-                // to compensate. Still strictly gated by
-                // `pass_target_player_id` — opponents can't poach during
-                // in-flight, so a wider radius only helps the *intended*
-                // receiver catch up to mid-flight passes.
-                const RECEIVER_CLAIM_DISTANCE_SQ: f32 = 100.0 * 100.0;
+                // Receiver claim radius = real control distance.
+                //
+                // This was 100u, chosen because widening it made the pass
+                // ACCURACY metric climb (14u→21%, 20u→38%, 32u→72%,
+                // 40u→85%). That reading was an artefact: the metric
+                // counts claims, and a claim beyond `MAX_OWNER_TRACK_DISTANCE`
+                // is immediately undone by `move_to`, so the wider radius
+                // bought completion events rather than completed passes.
+                // See `CONTROL_DISTANCE` for the full measurement.
+                const RECEIVER_CLAIM_DISTANCE_SQ: f32 =
+                    super::CONTROL_DISTANCE * super::CONTROL_DISTANCE;
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
                 if dist_sq < RECEIVER_CLAIM_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT {
@@ -293,6 +399,12 @@ impl Ball {
                     // receiver to survive the initial close-down without
                     // shutting the game off to defensive pressure entirely.
                     self.claim_cooldown = self.claim_cooldown.max(150);
+                    #[cfg(feature = "match-logs")]
+                    reception_diag::record(
+                        ((target_player.position.x - self.position.x).powi(2)
+                            + (target_player.position.y - self.position.y).powi(2))
+                        .sqrt(),
+                    );
                     if let Some(pid) = passer_id {
                         events.add_ball_event(BallEvent::PassCompleted(target_id, pid));
                     } else {
@@ -811,13 +923,12 @@ impl Ball {
                 let dy = target_player.position.y - self.position.y;
                 let dist_sq = dx * dx + dy * dy;
 
-                // Matches try_pass_target_claim; see rationale there.
-                // Lifted in step with the in-flight claim radius so the
-                // priority window doesn't shrink the moment in_flight_state
-                // hits zero — that transition was producing pass failures
-                // where the receiver was 80-100u from the ball when flight
-                // expired but the priority cap of 80u rejected the claim.
-                const RECEIVER_PRIORITY_DISTANCE_SQ: f32 = 100.0 * 100.0;
+                // Matches try_pass_target_claim; see rationale there. The
+                // receiver's PRIORITY over the delivery lasts as long as
+                // `pass_target_player_id` is set, but taking control still
+                // needs the ball to be within reach.
+                const RECEIVER_PRIORITY_DISTANCE_SQ: f32 =
+                    super::CONTROL_DISTANCE * super::CONTROL_DISTANCE;
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
                 if dist_sq < RECEIVER_PRIORITY_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT
@@ -848,6 +959,8 @@ impl Ball {
                     self.pass_target_player_id = None;
                     self.ownership_duration = 0;
                     self.claim_cooldown = 15;
+                    #[cfg(feature = "match-logs")]
+                    reception_diag::record(dist_sq.sqrt());
                     if let Some(pid) = passer_id.filter(|&id| id != target_id) {
                         events.add_ball_event(BallEvent::PassCompleted(target_id, pid));
                     } else {

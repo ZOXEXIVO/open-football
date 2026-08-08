@@ -5347,15 +5347,18 @@ fn four_week_calibration_spread_across_positions_and_profiles() {
     );
 }
 
-// ── End-to-end: reported 9-app 8.2-prospect bug ───────────────
+// ── End-to-end: the two rating currencies ─────────────────────
 //
 // Drives the same `on_match_played` pipeline a real simulator turn
-// uses, then asserts that the display surface and decision surfaces
-// both render the realistic value. Catches regressions where a future
-// edit re-introduces a raw `average_rating_str()` consumer.
+// uses, then asserts the split holds end to end: the *display* helper
+// reports the plain mean (FM's `Av Rat`, reconcilable against the
+// match list), while the *judgement* helper regresses a small sample
+// toward the positional neutral. Catches regressions in either
+// direction — a display surface quietly re-adopting the regressed
+// value, or a decision surface losing its small-sample protection.
 
 #[test]
-fn nine_starts_at_eight_two_display_below_seven_six() {
+fn nine_starts_at_eight_two_display_raw_but_judge_regressed() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     let s = stats(8.2, 0, 0, 0, PlayerFieldPositionGroup::Forward);
     let o = outcome(
@@ -5382,21 +5385,24 @@ fn nine_starts_at_eight_two_display_below_seven_six() {
         raw
     );
 
-    // The public *display* helper — the one the web layer uses —
-    // must report the regressed value, NOT the raw 8.20.
-    let displayed = p
-        .statistics
-        .display_average_rating(PlayerFieldPositionGroup::Forward);
-    let parsed: f32 = displayed.parse().unwrap();
-    assert!(
-        parsed < 7.6,
-        "9-app 8.2 forward must display under 7.60 (regressed). got {}",
-        displayed
+    // The public *display* helper — the one the web layer uses — shows
+    // what actually happened: nine 8.2s average 8.20.
+    assert_eq!(
+        p.statistics.display_average_rating(),
+        "8.20",
+        "display must be the plain mean over rated appearances"
     );
+
+    // The judgement currency still regresses the nine-app sample
+    // toward the forward neutral, so scouting / awards / contracts
+    // don't treat it as a settled 8.2.
+    let judged = p
+        .statistics
+        .average_rating_realistic(PlayerFieldPositionGroup::Forward);
     assert!(
-        parsed > 7.0,
-        "regressed value should still be clearly above neutral. got {}",
-        displayed
+        judged < 7.6 && judged > 7.0,
+        "9-app 8.2 forward must be judged at ~7.25, got {}",
+        judged
     );
 }
 

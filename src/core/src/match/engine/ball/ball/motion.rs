@@ -138,7 +138,7 @@ impl Ball {
         // 2. Ball has an owner (claimed)
         // Maximum distance owner can be from ball - must match deadlock claim distances
         // This allows deadlock resolution while preventing truly absurd teleports
-        const MAX_OWNER_TELEPORT_DISTANCE: f32 = 15.0;
+        const MAX_OWNER_TELEPORT_DISTANCE: f32 = super::MAX_OWNER_TRACK_DISTANCE;
         const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 =
             MAX_OWNER_TELEPORT_DISTANCE * MAX_OWNER_TELEPORT_DISTANCE;
 
@@ -185,6 +185,9 @@ impl Ball {
             } else {
                 // Owner is too far - this shouldn't happen but is a safety net
                 // Clear ownership and let ball move naturally
+                #[cfg(feature = "match-logs")]
+                super::ownership::reception_diag::OWNER_TOO_FAR
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.previous_owner = self.current_owner;
                 self.current_owner = None;
                 self.ownership_duration = 0;
@@ -211,7 +214,8 @@ impl Ball {
     }
 
     pub(super) fn move_to_with_players(&mut self, players: &[MatchPlayer]) {
-        const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 = 15.0 * 15.0;
+        const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 =
+            super::MAX_OWNER_TRACK_DISTANCE * super::MAX_OWNER_TRACK_DISTANCE;
         const BALL_TRACK_SPEED: f32 = 1.5;
         const SNAP_DISTANCE_SQUARED: f32 = 2.0 * 2.0;
 
@@ -234,6 +238,9 @@ impl Ball {
                         self.velocity = Vector3::zeros();
                     }
                 } else {
+                    #[cfg(feature = "match-logs")]
+                    super::ownership::reception_diag::OWNER_TOO_FAR
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     self.previous_owner = self.current_owner;
                     self.current_owner = None;
                     self.ownership_duration = 0;

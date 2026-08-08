@@ -117,7 +117,6 @@ pub async fn team_stats_action(
     let players: Vec<TeamPlayerStats> = raw_players
         .iter()
         .map(|(p, _)| {
-            let pos = p.position().position_group();
             TeamPlayerStats {
                 slug: p.slug(),
                 last_name: p.full_name.display_last_name().to_string(),
@@ -132,7 +131,9 @@ pub async fn team_stats_action(
                 shots_on_target: p.statistics.shots_on_target,
                 passes: p.statistics.passes,
                 tackling: p.statistics.tackling,
-                average_rating: p.statistics.display_average_rating(pos),
+                // Printed value is the plain mean; the ordering above is
+                // what keeps a one-cap 8.2 off the top of the table.
+                average_rating: p.statistics.display_average_rating(),
             }
         })
         .collect();

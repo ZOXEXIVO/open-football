@@ -78,6 +78,8 @@ impl Ball {
         self.recent_passers.clear();
         self.cached_shot_target = None;
         self.offside_snapshot = None;
+        // Dead ball — see `clear_open_play_metadata`.
+        self.clear_open_play_metadata();
         self.pass_origin_restart = PassOriginRestart::ThrowIn;
 
         let team_id = players
