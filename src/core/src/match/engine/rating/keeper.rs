@@ -220,7 +220,7 @@ const DEFENSIVE_OUTCOME: f32 = 0.30;
 /// slightly *below* where the old symmetric 0.18 had it. Real ratings
 /// treat a quiet clean sheet as "did his job" — which is the anchor, not
 /// a bonus.
-const CLEAN_SHEET_DAMP: f32 = 0.50;
+const CLEAN_SHEET_DAMP: f32 = 0.15;
 
 /// Team result, in goals. Deliberately tiny: a keeper is on the same
 /// pitch as ten other players and the scoreline at the other end is not
