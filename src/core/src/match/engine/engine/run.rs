@@ -137,8 +137,19 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // calls) stacks on top via `RefereeProfile::home_bias`.
         let home_edge = (context.environment.crowd_intensity * context.environment.home_advantage)
             .clamp(0.0, 1.0);
-        let home_arousal = 1.0 + 0.12 * home_edge;
-        let away_arousal = 1.0 - 0.07 * home_edge;
+        // Re-titrated 2026-08-08 (0.12 / 0.07 → 0.26 / 0.15). The
+        // comment above records a titration against the engine's
+        // measured response, and that response moved: with defenders
+        // finally getting goal-side of the ball (`DefensiveRecovery`) a
+        // small effective-skill edge converts into far fewer goals than
+        // it did when every shot was a one-on-one with the keeper.
+        // Re-measured over 3000 matches at the old values the home edge
+        // had decayed to **+0.097 goals/match against a real +0.35**,
+        // with results at 35.6 / 36.3 / 28.1 against this module's own
+        // documented target of 42-48 / 23-30 / 27-34 — home wins 7pp
+        // short and draws 6pp long.
+        let home_arousal = 1.0 + 0.26 * home_edge;
+        let away_arousal = 1.0 - 0.15 * home_edge;
         let home_team_id = field.home_team_id;
         for p in field.players.iter_mut().chain(field.substitutes.iter_mut()) {
             p.crowd_arousal = if p.team_id == home_team_id {
