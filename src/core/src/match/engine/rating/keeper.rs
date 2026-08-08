@@ -201,7 +201,26 @@ const REF_CONCEDED_PER_90: f32 = 1.15;
 /// reached 7.70 against a WhoScored/FM reference of 7.2-7.5, because the
 /// shutout credit stacks on shot-stopping that already paid for the
 /// saves which produced it.
-const DEFENSIVE_OUTCOME: f32 = 0.18;
+const DEFENSIVE_OUTCOME: f32 = 0.30;
+
+/// How much of the outcome term survives on its POSITIVE side — conceding
+/// fewer than a league-average night.
+///
+/// The term used to be symmetric, and real keeper ratings are not:
+/// shipping three is bad however busy you were, while a clean sheet in
+/// which you touched the ball twice is unremarkable. Measured on the
+/// per-match grid (`faced` × `conceded`, ordinary-difficulty strikes),
+/// the symmetric form forced a choice between two wrong answers —
+/// at weight 0.18 a keeper conceding **3 from 12 rated 6.79**, above the
+/// population anchor, and raising the weight to 0.30 fixed that but
+/// pushed a **two-save clean sheet to 7.37** against a real ~6.95.
+///
+/// Damping only the upside gets both: the concession side keeps the full
+/// 0.30 that stops volume outrunning goals, and the shutout side lands
+/// slightly *below* where the old symmetric 0.18 had it. Real ratings
+/// treat a quiet clean sheet as "did his job" — which is the anchor, not
+/// a bonus.
+const CLEAN_SHEET_DAMP: f32 = 0.50;
 
 /// Team result, in goals. Deliberately tiny: a keeper is on the same
 /// pitch as ten other players and the scoreline at the other end is not
@@ -261,7 +280,13 @@ impl<'a> RatingContext<'a> {
         // is the only term that reads goals conceded without dividing by
         // the workload that produced them — see `DEFENSIVE_OUTCOME` for
         // why the model is blind in the middle of the ladder without it.
-        value += DEFENSIVE_OUTCOME * (REF_CONCEDED_PER_90 * share - self.keeper_conceded() as f32);
+        let outcome = REF_CONCEDED_PER_90 * share - self.keeper_conceded() as f32;
+        value += DEFENSIVE_OUTCOME
+            * if outcome > 0.0 {
+                outcome * CLEAN_SHEET_DAMP
+            } else {
+                outcome
+            };
         value += if self.team_goals > self.opponent_goals {
             WIN * share
         } else if self.team_goals < self.opponent_goals {
