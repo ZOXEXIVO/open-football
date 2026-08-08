@@ -240,13 +240,24 @@ pub async fn player_history_action(
     // `player_history_rows` groups on so each main row can find its
     // own per-competition lines. Pre-build the i18n labels here so the
     // template only renders strings.
-    let to_history_stats = |stats: &PlayerStatistics| PlayerHistoryStats {
+    // Sample-size-regressed, not raw. `display_average_rating` is the
+    // documented preferred API for table rendering precisely so a tiny
+    // sample can't shout: at `RELIABILITY_GAMES = 12` a three-match run
+    // keeps only 3/15 of its distance from the positional neutral, so a
+    // keeper who kept one clean sheet in three stopped reading 7.34 and
+    // reads 6.79 — the number a reader would actually stand behind.
+    //
+    // This row was silently using the raw value while `teams/stats` and
+    // `leagues/get` used the regressed one, so the SAME player showed
+    // two different averages depending on which page you opened.
+    let position_group = player.position().position_group();
+    let to_history_stats = move |stats: &PlayerStatistics| PlayerHistoryStats {
         played: stats.played,
         played_subs: stats.played_subs,
         goals: stats.goals,
         assists: stats.assists,
         player_of_the_match: stats.player_of_the_match,
-        average_rating: core::PlayerStatistics::format_rating(stats.average_rating),
+        average_rating: stats.display_average_rating(position_group),
         conceded: stats.conceded,
         clean_sheets: stats.clean_sheets,
     };

@@ -812,6 +812,7 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
     /// list, top-rated, scouting, awards) where small-sample inflation
     /// distorts comparisons.
     fn build(&self, player: &Player, team: Option<&Team>) -> Vec<CompetitionStatisticsRow> {
+        let position_group = player.position().position_group();
         let domestic_override = self.domestic_cup_override(player);
         let live_cups: Vec<LiveCupSlice<'_>> = player
             .cup_statistics_by_competition
@@ -852,7 +853,7 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
                             &row.competition_name,
                             "league",
                         ),
-                        stats: Self::to_dto(&row.statistics),
+                        stats: Self::to_dto(&row.statistics, position_group),
                     });
                 }
                 PlayerStatCompetitionKind::Friendly => {
@@ -862,14 +863,14 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
                             "",
                             "friendly",
                         ),
-                        stats: Self::to_dto(&row.statistics),
+                        stats: Self::to_dto(&row.statistics, position_group),
                     });
                 }
                 PlayerStatCompetitionKind::DomesticCup
                 | PlayerStatCompetitionKind::ContinentalCup => {
                     cups.push(CompetitionStatisticsRow {
                         competition_name: row.competition_name,
-                        stats: Self::to_dto(&row.statistics),
+                        stats: Self::to_dto(&row.statistics, position_group),
                     });
                 }
             }
@@ -888,7 +889,7 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
         // reader which competition the player is registered for.
         ordered.push(league.unwrap_or_else(|| CompetitionStatisticsRow {
             competition_name: self.i18n.t("league").to_string(),
-            stats: self.empty_dto(),
+            stats: Self::empty_dto(position_group),
         }));
         ordered
     }
@@ -965,7 +966,10 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
         }
     }
 
-    fn to_dto(s: &core::PlayerStatistics) -> PlayerStatistics {
+    fn to_dto(
+        s: &core::PlayerStatistics,
+        position_group: core::PlayerFieldPositionGroup,
+    ) -> PlayerStatistics {
         PlayerStatistics {
             played: s.played,
             played_subs: s.played_subs,
@@ -978,14 +982,14 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
             shots_on_target: s.shots_on_target,
             tackling: s.tackling,
             passes: s.passes,
-            average_rating: s.average_rating_str(),
+            average_rating: s.display_average_rating(position_group),
             conceded: s.conceded,
             clean_sheets: s.clean_sheets,
         }
     }
 
-    fn empty_dto(&self) -> PlayerStatistics {
-        Self::to_dto(&core::PlayerStatistics::default())
+    fn empty_dto(position_group: core::PlayerFieldPositionGroup) -> PlayerStatistics {
+        Self::to_dto(&core::PlayerStatistics::default(), position_group)
     }
 }
 

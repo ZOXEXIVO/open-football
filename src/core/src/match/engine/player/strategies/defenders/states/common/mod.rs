@@ -5,7 +5,6 @@ use crate::r#match::engine::player::strategies::common::{
     JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD,
 };
 use crate::r#match::player::strategies::players::DefensiveRole;
-use nalgebra::Vector3;
 
 /// The one rule every defender obeys regardless of which state he is in:
 /// **do not let the ball sit behind you.**
