@@ -1,5 +1,5 @@
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::engine::ball::ball::PossessionSource;
+use crate::r#match::engine::ball::ball::{GROUND_FRICTION, PossessionSource};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::interactions::block_diag::BlockDiag;
 use crate::r#match::engine::ball::ball::interactions::SaveModel;
@@ -721,6 +721,8 @@ impl PlayerEventDispatcher {
                 }
                 field.ball.pending_pass_passer = Some(passer_id);
                 field.ball.pending_pass_set_tick = context.current_tick();
+                // Fresh pass, fresh interception attempt.
+                field.ball.intercept_rolled = false;
                 field.ball.pending_pass_origin = Some(passer_position);
                 field.ball.pending_pass_target = Some(pass_target);
                 field.ball.pending_pass_was_cross = was_cross;
@@ -1977,12 +1979,26 @@ impl PlayerEventDispatcher {
         // Sizing the window to match the physical flight time keeps the
         // receiver's priority through arrival; defenders still get the
         // ball when the receiver doesn't actually reach the landing spot.
-        let flight_protection = if actual_horizontal_distance < 30.0 {
-            120
-        } else if actual_horizontal_distance < 80.0 {
-            180
-        } else {
-            240
+        // Size the window to the ball's ACTUAL flight rather than to a
+        // distance band. Solving `d(T) = v0 (1 - k^T) / (1 - k)` for T
+        // gives the tick the ball reaches its target; the fixed
+        // 120/180/240 bands were hand-fitted to the old friction and
+        // under-covered the longer, more realistic flights the fixed
+        // `GROUND_FRICTION` produces. An expired window is not harmless:
+        // it ends the receiver's exclusive claim mid-pass and lets the
+        // ball be taken in open play — the same failure the shot path
+        // had (see the `ticks_to_goal` window in `handle_shoot_event`).
+        // 1.35 margin absorbs the receiver's last stride.
+        let flight_protection = {
+            let v0 = horizontal_velocity.norm().max(0.01);
+            let decay_fraction = actual_horizontal_distance * GROUND_FRICTION / v0;
+            if decay_fraction >= 0.95 {
+                // Struck barely hard enough to arrive — hold it open.
+                400
+            } else {
+                let ticks = (1.0 - decay_fraction).ln() / (1.0 - GROUND_FRICTION).ln() * 1.35;
+                (ticks as usize).clamp(60, 400)
+            }
         };
         field.ball.flags.in_flight_state = flight_protection;
     }
@@ -2001,31 +2017,34 @@ impl PlayerEventDispatcher {
             + ball_pass_vector.y * ball_pass_vector.y)
             .sqrt();
 
-        // Calculate velocity needed to reach target accounting for friction and air drag
-        // With ground friction factor 0.985/tick, total roll distance = v0 / 0.015
-        // So v0 = distance * 0.015 for ground passes
-        // Lofted passes experience air drag (proportional to v²) which bleeds much more speed,
-        // plus 5% horizontal loss on each bounce — so longer passes need more overshoot
-        const GROUND_FRICTION: f32 = 0.006;
+        // Weight the pass to ARRIVE, at a speed its man can take.
+        //
+        // The old model inverted the friction curve to make the ball's
+        // total roll distance `distance * overshoot`, with an overshoot
+        // table of 1.79-2.57 — every pass deliberately struck 79-157%
+        // too far so it would still be moving when it got there. That was
+        // a workaround for friction ~3.7× stronger than real grass (see
+        // `GROUND_FRICTION`): with the ball dying that fast, a pass
+        // weighted to its man arrived at walking pace, so the code hit it
+        // 5-12 m past him instead. It was invisible while a reception was
+        // credited at 100u — the pass was "complete" long before the ball
+        // ran through — and it is a large part of why an honest pass
+        // accuracy measured 34% against a real 85%.
+        //
+        // With realistic friction the ball keeps its pace on its own, so
+        // the strike speed can just be the speed a real player would use.
+        // Real ground passes leave the foot at ~8 m/s for a short ball
+        // and ~25 m/s for a raking one; at 1u = 0.125 m and 10 ms a tick
+        // that band is 0.64-2.0 u/tick.
+        const BASE_SPEED: f32 = 0.55;
+        const SPEED_PER_UNIT: f32 = 0.0028;
+        let delivery_speed = (BASE_SPEED + distance * SPEED_PER_UNIT).clamp(0.50, 2.20);
 
-        // Distance-dependent overshoot: short passes need little extra,
-        // long passes need significantly more to compensate for air drag and bounce losses
-        // Overshoot scaled by 1.56 alongside the 2.5x friction cut so
-        // ground-pass FLIGHT TIME is unchanged (t = -ln(1-1/overshoot)/k)
-        // while the reachable distance rises from 23m to ~37m. The ball
-        // now also arrives with real residual pace (~44% of strike speed
-        // rather than 13%), so receptions are contestable.
-        let overshoot = if distance < 50.0 {
-            1.79 // Short: ground friction only
-        } else if distance < 100.0 {
-            1.95 // Medium: slight air drag on lofted balls
-        } else if distance < 200.0 {
-            2.26 // Long: significant air drag compensation
-        } else {
-            2.57 // Very long: heavy air drag + multiple bounces
-        };
-
-        let needed_velocity = distance * GROUND_FRICTION * overshoot;
+        // Floor: the ball stops after `v / friction` units, so a pass
+        // struck too softly for its distance never arrives at all. Keep a
+        // margin over the bare minimum.
+        let min_arriving_speed = distance * GROUND_FRICTION * 1.25;
+        let needed_velocity = delivery_speed.max(min_arriving_speed);
 
         // pass_force (0.3-2.0) modulates: skilled players weight the pass better
         // Normalize to 0.90-1.1 range so it fine-tunes rather than drives the physics

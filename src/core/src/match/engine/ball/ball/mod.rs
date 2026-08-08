@@ -182,6 +182,25 @@ pub mod assist_diag {
     }
 }
 
+/// Per-tick rolling-friction decay for a ball on the ground: each tick
+/// its horizontal speed is multiplied by `1 - GROUND_FRICTION`.
+///
+/// Derived from the real figure rather than fitted: a football on grass
+/// loses roughly **15% of its speed per second**. At 100 ticks to the
+/// second that is `k^100 = 0.85`, so `k = 0.85^(1/100) = 0.998375` and
+/// the coefficient is 0.001625.
+///
+/// It was 0.006 — a 45%/s loss, ~3.7× real. That single number is why
+/// `calculate_horizontal_velocity` had to aim every pass 79-157% BEYOND
+/// its target (the old `overshoot` table): with the ball dying that fast,
+/// a pass weighted to arrive at its man arrived at walking pace or not at
+/// all, so the code compensated by hitting it 5-12 m too far. Both halves
+/// are fixed together; neither works alone.
+///
+/// Shared so the physics and the pass-weighting can never disagree again
+/// — they were separate literals in `motion.rs` and `players.rs`.
+pub const GROUND_FRICTION: f32 = 0.0016;
+
 /// How close a player must be to the ball to take control of it, in game
 /// units (1u = 0.125 m, so this is 1.5 m — one stride, a real first-touch
 /// distance).
@@ -320,8 +339,14 @@ pub struct Ball {
     /// How `current_owner` came by the ball. See [`PossessionSource`].
     pub possession_source: PossessionSource,
     /// Who `possession_source` describes, so a repeat event for the
-    /// player who already has the ball can't relabel their acquisition.
+    /// player who already has the ball cannot relabel their acquisition.
     pub possession_source_for: Option<u32>,
+    /// Whether the current pass has already had its one interception
+    /// attempt. Mirrors `ShotTarget::block_rolled`: without a latch the
+    /// intercept test fires every tick the ball is in flight, so its
+    /// rate is set by how long the flight window happens to be rather
+    /// than by the defending. Reset when a pass is struck.
+    pub intercept_rolled: bool,
     pub contested_claim_count: u32,
     pub unowned_ticks: u32,
     /// Snapshot captured at the moment the ball became uncontrolled — ball
@@ -632,6 +657,7 @@ impl Ball {
             recent_passers: VecDeque::with_capacity(5),
             possession_source: PossessionSource::Unknown,
             possession_source_for: None,
+            intercept_rolled: false,
             contested_claim_count: 0,
             unowned_ticks: 0,
             stall_start_snapshot: None,
@@ -1042,6 +1068,7 @@ impl Ball {
         self.clear_pass_history();
         self.possession_source = PossessionSource::Unknown;
         self.possession_source_for = None;
+        self.intercept_rolled = false;
         self.contested_claim_count = 0;
         self.unowned_ticks = 0;
         self.cached_landing_position = self.position;

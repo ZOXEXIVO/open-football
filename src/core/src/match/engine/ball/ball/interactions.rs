@@ -450,9 +450,20 @@ impl Ball {
             None => return,
         };
 
-        // Ball velocity determines the interception corridor width
+        // Ball velocity determines the interception corridor width.
+        //
+        // The floor only exists to hand a near-stationary ball to normal
+        // claiming — it is not a calibration knob. It was `speed < 1.0`,
+        // set when passes were struck at 0.5-2.7 u/tick under friction
+        // ~3.7× real. With `GROUND_FRICTION` corrected, a real pass now
+        // leaves the foot at 0.5-2.2 and arrives slower still, so a 1.0
+        // floor excluded most passes outright and interceptions fell from
+        // 37 to 2.6 per team against a real ~10. 0.25 u/tick is 3.1 m/s —
+        // the same physical meaning of "the ball is actually travelling"
+        // that 1.0 carried before the units moved under it.
+        const MIN_INTERCEPTABLE_SPEED: f32 = 0.25;
         let ball_speed_sq = self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y;
-        if ball_speed_sq < 1.0 {
+        if ball_speed_sq < MIN_INTERCEPTABLE_SPEED * MIN_INTERCEPTABLE_SPEED {
             return; // Ball too slow, normal claiming handles it
         }
 
@@ -528,20 +539,43 @@ impl Ball {
             }
         }
 
-        // Deterministic threshold. Avg defender (skill 0.5) at 60% of
-        // reach with a typical pass score ~0.040 — just above the bar —
-        // so most in-path defenders qualify, but peripheral ones don't.
+        // ONE PASS, ONE ATTEMPT — and it is a roll, not a threshold.
         //
-        // Stat-line note: population interceptions/team/match measures
-        // ~120 vs the ~10 real-football target. ~3× of that comes from
-        // the flight-protection extension (40→120 ticks) tripling the
-        // per-pass intercept window; the rest from pass-volume inflation
-        // (~1000 attempts/team vs real ~500). Raising the threshold to
-        // suppress this inflated goals/match dramatically (it acts as a
-        // population-wide pass-success governor), so the cosmetic stat
-        // inflation is accepted in favour of in-band goals + draws.
-        if best_chance > 0.030 {
-            if let Some(interceptor_id) = best_interceptor {
+        // This used to fire deterministically whenever `best_chance`
+        // cleared 0.030, re-evaluated every tick the ball was in flight.
+        // That made the interception RATE a function of how long the
+        // flight window happened to be rather than of the defending, and
+        // the previous note here recorded the consequence honestly: ~120
+        // interceptions per team against a real ~10, "~3× of that from
+        // the flight-protection extension tripling the per-pass intercept
+        // window". Correcting `GROUND_FRICTION` made the flights longer
+        // and more realistic still, and the deterministic form promptly
+        // ran to 1000+ per team.
+        //
+        // The chance the loop builds is already a per-event probability,
+        // so roll it. Latch on the first tick a defender is genuinely in
+        // reach — that is the moment the ball comes past him, and he gets
+        // one go at it, exactly as `try_block_shot` gives one roll per
+        // shot. Rate is now independent of the window length.
+        // A live SHOT keeps the old per-tick deterministic path. This
+        // site is where the engine actually models a defender getting a
+        // body in front of a strike — the event is already reclassified
+        // as a `block` on the stat sheet — and `try_block_shot`'s own
+        // corridor currently fires on 0.3% of checks against a real
+        // 18-22%. Latching shots here removed that channel outright and
+        // sent on-target from 32% to 59% and goals to 5.8 a game.
+        let is_live_shot = self.cached_shot_target.is_some();
+        let may_attempt = is_live_shot || !self.intercept_rolled;
+        if let Some(interceptor_id) = best_interceptor.filter(|_| may_attempt) {
+            if !is_live_shot {
+                self.intercept_rolled = true;
+            }
+            let fires = if is_live_shot {
+                best_chance > 0.030
+            } else {
+                context.rng.unit_f32() < best_chance
+            };
+            if fires {
                 // Snap the ball to the interceptor and zero the
                 // velocity. Before this, velocity was just scaled to
                 // Zeroing velocity + handing ownership to the defender
@@ -575,7 +609,23 @@ impl Ball {
                 // defender did not intercept a pass, he blocked a strike,
                 // and that is what the stat sheet should say. Captured
                 // before the flag is cleared and carried on the event.
-                let was_live_shot = self.cached_shot_target.is_some();
+                // A shot the defender got a body in front of is a BLOCK,
+                // and the stat sheet should say so. Keying that purely
+                // off `cached_shot_target` under-reported it badly: the
+                // target is cleared by several paths (a failed save, a
+                // keeper touch, a deflection) while the ball is still
+                // very much a shot in flight, and every stop after that
+                // point was filed as an ordinary interception. Blocks
+                // measured 0.18 per defender against a real ~0.9 for
+                // exactly this reason. `last_shot_struck_tick` is the
+                // robust question — was this BALL struck at goal
+                // recently — and is cleared on any dead ball.
+                let was_live_shot = self.cached_shot_target.is_some()
+                    || (self.last_shot_struck_tick > 0
+                        && self
+                            .current_tick_cached
+                            .saturating_sub(self.last_shot_struck_tick)
+                            < 400);
                 self.cached_shot_target = None;
                 let interceptor_team = players
                     .iter()
@@ -626,9 +676,14 @@ impl Ball {
         }
         #[cfg(feature = "match-logs")]
         block_diag::SHOTS_SEEN.fetch_add(1, Ordering::Relaxed);
-        // Ball above defender reach — aerial shots aren't blocked at
-        // chest height, only grounders and waist-high strikes.
-        if self.position.z > 2.0 {
+        // Ball above defender reach. This read `> 2.0` and the comment
+        // called it "chest height" — but 1u is 0.125 m, so the bar was
+        // 25 CENTIMETRES. Anything above ankle height was unblockable,
+        // which excluded 23% of all shot-ticks outright. A defender
+        // blocks with whatever he can get in the way, up to a raised
+        // boot or a head: 16u is 2 m.
+        const MAX_BLOCK_HEIGHT: f32 = 16.0;
+        if self.position.z > MAX_BLOCK_HEIGHT {
             #[cfg(feature = "match-logs")]
             block_diag::TOO_HIGH.fetch_add(1, Ordering::Relaxed);
             return;
@@ -672,8 +727,15 @@ impl Ball {
         // separate piece of work from the block model. Both constants
         // are therefore left where they were rather than carrying an
         // unmeasured widening for no benefit.
-        const BLOCK_LOOKAHEAD: f32 = 40.0;
-        const BLOCK_CORRIDOR: f32 = 7.0; // body + stretched leg (~0.9m)
+        // Widened 40/7 → 90/13 once the 25cm height bar above was lifted.
+        // The earlier attempt recorded in this comment measured no gain,
+        // but it was made while that bar silently threw away every ball
+        // above ankle height, so the corridor was never the thing being
+        // tested. 90u is 11 m — the range over which a defender can still
+        // get across to a shot — and 13u is 1.6 m, a committed lunge or
+        // slide rather than a standing body.
+        const BLOCK_LOOKAHEAD: f32 = 90.0;
+        const BLOCK_CORRIDOR: f32 = 16.0;
 
         let mut best_blocker: Option<u32> = None;
         let mut best_chance: f32 = 0.0;
@@ -769,7 +831,7 @@ impl Ball {
             // (skill_factor ≈ 0.85) at a good angle now block at
             // 30-40% chance, matching the real "closed-down striker
             // gets the ball blocked" rate.
-            let chance = skill_factor * line_factor * perp_factor * speed_penalty * 0.55;
+            let chance = skill_factor * line_factor * perp_factor * speed_penalty * 0.95;
 
             if chance > best_chance {
                 best_chance = chance;
@@ -792,7 +854,7 @@ impl Ball {
             }
         }
         let blocker_id = match best_blocker {
-            Some(id) if context.rng.unit_f32() < best_chance.clamp(0.03, 0.38) => id,
+            Some(id) if context.rng.unit_f32() < best_chance.clamp(0.03, 0.70) => id,
             _ => return,
         };
         #[cfg(feature = "match-logs")]
