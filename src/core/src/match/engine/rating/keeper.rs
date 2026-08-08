@@ -92,7 +92,7 @@ use crate::r#match::engine::zones::ZoneCoeffs;
 /// the league-average keeper scores exactly zero goals prevented and
 /// therefore rates exactly [`RatingShape::ANCHOR`]. Re-derive it from
 /// the keeper ladder if the engine's shot or save model moves.
-const ON_TARGET_CONVERSION: f32 = 0.345;
+const ON_TARGET_CONVERSION: f32 = 0.292;
 
 /// Engine population mean **post-shot** expected goal per shot on target
 /// — `SaveModel::expected_goal_on_target` averaged over the shots keepers
@@ -172,7 +172,7 @@ const DIFFICULTY_MAX: f32 = 1.55;
 
 /// League-average goals conceded per 90, measured from the same keeper
 /// ladder as [`ON_TARGET_CONVERSION`]. Re-derive it alongside.
-const REF_CONCEDED_PER_90: f32 = 1.31;
+const REF_CONCEDED_PER_90: f32 = 1.15;
 
 /// Weight on the defensive outcome — goals conceded measured against a
 /// league-average night instead of against this keeper's own workload.
