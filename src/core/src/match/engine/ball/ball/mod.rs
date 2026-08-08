@@ -113,6 +113,102 @@ impl OffsideSnapshot {
     }
 }
 
+/// Why a goal did or didn't carry an assist. The credited-assist rate is
+/// a headline realism number (real football assists ~70% of goals), and
+/// the count alone can't say whether the resolver is too strict or the
+/// engine simply isn't scoring off passes. These split the outcomes at
+/// the one decision point that knows: `assist_for_goal`.
+#[cfg(feature = "match-logs")]
+pub mod assist_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Non-own goals that reached the resolver.
+    pub static GOALS: AtomicU64 = AtomicU64::new(0);
+    /// Pass chain was empty — nothing was recorded, or a clear wiped it.
+    pub static EMPTY_CHAIN: AtomicU64 = AtomicU64::new(0);
+    /// Newest chain entry belongs to the conceding team: the scoring team
+    /// won the ball and finished without completing a pass of its own.
+    pub static OPPONENT_CHAIN: AtomicU64 = AtomicU64::new(0);
+    /// Of those, how many still had a scoring-team pass deeper in the
+    /// ring — i.e. the same-possession rule is what rejected them, not
+    /// the absence of a teammate's pass.
+    pub static OPPONENT_CHAIN_HAS_TEAMMATE: AtomicU64 = AtomicU64::new(0);
+    /// Age in ticks of the blocking opponent entry, summed.
+    pub static OPPONENT_CHAIN_AGE: AtomicU64 = AtomicU64::new(0);
+    /// Only the scorer appears in the chain (they passed, got it back).
+    pub static SCORER_ONLY: AtomicU64 = AtomicU64::new(0);
+    /// A teammate's pass was there but older than `ASSIST_WINDOW_TICKS`.
+    pub static STALE: AtomicU64 = AtomicU64::new(0);
+    pub static CREDITED: AtomicU64 = AtomicU64::new(0);
+    /// Sum of (goal tick − assist pass tick) over credited assists, so
+    /// the harness can print the mean delay and size the window.
+    pub static CREDITED_DELAY_TICKS: AtomicU64 = AtomicU64::new(0);
+
+    pub fn reset() {
+        for c in [
+            &GOALS,
+            &EMPTY_CHAIN,
+            &OPPONENT_CHAIN,
+            &OPPONENT_CHAIN_HAS_TEAMMATE,
+            &OPPONENT_CHAIN_AGE,
+            &SCORER_ONLY,
+            &STALE,
+            &CREDITED,
+            &CREDITED_DELAY_TICKS,
+        ] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// `(goals, empty, opponent, scorer_only, stale, credited, delay_sum)`
+    pub fn snapshot() -> (u64, u64, u64, u64, u64, u64, u64) {
+        (
+            GOALS.load(Ordering::Relaxed),
+            EMPTY_CHAIN.load(Ordering::Relaxed),
+            OPPONENT_CHAIN.load(Ordering::Relaxed),
+            SCORER_ONLY.load(Ordering::Relaxed),
+            STALE.load(Ordering::Relaxed),
+            CREDITED.load(Ordering::Relaxed),
+            CREDITED_DELAY_TICKS.load(Ordering::Relaxed),
+        )
+    }
+
+    /// `(opponent_chain_with_teammate_deeper, opponent_entry_age_sum)`
+    pub fn opponent_chain_detail() -> (u64, u64) {
+        (
+            OPPONENT_CHAIN_HAS_TEAMMATE.load(Ordering::Relaxed),
+            OPPONENT_CHAIN_AGE.load(Ordering::Relaxed),
+        )
+    }
+}
+
+/// How long a pass stays assist-eligible, in ticks (100 ticks ≈ 1 s).
+///
+/// An assist is the pass that *led to* the goal, so the two have to be
+/// close together. 6 s covers the slowest legitimate chain the engine
+/// produces — a long ball is ~3 s of flight, plus a touch and a strike —
+/// while excluding the case that used to dominate the charts: a goal
+/// kick counted as the assist for a solo run that ended half a minute
+/// later. The same-possession rule in `assist_for_goal` does most of the
+/// work; this is the backstop for a phase that never changes hands.
+pub const ASSIST_WINDOW_TICKS: u64 = 600;
+
+/// One kick in the current possession's pass chain.
+///
+/// The chain used to be a bare `VecDeque<u32>` of player ids, which is
+/// enough for the AI heuristics that read it (one-two detection, the
+/// "don't pass straight back" recency penalty) but not for crediting an
+/// assist. An assist has to answer three questions a lone id cannot:
+/// is the passer a TEAMMATE of the scorer, was the pass in the SAME
+/// possession phase, and was it RECENT. Carrying the team and the tick
+/// on every entry answers all three at the point of use.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct PassChainEntry {
+    pub player_id: u32,
+    pub team_id: u32,
+    pub tick: u64,
+}
+
 pub struct Ball {
     pub start_position: Vector3<f32>,
     pub position: Vector3<f32>,
@@ -143,7 +239,7 @@ pub struct Ball {
     /// active pass window.
     pub pending_pass_passer: Option<u32>,
     pub pending_pass_set_tick: u64,
-    pub recent_passers: VecDeque<u32>,
+    pub recent_passers: VecDeque<PassChainEntry>,
     pub contested_claim_count: u32,
     pub unowned_ticks: u32,
     /// Snapshot captured at the moment the ball became uncontrolled — ball
@@ -895,25 +991,117 @@ impl Ball {
         }
         self.take_ball_notified_players
             .retain(|&id| id != player_id);
-        self.recent_passers.retain(|&id| id != player_id);
+        self.recent_passers.retain(|e| e.player_id != player_id);
     }
 
     /// Record a passer in the recent passers ring buffer.
     /// Skips consecutive duplicates and caps at 5 entries.
-    pub fn record_passer(&mut self, passer_id: u32) {
+    pub fn record_passer(&mut self, passer_id: u32, team_id: u32, tick: u64) {
         // Skip consecutive duplicates
-        if self.recent_passers.back() == Some(&passer_id) {
+        if self.recent_passers.back().map(|e| e.player_id) == Some(passer_id) {
             return;
         }
         if self.recent_passers.len() >= 5 {
             self.recent_passers.pop_front();
         }
-        self.recent_passers.push_back(passer_id);
+        self.recent_passers.push_back(PassChainEntry {
+            player_id: passer_id,
+            team_id,
+            tick,
+        });
+    }
+
+    /// The teammate whose pass should be credited with an assist for a
+    /// goal scored by `scorer_id` of `scorer_team_id` at `tick`, if any.
+    ///
+    /// Walks the chain newest-first and applies the three rules a real
+    /// assist obeys:
+    ///
+    ///  1. **Same team.** The credited player must be a teammate of the
+    ///     scorer. Without this the resolver happily handed the assist to
+    ///     the goalkeeper whose goal kick got turned over — measured at
+    ///     71% of all assists, 63% of them to keepers.
+    ///  2. **Same possession.** Stop at the first opponent entry. A pass
+    ///     made before the other team had the ball belongs to an earlier
+    ///     phase of play, not to this goal.
+    ///  3. **Recent.** The pass has to have led to the goal, so it must
+    ///     land inside `ASSIST_WINDOW_TICKS`. This is what stops a goal
+    ///     kick from being an "assist" for a solo run half a minute later.
+    pub fn assist_for_goal(&self, scorer_id: u32, scorer_team_id: u32, tick: u64) -> Option<u32> {
+        #[cfg(feature = "match-logs")]
+        use std::sync::atomic::Ordering;
+        #[cfg(feature = "match-logs")]
+        assist_diag::GOALS.fetch_add(1, Ordering::Relaxed);
+
+        for entry in self.recent_passers.iter().rev() {
+            // Rule 2: an opponent touched the chain — earlier entries
+            // belong to a possession that is not this one.
+            if entry.team_id != scorer_team_id {
+                #[cfg(feature = "match-logs")]
+                {
+                    assist_diag::OPPONENT_CHAIN.fetch_add(1, Ordering::Relaxed);
+                    assist_diag::OPPONENT_CHAIN_AGE
+                        .fetch_add(tick.saturating_sub(entry.tick), Ordering::Relaxed);
+                    if self
+                        .recent_passers
+                        .iter()
+                        .any(|e| e.team_id == scorer_team_id && e.player_id != scorer_id)
+                    {
+                        assist_diag::OPPONENT_CHAIN_HAS_TEAMMATE.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                return None;
+            }
+            if entry.player_id == scorer_id {
+                continue;
+            }
+            // Rule 3: `tick` is monotonic within a match, but stay
+            // defensive about the ordering anyway.
+            let delay = tick.saturating_sub(entry.tick);
+            if delay > ASSIST_WINDOW_TICKS {
+                #[cfg(feature = "match-logs")]
+                assist_diag::STALE.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            #[cfg(feature = "match-logs")]
+            {
+                assist_diag::CREDITED.fetch_add(1, Ordering::Relaxed);
+                assist_diag::CREDITED_DELAY_TICKS.fetch_add(delay, Ordering::Relaxed);
+            }
+            return Some(entry.player_id);
+        }
+        #[cfg(feature = "match-logs")]
+        {
+            if self.recent_passers.is_empty() {
+                assist_diag::EMPTY_CHAIN.fetch_add(1, Ordering::Relaxed);
+            } else {
+                assist_diag::SCORER_ONLY.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        None
     }
 
     /// Clear the recent passers history (e.g. on tackles, interceptions, clearances).
     pub fn clear_pass_history(&mut self) {
         self.recent_passers.clear();
+    }
+
+    /// Note that `team_id` now has the ball, dropping the pass chain only
+    /// if the ball genuinely changed hands.
+    ///
+    /// The recovery paths (loose ball gained, ball headed clear, tackle)
+    /// all used to wipe the chain unconditionally. But a loose ball won
+    /// by a TEAMMATE is the same attacking phase: a cross flicked on at
+    /// the near post, a rebound off a block, a knock-down in the box. The
+    /// cross that started the move is still the assist if the move ends
+    /// in a goal, and wiping it left the resolver with nothing to credit
+    /// on roughly a third of all goals (`assist_diag::EMPTY_CHAIN`).
+    ///
+    /// Only a change of TEAM ends the phase.
+    pub fn note_possession(&mut self, team_id: u32) {
+        if self.recent_passers.back().map(|e| e.team_id) != Some(team_id) {
+            self.recent_passers.clear();
+        }
     }
 
     /// Clear the pass-window metadata used by the pass-completion classifier
@@ -1042,5 +1230,127 @@ mod completed_pass_tests {
         ball.clear_player_reference(11);
         assert!(ball.last_completed_pass_passer_id.is_none());
         assert!(ball.last_completed_pass_receiver_id.is_none());
+    }
+}
+
+#[cfg(test)]
+mod assist_tests {
+    use super::*;
+
+    const HOME: u32 = 1;
+    const AWAY: u32 = 2;
+
+    fn ball() -> Ball {
+        Ball::with_coord(840.0, 545.0)
+    }
+
+    #[test]
+    fn credits_the_teammate_who_played_the_last_pass() {
+        let mut ball = ball();
+        ball.record_passer(7, HOME, 1000);
+        ball.record_passer(9, HOME, 1200);
+        assert_eq!(ball.assist_for_goal(10, HOME, 1300), Some(9));
+    }
+
+    #[test]
+    fn never_credits_an_opponent() {
+        // The headline bug: an away keeper's goal kick sat in the ring,
+        // the home team turned it over and scored, and the resolver
+        // handed the keeper an assist for the goal he conceded. Across a
+        // season that put goalkeepers at the top of the assist charts.
+        let mut ball = ball();
+        ball.record_passer(200, AWAY, 1000); // away GK's goal kick
+        assert_eq!(ball.assist_for_goal(10, HOME, 1200), None);
+    }
+
+    #[test]
+    fn stops_at_a_possession_break() {
+        // Home passed, the away team had it and passed too, then home
+        // won it back and scored without a pass. The earlier home pass
+        // belongs to a different phase of play — no assist.
+        let mut ball = ball();
+        ball.record_passer(7, HOME, 800);
+        ball.record_passer(200, AWAY, 1000);
+        assert_eq!(ball.assist_for_goal(10, HOME, 1100), None);
+    }
+
+    #[test]
+    fn skips_the_scorer_but_keeps_walking_back() {
+        // Give-and-go: 7 passes, gets it back, scores. The assist is the
+        // teammate who returned it, not 7 himself.
+        let mut ball = ball();
+        ball.record_passer(9, HOME, 1000);
+        ball.record_passer(7, HOME, 1100);
+        ball.record_passer(9, HOME, 1200);
+        assert_eq!(ball.assist_for_goal(7, HOME, 1250), Some(9));
+    }
+
+    #[test]
+    fn a_chain_holding_only_the_scorer_yields_nothing() {
+        let mut ball = ball();
+        ball.record_passer(7, HOME, 1000);
+        assert_eq!(ball.assist_for_goal(7, HOME, 1100), None);
+    }
+
+    #[test]
+    fn a_stale_pass_is_not_an_assist() {
+        // A goal kick is not the assist for a solo run that ends half a
+        // minute later, however unbroken the possession was.
+        let mut ball = ball();
+        ball.record_passer(1, HOME, 1000);
+        let late = 1000 + ASSIST_WINDOW_TICKS + 1;
+        assert_eq!(ball.assist_for_goal(10, HOME, late), None);
+        // One tick inside the window still counts.
+        assert_eq!(
+            ball.assist_for_goal(10, HOME, 1000 + ASSIST_WINDOW_TICKS),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn empty_chain_yields_nothing() {
+        assert_eq!(ball().assist_for_goal(10, HOME, 500), None);
+    }
+
+    #[test]
+    fn possession_survives_a_teammate_winning_a_loose_ball() {
+        // A cross flicked on, a rebound off a block, a knock-down in the
+        // box — same attacking phase, so the cross is still the assist.
+        let mut ball = ball();
+        ball.record_passer(2, HOME, 1000);
+        ball.note_possession(HOME);
+        assert_eq!(ball.assist_for_goal(9, HOME, 1150), Some(2));
+    }
+
+    #[test]
+    fn possession_drops_the_chain_when_the_ball_changes_hands() {
+        let mut ball = ball();
+        ball.record_passer(2, HOME, 1000);
+        ball.note_possession(AWAY);
+        assert!(ball.recent_passers.is_empty());
+    }
+
+    #[test]
+    fn chain_entries_carry_team_and_tick() {
+        let mut ball = ball();
+        ball.record_passer(7, HOME, 1000);
+        // Consecutive duplicates are still collapsed.
+        ball.record_passer(7, HOME, 1050);
+        assert_eq!(ball.recent_passers.len(), 1);
+        let entry = ball.recent_passers.back().unwrap();
+        assert_eq!(entry.player_id, 7);
+        assert_eq!(entry.team_id, HOME);
+        assert_eq!(entry.tick, 1000);
+    }
+
+    #[test]
+    fn ring_caps_at_five_and_drops_the_oldest() {
+        let mut ball = ball();
+        for i in 0..7u32 {
+            ball.record_passer(i, HOME, 1000 + i as u64);
+        }
+        assert_eq!(ball.recent_passers.len(), 5);
+        assert_eq!(ball.recent_passers.front().unwrap().player_id, 2);
+        assert_eq!(ball.recent_passers.back().unwrap().player_id, 6);
     }
 }

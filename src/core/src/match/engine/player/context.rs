@@ -752,8 +752,8 @@ impl BallMetadata {
         }
 
         self.recent_len = field.ball.recent_passers.len().min(5) as u8;
-        for (i, &id) in field.ball.recent_passers.iter().take(5).enumerate() {
-            self.recent_buf[i] = id;
+        for (i, entry) in field.ball.recent_passers.iter().take(5).enumerate() {
+            self.recent_buf[i] = entry.player_id;
         }
 
         self.cached_shot_target = field.ball.cached_shot_target;

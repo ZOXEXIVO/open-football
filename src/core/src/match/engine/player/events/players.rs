@@ -1110,7 +1110,9 @@ impl PlayerEventDispatcher {
             }
         }
         Self::secure_ball_for(player_id, field);
-        field.ball.clear_pass_history();
+        if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
+            field.ball.note_possession(team_id);
+        }
     }
 
     fn handle_ball_owner_change_event(player_id: u32, field: &mut MatchField) {
@@ -1881,8 +1883,15 @@ impl PlayerEventDispatcher {
         // Apply ball physics
         field.ball.velocity = final_velocity;
 
-        // Record the passer in recent passers history before clearing ownership
-        field.ball.record_passer(event_model.from_player_id);
+        // Record the passer in recent passers history before clearing
+        // ownership. The team and tick ride along so the assist resolver
+        // can tell a teammate's pass from an opponent's and a live chain
+        // from a stale one.
+        field.ball.record_passer(
+            event_model.from_player_id,
+            passer_team_id,
+            context.current_tick(),
+        );
 
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
@@ -2406,7 +2415,9 @@ impl PlayerEventDispatcher {
 
     fn handle_gain_ball_event(player_id: u32, field: &mut MatchField) {
         Self::secure_ball_for(player_id, field);
-        field.ball.clear_pass_history();
+        if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
+            field.ball.note_possession(team_id);
+        }
         field.ball.flags.in_flight_state = 100;
     }
 
@@ -2445,7 +2456,14 @@ impl PlayerEventDispatcher {
         // arrive in ~18 ticks instead of ~9, matching the ~3.75× shot/player
         // speed ratio observed in real football (vs. the engine's prior ~10×).
         const MAX_SHOT_VELOCITY: f32 = 3.2;
-        const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
+        /// Half-width of the lane a defender must be inside to be credited
+/// with covering a shot, in game units (60u = 7.5m). Wide enough to
+/// mean "in front of goal in the danger zone" rather than "literally
+/// on the ball line" — a defender two yards off the strike still
+/// narrowed the angle it had to beat.
+const COVER_LANE_HALF_WIDTH: f32 = 60.0;
+
+const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
 
         let rng = &context.rng;
 
@@ -3161,8 +3179,20 @@ impl PlayerEventDispatcher {
         // but the raw stat reported on the match sheet was still wrong.
         let shooter_id = shoot_event_model.from_player_id;
         if xg > 0.0 {
+            // Restrict the chain to the shooter's own team. The ring
+            // survives a turnover (an interception hands the ball over
+            // without clearing it), so an unfiltered read was paying
+            // xg_chain / xg_buildup to the defenders and keeper who had
+            // just been dispossessed — credit for the chance they
+            // conceded.
+            let shooter_team = field.get_player(shooter_id).map(|p| p.team_id);
             let credits = Self::distribute_xg_credit(
-                field.ball.recent_passers.iter().copied(),
+                field
+                    .ball
+                    .recent_passers
+                    .iter()
+                    .filter(|e| Some(e.team_id) == shooter_team)
+                    .map(|e| e.player_id),
                 shooter_id,
                 direct_assister_id,
                 xg,
@@ -3276,6 +3306,42 @@ impl PlayerEventDispatcher {
                     final_velocity.norm(),
                     goal_line_z,
                 );
+                // Positional-defending credit. Every other defensive
+                // counter in the model is an EVENT — a tackle, an
+                // interception, a clearance — and a defender who defends
+                // by being in the right place produces none of them.
+                // This is the one that pays for the position itself:
+                // goal-side of the ball and inside the lane the shot is
+                // travelling down, measured at the moment it is struck.
+                // See `ZoneStats::shots_covered_in_position`.
+                {
+                    let ball_x = field.ball.position.x;
+                    let ball_y = field.ball.position.y;
+                    let span_x = goal_line_x - ball_x;
+                    let span_y = goal_line_y - ball_y;
+                    let span = (span_x * span_x + span_y * span_y).sqrt().max(1.0);
+                    for p in field.players.iter_mut() {
+                        if p.side != Some(defending_side)
+                            || p.tactical_position.current_position.position_group()
+                                == PlayerFieldPositionGroup::Goalkeeper
+                        {
+                            continue;
+                        }
+                        let goal_side = match defending_side {
+                            PlayerSide::Left => p.position.x < ball_x,
+                            PlayerSide::Right => p.position.x > ball_x,
+                        };
+                        if !goal_side {
+                            continue;
+                        }
+                        let cross = ((p.position.x - ball_x) * span_y
+                            - (p.position.y - ball_y) * span_x)
+                            .abs();
+                        if cross / span <= COVER_LANE_HALF_WIDTH {
+                            p.statistics.note_shot_covered_in_position();
+                        }
+                    }
+                }
                 #[cfg(feature = "match-logs")]
                 {
                     // Defensive picture at the strike — see `block_diag`.
@@ -4335,6 +4401,14 @@ impl PlayerEventDispatcher {
             }
         }
 
+        // Captured before ownership is dropped below — the possession
+        // check needs to know whose team just played the ball.
+        let clearer_team_id = field
+            .ball
+            .current_owner
+            .and_then(|id| field.get_player(id))
+            .map(|p| p.team_id);
+
         // Apply the clearing velocity to the ball
         field.ball.velocity = capped_velocity;
 
@@ -4342,7 +4416,16 @@ impl PlayerEventDispatcher {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
         field.ball.pass_target_player_id = None;
-        field.ball.clear_pass_history();
+        // A defender or keeper hoofing it away ends the attacking phase,
+        // so the chain goes. But `ClearBall` is also how an attacking
+        // midfielder's knock-down / flick-on is modelled (see
+        // `midfielders::states::heading`), and that keeps the move — and
+        // the cross that started it — alive.
+        if let Some(team_id) = clearer_team_id {
+            field.ball.note_possession(team_id);
+        } else {
+            field.ball.clear_pass_history();
+        }
 
         // Set in-flight state to prevent immediate reclaim after clearance
         field.ball.flags.in_flight_state = 40;

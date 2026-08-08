@@ -420,6 +420,8 @@ pub use club::{
 // Re-export shot-gate diagnostic counters for the dev stats harness.
 // Only compiled with the `match-logs` feature.
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::ball::ball::assist_diag;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::interactions::block_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::events::gk_claim::gk_claim_diag;

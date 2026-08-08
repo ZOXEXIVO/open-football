@@ -872,6 +872,16 @@ struct MatchOutcome {
     /// avoid attributing them to the wrong team in sequence analysis;
     /// own-goals are still counted in the final score).
     goal_events: Vec<(u64, bool)>,
+    /// Raw scorer rows for the ASSIST ATTRIBUTION diagnostic:
+    /// `(time_ms, scorer_id, is_auto_goal)`. Unlike `goal_events` this
+    /// keeps the player id so an assist can be paired with the goal it
+    /// belongs to and the two teams compared.
+    goal_details: Vec<(u64, u32, bool)>,
+    /// `(time_ms, assister_id)` from `score.detail()`. Paired against
+    /// `goal_details` by timestamp so the diagnostic can report which
+    /// LINE provides assists and — the actual bug hunt — how often the
+    /// credited assister plays for the CONCEDING team.
+    assist_details: Vec<(u64, u32)>,
     /// Per-position sums of every counter the rating model reads as
     /// VOLUME, for the RATING VOLUME PROFILE diagnostic. Index:
     /// 0=GK 1=DEF 2=MID 3=FWD.
@@ -3200,6 +3210,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::tackle_stats::reset();
     core::save_accounting_stats::reset();
     core::key_pass_diag::reset();
+    core::assist_diag::reset();
     BlockDiag::reset();
     core::helper_diag::reset();
     core::mid_run_diag::reset();
@@ -3273,6 +3284,25 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 .map(|g| (g.time, g.player_id / 100 == 1))
                 .collect();
             goal_events.sort_by_key(|e| e.0);
+            // Assist attribution: keep the raw (time, id) rows for both
+            // goals and assists so the report can pair them and see who
+            // actually got credited.
+            let goal_details: Vec<(u64, u32, bool)> = score
+                .detail()
+                .iter()
+                .filter(|g| {
+                    g.stat_type == core::r#match::player::statistics::MatchStatisticType::Goal
+                })
+                .map(|g| (g.time, g.player_id, g.is_auto_goal))
+                .collect();
+            let assist_details: Vec<(u64, u32)> = score
+                .detail()
+                .iter()
+                .filter(|g| {
+                    g.stat_type == core::r#match::player::statistics::MatchStatisticType::Assist
+                })
+                .map(|g| (g.time, g.player_id))
+                .collect();
             MatchOutcome {
                 idx: i,
                 level_a: match_level_a,
@@ -3283,6 +3313,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 away: a,
                 per_player,
                 goal_events,
+                goal_details,
+                assist_details,
                 pos_volumes: rating_volume_profile(&result),
                 per_player_skill,
             }
@@ -4552,6 +4584,115 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         );
     }
     println!("  target outfield goal share ≈ FWD 58% / MID 32% / DEF 10%");
+
+    // ── ASSISTS BY LINE + ATTRIBUTION SANITY ──────────────────────────
+    //
+    // Real football assist share ≈ MID 45% / FWD 30% / DEF 24% / GK ~1%
+    // (a keeper assist is a long kick headed straight in — a handful per
+    // league season, never a chart-topper). Two failure modes show here:
+    //
+    //  * `GK` share materially above ~2%: the assist is being read off a
+    //    stale `recent_passers` entry — typically the goal kick that
+    //    started the phase, minutes of play before the shot.
+    //  * `cross-team`: the credited assister plays for the team that
+    //    CONCEDED. That can only happen if the assist selection has no
+    //    same-team check and the pass ring survived the turnover.
+    //
+    // Assists are paired to goals by timestamp — the dispatcher emits
+    // `PlayerEvent::Assist` in the same tick as `PlayerEvent::Goal`, so
+    // both details carry the identical `total_match_time`.
+    println!();
+    println!(
+        "--- ASSISTS BY LINE (aggregated across {} matches) ---",
+        n_matches
+    );
+    let mut assists_by_line = [0u32; 4];
+    let mut cross_team_assists = 0u32;
+    let mut cross_team_by_line = [0u32; 4];
+    let mut assisted_goals = 0u32;
+    let mut unmatched_assists = 0u32;
+    let mut real_goals = 0u32;
+    for o in &outcomes {
+        real_goals += o.goal_details.iter().filter(|g| !g.2).count() as u32;
+        for &(time, assister) in &o.assist_details {
+            let gi = pos_group_of(assister) as usize;
+            assists_by_line[gi] += 1;
+            match o.goal_details.iter().find(|g| g.0 == time && !g.2) {
+                Some(&(_, scorer, _)) => {
+                    assisted_goals += 1;
+                    if scorer / 100 != assister / 100 {
+                        cross_team_assists += 1;
+                        cross_team_by_line[gi] += 1;
+                    }
+                }
+                None => unmatched_assists += 1,
+            }
+        }
+    }
+    let total_assists: u32 = assists_by_line.iter().sum::<u32>().max(1);
+    for (i, label) in line_labels.iter().enumerate() {
+        println!(
+            "  {:<4} assists={:>4} ({:>4.1}% of all)   cross-team={:>4} ({:>4.1}% of line)",
+            label,
+            assists_by_line[i],
+            assists_by_line[i] as f32 / total_assists as f32 * 100.0,
+            cross_team_by_line[i],
+            cross_team_by_line[i] as f32 / assists_by_line[i].max(1) as f32 * 100.0,
+        );
+    }
+    println!(
+        "  total assists={}  assisted goals={}/{} ({:.0}% of real goals)  unmatched={}",
+        total_assists,
+        assisted_goals,
+        real_goals,
+        assisted_goals as f32 / real_goals.max(1) as f32 * 100.0,
+        unmatched_assists,
+    );
+    println!(
+        "  CROSS-TEAM assists = {} ({:.1}% of all) — must be 0",
+        cross_team_assists,
+        cross_team_assists as f32 / total_assists as f32 * 100.0,
+    );
+    println!("  target assist share ≈ MID 45% / FWD 30% / DEF 24% / GK ~1%");
+    {
+        // Why a goal did or didn't carry an assist, straight from the
+        // resolver. `opponent chain` is the honest reading of "the
+        // scoring team won the ball and finished without passing" — it
+        // used to be silently credited to whoever conceded possession.
+        let (goals, empty, opponent, scorer_only, stale, credited, delay_sum) =
+            core::assist_diag::snapshot();
+        let pct = |x: u64| {
+            if goals == 0 {
+                0.0
+            } else {
+                x as f32 / goals as f32 * 100.0
+            }
+        };
+        println!(
+            "  resolver: {} goals — credited {:.1}%, empty chain {:.1}%, opponent chain {:.1}%, \
+             scorer-only chain {:.1}%, outside window {:.1}%",
+            goals,
+            pct(credited),
+            pct(empty),
+            pct(opponent),
+            pct(scorer_only),
+            pct(stale),
+        );
+        println!(
+            "  mean pass→goal delay on credited assists: {:.2}s (window {:.1}s)",
+            delay_sum as f32 / credited.max(1) as f32 / 100.0,
+            core::r#match::engine::ball::ball::ASSIST_WINDOW_TICKS as f32 / 100.0,
+        );
+        let (opp_has_teammate, opp_age) = core::assist_diag::opponent_chain_detail();
+        println!(
+            "  opponent-chain detail: {} of {} still had a teammate pass deeper in the ring \
+             ({:.1}%); blocking opponent pass was {:.2}s old on average",
+            opp_has_teammate,
+            opponent,
+            opp_has_teammate as f32 / opponent.max(1) as f32 * 100.0,
+            opp_age as f32 / opponent.max(1) as f32 / 100.0,
+        );
+    }
 
     // ── RATINGS DISTRIBUTION — per-position mean/median/p10/p90 ──────────
     //

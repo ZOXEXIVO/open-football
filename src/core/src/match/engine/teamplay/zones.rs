@@ -194,6 +194,31 @@ pub struct ZoneStats {
     pub penalty_fouls_conceded: u16,
     /// Defender / GK fouls inside the team's own third.
     pub own_third_def_fouls: u16,
+
+    /// Shots the opposition struck while this defender was **goal-side
+    /// of the ball and inside the shooting lane** — positional
+    /// defending, credited per shot rather than per action.
+    ///
+    /// # Why this counter exists
+    ///
+    /// Every other defensive counter in the model is an EVENT: a tackle,
+    /// an interception, a block, a clearance. A defender who defends by
+    /// being in the right place produces none of them — that is the
+    /// point of being in the right place. The model had no way to pay
+    /// for it, and the gap became measurable the moment defenders
+    /// actually started holding a line (`DefensiveRecovery`): the
+    /// measured defender performance distribution HALVED, mean 0.42 →
+    /// 0.22, because the tackle-and-chase volume that used to carry the
+    /// line collapsed. The visible symptom was a whole back four unable
+    /// to climb — 90% of defender matches finishing under 6.92 and only
+    /// 1.4% reaching 7.5, against a real ~8-10%.
+    ///
+    /// Recording it per SHOT is what makes it real-scale without a
+    /// divisor: a team faces ~13 shots a match, and the defenders
+    /// goal-side-and-in-lane for each are the ones who actually
+    /// compressed the space the shot came from.
+    #[serde(default)]
+    pub shots_covered_in_position: u16,
 }
 
 /// Centralised coefficient lookup. Keeping the zone bumps and discipline

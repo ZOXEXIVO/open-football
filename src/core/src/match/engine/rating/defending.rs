@@ -48,6 +48,28 @@ impl<'a> RatingContext<'a> {
         // / interceptions tighten above.
         let clearances = RatingMath::sat(s.clearances as f32, 6.0) * 0.18;
 
+        // Positional defending — shots the opposition struck with this
+        // defender goal-side of the ball and inside its lane.
+        //
+        // The one component here that is not an EVENT. Everything above
+        // pays a defender for doing something: winning a tackle, cutting
+        // out a pass, throwing a body in the way. A defender who is
+        // simply in the right place produces none of those, and the
+        // model had no way to pay him — which stopped being survivable
+        // the moment defenders actually held a line (`DefensiveRecovery`):
+        // their measured performance distribution HALVED (mean 0.42 →
+        // 0.22) because the chase-the-ball volume that used to carry
+        // them collapsed, and the whole line lost its ceiling — 90% of
+        // defender matches finishing under 6.92, only 1.4% reaching 7.5
+        // against a real ~8-10%.
+        //
+        // Saturating, and modest per shot: covering the ball is the
+        // baseline expectation of the job, so it lifts the routine
+        // honest shift off the floor rather than manufacturing standout
+        // ratings. A defender goal-side for most of the ~13 shots his
+        // team faces reads as having held his shape all afternoon.
+        let in_position = RatingMath::sat(z.shots_covered_in_position as f32, 2.5) * 0.34;
+
         let succ_pressure = RatingMath::sat(s.successful_pressures as f32, 5.5) * 0.16;
         let raw_pressure = s.pressures.saturating_sub(s.successful_pressures);
         let press_volume = RatingMath::sat(raw_pressure as f32, 12.0) * 0.04;
@@ -74,6 +96,7 @@ impl<'a> RatingContext<'a> {
             + interceptions
             + blocks
             + clearances
+            + in_position
             + succ_pressure
             + press_volume
             + danger_zone

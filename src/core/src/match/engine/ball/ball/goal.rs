@@ -74,8 +74,10 @@ impl Ball {
                     // passer. If anyone else is in `recent_passers`,
                     // somebody has taken a touch and a goal is legal.
                     if self.pass_origin_restart == PassOriginRestart::IndirectFreeKick {
-                        let any_second_touch =
-                            self.recent_passers.iter().any(|&id| id != goalscorer);
+                        let any_second_touch = self
+                            .recent_passers
+                            .iter()
+                            .any(|e| e.player_id != goalscorer);
                         if !any_second_touch {
                             // Reject: ball stays live, but no goal.
                             return;
@@ -97,8 +99,8 @@ impl Ball {
                             self.recent_passers
                                 .iter()
                                 .rev()
-                                .find(|&&id| id != goalscorer)
-                                .copied()
+                                .find(|e| e.player_id != goalscorer)
+                                .map(|e| e.player_id)
                         };
 
                         if let Some(attacker_id) = attacker {
@@ -125,13 +127,13 @@ impl Ball {
                         (goalscorer, is_auto_goal)
                     };
 
-                // Find assist provider: most recent passer who isn't the goalscorer
+                // Find the assist provider. `assist_for_goal` enforces the
+                // teammate / same-possession / recency rules — see its doc
+                // comment. An own goal never carries an assist.
                 let assist_player_id = if !final_is_auto_goal {
-                    self.recent_passers
-                        .iter()
-                        .rev()
-                        .find(|&&id| id != final_scorer)
-                        .copied()
+                    context.players.by_id(final_scorer).and_then(|scorer| {
+                        self.assist_for_goal(final_scorer, scorer.team_id, context.current_tick())
+                    })
                 } else {
                     None
                 };
