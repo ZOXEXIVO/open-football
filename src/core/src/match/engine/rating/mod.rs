@@ -301,7 +301,19 @@ impl PerformanceScale {
     const MIDFIELDER: PerformanceScale = PerformanceScale {
         mean: 0.26,
         sd: 0.56,
-        sensitivity: 0.62,
+        // Trimmed 0.62 → 0.52 (2026-08-08). Midfielders were reaching
+        // 8.0 in **4.0-4.9% of matches against a real ~1%** — a 4-5×
+        // fat upper tail, and not because they scored too often (braces
+        // measured 0.55% against a real ~0.5%). Non-scoring midfielders
+        // were simply arriving at elite ratings on routine volume.
+        //
+        // `sensitivity` is the right knob because it multiplies the
+        // shape's delta, which is ~0 through the middle: the tail moves
+        // and the population mean does not. Measured after: >= 8.0 down
+        // to 1.58%, >= 7.5 from 9.8% to 8.25%, population mean 6.74
+        // (band 6.60-7.00) — the mean barely budged, which is the
+        // property that made this safe to change on its own.
+        sensitivity: 0.52,
     };
     /// Strongly right-skewed: the median forward shift (0.10) sits well
     /// below the mean (0.51) because most of the value is concentrated
