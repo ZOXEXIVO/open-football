@@ -6,7 +6,9 @@ use crate::r#match::defenders::states::{
     DefenderShootingState, DefenderStandingState, DefenderTacklingState, DefenderTakeBallState,
     DefenderTrackingBackState, DefenderWalkingState,
 };
+use crate::r#match::defenders::states::common::DefensiveRecovery;
 use crate::r#match::{StateProcessingResult, StateProcessor};
+use nalgebra::Vector3;
 use std::fmt::Result;
 use std::fmt::{Display, Formatter};
 
@@ -76,6 +78,22 @@ impl DefenderStrategies {
         //     return common_state;
         // }
 
+        // Read the situation before dispatching — `process` consumes the
+        // processor. Every defender obeys the goal-side rule on top of
+        // whatever his state wants, because five of the states run during
+        // opposition possession and not one of them owns defensive depth.
+        // See `DefensiveRecovery` for the measurement that made this a
+        // cross-state rule rather than a fix to any single state.
+        let depth_override = DefensiveRecovery::depth_override(&state_processor.ctx());
+
+        let mut result = Self::dispatch(state, state_processor);
+        if let (Some(depth), Some(velocity)) = (depth_override, result.velocity) {
+            result.velocity = Some(Vector3::new(depth, velocity.y, velocity.z));
+        }
+        result
+    }
+
+    fn dispatch(state: DefenderState, state_processor: StateProcessor) -> StateProcessingResult {
         match state {
             DefenderState::Standing => state_processor.process(DefenderStandingState::default()),
             DefenderState::Resting => state_processor.process(DefenderRestingState::default()),

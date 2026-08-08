@@ -419,6 +419,19 @@ impl<'p> StateProcessor<'p> {
     pub fn into_ctx(self) -> StateProcessingContext<'p> {
         StateProcessingContext::from(self)
     }
+
+    /// Immutable view of the same situation [`Self::process`] will hand
+    /// the state handler. `process` consumes the processor, so a
+    /// per-group dispatcher that needs to inspect the context before
+    /// (or alongside) dispatching reads it here instead.
+    pub fn ctx(&self) -> StateProcessingContext<'_> {
+        StateProcessingContext {
+            in_state_time: self.in_state_time,
+            player: self.player,
+            context: self.context,
+            tick_context: self.tick_context,
+        }
+    }
 }
 
 pub struct ConditionContext<'sp> {

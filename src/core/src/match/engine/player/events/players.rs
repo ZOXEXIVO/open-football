@@ -1,5 +1,9 @@
 use crate::PlayerFieldPositionGroup;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::interactions::block_diag::BlockDiag;
 use crate::r#match::engine::ball::ball::interactions::SaveModel;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::state::PlayerState;
 use crate::r#match::engine::flow::context::PendingAdvantage;
 use crate::r#match::engine::flow::rng::MatchRng;
 use crate::r#match::engine::officiating::referee::{ContactLocation, FoulCallContext};
@@ -3220,13 +3224,32 @@ impl PlayerEventDispatcher {
                     // Defensive picture at the strike — see `block_diag`.
                     let ball_x = field.ball.position.x;
                     let ball_y = field.ball.position.y;
+                    let ball_to_goal = (goal_line_x - ball_x).abs();
                     let (mut goalside, mut near_line) = (0u64, 0u64);
+                    let (mut def_seen, mut def_depth_sum) = (0u64, 0.0f32);
                     for p in &field.players {
                         if p.side != Some(defending_side)
                             || p.tactical_position.current_position.position_group()
                                 == PlayerFieldPositionGroup::Goalkeeper
                         {
                             continue;
+                        }
+                        // How deep the BACK LINE actually is, whether or
+                        // not it is goal-side of the ball — this is what
+                        // says "the line never dropped" as opposed to
+                        // "the line dropped but scattered". Defender
+                        // group only: averaging all ten outfielders lets
+                        // their forwards, camped on the halfway line,
+                        // dominate the mean and hide the back four
+                        // entirely.
+                        if p.tactical_position.current_position.position_group()
+                            == PlayerFieldPositionGroup::Defender
+                        {
+                            def_seen += 1;
+                            def_depth_sum += (goal_line_x - p.position.x).abs();
+                            if let PlayerState::Defender(ds) = p.state {
+                                BlockDiag::note_defender_state(ds as usize);
+                            }
                         }
                         let is_goalside = match defending_side {
                             PlayerSide::Left => p.position.x < ball_x,
@@ -3248,7 +3271,16 @@ impl PlayerEventDispatcher {
                             near_line += 1;
                         }
                     }
-                    crate::block_diag::note_strike(goalside, near_line);
+                    BlockDiag::note_strike(
+                        goalside,
+                        near_line,
+                        ball_to_goal,
+                        if def_seen == 0 {
+                            0.0
+                        } else {
+                            def_depth_sum / def_seen as f32
+                        },
+                    );
                 }
                 field.ball.cached_shot_target = Some(ShotTarget {
                     goal_line_y,

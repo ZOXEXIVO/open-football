@@ -1,4 +1,5 @@
 use axum::response::IntoResponse;
+use core::block_diag::BlockDiag;
 use core::club::player::Player;
 use core::club::player::PlayerPositionType;
 use core::club::team::tactics::{MatchTacticType, Tactics};
@@ -3199,7 +3200,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::tackle_stats::reset();
     core::save_accounting_stats::reset();
     core::key_pass_diag::reset();
-    core::block_diag::reset();
+    BlockDiag::reset();
     core::helper_diag::reset();
     core::mid_run_diag::reset();
     core::time_band_diag::reset();
@@ -4958,7 +4959,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 pct(wrong_receiver),
                 pct(stale),
             );
-            let (seen, too_high, candidates, fired) = core::block_diag::snapshot();
+            let (seen, too_high, candidates, fired) = BlockDiag::snapshot();
             let bpct = |x: u64| {
                 if seen == 0 {
                     0.0
@@ -4974,7 +4975,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 bpct(candidates),
                 bpct(fired),
             );
-            let (opp, behind, beyond, wide, in_win, mean_perp) = core::block_diag::lane_snapshot();
+            let (opp, behind, beyond, wide, in_win, mean_perp) = BlockDiag::lane_snapshot();
             let opct = |x: u64| {
                 if opp == 0 {
                     0.0
@@ -4982,13 +4983,67 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     x as f32 / opp as f32 * 100.0
                 }
             };
-            let (struck, goalside, near_line) = core::block_diag::strike_snapshot();
+            let (struck, goalside, near_line, range, depth) = BlockDiag::strike_snapshot();
             println!(
                 "  at the strike: {} shots — opposition outfielders goal-side of the ball \
                  {:.2}/shot, of those within 30u of the ball's line to goal {:.2}/shot   \
                  (real: 2-4 goal-side, ~1 in the lane)",
                 struck, goalside, near_line,
             );
+            println!(
+                "  at the strike: shot range {:.0}u ({:.1}m) from goal, defending outfielders \
+                 sit {:.0}u ({:.1}m) from their own line   (defenders FURTHER out than the ball \
+                 = the line never dropped)",
+                range,
+                range * 0.125,
+                depth,
+                depth * 0.125,
+            );
+            const DEF_STATE_NAMES: [&str; 21] = [
+                "Standing",
+                "Covering",
+                "PushingUp",
+                "Resting",
+                "Passing",
+                "Running",
+                "Intercepting",
+                "Marking",
+                "Clearing",
+                "Heading",
+                "Tackling",
+                "Pressing",
+                "TrackingBack",
+                "HoldingLine",
+                "Returning",
+                "Walking",
+                "TakeBall",
+                "Shooting",
+                "Guarding",
+                "AttackingCorner",
+                "Crossing",
+            ];
+            let states = BlockDiag::defender_state_snapshot();
+            let total: u64 = states.iter().sum();
+            let mut ranked: Vec<(usize, u64)> = states
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|(_, c)| *c > 0)
+                .collect();
+            ranked.sort_by(|a, b| b.1.cmp(&a.1));
+            let listed = ranked
+                .iter()
+                .take(6)
+                .map(|(i, c)| {
+                    format!(
+                        "{} {:.0}%",
+                        DEF_STATE_NAMES[*i],
+                        *c as f32 / total.max(1) as f32 * 100.0
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("  at the strike: back-line state — {}", listed);
             println!(
                 "  block lane: {} opponent-samples — behind the ball {:.1}%, \
                  beyond lookahead {:.1}%, in window {:.1}% (of those, wider than the corridor \

@@ -261,6 +261,27 @@ impl PerformanceScale {
     // several invariants read (a forward straying offside must cost more
     // than a midfielder doing the same). Moving DEF/MID sensitivity with
     // their sd inverted that ordering by 0.004 of a rating point.
+    /// Measured 0.22 / 0.51 after `DefensiveRecovery` put defenders
+    /// goal-side of the ball (3 draws, 2026-08-08, down from 0.42) — and
+    /// NOT adopted. The drop is real and is the change working: a
+    /// defender who holds his shape in his own box accumulates far less
+    /// of the open-field tackling and pressing volume the old,
+    /// permanently-upfield back line did.
+    ///
+    /// But the two references disagree and one of them is a contract.
+    /// At the measured 0.22 the engine population lands its band while
+    /// `leaky_side_defender_season_stays_below_six_four` — a hand-built
+    /// season of 45 conceded with errors and a red card — rates 6.67
+    /// against a 6.40 ceiling. At 0.42 the fixture passes and the
+    /// population reads 6.54, one hundredth below its 6.55 band floor.
+    /// A 0.27 breach of a pinned ceiling is a real defect; 0.01 under a
+    /// band edge is noise, so the fixture wins.
+    ///
+    /// The disagreement is structural, not a tuning miss: fixtures feed
+    /// hand-built REAL-unit stat lines that bypass
+    /// `EngineVolumeCalibration`, while the measured population arrives
+    /// through the divisors. Reconciling them means making the two
+    /// describe the same distribution, not picking a number between.
     const DEFENDER: PerformanceScale = PerformanceScale {
         mean: 0.42,
         sd: 0.56,
