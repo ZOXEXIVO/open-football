@@ -953,8 +953,24 @@ pub fn evaluate_forward_shot_decision(
     // engine produced 54 shots/team. The division lands on the BASE so
     // the skill terms keep their relative steepness (selection remains
     // the dominant chooser signal).
+    // Restored ×1.08 (2026-08-08) after `DefensiveRecovery` put
+    // defenders goal-side of the ball. Bodies between ball and goal
+    // suppress shooting through the defer / clarity gates, and team shot
+    // volume fell 13.5 → 12.7 per match against a real ~13.4 — the
+    // engine had lost shots it should still be taking, not shots it
+    // should never have had. Applied to every term so the skill slope
+    // keeps its shape (selection stays the dominant chooser signal) and
+    // the 58/32/10 line balance is untouched, which a floor change
+    // would not have been.
+    //
+    // This recovers the VOLUME half of the goals drop only. Measured
+    // decomposition of 2.45 → 2.17: roughly 0.13 from shot volume and
+    // 0.15 from save% moving 67.2% → 69.6%. That second half is
+    // deliberately NOT chased — 69.6% is the real-football value and
+    // 67.2% was the engine sitting below it, so the defending fix moved
+    // save% the right way.
     let base_willingness =
-        0.00054 + selection * 0.00085 + composure_skill * 0.00038 + execution_skill * 0.00052;
+        0.00058 + selection * 0.00092 + composure_skill * 0.00041 + execution_skill * 0.00056;
     // xg_boost — floor 0.30 (vs prior 0.50). Mid-range chance with
     // xG=0.06 gets 0.30 boost (was 0.50 — ~40% reduction). Clear-shot
     // xG=0.10 gets 0.50 (was 0.50 — no change). High-xG xG≥0.28 gets

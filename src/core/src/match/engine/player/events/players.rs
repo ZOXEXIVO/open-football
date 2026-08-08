@@ -2550,6 +2550,15 @@ impl PlayerEventDispatcher {
         // is bounded (<=11) so the cost is negligible.
         let mut pressure_5u: u32 = 0;
         let mut pressure_10u: u32 = 0;
+        // Wider band for the recorded xG's pressure discount. 5u and 10u
+        // are 0.63m and 1.25m — close enough to be standing on the
+        // shooter's foot, and measured they are almost always zero, so a
+        // discount built on them moved population xG by 2%. A defender
+        // closing to ~3m is what a real xG model reads as pressure, and
+        // it is what actually separates a free strike from a hurried
+        // one. Kept separate rather than widening the two above, which
+        // the shot-accuracy error model is calibrated against.
+        let mut pressure_24u: u32 = 0;
         if let Some(side) = shooter_side {
             for other in field.players.iter() {
                 if other.id == shoot_event_model.from_player_id {
@@ -2564,6 +2573,9 @@ impl PlayerEventDispatcher {
                 }
                 if d <= 10.0 {
                     pressure_10u += 1;
+                }
+                if d <= 24.0 {
+                    pressure_24u += 1;
                 }
             }
         }
@@ -2699,6 +2711,13 @@ impl PlayerEventDispatcher {
         // resulting on-target rate sat at ~22% vs real ~33%. 16u with
         // damped pressure / body / condition multipliers keeps spread
         // realistic for both clean strikes and scrambling ones.
+        // NOT the lever for the population on-target rate, despite
+        // setting the aim band. Measured 2026-08-08: 16 → 13.5 left the
+        // rate at 28.3% (from 28.6%). At a 29u half-goal this band is
+        // already tight enough that most aims land between the posts —
+        // the rate is set by the explicit `wide_miss_chance` /
+        // `over_bar_chance` / `miskick_probability` rolls below, which
+        // fire independently of it.
         let max_y_error_raw = 16.0
             * distance_error
             * pressure_error
@@ -2726,14 +2745,23 @@ impl PlayerEventDispatcher {
         // 5/20 finisher pulls shots wide far more often than an elite.
         // Real Opta on-target rate is ~33% across all distances;
         // calibrated downward to land population on-target near that.
+        // Bases cut ~40% (0.030/0.060/0.100/0.150) 2026-08-08. This roll
+        // and `over_bar_chance` are what actually set the population
+        // on-target rate — the aim band above is tight enough that most
+        // targets already fall between the posts, so tightening it moved
+        // the rate 28.6% → 28.3% and nothing else. Measured 28.3%
+        // against the real ~32-33% this model is written against, and
+        // on-target volume is what caps goals/match: at 13.1 shots per
+        // team a 32% rate lands 2.47 goals on the engine's own
+        // arithmetic against the 2.21 it was producing.
         let wide_base = if horizontal_distance < 30.0 {
-            0.030
+            0.018
         } else if horizontal_distance < 60.0 {
-            0.060
+            0.036
         } else if horizontal_distance < 100.0 {
-            0.100
+            0.060
         } else {
-            0.150
+            0.090
         };
         // Skill-and-condition contributions trimmed (0.07/0.05 → 0.05/0.03)
         // because they compound with `random_error_scale`, `over_bar_chance`,
@@ -2930,14 +2958,18 @@ impl PlayerEventDispatcher {
         // the same bases produce too many accuracy-less misses. Cut
         // bases ~40% and scaling 0.20 → 0.12 so the on-target rate can
         // recover toward the real ~33%.
+        // Bases cut ~40% (0.015/0.030/0.055/0.080) 2026-08-08, alongside
+        // `wide_base` — the two forced-miss rolls are the same class and
+        // together they, not the aim band, set the population on-target
+        // rate.
         let over_bar_base = if horizontal_distance < 30.0 {
-            0.015
+            0.009
         } else if horizontal_distance < 60.0 {
-            0.030
+            0.018
         } else if horizontal_distance < 100.0 {
-            0.055
+            0.033
         } else {
-            0.080
+            0.048
         };
         // Skill contributions trimmed (0.04 / 0.04 → 0.025 / 0.025) — same
         // logic as `wide_miss_chance` above: the over-bar term compounds
@@ -3042,10 +3074,35 @@ impl PlayerEventDispatcher {
                 1.0
             }
         };
+        // Pressure discount. The recorded xG was a function of DISTANCE
+        // and ANGLE only — a strike with a defender's leg across it
+        // priced identically to a free one from the same spot. Real xG
+        // models all read the closing defender, and its absence here was
+        // measurable: across 4 runs of `stats 300 14 14` the engine
+        // scored **2.21 against its own 2.60 xG**, underperforming its
+        // chance model by 15% in a way real teams do not, and the
+        // per-line conversion-to-xG ratios came apart — MID 0.78-0.88 and
+        // FWD 0.78-0.89 (open-play shots, pressured, over-priced).
+        //
+        // It also got worse the moment `DefensiveRecovery` put bodies
+        // back in the box: a pressure-blind curve overstates a pressured
+        // shot by more, so the better the defending got, the more the
+        // recorded xG drifted above the goals it was supposed to predict.
+        // That is why every shot-volume lever failed to move goals — the
+        // extra shots were pressured ones being priced as free.
+        //
+        // `pressure_24u` (3m) is inclusive of `pressure_10u`, so the
+        // 1.25-3m ring is their difference and carries about half the
+        // weight of a body genuinely on top of the shot.
+        let close_pressure = pressure_10u as f32;
+        let ring_pressure = pressure_24u.saturating_sub(pressure_10u) as f32;
+        let pressure_factor =
+            (1.0 - close_pressure * 0.20 - ring_pressure * 0.10).clamp(0.35, 1.0);
         let base_xg = profile
             .expected_xg(horizontal_distance, true)
             .clamp(0.0, 0.82)
             * angle_factor
+            * pressure_factor
             * XG_REPORT_SCALE;
         let xg = base_xg;
         if let Some(shooter) = field.get_player_mut(shoot_event_model.from_player_id) {
