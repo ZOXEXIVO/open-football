@@ -7,13 +7,16 @@
 //! half that have to agree with each other.
 
 mod actors;
+mod body;
 mod camera;
 mod config;
 mod field;
+mod kit;
 mod loader;
 mod pitch;
 mod playback;
 mod replay;
+mod textures;
 mod timeline;
 
 use crate::actors::{Actors, BallState};
@@ -106,6 +109,7 @@ impl MatchViewer {
                     Playback::handle_keyboard,
                     Playback::advance,
                     Actors::follow_playhead,
+                    Actors::animate,
                     TvCamera::follow_play,
                     Actors::place_labels,
                     EventLog::follow_playhead,

@@ -16,29 +16,48 @@ pub struct TvCamera {
 
 impl TvCamera {
     /// Height of the gantry above the turf.
-    const HEIGHT: f32 = 34.0;
-    /// How far back from the touchline the gantry sits. Together with the
-    /// height this is what decides how much of the pitch the frame can hold:
-    /// from here the near and far touchlines are ~23° apart, which the field of
-    /// view below covers with room to spare.
-    const SETBACK: f32 = 40.0;
+    ///
+    /// Height and setback together decide nothing about how large the players
+    /// come out, which is worth stating because it is the opposite of the
+    /// intuition. Holding both touchlines in frame forces the field of view to
+    /// cover the angle between them, and that angle *widens* as the rig comes
+    /// in — by exactly as much as the shorter distance magnifies. Every
+    /// (height, setback) pair that frames the full width draws a footballer the
+    /// same size. Getting closer therefore means giving up some of the pitch,
+    /// which is what the numbers below do: they frame the play rather than the
+    /// ground, and the aim tracks the ball across the width to keep the part
+    /// that matters inside the cut.
+    const HEIGHT: f32 = 27.0;
+    /// How far back from the touchline the gantry sits.
+    const SETBACK: f32 = 29.0;
     /// Fraction of the ball's travel along the pitch the rig itself tracks. A
-    /// real main camera slides only a little; the rest is pan.
-    const TRAVEL: f32 = 0.65;
-    /// Vertical field of view. Long-lens rather than wide: a wide angle from
-    /// this distance would make the pitch look like a table.
-    const FOV: f32 = 0.50;
-    /// How far the aim point follows the ball across the pitch, and how far it
-    /// sits toward the near touchline. Chasing the ball's own width would swing
-    /// the near third out of frame every time play went long.
-    const AIM_ACROSS: f32 = 0.20;
+    /// real main camera slides only a little; the rest is pan. On a lens this
+    /// long the slide has to do more of the work, or a break down the wing
+    /// leaves the frame before the pan catches it.
+    const TRAVEL: f32 = 0.80;
+    /// How far along the pitch the rig is allowed to run, as a fraction of the
+    /// half-length.
+    const TRAVEL_LIMIT: f32 = 0.70;
+    /// Vertical field of view. Long-lens rather than wide: this is the number
+    /// that decides how close the footage feels, and 0.40 rad holds a little
+    /// over half the pitch length across a 16:9 frame — about what a broadcast
+    /// main camera carries during open play.
+    const FOV: f32 = 0.40;
+    /// How far the aim point follows the ball across the pitch. The frame no
+    /// longer spans both touchlines at once, so this has to be high enough that
+    /// whichever touchline gets cut is always the one play is furthest from —
+    /// a winger on the near touchline has to be in shot when the ball is with
+    /// him, and is expendable when it is on the far side.
+    const AIM_ACROSS: f32 = 0.65;
     /// Pulls the aim point toward the near touchline. Aiming at the middle of
-    /// the pitch tilts the rig up just far enough to push the near touchline
-    /// off the bottom of the frame, which loses whoever is hugging it.
-    const AIM_NEAR_BIAS: f32 = -9.0;
+    /// the pitch tilts the rig up far enough to push the near third off the
+    /// bottom of the frame, which loses whoever is hugging it — and on this
+    /// lens there is no slack left to absorb that.
+    const AIM_NEAR_BIAS: f32 = -12.0;
     /// Seconds for the framing to catch up to a ball that jumps across the
-    /// pitch. Slow enough to look operated, fast enough not to lose the play.
-    const RESPONSE: f32 = 0.42;
+    /// pitch. Slow enough to look operated, fast enough not to lose the play;
+    /// a tighter frame needs a quicker operator.
+    const RESPONSE: f32 = 0.34;
 
     pub fn spawn(mut commands: Commands) {
         let sideline = -(Field::HALF_WIDTH + Self::SETBACK);
@@ -92,8 +111,8 @@ impl TvCamera {
             rig.focus = rig.focus.lerp(target, blend.clamp(0.0, 1.0));
         }
 
-        let travel =
-            (rig.focus.x * Self::TRAVEL).clamp(-Field::HALF_LENGTH * 0.6, Field::HALF_LENGTH * 0.6);
+        let limit = Field::HALF_LENGTH * Self::TRAVEL_LIMIT;
+        let travel = (rig.focus.x * Self::TRAVEL).clamp(-limit, limit);
         transform.translation =
             Vec3::new(travel, Self::HEIGHT, -(Field::HALF_WIDTH + Self::SETBACK));
         transform.look_at(

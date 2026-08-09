@@ -1,3 +1,4 @@
+use crate::r#match::position_players::PlayerFieldMetadata;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -169,7 +170,13 @@ pub struct PlayerTickCache {
     /// them). Every input is tick-frozen (skills static, condition
     /// updated once before the state runs, grid/ball snapshots), so the
     /// memo is bit-identical.
-    pub defender_profile: Option<DefenderSkillProfile>,
+    ///
+    /// The defender slot carries the condition/jadedness it was built at
+    /// as well: the goal-side rule reads a profile *before* dispatch, and
+    /// dispatch is what applies the tick's fatigue, so this one memo can
+    /// legitimately be asked for a profile on both sides of a condition
+    /// change. See `DefenderSkillProfile::from_ctx`.
+    pub defender_profile: Option<(u32, DefenderSkillProfile)>,
     pub midfielder_profile: Option<MidfielderSkillProfile>,
     /// Deepest outfield opponent's x (the offside line) as computed by
     /// `MidfielderAttackSupportingState::is_offside_risk` — a roster
@@ -373,6 +380,22 @@ impl LooseBallChase {
         a.dist_sq < b.dist_sq || (a.dist_sq == b.dist_sq && a.id < b.id)
     }
 
+    /// The distance a chase designation is judged on — not the geometric
+    /// one.
+    ///
+    /// Striker gamble: forwards read rebounds early and commit, so they win
+    /// loose balls a real midfielder at the same distance would not. 0.82 on
+    /// `dist_sq` is ~10% on distance.
+    ///
+    /// Both the table and the reference scans that check it go through here.
+    /// They have to weigh a candidate identically or the debug oracles fire
+    /// on a table that is doing exactly what it was asked to.
+    #[inline]
+    pub fn chase_dist_sq(meta: &PlayerFieldMetadata, ball_pos: Vector3<f32>) -> f32 {
+        let raw = (ball_pos - meta.position).norm_squared();
+        if meta.is_forward { raw * 0.82 } else { raw }
+    }
+
     pub fn update(&mut self, positions: &MatchObjectsPositions) {
         let ball_pos = positions.ball.landing_position;
         self.left = [None; 2];
@@ -387,12 +410,8 @@ impl LooseBallChase {
             if !meta.chase_eligible {
                 continue;
             }
-            // Striker gamble: forwards read rebounds early and commit,
-            // so they win loose balls a real midfielder at the same
-            // distance would not. 0.82 on dist_sq is ~10% on distance.
-            let raw = (ball_pos - meta.position).norm_squared();
             let entry = ChaseEntry {
-                dist_sq: if meta.is_forward { raw * 0.82 } else { raw },
+                dist_sq: Self::chase_dist_sq(meta, ball_pos),
                 id: meta.player_id,
             };
             let slots = match meta.side {

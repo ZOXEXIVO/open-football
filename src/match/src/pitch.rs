@@ -112,7 +112,17 @@ impl LineMesh {
     }
 }
 
-/// The stadium: turf, painted markings and both goals.
+/// One bank of terracing, resolved into the numbers a tilted slab needs.
+struct Terrace {
+    length: f32,
+    /// Distance from the middle of the pitch to the middle of the slab.
+    reach: f32,
+    height: f32,
+    /// Angle it is tilted up from the flat, in radians.
+    pitch: f32,
+}
+
+/// The stadium: turf, painted markings, both goals and the ground around them.
 pub struct Pitch;
 
 impl Pitch {
@@ -140,6 +150,7 @@ impl Pitch {
         Self::spawn_turf(&mut commands, &mut meshes, &mut materials);
         Self::spawn_markings(&mut commands, &mut meshes, &mut materials);
         Self::spawn_goals(&mut commands, &mut meshes, &mut materials);
+        Self::spawn_ground(&mut commands, &mut meshes, &mut materials);
 
         commands.spawn((
             DirectionalLight {
@@ -247,6 +258,107 @@ impl Pitch {
             ..default()
         });
         commands.spawn((Mesh3d(meshes.add(lines.build())), MeshMaterial3d(paint)));
+    }
+
+    /// The ground the pitch sits in: advertising hoardings around the touchlines
+    /// and the low bowl of a stand behind them.
+    ///
+    /// Without it the turf simply stops and eleven-a-side is played in a void.
+    /// Only three sides are built — the near one is where the broadcast gantry
+    /// itself sits, so a stand there would be between the camera and the play.
+    fn spawn_ground(
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+    ) {
+        const SIDE_MARGIN: f32 = 3.4;
+        const END_MARGIN: f32 = 4.6;
+        const HOARDING_HEIGHT: f32 = 0.95;
+        const HOARDING_DEPTH: f32 = 0.14;
+
+        let board = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.07, 0.09, 0.13),
+            perceptual_roughness: 0.65,
+            ..default()
+        });
+        // The lit strip along the top of the hoardings. It is the one crisp
+        // line in the background, and it is what draws the edge of the playing
+        // surface from a camera looking down onto it.
+        let trim = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.22, 0.27, 0.36),
+            emissive: LinearRgba::rgb(0.10, 0.13, 0.19),
+            perceptual_roughness: 0.4,
+            ..default()
+        });
+        let stand = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.055, 0.062, 0.085),
+            perceptual_roughness: 1.0,
+            ..default()
+        });
+
+        let along = Field::HALF_LENGTH + END_MARGIN;
+        let across = Field::HALF_WIDTH + SIDE_MARGIN;
+        for (size, position) in [
+            (
+                Vec3::new(along * 2.0, HOARDING_HEIGHT, HOARDING_DEPTH),
+                Vec3::new(0.0, 0.0, across),
+            ),
+            (
+                Vec3::new(along * 2.0, HOARDING_HEIGHT, HOARDING_DEPTH),
+                Vec3::new(0.0, 0.0, -across),
+            ),
+            (
+                Vec3::new(HOARDING_DEPTH, HOARDING_HEIGHT, across * 2.0),
+                Vec3::new(along, 0.0, 0.0),
+            ),
+            (
+                Vec3::new(HOARDING_DEPTH, HOARDING_HEIGHT, across * 2.0),
+                Vec3::new(-along, 0.0, 0.0),
+            ),
+        ] {
+            commands.spawn((
+                Mesh3d(meshes.add(Cuboid::new(size.x, size.y, size.z))),
+                MeshMaterial3d(board.clone()),
+                Transform::from_translation(position + Vec3::Y * HOARDING_HEIGHT * 0.5),
+            ));
+            commands.spawn((
+                Mesh3d(meshes.add(Cuboid::new(size.x, 0.07, size.z + 0.04))),
+                MeshMaterial3d(trim.clone()),
+                Transform::from_translation(position + Vec3::Y * HOARDING_HEIGHT),
+            ));
+        }
+
+        // Terracing, as three slabs tilted up out of the surround. At this
+        // distance the fog has most of them, which is the point: they give the
+        // ground a horizon without ever competing with the play for attention.
+        let far = Self::terrace(across + 2.1, 26.5, 13.4);
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(along * 2.0 + 30.0, 0.8, far.length))),
+            MeshMaterial3d(stand.clone()),
+            Transform::from_xyz(0.0, far.height, far.reach)
+                .with_rotation(Quat::from_rotation_x(-far.pitch)),
+        ));
+
+        let end = Self::terrace(along + 2.4, 23.5, 11.4);
+        for side in [-1.0f32, 1.0] {
+            commands.spawn((
+                Mesh3d(meshes.add(Cuboid::new(end.length, 0.8, across * 2.0 + 24.0))),
+                MeshMaterial3d(stand.clone()),
+                Transform::from_xyz(side * end.reach, end.height, 0.0)
+                    .with_rotation(Quat::from_rotation_z(side * end.pitch)),
+            ));
+        }
+    }
+
+    /// Where to put a slab of terracing that starts `from` metres out and
+    /// climbs `rise` metres over `run`.
+    fn terrace(from: f32, run: f32, rise: f32) -> Terrace {
+        Terrace {
+            length: (run * run + rise * rise).sqrt(),
+            reach: from + run * 0.5,
+            height: rise * 0.5 + 0.6,
+            pitch: rise.atan2(run),
+        }
     }
 
     fn spawn_goals(
