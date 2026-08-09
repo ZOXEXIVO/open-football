@@ -775,6 +775,7 @@
   "match_recording_disabled": "Визуализация матча отключена, так как она ресурсоёмкая.",
   "match_recording_disabled_link": "Скачать OpenFootball для локального использования",
   "match_recording_disabled_local": "Вы можете запустить её локально на своём оборудовании.",
+  "match_viewer_missing": "3D-визуализация матча не включена в эту сборку.",
   "match_scouting_assignments": "Скаутинг матчей",
   "matches": "Матчи",
   "media_fan_kind_apology_accepted": "Публичные извинения были приняты",

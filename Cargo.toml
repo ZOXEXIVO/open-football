@@ -1,6 +1,9 @@
 [workspace]
 members = ["src/core", "src/database", "src/web"]
-exclude = [".dev/match", ".dev/simulate", ".dev/transfers"]
+# `src/match` is the Bevy/WebAssembly replay viewer. It only ever builds for
+# `wasm32-unknown-unknown` under its own profile, driven by `src/web/build.rs`,
+# so it stays out of the host workspace.
+exclude = [".dev/match", ".dev/simulate", ".dev/transfers", "src/match"]
 
 [workspace.package]
 version = "1.4.850"

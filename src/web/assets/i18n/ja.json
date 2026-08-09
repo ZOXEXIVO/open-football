@@ -775,6 +775,7 @@
   "match_recording_disabled": "試合のビジュアライゼーションはリソースを多く消費するため無効になっています。",
   "match_recording_disabled_link": "ローカル利用のためにOpenFootballをダウンロード",
   "match_recording_disabled_local": "お手元のハードウェアでローカル実行できます。",
+  "match_viewer_missing": "このビルドには3D試合ビューアーが含まれていません。",
   "match_scouting_assignments": "試合スカウティング任務",
   "matches": "試合",
   "media_fan_kind_apology_accepted": "公の謝罪は受け入れられた",

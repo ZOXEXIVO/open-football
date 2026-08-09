@@ -775,6 +775,7 @@
   "match_recording_disabled": "比賽視覺化已停用，因為其佔用大量資源。",
   "match_recording_disabled_link": "下载 OpenFootball 以供本地使用",
   "match_recording_disabled_local": "您可以在自己的硬體上本地執行。",
+  "match_viewer_missing": "此版本未包含 3D 比賽檢視器。",
   "match_scouting_assignments": "比赛球探任务",
   "matches": "比賽",
   "media_fan_kind_apology_accepted": "公開道歉被接受",

@@ -6093,214 +6093,45 @@ a:active {
 }
 
 /* ============================================
-   MATCH - PIXI CONTAINER & TIME SCROLLBAR
+   MATCH - WEBASSEMBLY VIEWER STAGE
    ============================================ */
 
-#match-container {
+#match-play-area {
     width: 100%;
-    overflow: hidden;
 }
 
-.match-container {
+/* The viewer's canvas resizes itself to this box, so the box is what pins the
+   aspect ratio. The placeholder sits behind the canvas and is simply painted
+   over once the first frame lands — no script has to clear it. */
+.match-stage {
+    position: relative;
     width: 100%;
+    aspect-ratio: 16 / 9;
     overflow: hidden;
-    position: relative;
+    border-radius: 6px;
+    background: #080c12;
 }
 
-.match-container canvas {
-    display: block;
-    width: 100% !important;
-    height: auto !important;
-}
-
-.time-scrollbar-wrapper {
-    padding: 10px 0;
-    margin-top: 12px;
-    margin-bottom: 10px;
-}
-
-.time-scrollbar-container {
-    position: relative;
-    margin: 0 auto;
-    width: 90%;
-    max-width: 1200px;
-    pointer-events: none;
-}
-
-.half-labels {
+.match-stage-placeholder {
+    position: absolute;
+    inset: 0;
     display: flex;
-    justify-content: space-between;
-    margin-bottom: 5px;
-    padding: 0 2%;
-    pointer-events: none;
-}
-
-.half-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.7);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.time-scrollbar-track {
-    position: relative;
-    height: 6px;
-    background: rgba(255, 255, 255, 0.3);
-    border-radius: 3px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-    pointer-events: auto;
-    cursor: pointer;
-    overflow: visible;
-}
-
-.time-scrollbar-track:hover {
-    background: rgba(255, 255, 255, 0.4);
-}
-
-.time-progress {
-    position: absolute;
-    left: 0;
-    top: 0;
-    height: 100%;
-    background: linear-gradient(90deg, #4caf50 0%, #45a049 100%);
-    border-radius: 3px;
-    pointer-events: none;
-    transition: width 0.1s linear;
-}
-
-.halftime-delimiter {
-    position: absolute;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    pointer-events: none;
-    z-index: 2;
-    transition: left 0.3s ease;
-}
-
-.halftime-delimiter .delimiter-line {
-    width: 3px;
-    height: 20px;
-    background: linear-gradient(180deg, #ff9800 0%, #f57c00 100%);
-    border-radius: 2px;
-    box-shadow: 0 2px 6px rgba(255, 152, 0, 0.5);
-    margin: 0 auto;
-}
-
-.halftime-delimiter .delimiter-label {
-    position: absolute;
-    top: -25px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(255, 152, 0, 0.95);
-    color: #fff;
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-size: 10px;
-    font-weight: bold;
-    white-space: nowrap;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-    letter-spacing: 0.5px;
-}
-
-.goal-marker {
-    position: absolute;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    pointer-events: none;
-    z-index: 2;
-    transition: left 0.3s ease;
-}
-
-.goal-marker .goal-icon {
-    font-size: 16px;
-    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
-    animation: goal-pulse 2s ease-in-out infinite;
-}
-
-.goal-marker.goal-marker-home .goal-icon {
-    filter: drop-shadow(0 2px 4px rgba(0, 48, 125, 0.8));
-}
-
-.goal-marker.goal-marker-away .goal-icon {
-    filter: drop-shadow(0 2px 4px rgba(179, 63, 0, 0.8));
-}
-
-@keyframes goal-pulse {
-    0%,
-    100% {
-        transform: scale(1);
-    }
-    50% {
-        transform: scale(1.1);
-    }
-}
-
-.time-scrollbar-slider {
-    position: absolute;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    width: 24px;
-    height: 24px;
-    background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
-    border: 3px solid #fff;
-    border-radius: 50%;
-    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
-    cursor: grab;
-    pointer-events: auto;
-    transition: transform 0.1s ease;
-    z-index: 3;
-}
-
-.time-scrollbar-slider:hover {
-    transform: translate(-50%, -50%) scale(1.15);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-}
-
-.time-scrollbar-slider:active {
-    cursor: grabbing;
-    transform: translate(-50%, -50%) scale(1.1);
-}
-
-.time-display {
-    position: absolute;
-    top: -35px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0, 0, 0, 0.8);
-    color: #fff;
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: bold;
-    white-space: nowrap;
-    pointer-events: none;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-}
-
-.loading-spinner {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 1000;
-    color: #fff;
-    text-align: center;
-}
-
-.loading-spinner i {
-    margin-bottom: 10px;
-}
-
-.fm-match-not-ready {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
     color: #8a9bb5;
-    font-size: 14px;
-    padding: 24px 16px;
+    font-size: 13px;
     text-align: center;
 }
 
-.fm-match-not-ready i {
-    margin-right: 6px;
+.match-canvas {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+    outline: none;
+    touch-action: none;
 }
 
 .fm-match-recording-disabled {

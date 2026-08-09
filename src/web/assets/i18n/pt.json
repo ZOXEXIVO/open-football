@@ -775,6 +775,7 @@
   "match_recording_disabled": "A visualização da partida está desativada pois consome muitos recursos.",
   "match_recording_disabled_link": "Baixe o OpenFootball para uso local",
   "match_recording_disabled_local": "Você pode executá-la localmente no seu próprio hardware.",
+  "match_viewer_missing": "O visualizador 3D da partida não foi incluído nesta compilação.",
   "match_scouting_assignments": "Atribuições de observação de jogos",
   "matches": "Partidas",
   "media_fan_kind_apology_accepted": "O pedido público de desculpas foi aceite",

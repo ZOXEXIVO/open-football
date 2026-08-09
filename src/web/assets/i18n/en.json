@@ -775,6 +775,7 @@
   "match_recording_disabled": "Match visualization is disabled as it is resource-intensive.",
   "match_recording_disabled_link": "Download OpenFootball for local use",
   "match_recording_disabled_local": "You can run it locally on your own hardware.",
+  "match_viewer_missing": "The 3D match viewer was not included in this build.",
   "match_scouting_assignments": "Match Scouting Assignments",
   "matches": "Matches",
   "media_fan_kind_apology_accepted": "Public apology was accepted",

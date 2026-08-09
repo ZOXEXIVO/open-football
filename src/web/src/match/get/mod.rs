@@ -1,6 +1,8 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::common::default_handler::{
+    COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION, MATCH_VIEWER_AVAILABLE, MATCH_VIEWER_VERSION,
+};
 use crate::common::slug::player_history_slug;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
@@ -39,7 +41,6 @@ pub struct MatchGetTemplate {
     pub lang: String,
     pub league_slug: String,
     pub league_name: String,
-    pub match_id: String,
     pub home_team_name: String,
     pub home_team_slug: String,
     pub home_goals: u8,
@@ -52,13 +53,11 @@ pub struct MatchGetTemplate {
     pub away_goal_events: Vec<GoalEventDisplay>,
     pub away_squad_main: Vec<MatchPlayer>,
     pub away_squad_subs: Vec<MatchPlayer>,
-    pub match_time_ms: u64,
-    pub goals_json: String,
-    pub players_json: String,
-    pub home_color_background: String,
-    pub home_color_foreground: String,
-    pub away_color_background: String,
-    pub away_color_foreground: String,
+    /// Everything the WebAssembly viewer needs, as a JSON literal the page
+    /// hands straight to `MatchViewer.start`.
+    pub viewer_config_json: String,
+    pub match_viewer_available: bool,
+    pub match_viewer_version: &'static str,
     pub player_of_the_match_id: u32,
     pub player_of_the_match_slug: String,
     pub player_of_the_match_name: String,
@@ -81,6 +80,65 @@ pub struct MatchPlayer {
     pub is_player_of_the_match: bool,
     pub rating: String,
     pub rating_tier: &'static str,
+}
+
+/// Mirror of `match_viewer::config::ViewerConfig`. The viewer reads its whole
+/// world from this document, so anything the replay needs to know about the
+/// fixture is resolved here, on the server, where the simulator data lives.
+#[derive(Serialize)]
+struct ViewerConfigJson {
+    canvas: &'static str,
+    api_base: String,
+    match_time_ms: u64,
+    home: TeamColorsJson,
+    away: TeamColorsJson,
+    players: Vec<PlayerJson>,
+    goals: Vec<GoalEventJson>,
+    labels: ViewerLabelsJson,
+}
+
+impl ViewerConfigJson {
+    /// Serialises for inlining inside a `<script>` element. `</` is escaped so
+    /// a player name can never close the element early; `\/` is a legal JSON
+    /// escape, so the viewer still parses it as written.
+    fn to_script_literal(&self) -> String {
+        serde_json::to_string(self)
+            .unwrap_or_else(|_| "null".to_string())
+            .replace("</", "<\\/")
+    }
+}
+
+#[derive(Serialize)]
+struct TeamColorsJson {
+    background: String,
+    foreground: String,
+}
+
+impl TeamColorsJson {
+    /// International fixtures carry country IDs rather than club IDs, so there
+    /// is no kit to look up — those fall back to the neutral pair.
+    fn for_club(data: &SimulatorData, club_id: u32, fallback_background: &str) -> Self {
+        let club = if club_id > 0 {
+            data.club(club_id)
+        } else {
+            None
+        };
+        TeamColorsJson {
+            background: club
+                .map(|c| c.colors.background.clone())
+                .unwrap_or_else(|| fallback_background.to_string()),
+            foreground: club
+                .map(|c| c.colors.foreground.clone())
+                .unwrap_or_else(|| "#ffffff".to_string()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ViewerLabelsJson {
+    first_half: String,
+    second_half: String,
+    loading: String,
 }
 
 #[derive(Serialize)]
@@ -190,7 +248,7 @@ pub async fn match_get_action(
         .as_ref()
         .ok_or_else(|| ApiError::NotFound("Match score not available".to_string()))?;
 
-    let goals_json: Vec<GoalEventJson> = score
+    let viewer_goals: Vec<GoalEventJson> = score
         .detail()
         .iter()
         .filter(|goal| goal.stat_type == MatchStatisticType::Goal)
@@ -201,7 +259,7 @@ pub async fn match_get_action(
         })
         .collect();
 
-    let mut players_json: Vec<PlayerJson> = Vec::new();
+    let mut viewer_players: Vec<PlayerJson> = Vec::new();
 
     // Assign squad numbers (1-based) per team when shirt_number is not set
     let mut home_number: u8 = 1;
@@ -209,7 +267,7 @@ pub async fn match_get_action(
         if let Some(p) = simulator_data.player(*player_id) {
             let sn = p.shirt_number();
             let number = if sn == 0 { home_number } else { sn };
-            players_json.push(PlayerJson {
+            viewer_players.push(PlayerJson {
                 id: p.id,
                 shirt_number: number,
                 last_name: p.full_name.display_last_name().to_string(),
@@ -223,7 +281,7 @@ pub async fn match_get_action(
         if let Some(p) = simulator_data.player(*player_id) {
             let sn = p.shirt_number();
             let number = if sn == 0 { home_number } else { sn };
-            players_json.push(PlayerJson {
+            viewer_players.push(PlayerJson {
                 id: p.id,
                 shirt_number: number,
                 last_name: p.full_name.display_last_name().to_string(),
@@ -239,7 +297,7 @@ pub async fn match_get_action(
         if let Some(p) = simulator_data.player(*player_id) {
             let sn = p.shirt_number();
             let number = if sn == 0 { away_number } else { sn };
-            players_json.push(PlayerJson {
+            viewer_players.push(PlayerJson {
                 id: p.id,
                 shirt_number: number,
                 last_name: p.full_name.display_last_name().to_string(),
@@ -253,7 +311,7 @@ pub async fn match_get_action(
         if let Some(p) = simulator_data.player(*player_id) {
             let sn = p.shirt_number();
             let number = if sn == 0 { away_number } else { sn };
-            players_json.push(PlayerJson {
+            viewer_players.push(PlayerJson {
                 id: p.id,
                 shirt_number: number,
                 last_name: p.full_name.display_last_name().to_string(),
@@ -390,6 +448,21 @@ pub async fn match_get_action(
         (name.to_string(), link)
     };
 
+    let viewer_config = ViewerConfigJson {
+        canvas: "#match-canvas",
+        api_base: format!("/api/match/{}", route_params.match_id),
+        match_time_ms: result_details.match_time_ms,
+        home: TeamColorsJson::for_club(simulator_data, home_club_id, "#00307d"),
+        away: TeamColorsJson::for_club(simulator_data, away_club_id, "#b33f00"),
+        players: viewer_players,
+        goals: viewer_goals,
+        labels: ViewerLabelsJson {
+            first_half: i18n.t("first_half").to_string(),
+            second_half: i18n.t("second_half").to_string(),
+            loading: i18n.t("loading_match").to_string(),
+        },
+    };
+
     Ok(MatchGetTemplate {
         css_version: CSS_VERSION,
         computer_name: &COMPUTER_NAME,
@@ -412,7 +485,6 @@ pub async fn match_get_action(
         league_name: league
             .map(|l| l.name.clone())
             .unwrap_or_else(|| "International".to_string()),
-        match_id: route_params.match_id.clone(),
         home_team_name: home_team_name.clone(),
         home_team_slug: home_team_slug.clone(),
         home_goals,
@@ -519,41 +591,9 @@ pub async fn match_get_action(
                 Some(p)
             })
             .collect(),
-        match_time_ms: result_details.match_time_ms,
-        goals_json: serde_json::to_string(&goals_json).unwrap_or_else(|_| "[]".to_string()),
-        players_json: serde_json::to_string(&players_json).unwrap_or_else(|_| "[]".to_string()),
-        home_color_background: if home_club_id > 0 {
-            simulator_data
-                .club(home_club_id)
-                .map(|c| c.colors.background.clone())
-                .unwrap_or_else(|| "#00307d".to_string())
-        } else {
-            "#00307d".to_string()
-        },
-        home_color_foreground: if home_club_id > 0 {
-            simulator_data
-                .club(home_club_id)
-                .map(|c| c.colors.foreground.clone())
-                .unwrap_or_else(|| "#ffffff".to_string())
-        } else {
-            "#ffffff".to_string()
-        },
-        away_color_background: if away_club_id > 0 {
-            simulator_data
-                .club(away_club_id)
-                .map(|c| c.colors.background.clone())
-                .unwrap_or_else(|| "#b33f00".to_string())
-        } else {
-            "#b33f00".to_string()
-        },
-        away_color_foreground: if away_club_id > 0 {
-            simulator_data
-                .club(away_club_id)
-                .map(|c| c.colors.foreground.clone())
-                .unwrap_or_else(|| "#ffffff".to_string())
-        } else {
-            "#ffffff".to_string()
-        },
+        viewer_config_json: viewer_config.to_script_literal(),
+        match_viewer_available: MATCH_VIEWER_AVAILABLE,
+        match_viewer_version: MATCH_VIEWER_VERSION,
         player_of_the_match_id: motm_id.unwrap_or(0),
         player_of_the_match_slug: motm_slug,
         player_of_the_match_name: motm_name,

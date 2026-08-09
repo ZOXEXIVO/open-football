@@ -1,0 +1,6 @@
+# `getrandom` 0.3 has no default backend on `wasm32-unknown-unknown`; the
+# browser backend has to be opted into with a cfg flag. The web crate's
+# build script runs cargo with this directory as its cwd, which is how
+# cargo discovers this file.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]

@@ -34,3 +34,9 @@ hostname = "0.4.2"
 sysinfo = { version = "0.39.6", features = ["system"] }
 bincode = { version = "2.0", features = ["serde"] }
 toml = "1.1"
+
+# Compiles `src/match` (the Bevy replay viewer) to WebAssembly and stages it
+# into `assets/`. The same helper backs `.dev/match`, so the harness and the
+# server always serve the same viewer.
+[build-dependencies]
+match_viewer_build = { path = "../match/builder" }

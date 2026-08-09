@@ -11,6 +11,11 @@ use sysinfo::{CpuRefreshKind, RefreshKind, System};
 // Also provides CSS_VERSION for cache-busting query params
 include!(concat!(env!("OUT_DIR"), "/css_hash.rs"));
 
+// Whether `build.rs` managed to stage the WebAssembly match viewer into
+// `assets/static/match/`, and a hash of the wasm it staged. Both come from the
+// same build-script pass that compiles `src/match`.
+include!(concat!(env!("OUT_DIR"), "/match_viewer.rs"));
+
 /// Machine hostname, resolved once at startup.
 pub static COMPUTER_NAME: LazyLock<String> = LazyLock::new(|| {
     hostname::get()
@@ -44,13 +49,19 @@ fn cache_control_for(path: &str) -> &'static str {
     match path.rsplit('.').next() {
         Some("woff2" | "woff" | "ttf" | "otf") => "public, max-age=31536000, immutable",
         Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "ico") => "public, max-age=86400",
+        // The viewer module and its wasm are requested with a build hash in the
+        // query string, so they can be cached hard.
+        Some("wasm") => "public, max-age=31536000, immutable",
         Some("css" | "js") => "public, max-age=3600",
         _ => "public, max-age=3600",
     }
 }
 
 /// Serves static files from the embedded assets, or redirects lang-less page routes
-pub async fn default_handler(uri: axum::http::Uri) -> axum::response::Response {
+pub async fn default_handler(
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
     let path_str = uri.path().trim_start_matches('/');
 
     // Try serving as static asset first
@@ -68,6 +79,34 @@ pub async fn default_handler(uri: axum::http::Uri) -> axum::response::Response {
             content.data,
         )
             .into_response();
+    }
+
+    // Assets that are only ever stored compressed — the WebAssembly match
+    // viewer and its module, ~30 MB inflated — live next door under a `.gz`
+    // suffix and are handed straight to the browser to inflate. They keep their
+    // real name in the URL so the wasm still arrives as `application/wasm`,
+    // which is what lets the browser stream-compile it.
+    let accepts_gzip = headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("gzip"));
+    if accepts_gzip {
+        if let Some(content) = Assets::get(&format!("{}.gz", path_str)) {
+            let mime = mime_guess::from_path(path_str).first_or_octet_stream();
+            return (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, mime.to_string()),
+                    (header::CONTENT_ENCODING, "gzip".to_string()),
+                    (
+                        header::CACHE_CONTROL,
+                        cache_control_for(path_str).to_string(),
+                    ),
+                ],
+                content.data,
+            )
+                .into_response();
+        }
     }
 
     // Check if path is missing a language prefix — redirect to default language

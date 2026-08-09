@@ -775,6 +775,7 @@
   "match_recording_disabled": "Spielvisualisierung ist deaktiviert, da sie ressourcenintensiv ist.",
   "match_recording_disabled_link": "OpenFootball für lokale Nutzung herunterladen",
   "match_recording_disabled_local": "Sie können sie lokal auf Ihrer eigenen Hardware ausführen.",
+  "match_viewer_missing": "Die 3D-Spielansicht wurde in diesen Build nicht aufgenommen.",
   "match_scouting_assignments": "Spiel-Scouting-Aufträge",
   "matches": "Spiele",
   "media_fan_kind_apology_accepted": "Öffentliche Entschuldigung wurde angenommen",

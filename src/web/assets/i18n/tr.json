@@ -775,6 +775,7 @@
   "match_recording_disabled": "Maç görselleştirmesi kaynak yoğun olduğundan devre dışı bırakıldı.",
   "match_recording_disabled_link": "Yerel kullanım için OpenFootball'u indirin",
   "match_recording_disabled_local": "Kendi donanımınızda yerel olarak çalıştırabilirsiniz.",
+  "match_viewer_missing": "3B maç görüntüleyicisi bu derlemeye dahil edilmedi.",
   "match_scouting_assignments": "Maç İzleme Görevleri",
   "matches": "Maçlar",
   "media_fan_kind_apology_accepted": "Kamuoyu özrü kabul gördü",

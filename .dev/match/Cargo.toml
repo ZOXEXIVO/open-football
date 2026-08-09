@@ -20,6 +20,11 @@ env_logger = "0.11"
 log = "0.4"
 rand = "0.10"
 
+# Compiles the Bevy replay viewer (../../src/match) to WebAssembly and stages
+# it into OUT_DIR, so `dev_match viewer` serves the same renderer the game does.
+[build-dependencies]
+match_viewer_build = { path = "../../src/match/builder" }
+
 # Match the optimized production profile so the bench reflects real
 # codegen. Fat LTO + a single codegen unit let the compiler inline across
 # the whole core crate (the entire AI hot path lives there). Bit-identical

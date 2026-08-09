@@ -1,11 +1,11 @@
 use axum::response::IntoResponse;
+use core::PlayerFieldPositionGroup;
 use core::block_diag::BlockDiag;
 use core::club::player::Player;
 use core::club::player::PlayerPositionType;
 use core::club::team::tactics::{MatchTacticType, Tactics};
 use core::r#match::FootballEngine;
 use core::r#match::MatchSquad;
-use core::PlayerFieldPositionGroup;
 use core::r#match::player::MatchPlayer;
 use core::r#match::player::strategies::players::ops::skill_composites as sc;
 use core::staff_contract_mod::NaiveDate;
@@ -176,6 +176,19 @@ fn random_level() -> u8 {
 const MATCH_ID: &str = "dev-match-001";
 const LEAGUE_SLUG: &str = "dev";
 const CHUNK_DURATION_MS: u64 = 300_000;
+const HOME_TEAM_NAME: &str = "Home FC";
+const AWAY_TEAM_NAME: &str = "Away United";
+
+/// The Bevy replay viewer, compiled to WebAssembly by `build.rs` and stored
+/// gzipped — the same artefact the web server embeds. Empty when the machine
+/// has no wasm target; the page then says so instead of hanging on a spinner.
+const VIEWER_SCRIPT_GZ: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/viewer/match_viewer.js.gz"));
+const VIEWER_WASM_GZ: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/viewer/match_viewer_bg.wasm.gz"));
+
+/// The rendered viewer page, built once the match has been played.
+static VIEWER_PAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 const POSITIONS_442: [PlayerPositionType; 11] = [
     PlayerPositionType::Goalkeeper,
@@ -237,6 +250,85 @@ struct MetadataJson {
     chunk_count: usize,
     chunk_duration_ms: u64,
     total_duration_ms: u64,
+}
+
+/// Mirror of `match_viewer::config::ViewerConfig`. `debug` is always on here:
+/// the state labels, the speed control and the ball-coordinate readout are the
+/// entire reason to look at a match in this harness rather than in the game.
+#[derive(Serialize)]
+struct ViewerConfigJson<'a> {
+    canvas: &'a str,
+    api_base: String,
+    match_time_ms: u64,
+    home: ViewerColorsJson,
+    away: ViewerColorsJson,
+    players: &'a [PlayerJson],
+    goals: &'a [GoalJson],
+    debug: bool,
+}
+
+#[derive(Serialize)]
+struct ViewerColorsJson {
+    background: &'static str,
+    foreground: &'static str,
+}
+
+/// Builds the one page the harness serves: a score header, a canvas, and the
+/// fixture handed to the viewer.
+struct ViewerPage;
+
+impl ViewerPage {
+    fn render(
+        home_goals: u8,
+        away_goals: u8,
+        level_a: u8,
+        level_b: u8,
+        match_time_ms: u64,
+        goals: &[GoalJson],
+        players: &[PlayerJson],
+    ) -> String {
+        let config = ViewerConfigJson {
+            canvas: "#match-canvas",
+            api_base: format!("/api/match/{}", MATCH_ID),
+            match_time_ms,
+            home: ViewerColorsJson {
+                background: "#00307d",
+                foreground: "#ffffff",
+            },
+            away: ViewerColorsJson {
+                background: "#b33f00",
+                foreground: "#ffffff",
+            },
+            players,
+            goals,
+            debug: true,
+        };
+
+        let placeholder = if VIEWER_WASM_GZ.is_empty() {
+            "match viewer was not built — run `rustup target add wasm32-unknown-unknown`, then rebuild"
+        } else {
+            "Loading match data…"
+        };
+
+        // `</` is escaped so a player name can never close the script element
+        // early; `\/` is a legal JSON escape, so the viewer still reads it as
+        // written.
+        let config_json = serde_json::to_string(&config)
+            .unwrap_or_else(|_| "null".to_string())
+            .replace("</", "<\\/");
+
+        include_str!("viewer.html")
+            .replace("__HOME_NAME__", HOME_TEAM_NAME)
+            .replace("__AWAY_NAME__", AWAY_TEAM_NAME)
+            .replace("__HOME_GOALS__", &home_goals.to_string())
+            .replace("__AWAY_GOALS__", &away_goals.to_string())
+            .replace(
+                "__SUBTITLE__",
+                &format!("level {} vs level {}", level_a, level_b),
+            )
+            .replace("__PLACEHOLDER__", placeholder)
+            .replace("__CONFIG__", &config_json)
+    }
 }
 
 /// Maps the user-facing `level` parameter (1..20) onto a target mean
@@ -1213,7 +1305,11 @@ struct LeagueMatch {
 
 /// Per-player raw performance values for one match, normalised through
 /// the same engine→real volume conversion the rating call site uses.
-fn perf_rows(result: &core::r#match::MatchResultRaw, home_goals: u8, away_goals: u8) -> Vec<(u8, f32)> {
+fn perf_rows(
+    result: &core::r#match::MatchResultRaw,
+    home_goals: u8,
+    away_goals: u8,
+) -> Vec<(u8, f32)> {
     use core::r#match::engine::rating::{EngineVolumeCalibration, RatingContext};
     let mut rows = Vec::new();
     for (id, s) in result.player_stats.iter() {
@@ -1253,7 +1349,11 @@ struct GkRow {
     minutes: u16,
 }
 
-fn keeper_rows(result: &core::r#match::MatchResultRaw, home_goals: u8, away_goals: u8) -> Vec<GkRow> {
+fn keeper_rows(
+    result: &core::r#match::MatchResultRaw,
+    home_goals: u8,
+    away_goals: u8,
+) -> Vec<GkRow> {
     let mut rows = Vec::new();
     for (id, s) in result.player_stats.iter() {
         if pos_group_of(*id) != 0 {
@@ -1510,10 +1610,8 @@ fn run_league(n_teams: usize, rounds: usize, min_lvl: u8, max_lvl: u8) {
                         continue;
                     }
                     let grp = pos_group_of(p.id);
-                    corr[grp as usize].push(
-                        SkillComposite::for_group(&p.skills, grp),
-                        points / weight,
-                    );
+                    corr[grp as usize]
+                        .push(SkillComposite::for_group(&p.skills, grp), points / weight);
                 }
             }
         }
@@ -1647,11 +1745,26 @@ fn print_keeper_season_ladder(played: &[LeagueMatch], teams: &[LeagueTeam]) {
         ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    println!("\n--- KEEPER SEASON LADDER (sorted by conceded per game — AV RAT must fall as you go down) ---");
+    println!(
+        "\n--- KEEPER SEASON LADDER (sorted by conceded per game — AV RAT must fall as you go down) ---"
+    );
     println!(
         "  {:<12} {:>3} {:>4} {:>4} {:>4} {:>6} {:>5} {:>5} {:>6} {:>6} {:>7} {:>4} {:>7} {:>6} {:>6}",
-        "club", "lvl", "Aps", "Con", "Cln", "con/g", "Sv", "Fcd", "save%", "xGp", "xG/shot", "Err",
-        "AV RAT", "best", "worst"
+        "club",
+        "lvl",
+        "Aps",
+        "Con",
+        "Cln",
+        "con/g",
+        "Sv",
+        "Fcd",
+        "save%",
+        "xGp",
+        "xG/shot",
+        "Err",
+        "AV RAT",
+        "best",
+        "worst"
     );
     // Spearman between conceded-per-game and season rating: −1.0 is a
     // perfectly ordered ladder, 0 is noise, positive means the model pays
@@ -1681,8 +1794,21 @@ fn print_keeper_season_ladder(played: &[LeagueMatch], teams: &[LeagueTeam]) {
         };
         println!(
             "  {:<12} {:>3} {:>4} {:>4} {:>4} {:>6.2} {:>5} {:>5} {:>5.1}% {:>6.2} {:>7.3} {:>4} {:>7.2} {:>6.2} {:>6.2}",
-            club, lvl, s.apps, s.conceded, s.clean_sheets, cpg, s.saves, s.faced, save_pct,
-            s.xg_prevented, xg_per_shot, s.errors, av, s.best, s.worst
+            club,
+            lvl,
+            s.apps,
+            s.conceded,
+            s.clean_sheets,
+            cpg,
+            s.saves,
+            s.faced,
+            save_pct,
+            s.xg_prevented,
+            xg_per_shot,
+            s.errors,
+            av,
+            s.best,
+            s.worst
         );
         xs.push(cpg);
         ys.push(av);
@@ -1857,9 +1983,9 @@ impl SpotlightSlot {
     fn slot_index(self) -> usize {
         match self {
             Self::Goalkeeper => 0,
-            Self::CentreBack => 2,  // DefenderCenterLeft
-            Self::CentreMid => 6,   // MidfielderCenterLeft
-            Self::Forward => 9,     // ForwardLeft
+            Self::CentreBack => 2, // DefenderCenterLeft
+            Self::CentreMid => 6,  // MidfielderCenterLeft
+            Self::Forward => 9,    // ForwardLeft
         }
     }
 
@@ -2147,8 +2273,17 @@ impl MixedQualityHarness {
         }
         println!(
             "  {:<8} {:>6} {:>7} {:>6} {:>6} {:>7} {:>8} {:>8} {:>8} {:>8} {:>8}",
-            "side", "skill", "rating", "p10", "p90", "save%", "conc/m", "saves/m", "faced/m",
-            "cmd/m", "err→gl"
+            "side",
+            "skill",
+            "rating",
+            "p10",
+            "p90",
+            "save%",
+            "conc/m",
+            "saves/m",
+            "faced/m",
+            "cmd/m",
+            "err→gl"
         );
         for (label, a) in [("senior", senior), ("youth", youth)] {
             let (mean, p10, p90) = a.rating_dist();
@@ -2657,8 +2792,7 @@ fn run_audit_contest(n: usize) {
             for mp in &squad.main_squad {
                 match mp.tactical_position.current_position.position_group() {
                     PlayerFieldPositionGroup::Goalkeeper => {
-                        gk += sc::
-                            gk_shot_stopping(mp, 45);
+                        gk += sc::gk_shot_stopping(mp, 45);
                         gk_n += 1;
                     }
                     group => {
@@ -2674,9 +2808,7 @@ fn run_audit_contest(n: usize) {
             }
         }
         let gk_mean = gk / gk_n.max(1) as f32;
-        let m: Vec<f32> = (0..3)
-            .map(|i| thr[i] / thr_n[i].max(1) as f32)
-            .collect();
+        let m: Vec<f32> = (0..3).map(|i| thr[i] / thr_n[i].max(1) as f32).collect();
         println!(
             "{:>3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>+8.3}",
             level,
@@ -5134,7 +5266,11 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 let names = core::reception_diag::BAND_NAMES;
                 let mut parts: Vec<String> = Vec::new();
                 for (i, n) in names.iter().enumerate() {
-                    parts.push(format!("{} {:.1}%", n, bands[i] as f32 / total as f32 * 100.0));
+                    parts.push(format!(
+                        "{} {:.1}%",
+                        n,
+                        bands[i] as f32 / total as f32 * 100.0
+                    ));
                 }
                 println!(
                     "  reception distance (receiver→ball at claim): {}   \
@@ -5681,8 +5817,8 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
     let level_a = level_a.unwrap_or_else(random_level);
     let level_b = level_b.unwrap_or_else(random_level);
 
-    let (home_squad, mut players_json) = make_squad_viewer(1, "Home FC", level_a, 0);
-    let (away_squad, away_players) = make_squad_viewer(2, "Away United", level_b, 11);
+    let (home_squad, mut players_json) = make_squad_viewer(1, HOME_TEAM_NAME, level_a, 0);
+    let (away_squad, away_players) = make_squad_viewer(2, AWAY_TEAM_NAME, level_b, 11);
     players_json.extend(away_players);
 
     println!("Play match... (level {} vs level {})", level_a, level_b);
@@ -5761,16 +5897,22 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
     )
     .expect("failed to write metadata");
 
-    let page_data = format!(
-        "const MATCH_ID=\"{}\";const MATCH_TIME_MS={};const GOALS_DATA={};const PLAYERS_DATA={};const HOME_BG=\"#00307d\";const HOME_FG=\"#ffffff\";const AWAY_BG=\"#b33f00\";const AWAY_FG=\"#ffffff\";const HOME_GOALS={};const AWAY_GOALS={};",
-        MATCH_ID,
-        result.match_time_ms,
-        serde_json::to_string(&goals_json).unwrap(),
-        serde_json::to_string(&players_json).unwrap(),
+    let _ = VIEWER_PAGE.set(ViewerPage::render(
         home_goals,
         away_goals,
-    );
-    std::fs::write(out_dir.join("page_data.js"), &page_data).expect("failed to write page data");
+        level_a,
+        level_b,
+        result.match_time_ms,
+        &goals_json,
+        &players_json,
+    ));
+
+    if VIEWER_WASM_GZ.is_empty() {
+        println!(
+            "\nWARNING: the match viewer was not built — run `rustup target add {}` and rebuild",
+            "wasm32-unknown-unknown"
+        );
+    }
 
     println!("\nStarting viewer at http://localhost:18001");
 
@@ -5807,9 +5949,13 @@ async fn serve() {
             "/api/match/{match_id}/chunk/{chunk_num}",
             get(chunk_handler),
         )
-        .route("/static/images/match/field.svg", get(field_svg_handler))
-        .route("/js/pixi.min.js", get(pixi_handler))
-        .route("/match_data.js", get(data_handler));
+        // Same URLs the web server uses, so the page markup is identical on
+        // both sides.
+        .route("/static/match/match_viewer.js", get(viewer_script_handler))
+        .route(
+            "/static/match/match_viewer_bg.wasm",
+            get(viewer_wasm_handler),
+        );
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:18001")
         .await
@@ -5818,18 +5964,37 @@ async fn serve() {
 }
 
 async fn page_handler() -> axum::response::Html<String> {
-    axum::response::Html(include_str!("viewer.html").to_string())
+    axum::response::Html(VIEWER_PAGE.get().cloned().unwrap_or_default())
 }
 
-async fn data_handler() -> impl axum::response::IntoResponse {
-    let path = PathBuf::from("match_results")
-        .join(LEAGUE_SLUG)
-        .join("page_data.js");
-    let data = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+async fn viewer_script_handler() -> impl axum::response::IntoResponse {
+    viewer_asset(VIEWER_SCRIPT_GZ, "text/javascript")
+}
+
+async fn viewer_wasm_handler() -> impl axum::response::IntoResponse {
+    viewer_asset(VIEWER_WASM_GZ, "application/wasm")
+}
+
+/// Both viewer files are stored gzipped — ~30 MB of Bevy and wgpu inflated is
+/// nothing worth holding — and handed straight to the browser to inflate. The
+/// wasm keeps its real content type so the browser can stream-compile it.
+fn viewer_asset(body: &'static [u8], content_type: &'static str) -> axum::response::Response {
+    if body.is_empty() {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            "match viewer was not built",
+        )
+            .into_response();
+    }
     (
-        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
-        data,
+        axum::http::StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, content_type),
+            (axum::http::header::CONTENT_ENCODING, "gzip"),
+        ],
+        body,
     )
+        .into_response()
 }
 
 async fn metadata_handler(
@@ -5867,17 +6032,4 @@ async fn chunk_handler(
             .into_response(),
         Err(_) => (axum::http::StatusCode::NOT_FOUND, "not found").into_response(),
     }
-}
-
-async fn field_svg_handler() -> impl axum::response::IntoResponse {
-    let svg = include_str!("../../../src/web/assets/static/images/match/field.svg");
-    ([(axum::http::header::CONTENT_TYPE, "image/svg+xml")], svg)
-}
-
-async fn pixi_handler() -> impl axum::response::IntoResponse {
-    let js = include_bytes!("../../../src/web/assets/static/js/pixi.min.js");
-    (
-        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
-        js.as_slice(),
-    )
 }
