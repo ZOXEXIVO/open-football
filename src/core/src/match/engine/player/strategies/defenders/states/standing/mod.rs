@@ -298,7 +298,7 @@ impl StateProcessingHandler for DefenderStandingState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: 3.0,
+                        crowd_offset: ctx.player().separation_offset(),
                     }
                     .calculate(ctx.player)
                     .velocity

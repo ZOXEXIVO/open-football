@@ -1,3 +1,4 @@
+use crate::r#match::engine::ball::ball::HandlingVerdict;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -41,13 +42,27 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
             ));
         }
 
-        // 2. Hands are only legal inside our own penalty area. If the ball
-        // has rolled out of the box while we were closing on it, break off
-        // — collecting it there would be a handball.
-        if !ctx.ball().in_own_penalty_area() {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Standing,
-            ));
+        // 2. Are hands legal on THIS ball? Covers the area (it may have
+        // rolled out of the box while we were closing on it), the
+        // back-pass, and the second-touch bar. Previously only the area
+        // was checked, so a keeper scooped up a team-mate's pass without
+        // anything noticing.
+        //
+        // Illegal means "play it with your feet", not "leave it": break off
+        // to Clearing so the ball is dealt with rather than abandoned in
+        // the six-yard box.
+        match ctx.ball().handling_verdict() {
+            HandlingVerdict::Legal => {}
+            HandlingVerdict::OutsideArea => {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Standing,
+                ));
+            }
+            HandlingVerdict::BackPass | HandlingVerdict::SecondTouch => {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Clearing,
+                ));
+            }
         }
 
         // 3. Approach phase. The state is entered from up to ~10u out, so
@@ -74,7 +89,12 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
             // Generate a pickup event
             state_change
                 .events
-                .add_player_event(PlayerEvent::CaughtBall(ctx.player.id));
+                .add_player_event({
+                #[cfg(feature = "match-logs")]
+                crate::r#match::engine::ball::ball::ownership::reception_diag::GATHER_SOURCE[1]
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                PlayerEvent::CaughtBall(ctx.player.id)
+            });
 
             Some(state_change)
         } else {

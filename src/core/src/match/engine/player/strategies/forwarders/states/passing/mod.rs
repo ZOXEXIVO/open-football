@@ -2,6 +2,9 @@ use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::players::ops::forward_shot_decision::{
+    ShotDecision, evaluate_forward_shot_decision,
+};
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
@@ -27,11 +30,47 @@ impl StateProcessingHandler for ForwardPassingState {
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-        // Very close to goal with clear shot — shoot instead of passing
-        if distance_to_goal < 40.0 && ctx.player().has_clear_shot() {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Shooting,
-            ));
+        // Very close to goal — ask whether the shot is actually on, using
+        // the SAME helper `ForwardShootingState` will ask on arrival.
+        //
+        // This used to be a bare `distance < 40 && has_clear_shot()`, which
+        // is not the question the shooting state answers. `Shooting` runs
+        // `evaluate_forward_shot_decision` as its last-mile check and, when
+        // that says pass, sends the forward straight back here — where the
+        // crude geometric test still said shoot. The two never agreed, and
+        // `Forward: Passing <-> Forward: Shooting` became the single
+        // largest remaining loop in the engine at ~14,400 round trips per
+        // match (`dev_match trace`). Because both are on-ball states they
+        // are also exempt from the decision-commitment guard, by design —
+        // an on-ball picture must stay reactive — so nothing else was
+        // damping it.
+        //
+        // Routing through the helper means the decision is made once, with
+        // the xG / pass-EV / clear-shot gates the rest of the engine uses,
+        // and `with_shot_reason` carries it forward so `Shooting` honours
+        // the verdict instead of re-rolling it (see `dispatch_shot` in the
+        // dribbling state for the same pattern).
+        //
+        // Asked ONCE, on entry. The helper rolls shot willingness, so
+        // calling it every tick turns a single chance into a per-tick
+        // lottery the forward eventually wins by attrition — measured at
+        // +1.5 goals a match (2.15 -> 3.65) with xG per team up 1.17 ->
+        // 1.57, all of it from this point-blank band. A chance is one
+        // chance; the player looks up, decides, and commits for this
+        // visit. `MAX_PASS_DURATION` already bounds how long that is, and
+        // losing the ball or a defender closing still exits below.
+        if distance_to_goal < 40.0 && ctx.in_state_time == 0 {
+            match evaluate_forward_shot_decision(ctx, "FWD_PASSING_CLOSE") {
+                ShotDecision::Shoot { reason } => {
+                    return Some(
+                        StateChangeResult::with_forward_state(ForwardState::Shooting)
+                            .with_shot_reason(reason),
+                    );
+                }
+                // Helper says the shot isn't on — carry on looking for the
+                // pass, which is what this state is for.
+                ShotDecision::Pass | ShotDecision::Hold => {}
+            }
         }
 
         // Brief scanning delay before executing pass (unless under pressure)

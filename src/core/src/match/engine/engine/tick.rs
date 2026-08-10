@@ -73,6 +73,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         for player in field.players.iter_mut().filter(|p| !p.is_sent_off) {
             player.check_boundary_collision(context);
             player.move_to();
+            #[cfg(feature = "match-logs")]
+            player.trace_motion(context);
         }
 
         if events.has_events() {
@@ -339,9 +341,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             } else {
                 Vector3::new(1.0, 0.0, 0.0)
             };
+            //
+            // Restated for the metres-per-tick vertical axis: −0.02 m/tick
+            // is 2 m/s of descent, which walks the ball down through the
+            // [1.4, 2.5] heading band over ~40 ticks, and 0.12 u/tick of
+            // goalward drift keeps it inside the 6u header reach for all of
+            // them. The old (−0.35, 1.8) pair was written when the vertical
+            // axis carried unit-scale speeds and would now fall through the
+            // band in three ticks while drifting 60u out of reach.
             let b = &mut field.ball;
-            b.position = Vector3::new(winner_pos.x - dir.x * 2.0, winner_pos.y - dir.y * 2.0, 2.55);
-            b.velocity = Vector3::new(dir.x * 1.8, dir.y * 1.8, -0.35);
+            b.position = Vector3::new(winner_pos.x - dir.x * 2.0, winner_pos.y - dir.y * 2.0, 2.5);
+            b.velocity = Vector3::new(dir.x * 0.12, dir.y * 0.12, -0.02);
             b.current_owner = None;
             b.previous_owner = taker;
             b.flags.in_flight_state = 1;

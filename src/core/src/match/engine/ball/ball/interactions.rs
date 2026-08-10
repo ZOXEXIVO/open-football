@@ -430,8 +430,10 @@ impl Ball {
         // wiring (slide tackle range, sliding_tackle_success) lands
         // without changing the signature again.
         let _ = context;
-        // Only intercept unowned balls that are in flight (active pass)
-        if self.current_owner.is_some() || self.flags.in_flight_state == 0 {
+        // Only intercept unowned balls that are in flight (active pass).
+        // A ball in a keeper's gloves is neither, but guard it explicitly
+        // — it is the one state where "unowned" could ever be wrong.
+        if self.current_owner.is_some() || self.held_in_hands || self.flags.in_flight_state == 0 {
             return;
         }
 
@@ -682,7 +684,10 @@ impl Ball {
         // which excluded 23% of all shot-ticks outright. A defender
         // blocks with whatever he can get in the way, up to a raised
         // boot or a head: 16u is 2 m.
-        const MAX_BLOCK_HEIGHT: f32 = 16.0;
+        // 2.2 m — a defender's raised-arm reach. Was 16.0, which on a
+        // vertical axis measured in metres put the block ceiling above the
+        // stands; it never rejected anything.
+        const MAX_BLOCK_HEIGHT: f32 = 2.2;
         if self.position.z > MAX_BLOCK_HEIGHT {
             #[cfg(feature = "match-logs")]
             block_diag::TOO_HIGH.fetch_add(1, Ordering::Relaxed);

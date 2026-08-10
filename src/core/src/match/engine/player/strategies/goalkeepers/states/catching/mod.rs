@@ -55,12 +55,34 @@ pub struct GoalkeeperCatchingState {}
 impl StateProcessingHandler for GoalkeeperCatchingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if self.is_catch_successful(ctx) {
+            // Are hands legal on THIS ball? Asked at the moment the gloves
+            // close, NOT while he is moving to it. The Laws bite on the act
+            // of handling, and a keeper crossing his own box to reach a
+            // shot spends most of that journey with the ball still outside
+            // the area — judging it per-tick made him abandon virtually
+            // every save from range (goals went 2.3 → 4.0 a match).
+            //
+            // Illegal means he plays it with his feet, which is what a
+            // keeper receiving a back-pass actually does. `Clearing` is the
+            // honest default: he is on the ball, usually with a forward
+            // bearing down.
+            if !ctx.ball().handling_verdict().is_legal() {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Clearing,
+                ));
+            }
+
             let mut holding_result =
                 StateChangeResult::with_goalkeeper_state(GoalkeeperState::HoldingBall);
 
             holding_result
                 .events
-                .add_player_event(PlayerEvent::CaughtBall(ctx.player.id));
+                .add_player_event({
+                #[cfg(feature = "match-logs")]
+                crate::r#match::engine::ball::ball::ownership::reception_diag::GATHER_SOURCE[0]
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                PlayerEvent::CaughtBall(ctx.player.id)
+            });
 
             return Some(holding_result);
         }

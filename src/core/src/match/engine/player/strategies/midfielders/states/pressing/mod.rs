@@ -1,6 +1,7 @@
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -96,8 +97,15 @@ impl StateProcessingHandler for MidfielderPressingState {
         if let Some(opponent) = ctx.players().opponents().nearby(60.0).with_ball(ctx).next() {
             let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
-            // Engage tackle aggressively — midfielders must win the ball
-            if opponent_distance < 50.0 {
+            // Engage only at genuine challenge range. This was 50u
+            // (~6 m) — a distance at which no one can tackle anyone —
+            // while `MidfielderTacklingState` breaks off far closer, so
+            // the pair oscillated for every carrier in between (~35k
+            // round trips a match). `should_commit` also refuses while
+            // the tackle cooldown is running, which is what stops a
+            // midfielder who has just lunged from being fed back into a
+            // state that can only hand him out again.
+            if TackleEngagement::should_commit(ctx, opponent_distance) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));

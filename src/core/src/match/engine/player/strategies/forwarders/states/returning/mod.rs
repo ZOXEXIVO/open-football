@@ -1,5 +1,7 @@
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::forwarders::states::common::{
+    ActivityIntensity, ForwardCondition, InterceptionRange,
+};
 use crate::r#match::{
     ConditionContext, MATCH_TIME_MS, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -35,7 +37,9 @@ impl StateProcessingHandler for ForwardReturningState {
             ));
         }
 
-        if !ctx.team().is_control_ball() && ctx.ball().distance() < 200.0 {
+        // Commit at the INNER band — `Intercepting` gives up at the outer
+        // one, so the two can never both be true (see `InterceptionRange`).
+        if !ctx.team().is_control_ball() && ctx.ball().distance() < InterceptionRange::COMMIT {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Intercepting,
             ));
@@ -48,8 +52,15 @@ impl StateProcessingHandler for ForwardReturningState {
             ));
         }
 
-        // Intercept if ball coming towards player and is closer than before
-        if !ctx.team().is_control_ball() && ctx.ball().is_towards_player_with_angle(0.9) {
+        // Intercept if ball coming towards player and is closer than before.
+        // Bounded by the same give-up range: without the bound this
+        // branch re-entered `Intercepting` for a ball the intercepting
+        // state would abandon on its very next tick, which is the same
+        // two-cycle from a different door.
+        if !ctx.team().is_control_ball()
+            && ctx.ball().distance() < InterceptionRange::GIVE_UP
+            && ctx.ball().is_towards_player_with_angle(0.9)
+        {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Intercepting,
             ));

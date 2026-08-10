@@ -58,6 +58,11 @@ pub struct MatchPlayer {
     /// overrides) deliberately PRESERVES it. See `game_tick_light` for why
     /// light ticks leave it alone.
     pub in_state_time: u64,
+    /// The state occupied immediately BEFORE the current one, ignoring
+    /// self-transitions. Read by the decision-commitment guard in
+    /// [`PlayerMatchState::process`] to recognise a transition that
+    /// merely undoes the last one; see `DecisionCommitment`.
+    pub previous_state: Option<PlayerState>,
     pub statistics: MatchPlayerStatistics,
     pub use_extended_state_logging: bool,
 
@@ -200,6 +205,12 @@ pub struct MatchPlayer {
     /// `Cell`) so `MatchPlayer` stays `Sync` — league/world harnesses
     /// share rosters across match threads.
     max_speed_memo: MaxSpeedMemo,
+
+    /// Per-tick motion / state-churn accumulator for the runtime flicker
+    /// tracer. Dev-only: the field, and every site that touches it,
+    /// compile out without `match-logs`.
+    #[cfg(feature = "match-logs")]
+    pub(crate) motion_trace: crate::r#match::player::motion_diag::MotionTrace,
 
     /// Memo for the fatigue processor's velocity curve, keyed on
     /// `(intensity_ratio_sq bits, sprint_peak bits)` — see
@@ -377,6 +388,7 @@ impl MatchPlayer {
             side: None,
             state: Self::default_state(position),
             in_state_time: 0,
+            previous_state: None,
             statistics: MatchPlayerStatistics::new(),
             waypoint_manager: WaypointManager::new(),
             use_extended_state_logging,
@@ -402,6 +414,8 @@ impl MatchPlayer {
             matchday_form: player.matchday_form(now),
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
+            #[cfg(feature = "match-logs")]
+            motion_trace: Default::default(),
         }
     }
 
@@ -445,6 +459,7 @@ impl MatchPlayer {
             side,
             state: Self::default_state(tactical_position),
             in_state_time: 0,
+            previous_state: None,
             statistics: MatchPlayerStatistics::new(),
             waypoint_manager: WaypointManager::new(),
             use_extended_state_logging,
@@ -477,6 +492,8 @@ impl MatchPlayer {
             matchday_form,
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
+            #[cfg(feature = "match-logs")]
+            motion_trace: Default::default(),
         }
     }
 
@@ -673,6 +690,8 @@ impl MatchPlayer {
 
         self.check_boundary_collision(context);
         self.move_to();
+        #[cfg(feature = "match-logs")]
+        self.trace_motion(context);
     }
 
     /// Reduced-cadence (LOD) update for a far-from-ball player in a
@@ -727,6 +746,8 @@ impl MatchPlayer {
         self.in_state_time += 1;
         self.check_boundary_collision(context);
         self.move_to();
+        #[cfg(feature = "match-logs")]
+        self.trace_motion(context);
     }
 
     #[inline]
@@ -774,8 +795,12 @@ impl MatchPlayer {
     /// and consumed there, so a blanket wipe would drop the shot-reason tag.
     #[inline]
     pub fn transition_to(&mut self, state: PlayerState, source: TransitionSource) {
-        self.in_state_time = 0;
+        // Record BEFORE zeroing: `set_state_internal` reads the running
+        // `in_state_time` as the dwell of the state being left, which is
+        // the only signal that separates a normal transition from an
+        // every-tick oscillation (see `motion_diag`).
         self.set_state_internal(state, source);
+        self.in_state_time = 0;
     }
 
     /// Out-of-band state override that PRESERVES the running `in_state_time`.
@@ -809,8 +834,8 @@ impl MatchPlayer {
     /// state now routes through here.
     #[inline]
     pub fn redirect_to_fresh(&mut self, state: PlayerState, source: TransitionSource) {
-        self.in_state_time = 0;
         self.set_state_internal(state, source);
+        self.in_state_time = 0;
     }
 
     /// The one place `self.state` is written. Both `transition_to` and
@@ -823,9 +848,28 @@ impl MatchPlayer {
         self.state = state;
 
         #[cfg(feature = "match-logs")]
-        crate::r#match::TransitionGraph::record(_from, state, source);
+        {
+            crate::r#match::TransitionGraph::record(_from, state, source);
+            // Dwell = how long the player actually stayed. The graph
+            // dedups edges, so only this number tells a real hand-off
+            // apart from a per-tick oscillation.
+            crate::r#match::player::motion_diag::record_transition(
+                self.id,
+                _from,
+                state,
+                self.in_state_time,
+                source,
+                self.previous_state,
+            );
+        }
         #[cfg(not(feature = "match-logs"))]
         let _ = source;
+
+        // A self-transition is not a move through the state sequence, so
+        // it must not shift the history the commitment guard reads.
+        if _from.compact_id() != state.compact_id() {
+            self.previous_state = Some(_from);
+        }
     }
 
     pub fn set_default_state(&mut self, source: TransitionSource) {
@@ -864,6 +908,24 @@ impl MatchPlayer {
     /// `Forward: Shooting -> Take Ball` tagged `event_handler`).
     pub fn run_for_ball(&mut self) {
         if self.state.is_committed_action() {
+            return;
+        }
+        // Already chasing — leave the state alone. `redirect_to_fresh`
+        // below zeroes `in_state_time`, so re-firing this on a player who
+        // is ALREADY in TakeBall restarted their chase clock every tick
+        // the signal repeated, and every give-up timeout inside TakeBall
+        // (the goalkeeper's 120 / 200-tick abort, the outfield yields)
+        // became unreachable: the player chased a ball they were never
+        // going to reach until something else moved them.
+        // `should_force_takeball` in `strategies::processor` has carried
+        // this same guard from the start — the event path never got it.
+        if matches!(
+            self.state,
+            PlayerState::Goalkeeper(GoalkeeperState::TakeBall)
+                | PlayerState::Defender(DefenderState::TakeBall)
+                | PlayerState::Midfielder(MidfielderState::TakeBall)
+                | PlayerState::Forward(ForwardState::TakeBall)
+        ) {
             return;
         }
         let target = match self.tactical_position.current_position.position_group() {
@@ -932,6 +994,100 @@ impl MatchPlayer {
                     self.velocity.y
                 );
             }
+        }
+    }
+
+    /// Sample this tick's motion for the runtime flicker tracer. Called
+    /// right after `move_to` on every tick that advances the player —
+    /// full AI ticks, LOD-skipped ticks and light ticks alike — so the
+    /// measured path is the path the viewer actually renders.
+    ///
+    /// Accumulation is entirely player-local; only the closing of a
+    /// one-second window touches the shared store.
+    #[cfg(feature = "match-logs")]
+    pub fn trace_motion(&mut self, context: &MatchContext) {
+        use crate::r#match::player::motion_diag;
+
+        let pos = self.position;
+        let vel = self.velocity;
+        let state = self.state;
+        let group = match self.tactical_position.current_position.position_group() {
+            PlayerFieldPositionGroup::Goalkeeper => 0u8,
+            PlayerFieldPositionGroup::Defender => 1,
+            PlayerFieldPositionGroup::Midfielder => 2,
+            PlayerFieldPositionGroup::Forward => 3,
+        };
+        let id = self.id;
+        let t_ms = context.total_match_time;
+        let t = &mut self.motion_trace;
+
+        if !t.seeded {
+            t.seeded = true;
+            t.win_start = pos;
+            t.prev_pos = pos;
+            t.prev_velocity = vel;
+            return;
+        }
+
+        let step = (pos - t.prev_pos).norm();
+        t.prev_pos = pos;
+        t.win_path += step;
+        t.win_ticks += 1;
+        if step < motion_diag::STILL_STEP_U {
+            t.win_still += 1;
+        }
+
+        // Direction reversal: this tick's velocity points back against the
+        // last one, with both fast enough for the direction to be a
+        // decision rather than float noise. Light ticks reuse the previous
+        // velocity unchanged, so they can never register a false reversal.
+        let same_state = t.last_state.map(|s| s.compact_id()) == Some(state.compact_id());
+        if !same_state {
+            if t.last_state.is_some() {
+                t.win_state_changes += 1;
+            }
+            t.last_state = Some(state);
+        }
+
+        let prev = t.prev_velocity;
+        let reversed = vel.norm() > motion_diag::REVERSAL_MIN_SPEED_U
+            && prev.norm() > motion_diag::REVERSAL_MIN_SPEED_U
+            && vel.dot(&prev) < 0.0;
+        motion_diag::note_tick(state, reversed && same_state);
+        if reversed {
+            t.win_reversals += 1;
+            // A reversal with no state change under it means one state's
+            // own velocity fn flipped direction — a steering problem.
+            // With a state change, two states disagree about where to go
+            // — a decision problem. The split decides which to fix.
+            if same_state {
+                t.win_reversals_in_state += 1;
+            }
+        }
+        t.prev_velocity = vel;
+
+        if t.win_ticks >= motion_diag::WINDOW_TICKS {
+            let net = (pos - t.win_start).norm();
+            motion_diag::record_window(
+                id,
+                group,
+                t_ms,
+                state,
+                t.win_path,
+                net,
+                t.win_reversals,
+                t.win_reversals_in_state,
+                t.win_state_changes,
+                t.win_still,
+                t.win_ticks,
+            );
+            t.win_start = pos;
+            t.win_path = 0.0;
+            t.win_ticks = 0;
+            t.win_reversals = 0;
+            t.win_reversals_in_state = 0;
+            t.win_state_changes = 0;
+            t.win_still = 0;
         }
     }
 

@@ -1,7 +1,7 @@
 use crate::actors::BallState;
 use crate::config::ViewerConfig;
-use crate::field::Field;
 use crate::loader::ChunkLoader;
+use crate::camera::CameraZoom;
 use crate::playback::Playback;
 use bevy::prelude::*;
 use bevy::text::LineBreak;
@@ -38,7 +38,13 @@ pub struct SpeedLabel;
 pub struct StatesButton;
 
 #[derive(Component)]
-pub struct BallCoordsLabel;
+pub struct ZoomOutButton;
+
+#[derive(Component)]
+pub struct ZoomInButton;
+
+#[derive(Component)]
+pub struct ZoomLabel;
 
 /// What the debug overlay is showing. Only meaningful when the page asked for
 /// it; in the game itself nothing ever reads or flips this.
@@ -232,9 +238,38 @@ impl Timeline {
                             TextColor(Color::WHITE),
                         ));
 
+                        // Camera zoom, in place of the ball-coordinate
+                        // readout that used to sit here. Those coordinates
+                        // were only ever for cross-checking against the match
+                        // engine logs; being able to pull the lens in and out
+                        // while watching earns the space better.
+                        // Plain ASCII. The typographic minus (U+2212) is the
+                        // correct character and pairs properly with "+", but
+                        // the default font has no glyph for it and it drew as
+                        // a blank box.
+                        for (glyph, outward) in [("-", true), ("+", false)] {
+                            let mut chip = bar.spawn((
+                                Self::chip(26.0),
+                                Interaction::default(),
+                                BackgroundColor(Self::CHIP_BACKGROUND),
+                            ));
+                            if outward {
+                                chip.insert(ZoomOutButton);
+                            } else {
+                                chip.insert(ZoomInButton);
+                            }
+                            chip.with_child((
+                                Text::new(glyph),
+                                TextFont {
+                                    font_size: FontSize::Px(13.0),
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        }
                         bar.spawn((
-                            BallCoordsLabel,
-                            Text::new(""),
+                            ZoomLabel,
+                            Text::new("1.00x"),
                             TextFont {
                                 font_size: FontSize::Px(11.0),
                                 ..default()
@@ -245,7 +280,7 @@ impl Timeline {
                                 ..default()
                             },
                             Node {
-                                width: px(168),
+                                width: px(52),
                                 flex_shrink: 0.0,
                                 justify_content: JustifyContent::Center,
                                 ..default()
@@ -346,11 +381,20 @@ impl Timeline {
     /// Cycles playback speed and flips the state labels. Debug overlay only —
     /// neither button exists otherwise.
     pub fn handle_debug_controls(
+        mut zoom: ResMut<CameraZoom>,
+        zoom_out: Query<&Interaction, (Changed<Interaction>, With<ZoomOutButton>)>,
+        zoom_in: Query<&Interaction, (Changed<Interaction>, With<ZoomInButton>)>,
         speed: Query<&Interaction, (Changed<Interaction>, With<SpeedButton>)>,
         states: Query<&Interaction, (Changed<Interaction>, With<StatesButton>)>,
         mut playback: ResMut<Playback>,
         mut overlay: ResMut<DebugOverlay>,
     ) {
+        if zoom_out.iter().any(|i| *i == Interaction::Pressed) {
+            zoom.step(-1);
+        }
+        if zoom_in.iter().any(|i| *i == Interaction::Pressed) {
+            zoom.step(1);
+        }
         if speed.iter().any(|i| *i == Interaction::Pressed) {
             playback.cycle_speed();
         }
@@ -362,10 +406,11 @@ impl Timeline {
     pub fn refresh_debug(
         playback: Res<Playback>,
         overlay: Res<DebugOverlay>,
-        ball: Res<BallState>,
+        _ball: Res<BallState>,
         mut speed: Query<&mut Text, With<SpeedLabel>>,
         mut states: Query<&mut BackgroundColor, With<StatesButton>>,
-        mut coords: Query<&mut Text, (With<BallCoordsLabel>, Without<SpeedLabel>)>,
+        zoom: Res<CameraZoom>,
+        mut readout: Query<&mut Text, (With<ZoomLabel>, Without<SpeedLabel>)>,
     ) {
         if let Ok(mut text) = speed.single_mut() {
             let wanted = format!("{}x", playback.speed as u32);
@@ -381,15 +426,8 @@ impl Timeline {
             };
             background.set_if_neq(BackgroundColor(wanted));
         }
-        if let Ok(mut text) = coords.single_mut() {
-            // Engine units, not metres: this readout exists to be compared
-            // against the numbers in the match engine's own logs.
-            let wanted = if ball.on_pitch {
-                let engine = Field::to_engine(ball.position);
-                format!("ball {:.1}, {:.1}, {:.1}", engine[0], engine[1], engine[2])
-            } else {
-                "ball —".to_string()
-            };
+        if let Ok(mut text) = readout.single_mut() {
+            let wanted = format!("{:.2}x", zoom.factor);
             if text.as_str() != wanted {
                 **text = wanted;
             }

@@ -187,7 +187,21 @@ impl MidfielderGuardingState {
     /// identical pick (debug oracle on every hit). Shares the
     /// `guard_target` slot with the defender variant — a player is in
     /// exactly one role-specific state per tick.
-    fn find_guard_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+    /// The attacker this midfielder would pick up.
+    ///
+    /// `pub(crate)` so the states that hand players INTO `Guarding` can ask
+    /// the same question first. `MidfielderRunningState` used to route on
+    /// ball position alone ("ball on our side and further than 100u"),
+    /// with no reference to whether there was anybody to guard — and this
+    /// state's only answer to "nobody to guard" is to hand the player
+    /// straight back. That pair ran ~7,400 round trips a match
+    /// (`dev_match trace`). The result is memoised per tick in
+    /// `player_agg_cache`, so the extra call from the sending state is a
+    /// cache hit, not a second scan.
+    pub(crate) fn find_guard_target(
+        &self,
+        ctx: &StateProcessingContext,
+    ) -> Option<MatchPlayerLite> {
         let tick = ctx.current_tick();
         let cached = ctx
             .tick_context

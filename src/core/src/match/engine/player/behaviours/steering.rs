@@ -29,7 +29,19 @@ pub enum SteeringBehavior<'a> {
     FollowPath {
         waypoints: &'a [Vector3<f32>],
         current_waypoint: usize,
-        path_offset: f32,
+        /// Positional shift applied to the waypoint being steered at —
+        /// personal space, as a place to stand rather than a shove.
+        ///
+        /// Replaces a scalar `path_offset` that was only ever tested for
+        /// `> 0.0` (its magnitude was discarded, and several callers were
+        /// re-rolling `IntegerUtils::random(1, 10)` into it every tick for
+        /// no effect). Callers used to add `separation_velocity()` to the
+        /// RESULT instead, which gave the system no resting place: the
+        /// behaviour brakes to zero on the waypoint, so avoidance always
+        /// won there and pushed the player off, and the waypoint pulled
+        /// him back. Shifting the target instead means the player arrives
+        /// at a spot a step clear of whoever is crowding him and stops.
+        crowd_offset: Vector3<f32>,
     },
 }
 
@@ -310,7 +322,7 @@ impl<'a> SteeringBehavior<'a> {
             SteeringBehavior::FollowPath {
                 waypoints,
                 current_waypoint,
-                path_offset,
+                crowd_offset,
             } => {
                 if waypoints.is_empty() {
                     return SteeringOutput {
@@ -327,34 +339,32 @@ impl<'a> SteeringBehavior<'a> {
                     };
                 }
 
-                let target = waypoints[*current_waypoint];
+                // Steer at the waypoint shifted clear of nearby players,
+                // so the arrival point itself is somewhere the player can
+                // actually come to rest.
+                let target = waypoints[*current_waypoint] + *crowd_offset;
 
                 // Calculate distance to current waypoint
                 let to_waypoint = target - player.position;
                 let distance = to_waypoint.norm();
 
-                // Calculate desired velocity toward waypoint with slight offset for natural movement
-                let direction = if distance > 0.0 {
-                    to_waypoint / distance
-                } else {
-                    Vector3::zeros()
-                };
-
-                // Apply slight offset if specified (makes movement more
-                // natural). Guarded normalize: with no offset — or when
-                // standing exactly on the waypoint — the perpendicular
-                // is the zero vector and normalize() would poison the
-                // velocity with NaN.
-                let offset_term = if *path_offset > 0.0 {
-                    Vector3::new(-direction.y, direction.x, 0.0)
-                        .try_normalize(1e-4)
-                        .map_or(Vector3::zeros(), |p| p * 0.1)
-                } else {
-                    Vector3::zeros()
-                };
-
                 let max_speed = player.max_speed_with_condition_cached();
-                let desired_velocity = (direction + offset_term) * max_speed;
+
+                // Settle on arrival. Without this the desired velocity
+                // stayed at full speed right up to the waypoint, so the
+                // player overshot and was steered back — the same
+                // hunting-around-the-target oscillation `Arrive` avoids
+                // with its deadzone.
+                const ARRIVAL_DEADZONE: f32 = 3.0;
+                if distance < ARRIVAL_DEADZONE {
+                    return SteeringOutput {
+                        velocity: player.velocity * 0.2,
+                        rotation: 0.0,
+                    };
+                }
+
+                let direction = to_waypoint / distance;
+                let desired_velocity = direction * max_speed;
                 let steering = desired_velocity - player.velocity;
 
                 // Limit steering force

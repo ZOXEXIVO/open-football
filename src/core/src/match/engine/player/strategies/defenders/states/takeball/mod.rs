@@ -44,23 +44,59 @@ impl StateProcessingHandler for DefenderTakeBallState {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let ball_vel = ctx.tick_context.positions.ball.velocity;
         let landing = ctx.tick_context.positions.ball.landing_position;
-        let is_aerial = ball_pos.z > 2.3;
-        let target = if is_aerial { landing } else { ball_pos };
 
-        let mut arrive_velocity = if is_aerial {
+        // Aim point crosses smoothly from the ball itself to where it will
+        // land as it rises, instead of snapping between them at a fixed
+        // height.
+        //
+        // This used to be `if ball_pos.z > 2.3 { landing } else { ball_pos }`.
+        // A bouncing ball crosses 2.3 repeatedly, and the two targets can
+        // be tens of units apart in DIFFERENT directions — so the chaser's
+        // velocity inverted on every crossing. `Defender: Take Ball`
+        // measured 6.6-7.8 velocity reversals per second held with the
+        // player never leaving the state (`dev_match trace`), which is a
+        // chaser visibly shivering next to a loose ball instead of
+        // collecting it. Blending across a band means there is no height
+        // at which the aim point can jump.
+        const GROUND_H: f32 = 1.5;
+        const AERIAL_H: f32 = 3.0;
+        let t = ((ball_pos.z - GROUND_H) / (AERIAL_H - GROUND_H)).clamp(0.0, 1.0);
+        // Smoothstep: zero gradient at both ends, so the aim point has no
+        // corner where it starts or finishes moving.
+        let aerial = t * t * (3.0 - 2.0 * t);
+        let target = ball_pos + (landing - ball_pos) * aerial;
+
+        // Same treatment for the behaviour itself: `Arrive` brakes into a
+        // landing spot, `Pursuit` leads a rolling ball, and switching
+        // between them at a threshold is its own discontinuity.
+        let mut arrive_velocity = if aerial >= 1.0 {
             SteeringBehavior::Arrive {
                 target,
                 slowing_distance: 10.0,
             }
             .calculate(ctx.player)
             .velocity
-        } else {
+        } else if aerial <= 0.0 {
             SteeringBehavior::Pursuit {
                 target,
                 target_velocity: ball_vel,
             }
             .calculate(ctx.player)
             .velocity
+        } else {
+            let brake = SteeringBehavior::Arrive {
+                target,
+                slowing_distance: 10.0,
+            }
+            .calculate(ctx.player)
+            .velocity;
+            let lead = SteeringBehavior::Pursuit {
+                target,
+                target_velocity: ball_vel,
+            }
+            .calculate(ctx.player)
+            .velocity;
+            lead * (1.0 - aerial) + brake * aerial
         };
 
         // Add separation force to prevent player stacking

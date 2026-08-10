@@ -8,6 +8,9 @@ struct Strip {
     shirt: Color,
     shorts: Color,
     socks: Color,
+    /// Ink for the printed number: whichever of black or white the shirt can
+    /// actually carry.
+    print: Color,
 }
 
 impl Strip {
@@ -31,6 +34,15 @@ impl Strip {
             // Socks in the shirt colour: down among twenty-two pairs of legs it
             // is the last place the eye can still pick a side out.
             socks: shirt,
+            print: Self::print_for(shirt),
+        }
+    }
+
+    fn print_for(shirt: Color) -> Color {
+        if Self::luminance(shirt) > 0.42 {
+            Wardrobe::DARK
+        } else {
+            Wardrobe::LIGHT
         }
     }
 
@@ -41,6 +53,7 @@ impl Strip {
             shirt,
             shorts: Wardrobe::DARK,
             socks: Wardrobe::DARK,
+            print: Self::print_for(shirt),
         }
     }
 
@@ -98,9 +111,41 @@ impl Complexion {
         ((Self::hash(id) >> 16) % Self::BOOTS.len() as u32) as usize
     }
 
-    /// Multiplier on the model's height — a hand's width either side of 1.80 m.
+    /// Multiplier on the model's height. Spans roughly 1.70 m to 1.92 m
+    /// against the 1.79 m base — the real range of a senior squad, from a
+    /// pocket winger to a centre-half.
+    ///
+    /// Was ±4%, which is 1.72-1.86 and far too tight to tell anyone apart
+    /// at broadcast camera distance.
     pub fn height(id: u32) -> f32 {
-        0.962 + ((Self::hash(id) >> 20) % 76) as f32 / 1000.0
+        0.950 + ((Self::hash(id) >> 20) % 116) as f32 / 1000.0
+    }
+
+    /// Multiplier on the model's GIRTH — width and depth, independent of
+    /// height.
+    ///
+    /// Every player used to be one mesh under a uniform scale, so the whole
+    /// squad had an identical build and differed only in size and colour.
+    /// Two footballers of the same height are not the same shape: one is a
+    /// whippet and one is built like a bouncer, and applied to x and z only
+    /// this separates them without a second mesh. It widens the shoulders
+    /// and the hips and thickens every limb together, which is exactly what
+    /// build means.
+    ///
+    /// Drawn from the top bits of the hash so it is independent of height —
+    /// tall players are not systematically broad.
+    pub fn build(id: u32) -> f32 {
+        0.930 + ((Self::hash(id) >> 26) % 64) as f32 / 440.0
+    }
+
+    /// How a player carries himself, −1..1 and fixed for the match.
+    ///
+    /// Feeds arm width, elbow flex and forward lean, and offsets where in
+    /// the run cycle he starts. Without it all twenty-two run one identical
+    /// animation in phase with each other, which no amount of modelling
+    /// will stop looking mechanical.
+    pub fn carriage(id: u32) -> f32 {
+        ((Self::hash(id) >> 12) % 200) as f32 / 100.0 - 1.0
     }
 
     /// Consecutive player ids have to land on unrelated appearances, and squad
@@ -124,6 +169,8 @@ pub struct Outfit {
     pub skin: Handle<StandardMaterial>,
     pub hands: Handle<StandardMaterial>,
     pub hair: Handle<StandardMaterial>,
+    /// `None` for a player the team sheet gave no shirt number.
+    pub number: Option<Handle<StandardMaterial>>,
 }
 
 /// One strip, as materials.
@@ -146,6 +193,9 @@ pub struct Wardrobe {
     gloves: Handle<StandardMaterial>,
     markers: [Handle<StandardMaterial>; 2],
     shadow: Handle<StandardMaterial>,
+    /// One printed number per player — the only material on the pitch that
+    /// cannot be shared, since the glyphs are baked into the texture.
+    numbers: Vec<(u32, Handle<StandardMaterial>)>,
 }
 
 impl Wardrobe {
@@ -154,7 +204,18 @@ impl Wardrobe {
     /// Keeper strips, home then away. Neither belongs to a club: a keeper has
     /// to be told apart from twenty outfielders, from the other keeper, and
     /// from the grass they are standing on.
-    const KEEPERS: [Color; 2] = [Color::srgb(0.96, 0.83, 0.15), Color::srgb(0.90, 0.28, 0.62)];
+    ///
+    /// Both yellow, which is the goalkeeper colour — the away keeper used to
+    /// be magenta. They are two SHADES of it rather than one, because the
+    /// second constraint above is real: with the lens pulled back, both
+    /// penalty areas can be in frame at once. Bright yellow and a
+    /// green-tinted one read as the same colour from the stand and stay
+    /// separable side by side, which is exactly what kit rules do with a
+    /// keeper clash.
+    ///
+    /// The green-yellow is deliberately the AWAY one: it is the weaker of the
+    /// two against grass, and the away keeper is the one at the far end.
+    const KEEPERS: [Color; 2] = [Color::srgb(0.98, 0.84, 0.10), Color::srgb(0.80, 0.88, 0.18)];
     const GLOVES: Color = Color::srgb(0.88, 0.90, 0.94);
     const HOME_FALLBACK: Color = Color::srgb(0.0, 0.19, 0.49);
     const AWAY_FALLBACK: Color = Color::srgb(0.70, 0.25, 0.0);
@@ -180,22 +241,44 @@ impl Wardrobe {
 
         // One kit per (side, keeper) pairing: the only four strips that can
         // take the field.
-        let kits = [
+        let strips = [
             Strip::outfield(&config.home, Self::HOME_FALLBACK),
             Strip::outfield(&config.away, Self::AWAY_FALLBACK),
             Strip::keeper(Self::KEEPERS[0]),
             Strip::keeper(Self::KEEPERS[1]),
-        ]
-        .map(|strip| Kit {
-            shirt: Self::cloth(materials, strip.shirt, 0.72),
-            shorts: Self::cloth(materials, strip.shorts, 0.75),
-            socks: Self::cloth(materials, strip.socks, 0.88),
+        ];
+        let kits = [0, 1, 2, 3].map(|index| Kit {
+            shirt: Self::cloth(materials, strips[index].shirt, 0.72),
+            shorts: Self::cloth(materials, strips[index].shorts, 0.75),
+            socks: Self::cloth(materials, strips[index].socks, 0.88),
         });
+
+        let numbers = config
+            .players
+            .iter()
+            .filter(|player| player.shirt_number > 0)
+            .map(|player| {
+                let strip = &strips[Self::strip_index(player)];
+                let texture = Textures::number(images, player.shirt_number);
+                let ink = strip.print.to_srgba();
+                (
+                    player.id,
+                    materials.add(StandardMaterial {
+                        base_color: Color::srgba(ink.red, ink.green, ink.blue, 1.0),
+                        base_color_texture: Some(texture),
+                        alpha_mode: AlphaMode::Blend,
+                        perceptual_roughness: 0.85,
+                        ..default()
+                    }),
+                )
+            })
+            .collect();
 
         let ring = Textures::ring(images);
         let blob = Textures::blob(images);
         Wardrobe {
             kits,
+            numbers,
             skin,
             hair,
             boots,
@@ -214,15 +297,19 @@ impl Wardrobe {
         }
     }
 
+    fn strip_index(player: &PlayerInfo) -> usize {
+        match (player.is_goalkeeper(), player.is_home) {
+            (false, true) => 0,
+            (false, false) => 1,
+            (true, true) => 2,
+            (true, false) => 3,
+        }
+    }
+
     /// What this player is wearing. The strip comes off the team sheet, the
     /// rest from who they are.
     pub fn outfit(&self, player: &PlayerInfo) -> Outfit {
-        let kit = match (player.is_goalkeeper(), player.is_home) {
-            (false, true) => &self.kits[0],
-            (false, false) => &self.kits[1],
-            (true, true) => &self.kits[2],
-            (true, false) => &self.kits[3],
-        };
+        let kit = &self.kits[Self::strip_index(player)];
         let skin = self.skin[Complexion::skin(player.id)].clone();
         Outfit {
             shirt: kit.shirt.clone(),
@@ -236,6 +323,11 @@ impl Wardrobe {
             },
             skin,
             hair: self.hair[Complexion::hair(player.id)].clone(),
+            number: self
+                .numbers
+                .iter()
+                .find(|(id, _)| *id == player.id)
+                .map(|(_, material)| material.clone()),
         }
     }
 

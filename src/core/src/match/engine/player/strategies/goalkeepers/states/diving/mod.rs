@@ -48,7 +48,12 @@ impl StateProcessingHandler for GoalkeeperDivingState {
         if self.is_ball_caught(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Standing,
-                Event::PlayerEvent(PlayerEvent::CaughtBall(ctx.player.id)),
+                Event::PlayerEvent({
+                #[cfg(feature = "match-logs")]
+                crate::r#match::engine::ball::ball::ownership::reception_diag::GATHER_SOURCE[2]
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                PlayerEvent::CaughtBall(ctx.player.id)
+            }),
             ));
         } else if self.is_ball_nearby(ctx) {
             let mut result = StateChangeResult::with_goalkeeper_state(GoalkeeperState::Catching);

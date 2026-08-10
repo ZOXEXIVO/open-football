@@ -52,7 +52,7 @@ impl StateProcessingHandler for ForwardWalkingState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: IntegerUtils::random(1, 10) as f32,
+                        crowd_offset: ctx.player().separation_offset(),
                     }
                     .calculate(ctx.player)
                     .velocity,

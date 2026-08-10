@@ -1,5 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefensiveLine,
+};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
@@ -9,7 +11,7 @@ use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
-use crate::{IntegerUtils, PlayerFieldPositionGroup};
+use crate::PlayerFieldPositionGroup;
 use nalgebra::Vector3;
 
 const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Defenders almost never shoot, only from very close
@@ -296,8 +298,13 @@ impl StateProcessingHandler for DefenderRunningState {
             // Gated on "near start position" so a defender caught upfield
             // doesn't stall there; the earlier `Returning` branch handles Big
             // displacement and this covers the Small/Medium idle case.
+            // Same shared predicate as the phase dispatch above: settle
+            // into the line only once we're actually in it, or this
+            // branch just re-opens the HoldingLine <-> Running loop from
+            // the other end 20 ticks later.
             if ctx.in_state_time > 20
                 && ctx.player().position_to_distance() != PlayerDistanceFromStartPosition::Big
+                && DefensiveLine::is_in_line(ctx)
             {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::HoldingLine,
@@ -358,23 +365,39 @@ impl StateProcessingHandler for DefenderRunningState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        if ctx.player.should_follow_waypoints(ctx) {
-            let waypoints = ctx.player.get_waypoints_as_vectors();
-
-            if !waypoints.is_empty() {
-                return Some(
-                    SteeringBehavior::FollowPath {
-                        waypoints,
-                        current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: IntegerUtils::random(1, 10) as f32,
-                    }
-                    .calculate(ctx.player)
-                    .velocity
-                        + ctx.player().separation_velocity(),
-                );
-            }
-        }
-
+        // NOTE: no waypoint branch here, deliberately.
+        //
+        // This state used to lead with `should_follow_waypoints`, which
+        // steered the defender along his tactical route — a straight line
+        // running 320u UPFIELD from his base position. The two problems
+        // with that compounded each other.
+        //
+        // First, the predicate is not stable: it returns false while the
+        // player is the designated ball-chaser, and that designation is a
+        // tolerance band that swaps between team-mates from one tick to
+        // the next. So the velocity alternated between "march up my route"
+        // and "go to the ball" — frequently opposite directions — without
+        // the player ever leaving `Running`. `Defender: Running` was by
+        // some distance the largest single source of position flicker
+        // left in the engine at that point: **11.7 velocity reversals per
+        // second held, 694k of them across three matches, with 94% of all
+        // this state's reversals happening with no state change under
+        // them** (`dev_match trace`). Zeroing the crowding term changed
+        // nothing, which is what identified the branch alternation rather
+        // than the steering composition as the cause.
+        //
+        // Second, and more basic: marching an attacking route is not what
+        // this state is for. `Running` is where a defender recovers his
+        // shape or goes to engage; pushing up the pitch has its own state
+        // (`PushingUp`) and its own phase dispatch. Following the route
+        // here also dragged defenders off the defensive line, which is
+        // what kept `DefensiveLine::is_in_line` failing in the first
+        // place. The route branches remain in `Standing` and `Walking`,
+        // where idle shape drift is the intent.
+        //
+        // What is left are the two ball-relative behaviours below, which
+        // cannot invert against each other: engage a nearby carrier, or
+        // recover the mark.
         if ctx.player.has_ball(ctx) {
             // With ball: move toward opponent goal, separation matters
             Some(
@@ -387,44 +410,90 @@ impl StateProcessingHandler for DefenderRunningState {
                     + ctx.player().separation_velocity(),
             )
         } else {
-            // Without ball: close down on nearby ball carrier, or return to position
+            // Without ball: engage a nearby carrier, or recover the mark —
+            // BLENDED, not switched.
+            //
+            // These were two branches either side of a hard 120u test, and
+            // they point in opposite directions: at 119u the defender ran
+            // at the carrier, at 121u he ran home. A carrier drifting
+            // along that radius therefore inverted the defender's velocity
+            // from one tick to the next, for as long as he stayed near it.
+            // A hard cut between two opposed behaviours is a flicker
+            // generator wherever it appears, and no amount of hysteresis
+            // on a memoryless branch selection removes it.
+            //
+            // Weighting the two continuously does. `engage` runs 1 at
+            // close range down to 0 at 140u with a smooth shoulder, so a
+            // defender near the carrier closes him down, one far away
+            // holds his mark, and the defenders in between shade toward
+            // the ball while keeping their shape — which is what a back
+            // line actually does. There is no distance at which the
+            // velocity can jump.
+            let carrier = ctx.players().opponents().with_ball().next();
+            let engage = carrier
+                .map(|c| {
+                    /// Inside this the defender is fully committed to the carrier.
+                    const FULL_ENGAGE: f32 = 80.0;
+                    /// Beyond this the carrier no longer pulls him at all.
+                    const NO_ENGAGE: f32 = 140.0;
+                    let d = (ctx.player.position - c.position).magnitude();
+                    let t = ((NO_ENGAGE - d) / (NO_ENGAGE - FULL_ENGAGE)).clamp(0.0, 1.0);
+                    // Smoothstep — zero gradient at both ends, so the
+                    // weight (and therefore the velocity) has no corner.
+                    t * t * (3.0 - 2.0 * t)
+                })
+                .unwrap_or(0.0);
 
-            // Check if an opponent has the ball nearby — engage them instead of returning home
-            if let Some(ball_carrier) = ctx.players().opponents().with_ball().next() {
-                let dist_to_carrier = (ctx.player.position - ball_carrier.position).magnitude();
-
-                if dist_to_carrier < 120.0 {
-                    // Get carrier's velocity for pursuit prediction
+            if engage > 0.0 {
+                if let Some(ball_carrier) = carrier {
                     let carrier_velocity =
                         ctx.tick_context.positions.players.velocity(ball_carrier.id);
-
-                    // Use Pursuit to intercept the ball carrier's predicted path
-                    let base = SteeringBehavior::Pursuit {
+                    let pursuit = SteeringBehavior::Pursuit {
                         target: ball_carrier.position,
                         target_velocity: carrier_velocity,
                     }
                     .calculate(ctx.player)
                     .velocity;
 
-                    return Some(base + ctx.player().separation_velocity());
+                    if engage >= 1.0 {
+                        return Some(pursuit + ctx.player().separation_velocity());
+                    }
+
+                    let home = SteeringBehavior::Arrive {
+                        target: ctx.player.start_position
+                            + ctx.player().separation_offset(),
+                        slowing_distance: 30.0,
+                    }
+                    .calculate(ctx.player)
+                    .velocity;
+                    return Some(pursuit * engage + home * (1.0 - engage));
                 }
             }
 
-            // No nearby ball carrier — return to tactical position
-            let base = SteeringBehavior::Arrive {
-                target: ctx.player.start_position,
-                slowing_distance: 30.0,
-            }
-            .calculate(ctx.player)
-            .velocity;
-
-            // Only compute separation if close to start (near other defenders)
+            // No carrier in range — recover the mark.
+            //
+            // Crowding shifts the MARK rather than being added to the
+            // velocity. Added as a velocity it fought `Arrive` with no
+            // stable fixed point — `Arrive` brakes to zero inside 3u of
+            // the mark, so avoidance always won there and pushed the
+            // defender back out, and this state became the single
+            // largest source of on-the-spot twitch left in the engine.
+            // Steering at one shifted target instead lets him settle a
+            // step off his mark, which is where he should stand anyway.
             let dist_to_start = (ctx.player.position - ctx.player.start_position).magnitude();
-            if dist_to_start < 40.0 {
-                Some(base + ctx.player().separation_velocity())
+            let target = if dist_to_start < 40.0 {
+                ctx.player.start_position + ctx.player().separation_offset()
             } else {
-                Some(base)
-            }
+                ctx.player.start_position
+            };
+            Some(
+                SteeringBehavior::Arrive {
+                    target,
+                    slowing_distance: 30.0,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            )
         }
     }
 
@@ -522,9 +591,20 @@ impl DefenderRunningState {
                         DefenderState::Returning,
                     ));
                 }
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::HoldingLine,
-                ));
+                // Settle into the line only once we have actually reached
+                // it. This used to hand off unconditionally on
+                // `near_start`, while `HoldingLine` left again on line
+                // DEVIATION — two different measurements of the same
+                // thing, so a defender near his start but off the drifted
+                // line ping-ponged between the two states every tick.
+                // `DefensiveLine::is_in_line` is now the one predicate
+                // both sides read; until it holds, keep running back.
+                if DefensiveLine::is_in_line(ctx) {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::HoldingLine,
+                    ));
+                }
+                return None;
             }
             // Mid-block: similar to low block but higher up. Same
             // shape-first defaults.
@@ -539,9 +619,12 @@ impl DefenderRunningState {
                 if ball_dist < 60.0 && ctx.team().is_best_player_to_chase_ball() {
                     return None; // fall through to the tackling logic
                 }
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::HoldingLine,
-                ));
+                if DefensiveLine::is_in_line(ctx) {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::HoldingLine,
+                    ));
+                }
+                return None;
             }
             // Defensive transition — the one closest defender engages,
             // others recover shape.

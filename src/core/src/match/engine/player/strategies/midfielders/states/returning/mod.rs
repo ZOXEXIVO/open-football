@@ -1,5 +1,7 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, MidfielderCondition, ShapeStation,
+};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -80,9 +82,11 @@ impl StateProcessingHandler for MidfielderReturningState {
             ));
         }
 
-        // Transition to Running when close to position (don't walk, stay active)
-        let distance_to_start = (ctx.player.position - ctx.player.start_position).magnitude();
-        if distance_to_start < 80.0 {
+        // Recovery run finished — back to active play. `ShapeStation` is
+        // the same predicate `MidfielderRunningState` reads before
+        // sending anyone back here, so "home" now means one thing to both
+        // states instead of two contradictory ones.
+        if !ShapeStation::should_recover(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));

@@ -39,7 +39,10 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.find(|player| {
-            let player_has_ball = self.ctx.ball().owner_id() == Some(player.id);
+            // `carrier_id`, not `owner_id`: a keeper with the ball in his
+            // gloves owns it but cannot be challenged for it. See
+            // `BallOperationsImpl::carrier_id`.
+            let player_has_ball = self.ctx.ball().carrier_id() == Some(player.id);
             player_has_ball == self.has_ball
         })
     }

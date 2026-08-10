@@ -752,6 +752,31 @@ pub struct BallMetadata {
     /// the pass ran through to nobody. Read by the receiving override in
     /// `PlayerFieldPositionGroup::process`.
     pub pass_target: Option<u32>,
+
+    /// The player currently barred from re-collecting the ball because he
+    /// released it himself and it has not travelled yet, if any.
+    ///
+    /// The ownership layer enforces this on its own claim paths, but the
+    /// goalkeeper reaches ownership through his state machine
+    /// (`Standing` → `PickingUpBall` → `CaughtBall` → `secure_ball_for`),
+    /// which bypasses those paths entirely. Surfacing the bar here lets
+    /// the keeper decline to go for it in the first place, instead of
+    /// lunging at a ball the engine will not let him have.
+    /// See `Ball::blocked_recollect_player`.
+    pub recollect_blocked_player: Option<u32>,
+
+    /// The ball is in a goalkeeper's hands — uncontestable. Read by the
+    /// pressing states (there is nothing to press) and by anything that
+    /// would otherwise treat the keeper as a carrier who can be closed
+    /// down. See `Ball::held_in_hands`.
+    pub held_in_hands: bool,
+    /// `(player, team)` of the team-mate whose deliberate kick or throw-in
+    /// was the last touch, if the last touch was one. Feeds the back-pass
+    /// half of `BallOperationsImpl::handling_verdict`.
+    pub deliberate_kick_by: Option<(u32, u32)>,
+    /// Goalkeeper who released the ball from his hands and is waiting for
+    /// somebody else to play it before he may handle it again.
+    pub hands_released_by: Option<u32>,
 }
 
 impl BallMetadata {
@@ -792,6 +817,20 @@ impl BallMetadata {
         self.pass_origin_restart = field.ball.pass_origin_restart;
         self.last_rebound_tick = field.ball.last_rebound_tick;
         self.pass_target = field.ball.pass_target_player_id;
+        self.recollect_blocked_player = field.ball.blocked_recollect_player();
+        self.held_in_hands = field.ball.held_in_hands;
+        self.deliberate_kick_by = if field.ball.last_touch_was_deliberate_kick {
+            field
+                .ball
+                .last_touch_player_id
+                .zip(field.ball.last_touch_team_id)
+        } else {
+            None
+        };
+        self.hands_released_by = field
+            .ball
+            .last_release_player_id
+            .filter(|_| field.ball.last_release_from_hands);
     }
 }
 
@@ -811,6 +850,10 @@ impl From<&MatchField> for BallMetadata {
             pass_origin_restart: PassOriginRestart::OpenPlay,
             last_rebound_tick: 0,
             pass_target: None,
+            recollect_blocked_player: None,
+            held_in_hands: false,
+            deliberate_kick_by: None,
+            hands_released_by: None,
         };
         meta.update(field);
         meta

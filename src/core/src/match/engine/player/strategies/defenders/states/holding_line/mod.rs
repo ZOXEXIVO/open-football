@@ -1,7 +1,9 @@
 use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefensiveLine,
+};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
@@ -9,7 +11,8 @@ use crate::r#match::{
     StateProcessingHandler,
 };
 
-const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 35.0; // Tighter line — less room for attackers
+// Line deviation now lives on `DefensiveLine` (shared with the Running
+// state, with hysteresis) — see `defenders/states/common`.
 const BALL_PROXIMITY_THRESHOLD: f32 = 150.0; // React to ball from further out
 const MARKING_DISTANCE_THRESHOLD: f32 = 50.0; // Pick up attackers from further away
 const PRESSING_DISTANCE_THRESHOLD: f32 = 60.0; // Step out to press ball carrier earlier
@@ -84,14 +87,13 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             ));
         }
 
-        // 1. Calculate the defensive line position (x-axis: goal-to-goal)
-        let defensive_line_position = self.calculate_defensive_line_position(ctx);
-
-        // 2. Calculate the distance from the defender to the defensive line
-        let distance_from_line = (ctx.player.position.x - defensive_line_position).abs();
-
-        // 3. If the defender is too far from the defensive line, switch to Running state
-        if distance_from_line > MAX_DEFENSIVE_LINE_DEVIATION {
+        // Off the line — run back to it. `DefensiveLine::is_in_line`
+        // is the SAME predicate `DefenderRunningState` uses to decide
+        // we've arrived, so the two states can no longer disagree and
+        // bounce the defender between them every tick (see
+        // `DefensiveLine`). Holding is the current state here, so this
+        // reads the generous `EXIT_BAND`.
+        if !DefensiveLine::is_in_line(ctx) {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Running,
             ));
@@ -141,11 +143,23 @@ impl StateProcessingHandler for DefenderHoldingLineState {
                             DefenderState::Pressing,
                         ));
                     }
-                    // Primary but out of range — chase via Running so we
-                    // can close the gap instead of holding the line.
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Running,
-                    ));
+                    // Primary but the carrier is still beyond pressing
+                    // range: hold the line and let him come. This used to
+                    // return `Running`, and `DefenderRunningState` — for a
+                    // defender who is in the line, in a settled block,
+                    // with the ball more than 60u away — sends him
+                    // straight back to `HoldingLine`. Neither view was
+                    // wrong on its own; together they were a two-cycle
+                    // that survived the shared-line fix and still ran
+                    // ~55k round trips a match.
+                    //
+                    // Holding is the correct half of the disagreement: a
+                    // block's nearest defender does not sprint 60u+ at a
+                    // carrier, he keeps his shape until the carrier
+                    // arrives — at which point the `Pressing` branch
+                    // above fires. Fall through to the dangerous-run,
+                    // through-ball and ball-proximity checks below, which
+                    // are exactly the reasons he SHOULD break early.
                 }
                 DefensiveRole::Cover => {
                     if distance < 100.0 && ctx.ball().on_own_side() {
@@ -373,33 +387,6 @@ impl DefenderHoldingLineState {
         };
 
         Vector3::new(target_x, target_y, 0.0)
-    }
-
-    /// Calculates the defensive line position based on team tactics and defender positions.
-    /// Uses tactical defensive line height to bias the position forward or deep.
-    fn calculate_defensive_line_position(&self, ctx: &StateProcessingContext) -> f32 {
-        let (sum_x, count) = ctx
-            .players()
-            .teammates()
-            .defenders()
-            .map(|p| p.position.x)
-            .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
-
-        let avg_x = if count > 0 {
-            sum_x / count as f32
-        } else {
-            ctx.player.position.x
-        };
-
-        // Use the team-shared defensive_line_x — already phase-aware
-        // (high in Attack/HighPress, deep in LowBlock). Blend toward it
-        // rather than overwrite, so the live back-line average still
-        // matters (avoids teleporting one CB out of an organised line).
-        let target_line_x = ctx
-            .context
-            .tactical_for_team(ctx.player.team_id)
-            .defensive_line_x;
-        avg_x * 0.6 + target_line_x * 0.4
     }
 
     /// Checks if an opponent player is nearby within the MARKING_DISTANCE_THRESHOLD.

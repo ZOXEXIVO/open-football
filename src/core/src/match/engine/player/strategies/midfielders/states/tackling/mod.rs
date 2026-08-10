@@ -71,7 +71,13 @@ impl StateProcessingHandler for MidfielderTacklingState {
         // them inside the 50u pressing radius simultaneously entered
         // Tackling. Only the best-positioned one actually engages; the
         // rest revert to Pressing to cover passing lanes.
-        if !ctx.team().is_best_player_to_chase_ball() {
+        // Entry condition only. `TackleEngagement::should_commit` already
+        // applies this before anyone is sent here, so re-checking it on
+        // every tick could only ever ABANDON a challenge already under
+        // way — and the designation is a tolerance band that swaps
+        // between team-mates tick to tick, so it did exactly that. A
+        // committed engagement now runs to contact or to `DISENGAGE`.
+        if ctx.in_state_time == 0 && !ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Pressing,
             ));

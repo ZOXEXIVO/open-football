@@ -1,5 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
@@ -12,12 +13,9 @@ use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 10.0; // ~1.25m — proper engagement range.
-// Previously 14u (~1.75m). Even with that, attempts ran at 174/team/match
-// because longer possessions in attacking zones create more chances to
-// hit the gate. 10u forces actual contact range — a defender who's
-// still half a stride away has to keep pressing rather than committing
-// to a slide that won't connect.
+// Contact / commit / disengage distances live on `TackleEngagement` in
+// `defenders::states::common`, shared with `DefenderPressingState` so the
+// two states can no longer disagree about the same carrier.
 const PRESSING_DISTANCE: f32 = 80.0;
 const RETURN_DISTANCE: f32 = 120.0;
 
@@ -48,18 +46,24 @@ impl StateProcessingHandler for DefenderTacklingState {
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let distance_to_opponent = opponent.distance(ctx);
 
-            // If opponent is too far for tackling, press instead
-            if distance_to_opponent > PRESSING_DISTANCE {
+            // The carrier got away — break off and press the space.
+            // `DISENGAGE` sits outside the `COMMIT` distance `Pressing`
+            // uses to send us here, so the two states can't hand the
+            // defender back and forth (see `TackleEngagement`).
+            if distance_to_opponent > TackleEngagement::DISENGAGE {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
                 ));
             }
 
-            // If opponent is close but not in tackle range, keep pressing
-            if distance_to_opponent > TACKLE_DISTANCE_THRESHOLD {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Pressing,
-                ));
+            // Committed but not yet in contact range: keep closing. The
+            // velocity fn below is already a Pursuit onto the carrier, so
+            // holding the state IS the closing-down run. This branch used
+            // to bounce straight back to Pressing, which is why a tackle
+            // never survived past its entry tick. The `in_state_time > 30`
+            // guard further down still bounds how long we can chase.
+            if distance_to_opponent > TackleEngagement::CONTACT {
+                return None;
             }
 
             // Per-player tackle cooldown: a single per-state-machine gate
@@ -82,7 +86,10 @@ impl StateProcessingHandler for DefenderTacklingState {
             // primary driver of ~370 tackle events/team/match (real
             // football: ~18). Only the best-positioned teammate
             // engages; the rest fall back to Pressing to cover angles.
-            if !ctx.team().is_best_player_to_chase_ball() {
+            // Entry condition only — see the midfielder/forward variants.
+            // Re-checking a flickering designation every tick could only
+            // abandon a challenge already under way.
+            if ctx.in_state_time == 0 && !ctx.team().is_best_player_to_chase_ball() {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
                 ));
@@ -364,7 +371,7 @@ impl DefenderTacklingState {
                 ball_position + ball_velocity.normalize() * ball_travel_distance;
             let player_intercept_distance = (ball_intercept_position - player_position).magnitude();
 
-            player_intercept_distance <= TACKLE_DISTANCE_THRESHOLD
+            player_intercept_distance <= TackleEngagement::CONTACT
         } else {
             false
         }

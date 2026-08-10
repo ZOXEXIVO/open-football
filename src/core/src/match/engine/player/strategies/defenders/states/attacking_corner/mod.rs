@@ -118,43 +118,61 @@ impl StateProcessingHandler for DefenderAttackingCornerState {
         let ball_vel = ctx.tick_context.positions.ball.velocity;
 
         // Attack an incoming aerial cross at its projected landing spot so
-        // the header is timed, not reactive.
-        if ball_pos.z >= 1.0 && ctx.ball().is_in_flight() {
-            let target = if ball_vel.z < 0.0 {
-                let gravity = 9.81;
-                let t = (-ball_vel.z / gravity).max(0.0);
-                Vector3::new(
-                    ball_pos.x + ball_vel.x * t,
-                    ball_pos.y + ball_vel.y * t,
-                    0.0,
-                )
-            } else {
-                Vector3::new(
-                    ball_pos.x + ball_vel.x * 0.4,
-                    ball_pos.y + ball_vel.y * 0.4,
-                    0.0,
-                )
-            };
-            return Some(
-                SteeringBehavior::Pursuit {
-                    target,
-                    target_velocity: ball_vel,
-                }
-                .calculate(ctx.player)
-                .velocity,
-            );
+        // the header is timed, not reactive — otherwise hold the assigned
+        // box-attack position (near / far post).
+        //
+        // Both of those are right; choosing between them with
+        // `ball_pos.z >= 1.0` was not. The post and the cross's landing
+        // spot are generally on opposite sides of the attacker, so every
+        // time the ball crossed a metre in height his velocity inverted.
+        // At 13-15 velocity reversals per second held, this was the
+        // twitchiest state in the engine by rate (`dev_match trace`) — a
+        // centre-back juddering in the six-yard box while the corner comes
+        // in. The lead-time projection also switched formula on the sign
+        // of `ball_vel.z`, jumping the aim point again at the apex.
+        //
+        // Weighted continuously instead: the higher and more airborne the
+        // ball, the more the attacker commits to the delivery. No height
+        // at which anything jumps.
+        const HOLD_H: f32 = 0.6;
+        const ATTACK_H: f32 = 2.0;
+        let t = ((ball_pos.z - HOLD_H) / (ATTACK_H - HOLD_H)).clamp(0.0, 1.0);
+        let attack = if ctx.ball().is_in_flight() {
+            t * t * (3.0 - 2.0 * t)
+        } else {
+            0.0
+        };
+
+        let hold = SteeringBehavior::Arrive {
+            target: self.box_attack_target(ctx),
+            slowing_distance: 8.0,
+        }
+        .calculate(ctx.player)
+        .velocity;
+
+        if attack <= 0.0 {
+            return Some(hold);
         }
 
-        // Otherwise hold the assigned box-attack position (near / far post).
-        let target = self.box_attack_target(ctx);
-        Some(
-            SteeringBehavior::Arrive {
-                target,
-                slowing_distance: 8.0,
-            }
-            .calculate(ctx.player)
-            .velocity,
-        )
+        // Lead the ball by its own descent time, with the same expression
+        // whether it is still rising or already falling — `.max(0.0)` on a
+        // rising ball yields zero lead, which tends smoothly into the
+        // descending case instead of stepping to a different formula.
+        const GRAVITY: f32 = 9.81;
+        let lead = (-ball_vel.z / GRAVITY).max(0.0);
+        let target = Vector3::new(
+            ball_pos.x + ball_vel.x * lead,
+            ball_pos.y + ball_vel.y * lead,
+            0.0,
+        );
+        let attack_velocity = SteeringBehavior::Pursuit {
+            target,
+            target_velocity: ball_vel,
+        }
+        .calculate(ctx.player)
+        .velocity;
+
+        Some(attack_velocity * attack + hold * (1.0 - attack))
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

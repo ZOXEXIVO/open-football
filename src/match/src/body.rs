@@ -2,7 +2,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use crate::kit::Outfit;
 
@@ -44,11 +44,12 @@ struct Sculptor {
 }
 
 impl Sculptor {
-    /// Sides around each ring. Twelve is round at the size a broadcast camera
-    /// draws a player and still leaves a full squad at a few thousand triangles.
-    const SIDES: usize = 12;
+    /// Sides around each ring. Sixteen holds a round silhouette at the range
+    /// the broadcast camera now sits at, and still leaves a full squad at a few
+    /// thousand triangles — the meshes are shared by all twenty-two.
+    const SIDES: usize = 16;
     /// Rings from pole to pole on a sphere.
-    const STACKS: usize = 8;
+    const STACKS: usize = 10;
 
     /// A part described by its profile, from either end.
     fn part(rings: &[Ring]) -> Mesh {
@@ -204,10 +205,21 @@ impl Physique {
     /// Hip to the base of the neck.
     pub const TORSO: f32 = 0.58;
     /// Shoulder joints, in the torso's own space.
-    pub const SHOULDER: f32 = 0.505;
-    pub const SHOULDER_SPREAD: f32 = 0.196;
+    ///
+    /// Deliberately sunk BENEATH and INSIDE the torso's shoulder crest
+    /// (which peaks 0.209 wide at y=0.512). An arm socket level with the
+    /// crest, as this was, leaves the top cap of the upper arm standing
+    /// proud of the shirt as a separate rounded lump — the single thing
+    /// that made the figures read as assembled out of parts. Buried, the
+    /// only bit of arm you see above the armpit is the deltoid, which is
+    /// how a shoulder actually looks.
+    pub const SHOULDER: f32 = 0.470;
+    pub const SHOULDER_SPREAD: f32 = 0.176;
     pub const UPPER_ARM: f32 = 0.30;
     pub const FOREARM: f32 = 0.26;
+    /// Crown to turf. Only the name plates want this, to size themselves
+    /// against the player they belong to.
+    pub const STATURE: f32 = 1.79;
 }
 
 /// Every mesh a footballer is made of, built once and shared by all
@@ -224,22 +236,45 @@ pub struct BodyParts {
     shorts_leg: Handle<Mesh>,
     thigh: Handle<Mesh>,
     shin: Handle<Mesh>,
+    sock_top: Handle<Mesh>,
     boot: Handle<Mesh>,
+    /// The flat panel the shirt number is printed on.
+    number: Handle<Mesh>,
 }
 
 impl BodyParts {
     pub fn new(meshes: &mut Assets<Mesh>) -> Self {
         BodyParts {
-            // Hips, waist, chest, shoulders — the shirt.
+            // Hips, waist, chest, shoulders — the shirt. A footballer's torso
+            // is a V: the waist is the narrowest point and the shoulders carry
+            // most of the width, which is most of what reads as "athlete" in a
+            // silhouette this size.
+            // The shoulder line is the whole problem with a figure this size.
+            // It used to go 0.196 wide at y=0.530 and 0.150 at y=0.558 — a
+            // 23% collapse across 28 mm — which is a coat-hanger, not a
+            // shoulder: a flat shelf ending in a cliff, with the arm hung off
+            // the edge of it. Real shoulders are a dome. The trapezius leaves
+            // the neck and falls away over a good ten centimetres, and the
+            // widest point is the acromion, out at the very end of the
+            // collarbone, with a rounded crest over it.
+            //
+            // So the crest is now broad and slightly domed (0.482-0.535 all
+            // within 4% of each other) and the run into the neck takes three
+            // rings instead of one.
             torso: meshes.add(Sculptor::part(&[
-                Ring::oval(0.000, 0.140, 0.096),
-                Ring::oval(0.090, 0.132, 0.090),
-                Ring::oval(0.200, 0.145, 0.098),
-                Ring::oval(0.320, 0.174, 0.107),
-                Ring::oval(0.420, 0.196, 0.110),
-                Ring::oval(0.500, 0.204, 0.104),
-                Ring::oval(0.555, 0.158, 0.090),
-                Ring::oval(0.580, 0.090, 0.072),
+                Ring::oval(0.000, 0.142, 0.098),
+                Ring::oval(0.070, 0.134, 0.092),
+                Ring::oval(0.140, 0.131, 0.089),
+                Ring::oval(0.220, 0.148, 0.100),
+                Ring::oval(0.300, 0.168, 0.107),
+                Ring::oval(0.370, 0.185, 0.111),
+                Ring::oval(0.440, 0.198, 0.111),
+                Ring::oval(0.482, 0.207, 0.108),
+                Ring::oval(0.512, 0.209, 0.104),
+                Ring::oval(0.535, 0.201, 0.099),
+                Ring::oval(0.552, 0.176, 0.093),
+                Ring::oval(0.568, 0.134, 0.082),
+                Ring::oval(0.580, 0.088, 0.070),
             ])),
             // The seat of the shorts, which stays put while the legs swing.
             pelvis: meshes.add(Sculptor::part(&[
@@ -251,14 +286,16 @@ impl BodyParts {
             // Neck, jaw and skull, hung off the base of the neck.
             head: meshes.add(Sculptor::part(&[
                 Ring::oval(-0.060, 0.048, 0.052),
-                Ring::oval(0.000, 0.052, 0.056),
-                Ring::oval(0.025, 0.076, 0.080),
-                Ring::oval(0.065, 0.094, 0.101),
-                Ring::oval(0.115, 0.099, 0.108),
-                Ring::oval(0.165, 0.091, 0.099),
-                Ring::oval(0.205, 0.072, 0.078),
-                Ring::oval(0.235, 0.040, 0.044),
-                Ring::oval(0.252, 0.000, 0.000),
+                Ring::oval(0.000, 0.053, 0.057),
+                Ring::oval(0.022, 0.070, 0.074),
+                Ring::oval(0.045, 0.086, 0.092),
+                Ring::oval(0.075, 0.096, 0.103),
+                Ring::oval(0.110, 0.100, 0.109),
+                Ring::oval(0.145, 0.096, 0.104),
+                Ring::oval(0.180, 0.086, 0.093),
+                Ring::oval(0.212, 0.068, 0.074),
+                Ring::oval(0.238, 0.040, 0.044),
+                Ring::oval(0.253, 0.000, 0.000),
             ])),
             // A cap over the skull, set back a little so a hairline reads.
             hair: meshes.add({
@@ -276,25 +313,39 @@ impl BodyParts {
                 );
                 sculptor.build()
             }),
+            // Deltoid, bicep, taper to the elbow.
+            //
+            // The top ring is now narrow (0.030) and sits high, so it ends up
+            // inside the torso and its cap is never seen; the deltoid swells
+            // 20 mm BELOW the socket, which is where a shoulder muscle
+            // actually sits. Previously the widest ring was 5 mm below the
+            // top, so the arm's broadest point was level with its own
+            // socket and the join showed as a seam.
             upper_arm: meshes.add(Sculptor::part(&[
-                Ring::round(0.020, 0.052),
-                Ring::round(0.000, 0.055),
-                Ring::round(-0.140, 0.048),
-                Ring::round(-0.280, 0.042),
-                Ring::round(-0.300, 0.038),
+                Ring::round(0.055, 0.030),
+                Ring::round(0.020, 0.050),
+                Ring::round(-0.020, 0.057),
+                Ring::round(-0.075, 0.054),
+                Ring::round(-0.140, 0.049),
+                Ring::round(-0.215, 0.044),
+                Ring::round(-0.280, 0.040),
+                Ring::round(-0.300, 0.037),
             ])),
-            // A short sleeve, riding on the shoulder joint so it swings with it.
+            // A short sleeve, riding on the shoulder joint so it swings with
+            // it. Dropped to sit over the deltoid rather than above it —
+            // level with the socket it stood off the shoulder like a pad.
             sleeve: meshes.add(Sculptor::part(&[
-                Ring::oval(0.055, 0.072, 0.070),
-                Ring::oval(0.000, 0.078, 0.075),
-                Ring::oval(-0.090, 0.070, 0.068),
-                Ring::oval(-0.135, 0.062, 0.060),
+                Ring::oval(0.030, 0.064, 0.062),
+                Ring::oval(-0.015, 0.074, 0.071),
+                Ring::oval(-0.080, 0.070, 0.067),
+                Ring::oval(-0.130, 0.062, 0.060),
             ])),
             forearm: meshes.add(Sculptor::part(&[
-                Ring::round(0.000, 0.044),
-                Ring::round(-0.120, 0.039),
-                Ring::round(-0.240, 0.033),
-                Ring::round(-0.260, 0.028),
+                Ring::round(0.000, 0.046),
+                Ring::round(-0.060, 0.043),
+                Ring::round(-0.140, 0.037),
+                Ring::round(-0.215, 0.031),
+                Ring::round(-0.260, 0.027),
             ])),
             hand: meshes.add(Sculptor::ellipsoid(Vec3::new(0.035, 0.050, 0.028))),
             // The leg of the shorts: it belongs to the thigh, not to the hips.
@@ -304,23 +355,38 @@ impl BodyParts {
                 Ring::oval(-0.130, 0.116, 0.105),
                 Ring::oval(-0.205, 0.106, 0.097),
             ])),
+            // Quadriceps high on the thigh, narrowing into the knee.
             thigh: meshes.add(Sculptor::part(&[
-                Ring::round(-0.100, 0.086),
-                Ring::round(-0.200, 0.079),
-                Ring::round(-0.340, 0.068),
-                Ring::round(-0.440, 0.058),
-                Ring::round(-0.455, 0.052),
+                Ring::oval(-0.090, 0.089, 0.086),
+                Ring::oval(-0.160, 0.086, 0.083),
+                Ring::oval(-0.250, 0.078, 0.075),
+                Ring::oval(-0.340, 0.068, 0.066),
+                Ring::oval(-0.420, 0.059, 0.058),
+                Ring::oval(-0.455, 0.053, 0.053),
             ])),
             // Shin and sock in one: socks cover a footballer's leg to the knee.
+            // The calf sits high and at the back, which is what stops the lower
+            // leg reading as a broom handle when a stride opens out.
             shin: meshes.add(Sculptor::part(&[
-                Ring::round(0.020, 0.060),
-                Ring::round(-0.080, 0.058),
-                Ring::round(-0.220, 0.049),
-                Ring::round(-0.360, 0.040),
-                Ring::oval(-0.440, 0.036, 0.038),
-                Ring::oval(-0.455, 0.034, 0.036),
+                Ring::oval(0.020, 0.060, 0.060),
+                Ring::oval(-0.040, 0.062, 0.063),
+                Ring::oval(-0.110, 0.059, 0.061),
+                Ring::oval(-0.200, 0.050, 0.052),
+                Ring::oval(-0.300, 0.042, 0.043),
+                Ring::oval(-0.390, 0.036, 0.037),
+                Ring::oval(-0.440, 0.034, 0.036),
+                Ring::oval(-0.455, 0.033, 0.035),
             ])),
-            boot: meshes.add(Sculptor::ellipsoid(Vec3::new(0.046, 0.040, 0.095))),
+            // The turnover at the top of the sock, in the shorts colour — the
+            // one piece of kit detail that survives at this distance.
+            sock_top: meshes.add(Sculptor::part(&[
+                Ring::oval(0.012, 0.0620, 0.0625),
+                Ring::oval(-0.030, 0.0645, 0.0655),
+                Ring::oval(-0.078, 0.0620, 0.0635),
+            ])),
+            boot: meshes.add(Sculptor::ellipsoid(Vec3::new(0.048, 0.038, 0.105))),
+            // A real shirt number covers most of the upper back.
+            number: meshes.add(Rectangle::new(0.250, 0.215).mesh().build()),
         }
     }
 }
@@ -359,6 +425,29 @@ pub struct Gait {
     pub phase: f32,
     /// 0 standing, 1 flat out.
     pub run: f32,
+    /// −1..1, fixed for the life of a player: how he carries himself.
+    ///
+    /// Twenty-two figures running one identical animation is most of what
+    /// reads as "robots" — more than any amount of geometry. Real players
+    /// are individually recognisable at distance almost entirely by
+    /// carriage: how wide the arms are held, how bent the elbows, how far
+    /// forward the shoulders go. One number per player, applied to those
+    /// three, is enough to break the lockstep.
+    pub signature: f32,
+    /// A slow cycle in radians that runs on the clock rather than on ground
+    /// covered, so it keeps going when a player is not.
+    ///
+    /// Standing still was literally standing still: every amplitude in this
+    /// rig is scaled by `run`, so at rest a footballer froze into a statue.
+    /// The path trace says that is most of the pitch most of the time —
+    /// forwards are stationary 68% of a match and keepers 77% — so a frozen
+    /// idle is not an edge case, it is the default state of the scene.
+    pub idle: f32,
+    /// How hard he is turning, −1..1, for the lean into it.
+    pub turn: f32,
+    /// Where he is looking, as a yaw off his own facing in radians. A player
+    /// watches the ball; his head does not sit welded to his chest.
+    pub look: f32,
 }
 
 impl Joint {
@@ -371,6 +460,20 @@ impl Joint {
     /// How far a running player's whole body rises as the stride closes up,
     /// in metres.
     const BOB: f32 = 0.06;
+    /// And how far a standing one rises and falls just breathing. Small on
+    /// purpose — this is the difference between a statue and a man waiting,
+    /// not a visible bounce.
+    const BREATHE: f32 = 0.013;
+    /// How far a standing player rolls as his weight goes from one foot to
+    /// the other, in radians.
+    const WEIGHT_SHIFT: f32 = 0.038;
+    /// Roll of the torso through the stride — a runner rocks, he does not
+    /// stay square.
+    const ROCK: f32 = 0.055;
+    /// How far the hips counter-rotate against the shoulders.
+    const HIP_TWIST: f32 = 0.065;
+    /// How far a player leans into a turn at full tilt.
+    const BANK: f32 = 0.30;
 
     fn new(owner: Entity, limb: Limb, side: f32, origin: Vec3) -> Self {
         Joint {
@@ -392,7 +495,11 @@ impl Joint {
         match self.limb {
             Limb::Pelvis | Limb::Torso | Limb::Hip => {
                 let bob = Self::BOB * gait.run * (0.5 + 0.5 * (gait.phase * 2.0).cos());
-                self.origin + Vec3::Y * bob
+                // Breathing, for a player who is not running. Fades out as he
+                // does, where the stride bob takes over.
+                let breathe =
+                    Self::BREATHE * (1.0 - gait.run) * (0.5 + 0.5 * gait.idle.sin());
+                self.origin + Vec3::Y * (bob + breathe)
             }
             _ => self.origin,
         }
@@ -411,23 +518,67 @@ impl Joint {
         let swing = leg.sin();
         let lean = Self::blend(Self::LEAN, gait.run);
 
+        // Weight going from one foot to the other, and back. Half the idle
+        // rate, because a shift is a whole cycle where a breath is half of
+        // one. Fades out the moment he starts running.
+        let standing = 1.0 - gait.run;
+        let weight = (gait.idle * 0.5).sin() * standing;
+
         match self.limb {
-            Limb::Pelvis => Quat::IDENTITY,
-            Limb::Torso => {
-                Quat::from_rotation_x(lean)
-                    * Quat::from_rotation_y(-0.14 * gait.run * gait.phase.sin())
+            // Hips counter-rotate against the shoulders — the thing that
+            // makes a run read as a person rather than a mechanism — and
+            // carry the weight shift when he is standing.
+            Limb::Pelvis => {
+                Quat::from_rotation_y(Self::HIP_TWIST * gait.run * gait.phase.sin())
+                    * Quat::from_rotation_z(Self::WEIGHT_SHIFT * weight)
             }
-            // Kept level: a runner leans from the hips and looks up the pitch,
-            // not at their own boots.
-            Limb::Head => Quat::from_rotation_x(-lean * 0.75),
+            Limb::Torso => {
+                // Rock through the stride, a quarter cycle off the twist so
+                // the shoulder drops as the opposite leg drives; the weight
+                // shift when standing; and the bank into a turn.
+                //
+                // Bank sign: heading increases turning toward +X, and a
+                // positive Z rotation carries the head toward −X, so leaning
+                // INTO a left turn is the negative of the turn signal. If it
+                // ever looks like a motorbike falling the wrong way, this is
+                // the sign to flip.
+                let roll = Self::ROCK * gait.run * (gait.phase + FRAC_PI_2).sin()
+                    + Self::WEIGHT_SHIFT * 0.8 * weight
+                    - Self::BANK * gait.turn;
+                Quat::from_rotation_x(lean * (1.0 + 0.16 * gait.signature))
+                    * Quat::from_rotation_y(-0.14 * gait.run * gait.phase.sin())
+                    * Quat::from_rotation_z(roll)
+            }
+            // He watches the ball. The head hangs off the torso, so this yaw
+            // is already relative to his chest — turning it is the single
+            // cheapest thing in the whole rig that reads as attention, and
+            // without it twenty-two players stare rigidly down their own
+            // running line all match.
+            //
+            // Still kept level in pitch: a runner leans from the hips and
+            // looks up the pitch, not at his own boots.
+            Limb::Head => {
+                Quat::from_rotation_y(gait.look) * Quat::from_rotation_x(-lean * 0.75)
+            }
             Limb::Shoulder => {
                 // Arms swing against the leg on the same side, and are carried
-                // wider the harder the player is running.
-                Quat::from_rotation_z(self.side * (0.15 + 0.07 * gait.run))
-                    * Quat::from_rotation_x(Self::blend(Self::ARM_SWING, gait.run) * swing)
+                // wider the harder the player is running — and wider again, or
+                // tighter, depending on the man.
+                let carriage = 0.15 + 0.07 * gait.run + 0.055 * gait.signature;
+                // Nobody's two arms do the same thing. Tied to the signature
+                // so it is this player's asymmetry, the same one every time.
+                let asymmetry = 1.0 + 0.11 * gait.signature * self.side;
+                // Standing, they drift instead of locking. Offset by side so
+                // the two do not move as a pair.
+                let drift = 0.055 * standing * (gait.idle + self.side).sin();
+                let arm = Self::blend(Self::ARM_SWING, gait.run) * swing * asymmetry + drift;
+                Quat::from_rotation_z(self.side * carriage) * Quat::from_rotation_x(arm)
             }
+            // Elbow carriage is the most individual thing about a runner:
+            // some hold them almost straight, some at a right angle.
             Limb::Elbow => Quat::from_rotation_x(
-                -Self::blend(Self::ELBOW_FLEX, gait.run) - 0.18 * gait.run * swing,
+                -Self::blend(Self::ELBOW_FLEX, gait.run) * (1.0 + 0.24 * gait.signature)
+                    - 0.18 * gait.run * swing,
             ),
             Limb::Hip => Quat::from_rotation_x(-Self::blend(Self::HIP_SWING, gait.run) * swing),
             // Deepest as the leg folds through underneath the player, and all
@@ -475,6 +626,17 @@ impl Footballer {
                 Transform::from_translation(hips),
             ))
             .with_children(|torso| {
+                // Printed across the shoulder blades, standing a couple of
+                // millimetres off the shirt so it never fights it for depth.
+                if let Some(number) = outfit.number.clone() {
+                    torso.spawn((
+                        Mesh3d(parts.number.clone()),
+                        MeshMaterial3d(number),
+                        Transform::from_xyz(0.0, 0.330, -0.115)
+                            .with_rotation(Quat::from_rotation_y(PI)),
+                    ));
+                }
+
                 torso
                     .spawn((
                         Joint::new(root, Limb::Head, 0.0, neck),
@@ -539,11 +701,18 @@ impl Footballer {
                         MeshMaterial3d(outfit.socks.clone()),
                         Transform::from_translation(knee),
                     ))
-                    .with_child((
-                        Mesh3d(parts.boot.clone()),
-                        MeshMaterial3d(outfit.boots.clone()),
-                        Transform::from_xyz(0.0, -Physique::SHIN + 0.005, 0.035),
-                    ));
+                    .with_children(|shin| {
+                        shin.spawn((
+                            Mesh3d(parts.sock_top.clone()),
+                            MeshMaterial3d(outfit.shorts.clone()),
+                            Transform::default(),
+                        ));
+                        shin.spawn((
+                            Mesh3d(parts.boot.clone()),
+                            MeshMaterial3d(outfit.boots.clone()),
+                            Transform::from_xyz(0.0, -Physique::SHIN + 0.005, 0.035),
+                        ));
+                    });
                 });
             }
         });

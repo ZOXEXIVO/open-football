@@ -1,4 +1,5 @@
 use crate::r#match::StateProcessingContext;
+use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::engine::player::strategies::common::{
     ActivityIntensityConfig, ConditionProcessor, FIELD_PLAYER_JADEDNESS_INTERVAL,
@@ -114,6 +115,100 @@ impl DefensiveRecovery {
         let profile = DefenderSkillProfile::from_ctx(ctx);
         let pace = (ctx.player.skills.physical.pace / 20.0).clamp(0.6, 1.2);
         Some(to_goal * Self::RECOVERY_SPEED * pace * profile.recovery_run_mult)
+    }
+}
+
+/// The back line, as one shared piece of geometry.
+///
+/// # Why this exists
+///
+/// `HoldingLine` and `Running` both answer the question "is this defender
+/// in the line?", and they used to answer it with **different
+/// quantities**. `DefenderHoldingLineState` left for `Running` when the
+/// defender was more than 35u from the computed line x;
+/// `DefenderRunningState::phase_dispatch` sent him straight back to
+/// `HoldingLine` whenever `position_to_distance() != Big`, i.e. based on
+/// distance from his *start position*. A defender can trivially satisfy
+/// both at once — near his start, far from where the line has drifted —
+/// and every such defender then ran the two-cycle
+/// `HoldingLine -> Running -> HoldingLine` at AI-tick cadence, forever.
+///
+/// It was the single largest source of state churn in the engine:
+/// 152,000 transitions each way in ONE match, with 98.4% of `HoldingLine`
+/// visits lasting a single tick (`dev_match trace`). The back four never
+/// held a line and never committed to a recovery run; they alternated
+/// between the two ~9 times a second.
+///
+/// # The rule
+///
+/// One quantity — distance from the line — with hysteresis. A defender
+/// must actually arrive (`ENTER_BAND`) before he counts as part of the
+/// line, and once he is part of it he keeps holding until he genuinely
+/// drifts out (`EXIT_BAND`). The gap between the two bands is the
+/// commitment: inside it, whatever the defender is already doing is the
+/// right answer, which is exactly how a real back four behaves — you
+/// don't join or abandon a line over a metre.
+pub struct DefensiveLine;
+
+impl DefensiveLine {
+    /// Drift that pulls a settled defender back out of the line.
+    /// Unchanged from `MAX_DEFENSIVE_LINE_DEVIATION`, so a defender
+    /// leaves the line exactly when he did before.
+    pub const EXIT_BAND: f32 = 35.0;
+    /// How close a defender must get before he counts as having joined
+    /// the line. Comfortably inside `EXIT_BAND` — the difference is the
+    /// hysteresis that makes the pair of states agree.
+    pub const ENTER_BAND: f32 = 20.0;
+
+    /// The x-coordinate of the line the back four is currently holding.
+    ///
+    /// Blends the live back-line average with the team-shared, phase-aware
+    /// `defensive_line_x` rather than overwriting it, so one recovering
+    /// defender can't teleport the whole line's reference point.
+    pub fn position_x(ctx: &StateProcessingContext) -> f32 {
+        let (sum_x, count) = ctx
+            .players()
+            .teammates()
+            .defenders()
+            .map(|p| p.position.x)
+            .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
+
+        let avg_x = if count > 0 {
+            sum_x / count as f32
+        } else {
+            ctx.player.position.x
+        };
+
+        let target_line_x = ctx
+            .context
+            .tactical_for_team(ctx.player.team_id)
+            .defensive_line_x;
+        avg_x * 0.6 + target_line_x * 0.4
+    }
+
+    /// How far this defender is off the line, along the goal-to-goal axis.
+    pub fn deviation(ctx: &StateProcessingContext) -> f32 {
+        (ctx.player.position.x - Self::position_x(ctx)).abs()
+    }
+
+    /// Is this defender part of the line right now?
+    ///
+    /// Hysteretic on the defender's CURRENT state, which is what makes
+    /// this safe to call from both sides of the hand-off: a defender
+    /// already holding gets the generous `EXIT_BAND`, one still running
+    /// back has to reach `ENTER_BAND` first. Both states therefore read
+    /// the same predicate and can never contradict each other.
+    pub fn is_in_line(ctx: &StateProcessingContext) -> bool {
+        let holding = matches!(
+            ctx.player.state,
+            crate::r#match::player::state::PlayerState::Defender(DefenderState::HoldingLine)
+        );
+        let band = if holding {
+            Self::EXIT_BAND
+        } else {
+            Self::ENTER_BAND
+        };
+        Self::deviation(ctx) <= band
     }
 }
 

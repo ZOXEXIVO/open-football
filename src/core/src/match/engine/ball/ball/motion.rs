@@ -9,7 +9,6 @@ use nalgebra::Vector3;
 
 impl Ball {
     pub fn update_velocity(&mut self) {
-        const GRAVITY: f32 = 9.81;
         const BALL_MASS: f32 = 0.43;
         const STOPPING_THRESHOLD: f32 = 0.05; // Lower threshold for smoother final stop
         // Football bounce retention on grass is ~25-35%. The previous
@@ -92,12 +91,13 @@ impl Ball {
                     Vector3::zeros()
                 };
 
-                // Gravity force (constant downward)
-                let gravity_force = Vector3::new(0.0, 0.0, -GRAVITY);
-
-                // Apply forces
-                let acceleration = air_drag_force / BALL_MASS + gravity_force;
-                self.velocity += acceleration * 0.016; // ~60fps timestep
+                // Drag is integrated over the same sub-step the drag
+                // coefficient was fitted against; gravity comes from the
+                // shared per-tick constant so the pass solver and the
+                // landing projection cannot drift away from the physics
+                // (see `super::GRAVITY_PER_TICK`).
+                self.velocity += (air_drag_force / BALL_MASS) * 0.016;
+                self.velocity.z -= super::GRAVITY_PER_TICK;
             }
         } else {
             // Ball has nearly stopped - bring to complete rest smoothly
@@ -122,8 +122,11 @@ impl Ball {
             self.velocity.x *= 0.95;
             self.velocity.y *= 0.95;
 
-            // If bounce is too small, stop vertical movement
-            if self.velocity.z.abs() < 0.3 {
+            // If bounce is too small, stop vertical movement. 0.012 m/tick
+            // = 1.2 m/s, which peaks at ~7 cm — below that the ball is
+            // rolling, not bouncing. (Was 0.3, i.e. 30 m/s, from when the
+            // vertical axis carried unit-scale speeds.)
+            if self.velocity.z.abs() < 0.012 {
                 self.velocity.z = 0.0;
             }
         }
@@ -165,18 +168,22 @@ impl Ball {
 
             if distance_squared <= MAX_OWNER_TELEPORT_DISTANCE_SQUARED {
                 if distance_squared <= SNAP_DISTANCE_SQUARED {
-                    // Close enough - snap to owner
+                    // Close enough - snap to owner, at whatever height he is
+                    // carrying it: on the deck at his feet, or into his chest
+                    // if he is a keeper with it in his gloves.
+                    let carry = self.carry_height();
                     self.position = owner_position;
-                    self.position.z = 0.0;
+                    self.position.z = carry;
                     self.velocity = Vector3::zeros();
                 } else {
                     // Move ball toward owner smoothly instead of teleporting
                     let distance = distance_squared.sqrt();
                     let dir_x = dx / distance;
                     let dir_y = dy / distance;
+                    let carry = self.carry_height();
                     self.position.x += dir_x * BALL_TRACK_SPEED;
                     self.position.y += dir_y * BALL_TRACK_SPEED;
-                    self.position.z = 0.0;
+                    self.position.z = carry;
                     self.velocity = Vector3::zeros();
                 }
             } else {
@@ -224,14 +231,16 @@ impl Ball {
 
                 if dist_sq <= MAX_OWNER_TELEPORT_DISTANCE_SQUARED {
                     if dist_sq <= SNAP_DISTANCE_SQUARED {
+                        let carry = self.carry_height();
                         self.position = owner.position;
-                        self.position.z = 0.0;
+                        self.position.z = carry;
                         self.velocity = Vector3::zeros();
                     } else {
+                        let carry = self.carry_height();
                         let dist = dist_sq.sqrt();
                         self.position.x += (dx / dist) * BALL_TRACK_SPEED;
                         self.position.y += (dy / dist) * BALL_TRACK_SPEED;
-                        self.position.z = 0.0;
+                        self.position.z = carry;
                         self.velocity = Vector3::zeros();
                     }
                 } else {

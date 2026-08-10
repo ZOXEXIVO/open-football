@@ -29,6 +29,43 @@ fn fallback_attributes() -> &'static PlayerAttributes {
     FALLBACK.get_or_init(PlayerAttributes::default)
 }
 
+/// What a player can see of the opposition goal from where he is
+/// standing. See [`PlayerOperationsImpl::goal_sight`].
+#[derive(Debug, Clone, Copy)]
+pub struct GoalSight {
+    /// Visible opening measured against an absolute 75° reference, so it
+    /// falls away with distance. This is the CHANCE-QUALITY reading — how
+    /// big a target he is aiming at.
+    pub angle_clarity: f32,
+    /// Visible opening measured against the widest one available at this
+    /// distance. This is the POSITION reading — whether he is central or
+    /// squeezed toward the byline — and it does not decay with range.
+    pub angle_quality: f32,
+    /// How clear the path is: immediate pressure and bodies in the
+    /// corridor, 1.0 for an unobstructed lane, 0.0 for a blocked one.
+    pub lane: f32,
+}
+
+impl GoalSight {
+    /// Nothing on: blind angle, or a defender physically in the way.
+    pub fn blind() -> Self {
+        GoalSight {
+            angle_clarity: 0.0,
+            angle_quality: 0.0,
+            lane: 0.0,
+        }
+    }
+
+    /// On the goal line with the ball — no meaningful geometry left.
+    pub fn wide_open() -> Self {
+        GoalSight {
+            angle_clarity: 1.0,
+            angle_quality: 1.0,
+            lane: 1.0,
+        }
+    }
+}
+
 pub struct PlayerOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
 }
@@ -140,101 +177,29 @@ impl<'p> PlayerOperationsImpl<'p> {
         self.ctx.player.position + direction * 200.0
     }
 
+    /// The goal a shot from this player is aimed INTO — the centre of
+    /// the opponent's goal mouth, and nothing else.
+    ///
+    /// It used to return a pre-scattered aim point: a corner offset of up
+    /// to 0.35 of the goal width, plus an inaccuracy deviation, plus an
+    /// x-deviation off the goal line, plus a panic deviation under
+    /// pressure. Every one of those is ALSO rolled by
+    /// `handle_shoot_event`, which is where the unified `ShotSkillProfile`
+    /// lives — and which reads this value as the CENTRE of the goal in
+    /// order to place the posts around it. So the scatter applied here
+    /// dragged the whole frame sideways and the strike model then added a
+    /// second, independent offset on top of it: a confident finisher
+    /// routinely ended up aiming ~46u (5.8 m) off centre, two metres
+    /// outside the post, from any range at all. That is the "he shot wide
+    /// from two metres" behaviour, and the reason a strike from the
+    /// six-yard box could travel almost parallel to the goal line and
+    /// trickle out for a goal kick.
+    ///
+    /// Placement, spread, miskicks and the wide/over-the-bar rolls all
+    /// belong to the strike model — one profile, one set of rolls. This
+    /// answers only "which goal, and where is its middle".
     pub fn shooting_direction(&self) -> Vector3<f32> {
-        let goal_position = self.opponent_goal_position();
-        let distance_to_goal = self.goal_distance();
-
-        let skills = &self.ctx.player.skills;
-
-        // Normalize skills (0.0 to 1.0)
-        let finishing_f = (skills.technical.finishing - 1.0) / 19.0;
-        let technique_f = (skills.technical.technique - 1.0) / 19.0;
-        let first_touch_f = (skills.technical.first_touch - 1.0) / 19.0;
-        let long_shots_f = (skills.technical.long_shots - 1.0) / 19.0;
-        let composure_f = (skills.mental.composure - 1.0) / 19.0;
-
-        // Core shot accuracy: finishing and technique are dominant
-        // Blend finishing vs long_shots based on distance
-        let max_field_distance = self.ctx.context.field_size.width as f32;
-        let distance_blend = (distance_to_goal / (max_field_distance * 0.3)).clamp(0.0, 1.0);
-        let shot_skill = finishing_f * (1.0 - distance_blend) + long_shots_f * distance_blend;
-
-        let base_accuracy =
-            shot_skill * 0.45 + technique_f * 0.25 + first_touch_f * 0.15 + composure_f * 0.15;
-
-        // Distance modifier: closer = more accurate (multiplicative, not part of accuracy blend)
-        let distance_modifier = if distance_to_goal < 100.0 {
-            1.0
-        } else if distance_to_goal < 200.0 {
-            1.0 - (distance_to_goal - 100.0) / 400.0 // 1.0 → 0.75
-        } else {
-            0.6 + long_shots_f * 0.2 // Long shots: 0.6-0.8 based on skill
-        };
-
-        // Pressure modifier
-        let nearby_defenders = self.ctx.players().opponents().nearby(10.0).count();
-        let pressure_modifier = 1.0 - (nearby_defenders as f32 * 0.12).min(0.4);
-
-        // Condition modifier: slight accuracy loss when exhausted
-        let condition = self.ctx.player.player_attributes.condition as f32 / 10000.0;
-        let condition_modifier = 0.93 + condition * 0.07;
-
-        // Final accuracy (0.0 to ~1.0)
-        let accuracy = (base_accuracy * distance_modifier * pressure_modifier * condition_modifier)
-            .clamp(0.0, 1.0);
-
-        // Inaccuracy factor: even good players miss sometimes
-        // Base inaccuracy + distance penalty means long shots are genuinely difficult
-        let base_inaccuracy = (1.0 - accuracy) * (1.0 - accuracy);
-        let distance_inaccuracy = if distance_to_goal > 80.0 {
-            0.15 // significant extra miss chance for long shots
-        } else if distance_to_goal > 40.0 {
-            0.06 // moderate extra miss for medium range
-        } else {
-            0.0
-        };
-        let inaccuracy = (base_inaccuracy + distance_inaccuracy).min(1.0);
-
-        let goal_width = 58.0; // matches GOAL_WIDTH * 2 (29 half-width)
-        let rng = &self.ctx.context.rng;
-
-        // Placement shot: skilled finishers pick corners from close range
-        let is_placement_shot = distance_to_goal < 150.0 && finishing_f > 0.55;
-
-        let mut target = goal_position;
-
-        if is_placement_shot {
-            // Close range: aim for a corner
-            let y_target = if rng.random_range(0.0..1.0) < 0.5 {
-                -goal_width * 0.35
-            } else {
-                goal_width * 0.35
-            };
-
-            // Better finishing = tighter grouping around intended corner
-            let y_deviation = rng.random_range(-goal_width * 0.2..goal_width * 0.2) * inaccuracy;
-            target.y += y_target + y_deviation;
-        } else {
-            // Long range / low skill: aim more central with wider spread
-            let y_base = rng.random_range(-goal_width * 0.1..goal_width * 0.1);
-            let y_deviation = rng.random_range(-goal_width * 0.4..goal_width * 0.4) * inaccuracy;
-            target.y += y_base + y_deviation;
-        }
-
-        // Technique affects clean contact — poor technique sprays the ball
-        let x_deviation = rng.random_range(-5.0..5.0) * inaccuracy;
-        target.x += x_deviation;
-
-        // Composure under pressure: defenders nearby cause panic deviation
-        if nearby_defenders > 0 {
-            let panic = (1.0 - composure_f) * (1.0 - composure_f);
-            let panic_y = rng.random_range(-goal_width * 0.12..goal_width * 0.12) * panic;
-            let panic_x = rng.random_range(-6.0..6.0) * panic;
-            target.y += panic_y;
-            target.x += panic_x;
-        }
-
-        target
+        self.opponent_goal_position()
     }
 
     pub fn opponent_goal_position(&self) -> Vector3<f32> {
@@ -475,13 +440,29 @@ impl<'p> PlayerOperationsImpl<'p> {
     /// Used both as a gate (`has_clear_shot()` returns `clarity > 0.35`)
     /// and as a multiplicative factor in shot-willingness and xG, so
     /// "half-blocked" shots are rare *and* low quality.
-    pub fn shot_clarity(&self) -> f32 {
+    /// What the player can actually see of the goal from where he stands,
+    /// split into the parts a footballer weighs separately.
+    ///
+    /// `shot_clarity` multiplies these together into one number, which is
+    /// the right shape for scaling a chance's quality but the wrong shape
+    /// for a DECISION: its angle term is normalised against an absolute
+    /// 75° reference, so it shrinks with distance by pure geometry. A
+    /// player 25 m out with the whole goal in front of him scores ~0.15 on
+    /// it — indistinguishable from one at 8 m with two defenders in the
+    /// way. Anything that reads it as "how good is this look" therefore
+    /// concludes that the only good look is a close one, which is how the
+    /// engine ended up carrying every attack into the six-yard box.
+    ///
+    /// Kept as one computation so the decision and the chance-quality
+    /// scaling can never disagree about what the player is looking at.
+    pub fn goal_sight(&self) -> GoalSight {
         let player_position = self.ctx.player.position;
         let goal_position = self.opponent_goal_position();
         let dir_2d = goal_position - player_position;
         let dir_norm = dir_2d.norm();
         if dir_norm < 1.0 {
-            return 1.0; // Hard to even define clarity at zero distance — shot anyway.
+            // Hard to even define clarity on the goal line — shoot anyway.
+            return GoalSight::wide_open();
         }
         let direction_to_goal = dir_2d / dir_norm;
         let distance_to_goal = dir_norm;
@@ -499,9 +480,22 @@ impl<'p> PlayerOperationsImpl<'p> {
         // Cap at ~75° (1.31 rad) — ratio above that doesn't add quality.
         const ANGLE_REFERENCE_RAD: f32 = 1.31;
         let angle_clarity = (visible_opening / ANGLE_REFERENCE_RAD).clamp(0.0, 1.0);
+        // ANGLE QUALITY, as distinct from angle clarity: the opening the
+        // player has relative to the widest one available at HIS distance
+        // (dead centre). This is the part a shooter reads as "am I in a
+        // good position", and unlike `angle_clarity` it does not decay
+        // just because he is further out — a central 25-yarder scores ~1.0
+        // here and a tight angle from the byline scores ~0.2, which is the
+        // real distinction between the two looks.
+        let central_opening = 2.0 * (GOAL_HALF_WIDTH / x_offset).atan();
+        let angle_quality = if central_opening > 1e-4 {
+            (visible_opening / central_opening).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         // Below 8° (0.14 rad) → blind shot.
         if visible_opening < 0.14 {
-            return 0.0;
+            return GoalSight::blind();
         }
 
         // 2) Immediate-pressure clarity. Linear ramp: defender at 0u
@@ -523,7 +517,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         let pressure_clarity = (1.0 - closest_pressure).clamp(0.0, 1.0);
         // Defender at point-blank (≤2u) blocks the strike physically.
         if closest_pressure > 0.83 {
-            return 0.0;
+            return GoalSight::blind();
         }
 
         // 3) Corridor clarity. For each defender along the shot line
@@ -579,7 +573,20 @@ impl<'p> PlayerOperationsImpl<'p> {
         // positioning influences the *result* (save success in
         // try_save_shot / catching state), not the *decision to shoot*.
 
-        (angle_clarity * pressure_clarity * corridor_clarity).clamp(0.0, 1.0)
+        GoalSight {
+            angle_clarity,
+            angle_quality,
+            lane: (pressure_clarity * corridor_clarity).clamp(0.0, 1.0),
+        }
+    }
+
+    /// Single-number chance-quality view of [`Self::goal_sight`] — the
+    /// visible opening in absolute terms, damped by whatever is in the
+    /// way. Correct for scaling how good a chance IS; see `goal_sight`
+    /// for why it is the wrong input to the decision to take it.
+    pub fn shot_clarity(&self) -> f32 {
+        let sight = self.goal_sight();
+        (sight.angle_clarity * sight.lane).clamp(0.0, 1.0)
     }
 
     /// Boolean gate for shooting decisions. Built on top of
@@ -605,6 +612,71 @@ impl<'p> PlayerOperationsImpl<'p> {
         clarity >= threshold
     }
 
+    /// Personal-space avoidance, as a velocity contribution in u/tick.
+    ///
+    /// Callers ADD this to the velocity their state computed, so it has to
+    /// live on the same scale as that velocity — which is bounded by
+    /// `max_speed_with_condition` (0.36-0.63 u/tick, a real sprint).
+    ///
+    /// It did not. The accumulator below is built from "force" units in
+    /// the tens and was previously handed back raw, clamped only at
+    /// `MAX_SEPARATION_FORCE` = 40 — roughly **60x a player's top speed**.
+    /// Added to a ~0.5 u/tick steering vector, the sum pointed wherever
+    /// avoidance pointed and the state's own intent contributed nothing;
+    /// the engine-wide speed clamp in `PlayerMatchState::process` then
+    /// scaled that back to a full sprint, so the player ran flat-out away
+    /// from whoever was nearest instead of toward their target.
+    ///
+    /// That is the position flicker. A defender marking a striker was
+    /// pulled in by Marking and shoved out by avoidance; with avoidance
+    /// winning by 60x, the pair settled into a limit cycle at the radius
+    /// where the two happened to balance — the player vibrating on the
+    /// spot, burning ground and covering no distance. Measured at up to
+    /// 28 velocity reversals per second and half of all one-second
+    /// windows spent going nowhere (`dev_match trace`).
+    ///
+    /// The field's SHAPE — quadratic falloff, per-neighbour weighting,
+    /// the close-quarters emergency term — was never the problem and is
+    /// unchanged. Only the final conversion is: the accumulator is
+    /// reduced to a direction plus a 0..1 crowding scalar, then scaled to
+    /// a fraction of the player's own top speed. Avoidance can now bend a
+    /// run, which is what avoidance does; it can no longer replace it.
+    /// Personal-space avoidance expressed as a POSITIONAL offset in field
+    /// units — "stand about here instead".
+    ///
+    /// For a state that steers at a fixed point (a defender arriving at
+    /// his mark), adding avoidance as a velocity leaves the system with no
+    /// resting place: `Arrive` brakes to zero inside its 3u deadzone, so
+    /// within that deadzone avoidance always wins and pushes the player
+    /// out; once out, `Arrive` pulls him back in. There is no position
+    /// where the two cancel, so the player oscillates around his mark
+    /// forever. `Defender: Running` was the last state left doing this
+    /// after the scale fix, at ~6 reversals a second with 96% of them
+    /// inside the single state (`dev_match trace`).
+    ///
+    /// Moving the crowding onto the TARGET instead gives the system a
+    /// fixed point: the player arrives at a mark shifted a little away
+    /// from whoever is crowding him, `Arrive` brakes to zero there, and
+    /// as he settles the crowding — and therefore the shift — shrinks.
+    /// He ends up standing a metre off his mark, which is what a real
+    /// player does when a team-mate is in his space.
+    pub fn separation_offset(&self) -> Vector3<f32> {
+        /// How far a fully-crowded player is willing to stand off his
+        /// mark. ~1.2 m — a step aside, not a new position.
+        const PERSONAL_SPACE_UNITS: f32 = 10.0;
+        let avoidance = self.separation_velocity();
+        let magnitude = avoidance.magnitude();
+        if magnitude <= f32::EPSILON {
+            return Vector3::zeros();
+        }
+        // `separation_velocity` is already scaled to a fraction of top
+        // speed, so dividing by that ceiling recovers the same 0..1
+        // crowding scalar without recomputing the neighbour field.
+        let ceiling = self.ctx.player.max_speed_with_condition_cached() * 0.6;
+        let crowding = (magnitude / ceiling.max(f32::EPSILON)).clamp(0.0, 1.0);
+        avoidance * (crowding * PERSONAL_SPACE_UNITS / magnitude)
+    }
+
     pub fn separation_velocity(&self) -> Vector3<f32> {
         // Separation parameters. Boosted from the previous 20-radius,
         // 20-strength, cubic-falloff setup — that configuration meant
@@ -619,6 +691,11 @@ impl<'p> PlayerOperationsImpl<'p> {
         const SEPARATION_STRENGTH: f32 = 45.0;
         const MIN_SEPARATION_DISTANCE: f32 = 5.0;
         const MAX_SEPARATION_FORCE: f32 = 40.0;
+        /// Share of the player's top speed that full crowding may claim.
+        /// Below 1.0 by construction: a player squeezing out of traffic
+        /// gives up ground on their original line, they do not sprint
+        /// backwards out of the play.
+        const SEPARATION_AUTHORITY: f32 = 0.6;
 
         // Early exit: check if anyone is nearby before iterating
         let players = self.ctx.players();
@@ -676,6 +753,13 @@ impl<'p> PlayerOperationsImpl<'p> {
         // controls their movement cleanly.
         let i_have_ball = self.ctx.ball().owner_id() == Some(self.ctx.player.id);
         if !i_have_ball {
+            // The carrier is the one opponent we never avoid. Marking,
+            // Pressing, Tackling, Covering and Guarding all exist to get
+            // TIGHT to the man on the ball — real defenders engage inside
+            // a metre. Repelling them from that same man set the state's
+            // intent directly against the avoidance term, which is how
+            // those five states came to dominate the twitch table.
+            let carrier = self.ctx.ball().owner_id();
             // Same raw-iterator distance reuse as the teammate loop; the
             // opponents `nearby` wrapper had no minimum distance.
             for (other_player, distance) in grid.opponents_full(
@@ -684,6 +768,9 @@ impl<'p> PlayerOperationsImpl<'p> {
                 player_pos,
                 OPP_SEPARATION_RADIUS,
             ) {
+                if Some(other_player.id) == carrier {
+                    continue;
+                }
                 let to_other = other_player.position - player_pos;
 
                 if distance > 0.0 {
@@ -701,13 +788,19 @@ impl<'p> PlayerOperationsImpl<'p> {
             }
         }
 
-        // Clamp separation force
-        let separation_magnitude_sq = separation.magnitude_squared();
-        if separation_magnitude_sq > MAX_SEPARATION_FORCE * MAX_SEPARATION_FORCE {
-            separation *= MAX_SEPARATION_FORCE / separation_magnitude_sq.sqrt();
+        // Convert the accumulated crowding field into a velocity.
+        // `magnitude / MAX_SEPARATION_FORCE` is how badly personal space
+        // is being violated, saturating at 1.0; scaling that by the
+        // player's own top speed keeps the result on the same scale as
+        // the state velocity it is added to, so the two compose instead
+        // of one erasing the other.
+        let magnitude = separation.magnitude();
+        if magnitude <= f32::EPSILON {
+            return Vector3::zeros();
         }
-
-        separation
+        let crowding = (magnitude / MAX_SEPARATION_FORCE).clamp(0.0, 1.0);
+        let max_speed = self.ctx.player.max_speed_with_condition_cached();
+        separation * (crowding * max_speed * SEPARATION_AUTHORITY / magnitude)
     }
 
     /// Get pressure operations for assessing game pressure

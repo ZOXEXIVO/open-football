@@ -201,6 +201,67 @@ pub mod assist_diag {
 /// — they were separate literals in `motion.rs` and `players.rs`.
 pub const GROUND_FRICTION: f32 = 0.0016;
 
+/// Downward acceleration applied to an airborne ball, in **m/tick²**.
+///
+/// # The ball's vertical axis is in METRES
+///
+/// `x` and `y` are in game units (1u = 0.125 m); `z` is in metres. The
+/// engine has always said so — `GOAL_HEIGHT` is annotated "crossbar height
+/// in meters (z-axis is in meters)", and every reach threshold in the
+/// engine (`PLAYER_JUMP_REACH` 3.5, `is_aerial` 2.3, the receiver ceiling
+/// 2.8, the heading band 1.4-2.5) is a sane figure in metres and a
+/// nonsense one in units. What did NOT honour the convention was the
+/// motion: gravity and the launch velocities were written in units, so a
+/// ball climbing to "4.0" was climbing four metres' worth of threshold at
+/// four units' worth of speed.
+///
+/// This constant is the reconciliation. At 10 ms a tick,
+/// `9.81 m/s² × (0.01 s)² = 9.81e-4 m/tick²`. It replaces `9.81 * 0.016`
+/// (= 0.157), which was 160× too strong in metres — the ball fell like a
+/// stone, so nothing could hang, so the pass solver had to fire lofted
+/// balls at 85 m/s to get them anywhere, and clearances and shots were
+/// each hand-fitted to that in their own units.
+///
+/// Consequences, all of them wanted: hang times become real (a 30 m cross
+/// hangs ~2.3 s instead of ~0.5 s), lofted passes come back inside normal
+/// pass speeds, and every height threshold in the engine starts meaning
+/// what it says.
+///
+/// Every site that integrates or inverts vertical motion MUST read this
+/// (or the helpers below) rather than carry its own literal — the physics,
+/// the landing projection, the pass solver, the shot arc, the clearance
+/// and the cross-chase all used to hold private copies of `9.81`-something
+/// in three different unit systems.
+pub const GRAVITY_PER_TICK: f32 = 9.81 * 0.01 * 0.01;
+
+impl Ball {
+    /// Vertical launch speed (m/tick) that peaks at `apex` metres.
+    ///
+    /// Apex is the natural way to ask for a trajectory: it is the one
+    /// property of a kick a player actually aims at ("clip it over him",
+    /// "put it on his head", "row Z"), it reads in metres so it can be
+    /// sanity-checked against a human being, and it is unit-clean — the
+    /// alternative, a launch angle, cannot be expressed at all when the
+    /// horizontal and vertical axes carry different units.
+    #[inline]
+    pub fn launch_speed_for_apex(apex_metres: f32) -> f32 {
+        (2.0 * GRAVITY_PER_TICK * apex_metres.max(0.0)).sqrt()
+    }
+
+    /// How long a ball launched at `vertical_speed` (m/tick) stays up, in
+    /// ticks, before returning to the height it left from.
+    #[inline]
+    pub fn hang_ticks(vertical_speed: f32) -> f32 {
+        2.0 * vertical_speed.max(0.0) / GRAVITY_PER_TICK
+    }
+
+    /// Peak height in metres of a ball launched at `vertical_speed`.
+    #[inline]
+    pub fn apex_for_launch(vertical_speed: f32) -> f32 {
+        vertical_speed * vertical_speed / (2.0 * GRAVITY_PER_TICK)
+    }
+}
+
 /// How close a player must be to the ball to take control of it, in game
 /// units (1u = 0.125 m, so this is 1.5 m — one stride, a real first-touch
 /// distance).
@@ -561,6 +622,76 @@ pub struct Ball {
     /// to credit progressive carries and box entries.
     pub carry_owner: Option<u32>,
     pub carry_start_position: Vector3<f32>,
+
+    /// Who last put the ball into play out of their own control — a pass,
+    /// a goal kick, a clearance — with where and when they did it.
+    ///
+    /// Read by [`Ball::blocked_recollect_player`] to stop the releaser
+    /// immediately re-collecting a delivery that has barely moved. Real
+    /// football has no rule against running onto your own pass, but the
+    /// engine had a degenerate cycle that did need one: a goalkeeper
+    /// whose kick landed at his feet picked it up, kicked again, and
+    /// never got out of his own six-yard box. The ball-travel test (not a
+    /// blanket ban) is what keeps a legitimate one-two or chip-over-the-
+    /// top intact.
+    ///
+    /// Cleared the moment any OTHER player touches the ball, and on every
+    /// dead-ball restart.
+    pub last_release_player_id: Option<u32>,
+    pub last_release_position: Vector3<f32>,
+    pub last_release_tick: u64,
+    /// Whether that release was out of a goalkeeper's HANDS. Drives the
+    /// second-touch half of Law 12: once a keeper puts the ball back into
+    /// play he may not handle it again until someone else has played it.
+    pub last_release_from_hands: bool,
+
+    /// The ball is in a goalkeeper's gloves.
+    ///
+    /// Distinct from `current_owner` being a keeper, which only says he has
+    /// it at his feet. A ball in the hands is out of play in every sense
+    /// that matters to the other twenty-one players: it cannot be tackled,
+    /// intercepted, or claimed, and pressing it is pointless. Nothing
+    /// represented that before — a keeper who had caught a cross could be
+    /// dispossessed by a forward standing next to him, because
+    /// `check_ball_ownership` just hands the ball to the best tackler
+    /// within 5u whoever they are.
+    pub held_in_hands: bool,
+
+    /// The last touch was a team-mate deliberately playing the ball with
+    /// their feet (a pass or a throw-in), which is what arms the back-pass
+    /// prohibition. Set by [`Ball::note_deliberate_kick`] and cleared by
+    /// [`Ball::record_touch`] — so ANY subsequent touch by anyone, of any
+    /// kind, disarms it automatically. That is exactly the Law: a header
+    /// back, a deflection, an opponent's touch, all restore the keeper's
+    /// right to use his hands.
+    pub last_touch_was_deliberate_kick: bool,
+}
+
+/// Whether a goalkeeper may pick this ball up, and if not, why not.
+///
+/// The engine had no notion of this at all: `Catching` never checked where
+/// it was happening, so a keeper would take the ball cleanly in his hands
+/// forty metres from his own goal, and a back-pass was gathered exactly
+/// like a cross.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandlingVerdict {
+    /// Hands are legal — gather it.
+    Legal,
+    /// Outside his own penalty area. Handling here is a direct free kick
+    /// (and usually a red card), so a keeper simply does not do it.
+    OutsideArea,
+    /// Deliberately kicked to him by a team-mate, or thrown in by one.
+    /// Indirect free kick if he handles it, so he plays it with his feet.
+    BackPass,
+    /// He has already released it and nobody else has touched it since.
+    SecondTouch,
+}
+
+impl HandlingVerdict {
+    #[inline]
+    pub fn is_legal(self) -> bool {
+        matches!(self, HandlingVerdict::Legal)
+    }
 }
 
 /// Projection of a shot at the moment it's taken. The `PreparingForSave`
@@ -703,12 +834,130 @@ impl Ball {
             pending_failed_claim_charged: false,
             carry_owner: None,
             carry_start_position: Vector3::new(x, y, 0.0),
+            last_release_player_id: None,
+            last_release_position: Vector3::new(x, y, 0.0),
+            last_release_tick: 0,
+            last_release_from_hands: false,
+            held_in_hands: false,
+            last_touch_was_deliberate_kick: false,
         }
+    }
+
+    /// Record that `player_id` has just released the ball into open play
+    /// from `position`. See [`Ball::last_release_player_id`].
+    pub fn note_release(&mut self, player_id: u32, position: Vector3<f32>, tick: u64) {
+        self.last_release_player_id = Some(player_id);
+        self.last_release_position = position;
+        self.last_release_tick = tick;
+        // Any release puts the ball back in open play — it is no longer in
+        // anyone's gloves. `from_hands` is stamped separately by the
+        // goalkeeper release paths.
+        self.last_release_from_hands = self.held_in_hands;
+        self.held_in_hands = false;
+    }
+
+    /// A field player has deliberately played the ball with their feet.
+    ///
+    /// Routed through `record_touch` so the touch bookkeeping stays in one
+    /// place, then raises the deliberate-kick flag that
+    /// [`Ball::is_backpass_to`] reads. Because `record_touch` LOWERS the
+    /// flag, the very next touch by anybody disarms the back-pass bar with
+    /// no explicit clearing anywhere.
+    pub fn note_deliberate_kick(&mut self, player_id: u32, team_id: u32, tick: u64) {
+        self.record_touch(player_id, team_id, tick, true);
+        self.last_touch_was_deliberate_kick = true;
+    }
+
+    /// True when handling this ball would breach the back-pass law: the
+    /// last touch was a team-mate of `keeper_id` deliberately kicking or
+    /// throwing it.
+    pub fn is_backpass_to(&self, keeper_id: u32, keeper_team: u32) -> bool {
+        self.last_touch_was_deliberate_kick
+            && self.last_touch_team_id == Some(keeper_team)
+            && self.last_touch_player_id != Some(keeper_id)
+    }
+
+    /// True when `keeper_id` put this ball back into play from his hands
+    /// and nobody has played it since — the second-touch prohibition.
+    pub fn awaiting_touch_after_release_by(&self, keeper_id: u32) -> bool {
+        self.last_release_from_hands && self.last_release_player_id == Some(keeper_id)
+    }
+
+    /// Height the ball rides at while it is being carried, in metres.
+    ///
+    /// At a player's feet normally — and at CHEST HEIGHT in a keeper's
+    /// gloves. `held_in_hands` was a rules concept only: the ball still
+    /// snapped to z = 0, so a keeper who had just caught a cross was drawn
+    /// with it lying on the grass by his boots, and the replay showed a
+    /// goalkeeper who never uses his hands for anything. Nothing else was
+    /// wrong — the viewer draws exactly the height it is given.
+    ///
+    /// 1.15 m is where a man of the model's 1.79 m holds a ball into his
+    /// chest. It stays well under `is_aerial`'s 2.3 m and under the 2.44 m
+    /// crossbar, so no height-gated rule changes behaviour because of it.
+    pub fn carry_height(&self) -> f32 {
+        if self.held_in_hands { 1.15 } else { 0.0 }
+    }
+
+    /// Take the ball into `keeper_id`'s gloves.
+    pub fn gather_in_hands(&mut self, keeper_id: u32, team_id: u32, tick: u64) {
+        #[cfg(feature = "match-logs")]
+        ownership::reception_diag::GATHERS
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_touch(keeper_id, team_id, tick, true);
+        self.held_in_hands = true;
+        self.last_release_from_hands = false;
+    }
+
+    /// The player currently barred from re-collecting the ball because
+    /// they released it themselves and it has not yet gone anywhere, or
+    /// `None` when nobody is barred.
+    ///
+    /// Bounded on BOTH axes so it can never become a deadlock of its own:
+    /// the bar lifts as soon as the ball has travelled `MIN_TRAVEL`, and
+    /// unconditionally after `MAX_BLOCK_TICKS` whether it moved or not.
+    /// Without the time bound, a ball that stops 2 m from a lone player
+    /// with no one else nearby would sit there forever.
+    pub fn blocked_recollect_player(&self) -> Option<u32> {
+        /// 5 m. Short enough that a genuine one-two or a chip over the top
+        /// is unaffected; long enough that a delivery which never left the
+        /// striker's own feet is caught.
+        const MIN_TRAVEL: f32 = 40.0;
+        /// 2 s. Deadlock escape — see above.
+        const MAX_BLOCK_TICKS: u64 = 200;
+
+        let releaser = self.last_release_player_id?;
+        if self
+            .current_tick_cached
+            .saturating_sub(self.last_release_tick)
+            > MAX_BLOCK_TICKS
+        {
+            return None;
+        }
+        let dx = self.position.x - self.last_release_position.x;
+        let dy = self.position.y - self.last_release_position.y;
+        if dx * dx + dy * dy >= MIN_TRAVEL * MIN_TRAVEL {
+            return None;
+        }
+        Some(releaser)
     }
 
     /// Record a meaningful touch. Drives restart resolution. `controlled`
     /// distinguishes a clean reception from a deflection / failed save.
     pub fn record_touch(&mut self, player_id: u32, team_id: u32, tick: u64, controlled: bool) {
+        // Somebody else has been on the ball — whatever the last releaser
+        // did is history, and their re-collect bar lifts.
+        if self.last_release_player_id.is_some_and(|id| id != player_id) {
+            self.last_release_player_id = None;
+            // Somebody else has played it, so the keeper who put it into
+            // play may use his hands again (Law 12's second-touch bar
+            // lifts on any other player's touch).
+            self.last_release_from_hands = false;
+        }
+        // Every touch disarms the back-pass bar. `note_deliberate_kick`
+        // re-raises it immediately afterwards for the one touch that
+        // should — see its docs.
+        self.last_touch_was_deliberate_kick = false;
         self.last_touch_player_id = Some(player_id);
         self.last_touch_team_id = Some(team_id);
         self.last_touch_tick = tick;
@@ -753,6 +1002,13 @@ impl Ball {
         // A dead ball ends the shot: without this a stale strike would
         // let the next pass that rolls over the line stand as a goal.
         self.last_shot_struck_tick = 0;
+        // A restart is a fresh delivery — the taker may legally be the
+        // player who last released the ball in open play, and no dead ball
+        // is ever in a keeper's gloves.
+        self.last_release_player_id = None;
+        self.last_release_from_hands = false;
+        self.held_in_hands = false;
+        self.last_touch_was_deliberate_kick = false;
     }
 
     /// Soft invariant check on the ball's lifecycle flags. Returns the
@@ -845,7 +1101,129 @@ impl Ball {
                 return Err("carry_owner disagrees with current_owner");
             }
         }
+        // A ball in the gloves has a keeper holding it. Nothing else in
+        // the engine may take ownership away without lowering the flag,
+        // or the ball becomes permanently unclaimable.
+        if self.held_in_hands && self.current_owner.is_none() {
+            return Err("held_in_hands with no owner");
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod gk_handling_tests {
+    use super::*;
+
+    const KEEPER: u32 = 1;
+    const KEEPER_TEAM: u32 = 10;
+    const DEFENDER: u32 = 2;
+    const OPPONENT: u32 = 3;
+    const OPPONENT_TEAM: u32 = 20;
+
+    fn ball() -> Ball {
+        Ball::with_coord(840.0, 545.0)
+    }
+
+    #[test]
+    fn a_teammates_deliberate_kick_bars_the_keepers_hands() {
+        let mut b = ball();
+        b.note_deliberate_kick(DEFENDER, KEEPER_TEAM, 100);
+        assert!(b.is_backpass_to(KEEPER, KEEPER_TEAM));
+    }
+
+    #[test]
+    fn any_later_touch_disarms_the_backpass_bar() {
+        // The Law: a header back, a deflection, an opponent's touch — each
+        // restores the keeper's right to use his hands. This falls out of
+        // `record_touch` lowering the flag rather than from any explicit
+        // clearing, so it holds for touch paths that do not exist yet.
+        for (toucher, team, controlled) in [
+            (DEFENDER, KEEPER_TEAM, false), // deflection off a team-mate
+            (OPPONENT, OPPONENT_TEAM, true), // opponent played it
+            (OPPONENT, OPPONENT_TEAM, false), // opponent deflected it
+        ] {
+            let mut b = ball();
+            b.note_deliberate_kick(DEFENDER, KEEPER_TEAM, 100);
+            b.record_touch(toucher, team, 120, controlled);
+            assert!(
+                !b.is_backpass_to(KEEPER, KEEPER_TEAM),
+                "touch by {toucher} (controlled={controlled}) should have disarmed the bar"
+            );
+        }
+    }
+
+    #[test]
+    fn an_opponents_pass_is_not_a_backpass() {
+        let mut b = ball();
+        b.note_deliberate_kick(OPPONENT, OPPONENT_TEAM, 100);
+        assert!(!b.is_backpass_to(KEEPER, KEEPER_TEAM));
+    }
+
+    #[test]
+    fn a_keeper_does_not_bar_himself_by_kicking() {
+        // His own distribution is governed by the second-touch rule, not
+        // the back-pass one — and that rule only bites if he released it
+        // from his HANDS.
+        let mut b = ball();
+        b.note_deliberate_kick(KEEPER, KEEPER_TEAM, 100);
+        assert!(!b.is_backpass_to(KEEPER, KEEPER_TEAM));
+    }
+
+    #[test]
+    fn releasing_from_the_hands_bars_a_second_handling() {
+        let mut b = ball();
+        b.gather_in_hands(KEEPER, KEEPER_TEAM, 100);
+        assert!(b.held_in_hands);
+
+        b.note_release(KEEPER, Vector3::new(20.0, 270.0, 0.0), 400);
+        assert!(!b.held_in_hands, "releasing empties the gloves");
+        assert!(b.awaiting_touch_after_release_by(KEEPER));
+    }
+
+    #[test]
+    fn the_second_touch_bar_lifts_once_anyone_else_plays_it() {
+        let mut b = ball();
+        b.gather_in_hands(KEEPER, KEEPER_TEAM, 100);
+        b.note_release(KEEPER, Vector3::new(20.0, 270.0, 0.0), 400);
+        b.record_touch(DEFENDER, KEEPER_TEAM, 460, true);
+        assert!(!b.awaiting_touch_after_release_by(KEEPER));
+    }
+
+    #[test]
+    fn a_kick_off_the_deck_does_not_arm_the_second_touch_bar() {
+        // Only a release FROM THE HANDS does. A keeper who sweeps a ball
+        // clear with his feet may pick up the next one.
+        let mut b = ball();
+        b.note_release(KEEPER, Vector3::new(20.0, 270.0, 0.0), 400);
+        assert!(!b.awaiting_touch_after_release_by(KEEPER));
+    }
+
+    #[test]
+    fn a_dead_ball_clears_every_handling_bar() {
+        let mut b = ball();
+        b.note_deliberate_kick(DEFENDER, KEEPER_TEAM, 100);
+        b.gather_in_hands(KEEPER, KEEPER_TEAM, 110);
+        b.note_release(KEEPER, Vector3::new(20.0, 270.0, 0.0), 400);
+
+        b.clear_open_play_metadata();
+
+        assert!(!b.held_in_hands);
+        assert!(!b.is_backpass_to(KEEPER, KEEPER_TEAM));
+        assert!(!b.awaiting_touch_after_release_by(KEEPER));
+    }
+
+    #[test]
+    fn a_held_ball_keeps_the_invariants() {
+        let mut b = ball();
+        b.current_owner = Some(KEEPER);
+        b.gather_in_hands(KEEPER, KEEPER_TEAM, 100);
+        assert!(b.check_invariants().is_ok());
+
+        // Ownership taken away without lowering the flag would leave the
+        // ball permanently unclaimable — the claim path skips it entirely.
+        b.current_owner = None;
+        assert!(b.check_invariants().is_err());
     }
 }
 
@@ -913,6 +1291,14 @@ impl Ball {
         events: &mut EventCollection,
     ) {
         self.current_tick_cached = context.current_tick();
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering;
+            ownership::reception_diag::TOTAL_TICKS.fetch_add(1, Ordering::Relaxed);
+            if self.held_in_hands {
+                ownership::reception_diag::HELD_TICKS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
 
         // Decrement claim cooldown
         if self.claim_cooldown > 0 {
@@ -999,7 +1385,7 @@ impl Ball {
             return self.position;
         }
 
-        const G_PER_TICK: f32 = 9.81 * 0.016;
+        const G_PER_TICK: f32 = GRAVITY_PER_TICK;
         let vz = self.velocity.z;
         let h = self.position.z;
 
@@ -1019,7 +1405,12 @@ impl Ball {
     /// Check if the ball is aerial (in the air above player reach)
     pub fn is_aerial(&self) -> bool {
         const PLAYER_REACH_HEIGHT: f32 = 2.3;
-        self.position.z > PLAYER_REACH_HEIGHT && self.velocity.z.abs() > 0.1
+        // 0.005 m/tick = 0.5 m/s. The old 0.1 was 10 m/s — a bar set in
+        // the units gravity used to be written in, which meant a ball
+        // hanging at head height read as "not aerial" the moment it
+        // slowed near its apex.
+        const MOVING_VERTICALLY: f32 = 0.005;
+        self.position.z > PLAYER_REACH_HEIGHT && self.velocity.z.abs() > MOVING_VERTICALLY
     }
 
     pub fn is_stands_outside(&self) -> bool {
@@ -1090,6 +1481,10 @@ impl Ball {
         self.last_completed_pass_receiver_id = None;
         self.last_completed_pass_tick = 0;
         self.last_shot_struck_tick = 0;
+        self.last_release_player_id = None;
+        self.last_release_from_hands = false;
+        self.held_in_hands = false;
+        self.last_touch_was_deliberate_kick = false;
     }
 
     /// Snapshot the most-recent completed pass so the shot-handler
@@ -1108,12 +1503,17 @@ impl Ball {
         if self.current_owner == Some(player_id) {
             self.current_owner = None;
             self.ownership_duration = 0;
+            // A substituted / sent-off keeper cannot still be holding it.
+            self.held_in_hands = false;
         }
         if self.previous_owner == Some(player_id) {
             self.previous_owner = None;
         }
         if self.pass_target_player_id == Some(player_id) {
             self.pass_target_player_id = None;
+        }
+        if self.last_release_player_id == Some(player_id) {
+            self.last_release_player_id = None;
         }
         if self.last_completed_pass_passer_id == Some(player_id)
             || self.last_completed_pass_receiver_id == Some(player_id)

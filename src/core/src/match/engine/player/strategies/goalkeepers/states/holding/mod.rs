@@ -8,8 +8,26 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const MIN_HOLDING_DURATION: u64 = 25;
-const MAX_HOLDING_DURATION: u64 = 60;
+/// How long a keeper keeps the ball in his hands before releasing it, in
+/// ticks (100 = 1 s).
+///
+/// Law 12 gives him six seconds; in practice a keeper takes two on a quick
+/// counter and five when his side is happy to slow the game down, and the
+/// referee's whistle is close to a dead letter. These bracket that.
+///
+/// They were 25 and 60 — half a second to one and a quarter, which is
+/// physically impossible: he had not finished catching it. The engine's
+/// keepers released the ball almost the instant they claimed it, which
+/// removed the natural pause in play after every save and cross.
+///
+/// UNITS: `in_state_time` counts AI TICKS, not engine ticks. Only full
+/// ticks run the state machine — `game_tick_light` deliberately leaves
+/// the counter alone — so one unit here is 20 ms, not 10. The first pass
+/// at this used 200-550 believing they were 10 ms ticks, which made a
+/// keeper hold the ball for four to eleven seconds and put the ball in
+/// his gloves for 27.9% of the match against a real 3-6%.
+const MIN_HOLDING_DURATION: u64 = 100;
+const MAX_HOLDING_DURATION: u64 = 275;
 
 /// Furthest a keeper can realistically throw. Beyond this the ball has
 /// to be kicked.

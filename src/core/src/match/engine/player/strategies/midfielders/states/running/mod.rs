@@ -1,7 +1,10 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::events::Event;
+use crate::r#match::midfielders::states::MidfielderGuardingState;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, MidfielderCondition, ShapeStation,
+};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
@@ -784,8 +787,19 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            // Guard unmarked attackers on our side when we can't press/intercept
-            if ctx.ball().on_own_side() && ctx.ball().distance() > 100.0 {
+            // Guard unmarked attackers on our side when we can't
+            // press/intercept — but only if there is actually somebody to
+            // guard. This condition is about where the BALL is; `Guarding`
+            // answers "nobody to guard" by handing the player straight
+            // back here, so without asking its question first the two
+            // states ran as a two-cycle. Same memoised scan `Guarding`
+            // itself uses, so this costs a cache lookup.
+            if ctx.ball().on_own_side()
+                && ctx.ball().distance() > 100.0
+                && MidfielderGuardingState::default()
+                    .find_guard_target(ctx)
+                    .is_some()
+            {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Guarding,
                 ));
@@ -924,7 +938,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: 5.0,
+                        crowd_offset: ctx.player().separation_offset(),
                     }
                     .calculate(ctx.player)
                     .velocity,
@@ -1106,8 +1120,12 @@ impl MidfielderRunningState {
                     ));
                 }
                 // Further-away midfielders reset shape rather than
-                // ball-chase into space.
-                if ball_dist > 80.0 {
+                // ball-chase into space — but only if there is shape to
+                // reset. A midfielder already standing on his mark has
+                // nothing to recover, and sending him to `Returning`
+                // anyway just bounced him back the next tick (see
+                // `ShapeStation`).
+                if ball_dist > 80.0 && ShapeStation::should_recover(ctx) {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Returning,
                     ));
@@ -1136,7 +1154,10 @@ impl MidfielderRunningState {
             // between defenders and the ball. Midfielders shouldn't
             // continue chasing upfield in this phase.
             GamePhase::LowBlock if !has_ball => {
-                if ball_dist > 50.0 {
+                // Same shared predicate: drop back only when actually out
+                // of shape. Unconditional on `ball_dist` alone, this was
+                // the single biggest midfield loop in the engine.
+                if ball_dist > 50.0 && ShapeStation::should_recover(ctx) {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Returning,
                     ));

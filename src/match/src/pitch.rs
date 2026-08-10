@@ -1,4 +1,5 @@
 use crate::field::Field;
+use crate::textures::Textures;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
 use bevy::prelude::*;
@@ -112,16 +113,6 @@ impl LineMesh {
     }
 }
 
-/// One bank of terracing, resolved into the numbers a tilted slab needs.
-struct Terrace {
-    length: f32,
-    /// Distance from the middle of the pitch to the middle of the slab.
-    reach: f32,
-    height: f32,
-    /// Angle it is tilted up from the flat, in radians.
-    pitch: f32,
-}
-
 /// The stadium: turf, painted markings, both goals and the ground around them.
 pub struct Pitch;
 
@@ -135,9 +126,16 @@ impl Pitch {
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
+        mut images: ResMut<Assets<Image>>,
     ) {
+        // The grass beyond the touchlines: the same turf, unlit and in the
+        // shadow of the stand, so it keeps the pitch's yellow-green hue and
+        // simply loses most of its value. It was a near-black blue-green
+        // (0.05 / 0.13 / 0.07) that belonged to nothing else in the scene,
+        // and a surround in a different hue family from the pitch reads as
+        // a hole cut in the world rather than as ground.
         let surround = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.05, 0.13, 0.07),
+            base_color: Color::srgb(0.106, 0.169, 0.086),
             perceptual_roughness: 1.0,
             ..default()
         });
@@ -150,12 +148,18 @@ impl Pitch {
         Self::spawn_turf(&mut commands, &mut meshes, &mut materials);
         Self::spawn_markings(&mut commands, &mut meshes, &mut materials);
         Self::spawn_goals(&mut commands, &mut meshes, &mut materials);
-        Self::spawn_ground(&mut commands, &mut meshes, &mut materials);
+        Self::spawn_ground(&mut commands, &mut meshes, &mut materials, &mut images);
 
+        // A stadium is lit from four corners at once, so almost nothing on the
+        // pitch falls into true shadow. One directional light standing in for
+        // all of them has to be paired with a generous ambient (see the camera,
+        // which carries it): on its own it leaves every surface turned away
+        // from it near black, which is fine on a disc and wrong on a body with
+        // limbs, once the camera is close enough to see them shaded.
         commands.spawn((
             DirectionalLight {
                 color: Color::srgb(1.0, 0.98, 0.92),
-                illuminance: 11_000.0,
+                illuminance: 8_500.0,
                 // Deliberately off: the only thing tall enough to cast a
                 // meaningful shadow is the ball, which carries its own contact
                 // disc, and cascaded shadow maps are the single most expensive
@@ -172,14 +176,34 @@ impl Pitch {
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
     ) {
+        // Turf colour, sampled off broadcast football rather than picked
+        // off a colour wheel.
+        //
+        // The old pair had MORE BLUE THAN RED (0.17 / 0.44 / 0.20), which
+        // is what made it read as synthetic: a blue-shifted green is
+        // snooker baize or AstroTurf. Real grass on camera is a
+        // yellow-green — red comfortably ahead of blue — and considerably
+        // less saturated than people expect, because a stadium is lit flat
+        // and the camera is looking at dust, wear and seed heads as much
+        // as at leaf.
+        //
+        // The two shades are the same grass mown in opposite directions,
+        // NOT two different greens. Leaf bent away from you reflects more
+        // sky and looks lighter and slightly cooler; leaf bent toward you
+        // shows its shadowed side and looks darker and a touch greyer. So
+        // the pair differs by ~15% in luminance (the real figure for
+        // mowing stripes) and only slightly in hue. Making them differ by
+        // brightness alone is what makes stripes look painted on.
+        //
+        //   light  #497434    dark  #3A6230   (16% darker, a shade greyer)
         let shades = [
             materials.add(StandardMaterial {
-                base_color: Color::srgb(0.17, 0.44, 0.20),
+                base_color: Color::srgb(0.286, 0.455, 0.204),
                 perceptual_roughness: 1.0,
                 ..default()
             }),
             materials.add(StandardMaterial {
-                base_color: Color::srgb(0.14, 0.38, 0.17),
+                base_color: Color::srgb(0.228, 0.385, 0.188),
                 perceptual_roughness: 1.0,
                 ..default()
             }),
@@ -270,28 +294,45 @@ impl Pitch {
         commands: &mut Commands,
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
     ) {
         const SIDE_MARGIN: f32 = 3.4;
         const END_MARGIN: f32 = 4.6;
         const HOARDING_HEIGHT: f32 = 0.95;
         const HOARDING_DEPTH: f32 = 0.14;
 
+        // Advertising hoardings. Lifted out of near-black too, but only to a
+        // mid tone: these run the full length of the touchline right at the
+        // edge of the play, and a bright band there pulls the eye off the
+        // ball in a way the stands behind them do not.
         let board = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.07, 0.09, 0.13),
+            base_color: Color::srgb(0.200, 0.230, 0.300),
             perceptual_roughness: 0.65,
             ..default()
         });
         // The lit strip along the top of the hoardings. It is the one crisp
         // line in the background, and it is what draws the edge of the playing
         // surface from a camera looking down onto it.
+        // Now that the stands behind it are pale, the walkway has to be paler
+        // still or it stops reading as lit — at 0.22 it would be the darkest
+        // thing on a light structure, which is the opposite of a lit strip.
         let trim = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.22, 0.27, 0.36),
-            emissive: LinearRgba::rgb(0.10, 0.13, 0.19),
+            base_color: Color::srgb(0.86, 0.90, 0.96),
+            emissive: LinearRgba::rgb(0.16, 0.19, 0.24),
             perceptual_roughness: 0.4,
             ..default()
         });
+        // Roof and back wall: pale concrete under the floodlights, which is
+        // what a stand is actually made of. These were near-black
+        // (0.075/0.082/0.105) — the whole ground was pitched as an unlit
+        // silhouette, and the structure read as a hole rather than as a
+        // building.
+        //
+        // Seen from underneath, so it is a shaded grey rather than a white:
+        // the camera looks UP at every roof in this scene and never at a lit
+        // top surface.
         let stand = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.055, 0.062, 0.085),
+            base_color: Color::srgb(0.580, 0.600, 0.630),
             perceptual_roughness: 1.0,
             ..default()
         });
@@ -328,37 +369,146 @@ impl Pitch {
             ));
         }
 
-        // Terracing, as three slabs tilted up out of the surround. At this
-        // distance the fog has most of them, which is the point: they give the
-        // ground a horizon without ever competing with the play for attention.
-        let far = Self::terrace(across + 2.1, 26.5, 13.4);
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(along * 2.0 + 30.0, 0.8, far.length))),
-            MeshMaterial3d(stand.clone()),
-            Transform::from_xyz(0.0, far.height, far.reach)
-                .with_rotation(Quat::from_rotation_x(-far.pitch)),
-        ));
+        // Three banks of seating. Empty: no crowd, just the structure.
+        //
+        // These were one tilted slab each — a smooth ramp, which from the
+        // camera is a flat grey triangle and reads as scenery rather than as
+        // a stand. What makes a stand recognisable at distance is not detail
+        // but RELIEF: stepped rows catching the light one edge at a time, and
+        // a roof line over the top of them. Both are cheap, and with the lens
+        // widened they are a good deal more visible than they used to be.
+        // The seats themselves, as a texture across the face of every row —
+        // see `Textures::seats` for why they cannot be geometry. White base
+        // colour so the image supplies the colour unmodified.
+        let seating = materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(Textures::seats(images)),
+            perceptual_roughness: 0.95,
+            ..default()
+        });
 
-        let end = Self::terrace(along + 2.4, 23.5, 11.4);
-        for side in [-1.0f32, 1.0] {
-            commands.spawn((
-                Mesh3d(meshes.add(Cuboid::new(end.length, 0.8, across * 2.0 + 24.0))),
-                MeshMaterial3d(stand.clone()),
-                Transform::from_xyz(side * end.reach, end.height, 0.0)
-                    .with_rotation(Quat::from_rotation_z(side * end.pitch)),
-            ));
+        let across_span = along * 2.0 + 30.0;
+        let end_span = across * 2.0 + 24.0;
+
+        // Behind the far touchline. The near side is where the broadcast
+        // gantry sits, so nothing is built there.
+        Self::spawn_stand(
+            commands,
+            meshes,
+            &seating,
+            &stand,
+            &trim,
+            across_span,
+            across + 2.1,
+            26.5,
+            13.4,
+            0.0,
+        );
+        // Both ends, rotated a quarter turn so their rows recede down the x
+        // axis instead of the z one — one each way, which is what puts them
+        // behind opposite goals.
+        for turn in [FRAC_PI_2, -FRAC_PI_2] {
+            Self::spawn_stand(
+                commands,
+                meshes,
+                &seating,
+                &stand,
+                &trim,
+                end_span,
+                along + 2.4,
+                23.5,
+                11.4,
+                turn,
+            );
         }
     }
 
-    /// Where to put a slab of terracing that starts `from` metres out and
-    /// climbs `rise` metres over `run`.
-    fn terrace(from: f32, run: f32, rise: f32) -> Terrace {
-        Terrace {
-            length: (run * run + rise * rise).sqrt(),
-            reach: from + run * 0.5,
-            height: rise * 0.5 + 0.6,
-            pitch: rise.atan2(run),
-        }
+    /// One bank of empty seating, built in its own local space — rows
+    /// receding along +Z and climbing in +Y from the front row at the origin
+    /// — and then turned to face the pitch.
+    ///
+    /// `turn` is the rotation about Y that points the stand inward: zero for
+    /// the far side, a quarter turn either way for the ends.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_stand(
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        seating: &Handle<StandardMaterial>,
+        structure: &Handle<StandardMaterial>,
+        trim: &Handle<StandardMaterial>,
+        length: f32,
+        from: f32,
+        run: f32,
+        rise: f32,
+        turn: f32,
+    ) {
+        /// Depth of one row of seats, front to back. Real terracing is about
+        /// 0.8 m; a little deeper here keeps the row count — and so the
+        /// entity count — sensible for a background element that spends most
+        /// of its life in the fog.
+        const TREAD: f32 = 1.25;
+        /// How far the roof stands above the back row.
+        const ROOF_CLEARANCE: f32 = 7.0;
+        /// Fraction of the way up the lit walkway runs.
+        const TIER: f32 = 0.35;
+
+        let rows = (run / TREAD).round().max(4.0);
+        let riser = rise / rows;
+        let rows = rows as usize;
+
+        // One mesh, reused for every row of every stand.
+        let step = meshes.add(Cuboid::new(length, riser * 1.9, TREAD * 0.96));
+
+        let placement = Transform::from_rotation(Quat::from_rotation_y(turn));
+        let anchor = commands.spawn((placement, Visibility::default())).id();
+
+        commands.entity(anchor).with_children(|bank| {
+            for row in 0..rows {
+                let up = riser * (row as f32 + 0.5);
+                let back = from + TREAD * (row as f32 + 0.5);
+                bank.spawn((
+                    Mesh3d(step.clone()),
+                    MeshMaterial3d(seating.clone()),
+                    Transform::from_xyz(0.0, up, back),
+                ));
+            }
+
+            // The walkway that splits the tiers. Deliberately not along the
+            // crest — the camera looks UP at these from below their top, so a
+            // line drawn on the crest is never in shot. A third of the way up
+            // is, and it is the one thing that stops the background reading as
+            // a flat wall.
+            let tier_row = rows as f32 * TIER;
+            bank.spawn((
+                Mesh3d(meshes.add(Cuboid::new(length, 0.5, 1.1))),
+                MeshMaterial3d(trim.clone()),
+                Transform::from_xyz(0.0, riser * tier_row, from + TREAD * tier_row),
+            ));
+
+            // Roof: cantilevered forward over the back two thirds of the
+            // seating. More than anything else on the structure, this is what
+            // gives a ground its silhouette.
+            let roof_depth = run * 0.72 + 3.0;
+            bank.spawn((
+                Mesh3d(meshes.add(Cuboid::new(length + 2.0, 0.55, roof_depth))),
+                MeshMaterial3d(structure.clone()),
+                Transform::from_xyz(
+                    0.0,
+                    rise + ROOF_CLEARANCE,
+                    from + run - roof_depth * 0.5 + 1.0,
+                ),
+            ));
+
+            // Back wall, closing the bank off. Without it the top rows are
+            // seen against open sky and the stand looks like a ramp with
+            // nothing behind it.
+            let wall = rise + ROOF_CLEARANCE;
+            bank.spawn((
+                Mesh3d(meshes.add(Cuboid::new(length + 2.0, wall, 0.9))),
+                MeshMaterial3d(structure.clone()),
+                Transform::from_xyz(0.0, wall * 0.5, from + run + 1.4),
+            ));
+        });
     }
 
     fn spawn_goals(

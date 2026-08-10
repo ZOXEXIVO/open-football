@@ -20,7 +20,7 @@ mod textures;
 mod timeline;
 
 use crate::actors::{Actors, BallState};
-use crate::camera::TvCamera;
+use crate::camera::{CameraZoom, TvCamera};
 use crate::config::ViewerConfig;
 use crate::loader::ChunkLoader;
 use crate::pitch::Pitch;
@@ -90,6 +90,7 @@ impl MatchViewer {
             .init_resource::<ChunkLoader>()
             .init_resource::<BallState>()
             .init_resource::<DebugOverlay>()
+            .init_resource::<CameraZoom>()
             .add_systems(
                 Startup,
                 (

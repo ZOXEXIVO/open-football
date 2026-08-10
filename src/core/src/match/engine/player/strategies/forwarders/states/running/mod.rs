@@ -1,4 +1,3 @@
-use crate::IntegerUtils;
 use crate::PlayerPositionType;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::events::Event;
@@ -7,7 +6,7 @@ use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondi
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
-    ShotDecision, evaluate_forward_shot_decision,
+    BallCarry, ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -982,7 +981,7 @@ impl StateProcessingHandler for ForwardRunningState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: IntegerUtils::random(1, 10) as f32,
+                        crowd_offset: ctx.player().separation_offset(),
                     }
                     .calculate(ctx.player)
                     .velocity
@@ -1651,23 +1650,30 @@ impl ForwardRunningState {
 
     /// Calculate movement when carrying the ball
     fn calculate_ball_carrying_movement(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        // First, look for optimal path to goal
+        // A gap in the defensive line is worth running at — that is a real
+        // read and it stays, unclamped: running into space is not the
+        // problem, and walling it off just piled every carrier up on the
+        // wall (54% of all shots came from one 5-metre band, and the
+        // keeper saved 94% of them because he was set for every one).
         if let Some(target_position) = self.find_optimal_attacking_path(ctx) {
-            SteeringBehavior::Arrive {
+            return SteeringBehavior::Arrive {
                 target: target_position,
                 slowing_distance: 20.0,
             }
             .calculate(ctx.player)
-            .velocity
-        } else {
-            // Default to moving toward goal
-            SteeringBehavior::Arrive {
-                target: ctx.player().opponent_goal_position(),
-                slowing_distance: 100.0,
-            }
-            .calculate(ctx.player)
-            .velocity
+            .velocity;
         }
+        // Otherwise carry toward a shooting position rather than toward
+        // the goal itself. The fallback here was `Arrive` at the goal
+        // centre, which is an instruction to run into the goalkeeper and
+        // was doing exactly that whenever no gap was found — the common
+        // case against a set defence.
+        SteeringBehavior::Arrive {
+            target: BallCarry::target(ctx),
+            slowing_distance: 30.0,
+        }
+        .calculate(ctx.player)
+        .velocity
     }
 
     /// Find optimal path considering opponents and teammates

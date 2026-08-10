@@ -1,5 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
@@ -8,7 +9,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TACKLING_DISTANCE_THRESHOLD: f32 = 25.0; // Commit from ~2.5× the old 20u lunge range — carriers can't brush past at 21u
+// Commit distance moved to `TackleEngagement::COMMIT` — same value,
+// now shared with `DefenderTacklingState` so the hand-off is ordered.
 const BASE_PRESSING_DISTANCE: f32 = 45.0;
 const MAX_PRESSING_BONUS: f32 = 35.0; // effective range: 45-80
 const BASE_PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 40.0;
@@ -55,8 +57,12 @@ impl StateProcessingHandler for DefenderPressingState {
             // If close enough to tackle, transition to Tackling state.
             // Repeat-tackle prevention lives on the player via
             // `tackle_cooldown` — a single-state cooldown here wouldn't
-            // cover the Standing/Running/Covering re-entry paths.
-            if distance_to_opponent < TACKLING_DISTANCE_THRESHOLD {
+            // cover the Standing/Running/Covering re-entry paths — and
+            // `should_commit` reads it here too, so a defender who has
+            // just lunged and missed contains the carrier instead of
+            // being handed into a `Tackling` state whose first act is to
+            // send him straight back.
+            if TackleEngagement::should_commit(ctx, distance_to_opponent) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
                 ));

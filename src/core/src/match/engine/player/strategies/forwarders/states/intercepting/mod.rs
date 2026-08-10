@@ -1,5 +1,7 @@
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::forwarders::states::common::{
+    ActivityIntensity, ForwardCondition, InterceptionRange,
+};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -24,7 +26,11 @@ impl StateProcessingHandler for ForwardInterceptingState {
 
         let ball_distance = ctx.ball().distance();
 
-        if ball_distance > 150.0 {
+        // Give up beyond the OUTER band. `Returning` commits at
+        // `InterceptionRange::COMMIT`, so the give-up distance has to sit
+        // outside it or the overlap makes the two states a two-cycle —
+        // see `InterceptionRange` for the measurement.
+        if ball_distance > InterceptionRange::GIVE_UP {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Returning,
             ));

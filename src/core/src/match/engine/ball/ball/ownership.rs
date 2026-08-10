@@ -45,6 +45,37 @@ pub mod reception_diag {
     /// passer's reach.
     pub static OUT_OF_REACH: AtomicU64 = AtomicU64::new(0);
 
+    /// Ticks the ball spent in a keeper's gloves, against total ticks.
+    ///
+    /// `held_in_hands` suppresses claiming, interception and — since
+    /// `carrier_id` — every press and tackle decision, so if it ever fails
+    /// to clear it does not misbehave subtly, it switches the defending
+    /// half of the engine off. Two counters settle "is this stuck?" in one
+    /// run instead of by reading clearing paths and hoping.
+    /// Real football: a keeper holds the ball for roughly 3-6% of a match.
+    pub static HELD_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static TOTAL_TICKS: AtomicU64 = AtomicU64::new(0);
+    /// Times a keeper closed his gloves on it. Held ticks divided by this
+    /// is the mean hold, which separates "holds too long" from "gathers
+    /// far too often" — the two have completely different causes.
+    pub static GATHERS: AtomicU64 = AtomicU64::new(0);
+    /// Gathers split by the state that emitted `CaughtBall`:
+    /// 0 catching, 1 picking up, 2 diving, 3 anything else.
+    pub static GATHER_SOURCE: [AtomicU64; 4] = [ZERO2; 4];
+    const ZERO2: AtomicU64 = AtomicU64::new(0);
+    pub fn gather_source_snapshot() -> [u64; 4] {
+        std::array::from_fn(|i| GATHER_SOURCE[i].load(Ordering::Relaxed))
+    }
+
+    /// `(held, total, gathers)`
+    pub fn hold_snapshot() -> (u64, u64, u64) {
+        (
+            HELD_TICKS.load(Ordering::Relaxed),
+            TOTAL_TICKS.load(Ordering::Relaxed),
+            GATHERS.load(Ordering::Relaxed),
+        )
+    }
+
     // ── Shot fate ────────────────────────────────────────────────────
     // ~80% of shots are AIMED between the posts (`on_target` at emit),
     // yet only ~23% ever resolve as a save or a goal. These say where
@@ -150,9 +181,43 @@ impl Ball {
             self.flags.in_flight_state -= 1;
             // Allow pass target to claim during flight
             self.try_pass_target_claim(context, players, events);
+            // A delivery that has come to rest is not "in flight", whatever
+            // the counter says.
+            //
+            // The window is an EXCLUSION: while it runs, `check_ball_ownership`
+            // never executes, `force_claim_if_deadlock` and
+            // `try_notify_standing_ball` return early, and `ClaimBall` is
+            // rejected for anyone but the intended receiver. That is correct
+            // for a ball genuinely travelling to its man and indefensible for
+            // one lying still — and the two used to be indistinguishable,
+            // because the window was sized from a velocity the ball never
+            // got. The result was a stationary ball nobody was permitted to
+            // touch, with the designated chaser stuck in TakeBall beside it
+            // for as long as four seconds.
+            //
+            // Checked AFTER the receiver's own attempt, so his priority is
+            // never cut short by his pass arriving gently.
+            if self.current_owner.is_none() && self.is_delivery_spent() {
+                self.flags.in_flight_state = 0;
+                self.check_ball_ownership(context, players, events);
+            }
         } else {
             self.check_ball_ownership(context, players, events);
         }
+    }
+
+    /// True when the current delivery has stopped being one: on the deck
+    /// and slower than a walking pace. See the call site in
+    /// [`Ball::process_ownership`].
+    fn is_delivery_spent(&self) -> bool {
+        /// 2.5 m/s. Below this the ball is trickling, not travelling — the
+        /// same physical meaning `MIN_INTERCEPTABLE_SPEED` carries.
+        const SPENT_SPEED: f32 = 0.20;
+        /// Anything with height left is still arriving.
+        const SPENT_HEIGHT: f32 = 0.5;
+
+        self.position.z <= SPENT_HEIGHT
+            && self.velocity.norm_squared() < SPENT_SPEED * SPENT_SPEED
     }
 
     /// Skill-rolled first touch at pass reception — the producer for the
@@ -420,6 +485,11 @@ impl Ball {
         // This prevents the passer from immediately reclaiming on low-force passes
         if self.flags.in_flight_state < 10 {
             if let Some(prev_id) = self.previous_owner {
+                // …but not if he is the man who just put it into play and it
+                // has gone nowhere. See `blocked_recollect_player`.
+                if self.blocked_recollect_player() == Some(prev_id) {
+                    return;
+                }
                 if let Some(prev_player) = players.iter().find(|p| p.id == prev_id) {
                     let dx = prev_player.position.x - self.position.x;
                     let dy = prev_player.position.y - self.position.y;
@@ -639,8 +709,14 @@ impl Ball {
             if should_claim {
                 // Find nearest player within current claim distance (use squared to avoid sqrt)
                 let claim_distance_sq = claim_distance * claim_distance;
+                // Same self-recollect bar as the normal claim path. Safe to
+                // apply even in the deadlock resolver because the bar itself
+                // expires on a timer (`blocked_recollect_player`), so it can
+                // never be the thing that keeps the ball stuck.
+                let blocked_recollect = self.blocked_recollect_player();
                 if let Some(nearest_player) = players
                     .iter()
+                    .filter(|p| blocked_recollect != Some(p.id))
                     .filter_map(|p| {
                         let dx = p.position.x - self.position.x;
                         let dy = p.position.y - self.position.y;
@@ -818,6 +894,16 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        // The ball is in the keeper's gloves. Nobody takes it off him —
+        // not the best tackler within 5u, not anybody. Without this the
+        // generic claim below treated a caught cross as a loose ball at
+        // the keeper's feet and handed it to whichever forward happened to
+        // be standing closest.
+        if self.held_in_hands {
+            self.ownership_duration += 1;
+            return;
+        }
+
         // COOLDOWN CHECK: If cooldown is active and there's an owner, skip ownership checks
         // This prevents rapid ping-pong between players
         if self.claim_cooldown > 0 && self.current_owner.is_some() {
@@ -983,8 +1069,18 @@ impl Ball {
         let mut nearby_count: usize = 0;
 
         let ball_height_reachable = self.position.z <= PLAYER_JUMP_REACH;
+        // The man who just released the ball doesn't get it straight back
+        // while it is still sitting on top of him — see
+        // `blocked_recollect_player`. This is the generic half of the
+        // fix; the goalkeeper's own Standing-state door is guarded too,
+        // because his pick-up path grants ownership directly.
+        let blocked_recollect = self.blocked_recollect_player();
 
         for player in players.iter() {
+            if blocked_recollect == Some(player.id) {
+                continue;
+            }
+
             let dx = player.position.x - self.position.x;
             let dy = player.position.y - self.position.y;
             let dist_sq = dx * dx + dy * dy;

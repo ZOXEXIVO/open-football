@@ -144,7 +144,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: 5.0,
+                        crowd_offset: ctx.player().separation_offset(),
                     }
                     .calculate(ctx.player)
                     .velocity,

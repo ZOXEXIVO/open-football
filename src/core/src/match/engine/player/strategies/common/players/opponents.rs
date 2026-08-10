@@ -172,10 +172,13 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
             .iter_other_team(team_id)
             .filter(move |entry| {
                 // Check if player matches has_ball criteria
+                // `carrier_id`, not `owner_id`: a keeper holding the ball
+                // owns it but is not someone you can go and press. See
+                // `BallOperationsImpl::carrier_id`.
                 match has_ball {
                     None => true,
-                    Some(true) => self.ctx.ball().owner_id() == Some(entry.id),
-                    Some(false) => self.ctx.ball().owner_id() != Some(entry.id),
+                    Some(true) => self.ctx.ball().carrier_id() == Some(entry.id),
+                    Some(false) => self.ctx.ball().carrier_id() != Some(entry.id),
                 }
             })
             .map(|entry| MatchPlayerLite {

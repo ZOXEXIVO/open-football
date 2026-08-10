@@ -7,7 +7,9 @@ use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::transition::TransitionSource;
-use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MovementEffort};
+use crate::r#match::{
+    GameTickContext, MatchContext, MatchPlayer, MovementEffort, StateProcessingResult,
+};
 
 use nalgebra::Vector3;
 use std::fmt::Display;
@@ -168,6 +170,113 @@ impl Display for PlayerState {
     }
 }
 
+/// How long a player is committed to a decision before he is allowed to
+/// simply undo it.
+///
+/// # The problem this exists for
+///
+/// The engine re-runs every player's full decision tree on every AI tick
+/// — one every 20 ms. Nothing anywhere required a decision to survive
+/// longer than that. Measured over a real match (`dev_match trace`), the
+/// consequence was that **90% of all state transitions left the state
+/// after one tick or less**, players changed state ~9 times a second, and
+/// **73% of transitions went straight back to the state just left**.
+///
+/// The cause is always the same shape: two states answering one question
+/// with slightly different predicates, so a player satisfies both at
+/// once. `Pressing` commits to a challenge inside 25u while `Tackling`
+/// breaks off outside 10u; `Returning` finishes its run at 80u from the
+/// mark while `Running` sends it back whenever the ball is 50u away. Each
+/// such pair is a two-cycle with no exit, and the engine has a dozen of
+/// them. The worst are worth fixing individually — and are fixed — but
+/// the defect is structural: nothing was stopping the machine from
+/// oscillating in the first place.
+///
+/// # The constraint
+///
+/// A footballer cannot reverse a decision faster than they can make one.
+/// Choice reaction time in sport is ~150-250 ms; the engine's decision
+/// tick is 20 ms, so re-deciding every tick is not a modelling choice,
+/// it is physically impossible. This applies that latency — and only to
+/// the pathological case: a transition BACK to the state the player just
+/// came from, while the current decision is still younger than his own
+/// reaction time. Any transition to a genuinely new state is untouched,
+/// so nothing here can trap a player anywhere.
+///
+/// Latency is the player's own: reading the game quickly is what
+/// `decisions`, `anticipation` and `concentration` describe, so a sharp
+/// midfielder corrects himself in ~120 ms and a poor one takes ~200 ms.
+pub struct DecisionCommitment;
+
+impl DecisionCommitment {
+    /// Reaction latency in AI ticks (one AI tick = 20 ms of match time).
+    /// 6 ticks = 120 ms for an elite reader of the game, 10 ticks =
+    /// 200 ms for a poor one — the human choice-reaction band.
+    const FASTEST_TICKS: f32 = 6.0;
+    const SLOWEST_TICKS: f32 = 10.0;
+
+    /// This player's own latency before he may reverse a decision.
+    fn latency_ticks(player: &MatchPlayer) -> u64 {
+        let m = &player.skills.mental;
+        // Mean of the three attributes that describe how fast a player
+        // reads a changing picture, on 1..20.
+        let sharpness = ((m.decisions + m.anticipation + m.concentration) / 3.0).clamp(1.0, 20.0);
+        let t = (sharpness - 1.0) / 19.0;
+        (Self::SLOWEST_TICKS - t * (Self::SLOWEST_TICKS - Self::FASTEST_TICKS)).round() as u64
+    }
+
+    /// Should this transition be held back for a tick?
+    ///
+    /// True only when ALL of the following hold:
+    ///   * the destination is exactly the state we came from — a
+    ///     reversal, not progress;
+    ///   * the current decision is younger than the player's reaction
+    ///     latency;
+    ///   * the transition carries no event, so nothing has actually been
+    ///     executed (a pass, a claim, a foul) that must not be lost;
+    ///   * neither end is a committed physical action — a strike, a
+    ///     header, a dive resolves the moment it is decided.
+    ///
+    /// Blocking one leg is enough to break a two-cycle, so exempting the
+    /// committed-action end costs nothing.
+    ///
+    /// Being ON THE BALL is deliberately NOT an exemption. It was one at
+    /// first, on the reasoning that the picture changes under a carrier's
+    /// feet and must stay reactive — but the exemption is what left the
+    /// two largest loops in the engine undamped once the off-ball ones
+    /// were fixed: `Forward: Passing <-> Forward: Shooting` (~14,400 round
+    /// trips a match) and `Forward: Passing <-> Forward: Running`
+    /// (~9,500). It is also redundant. A carrier who actually DOES
+    /// something — plays the pass, strikes the ball — emits an event, and
+    /// event-carrying results are exempt on the line above; one who
+    /// merely changes his mind about what he might do is exactly the case
+    /// this guard exists for. A real player cannot re-decide a pass into
+    /// a shot and back twice in a tenth of a second either.
+    fn holds(
+        player: &MatchPlayer,
+        target: PlayerState,
+        result: &StateProcessingResult,
+        _on_ball: bool,
+    ) -> bool {
+        if player.state == PlayerState::Injured {
+            return false;
+        }
+        if result.events.has_events() {
+            return false;
+        }
+        if target.is_committed_action() || player.state.is_committed_action() {
+            return false;
+        }
+        let Some(previous) = player.previous_state else {
+            return false;
+        };
+        if previous.compact_id() != target.compact_id() {
+            return false;
+        }
+        player.in_state_time < Self::latency_ticks(player)
+    }
+}
+
 pub struct PlayerMatchState;
 
 impl PlayerMatchState {
@@ -185,6 +294,28 @@ impl PlayerMatchState {
             player.start_tackle_cooldown();
         }
 
+        // Decision commitment: a transition that merely undoes the last
+        // one is held until the player has had time to actually re-read
+        // the picture (see `DecisionCommitment`). Resolved here, before
+        // anything else consumes the result, so the shot-reason bookkeeping
+        // and the transition itself see one consistent decision.
+        let on_ball = tick_context.ball.current_owner == Some(player.id);
+        let new_state = state_change_result
+            .state
+            // A handler returning its OWN state is not a transition, it is
+            // a handler that meant `None`. Treating it as one reset
+            // `in_state_time` to zero, so every `in_state_time > N` guard
+            // inside that state became unreachable for as long as the
+            // condition producing the self-return held — the state could
+            // never time out of itself. Observed on `Midfielder: Running`
+            // and `Forward: Running`, both of which carry timeout-driven
+            // exits. Dropping it here fixes every such handler at once and
+            // leaves the timer running, which is what a no-op tick means.
+            .filter(|target| target.compact_id() != player.state.compact_id())
+            .filter(|target| {
+                !DecisionCommitment::holds(player, *target, &state_change_result, on_ball)
+            });
+
         // Stash the shot reason on the player. The Shooting state will
         // consume and clear this when it composes the Shoot event.
         // A reason-less transition to any non-shot state invalidates a
@@ -195,7 +326,7 @@ impl PlayerMatchState {
         // into a guaranteed free shot later.
         if let Some(reason) = state_change_result.shot_reason {
             player.pending_shot_reason = Some(reason);
-        } else if let Some(new_state) = state_change_result.state {
+        } else if let Some(new_state) = new_state {
             if !Self::is_shot_emitting_state(new_state) {
                 #[cfg(feature = "match-logs")]
                 if player.pending_shot_reason.is_some() {
@@ -214,7 +345,7 @@ impl PlayerMatchState {
             }
         }
 
-        if let Some(state) = state_change_result.state {
+        if let Some(state) = new_state {
             Self::change_state(player, state);
         } else {
             player.in_state_time += 1;
@@ -234,6 +365,10 @@ impl PlayerMatchState {
             } else {
                 player.max_speed_with_condition_cached()
             };
+            // Sprint capability BEFORE the carry / effort multipliers —
+            // the acceleration bound below is a property of the athlete,
+            // not of how hard they happen to be working this tick.
+            let sprint_capability = max_speed;
 
             // Ball-carrier speed multiplier. Real football: carrying
             // the ball costs ~15-25% of top sprint for an average
@@ -289,6 +424,46 @@ impl PlayerMatchState {
             // remember to self-sanitize. Non-finite → zero this tick.
             let finite = velocity.x.is_finite() && velocity.y.is_finite() && velocity.z.is_finite();
             let velocity = if finite { velocity } else { Vector3::zeros() };
+
+            // ACCELERATION LIMIT — a player is a body with momentum, so
+            // this tick's velocity is reachable from last tick's only
+            // within the limits of what they can push against the ground.
+            //
+            // The steering behaviours already know this: `Seek`, `Arrive`
+            // and `Pursuit` each cap their steering vector at roughly
+            // `max_speed * agility * 0.7` before returning. The bound was
+            // simply being thrown away afterwards. Almost every caller
+            // composes the result — `Arrive{..}.velocity +
+            // separation_velocity()` — and the added term is not part of
+            // any behaviour's limit, while a handful of states
+            // (`RunningInBehind` and friends) skip the behaviours entirely
+            // and assign `direction * speed` outright. Either way the
+            // final velocity could invert between two consecutive ticks.
+            //
+            // That is what the twitch actually is. With no momentum, two
+            // competing pulls — a state steering a defender back to his
+            // mark and personal-space steering him off it — do not settle
+            // at a balance point, they alternate: full velocity one way,
+            // full velocity back, at 50 Hz. Measured, **88% of all
+            // velocity reversals happened with no state change under
+            // them** (`dev_match trace`), i.e. inside a single state's own
+            // steering, which is exactly this signature.
+            //
+            // Enforcing the bound HERE, at the one place every state's
+            // velocity passes through, means no state can bypass it and
+            // no caller can compose its way around it. States that
+            // already respected it (a plain `Arrive`, a plain `Pursuit`)
+            // are unaffected — their velocity change was inside the limit
+            // to begin with.
+            let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
+            let max_accel = sprint_capability * agility_normalized * 0.7;
+            let delta = velocity - player.velocity;
+            let delta_sq = delta.norm_squared();
+            let velocity = if delta_sq > max_accel * max_accel && delta_sq > 0.0 {
+                player.velocity + delta * (max_accel / delta_sq.sqrt())
+            } else {
+                velocity
+            };
 
             let velocity_sq = velocity.norm_squared();
             let max_speed_sq = max_speed * max_speed;
