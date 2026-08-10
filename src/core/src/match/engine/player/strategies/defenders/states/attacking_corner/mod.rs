@@ -136,6 +136,13 @@ impl StateProcessingHandler for DefenderAttackingCornerState {
         // at which anything jumps.
         const HOLD_H: f32 = 0.6;
         const ATTACK_H: f32 = 2.0;
+        // The `is_in_flight()` gate stays. Dropping it (so height alone
+        // decides) is tempting — the boolean re-introduces a step into an
+        // otherwise smooth weight — but it did NOT reduce this state's
+        // reversal rate, and it lets a pushed-up centre-back commit to any
+        // high ball in the box rather than to the delivery. Keeping the
+        // gate; the residual flicker here has some other cause, still
+        // unidentified.
         let t = ((ball_pos.z - HOLD_H) / (ATTACK_H - HOLD_H)).clamp(0.0, 1.0);
         let attack = if ctx.ball().is_in_flight() {
             t * t * (3.0 - 2.0 * t)

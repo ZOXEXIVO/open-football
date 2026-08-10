@@ -5999,27 +5999,117 @@ fn run_trace(matches: usize, level: u8) {
     // steering bug, localised to one function.
     {
         use std::sync::atomic::Ordering;
-        let mut rows: Vec<(f64, u64, u64, String)> = Vec::new();
+        let mut rows: Vec<(f64, f64, u64, u64, String)> = Vec::new();
         for st in core::r#match::player::state::PlayerState::all() {
             let slot = st.compact_id() as usize;
             let ticks = motion_diag::TICKS_BY_STATE[slot].load(Ordering::Relaxed);
             let revs = motion_diag::REV_BY_STATE[slot].load(Ordering::Relaxed);
+            let fast = motion_diag::REV_FAST_BY_STATE[slot].load(Ordering::Relaxed);
             if ticks < 1000 {
                 continue;
             }
             // Reversals per second of occupancy (100 ticks = 1 s).
             let rate = revs as f64 / ticks as f64 * 100.0;
-            rows.push((rate, revs, ticks, st.to_string()));
+            let fast_rate = fast as f64 / ticks as f64 * 100.0;
+            rows.push((fast_rate, rate, revs, ticks, st.to_string()));
         }
+        // Sorted by the FAST rate — that is the one that reads as a twitch
+        // on screen. A high total with a near-zero fast rate is a player
+        // settling onto a target, not flicker.
         rows.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
         println!();
         println!("--- IN-STATE VELOCITY REVERSALS (state's own steering flips direction) ---");
         println!(
-            "  {:<34} {:>9} {:>12} {:>12}",
-            "state", "rev/s held", "reversals", "ticks held"
+            "  {:<34} {:>9} {:>9} {:>12} {:>12}",
+            "state", "FAST/s", "rev/s", "reversals", "ticks held"
         );
-        for (rate, revs, ticks, name) in rows.iter().take(12) {
-            println!("  {:<34} {:>9.2} {:>12} {:>12}", name, rate, revs, ticks);
+        for (fast_rate, rate, revs, ticks, name) in rows.iter().take(12) {
+            println!(
+                "  {:<34} {:>9.2} {:>9.2} {:>12} {:>12}",
+                name, fast_rate, rate, revs, ticks
+            );
+        }
+        // Control: the ball's OWN direction stability. Chase states aim at
+        // a point derived from the ball, so a chaser cannot be steadier
+        // than what he is chasing.
+        let ball_rev = motion_diag::BALL_REVERSALS.load(Ordering::Relaxed);
+        let ball_ticks = motion_diag::BALL_TICKS.load(Ordering::Relaxed);
+        println!(
+            "  {:<34} {:>9.2} {:>9.2} {:>12} {:>12}   <- the ball itself",
+            "(ball direction changes)",
+            0.0,
+            ball_rev as f64 / ball_ticks.max(1) as f64 * 100.0,
+            ball_rev,
+            ball_ticks,
+        );
+    }
+
+    // ── raw velocity dumps around captured reversals ───────────────────
+    // Counting reversals says WHICH state; only the vectors say WHY.
+    // Each row is one sampled tick: where the player was, how fast and
+    // which way he was going, and where the ball was relative to him.
+    {
+        let eps = motion_diag::episodes();
+        let states = core::r#match::player::state::PlayerState::all();
+        // Only dump the worst few states — otherwise this buries the report.
+        // Ranked by the COUNT of fast reversals, not the rate: a state
+        // occupied for a handful of ticks can top a rate table without
+        // mattering, and the dumps are for chasing what actually happens
+        // most.
+        let mut ranked: Vec<(u64, u16)> = eps
+            .keys()
+            .map(|id| {
+                use std::sync::atomic::Ordering;
+                let fast = motion_diag::REV_FAST_BY_STATE[*id as usize].load(Ordering::Relaxed);
+                (fast, *id)
+            })
+            .collect();
+        ranked.sort_by(|a, b| b.0.cmp(&a.0));
+
+        println!();
+        println!("--- REVERSAL DUMPS (the ticks around a fast in-state reversal) ---");
+        for (_, id) in ranked.iter().take(6) {
+            let name = states
+                .iter()
+                .find(|s| s.compact_id() == *id)
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let Some(list) = eps.get(id) else { continue };
+            println!();
+            println!("  === {} ===", name);
+            for ep in list.iter().take(3) {
+                println!(
+                    "   t={}:{:02}  player {}   ball ({:.1},{:.1},{:.2}) vel ({:.3},{:.3},{:.3})",
+                    ep.t_ms / 60_000,
+                    (ep.t_ms % 60_000) / 1000,
+                    ep.player_id,
+                    ep.ball_pos.x,
+                    ep.ball_pos.y,
+                    ep.ball_pos.z,
+                    ep.ball_vel.x,
+                    ep.ball_vel.y,
+                    ep.ball_vel.z,
+                );
+                println!(
+                    "     {:>4} {:>17} {:>17} {:>7} {:>8} {:>9}",
+                    "tick", "position", "velocity", "speed", "dist_ball", "cos(v,ball)"
+                );
+                for (i, (p, v)) in ep.samples.iter().enumerate() {
+                    let to_ball = ep.ball_pos - p;
+                    let d = to_ball.magnitude();
+                    let sp = v.magnitude();
+                    // Is the player moving TOWARD the ball this tick?
+                    let cos = if d > 0.001 && sp > 0.001 {
+                        (v.x * to_ball.x + v.y * to_ball.y) / (d * sp)
+                    } else {
+                        0.0
+                    };
+                    println!(
+                        "     {:>4} ({:>7.1},{:>7.1}) ({:>7.3},{:>7.3}) {:>7.3} {:>8.1} {:>9.2}",
+                        i, p.x, p.y, v.x, v.y, sp, d, cos
+                    );
+                }
+            }
         }
     }
 

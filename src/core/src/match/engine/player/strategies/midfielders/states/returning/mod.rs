@@ -1,3 +1,4 @@
+use crate::r#match::midfielders::states::MidfielderGuardingState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
     ActivityIntensity, MidfielderCondition, ShapeStation,
@@ -58,9 +59,24 @@ impl StateProcessingHandler for MidfielderReturningState {
             ));
         }
 
-        // Guard attackers when ball is on our side — but only after returning for a while
-        // to prevent Returning↔Guarding flicker when no guard target exists
-        if ctx.in_state_time > 30 && !ctx.team().is_control_ball() && ctx.ball().on_own_side() {
+        // Guard attackers when the ball is on our side — but only if there
+        // is actually somebody to guard.
+        //
+        // The `in_state_time > 30` gate was added to "prevent
+        // Returning↔Guarding flicker when no guard target exists", and it
+        // cannot: a time delay slows an oscillation down, it does not stop
+        // one. `Guarding`'s answer to "no target" is to hand the player
+        // straight back here, so the pair simply ran on a 30-tick period
+        // instead of a 1-tick one — still ~2,900 round trips a match
+        // (`dev_match trace`). Asking the destination's own question is
+        // what removes it; the delay stays as a debounce on top.
+        if ctx.in_state_time > 30
+            && !ctx.team().is_control_ball()
+            && ctx.ball().on_own_side()
+            && MidfielderGuardingState::default()
+                .find_committable_guard_target(ctx)
+                .is_some()
+        {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Guarding,
             ));

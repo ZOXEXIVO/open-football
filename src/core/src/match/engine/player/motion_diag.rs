@@ -84,7 +84,20 @@ pub struct MotionTrace {
     /// Whether any tick has been observed yet (first tick seeds the window
     /// rather than measuring a step from a zeroed position).
     pub seeded: bool,
+    /// Rolling window of the last few sampled ticks, `(position,
+    /// velocity)`, oldest-to-newest via `ring_idx`.
+    ///
+    /// Exists so a reversal can be shown in CONTEXT rather than as a
+    /// count. Five separate hypotheses about `Defender: Take Ball` were
+    /// derived by reading the steering code and every one measured within
+    /// noise; the only way left to see what the velocity is actually
+    /// doing is to print it.
+    pub ring: [(Vector3<f32>, Vector3<f32>); RING],
+    pub ring_idx: usize,
 }
+
+/// Ticks of context kept either side of a captured reversal.
+pub const RING: usize = 6;
 
 impl Default for MotionTrace {
     fn default() -> Self {
@@ -100,8 +113,54 @@ impl Default for MotionTrace {
             last_state: None,
             win_state_changes: 0,
             seeded: false,
+            ring: [(Vector3::zeros(), Vector3::zeros()); RING],
+            ring_idx: 0,
         }
     }
+}
+
+/// One captured reversal, with the ticks either side of it.
+#[derive(Debug, Clone)]
+pub struct ReversalEpisode {
+    pub t_ms: u64,
+    pub player_id: u32,
+    /// `(position, velocity)` oldest-to-newest; the reversal is at the end.
+    pub samples: Vec<(Vector3<f32>, Vector3<f32>)>,
+    pub ball_pos: Vector3<f32>,
+    pub ball_vel: Vector3<f32>,
+}
+
+/// Captured episodes per state, capped so the hot path stays cheap.
+static EPISODES: Mutex<Option<BTreeMap<u16, Vec<ReversalEpisode>>>> = Mutex::new(None);
+const MAX_EPISODES_PER_STATE: usize = 6;
+
+/// Record a fast in-state reversal with its surrounding ticks.
+pub fn capture_reversal(
+    state: PlayerState,
+    t_ms: u64,
+    player_id: u32,
+    samples: Vec<(Vector3<f32>, Vector3<f32>)>,
+    ball_pos: Vector3<f32>,
+    ball_vel: Vector3<f32>,
+) {
+    let mut guard = EPISODES.lock().unwrap();
+    let map = guard.get_or_insert_with(BTreeMap::new);
+    let slot = map.entry(state.compact_id()).or_default();
+    if slot.len() >= MAX_EPISODES_PER_STATE {
+        return;
+    }
+    slot.push(ReversalEpisode {
+        t_ms,
+        player_id,
+        samples,
+        ball_pos,
+        ball_vel,
+    });
+}
+
+/// Copy out the captured episodes.
+pub fn episodes() -> BTreeMap<u16, Vec<ReversalEpisode>> {
+    EPISODES.lock().unwrap().clone().unwrap_or_default()
 }
 
 /// Rolled-up motion behaviour for one player across the run.
@@ -165,9 +224,52 @@ pub static REV_BY_STATE: [std::sync::atomic::AtomicU64; REV_SLOTS] = [REV_ZERO; 
 /// rather than as "this state is simply occupied a lot".
 pub static TICKS_BY_STATE: [std::sync::atomic::AtomicU64; REV_SLOTS] = [REV_ZERO; REV_SLOTS];
 
+/// Of the in-state reversals, those taken at real running speed.
+///
+/// `REVERSAL_MIN_SPEED_U` (0.05 u/tick = 0.6 m/s) is deliberately low so
+/// the metric catches everything, but that also counts a player settling
+/// onto a target — brake, drift back a hair, brake again — as a reversal.
+/// That is invisible on screen. A player who inverts direction while
+/// actually running is the thing that reads as a twitch, so it gets its
+/// own counter: without the split, a state that merely dithers at
+/// walking pace and one that genuinely whips at a sprint are the same
+/// number, and there is no way to tell which is worth chasing.
+pub static REV_FAST_BY_STATE: [std::sync::atomic::AtomicU64; REV_SLOTS] = [REV_ZERO; REV_SLOTS];
+
+/// Speed above which a reversal is a visible change of direction rather
+/// than settling jitter. Half of a slow player's top speed (0.36 u/tick).
+pub const REVERSAL_FAST_SPEED_U: f32 = 0.18;
+
+/// Direction reversals of the BALL itself, and ticks sampled.
+///
+/// Every chase state aims at a point derived from the ball's position and
+/// velocity, so a ball that keeps inverting its own direction produces
+/// chasers that invert theirs — faithfully, not spuriously. Without this
+/// number there is no way to tell a steering bug in a chase state from a
+/// chaser correctly tracking a jittery ball, and both look identical in
+/// the per-state reversal table.
+pub static BALL_REVERSALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static BALL_TICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Sample the ball's own direction stability for one tick.
+#[inline]
+pub fn note_ball(velocity: Vector3<f32>, prev: Vector3<f32>) {
+    use std::sync::atomic::Ordering;
+    BALL_TICKS.fetch_add(1, Ordering::Relaxed);
+    // Same test the player sampler uses, on the ball's own 2D travel.
+    let flat = Vector3::new(velocity.x, velocity.y, 0.0);
+    let flat_prev = Vector3::new(prev.x, prev.y, 0.0);
+    if flat.norm() > REVERSAL_MIN_SPEED_U
+        && flat_prev.norm() > REVERSAL_MIN_SPEED_U
+        && flat.dot(&flat_prev) < 0.0
+    {
+        BALL_REVERSALS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Record one sampled tick in `state`, and whether it reversed direction.
 #[inline]
-pub fn note_tick(state: PlayerState, reversed_in_state: bool) {
+pub fn note_tick(state: PlayerState, reversed_in_state: bool, fast: bool) {
     use std::sync::atomic::Ordering;
     let slot = state.compact_id() as usize;
     if slot >= REV_SLOTS {
@@ -176,6 +278,9 @@ pub fn note_tick(state: PlayerState, reversed_in_state: bool) {
     TICKS_BY_STATE[slot].fetch_add(1, Ordering::Relaxed);
     if reversed_in_state {
         REV_BY_STATE[slot].fetch_add(1, Ordering::Relaxed);
+        if fast {
+            REV_FAST_BY_STATE[slot].fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -183,8 +288,12 @@ pub fn note_tick(state: PlayerState, reversed_in_state: bool) {
 pub fn reset() {
     use std::sync::atomic::Ordering;
     *STORE.lock().unwrap() = Some(Snapshot::default());
+    *EPISODES.lock().unwrap() = Some(BTreeMap::new());
+    BALL_REVERSALS.store(0, Ordering::Relaxed);
+    BALL_TICKS.store(0, Ordering::Relaxed);
     for i in 0..REV_SLOTS {
         REV_BY_STATE[i].store(0, Ordering::Relaxed);
+        REV_FAST_BY_STATE[i].store(0, Ordering::Relaxed);
         TICKS_BY_STATE[i].store(0, Ordering::Relaxed);
     }
 }

@@ -71,14 +71,47 @@ impl DefensiveRecovery {
     /// margin should be the one that defends best.
     const COVER_MARGIN: f32 = 24.0;
 
-    /// The depth (x) velocity this defender must be running at, or
-    /// `None` when the rule is inert and his state keeps its own.
+    /// The depth (x) velocity this defender must be running at and how
+    /// strongly the rule applies, or `None` when it is inert and his
+    /// state keeps its own depth.
     ///
     /// Returns only the depth component on purpose: lateral movement is
     /// the state's business — marking, covering and shuttling all keep
     /// working — and depth is the one axis no defender state was
     /// managing at all.
-    pub fn depth_override(ctx: &StateProcessingContext) -> Option<f32> {
+    ///
+    /// # Why there is a weight and not just a velocity
+    ///
+    /// The recovery speed is ~2-4 u/tick against state velocities of
+    /// ~0.2-0.4 and a top speed of ~0.28-0.63 — an order of magnitude
+    /// larger, deliberately (see the note on `RECOVERY_SPEED`). That is
+    /// fine while the rule is ON: the engine-wide clamp scales the result
+    /// back to a sprint. What is not fine is that it used to switch on
+    /// and off at a hard boundary. Because the override swamps the
+    /// state's own vector, the velocity did not adjust at that boundary,
+    /// it INVERTED: full sprint toward the ball on one tick, full sprint
+    /// toward his own goal on the next.
+    ///
+    /// And the boundary is exactly where defenders live. `cover_x` sits
+    /// 24u goal-side of the ball; a defender recovering to it crosses it,
+    /// the rule switches off, his state pulls him back upfield, he
+    /// crosses back, and it switches on again. Dumping the raw per-tick
+    /// velocities showed precisely this: a chaser 36u from the ball
+    /// alternating between `(0.166, 0.226)` — cos +1.0 to the ball — and
+    /// `(-0.280, -0.002)` — pure goal-ward, cos -0.64 — at identical
+    /// saturated speed, without closing any distance (`dev_match trace`
+    /// reversal dumps). Every defender state sat at the top of the
+    /// fast-reversal table for this one reason, which is why five
+    /// hypotheses aimed INSIDE `DefenderTakeBallState` all measured null:
+    /// the velocity was being overwritten after that state returned.
+    ///
+    /// The weight ramps the rule in across the cover zone instead. A
+    /// defender deep out of position still recovers at exactly the speed
+    /// he did before — the calibrated end of the behaviour is untouched —
+    /// while one hovering near the cover point keeps his own steering and
+    /// merely leans goal-ward. There is no longer any position at which
+    /// his velocity can jump.
+    pub fn depth_override(ctx: &StateProcessingContext) -> Option<(f32, f32)> {
         // The man on the ball is not defending a line.
         if ctx.player.has_ball(ctx) {
             return None;
@@ -90,10 +123,34 @@ impl DefensiveRecovery {
         let to_goal = (own_goal_x - me_x).signum();
         // Am I already at the cover point or goal-side of it?
         let ball_x = ctx.tick_context.positions.ball.position.x;
-        let cover_x = ball_x + to_goal * Self::COVER_MARGIN;
-        if (cover_x - me_x) * to_goal <= 0.0 {
+        // Clamped to the pitch. With the ball inside `COVER_MARGIN` of a
+        // goal line — every corner, every goalmouth scramble — the raw
+        // cover point lands BEHIND the goal line, i.e. off the field. A
+        // defender can never reach it, so the rule never goes inert: he
+        // is driven into the touchline and held there, pushing outward
+        // every tick while the boundary clamp shoves him back.
+        //
+        // The dump caught exactly that — a defender oscillating across
+        // x = 1.6 -> 0.7 -> -0.2 -> 0.2 with the ball 40u away, velocity
+        // alternating (-0.457, -0.06) and (0.175, -0.065) (`dev_match
+        // trace` reversal dumps). Keeping the cover point on the pitch
+        // means arriving at it is possible, which is what lets the rule
+        // switch off.
+        let field_w = ctx.context.field_size.width as f32;
+        let cover_x = (ball_x + to_goal * Self::COVER_MARGIN).clamp(0.0, field_w);
+        // How far up-field of the cover point I still am. Positive means
+        // there is recovering to do; zero or less and the rule is inert.
+        let behind = (cover_x - me_x) * to_goal;
+        if behind <= 0.0 {
             return None;
         }
+        // Ramp the rule in across the depth of the cover zone itself, so
+        // no new constant is invented: a defender at the cover point is
+        // barely affected, one a full zone up-field is fully committed to
+        // the recovery run. Smoothstep so the weight has no corner at
+        // either end of the band.
+        let t = (behind / Self::COVER_MARGIN).clamp(0.0, 1.0);
+        let weight = t * t * (3.0 - 2.0 * t);
         // Somebody has to go to the ball.
         if matches!(
             ctx.player().defensive().defensive_role_for_ball_carrier(),
@@ -114,7 +171,10 @@ impl DefensiveRecovery {
         // the pace term still make a quick defender genuinely quicker.
         let profile = DefenderSkillProfile::from_ctx(ctx);
         let pace = (ctx.player.skills.physical.pace / 20.0).clamp(0.6, 1.2);
-        Some(to_goal * Self::RECOVERY_SPEED * pace * profile.recovery_run_mult)
+        Some((
+            to_goal * Self::RECOVERY_SPEED * pace * profile.recovery_run_mult,
+            weight,
+        ))
     }
 }
 

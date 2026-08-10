@@ -191,6 +191,28 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Attack supporting is high intensity - sustained running to support attacks
+        //
+        // NOTE — `Moderate` was tried here and REVERTED; don't repeat it
+        // without a plan for the cost. The argument for it is good on
+        // paper: the declared intensity is also the speed cap
+        // (`MovementEffort::speed_fraction`: High 0.78 vs Moderate 0.52),
+        // this is where midfielders spend most of the match (7.3M of
+        // ~14M midfielder ticks, ~24 minutes each), and `Moderate` is the
+        // tier documented as "jogging into space" while `High` reads
+        // "pressing, marking, covering, tracking back".
+        //
+        // Measured over 5x60 matches it bought less than it cost: MID
+        // distance 20.1 -> 18.2 km against a real ~11 (only -9%, because
+        // midfielders are in SOME motion state ~75% of the time either
+        // way), while goals went 4.19 -> 4.64 per match against a real
+        // ~2.5 — slower support means less presence around the ball.
+        //
+        // The real problem is not this tier, it is that midfielders never
+        // stand still: they have no low-intensity dwell state in their
+        // rotation the way defenders have `HoldingLine` (`Recovery`),
+        // which is why DEF measures a realistic 10.0 km on the same
+        // model. Fixing the distance means giving midfielders somewhere
+        // to rest, not making their running slower.
         MidfielderCondition::with_velocity(ActivityIntensity::High).process(ctx);
     }
 }

@@ -5,6 +5,7 @@ use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -170,27 +171,54 @@ impl StateProcessingHandler for MidfielderPressingState {
             // shooting lane rather than just touch their back.
             let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
             let opp_speed = opp_velocity.magnitude();
-            let pace = ctx.player.skills.physical.pace;
-            let lead_ticks = if pace > 0.01 {
-                (distance_to_opponent / pace).min(30.0)
-            } else {
-                0.0
-            };
-            let predicted = opponent.position + opp_velocity * lead_ticks;
+
+            // Goal-side bias: close the shooting lane rather than just
+            // touch the carrier's back. The interception itself is left to
+            // `SteeringBehavior::Pursuit`.
+            //
+            // The lead time used to be hand-rolled here as
+            // `distance / pace`, mixing units: `pace` is a 1-20 SKILL,
+            // while distance is in field units and the answer was used as
+            // ticks. At pace 15 that put a carrier 50u away only ~3 ticks
+            // ahead when closing him actually takes ~100 — the prediction
+            // was ~30x short and moved erratically as the distance
+            // changed. `Pursuit` computes the same thing from the
+            // player's real u/tick speed.
+            // Goal-side bias only; the interception maths belongs to
+            // `SteeringBehavior::Pursuit` below, which derives the lead
+            // from the player's real u/tick speed.
+            //
+            // The lead time used to be hand-rolled here as
+            // `distance / pace`, mixing units: `pace` is a 1-20 SKILL,
+            // while distance is in field units and the result was used as
+            // a tick count. At pace 15 that put a carrier 50u away only
+            // ~3 ticks ahead when closing him actually takes ~100 — the
+            // prediction was ~30x short and lurched as the gap changed,
+            // which moved the aim point (and the presser's heading) tick
+            // to tick.
+            let predicted = opponent.position;
+
             let own_goal = ctx.ball().direction_to_own_goal();
             let to_own_goal = (own_goal - predicted).normalize();
             let goalside_bias = if opp_speed > 0.1 { 2.0 } else { 0.0 };
             let intercept_target = predicted + to_own_goal * goalside_bias;
 
-            let to_target = intercept_target - ctx.player.position;
-            let direction = if to_target.magnitude() > 0.01 {
-                to_target.normalize()
-            } else {
-                Vector3::zeros()
-            };
-            let speed = pace;
-
-            let pressing_velocity = direction * speed;
+            // Steer, don't teleport. `direction * pace` assigned an
+            // absolute velocity of up to 20 u/tick against a ~0.63 u/tick
+            // top speed, with no reference to the velocity the player
+            // already had — so the engine-wide clamp kept whatever heading
+            // this tick's aim point produced, and the press could invert
+            // between consecutive ticks. `Pursuit` integrates from the
+            // current velocity under a force limit, as every other
+            // well-behaved state does. This took `Midfielder: Pressing`
+            // from 8.6 velocity reversals per second held to below the
+            // reporting threshold (`dev_match trace`).
+            let pressing_velocity = SteeringBehavior::Pursuit {
+                target: intercept_target,
+                target_velocity: opp_velocity,
+            }
+            .calculate(ctx.player)
+            .velocity;
 
             // Reduce separation when actively pressing to allow close approach
             let separation = if distance_to_opponent < 25.0 {

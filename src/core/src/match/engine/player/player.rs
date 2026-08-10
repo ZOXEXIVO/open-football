@@ -688,10 +688,22 @@ impl MatchPlayer {
 
         self.update_waypoint_index_at(field_index, tick_context);
 
-        self.check_boundary_collision(context);
+        // Move first, THEN clamp. Clamping before the move meant the
+        // boundary check could never actually stop anyone leaving the
+        // pitch — it corrected the position a tick late, and its
+        // velocity-zeroing test read a stale position, so a player
+        // steering outward was never stopped. He ended each tick a
+        // fraction off-field (dumps caught x = -0.2) and was dragged
+        // back the next, which is a velocity reversal per tick for as
+        // long as his state kept pointing outward.
         self.move_to();
+        self.check_boundary_collision(context);
         #[cfg(feature = "match-logs")]
-        self.trace_motion(context);
+        self.trace_motion(
+            context,
+            tick_context.positions.ball.position,
+            tick_context.positions.ball.velocity,
+        );
     }
 
     /// Reduced-cadence (LOD) update for a far-from-ball player in a
@@ -711,7 +723,12 @@ impl MatchPlayer {
     ///     clamp applies — identical to a light tick).
     ///
     /// The player re-decides on the next full tick, ~20 ms later.
-    pub fn lod_skip_update(&mut self, context: &MatchContext) {
+    pub fn lod_skip_update(
+        &mut self,
+        context: &MatchContext,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+    ) {
         self.tick_tackle_cooldown();
 
         let half_ms = MATCH_HALF_TIME_MS as f32;
@@ -744,10 +761,18 @@ impl MatchPlayer {
         }
 
         self.in_state_time += 1;
-        self.check_boundary_collision(context);
+        // Move first, THEN clamp. Clamping before the move meant the
+        // boundary check could never actually stop anyone leaving the
+        // pitch — it corrected the position a tick late, and its
+        // velocity-zeroing test read a stale position, so a player
+        // steering outward was never stopped. He ended each tick a
+        // fraction off-field (dumps caught x = -0.2) and was dragged
+        // back the next, which is a velocity reversal per tick for as
+        // long as his state kept pointing outward.
         self.move_to();
+        self.check_boundary_collision(context);
         #[cfg(feature = "match-logs")]
-        self.trace_motion(context);
+        self.trace_motion(context, ball_pos, ball_vel);
     }
 
     #[inline]
@@ -1005,7 +1030,12 @@ impl MatchPlayer {
     /// Accumulation is entirely player-local; only the closing of a
     /// one-second window touches the shared store.
     #[cfg(feature = "match-logs")]
-    pub fn trace_motion(&mut self, context: &MatchContext) {
+    pub fn trace_motion(
+        &mut self,
+        context: &MatchContext,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+    ) {
         use crate::r#match::player::motion_diag;
 
         let pos = self.position;
@@ -1050,10 +1080,31 @@ impl MatchPlayer {
         }
 
         let prev = t.prev_velocity;
-        let reversed = vel.norm() > motion_diag::REVERSAL_MIN_SPEED_U
-            && prev.norm() > motion_diag::REVERSAL_MIN_SPEED_U
+        let speed = vel.norm();
+        let prev_speed = prev.norm();
+        let reversed = speed > motion_diag::REVERSAL_MIN_SPEED_U
+            && prev_speed > motion_diag::REVERSAL_MIN_SPEED_U
             && vel.dot(&prev) < 0.0;
-        motion_diag::note_tick(state, reversed && same_state);
+        // A reversal taken at running speed is a visible twitch; one taken
+        // at a crawl is a player settling onto a target.
+        let fast = speed > motion_diag::REVERSAL_FAST_SPEED_U
+            && prev_speed > motion_diag::REVERSAL_FAST_SPEED_U;
+        motion_diag::note_tick(state, reversed && same_state, fast);
+
+        // Keep the last few ticks so a reversal can be shown in context.
+        t.ring[t.ring_idx] = (pos, vel);
+        t.ring_idx = (t.ring_idx + 1) % motion_diag::RING;
+        if reversed && same_state && fast {
+            // Unwind the ring oldest-to-newest.
+            let mut samples = Vec::with_capacity(motion_diag::RING);
+            for k in 0..motion_diag::RING {
+                let s = t.ring[(t.ring_idx + k) % motion_diag::RING];
+                if s.0 != Vector3::zeros() || s.1 != Vector3::zeros() {
+                    samples.push(s);
+                }
+            }
+            motion_diag::capture_reversal(state, t_ms, id, samples, ball_pos, ball_vel);
+        }
         if reversed {
             t.win_reversals += 1;
             // A reversal with no state change under it means one state's

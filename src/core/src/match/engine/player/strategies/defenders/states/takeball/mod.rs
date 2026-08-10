@@ -66,9 +66,38 @@ impl StateProcessingHandler for DefenderTakeBallState {
         let aerial = t * t * (3.0 - 2.0 * t);
         let target = ball_pos + (landing - ball_pos) * aerial;
 
-        // Same treatment for the behaviour itself: `Arrive` brakes into a
-        // landing spot, `Pursuit` leads a rolling ball, and switching
-        // between them at a threshold is its own discontinuity.
+        // `Arrive` brakes into a landing spot, `Pursuit` leads a rolling
+        // ball, blended across the same aerial weight as the aim point so
+        // neither the target nor the behaviour can jump.
+        //
+        // UNSOLVED — this state is the largest remaining source of
+        // position flicker in the engine: 5.8-6.5 velocity reversals per
+        // second held, with essentially ALL of them at running speed
+        // (`dev_match trace` FAST column), i.e. a chaser visibly snapping
+        // around at a sprint rather than settling onto a target. Five
+        // hypotheses have been tested and every one changed the number by
+        // less than run-to-run noise, so DON'T repeat them:
+        //
+        //   1. the aerial/ground aim point snapping at `z > 2.3`
+        //      (blended — this fix is kept below, it removes a real
+        //      discontinuity even though it did not move the number);
+        //   2. the separation weight's 0.3 -> 1.0 step at 10u (smoothed);
+        //   3. the separation force entirely (disabled outright);
+        //   4. `Pursuit`'s discontinuous interception solver (rewritten
+        //      continuous — kept, in `steering.rs`);
+        //   5. `Pursuit` swapped for `Arrive` across the whole range,
+        //      on the theory that its 0.2x min-speed floor made chasers
+        //      overshoot a loose ball and snap back.
+        //
+        // Also ruled OUT: the chaser faithfully tracking a jittery ball.
+        // The ball's own direction was measured reversing **6 times in
+        // 1.38M ticks** (the `(ball direction changes)` control row), so
+        // the target is essentially perfectly stable and the instability
+        // is being generated on the player side.
+        //
+        // The next attempt should instrument the actual per-tick velocity
+        // vectors for one chaser rather than reason about the code —
+        // inspection has now been wrong five times running.
         let mut arrive_velocity = if aerial >= 1.0 {
             SteeringBehavior::Arrive {
                 target,
@@ -103,9 +132,19 @@ impl StateProcessingHandler for DefenderTakeBallState {
         // Reduce separation when approaching ball, but keep minimum to prevent clustering
         const SEPARATION_RADIUS: f32 = 25.0;
         const SEPARATION_WEIGHT: f32 = 0.4;
-        const BALL_CLAIM_DISTANCE: f32 = 10.0;
         const NO_SEPARATION_DISTANCE: f32 = 5.0; // Completely disable separation within this distance
 
+        // NOTE — this ramp has a genuine discontinuity: it runs 0 -> 0.3
+        // across 5..10u and then JUMPS to 1.0 beyond 10u, so a chaser
+        // hovering either side of 10u sees the force opposing his pursuit
+        // change by more than 3x between ticks. Smoothing it into one
+        // continuous ramp was tried and did NOT reduce this state's
+        // reversal rate, so it is not the cause of the `Defender: Take
+        // Ball` flicker, and the smoothed version changes how tightly
+        // chasers converge on a loose ball. Left as-is pending a real
+        // diagnosis; the step is documented so the next attempt starts
+        // from what is already known.
+        const BALL_CLAIM_DISTANCE: f32 = 10.0;
         let distance_to_ball = (ctx.player.position - target).magnitude();
         let separation_factor = if distance_to_ball < NO_SEPARATION_DISTANCE {
             0.0 // No separation at all — let the player reach the ball

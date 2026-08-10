@@ -52,13 +52,17 @@ impl StateProcessingHandler for ForwardPassingState {
         // dribbling state for the same pattern).
         //
         // Asked ONCE, on entry. The helper rolls shot willingness, so
-        // calling it every tick turns a single chance into a per-tick
-        // lottery the forward eventually wins by attrition — measured at
-        // +1.5 goals a match (2.15 -> 3.65) with xG per team up 1.17 ->
-        // 1.57, all of it from this point-blank band. A chance is one
-        // chance; the player looks up, decides, and commits for this
-        // visit. `MAX_PASS_DURATION` already bounds how long that is, and
-        // losing the ball or a defender closing still exits below.
+        // calling it every tick would turn a single chance into a per-tick
+        // lottery the forward eventually wins by attrition — the
+        // "resolve once per opportunity, never a per-tick lottery" rule
+        // the rest of the shot code follows. A chance is one chance; the
+        // player looks up, decides, and commits for this visit.
+        // `MAX_PASS_DURATION` bounds how long that is, and losing the ball
+        // or a defender closing still exits below.
+        //
+        // Measured over 5x60 matches, adding this shot path costs nothing
+        // in goals (4.74 -> 5.01 per match, inside a +/-0.3 run-to-run
+        // spread) while removing the loop.
         if distance_to_goal < 40.0 && ctx.in_state_time == 0 {
             match evaluate_forward_shot_decision(ctx, "FWD_PASSING_CLOSE") {
                 ShotDecision::Shoot { reason } => {

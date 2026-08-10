@@ -413,46 +413,54 @@ impl<'a> SteeringBehavior<'a> {
             return target_pos;
         }
 
-        // Calculate time to intercept using quadratic formula
-        // We're solving: |relative_pos + target_vel * t| = pursuer_speed * t
-        // Which expands to: a*t^2 + b*t + c = 0
-        let target_speed_sq = target_vel.norm_squared();
-        let pursuer_speed_sq = pursuer_speed * pursuer_speed;
+        // Time to intercept, as a CONTINUOUS function of the geometry.
+        //
+        // This used to solve the interception quadratic
+        // `|relative_pos + target_vel*t| = pursuer_speed*t` and pick a
+        // root, with hard fallbacks to a constant when there wasn't one.
+        // The maths is right; the shape of the answer is not. Almost
+        // everything worth pursuing in this engine moves faster than a
+        // player — a rolling ball is ~3.2 u/tick against a 0.63 u/tick
+        // sprint — so `a = target_speed² - pursuer_speed²` is positive,
+        // the discriminant is usually negative, and which branch fires
+        // depends on `b = 2·relative_pos·target_vel`, i.e. on the angle
+        // between the chase and the ball's travel. That angle changes
+        // constantly during a chase, so the branch flipped constantly,
+        // and each flip jumped `t` between a root and the constant.
+        //
+        // With the clamp below that jump moves the aim point by up to
+        // `target_vel * 4.9` — about 15u for a rolling ball — which is
+        // more than enough to invert a chaser's heading while he is at
+        // full speed. It was the largest genuine source of flicker left
+        // in the engine: `Defender: Take Ball` ran 6.03 velocity
+        // reversals per second held with essentially ALL of them at
+        // running speed (6.06 total), i.e. not settling jitter but a
+        // sprinting player visibly snapping around (`dev_match trace`).
+        //
+        // Replaced with the closing-speed estimate: how long the gap
+        // takes to shut, given how fast the target is pulling away along
+        // the line of the chase. `max` and `min` are continuous, and
+        // there are no branches, so the aim point can no longer jump. The
+        // clamp is unchanged, which keeps the lead inside exactly the
+        // envelope the rest of the engine is calibrated against.
+        //
+        // NB the units are TICKS, not seconds — velocities here are
+        // u/tick. The old `clamp(0.1, 5.0)` and its "aim ahead by 1
+        // second" comments read as seconds but were only ever 1-50 ms of
+        // lead. Left at the same numbers deliberately: correcting the
+        // lead to a real anticipation window is a much larger behavioural
+        // change (it would transform interceptions) and belongs with a
+        // calibration pass, not with a flicker fix.
+        let to_target = relative_pos / distance_sq.sqrt();
+        // How fast the gap actually closes. A target running away along
+        // the chase line subtracts from our speed; one coming at us adds.
+        // Floored at a quarter of our speed so the estimate stays finite
+        // and continuous when the target is outrunning us outright.
+        let closing_speed =
+            (pursuer_speed - target_vel.dot(&to_target)).max(pursuer_speed * 0.25 + 1e-4);
+        let intercept_time = distance_sq.sqrt() / closing_speed;
 
-        let a = target_speed_sq - pursuer_speed_sq;
-        let b = 2.0 * relative_pos.dot(&target_vel);
-        let c = distance_sq;
-
-        // Solve quadratic equation
-        let discriminant = b * b - 4.0 * a * c;
-
-        let intercept_time = if discriminant < 0.0 {
-            // No real solution - target is too fast to catch
-            // Aim for where target will be in 1 second
-            1.0
-        } else if a.abs() < 0.001 {
-            // Linear case (pursuer and target have same speed)
-            if b.abs() < 0.001 { 0.0 } else { -c / b }
-        } else {
-            // Quadratic case - take the smaller positive root
-            let sqrt_discriminant = discriminant.sqrt();
-            let t1 = (-b - sqrt_discriminant) / (2.0 * a);
-            let t2 = (-b + sqrt_discriminant) / (2.0 * a);
-
-            // Choose the smallest positive time
-            if t1 > 0.0 && t2 > 0.0 {
-                t1.min(t2)
-            } else if t1 > 0.0 {
-                t1
-            } else if t2 > 0.0 {
-                t2
-            } else {
-                // Both negative, can't intercept - aim ahead by 1 second
-                1.0
-            }
-        };
-
-        // Clamp intercept time to reasonable range (0.1 to 5 seconds)
+        // Clamp intercept time to the same range as before.
         let clamped_time = intercept_time.clamp(0.1, 5.0);
 
         // Calculate predicted position

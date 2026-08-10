@@ -4,7 +4,7 @@ use crate::r#match::player::strategies::common::players::ops::defender_skill::De
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -166,13 +166,8 @@ impl StateProcessingHandler for DefenderMarkingState {
                 return Some(to_desired * 0.5);
             }
 
-            let direction = to_desired.normalize();
             // Urgency relative to the profile-driven mark distance.
             let urgency = (distance / mark_dist.max(4.0)).clamp(0.6, 2.0);
-            // Recovery-run mult bakes pace/stamina/condition into a
-            // 0.58..1.05 multiplier so tired markers can't keep up
-            // with fast attackers.
-            let speed = ctx.player.skills.physical.pace * urgency * def_profile.recovery_run_mult;
 
             let threat_boost = if opponent_to_mark.has_ball(ctx) && distance < 20.0 {
                 1.3
@@ -180,7 +175,41 @@ impl StateProcessingHandler for DefenderMarkingState {
                 1.0
             };
 
-            Some(direction * speed * threat_boost + ctx.player().separation_velocity() * 0.2)
+            // Steer onto the marking position rather than assigning the
+            // velocity outright.
+            //
+            // `direction * (pace * urgency * mult)` produced an absolute
+            // velocity of up to ~40 u/tick against a ~0.63 u/tick top
+            // speed, with no reference to the velocity the defender
+            // already had — so the engine clamp kept whatever heading
+            // `desired_position` implied on that tick. Since the marking
+            // TARGET is a discrete choice (`find_best_marking_target`
+            // picks a man), every time the chosen man changed the
+            // defender's heading inverted at full speed rather than
+            // curving across. The per-tick dumps show exactly that shape:
+            // four or five ticks of smooth, steadily rotating movement at
+            // a constant 0.407, then an abrupt snap to the opposite
+            // heading AT A DIFFERENT SPEED — a changed target, not an
+            // overshoot (`dev_match trace` reversal dumps). `Defender:
+            // Marking` was the top fast-reversal state once the goal-side
+            // override was fixed.
+            //
+            // `Arrive` integrates from the current velocity under a force
+            // limit and decelerates into the mark, which is also what
+            // marking looks like: you settle alongside your man rather
+            // than arriving at a sprint. Urgency and the threat boost
+            // still scale the result, and the recovery multiplier still
+            // reaches the speed through the profile.
+            let base = SteeringBehavior::Arrive {
+                target: desired_position,
+                slowing_distance: mark_dist.max(4.0),
+            }
+            .calculate(ctx.player)
+            .velocity;
+            Some(
+                base * urgency * threat_boost * def_profile.recovery_run_mult
+                    + ctx.player().separation_velocity() * 0.2,
+            )
         } else {
             Some(Vector3::new(0.0, 0.0, 0.0))
         }
@@ -276,6 +305,41 @@ impl DefenderMarkingState {
                 + (opponent_skills.mental.composure / 20.0).powf(1.20) * 0.08)
                 .clamp(0.0, 1.0);
             danger_score += receiver_threat * 30.0;
+
+            // COMMITMENT: keep the man you are already going to.
+            //
+            // Everything above scores the SITUATION, and several of the
+            // terms sit within a few points of each other for two
+            // attackers in the same area. The argmax therefore swapped
+            // between them on tiny frame-to-frame changes, and because
+            // the marking velocity is `direction * (pace * urgency)` —
+            // saturated by the engine clamp — a swap does not nudge the
+            // defender, it inverts him at full speed. The per-tick dumps
+            // show exactly that: four or five ticks of smooth, steadily
+            // rotating movement at a constant 0.407, then an abrupt snap
+            // to the opposite heading at a different speed, which is a
+            // changed target rather than an overshoot (`dev_match trace`
+            // reversal dumps). `Defender: Marking` was left as the top
+            // fast-reversal state once the goal-side override was fixed.
+            //
+            // The defender's own velocity is the memory of who he chose —
+            // he has been running at that man — so aligning with it
+            // rewards continuing. A genuinely more dangerous opponent
+            // still wins: this is worth ~15 points against the 100 a ball
+            // carrier scores and the 30 a goalward run does, so it breaks
+            // ties without overriding a real threat. Continuous in the
+            // geometry, so it cannot itself introduce a step.
+            let my_velocity = ctx.player.velocity;
+            let my_speed_sq = my_velocity.norm_squared();
+            if my_speed_sq > 0.0025 {
+                let to_opponent = opponent.position - ctx.player.position;
+                let to_opp_dist = to_opponent.magnitude();
+                if to_opp_dist > 0.01 {
+                    let heading = my_velocity * (1.0 / my_speed_sq.sqrt());
+                    let alignment = heading.dot(&(to_opponent * (1.0 / to_opp_dist)));
+                    danger_score += alignment.max(0.0) * 15.0;
+                }
+            }
 
             if danger_score > best_score {
                 best_score = danger_score;

@@ -203,9 +203,23 @@ impl StateProcessingHandler for DefenderRunningState {
                             ));
                         }
                         DefensiveRole::Hold => {
-                            return Some(StateChangeResult::with_defender_state(
-                                DefenderState::HoldingLine,
-                            ));
+                            // Same shared predicate as the phase dispatch
+                            // and the idle default: settle into the line
+                            // only once actually in it. This was the last
+                            // ungated `-> HoldingLine` leg in the state,
+                            // and it kept the pair alive on its own — a
+                            // defender with role Hold but off the line was
+                            // sent to `HoldingLine`, whose first act is to
+                            // notice he is off the line and send him back.
+                            // ~6,300 round trips a match after every other
+                            // leg had been gated (`dev_match trace`).
+                            if DefensiveLine::is_in_line(ctx) {
+                                return Some(StateChangeResult::with_defender_state(
+                                    DefenderState::HoldingLine,
+                                ));
+                            }
+                            // Off the line — keep running back to it.
+                            return None;
                         }
                         DefensiveRole::Primary => {
                             // Primary — fall through to tackle/press checks below.

@@ -797,7 +797,7 @@ impl StateProcessingHandler for MidfielderRunningState {
             if ctx.ball().on_own_side()
                 && ctx.ball().distance() > 100.0
                 && MidfielderGuardingState::default()
-                    .find_guard_target(ctx)
+                    .find_committable_guard_target(ctx)
                     .is_some()
             {
                 return Some(StateChangeResult::with_midfielder_state(

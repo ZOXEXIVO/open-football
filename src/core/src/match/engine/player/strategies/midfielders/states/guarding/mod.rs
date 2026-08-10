@@ -8,6 +8,18 @@ use nalgebra::Vector3;
 
 const GUARD_DISTANCE: f32 = 25.0; // Keep a realistic marking distance (don't sit on top of opponent)
 const MAX_GUARD_RANGE: f32 = 100.0; // Give up guarding if attacker moves too far
+/// Range within which a midfielder will TAKE UP a guard, as opposed to
+/// the wider `MAX_GUARD_RANGE` at which he gives one up.
+///
+/// The two used to be the same number, which makes the boundary a
+/// flicker generator: `find_guard_target` scans `nearby(MAX_GUARD_RANGE)`,
+/// so a target at 99u was pickable, and `Guarding` abandons anything past
+/// 100u — one stride either way flipped the decision. `Midfielder:
+/// Guarding <-> Midfielder: Returning` survived every other fix on this
+/// pair and was still running ~2,300 round trips a match on it alone
+/// (`dev_match trace`). Committing only inside the tighter radius leaves
+/// a 20u band in which whatever the player is already doing stands.
+const GUARD_COMMIT_RANGE: f32 = 80.0;
 const TACKLE_TRANSITION_DISTANCE: f32 = 15.0; // Tackle if opponent receives ball nearby
 const STAMINA_THRESHOLD: f32 = 15.0;
 const PREDICTION_TIME: f32 = 0.25;
@@ -198,6 +210,20 @@ impl MidfielderGuardingState {
     /// (`dev_match trace`). The result is memoised per tick in
     /// `player_agg_cache`, so the extra call from the sending state is a
     /// cache hit, not a second scan.
+    /// A guard target worth STARTING on — inside `GUARD_COMMIT_RANGE`.
+    ///
+    /// This is what the states that hand players into `Guarding` should
+    /// ask; `find_guard_target` itself scans out to the wider give-up
+    /// radius, so using it directly to decide entry puts the commit and
+    /// the abandon condition on the same boundary.
+    pub(crate) fn find_committable_guard_target(
+        &self,
+        ctx: &StateProcessingContext,
+    ) -> Option<MatchPlayerLite> {
+        self.find_guard_target(ctx)
+            .filter(|t| t.distance(ctx) <= GUARD_COMMIT_RANGE)
+    }
+
     pub(crate) fn find_guard_target(
         &self,
         ctx: &StateProcessingContext,

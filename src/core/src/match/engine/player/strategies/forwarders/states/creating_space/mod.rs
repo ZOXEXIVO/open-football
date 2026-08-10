@@ -151,6 +151,29 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         }
         gaps[..gaps_len].sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
+        // Re-order the shortlist SPATIALLY before assigning it.
+        //
+        // Ranking by width alone is not a stable assignment, whatever the
+        // slot index does. The gaps are recomputed every tick from live
+        // defender positions, so two gaps of similar width trade ranks
+        // constantly — and they can be at opposite ends of the pitch, so
+        // `gaps[gap_idx]` jumps the target the full width of the field.
+        // With the velocity saturated at the speed clamp, that inverts
+        // the forward's heading rather than nudging it: the dumps show
+        // four or five ticks of steady movement at a constant 0.290 and
+        // then the y component flipping sign outright (`dev_match trace`
+        // reversal dumps). The `Creating Space` states between them were
+        // the largest remaining block of fast reversals.
+        //
+        // Widest-first still chooses WHICH spaces are worth attacking —
+        // that shortlist is kept. Sorting the shortlist by position then
+        // makes "my slot" mean a consistent channel (left to right)
+        // instead of a volatile width rank, so a rank swap inside the
+        // shortlist moves a forward to an adjacent gap at most, and
+        // usually not at all.
+        let shortlist = gaps_len.min(4).max(1);
+        gaps[..shortlist].sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+
         // Rank THIS forward among our forwards by id so each one picks
         // a distinct gap (id-based so the assignment is stable tick
         // to tick — forwards don't swap targets and swap back).
@@ -166,7 +189,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         // there are fewer gaps than forwards. Also skew slightly
         // toward a different gap than the nearest teammate would have
         // picked (nearest forward might still be in my slot range).
-        let gap_idx = slot_index.min(gaps_len.saturating_sub(1));
+        let gap_idx = slot_index.min(shortlist.saturating_sub(1));
         let target_y = if gaps_len == 0 {
             field_height / 2.0
         } else {

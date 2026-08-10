@@ -70,11 +70,27 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // those. Advancing the timer here would double its rate relative
         // to AI decisions and halve every state timeout — a calibration
         // change, not a graph fix. See `MatchPlayer::in_state_time`.
+        // Ball direction stability, sampled on the same cadence as the
+        // players. Every chase state aims at a point derived from the
+        // ball, so this is the control for the per-state reversal table:
+        // a chaser tracking a jittery ball and a chaser with a steering
+        // bug produce identical numbers without it.
+        #[cfg(feature = "match-logs")]
+        let (ball_pos, ball_vel) = (field.ball.position, field.ball.velocity);
+        #[cfg(feature = "match-logs")]
+        {
+            crate::r#match::player::motion_diag::note_ball(
+                ball_vel,
+                tick_ctx.positions.ball.velocity,
+            );
+        }
+
         for player in field.players.iter_mut().filter(|p| !p.is_sent_off) {
-            player.check_boundary_collision(context);
+            // Move first, then clamp — see `MatchPlayer::update`.
             player.move_to();
+            player.check_boundary_collision(context);
             #[cfg(feature = "match-logs")]
-            player.trace_motion(context);
+            player.trace_motion(context, ball_pos, ball_vel);
         }
 
         if events.has_events() {
