@@ -56,6 +56,57 @@ use std::sync::atomic::Ordering;
 /// `WRONG_RECEIVER` (a pass completed, but to someone other than the
 /// player who ended up shooting) vs `CREDITED`.
 #[cfg(feature = "match-logs")]
+/// Why shots end up off target.
+///
+/// The population on-target rate is set by three independent forced-miss
+/// rolls (`wide_miss_chance`, `over_bar_chance`, `miskick_probability`)
+/// plus the aim band, and the aim band is documented as NOT being the
+/// lever. Without a breakdown, re-tuning that rate means moving two
+/// numbers and re-running until it lands — this makes it arithmetic
+/// instead. Every counter is per shot struck.
+#[cfg(feature = "match-logs")]
+pub mod shot_accuracy_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Shots that reached the aiming code.
+    pub static SHOTS: AtomicU64 = AtomicU64::new(0);
+    /// The wide-miss roll fired (target pushed outside a post).
+    pub static WIDE_FIRED: AtomicU64 = AtomicU64::new(0);
+    /// The over-bar roll fired (apex skied clear of the crossbar).
+    pub static OVER_FIRED: AtomicU64 = AtomicU64::new(0);
+    /// The miskick roll fired (target smeared up to 1.5 goal-widths).
+    pub static MISKICK_FIRED: AtomicU64 = AtomicU64::new(0);
+    /// Final aim point landed between the posts.
+    pub static AIM_INSIDE_POSTS: AtomicU64 = AtomicU64::new(0);
+    /// Aim between the posts AND not skied — the shots that can be
+    /// on target once they reach the goal line.
+    pub static AIM_ON_FRAME: AtomicU64 = AtomicU64::new(0);
+
+    pub fn reset() {
+        for c in [
+            &SHOTS,
+            &WIDE_FIRED,
+            &OVER_FIRED,
+            &MISKICK_FIRED,
+            &AIM_INSIDE_POSTS,
+            &AIM_ON_FRAME,
+        ] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub fn snapshot() -> [u64; 6] {
+        [
+            SHOTS.load(Ordering::Relaxed),
+            WIDE_FIRED.load(Ordering::Relaxed),
+            OVER_FIRED.load(Ordering::Relaxed),
+            MISKICK_FIRED.load(Ordering::Relaxed),
+            AIM_INSIDE_POSTS.load(Ordering::Relaxed),
+            AIM_ON_FRAME.load(Ordering::Relaxed),
+        ]
+    }
+}
+
 pub mod key_pass_diag {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -3110,14 +3161,44 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
         // on-target volume is what caps goals/match: at 13.1 shots per
         // team a 32% rate lands 2.47 goals on the engine's own
         // arithmetic against the 2.21 it was producing.
+        // Re-raised 2026-08-11, ~3.2x (0.018/0.036/0.060/0.090 -> below).
+        //
+        // The 2026-08-08 cut took these down ~40% to lift on-target from
+        // 28.3% toward the real ~33%; the engine changed underneath them
+        // since and the same bases were producing 43.8%.
+        //
+        // The `off-target causes` diagnostic (added alongside this) showed
+        // why that was not a tuning miss but a modelling one: the three
+        // forced-miss rolls between them pushed only 15% of shots off
+        // target, so **83.4% of every shot struck left the boot aimed
+        // between the posts and under the bar**. Real football is nowhere
+        // near that — roughly 43% of shots are struck wide or over. The
+        // aim band cannot fix it (documented above: tightening it
+        // 16 -> 13.5 moved the rate 28.6% -> 28.3% and nothing else),
+        // because at a 29u half-goal almost every aim already lands
+        // between the posts. These rolls are the lever.
+        //
+        // Measured at 5x60 matches, this setting moves on-target
+        // 43.8% -> 38.7% and on-frame-at-strike 83.4% -> 64%, and it
+        // costs something: conversion of on-target shots rises
+        // 31.6% -> 35.2% (real 30) and keeper save rate falls
+        // 68.4% -> 64.8% (real 67). That is not the aim model being
+        // wrong, it is the SHOT MIX: forcing shots off the frame removes
+        // long-range attempts preferentially, so what survives is closer
+        // and converts better. The engine strikes from **10.1 m on
+        // average against a real ~17 m** — until shot SELECTION moves
+        // out, a realistic aim model cannot land on-target at 33%
+        // without distorting conversion. Pushing these bases a further
+        // 25% was tried and reverted: on-target reached 39.2% but
+        // conversion hit 40.8% and saves 59.2%, i.e. all cost, no gain.
         let wide_base = if horizontal_distance < 30.0 {
-            0.018
-        } else if horizontal_distance < 60.0 {
-            0.036
-        } else if horizontal_distance < 100.0 {
             0.060
+        } else if horizontal_distance < 60.0 {
+            0.120
+        } else if horizontal_distance < 100.0 {
+            0.195
         } else {
-            0.090
+            0.285
         };
         // Skill-and-condition contributions trimmed (0.07/0.05 → 0.05/0.03)
         // because they compound with `random_error_scale`, `over_bar_chance`,
@@ -3133,7 +3214,12 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
             + pressure_penalty * 0.04
             + low_condition_penalty * 0.03
             + desperation * 0.08;
+        #[cfg(feature = "match-logs")]
+        shot_accuracy_diag::SHOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
+            #[cfg(feature = "match-logs")]
+            shot_accuracy_diag::WIDE_FIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let extra_wide = rng.random_range(GOAL_WIDTH * 0.2..GOAL_WIDTH * 1.5);
             if rng.random_range(0.0f32..1.0) < 0.5 {
                 actual_y_target = goal_right_post + extra_wide;
@@ -3146,7 +3232,14 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
         // includes the smoothstep poor-penalty contribution rather
         // than a single technique^3 read.
         if rng.random_range(0.0f32..1.0) < miskick_probability {
+            #[cfg(feature = "match-logs")]
+            shot_accuracy_diag::MISKICK_FIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             actual_y_target += rng.random_range(-GOAL_WIDTH * 1.5..GOAL_WIDTH * 1.5);
+        }
+
+        #[cfg(feature = "match-logs")]
+        if (actual_y_target - goal_center.y).abs() <= GOAL_WIDTH {
+            shot_accuracy_diag::AIM_INSIDE_POSTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
         // ── Deflection on the way to goal ───────────────────────────────
@@ -3328,14 +3421,17 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
         // `wide_base` — the two forced-miss rolls are the same class and
         // together they, not the aim band, set the population on-target
         // rate.
+        // Re-raised 2026-08-11 alongside `wide_base`, same reasoning and
+        // the same ratio — the two forced-miss rolls are one lever and
+        // must move together or the wide/over split distorts.
         let over_bar_base = if horizontal_distance < 30.0 {
-            0.009
+            0.030
         } else if horizontal_distance < 60.0 {
-            0.018
+            0.060
         } else if horizontal_distance < 100.0 {
-            0.033
+            0.105
         } else {
-            0.048
+            0.150
         };
         // Skill contributions trimmed (0.04 / 0.04 → 0.025 / 0.025) — same
         // logic as `wide_miss_chance` above: the over-bar term compounds
@@ -3348,6 +3444,15 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
             + poor_penalty * 0.025
             + low_condition_penalty * 0.03;
         let shot_goes_over_bar = rng.random_range(0.0f32..1.0) < over_bar_chance;
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering as AtomicOrdering;
+            if shot_goes_over_bar {
+                shot_accuracy_diag::OVER_FIRED.fetch_add(1, AtomicOrdering::Relaxed);
+            } else if (actual_y_target - goal_center.y).abs() <= GOAL_WIDTH {
+                shot_accuracy_diag::AIM_ON_FRAME.fetch_add(1, AtomicOrdering::Relaxed);
+            }
+        }
         let struck_apex = if shot_goes_over_bar {
             // Skied. Peaks well clear of the 2.44 m crossbar whatever the
             // range, so the ball is over it at any plausible crossing time.

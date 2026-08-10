@@ -269,6 +269,27 @@ impl Ball {
         // while still keeping the ball in the corner/touchline area of the pitch.
         const BOUNDARY_INSET: f32 = 10.0;
 
+        // Reaching here still past an endline and still between the posts
+        // means every endline resolver declined the ball and the clamp
+        // below is about to strand it in the goalmouth with no restart.
+        // That must not happen — see `ENDLINE_CLAMPED_IN_MOUTH`.
+        #[cfg(feature = "match-logs")]
+        if self.current_owner.is_none()
+            && (self.position.x <= 0.0 || self.position.x >= field_width)
+        {
+            let goal_center_y = if self.position.x <= 0.0 {
+                context.goal_positions.left.y
+            } else {
+                context.goal_positions.right.y
+            };
+            if (self.position.y - goal_center_y).abs()
+                <= crate::r#match::engine::goal::GOAL_WIDTH
+            {
+                super::ownership::reception_diag::ENDLINE_CLAMPED_IN_MOUTH
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
         if self.position.x <= 0.0 {
             self.position.x = BOUNDARY_INSET;
             self.velocity = Vector3::zeros();

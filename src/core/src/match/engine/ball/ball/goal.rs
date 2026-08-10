@@ -178,6 +178,37 @@ impl Ball {
         }
     }
 
+    /// Where the defending side restarts from after the ball goes out
+    /// over their own goal line.
+    ///
+    /// Both goal-kick sites used to place the ball on ONE point —
+    /// `(±50, goal_positions.left.y)` — for every restart at either end,
+    /// which is the single spot in front of the goal a replay shows the
+    /// ball blinking to after every wide or skied shot. It is also not
+    /// how a goal kick is taken: the ball is put down in the goal area on
+    /// the side it went out. Reading `left.y` for the RIGHT-hand goal was
+    /// wrong on its own terms too — the two centres are built from
+    /// `height as f32 / 2.0` and `(height / 2) as f32`, so they differ by
+    /// half a unit on an odd-height pitch.
+    ///
+    /// Carrying the exit point through keeps the spot continuous in where
+    /// the ball actually left the pitch, so it varies the way the real
+    /// thing does without spending a roll on it.
+    fn goal_kick_spot(&self, side: GoalSide, goal_center_y: f32, exit_y: f32) -> Vector3<f32> {
+        // Goal area: 5.5 m deep, 9.16 m either side of the goal centre.
+        // At 0.125 m/unit that is 44u and 73u — the 50u depth used here
+        // puts the ball just outside the six-yard line, where keepers
+        // actually tee it up.
+        const GOAL_AREA_HALF_WIDTH: f32 = 73.0;
+        const GOAL_KICK_DEPTH: f32 = 50.0;
+        let x = match side {
+            GoalSide::Home => GOAL_KICK_DEPTH,
+            GoalSide::Away => self.field_width - GOAL_KICK_DEPTH,
+        };
+        let offset = (exit_y - goal_center_y).clamp(-GOAL_AREA_HALF_WIDTH, GOAL_AREA_HALF_WIDTH);
+        Vector3::new(x, goal_center_y + offset * 0.75, 0.0)
+    }
+
     /// Ball crossed goal line within goal width but above crossbar — goal kick.
     /// Place ball near the 6-yard box and give it to the defending goalkeeper.
     pub(super) fn check_over_goal(
@@ -209,15 +240,13 @@ impl Ball {
         if let Some(gk) = players.iter().find(|p| {
             p.side == Some(defending_side) && p.tactical_position.current_position.is_goalkeeper()
         }) {
-            // Place ball at the 6-yard area in front of the goal
-            let goal_kick_x = match over_side {
-                GoalSide::Home => 50.0, // ~6 yards from left goal line
-                GoalSide::Away => self.field_width - 50.0,
+            // Place the ball in the goal area, on the side it went out.
+            let goal_center_y = match over_side {
+                GoalSide::Home => context.goal_positions.left.y,
+                GoalSide::Away => context.goal_positions.right.y,
             };
-
-            self.position.x = goal_kick_x;
-            self.position.y = context.goal_positions.left.y; // Center of goal
-            self.position.z = 0.0;
+            let spot = self.goal_kick_spot(over_side, goal_center_y, self.position.y);
+            self.position = spot;
             self.velocity = Vector3::zeros();
 
             // Give ball to goalkeeper
@@ -260,34 +289,45 @@ impl Ball {
         let field_width = context.field_size.width as f32;
         let goal_half_width = GOAL_WIDTH;
 
-        // Check left endline
-        let crossed_side = if self.position.x <= 0.0 {
-            let goal_center_y = context.goal_positions.left.y;
-            // Only trigger if OUTSIDE the goal posts (inside is handled by check_goal/check_over_goal)
-            if self.position.y < goal_center_y - goal_half_width
-                || self.position.y > goal_center_y + goal_half_width
-            {
-                Some(GoalSide::Home)
-            } else {
-                None
-            }
+        // Which endline, if either, the ball is past.
+        let (crossed_side, goal_center_y) = if self.position.x <= 0.0 {
+            (Some(GoalSide::Home), context.goal_positions.left.y)
         } else if self.position.x >= field_width {
-            let goal_center_y = context.goal_positions.right.y;
-            if self.position.y < goal_center_y - goal_half_width
-                || self.position.y > goal_center_y + goal_half_width
-            {
-                Some(GoalSide::Away)
-            } else {
-                None
-            }
+            (Some(GoalSide::Away), context.goal_positions.right.y)
         } else {
-            None
+            (None, 0.0)
         };
 
         let side = match crossed_side {
             Some(s) => s,
             None => return,
         };
+
+        // Between the posts this used to return, on the assumption that
+        // `check_goal` / `check_over_goal` had it covered. They do not
+        // cover the case between them. `check_goal` REFUSES a ball that
+        // crosses the line with no shot behind it — a cross carrying
+        // through the six-yard box, a through-ball hit too hard — and
+        // returns without restarting play; `check_over_goal` only takes
+        // balls above the bar. Measured at 22 refused balls a match.
+        //
+        // Nothing downstream owned them either, so
+        // `check_boundary_collision` had the last word: it clamped the
+        // ball back to x = ±10 and zeroed its velocity, leaving it dead
+        // in the goalmouth a metre off the line for whoever got there
+        // first. That is the ball "appearing at a single point in front
+        // of the goal", and play never restarted from any of them.
+        //
+        // A ball wholly over the goal line is out of play whatever its
+        // height, so the corner-or-goal-kick resolver below is the right
+        // answer for all of them. Restricted to a LOOSE ball: the
+        // position clamp can pin a keeper on his own goal line, and a
+        // keeper standing there with it in his gloves is holding the
+        // ball, not putting it out.
+        let outside_posts = (self.position.y - goal_center_y).abs() > goal_half_width;
+        if !outside_posts && self.current_owner.is_some() {
+            return;
+        }
 
         #[cfg(feature = "match-logs")]
         if self.cached_shot_target.is_some() {
@@ -462,14 +502,9 @@ impl Ball {
         }) {
             let gk_id = gk.id;
             let gk_team = gk.team_id;
-            let goal_kick_x = match side {
-                GoalSide::Home => 50.0,
-                GoalSide::Away => field_width - 50.0,
-            };
 
-            self.position.x = goal_kick_x;
-            self.position.y = context.goal_positions.left.y;
-            self.position.z = 0.0;
+            let spot = self.goal_kick_spot(side, goal_center_y, self.position.y);
+            self.position = spot;
             self.velocity = Vector3::zeros();
 
             self.current_owner = Some(gk_id);

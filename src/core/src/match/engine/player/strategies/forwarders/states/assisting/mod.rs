@@ -101,10 +101,43 @@ impl StateProcessingHandler for ForwardAssistingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Take up a supporting position in the box, not the goal itself.
+        //
+        // This used to `Arrive` at `opponent_goal_position()` — a fixed
+        // point ON the goal line. This state is entered mostly OFF the
+        // ball (see `process`), so every assisting forward converged into
+        // the net, where they stacked on one spot and ground against the
+        // pitch boundary. It was the highest-RATE flicker state left in
+        // the engine at ~2.7 velocity reversals per second held
+        // (`dev_match trace`), and standing in the goal is not a
+        // supporting position in the first place.
+        //
+        // Depth comes back off the line toward the ball, so the forward
+        // occupies the area a cutback or cross is played into. Laterally
+        // he mostly holds his own channel, drawn gently central — that
+        // keeps forwards in separate lanes instead of piling onto a
+        // single aim point, and it is continuous in his own position, so
+        // it cannot introduce a jump.
+        const SUPPORT_DEPTH: f32 = 90.0; // ~11 m off the line
+        let goal = ctx.player().opponent_goal_position();
+        let ball = ctx.tick_context.positions.ball.position;
+        let to_ball = ball - goal;
+        let dir = if to_ball.magnitude() > 0.01 {
+            to_ball.normalize()
+        } else {
+            Vector3::new(1.0, 0.0, 0.0)
+        };
+        let depth_point = goal + dir * SUPPORT_DEPTH;
+        let target = Vector3::new(
+            depth_point.x,
+            ctx.player.position.y * 0.7 + goal.y * 0.3,
+            0.0,
+        );
+
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player().opponent_goal_position(),
-                slowing_distance: 10.0,
+                target,
+                slowing_distance: 20.0,
             }
             .calculate(ctx.player)
             .velocity,

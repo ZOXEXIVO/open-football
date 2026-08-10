@@ -3577,6 +3577,22 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         "on-target rate      : {:.1}%  (real ~33%)",
         total_on_target as f32 / total_shots.max(1) as f32 * 100.0
     );
+    // Why shots end up off target. The aim band is documented as NOT
+    // being the population lever — these three forced-miss rolls are —
+    // so this breaks the rate down into the terms that actually set it.
+    {
+        let sa = core::shot_accuracy_diag::snapshot();
+        let struck = sa[0].max(1) as f32;
+        println!(
+            "  off-target causes  : wide {:.1}%  over-bar {:.1}%  miskick {:.1}%  \
+             → aim between posts {:.1}%, on frame {:.1}%",
+            sa[1] as f32 / struck * 100.0,
+            sa[2] as f32 / struck * 100.0,
+            sa[3] as f32 / struck * 100.0,
+            sa[4] as f32 / struck * 100.0,
+            sa[5] as f32 / struck * 100.0,
+        );
+    }
     let conversion = total_goals as f32 / total_on_target.max(1) as f32 * 100.0;
     println!("on-target→goal rate : {:.1}%  (real ~30%)", conversion);
     let saves_vs_ontarget = total_saves as f32 / total_on_target.max(1) as f32 * 100.0;
@@ -5336,12 +5352,22 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     too_far,
                     too_far as f32 / n_matches as f32,
                 );
-                let (sw, so, sc_, snt, grj) = core::reception_diag::shot_fate_snapshot();
+                let (sw, so, sc_, snt, grj, clamped) =
+                    core::reception_diag::shot_fate_snapshot();
                 println!(
                     "  shot fate: wide {}, over the bar {}, claimed mid-flight {}, \
                      no projected target {}, goal REJECTED at the line {}   \
                      (vs saves+goals = the credited on-target count)",
                     sw, so, sc_, snt, grj,
+                );
+                println!(
+                    "  stranded in the goalmouth (endline clamp, MUST be 0): {}{}",
+                    clamped,
+                    if clamped == 0 {
+                        ""
+                    } else {
+                        "   <-- an endline resolver is declining balls again"
+                    },
                 );
                 let (emitted, superseded, dead, out_of_reach) =
                     core::reception_diag::pass_outcome_snapshot();

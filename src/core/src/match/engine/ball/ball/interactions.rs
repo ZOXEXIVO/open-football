@@ -1064,11 +1064,6 @@ impl Ball {
             return;
         }
 
-        // Ball well over the bar — not a save situation.
-        if self.position.z > 2.8 {
-            return;
-        }
-
         // Only consider the shot once it's close to the goal line —
         // the save resolves at the moment of contact. Distance in
         // x-units the ball will cover in a single tick determines the
@@ -1106,6 +1101,32 @@ impl Ball {
             save_accounting_stats::SAVE_TICKS_OUT_OF_REACH.fetch_add(1, Ordering::Relaxed);
             return;
         }
+        // The ball has reached the goal line. Anything off the frame at
+        // this point is a MISS, and the shot is over — retire it.
+        //
+        // Retiring matters as much as not saving it. `cached_shot_target`
+        // is what `gk_clearing_shot` reads to decide that a keeper who
+        // has just gathered the ball made a save, and it credits the
+        // shooter an on-target shot at the same time. Leaving the cache
+        // armed on a miss meant every skied or wide shot the keeper
+        // subsequently collected — which is most of them, since the
+        // restart is his goal kick — was booked as a save on target.
+        //
+        // That is why the on-target rate would not respond to the aim
+        // model: forcing 8 percentage points more shots off the frame
+        // moved the measured rate by ~2, because the misses were being
+        // credited anyway. The over-the-bar test in particular used to
+        // sit ABOVE the arrival-window check and return without
+        // clearing, so it fired mid-flight on any shot whose apex
+        // cleared 2.8 m and left the cache armed for the rest of the
+        // flight.
+        let off_frame_high = self.position.z > 2.8;
+        let off_frame_wide = (self.position.y - goal_y).abs() > GOAL_WIDTH + 1.0;
+        if off_frame_high || off_frame_wide {
+            self.cached_shot_target = None;
+            return;
+        }
+
         // One shot, one roll — see `ShotTarget::save_rolled`.
         if shot_target.save_rolled {
             return;
@@ -1122,11 +1143,8 @@ impl Ball {
             return;
         }
 
-        // Ball must be within goal width (else it's wide and the
-        // post / out-of-play handler catches it).
-        if (self.position.y - goal_y).abs() > GOAL_WIDTH + 1.0 {
-            return;
-        }
+        // Frame test already applied above, where a miss also retires
+        // the shot.
 
         // Find the defending keeper.
         let keeper = players.iter().find(|p| {

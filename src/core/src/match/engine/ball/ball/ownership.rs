@@ -92,14 +92,28 @@ pub mod reception_diag {
     /// Ball crossed the goal line but `check_goal` refused it (no recent
     /// shot on record and no live shot target).
     pub static GOAL_REJECTED: AtomicU64 = AtomicU64::new(0);
+    /// MUST STAY 0. A loose ball that reached `check_boundary_collision`
+    /// still past an endline and still between the posts — i.e. one that
+    /// every endline resolver declined, so the boundary clamp teleported
+    /// it back to x = ±10 with zero velocity and left it dead in the
+    /// goalmouth instead of restarting play.
+    ///
+    /// This was the "ball appears at a single point in front of the goal"
+    /// bug: `check_goal` refuses a ball with no shot behind it and
+    /// returned without a restart, `check_over_goal` only takes balls
+    /// above the bar, and `check_wide_of_goal` only took balls outside
+    /// the posts. 22 balls a match fell through all three. The counter is
+    /// the invariant: any non-zero reading means a hole has reopened.
+    pub static ENDLINE_CLAMPED_IN_MOUTH: AtomicU64 = AtomicU64::new(0);
 
-    pub fn shot_fate_snapshot() -> (u64, u64, u64, u64, u64) {
+    pub fn shot_fate_snapshot() -> (u64, u64, u64, u64, u64, u64) {
         (
             SHOT_WIDE.load(Ordering::Relaxed),
             SHOT_OVER.load(Ordering::Relaxed),
             SHOT_CLAIMED.load(Ordering::Relaxed),
             SHOT_NO_TARGET.load(Ordering::Relaxed),
             GOAL_REJECTED.load(Ordering::Relaxed),
+            ENDLINE_CLAMPED_IN_MOUTH.load(Ordering::Relaxed),
         )
     }
 
@@ -129,6 +143,7 @@ pub mod reception_diag {
             &SHOT_CLAIMED,
             &SHOT_NO_TARGET,
             &GOAL_REJECTED,
+            &ENDLINE_CLAMPED_IN_MOUTH,
         ] {
             c.store(0, Ordering::Relaxed);
         }
