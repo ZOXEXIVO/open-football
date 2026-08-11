@@ -935,7 +935,16 @@ impl StateProcessingHandler for ForwardRunningState {
 
             // Priority 4: Defensive duties when needed
             if !ctx.team().is_control_ball() {
-                if self.should_return_to_position(ctx) {
+                // Retreating is a response to the OPPOSITION having the
+                // ball, not to nobody having it. `is_control_ball()` is
+                // false for a loose ball too, and that sent forwards
+                // home every time it broke loose — see the measurement
+                // in `ForwardReturningState`. Helping to defend below
+                // keeps the looser gate: closing a loose ball down is
+                // work a forward does.
+                if ctx.players().opponents().with_ball().next().is_some()
+                    && self.should_return_to_position(ctx)
+                {
                     return Some(StateChangeResult::with_forward_state(
                         ForwardState::Returning,
                     ));
@@ -1655,7 +1664,21 @@ impl ForwardRunningState {
         // problem, and walling it off just piled every carrier up on the
         // wall (54% of all shots came from one 5-metre band, and the
         // keeper saved 94% of them because he was set for every one).
+        // A carry target within touching distance is not a run, and
+        // chasing it is what produces the limit cycle: `Arrive` cannot
+        // settle on a point closer than the carrier's own per-tick step,
+        // so he overshoots, reverses, and overshoots back. Measured off a
+        // replay dump as a clean 240 ms oscillation of 2.1u amplitude,
+        // held for 20-38 s at a time with the ball a few metres in front
+        // of the goalkeeper. Standing still is the honest outcome — and
+        // it stops the ball vibrating on the spot, which is what this
+        // reads as on the pitch.
+        const CARRY_DEADBAND: f32 = 6.0; // 0.75 m
+
         if let Some(target_position) = self.find_optimal_attacking_path(ctx) {
+            if (target_position - ctx.player.position).magnitude() < CARRY_DEADBAND {
+                return Vector3::zeros();
+            }
             return SteeringBehavior::Arrive {
                 target: target_position,
                 slowing_distance: 20.0,
@@ -1668,8 +1691,12 @@ impl ForwardRunningState {
         // centre, which is an instruction to run into the goalkeeper and
         // was doing exactly that whenever no gap was found — the common
         // case against a set defence.
+        let carry_target = BallCarry::target(ctx);
+        if (carry_target - ctx.player.position).magnitude() < CARRY_DEADBAND {
+            return Vector3::zeros();
+        }
         SteeringBehavior::Arrive {
-            target: BallCarry::target(ctx),
+            target: carry_target,
             slowing_distance: 30.0,
         }
         .calculate(ctx.player)
@@ -1748,6 +1775,31 @@ impl ForwardRunningState {
                 let gap_size = (positions[i] - positions[j]).magnitude();
 
                 if gap_size > best_gap_size && gap_size > 20.0 {
+                    // A gap has to be somewhere to RUN, not where he is
+                    // already standing.
+                    //
+                    // Two defenders either side of the carrier produce a
+                    // midpoint at his own feet, and `Arrive` at your own
+                    // feet is a limit cycle: he reaches it, the candidate
+                    // set shifts by one man as he moves a few centimetres
+                    // (the `dot > 0.5` cone is a discrete membership test
+                    // on a normalised vector, so it flips on sub-metre
+                    // movement), the midpoint jumps a couple of units, and
+                    // he accelerates back to it. Measured off a replay
+                    // dump: a clean 240 ms limit cycle, 2.1u amplitude,
+                    // held for 20 s with the ball four metres in front of
+                    // the goalkeeper. `dead_ball_diag` puts the whole
+                    // pattern at ~156 s a match of the ball going nowhere
+                    // in a forward's feet — the largest single source.
+                    //
+                    // Requiring the gap to be a real advance ahead of him
+                    // means he only targets one he has to run to; once
+                    // through it the gap stops qualifying and
+                    // `BallCarry::target` takes over.
+                    const MIN_GAP_ADVANCE: f32 = 25.0; // ~3 m
+                    if (gap_center - player_pos).dot(&goal_dir) < MIN_GAP_ADVANCE {
+                        continue;
+                    }
                     best_gap_size = gap_size;
                     best_gap = Some(gap_center);
                 }

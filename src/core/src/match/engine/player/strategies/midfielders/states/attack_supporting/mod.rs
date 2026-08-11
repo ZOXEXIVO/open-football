@@ -388,22 +388,41 @@ impl MidfielderAttackSupportingState {
             return false;
         }
 
-        // Highest attacking drive among central-mid teammates wins the run.
+        // The most attack-minded central midfielders make the run.
+        //
+        // This used to be a strict argmax — `!beaten` — so no matter the
+        // situation exactly ONE midfielder ever arrived in the box.
+        // Measured off replay dumps: only **1.3-1.9 team-mates ahead of
+        // the ball** when a shot was struck (real 2-4) and 2.1-3.2 inside
+        // the box (real 3-5). A real attack puts an arriving #8 in
+        // ALONGSIDE the front line, not instead of the other midfielder,
+        // and the shortage is also why a forward's final-third passes go
+        // backward half the time: there is nobody ahead of him to find.
+        //
+        // `cover_behind` above is what keeps this honest — the deepest
+        // central midfielder still has to be behind the ball before
+        // anyone goes, so widening the count cannot empty the middle.
+        const MAX_RUNNERS: usize = 2;
         let my_drive = Self::attacking_drive(&ctx.player.skills);
         let my_id = ctx.player.id;
-        let beaten = ctx.players().teammates().all().any(|t| {
-            if !t.tactical_positions.is_central_midfielder() {
-                return false;
-            }
-            let t_drive = ctx
-                .context
-                .players
-                .by_id(t.id)
-                .map(|tp| Self::attacking_drive(&tp.skills))
-                .unwrap_or(0.0);
-            t_drive > my_drive + 0.01 || ((t_drive - my_drive).abs() <= 0.01 && t.id < my_id)
-        });
-        !beaten
+        let outranked = ctx
+            .players()
+            .teammates()
+            .all()
+            .filter(|t| {
+                if !t.tactical_positions.is_central_midfielder() {
+                    return false;
+                }
+                let t_drive = ctx
+                    .context
+                    .players
+                    .by_id(t.id)
+                    .map(|tp| Self::attacking_drive(&tp.skills))
+                    .unwrap_or(0.0);
+                t_drive > my_drive + 0.01 || ((t_drive - my_drive).abs() <= 0.01 && t.id < my_id)
+            })
+            .count();
+        outranked < MAX_RUNNERS
     }
 
     /// A central midfielder's drive to get into the box. Off-the-ball is

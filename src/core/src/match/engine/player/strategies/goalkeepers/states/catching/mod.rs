@@ -1,5 +1,7 @@
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperSetPosition,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -154,7 +156,15 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
         // outrunning the keeper's pursuit steering).
         if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
             let goal_pos = ctx.ball().direction_to_own_goal();
-            let intercept = Vector3::new(goal_pos.x, target.goal_line_y, 0.0);
+            // Off the line, not on it — see `KeeperSetPosition`. This is
+            // the site that decides where a CAUGHT ball ends up, because
+            // the physics save snaps the ball onto the keeper.
+            let intercept = KeeperSetPosition::set_point(
+                goal_pos,
+                target.goal_line_y,
+                (ctx.tick_context.positions.ball.position - goal_pos).magnitude(),
+                ctx.context.field_size.width as f32,
+            );
             return Some(
                 SteeringBehavior::Arrive {
                     target: intercept,

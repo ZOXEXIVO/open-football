@@ -1,10 +1,13 @@
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperSetPosition,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::teamplay::coach::CoachInstruction;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -97,8 +100,34 @@ impl StateProcessingHandler for GoalkeeperHoldingState {
         None
     }
 
-    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(Vector3::new(0.0, 0.0, 0.0))
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Carry it out. This used to return a hard zero, so a keeper stood
+        // rooted on the exact spot he gathered it for the whole 2-5.5 s
+        // hold — and the ball tracks its owner, so the ball did not move
+        // either. Caught on the goal line, that is a ball hanging
+        // motionless in the goalmouth at glove height, ~160 times a match:
+        // the "the ball always ends up at one point in front of the goal"
+        // report. A real keeper gets up and walks it out towards the edge
+        // of his area, which is where he releases it from anyway.
+        let own_goal = ctx.ball().direction_to_own_goal();
+        let release = KeeperSetPosition::release_point(
+            own_goal,
+            ctx.player.position,
+            ctx.context.field_size.width as f32,
+        );
+        // Walking pace: he is managing the game, not sprinting, and the
+        // ball's own tracking speed is the ceiling that keeps it at his
+        // feet rather than trailing behind him.
+        const CARRY_PACE: f32 = 0.45;
+        Some(
+            SteeringBehavior::Arrive {
+                target: release,
+                slowing_distance: 25.0,
+            }
+            .calculate(ctx.player)
+            .velocity
+                * CARRY_PACE,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

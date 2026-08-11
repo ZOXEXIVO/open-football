@@ -15,6 +15,19 @@ pub struct GoalkeeperComingOutState {}
 
 impl StateProcessingHandler for GoalkeeperComingOutState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Got it — get on with it. Every sibling state (Standing,
+        // PreparingForSave, ReturningToGoal, TakeBall) opens with this
+        // branch; `ComingOut` never had one. A keeper who ended up owning
+        // the ball here had no way out of the state and stood over it
+        // until the ball's stall detector fired ~19.5 s later — measured
+        // at four such episodes a match, one of them with the ball on the
+        // goal line at x = 2.2.
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Distributing,
+            ));
+        }
+
         // Shot in flight at our goal — abandon the rush and prepare
         // for the save. Staying in ComingOut leaves the goal wide open.
         if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
@@ -39,7 +52,17 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         let distance_from_goal = ctx.player().distance_from_start_position();
         const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 50.0; // Only catch near goal area
 
-        if ball_distance < CLAIM_BALL_DISTANCE
+        // Only a LOOSE ball can be claimed. Same defect `PreparingForSave`
+        // carried: reaching the ball was tested on distance alone, so a
+        // keeper who had come out gathered the ball off his own
+        // defender's feet — or off an opponent's — as soon as he got
+        // within 2.5 m of it. Every other route into `Catching`
+        // (Standing, Walking, TakeBall, ReturningToGoal) has always
+        // required the ball to be unowned; these two did not, and between
+        // them they are why the keeper collected 154 balls a match
+        // against a real 8-12.
+        if !ctx.ball().is_owned()
+            && ball_distance < CLAIM_BALL_DISTANCE
             && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH
         {
             return Some(StateChangeResult::with_goalkeeper_state(

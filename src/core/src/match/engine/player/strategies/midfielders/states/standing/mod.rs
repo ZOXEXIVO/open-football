@@ -35,7 +35,31 @@ impl StateProcessingHandler for MidfielderStandingState {
             // at all, so a midfielder in settled possession with nothing
             // on always went looking for a forward pass.
             return if !self.has_passing_options(ctx) {
-                None
+                // Nobody in range to pass to — carry it.
+                //
+                // This used to return `None`: stay in `Standing`, whose
+                // `velocity` is a hard zero. The same evaluation runs
+                // next tick and gives the same answer, so the player
+                // stood motionless over the ball until the ball's own
+                // stall detector took it off him — a fixed point, not a
+                // decision. Measured from a replay dump: **11 episodes of
+                // exactly 19.5 s a match**, three and a half minutes of a
+                // midfielder standing on the ball while the game waited.
+                // (19.5 s because `STALL_TICKS = 1000` is counted in full
+                // ticks, not the 10 s its comment claims.)
+                //
+                // It fires far more often than "no options" suggests:
+                // `has_passing_options` only looks 30u — 3.75 m — so any
+                // time the nearest team-mate is more than four metres
+                // away, which in open play is most of the time, the
+                // midfielder had nothing to do.
+                //
+                // A midfielder with the ball and no short option drives
+                // into the space in front of him. That is what a real one
+                // does, and it is what breaks the fixed point.
+                Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Dribbling,
+                ))
             } else if self.should_recycle_possession(ctx) {
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Distributing,
@@ -241,8 +265,20 @@ impl MidfielderStandingState {
     }
 
     /// Determines if the midfielder has passing options.
+    /// Is there anyone at all to give it to?
+    ///
+    /// A cheap pre-filter, not a decision — `Passing` runs the real
+    /// evaluation and picks the target. It was set at 30u, which is
+    /// **3.75 m**: a midfielder whose nearest team-mate was four metres
+    /// away counted as having nobody to pass to. In open play that is
+    /// most of the time, and the caller's answer to "no options" was to
+    /// stand still (see the `has_ball` branch above), so this constant is
+    /// what made the freeze routine rather than rare.
+    ///
+    /// 200u = 25 m — a normal midfield pass. Below that he is genuinely
+    /// isolated and carries it instead.
     fn has_passing_options(&self, ctx: &StateProcessingContext) -> bool {
-        const PASSING_DISTANCE_THRESHOLD: f32 = 30.0;
+        const PASSING_DISTANCE_THRESHOLD: f32 = 200.0;
         ctx.players().teammates().exists(PASSING_DISTANCE_THRESHOLD)
     }
 

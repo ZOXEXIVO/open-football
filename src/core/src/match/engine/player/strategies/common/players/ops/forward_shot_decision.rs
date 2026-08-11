@@ -671,6 +671,14 @@ impl BallCarry {
             let d = relative.magnitude();
             if d < blocker_distance {
                 blocker_distance = d;
+                // NB a square-on defender has a lateral offset near zero,
+                // so this signum flips as the carrier jitters. Gating it
+                // with a 1 m dead zone and deferring to the centre drift
+                // was tried and REVERTED: square on is the common case in
+                // front of goal, so carriers stopped dead in front of
+                // their man instead of going round him, and the ball
+                // going nowhere went 178 -> 449 s a match. Whatever
+                // replaces this has to keep him committing to a side.
                 sidestep = if relative.dot(&lateral) > 0.0 { -1.0 } else { 1.0 };
             }
         }
@@ -693,7 +701,35 @@ impl BallCarry {
         // the goalkeeper (see `GoalkeeperStandingState::should_rush_out_for_ball`).
         let advance = (distance - StrikingRange::carry_hold(ctx)).clamp(0.0, Self::MAX_ADVANCE);
 
-        me + forward * advance + lateral * (sidestep * Self::SIDESTEP)
+        let mut target = me + forward * advance + lateral * (sidestep * Self::SIDESTEP);
+
+        // The drift to the middle must CONVERGE, not oscillate.
+        //
+        // `sidestep` is a signum, and the branch that sets it from
+        // `to_centre` flips the instant the carrier crosses the middle of
+        // the pitch. The target is also a fixed offset from `me`, so it
+        // slides sideways exactly as fast as he does and he never
+        // arrives. Together that is a treadmill with a sign flip on the
+        // end of it: he strafes towards the centre, crosses it, reverses,
+        // crosses back. It is the same shape as every other flicker in
+        // this engine — a discrete switch on a saturated steering output.
+        //
+        // Measured with `dead_ball_diag`: a forward holding the ball
+        // inside a 15u (1.9 m) circle for a mean of 12 s, 12.7 times a
+        // match — 156 s a match, the largest single source of the ball
+        // going nowhere.
+        //
+        // Clamping the target between where he stands and the middle
+        // makes it converge: he works across the face of the defence and
+        // stops once he is central, which is what this is for. Only the
+        // no-blocker branch needs it — stepping past a man's shoulder is
+        // legitimately relative, and it terminates when he beats him.
+        if blocker_distance == f32::MAX {
+            let lo = me.y.min(goal.y);
+            let hi = me.y.max(goal.y);
+            target.y = target.y.clamp(lo, hi);
+        }
+        target
     }
 }
 

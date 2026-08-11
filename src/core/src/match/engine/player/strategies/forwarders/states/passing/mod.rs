@@ -249,8 +249,27 @@ impl ForwardPassingState {
         // Forward-specific factors - much more goal-oriented than midfielders
         let mut score = base_score.expected_value;
 
-        // Space multiplier: scale all bonuses by how free the receiver is
-        // This prevents huge bonuses from overwhelming space considerations
+        // Space multiplier: scale the attacking bonuses by how free the
+        // receiver is, so a huge through-ball bonus can't override the
+        // fact that the man is in a thicket.
+        //
+        // NOTE, and a negative result. `receiver_positioning` is ALREADY
+        // priced into `base_score.expected_value` — it feeds
+        // `success_probability`, which the expected value multiplies — so
+        // scaling every attacking term by it again discounts a marked
+        // receiver quadratically, and a receiver in an attacking position
+        // is marked essentially by definition. Softening the bands to
+        // 1.0/0.85/0.70/0.55 to end that double-count was tried and
+        // REVERTED: measured over 3 matches it left a forward's
+        // final-third back-pass rate at 52-55% (from 46-50%, i.e. inside
+        // the noise) and moved nothing in the scoreline.
+        //
+        // The reason is geometric, not evaluative: a forward in the final
+        // third IS the most advanced man, so nearly every option is
+        // behind him. Only 1.3-1.9 team-mates are ahead of the ball when
+        // a shot is struck (real 2-4). The back-pass rate is a symptom of
+        // the SUPPORT model, not of how passes are scored — fix the
+        // runners first, then re-test this.
         let receiver_space = base_score.factors.receiver_positioning;
         let space_multiplier = if receiver_space > 0.8 {
             1.0 // Free player - full bonuses

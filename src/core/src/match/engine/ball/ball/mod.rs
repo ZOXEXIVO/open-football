@@ -16,7 +16,9 @@ pub mod interactions;
 mod motion;
 pub mod ownership;
 mod restart;
-mod stall;
+// `pub` for `dead_ball_diag` — the stall attribution counters are read by
+// the dev harness, same as `ownership::reception_diag`.
+pub mod stall;
 
 use crate::r#match::engine::ball::events::BallEvent;
 use crate::r#match::engine::set_pieces::CornerRoutine;

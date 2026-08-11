@@ -1,4 +1,6 @@
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperSetPosition,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
@@ -52,7 +54,33 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
             ));
         }
 
-        if ball_distance < CATCH_DISTANCE && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH {
+        // Claim a LOOSE ball near the goal.
+        //
+        // This used to fire on ball distance alone: anything inside 35u
+        // (4.4 m) sent the keeper into `Catching` whether the ball was
+        // loose or at his own defender's feet, whether it was coming
+        // towards him or going away, and whether or not he had just put
+        // it there himself. `Standing`'s equivalent gate has always
+        // carried those conditions; this one carried none of them, at
+        // 3.5x the radius — so the keeper hoovered up everything that
+        // came within four metres of him.
+        //
+        // Measured: 154 gathers a match against a real 8-12, and the
+        // ball in a keeper's gloves for 11-13% of the match against a
+        // real 3-6%. The visible symptom is the ball forever ending up
+        // on one spot in front of the goal, because that spot is where
+        // the keeper who just collected it is standing.
+        //
+        // A shot in flight is handled by the branch above and is
+        // deliberately untouched — this is about everything that is NOT
+        // a shot.
+        let loose_ball_claimable = !ctx.ball().is_owned()
+            && !ctx.ball().blocked_from_recollecting()
+            && ctx.ball().on_own_side();
+        if loose_ball_claimable
+            && ball_distance < CATCH_DISTANCE
+            && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH
+        {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
             ));
@@ -111,10 +139,16 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         // tick-by-tick to the 5.6 u/tick shot and never saved anything.
         if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
             let goal_pos = ctx.ball().direction_to_own_goal();
-            // Arrive at (goal_line_x, target_y) — i.e. the post-to-post
-            // line, Y offset is where the shot is going. Z ignored: we
-            // move on the ground.
-            let intercept_point = Vector3::new(goal_pos.x, target.goal_line_y, 0.0);
+            // Guard `target.goal_line_y`, but from a set position OFF the
+            // line rather than on it — see `KeeperSetPosition` for why
+            // standing on the line put the ball inside the goal frame
+            // after every catch. Z ignored: we move on the ground.
+            let intercept_point = KeeperSetPosition::set_point(
+                goal_pos,
+                target.goal_line_y,
+                (ball_position - goal_pos).magnitude(),
+                ctx.context.field_size.width as f32,
+            );
             return Some(
                 SteeringBehavior::Arrive {
                     target: intercept_point,

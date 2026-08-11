@@ -2679,6 +2679,15 @@ fn main() {
             let level_b: Option<u8> = args.get(3).and_then(|s| s.parse().ok());
             run_viewer(level_a, level_b);
         }
+        // Headless replay dump: writes exactly the chunk files `viewer`
+        // writes, then exits — no server, no browser. Use this when the
+        // question is "what does the ball actually DO", because the answer
+        // is in the recorded track and the track is what the viewer draws.
+        "record" => {
+            let level_a: Option<u8> = args.get(2).and_then(|s| s.parse().ok());
+            let level_b: Option<u8> = args.get(3).and_then(|s| s.parse().ok());
+            run_record(level_a, level_b);
+        }
         // Deterministic seeded timing + calibration-neutrality benchmark.
         "bench" => {
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
@@ -3364,6 +3373,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     BlockDiag::reset();
     core::helper_diag::reset();
     core::mid_run_diag::reset();
+    core::dead_ball_diag::reset();
     core::time_band_diag::reset();
     core::r#match::TransitionGraph::reset();
     {
@@ -5369,6 +5379,39 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         "   <-- an endline resolver is declining balls again"
                     },
                 );
+                // Who the ball dies on. A stalled ball is nearly always a
+                // state with no way to act on possession — see
+                // `dead_ball_diag`. Ticks here are FULL ticks (~20 ms).
+                {
+                    let (rows, un_ticks, un_eps, longest) = core::dead_ball_diag::snapshot();
+                    let mut label = std::collections::HashMap::new();
+                    for st in core::r#match::player::state::PlayerState::all() {
+                        label.insert(st.compact_id(), format!("{}", st));
+                    }
+                    let total: u64 = rows.iter().map(|r| r.1).sum::<u64>() + un_ticks;
+                    println!(
+                        "  ball STUCK (inside 15u for 5s+): {:.1}s/match over {} episodes, longest {:.1}s",
+                        total as f64 * 0.02 / n_matches as f64,
+                        rows.iter().map(|r| r.2).sum::<u64>() + un_eps,
+                        longest as f64 * 0.02,
+                    );
+                    for (id, ticks, eps) in rows.iter().take(8) {
+                        println!(
+                            "      {:>28}  {:>6.1}s  {:>4} episodes",
+                            label.get(id).cloned().unwrap_or_else(|| format!("state {id}")),
+                            *ticks as f64 * 0.02,
+                            eps
+                        );
+                    }
+                    if un_ticks > 0 {
+                        println!(
+                            "      {:>28}  {:>6.1}s  {:>4} episodes",
+                            "(nobody — loose ball)",
+                            un_ticks as f64 * 0.02,
+                            un_eps
+                        );
+                    }
+                }
                 let (emitted, superseded, dead, out_of_reach) =
                     core::reception_diag::pass_outcome_snapshot();
                 println!(
@@ -6433,6 +6476,47 @@ fn run_paths(matches: usize, level: u8) {
     println!();
     println!("  reference: nearest team-mate ~15-20m, nearest opponent ~5-12m,");
     println!("             straightness ~0.6-0.9 for purposeful movement, still ~15-25%");
+}
+
+/// Headless sibling of `run_viewer`: play one match with position
+/// recording on and write the same chunk files, then exit. No axum
+/// server, no browser launch — so a replay can be captured and inspected
+/// without taking over the machine.
+fn run_record(level_a: Option<u8>, level_b: Option<u8>) {
+    MatchRuntime::set_events_mode(true);
+
+    let level_a = level_a.unwrap_or_else(random_level);
+    let level_b = level_b.unwrap_or_else(random_level);
+
+    let (home_squad, _) = make_squad_viewer(1, HOME_TEAM_NAME, level_a, 0);
+    let (away_squad, _) = make_squad_viewer(2, AWAY_TEAM_NAME, level_b, 11);
+
+    let result = FootballEngine::<840, 545>::play(home_squad, away_squad, true, false, false);
+    let score = result.score.as_ref().unwrap();
+    println!(
+        "recorded: {}:{} (level {} vs {})",
+        score.home_team.get(),
+        score.away_team.get(),
+        level_a,
+        level_b
+    );
+
+    let out_dir = PathBuf::from("match_results").join(LEAGUE_SLUG);
+    std::fs::create_dir_all(&out_dir).expect("failed to create output dir");
+    // Stale chunks from a longer previous match would be read back as part
+    // of this one — the analysis concatenates every chunk in the folder.
+    if let Ok(entries) = std::fs::read_dir(&out_dir) {
+        for entry in entries.flatten() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+
+    let chunks = result.position_data.split_into_chunks(CHUNK_DURATION_MS);
+    for (idx, chunk) in chunks.iter().enumerate() {
+        let data = serde_json::to_vec(chunk).expect("failed to serialize chunk");
+        save_gzip_json(&out_dir.join(format!("{}_chunk_{}.json.gz", MATCH_ID, idx)), &data);
+    }
+    println!("wrote {} chunks to {}", chunks.len(), out_dir.display());
 }
 
 fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
