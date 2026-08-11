@@ -5729,6 +5729,22 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 nearest * 0.125,
                 unmarked as f64 / attackers.max(1) as f64 * 100.0
             );
+            use core::mid_run_diag::EvasionDiag;
+            let (calls, marked, tightness, edge) = EvasionDiag::snapshot();
+            if calls > 0 {
+                println!(
+                    "  marker evasion: {:.0}% of attacker off-ball ticks had a marker, mean tightness {tightness:.2}, mean edge {edge:.2} ({marked} of {calls})",
+                    marked as f64 / calls as f64 * 100.0
+                );
+            }
+            let (duels, duel_gap, duels_lost) = DefenceDiag::duel_snapshot();
+            if duels > 0 {
+                println!(
+                    "  marking duels: marker sits {duel_gap:.0}u ({:.1}m) from his man, attacker got away (>4m) on {:.0}% of samples",
+                    duel_gap * 0.125,
+                    duels_lost * 100.0
+                );
+            }
             let (refresh, active, individual) = DefenceDiag::plan_snapshot();
             if refresh > 0 {
                 println!(

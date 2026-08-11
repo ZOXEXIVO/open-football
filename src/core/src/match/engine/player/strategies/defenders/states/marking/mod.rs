@@ -143,7 +143,35 @@ impl StateProcessingHandler for DefenderMarkingState {
             let own_goal = ctx.ball().direction_to_own_goal();
             let opponent_velocity = opponent_to_mark.velocity(ctx);
 
-            let prediction_time = 0.3;
+            // READING THE RUN — signed, and the defender's own property.
+            //
+            // This was a flat `0.3`: every marker in the game predicted
+            // his man's movement forward, perfectly, whoever he was. A
+            // pursuer who re-aims at where you are GOING every tick
+            // cannot be beaten by movement, which is why the attacking
+            // side's evasion work moved attacker separation not at all —
+            // 5.0 m and 56% unmarked before and after, at every
+            // amplitude tried.
+            //
+            // Real marking is a contest of reading. A defender who reads
+            // it arrives before you do; one who doesn't is a step behind
+            // and gets spun, and a check-and-spin beats him precisely
+            // BECAUSE he extrapolated the first movement. Signing this
+            // quantity is what makes that true: lead for the good
+            // reader, trail for the poor one.
+            //
+            // Scored on the same three attributes `MarkerEvasion` reads
+            // him on, so the two halves of the duel are one contest.
+            let reading = {
+                let s = &ctx.player.skills.mental;
+                ((s.positioning / 20.0) * 0.40
+                    + (s.anticipation / 20.0) * 0.35
+                    + (s.concentration / 20.0) * 0.25)
+                    .clamp(0.0, 1.0)
+            };
+            // −MAX_READ_LAG (a step behind) … +MAX_READ_LAG (a step ahead).
+            const MAX_READ_LAG: f32 = 14.0;
+            let prediction_time = (reading - 0.5) * 2.0 * MAX_READ_LAG;
             let opponent_future_position =
                 opponent_to_mark.position + opponent_velocity * prediction_time;
 

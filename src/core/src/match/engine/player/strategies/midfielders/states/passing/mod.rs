@@ -148,7 +148,7 @@ impl StateProcessingHandler for MidfielderPassingState {
                     StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
                         .with_shot_reason("MID_PASS_BAILOUT_SHOOT"),
                 )
-            } else if goal_dist < 144.0
+            } else if goal_dist < 280.0
                 && ctx.player().has_clear_shot()
                 && ctx.player().shooting().has_good_angle()
                 && mid_profile.mid_shot_selection >= 0.58
@@ -156,6 +156,13 @@ impl StateProcessingHandler for MidfielderPassingState {
             {
                 // Long-shot specialists only — gated by mid_shot_selection
                 // (skill-curved long_shots/technique/composure blend).
+                //
+                // The distance bar was 144u (18 m), which is not a long
+                // shot by any definition and made this branch — the one
+                // routing to the state literally named `DistanceShooting`
+                // — unreachable at long range. 280u (35 m) is where a
+                // specialist genuinely tries one; the skill gates above
+                // are what keep it to specialists.
                 Some(
                     StateChangeResult::with_midfielder_state(MidfielderState::DistanceShooting)
                         .with_shot_reason("MID_PASS_BAILOUT_DISTANCE"),

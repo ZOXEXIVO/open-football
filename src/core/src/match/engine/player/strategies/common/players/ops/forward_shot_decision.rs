@@ -202,10 +202,84 @@ pub mod mid_run_diag {
     pub static DEF_PLAN_ACTIVE: AtomicU64 = AtomicU64::new(0);
     pub static DEF_PLAN_INDIVIDUAL: AtomicU64 = AtomicU64::new(0);
 
+    /// Marker-evasion coverage: how often an attacker asked to evade,
+    /// how often anybody was actually marking him, and how much room the
+    /// contest gave him. A low marked-rate means the read is too strict;
+    /// a low edge means the offset is being applied but is too small to
+    /// matter.
+    pub static EVASION_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static EVASION_MARKED: AtomicU64 = AtomicU64::new(0);
+    pub static EVASION_TIGHT_X1000: AtomicU64 = AtomicU64::new(0);
+    pub static EVASION_EDGE_X1000: AtomicU64 = AtomicU64::new(0);
+
+    pub struct EvasionDiag;
+
+    impl EvasionDiag {
+        pub fn note_call() {
+            EVASION_CALLS.fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub fn note_marked(tightness: f32, edge: f32) {
+            EVASION_MARKED.fetch_add(1, Ordering::Relaxed);
+            EVASION_TIGHT_X1000.fetch_add((tightness * 1000.0) as u64, Ordering::Relaxed);
+            EVASION_EDGE_X1000.fetch_add((edge * 1000.0) as u64, Ordering::Relaxed);
+        }
+
+        /// `(calls, marked, mean_tightness, mean_edge)`
+        pub fn snapshot() -> (u64, u64, f32, f32) {
+            let m = EVASION_MARKED.load(Ordering::Relaxed).max(1);
+            (
+                EVASION_CALLS.load(Ordering::Relaxed),
+                EVASION_MARKED.load(Ordering::Relaxed),
+                EVASION_TIGHT_X1000.load(Ordering::Relaxed) as f32 / 1000.0 / m as f32,
+                EVASION_EDGE_X1000.load(Ordering::Relaxed) as f32 / 1000.0 / m as f32,
+            )
+        }
+
+        pub fn reset() {
+            for c in [
+                &EVASION_CALLS,
+                &EVASION_MARKED,
+                &EVASION_TIGHT_X1000,
+                &EVASION_EDGE_X1000,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
     /// Defensive-shape counters.
     pub struct DefenceDiag;
 
+    /// Distance between an assigned marker and the man he was given —
+    /// the marking duel itself, as opposed to general defensive density.
+    pub static DEF_DUELS: AtomicU64 = AtomicU64::new(0);
+    pub static DEF_DUEL_GAP_X100: AtomicU64 = AtomicU64::new(0);
+    /// Duels where the attacker has genuinely got away (>4 m).
+    pub static DEF_DUELS_LOST: AtomicU64 = AtomicU64::new(0);
+
     impl DefenceDiag {
+        pub fn note_duel(gap: f32) {
+            DEF_DUELS.fetch_add(1, Ordering::Relaxed);
+            DEF_DUEL_GAP_X100.fetch_add((gap * 100.0) as u64, Ordering::Relaxed);
+            if gap > 32.0 {
+                DEF_DUELS_LOST.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(duels, mean_gap, share_lost)`
+        pub fn duel_snapshot() -> (u64, f32, f32) {
+            let n = DEF_DUELS.load(Ordering::Relaxed);
+            if n == 0 {
+                return (0, 0.0, 0.0);
+            }
+            (
+                n,
+                DEF_DUEL_GAP_X100.load(Ordering::Relaxed) as f32 / 100.0 / n as f32,
+                DEF_DUELS_LOST.load(Ordering::Relaxed) as f32 / n as f32,
+            )
+        }
+
         pub fn note_plan(active: bool, individual: usize) {
             DEF_PLAN_REFRESH.fetch_add(1, Ordering::Relaxed);
             if active {
@@ -276,6 +350,9 @@ pub mod mid_run_diag {
                 &DEF_PLAN_REFRESH,
                 &DEF_PLAN_ACTIVE,
                 &DEF_PLAN_INDIVIDUAL,
+                &DEF_DUELS,
+                &DEF_DUEL_GAP_X100,
+                &DEF_DUELS_LOST,
             ] {
                 c.store(0, Ordering::Relaxed);
             }
@@ -332,6 +409,7 @@ pub mod mid_run_diag {
         CrossDiag::reset();
         PlanDiag::reset();
         DefenceDiag::reset();
+        EvasionDiag::reset();
         for c in [
             &RUNNER_BOX_TICKS,
             &FWD_CUTBACK,
@@ -801,6 +879,14 @@ pub enum ShotDecision {
 /// Grouped because they are one idea measured three ways, and because
 /// separating them is how the movement code and the shooting code came to
 /// disagree about where a shooting position is.
+/// How far the shot-decision bar eases at the very edge of a player's
+/// striking range. See the note at the threshold for why the bar moves
+/// with distance at all.
+const LONG_RANGE_RELIEF: f32 = 0.28;
+/// The bar never falls below this, so a hopeful from 40 m is still a
+/// decision and not a reflex.
+const LONG_RANGE_FLOOR: f32 = 0.26;
+
 pub struct StrikingRange;
 
 impl StrikingRange {
@@ -1269,7 +1355,79 @@ pub fn evaluate_forward_shot_decision(
     // alone sets how many of the looks a team works actually get hit.
     // At 0.24-0.50 every touch inside 16 m cleared it and teams took 38
     // shots; real football hits about a third of what it works.
-    let threshold = 0.527 + spread * 0.24;
+    //
+    // ── The bar is not the same at 30 m as at 12 m ────────────────────
+    //
+    // A single absolute bar treats every strike as the same decision, and
+    // it isn't. Close in, both answers are expensive: a declined look
+    // wastes a big chance and so does a bad shot, so the bar is high and
+    // only a good look clears it. From range the arithmetic inverts — the
+    // shot is low-percentage, but so is everything else available, and
+    // missing costs a goal kick thirty metres from your own danger. Real
+    // players hit them for exactly that reason: ~18% of real shots come
+    // from beyond 22 m.
+    //
+    // This engine produced 4.7% beyond 22 m and, measurably, ZERO beyond
+    // 30 m — not rare, impossible. `reach` correctly says a player's
+    // appetite is lower from range; nothing said the bar he has to clear
+    // is lower too. Working it through: clearing 0.527 at 30 m needed a
+    // 390u striking range (the absolute maximum in the game) AND a
+    // perfect angle AND a perfect lane AND perfect poise simultaneously.
+    //
+    // So the bar eases across the same band `reach` fades over. It is
+    // still the same appetite model deciding, and still the player's own
+    // range that sets where "long" begins for him — a specialist's bar
+    // eases later because his range is longer. The floor keeps a
+    // 40 m hopeful from ever being a free shot.
+    // Keyed to ABSOLUTE distance, not to the fraction of the player's own
+    // range. The thing being modelled is the cost of missing, and that
+    // depends on where you are on the pitch — a shot from 30 m is cheap
+    // for everybody. Whether you can HIT it from there is the part that
+    // varies by player, and `reach` already carries it.
+    //
+    // Normalising by the player's range instead inverts the football: a
+    // specialist with a 45 m range is only 40% "past comfortable" at 30 m
+    // and so got the LEAST encouragement exactly where he is the man who
+    // should be shooting, while a poacher at 25 m got the most.
+    //
+    // Eases in from 22 m and is full by 36 m.
+    //
+    // Where this curve starts matters far more than it looks, because
+    // **59% of all shot decisions in a match are taken from beyond 30 m**
+    // — that is simply where the ball spends its time. A bar that is
+    // slightly too low out there does not produce a few speculative
+    // efforts, it floods: easing from 20 m at 0.32 put 20.7% of all shots
+    // beyond 30 m against a real 5%, and 32.5 shots per team.
+    let range_ease = ((distance - 176.0) / 112.0).clamp(0.0, 1.0);
+
+    // ── …but only when there is nothing better on ─────────────────────
+    //
+    // The whole justification for the eased bar is that from range the
+    // alternatives are no better either. When a team-mate is genuinely
+    // better placed — nearer the goal and free — that justification is
+    // gone, and hitting a hopeful 30-yarder instead of finding him is
+    // precisely the decision real players are criticised for.
+    //
+    // This is load-bearing for the front line, not just tidiness.
+    // Measured: with the relief applied unconditionally, midfielders took
+    // 73% of all shots and forwards 23%, because a striker who had just
+    // worked himself free was passed over for a speculative strike. The
+    // outlet test has to be asked BEFORE the bar is eased, not after it
+    // has already been cleared.
+    let outlet = ctx
+        .player()
+        .passing()
+        .find_best_pass_option_with_distance(140.0);
+    let generosity = (0.78 + decisions * 0.14).clamp(0.78, 0.92);
+    let opp_goal = ctx.player().opponent_goal_position();
+    let better_placed = outlet.is_some_and(|(t, _)| {
+        let their_distance = (opp_goal - t.position).magnitude();
+        their_distance < distance * generosity
+            && ctx.tick_context.grid.opponents(t.id, 12.0).next().is_none()
+    });
+    let range_ease = if better_placed { 0.0 } else { range_ease };
+
+    let threshold = (0.527 + spread * 0.24 - range_ease * LONG_RANGE_RELIEF).max(LONG_RANGE_FLOOR);
 
     if appetite >= threshold {
         #[cfg(feature = "match-logs")]
@@ -1293,18 +1451,6 @@ pub fn evaluate_forward_shot_decision(
     // nobody is on him, which is the question a player actually asks. A
     // good decision-maker gives it up for a marginally better position; a
     // poor one only when the difference is obvious.
-    let outlet = ctx
-        .player()
-        .passing()
-        .find_best_pass_option_with_distance(140.0);
-    let generosity = (0.78 + decisions * 0.14).clamp(0.78, 0.92);
-    let opp_goal = ctx.player().opponent_goal_position();
-    let better_placed = outlet.is_some_and(|(t, _)| {
-        let their_distance = (opp_goal - t.position).magnitude();
-        their_distance < distance * generosity
-            && ctx.tick_context.grid.opponents(t.id, 12.0).next().is_none()
-    });
-
     // Or: he is ALREADY in a position to shoot from and has decided
     // against it. Then he releases, because the one thing he must not do
     // is take it nearer — inside his own range the angle only narrows

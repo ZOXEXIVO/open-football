@@ -31,7 +31,10 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             ));
         }
 
-        if ctx.player().goal_distance() > 280.0 {
+        // Matches the absolute cap in `evaluate_forward_shot_decision` so
+        // a specialist routed here from 35 m isn't immediately bounced
+        // back out to passing by a tighter bar than the one that sent him.
+        if ctx.player().goal_distance() > 320.0 {
             // Too far from the goal, consider other options
             if self.should_pass(ctx) {
                 return Some(StateChangeResult::with_midfielder_state(

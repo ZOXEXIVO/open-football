@@ -8,6 +8,7 @@ use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     BallCarry, ShotDecision, evaluate_forward_shot_decision,
 };
+use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
@@ -145,8 +146,14 @@ pub mod tackle_stats {
 
 // Realistic shooting distances (field is 840 units)
 // Real football: most goals scored from within 18m (~36 units)
+/// Furthest a forward will even CONSIDER a strike (40 m). Reachability
+/// only — see the note on the midfielder constant of the same name. The
+/// per-player range and the appetite that fades across it live in
+/// `StrikingRange` / `evaluate_forward_shot_decision`; a flat cap here
+/// short-circuits that model and was capping the whole engine's shot
+/// distribution at 30 m.
 #[allow(dead_code)]
-const MAX_SHOOTING_DISTANCE: f32 = 240.0; // 30m — elite long shots (1u = 0.125m)
+const MAX_SHOOTING_DISTANCE: f32 = 320.0;
 #[allow(dead_code)]
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
 const POINT_BLANK_DISTANCE: f32 = 48.0; // 6m — point-blank strike zone. Below this, the
@@ -485,7 +492,9 @@ impl StateProcessingHandler for ForwardRunningState {
             // shot is good. Skill-stratified caps double-punished low-fin
             // strikers (penalised by xG already and by willingness, then
             // additionally vetoed by a hard distance cap).
-            let max_shot_distance = 240.0f32;
+            // Reachability gate only — the helper owns the decision and
+            // the per-player range. See `MAX_SHOOTING_DISTANCE`.
+            let max_shot_distance = 320.0f32;
             // GAME-MANAGEMENT SHOT SUPPRESSION (PRIO 0.5 only). The
             // unified helper does NOT scale by gm_intensity — that's a
             // tempo decision the coach makes, not the helper's
@@ -1077,18 +1086,30 @@ impl StateProcessingHandler for ForwardRunningState {
             // the whole side, which is the only thing that stops bodies
             // converging in front of goal.
             if let Some(slot_target) = ctx.team().my_box_slot_target() {
-                let dist = (slot_target - ctx.player.position).magnitude();
-                if dist < 8.0 {
+                // Occupying the slot is not the same as being available
+                // in it. A defender whose whole job is to stand on this
+                // forward's goal-side shoulder solves a stationary target
+                // by standing still, which is why forwards' share of
+                // shots collapsed once man-marking started working.
+                //
+                // `MarkerEvasion` keeps the assignment and changes the
+                // ANGLE he attacks it from — blind side, seam, and the
+                // check-and-spin — bounded so he never evades his way out
+                // of the zone the team plan gave him.
+                let target = MarkerEvasion::evade(ctx, slot_target);
+                let dist = (target - ctx.player.position).magnitude();
+                if dist < 6.0 {
                     return Some(Vector3::zeros());
                 }
                 return Some(
                     SteeringBehavior::Arrive {
-                        target: slot_target,
+                        target,
                         slowing_distance: 15.0,
                     }
                     .calculate(ctx.player)
                     .velocity
-                        * fatigue_factor,
+                        * fatigue_factor
+                        * MarkerEvasion::burst(ctx),
                 );
             }
 
@@ -1170,6 +1191,9 @@ impl StateProcessingHandler for ForwardRunningState {
                 target_y.clamp(40.0, field_height - 40.0),
                 0.0,
             );
+            // Same rule outside the box: the spread decides WHERE he
+            // wants to be, the marker decides how he gets there.
+            let target = MarkerEvasion::evade(ctx, target);
 
             let dist_to_target = (target - ctx.player.position).magnitude();
 
@@ -1184,7 +1208,7 @@ impl StateProcessingHandler for ForwardRunningState {
             .calculate(ctx.player)
             .velocity;
 
-            Some(arrive_velocity * fatigue_factor)
+            Some(arrive_velocity * fatigue_factor * MarkerEvasion::burst(ctx))
         }
     }
 

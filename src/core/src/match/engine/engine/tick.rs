@@ -532,6 +532,34 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 DefenceDiag::note_attacker(nearest, nearest > MARKED_RADIUS);
             }
         }
+
+        // ── The marking duel itself ──────────────────────────────────
+        //
+        // The measure above is every defender against every attacker, and
+        // it is dominated by sheer density: the goal-side recovery rule
+        // puts bodies near attackers whether or not anybody is marking
+        // them, so it cannot tell you whether marking is being BEATEN.
+        // This one reads the assigned pairs only — the distance between a
+        // marker and the man he was actually given — which is the number
+        // the evasion work moves or does not.
+        let plan = context.defence_plan_for_team(
+            field
+                .players
+                .iter()
+                .find(|p| p.team_id != attacking_team)
+                .map(|p| p.team_id)
+                .unwrap_or(attacking_team),
+        );
+        if plan.active {
+            for d in field.players.iter() {
+                let Some(target) = plan.mark_of(d.id) else {
+                    continue;
+                };
+                if let Some(man) = field.players.iter().find(|p| p.id == target) {
+                    DefenceDiag::note_duel((d.position - man.position).magnitude());
+                }
+            }
+        }
     }
 
     /// Discrete OPEN-PLAY cross contest — the sibling of

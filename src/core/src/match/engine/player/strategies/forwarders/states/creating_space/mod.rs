@@ -1,6 +1,7 @@
 use crate::TacticalStyle;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
@@ -98,17 +99,22 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         // and an arriving midfielder's were free to be the same patch of
         // grass. The team plan de-duplicates across the whole side.
         if let Some(slot_target) = ctx.team().my_box_slot_target() {
-            let dist = (slot_target - ctx.player.position).magnitude();
-            if dist < 8.0 {
+            // Creating space against a man who is marking you IS the
+            // marker evasion — blind side, seam, check-and-spin. See
+            // `MarkerEvasion`.
+            let target = MarkerEvasion::evade(ctx, slot_target);
+            let dist = (target - ctx.player.position).magnitude();
+            if dist < 6.0 {
                 return Some(Vector3::zeros());
             }
             return Some(
                 SteeringBehavior::Arrive {
-                    target: slot_target,
+                    target,
                     slowing_distance: 20.0,
                 }
                 .calculate(ctx.player)
-                .velocity,
+                .velocity
+                    * MarkerEvasion::burst(ctx),
             );
         }
 

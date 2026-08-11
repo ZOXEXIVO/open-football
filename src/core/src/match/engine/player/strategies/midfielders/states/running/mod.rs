@@ -20,7 +20,30 @@ use nalgebra::Vector3;
 use std::cmp::Ordering;
 
 // Shooting distance constants for midfielders — more conservative than forwards
-const MAX_SHOOTING_DISTANCE: f32 = 208.0; // 26m — edge-of-box / arriving-midfielder strikes
+/// Furthest a midfielder will even CONSIDER a strike, in game units
+/// (1u = 0.125 m).
+///
+/// This is a reachability gate, not a decision. It used to be 208u
+/// (26 m), and because the whole shooting block below sits behind it, a
+/// midfielder further out than 26 m never reached the shot decision at
+/// all — he fell through to passing and dribbling every time. That is
+/// the entire reason the engine produced **zero shots from 30 m+**
+/// against a real ~5% of all shots, and only 4.7% from 22-30 m against a
+/// real ~13%: the long shot was not rare, it was unreachable.
+///
+/// The decision itself belongs to `evaluate_forward_shot_decision`, which
+/// already models it properly and per-player: `StrikingRange::of` gives
+/// each man his own range from long_shots / technique / strength (25 m
+/// for a poacher, 49 m for a specialist), `reach` fades his appetite
+/// across it, and the appetite is compared against a per-opportunity
+/// threshold. A deep-lying playmaker with a hammer clears that bar from
+/// 30 m with a clear sight; an average midfielder does not. That is the
+/// behaviour we want, and it was being pre-empted by a flat constant.
+///
+/// 320u = 40 m matches the helper's own absolute cap, so the two agree
+/// on where hopeless begins and the helper is the only thing deciding
+/// inside it.
+const MAX_SHOOTING_DISTANCE: f32 = 320.0;
 const STANDARD_SHOOTING_DISTANCE: f32 = 104.0; // 13m — standard shooting range for midfielders
 const POINT_BLANK_DISTANCE: f32 = 40.0; // 5m - must shoot, goalkeeper is right there
 
