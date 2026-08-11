@@ -9,11 +9,16 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::cmp::Ordering;
 
-const MAX_DISTANCE_FROM_BALL: f32 = 120.0;
-const MIN_DISTANCE_FROM_BALL: f32 = 25.0;
-const SPACE_CREATION_RADIUS: f32 = 20.0;
+/// ~35 m — scaled with the floor, which the two are a band across.
+const MAX_DISTANCE_FROM_BALL: f32 = 280.0;
+/// ~15 m. Was 25u (3.1 m) — written as metres, so "move away from the
+/// ball to create space" meant three strides.
+const MIN_DISTANCE_FROM_BALL: f32 = 120.0;
+/// ~15 m of space to work in. Was 20u — 2.5 m.
+const SPACE_CREATION_RADIUS: f32 = 120.0;
 #[allow(dead_code)]
-const HALF_SPACE_WIDTH: f32 = 15.0;
+/// A half-space is ~10 m wide. Was 15u — 1.9 m.
+const HALF_SPACE_WIDTH: f32 = 80.0;
 
 #[derive(Default, Clone)]
 pub struct MidfielderCreatingSpaceState {}

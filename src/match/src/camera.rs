@@ -3,6 +3,10 @@ use crate::field::Field;
 use crate::playback::Playback;
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
+use std::f32::consts::{PI, TAU};
+use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
+use web_sys::MouseEvent;
 
 /// How far the lens is pulled in, as a multiple of the default framing.
 ///
@@ -37,10 +41,144 @@ impl CameraZoom {
     }
 }
 
+/// Where the operator has walked the rig to, held as a pair of angles rather
+/// than as a place: a bearing round the centre spot and a height above the
+/// turf, both measured from the gantry the shot starts on.
+///
+/// The distance from the centre spot does not change with them. With the lens
+/// fixed, distance is the only thing that decides how large a footballer comes
+/// out, so holding it is what makes the move read as one camera walking round
+/// the ground rather than as a cut between several.
+#[derive(Resource)]
+pub struct CameraOrbit {
+    /// Rotation about the centre spot, zero at the gantry, kept in (−π, π].
+    pub bearing: f32,
+    /// Angle up from the turf to the rig, measured at the centre spot.
+    pub elevation: f32,
+}
+
+impl Default for CameraOrbit {
+    fn default() -> Self {
+        CameraOrbit {
+            bearing: 0.0,
+            elevation: TvCamera::rest_elevation(),
+        }
+    }
+}
+
+impl CameraOrbit {
+    /// How far a pixel of drag turns the rig. A sweep across a full-width
+    /// canvas comes to most of a turn, so the far side of the ground is one
+    /// gesture away rather than several.
+    const RADIANS_PER_PIXEL: f32 = 0.006;
+    /// How low and how high the rig can be walked. The floor is about head
+    /// height out by the hoardings; the ceiling stops short of straight down,
+    /// where a camera looking along its own up-vector has no way left to
+    /// decide which way up the frame goes.
+    const ELEVATION: (f32, f32) = (0.035, 1.40);
+    /// How near the gantry a drag has to finish for the rig to settle back
+    /// onto it exactly. Five degrees — too small to see it click, wide enough
+    /// to find by hand, and the only way back to the broadcast shot once the
+    /// rig has been walked off it.
+    const DETENT: f32 = 0.09;
+
+    /// Right button or wheel button held, and the ground turns under the
+    /// pointer.
+    pub fn handle_drag(
+        mouse: Res<ButtonInput<MouseButton>>,
+        mut moved: MessageReader<CursorMoved>,
+        mut orbit: ResMut<CameraOrbit>,
+    ) {
+        // Read every frame, dragging or not. A reader left alone keeps the
+        // last couple of frames of motion, which would otherwise all arrive
+        // as one jump the moment a button went down.
+        let drag = moved.read().fold(Vec2::ZERO, |total, event| {
+            total + event.delta.unwrap_or(Vec2::ZERO)
+        });
+
+        let held = mouse.pressed(MouseButton::Right) || mouse.pressed(MouseButton::Middle);
+        if held && drag != Vec2::ZERO {
+            // The ground follows the pointer rather than the lens: drag right
+            // and the pitch turns right, which means the rig itself travels
+            // the other way round. That is the gesture of spinning a model on
+            // a turntable, and it is what a drag with the cursor still on
+            // screen reads as — the opposite convention belongs to a
+            // mouselook, which needs the pointer out of the way first.
+            orbit.bearing = Self::wrap(orbit.bearing + drag.x * Self::RADIANS_PER_PIXEL);
+            // Pulling the near side of the ground down toward you lifts the
+            // rig over it, which is the same way round.
+            orbit.elevation = (orbit.elevation + drag.y * Self::RADIANS_PER_PIXEL)
+                .clamp(Self::ELEVATION.0, Self::ELEVATION.1);
+        }
+
+        let let_go = mouse.just_released(MouseButton::Right)
+            || mouse.just_released(MouseButton::Middle);
+        if let_go
+            && orbit.bearing.abs() < Self::DETENT
+            && (orbit.elevation - TvCamera::rest_elevation()).abs() < Self::DETENT
+        {
+            *orbit = CameraOrbit::default();
+        }
+    }
+
+    /// Keeps the bearing in (−π, π], so the detent has one home rather than
+    /// one per lap.
+    fn wrap(angle: f32) -> f32 {
+        (angle + PI).rem_euclid(TAU) - PI
+    }
+
+    /// Takes the right and wheel buttons off the page.
+    ///
+    /// The browser answers a right-press with a context menu and a
+    /// wheel-press with autoscroll, and either would land on top of the drag.
+    /// Winit will suppress both, but only through the same switch that
+    /// swallows the keyboard — and the page keeps the keyboard, F5 included
+    /// (see [`crate::MatchViewer::start`]) — so the two listeners go on by
+    /// hand instead.
+    pub fn claim_pointer_buttons(canvas: &str) {
+        let Some(element) = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.query_selector(canvas).ok().flatten())
+        else {
+            web_sys::console::warn_1(&format!("match viewer: no canvas at {canvas}").into());
+            return;
+        };
+
+        let menu = Closure::<dyn FnMut(MouseEvent)>::new(|event: MouseEvent| {
+            event.prevent_default();
+        });
+        let press = Closure::<dyn FnMut(MouseEvent)>::new(|event: MouseEvent| {
+            // 1 is the wheel, 2 the right button. The left one is left alone:
+            // it works the transport bar, and taking its default away would
+            // take the canvas's focus with it.
+            if event.button() == 1 || event.button() == 2 {
+                event.prevent_default();
+            }
+        });
+
+        for (name, listener) in [("contextmenu", &menu), ("mousedown", &press)] {
+            if element
+                .add_event_listener_with_callback(name, listener.as_ref().unchecked_ref())
+                .is_err()
+            {
+                web_sys::console::warn_1(&format!("match viewer: {name} refused").into());
+            }
+        }
+
+        // Both live as long as the page does. There is nothing to hang them
+        // on and nothing to reclaim them at teardown, which is what `forget`
+        // says out loud.
+        menu.forget();
+        press.forget();
+    }
+}
+
 /// The broadcast rig: one long-lens camera high on the halfway-line stand,
-/// panning to keep the ball framed. It never leaves its gantry — only the pan,
-/// tilt and a little lateral travel change — which is what makes footage read
-/// as televised football rather than as a game camera.
+/// panning to keep the ball framed. Left alone it never leaves its gantry —
+/// only the pan, tilt and a little lateral travel change — which is what makes
+/// footage read as televised football rather than as a game camera. A drag on
+/// the right or wheel button walks it round the ground from there; everything
+/// below is written in the gantry's terms and turns with it.
 #[derive(Component)]
 pub struct TvCamera {
     /// Smoothed point of interest, in world space.
@@ -126,8 +264,26 @@ impl TvCamera {
     /// a tighter frame needs a quicker operator.
     const RESPONSE: f32 = 0.30;
 
+    /// How far out from the centre spot the gantry stands, along the ground.
+    fn rest_reach() -> f32 {
+        Field::HALF_WIDTH + Self::SETBACK
+    }
+
+    /// The angle up from the centre spot to the gantry: where the orbit
+    /// starts, and where its detent puts the rig back.
+    fn rest_elevation() -> f32 {
+        Self::HEIGHT.atan2(Self::rest_reach())
+    }
+
+    /// Centre spot to lens. Held constant as the rig orbits, so a shot from
+    /// behind a goal draws a footballer exactly as large as the one from the
+    /// main stand.
+    fn rest_distance() -> f32 {
+        Self::HEIGHT.hypot(Self::rest_reach())
+    }
+
     pub fn spawn(mut commands: Commands) {
-        let sideline = -(Field::HALF_WIDTH + Self::SETBACK);
+        let sideline = -Self::rest_reach();
         commands.spawn((
             TvCamera { focus: Vec3::ZERO },
             Camera3d::default(),
@@ -176,6 +332,7 @@ impl TvCamera {
         playback: Res<Playback>,
         time: Res<Time>,
         zoom: Res<CameraZoom>,
+        orbit: Res<CameraOrbit>,
         mut camera: Single<(&mut TvCamera, &mut Transform, &mut Projection)>,
     ) {
         let (rig, transform, projection) = &mut *camera;
@@ -202,16 +359,34 @@ impl TvCamera {
             rig.focus = rig.focus.lerp(target, blend.clamp(0.0, 1.0));
         }
 
-        let limit = Field::HALF_LENGTH * Self::TRAVEL_LIMIT;
-        let travel = (rig.focus.x * Self::TRAVEL).clamp(-limit, limit);
-        transform.translation =
-            Vec3::new(travel, Self::HEIGHT, -(Field::HALF_WIDTH + Self::SETBACK));
+        // Where the gantry stands for this bearing and height. At rest the
+        // three numbers below come back out as the constants they were
+        // written as: `(0, HEIGHT, -(HALF_WIDTH + SETBACK))`.
+        let distance = Self::rest_distance();
+        let reach = distance * orbit.elevation.cos();
+        let gantry = Vec3::new(
+            orbit.bearing.sin() * reach,
+            distance * orbit.elevation.sin(),
+            -orbit.bearing.cos() * reach,
+        );
+        // The rail the rig slides along and the axis it looks down, both
+        // turned with it. From the gantry they are the pitch's own length and
+        // width, which is the sense in which the framing constants above are
+        // written; from behind a goal they have swapped over.
+        let rail = Vec3::new(orbit.bearing.cos(), 0.0, orbit.bearing.sin());
+        let depth = Vec3::new(-orbit.bearing.sin(), 0.0, orbit.bearing.cos());
+
+        // How much pitch there is to run along: the full half-length from the
+        // main stand, the half-width from behind a goal, and the two mixed
+        // anywhere in between.
+        let along = rail.x.abs() * Field::HALF_LENGTH + rail.z.abs() * Field::HALF_WIDTH;
+        let limit = along * Self::TRAVEL_LIMIT;
+        let travel = (rig.focus.dot(rail) * Self::TRAVEL).clamp(-limit, limit);
+
+        transform.translation = gantry + rail * travel;
         transform.look_at(
-            Vec3::new(
-                rig.focus.x,
-                0.0,
-                rig.focus.z * Self::AIM_ACROSS + Self::AIM_NEAR_BIAS,
-            ),
+            rail * rig.focus.dot(rail)
+                + depth * (rig.focus.dot(depth) * Self::AIM_ACROSS + Self::AIM_NEAR_BIAS),
             Vec3::Y,
         );
     }

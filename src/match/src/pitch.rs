@@ -1,3 +1,4 @@
+use crate::camera::TvCamera;
 use crate::field::Field;
 use crate::textures::Textures;
 use bevy::asset::RenderAssetUsages;
@@ -5,6 +6,30 @@ use bevy::mesh::Indices;
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
+
+/// One bank of seating, as the box it fills and the turn that points it at
+/// the pitch.
+///
+/// A stand between the lens and the play is not scenery, it is a wall. The
+/// rig used to have one place to stand, so there was one wall and the fix was
+/// simply not to build it — the near touchline was left open because that is
+/// where the gantry hangs. Now the rig walks all the way round, so all four
+/// sides stand and whichever one it is inside steps aside instead: a camera
+/// behind the goal is *in* the end stand, and not drawing that stand is what
+/// being there looks like.
+#[derive(Component)]
+pub struct Bank {
+    /// Turns a point from the world into the bank's own frame, where the box
+    /// below is axis-aligned.
+    frame: Quat,
+    /// Half the width across the front.
+    flank: f32,
+    /// Centre spot to the front row, and to the back of the back wall.
+    near: f32,
+    far: f32,
+    /// Top of the roof.
+    top: f32,
+}
 
 /// Accumulates every pitch marking into a single flat mesh.
 ///
@@ -288,8 +313,9 @@ impl Pitch {
     /// and the low bowl of a stand behind them.
     ///
     /// Without it the turf simply stops and eleven-a-side is played in a void.
-    /// Only three sides are built — the near one is where the broadcast gantry
-    /// itself sits, so a stand there would be between the camera and the play.
+    /// All four sides are built, including the one the broadcast gantry hangs
+    /// over: a rig that can be walked round the ground would otherwise find a
+    /// hole in it. [`Bank`] takes the one in the way back out again.
     fn spawn_ground(
         commands: &mut Commands,
         meshes: &mut Assets<Mesh>,

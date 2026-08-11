@@ -23,10 +23,18 @@ enum ForwardMovementPattern {
 use nalgebra::Vector3;
 use std::cmp::Ordering;
 
-const MAX_DISTANCE_FROM_BALL: f32 = 80.0;
-const MIN_DISTANCE_FROM_BALL: f32 = 30.0;
-const OPTIMAL_PASSING_DISTANCE_MIN: f32 = 20.0;
-const OPTIMAL_PASSING_DISTANCE_MAX: f32 = 70.0;
+/// ~35 m. Scaled with `MIN_DISTANCE_FROM_BALL` — the two are a BAND and
+/// leaving the ceiling at 80u (10 m) while lifting the floor to 120u
+/// inverted it, making every "am I a useful distance from the ball"
+/// test unsatisfiable.
+const MAX_DISTANCE_FROM_BALL: f32 = 280.0;
+/// ~15 m. Was 30u — 3.75 m.
+const MIN_DISTANCE_FROM_BALL: f32 = 120.0;
+/// ~15 m. Was 20u — 2.5 m.
+const OPTIMAL_PASSING_DISTANCE_MIN: f32 = 120.0;
+/// ~30 m — the far end of the band whose floor is
+/// `OPTIMAL_PASSING_DISTANCE_MIN`.
+const OPTIMAL_PASSING_DISTANCE_MAX: f32 = 240.0;
 #[allow(dead_code)]
 const SPACE_SCAN_RADIUS: f32 = 250.0;
 #[allow(dead_code)]

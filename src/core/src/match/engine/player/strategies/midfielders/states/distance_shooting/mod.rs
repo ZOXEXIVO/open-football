@@ -9,6 +9,10 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
+/// Depth of the penalty area from the goal line (16.5 m). Same figure the
+/// forward and midfielder box blocks use.
+const PENALTY_AREA_DEPTH: f32 = 132.0;
+
 #[derive(Default, Clone)]
 pub struct MidfielderDistanceShootingState {}
 
@@ -47,10 +51,16 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             }
         }
 
-        // Close to goal with a clear sight — shoot (5.5m; the old 50u
-        // gate fired UNCONDITIONALLY from 6.25m with no clarity check)
+        // Inside the penalty area — shoot.
+        //
+        // Was 44u (5.5 m) plus a binary `has_clear_shot()`, the same
+        // tap-in gate the forward's box block carried. A player only
+        // reaches this state having ALREADY been approved to strike by
+        // the helper, so once he is in the area the question is settled;
+        // making him carry to within five metres of the line first is
+        // what turns an approved shot into another lap of the box.
         let distance_to_goal = ctx.player().goal_distance();
-        if distance_to_goal < 44.0 && ctx.player().has_clear_shot() {
+        if distance_to_goal < PENALTY_AREA_DEPTH {
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Shooting,
                 Event::PlayerEvent(PlayerEvent::Shoot(

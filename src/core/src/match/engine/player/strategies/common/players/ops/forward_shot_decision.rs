@@ -931,7 +931,7 @@ const LONG_RANGE_FLOOR: f32 = 0.26;
 /// Height of the shot bar before the per-opportunity spread and the two
 /// distance reliefs. This is the engine's shot-volume knob — see the note
 /// at the threshold.
-const SHOT_BAR_BASE: f32 = 0.534;
+const SHOT_BAR_BASE: f32 = 0.530;
 /// How much of the full relief a point-blank chance gets.
 ///
 /// Sized against shot QUALITY, not shot count. At 1.0 the close-range

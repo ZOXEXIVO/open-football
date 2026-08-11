@@ -7,8 +7,16 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
+/// Close enough to gather it (~2.5 m).
 const CLAIM_BALL_DISTANCE: f32 = 20.0;
-const MAX_COMING_OUT_DISTANCE: f32 = 60.0; // Maximum distance to pursue ball
+/// Furthest a keeper will chase a loose ball (~20 m), before the
+/// `rushing_out_profile` scaling either side of it.
+///
+/// Was 60u — **7.5 m**, written as if units were metres. A sweeper
+/// keeper covers twenty-five metres of space behind his line; this one
+/// would not leave his six-yard box, so the whole sweeping behaviour the
+/// state exists for could never fire.
+const MAX_COMING_OUT_DISTANCE: f32 = 160.0;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperComingOutState {}

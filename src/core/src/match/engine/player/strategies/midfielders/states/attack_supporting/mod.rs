@@ -12,7 +12,9 @@ use std::cmp::Ordering;
 const TACKLE_RANGE: f32 = 40.0;
 const ATTACK_SUPPORT_TIME_LIMIT: u64 = 300;
 const MIN_STAY_TIME: u64 = 60; // Minimum ticks before allowing non-urgent exit to Running
-const CHANNEL_WIDTH: f32 = 15.0; // Width of vertical channels for runs
+/// Width of the vertical channels a runner attacks (~10 m). Was 15u —
+/// 1.9 m, which is narrower than a player.
+const CHANNEL_WIDTH: f32 = 80.0;
 
 #[derive(Default, Clone)]
 pub struct MidfielderAttackSupportingState {}

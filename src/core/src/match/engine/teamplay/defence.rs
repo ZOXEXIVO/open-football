@@ -42,8 +42,9 @@
 use crate::r#match::{MatchField, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 
-/// Largest defensive unit we assign duties to.
-const MAX_UNIT: usize = 8;
+/// Largest defensive unit we assign duties to — the back line plus the
+/// midfield, which is every outfielder bar the forwards.
+const MAX_UNIT: usize = 10;
 /// Most opponents worth ranking as threats.
 const MAX_THREATS: usize = 10;
 
@@ -249,9 +250,21 @@ impl DutyAssigner<'_> {
             0.0,
         );
 
-        // The defensive unit: the back line plus the holding midfielders
-        // that sit in it (`is_defender` covers defensive midfielders — see
-        // the depth-count convention).
+        // The defensive unit: the back line AND the midfield.
+        //
+        // It was defenders only, and that turned out to be the single
+        // biggest distortion in the attacking half of the game. A back
+        // four cannot mark five attacking players, so the threat ranking
+        // spent its exclusive slots on whoever scored highest — the
+        // forwards — and every opposing MIDFIELDER was left completely
+        // unmarked. Measured: forwards held at 4.0 m by an assigned
+        // marker, midfielders at 10.9 m by nobody, and midfielders
+        // consequently took **74% of every shot in the game** against a
+        // real 32% while forwards took 23% against a real 58%.
+        //
+        // Midfield is marked by midfielders. Including them is what lets
+        // the ranking cover the whole attacking side instead of running
+        // out of bodies after the front line.
         let mut unit = [(0u32, Vector3::<f32>::zeros()); MAX_UNIT];
         let mut unit_len = 0usize;
         for p in self.field.players.iter() {
@@ -259,7 +272,7 @@ impl DutyAssigner<'_> {
                 continue;
             }
             let pos = p.tactical_position.current_position;
-            if pos.is_goalkeeper() || !pos.is_defender() {
+            if pos.is_goalkeeper() || !(pos.is_defender() || pos.is_midfielder()) {
                 continue;
             }
             unit[unit_len] = (p.id, p.position);

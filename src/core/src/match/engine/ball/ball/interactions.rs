@@ -211,7 +211,15 @@ pub(crate) struct SaveModel;
 impl SaveModel {
     /// Geometric ceiling for a dead-centre shot. Pure geometry — the
     /// keeper is standing where the ball is going.
-    const CENTRED_BASE: f32 = 0.88;
+    /// Re-anchored 0.88 → 0.76. The old value was calibrated for a
+    /// keeper genuinely standing on the ball's line, which was ALWAYS
+    /// true while the shot cache handed him the exact crossing point —
+    /// so the geometric ceiling applied to essentially every shot and
+    /// the population save rate sat at 82% against a real 67%. With the
+    /// keeper's committed line now carrying a reading error, the
+    /// dead-centre case is rare again and the ceiling can be what it
+    /// says it is: the chance for a shot hit straight at him.
+    const CENTRED_BASE: f32 = 0.82;
     /// How much of that ceiling a full-stretch shot gives away.
     const STRETCH_PENALTY: f32 = 0.58;
     /// Save probability for the worst keeper alive on a centred shot,

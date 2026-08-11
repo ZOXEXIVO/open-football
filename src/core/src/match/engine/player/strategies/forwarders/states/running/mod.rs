@@ -156,6 +156,9 @@ pub mod tackle_stats {
 const MAX_SHOOTING_DISTANCE: f32 = 320.0;
 #[allow(dead_code)]
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
+/// Depth of the penalty area from the goal line (16.5 m). Inside this, a
+/// forward with the ball is in a shooting position by definition.
+const PENALTY_AREA_DEPTH: f32 = 132.0;
 const POINT_BLANK_DISTANCE: f32 = 48.0; // 6m — point-blank strike zone. Below this, the
 // forward must shoot rather than dribble toward the keeper. Widened
 // from 24u (3m — practically on the 6-yard line) because at 24u the
@@ -646,11 +649,34 @@ impl StateProcessingHandler for ForwardRunningState {
             // helper's — leaving it as the gate here meant a sprinting
             // forward off-balance still fired in the box without the
             // composure penalty being applied.
-            let box_shot_condition = can_shoot
-                && !defer_to_teammate
-                && distance_to_goal < 45.0
-                && distance_to_goal <= max_shot_distance
-                && ctx.player().has_clear_shot();
+            // A STRIKER IN THE BOX SHOOTS.
+            //
+            // This block was gated at 45u — **5.6 metres** — which is the
+            // six-yard box, not the penalty area. A forward anywhere
+            // between the spot and the D never reached it, and the
+            // measured consequence is the whole complaint: forwards took
+            // **91% of their shots from inside 11 m** (30% from <6 m, 61%
+            // from 6-11 m) and 5.2% from 11-16.5 m, while midfielders
+            // arriving into the same area took 25.6% of theirs from
+            // there. The strikers were not shooting; they were waiting
+            // for tap-ins.
+            //
+            // The asymmetry is not skill, it is marking: a forward is
+            // held at 4.0 m by an assigned marker and a midfielder at
+            // 10.9 m, so the forward's lane is worse everywhere except
+            // point-blank. That is correct defending, and the answer is
+            // not to make him wait — it is that a striker inside the area
+            // hits it anyway. That is his job, and the shot he takes at a
+            // narrow angle under pressure is a real striker's shot.
+            //
+            // `has_clear_shot()` is dropped as an AND for the same reason
+            // the main path above dropped it: it is a hard binary veto on
+            // a quantity the helper already prices continuously through
+            // `clarity`, and the helper still rejects a genuinely blocked
+            // lane. Keeping it here re-created exactly the asymmetry the
+            // note above describes, one block further down.
+            let box_shot_condition =
+                can_shoot && !defer_to_teammate && distance_to_goal < PENALTY_AREA_DEPTH;
 
             if box_shot_condition {
                 match evaluate_forward_shot_decision(ctx, "FWD_RUN_PRIO06_BOX") {
@@ -660,12 +686,21 @@ impl StateProcessingHandler for ForwardRunningState {
                                 .with_shot_reason(reason),
                         );
                     }
-                    // Original Hold-fallback laid the ball off via a pass —
-                    // a forward who declines a clear box shot would cutback
-                    // rather than sit on the ball. Preserve that semantic so
-                    // we don't loiter with a chance available.
-                    ShotDecision::Pass | ShotDecision::Hold => {
+                    // A forward who declines lays it off — but only from
+                    // somewhere a lay-off is the better ball. Deep in the
+                    // area he keeps it and looks again rather than
+                    // squaring it backwards, which is the other half of
+                    // "does everything except shoot".
+                    ShotDecision::Pass => {
                         return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                    }
+                    ShotDecision::Hold => {
+                        if distance_to_goal < POINT_BLANK_DISTANCE {
+                            return Some(StateChangeResult::with_forward_state(
+                                ForwardState::Passing,
+                            ));
+                        }
+                        return None;
                     }
                 }
             }

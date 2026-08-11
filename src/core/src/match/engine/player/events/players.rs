@@ -2976,6 +2976,10 @@ impl PlayerEventDispatcher {
         // arrive in ~18 ticks instead of ~9, matching the ~3.75× shot/player
         // speed ratio observed in real football (vs. the engine's prior ~10×).
         const MAX_SHOT_VELOCITY: f32 = 3.2;
+        /// How far off the true crossing point a keeper's committed line
+        /// can be, in game units, before the flight-time scaling. 18u is
+        /// 2.25 m — the width a placed shot beats a set keeper by.
+        const KEEPER_PLACEMENT_READ: f32 = 18.0;
         /// Half-width of the lane a defender must be inside to be credited
         /// with covering a shot, in game units (60u = 7.5m). Wide enough to
         /// mean "in front of goal in the danger zone" rather than "literally
@@ -3978,6 +3982,30 @@ impl PlayerEventDispatcher {
                         + final_velocity.y * ticks_to_goal
                         + curl_units * KEEPER_CURL_READ
                 };
+                // ── The keeper does not know where it is going ────────
+                //
+                // This cache is what the goalkeeper states steer onto, so
+                // whatever it says is where he will be standing when the
+                // ball arrives. Handing him the exact crossing point
+                // means `lateral_error` collapses to ~0, `reach_ratio`
+                // with it, and every save resolves at `CENTRED_BASE` —
+                // the 0.88 "keeper is standing where the ball is going"
+                // ceiling. Measured consequence: an 82% population save
+                // rate against a real 67%, and it was not the save
+                // model's calibration at fault, it was that the model's
+                // hardest case never occurred.
+                //
+                // A keeper reads the striker's body and commits; he is
+                // beaten by placement inside a couple of metres all the
+                // time. The error shrinks with flight time, because a
+                // ball he can watch for longer is one he reads better —
+                // so a close-range piledriver beats him more often than a
+                // 25-yard effort, which is the right way round.
+                let read_error = {
+                    let seen = (ticks_to_goal / 120.0).clamp(0.0, 1.0);
+                    KEEPER_PLACEMENT_READ * (1.0 - seen * 0.55)
+                };
+                let goal_line_y = goal_line_y + rng.jitter(0.0, read_error);
                 // Arc approximation: z under gravity, from the shared
                 // constant rather than a copy of it. The literal here was
                 // `0.157` — the pre-fix value — so the moment the physics

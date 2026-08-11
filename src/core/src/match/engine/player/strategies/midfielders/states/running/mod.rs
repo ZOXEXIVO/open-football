@@ -44,6 +44,16 @@ use std::cmp::Ordering;
 /// on where hopeless begins and the helper is the only thing deciding
 /// inside it.
 const MAX_SHOOTING_DISTANCE: f32 = 320.0;
+
+/// How close an assigned man has to be before a midfielder abandons the
+/// shape logic to go and mark him (~19 m). Same figure the back line
+/// uses, so a duty means the same thing wherever it is held.
+const MARK_BREAK_DISTANCE: f32 = 150.0;
+
+/// Depth of the penalty area from the goal line (16.5 m). Inside it, a
+/// midfielder arriving onto the ball is in a shooting position — same
+/// figure and same rule as the forward's box block.
+const PENALTY_AREA_DEPTH: f32 = 132.0;
 const STANDARD_SHOOTING_DISTANCE: f32 = 104.0; // 13m — standard shooting range for midfielders
 const POINT_BLANK_DISTANCE: f32 = 40.0; // 5m - must shoot, goalkeeper is right there
 
@@ -272,9 +282,30 @@ impl StateProcessingHandler for MidfielderRunningState {
                 // longer machine-guns every clear look the instant it
                 // appears. Range tightened to 11m (88u): beyond that,
                 // Tier-2's willingness roll owns the decision.
-                let clear_good = distance_to_goal <= 88.0
+                // AN ARRIVING MIDFIELDER IN THE BOX SHOOTS — the same rule
+                // the striker's box block now follows, and it was blocked
+                // the same two ways.
+                //
+                // Range was 88u (11 m), so the late-arriving eight who
+                // reaches the penalty spot or the edge of the six had no
+                // Tier-1 path at all and fell through to a willingness
+                // roll calibrated for speculative efforts. Widened to the
+                // penalty area, which is where an arriving runner's whole
+                // job is to finish.
+                //
+                // `has_clear_shot()` drops for the reason it dropped on
+                // both forward paths: it is a hard binary veto on lane
+                // quality, and lane is already priced — continuously by
+                // the helper, and here by `expected_xg(.., true)`, which
+                // takes clarity into account. Keeping it meant a marked
+                // runner could never qualify, which is every arriving
+                // runner worth marking.
+                //
+                // The 0.30 xG floor, `has_good_angle`, the ≤2-shot cap
+                // and the 0.003 throttle below are untouched: those are
+                // chance-quality and anti-monopoly gates, not range gates.
+                let clear_good = distance_to_goal <= PENALTY_AREA_DEPTH
                     && coach.shooting_reluctance() < 0.5
-                    && ctx.player().has_clear_shot()
                     && ctx.player().shooting().has_good_angle()
                     && sp.expected_xg(distance_to_goal, true) >= 0.30;
                 if clear_good && ctx.memory().shots_taken <= 2 && ctx.context.rng.unit_f32() < 0.003
@@ -798,6 +829,23 @@ impl StateProcessingHandler for MidfielderRunningState {
                     let alignment = vel.normalize().dot(&to_goal);
                     alignment > 0.5
                 });
+
+                // DUTY BEFORE SHAPE — the midfield half of the rule the
+                // back line already follows. A midfielder the plan gave a
+                // man goes to him; `Guarding` is the midfielder's marking
+                // state and now prefers that assignment.
+                //
+                // Without this the plan could assign midfield duties and
+                // nothing would act on them, which is exactly how the
+                // back line's `Press` duty sat unused while carriers
+                // walked to the edge of the box.
+                if let Some(man) = ctx.team().my_mark() {
+                    if (man.position - ctx.player.position).magnitude() < MARK_BREAK_DISTANCE {
+                        return Some(StateChangeResult::with_midfielder_state(
+                            MidfielderState::Guarding,
+                        ));
+                    }
+                }
 
                 // Dangerous runner detected — close them down via Guarding.
                 // TrackingRunner was a single-entry ghost state that did the

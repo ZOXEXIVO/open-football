@@ -259,6 +259,18 @@ impl MidfielderGuardingState {
     /// The scored scan behind [`find_guard_target`](Self::find_guard_target)
     /// — attackers without ball trying to find space.
     fn compute_find_guard_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        // THE ASSIGNMENT WINS.
+        //
+        // The team plan hands out man-marking duties exclusively across
+        // the whole defensive unit; picking a target locally instead
+        // means two midfielders can converge on the same opponent while
+        // another goes free, which is the failure the plan exists to
+        // prevent. The local scan below stays as the fallback for a
+        // midfielder the plan gave nobody.
+        if let Some(man) = ctx.team().my_mark() {
+            return Some(man);
+        }
+
         let own_goal = ctx.ball().direction_to_own_goal();
         let ball_position = ctx.tick_context.positions.ball.position;
         // Our grid-stored position, fetched once — Factor 5 used to
