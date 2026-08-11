@@ -1,14 +1,15 @@
 use crate::PlayerFieldPositionGroup;
+use crate::club::player::PlayerTrait;
+use crate::r#match::engine::ball::ball::interactions::SaveModel;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::interactions::block_diag::BlockDiag;
+use crate::r#match::engine::ball::ball::motion::SpinModel;
 use crate::r#match::engine::ball::ball::{
     Ball, GRAVITY_PER_TICK, GROUND_FRICTION, PossessionSource,
 };
-#[cfg(feature = "match-logs")]
-use crate::r#match::engine::ball::ball::interactions::block_diag::BlockDiag;
-use crate::r#match::engine::ball::ball::interactions::SaveModel;
-#[cfg(feature = "match-logs")]
-use crate::r#match::player::state::PlayerState;
 use crate::r#match::engine::flow::context::PendingAdvantage;
 use crate::r#match::engine::flow::rng::MatchRng;
+use crate::r#match::engine::goal::GOAL_WIDTH as GOAL_MOUTH_HALF_WIDTH;
 use crate::r#match::engine::officiating::referee::{ContactLocation, FoulCallContext};
 use crate::r#match::engine::psychology::{NegativeEvent, PositiveEvent};
 use crate::r#match::engine::set_pieces::{FreeKickBand, wall_block_prob, wall_size_for};
@@ -18,7 +19,10 @@ use crate::r#match::player::events::gk_claim::GkClaimContest;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::events::gk_claim::gk_claim_diag;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::statistics::MatchStatisticType;
+use crate::r#match::player::strategies::passing::CrossType;
 use crate::r#match::player::strategies::players::ShotSkillInputs;
 use crate::r#match::player::strategies::players::ShotSkillProfile;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
@@ -28,7 +32,6 @@ use crate::r#match::player::strategies::players::ops::effective_skill::{
 use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
-use crate::r#match::engine::goal::GOAL_WIDTH as GOAL_MOUTH_HALF_WIDTH;
 use crate::r#match::{
     GoalDetail, GoalPosition, MatchContext, MatchField, MatchPlayer, OffsideSnapshot,
     PassOriginRestart, PlayerSide, ResultMatchPositionData, ShotTarget,
@@ -375,6 +378,26 @@ enum TrajectoryType {
     HighArc,
     /// Chip - very high arc over short distance (for beating defenders)
     Chip,
+    /// A modelled cross. The shape comes from the [`CrossType`] the
+    /// crossing state chose, NOT from lane traffic — a cross is played
+    /// over the traffic by definition, so routing it through the
+    /// obstacle-driven selector produced the contradiction documented in
+    /// `passing::cross`: the only deliveries that qualified as crosses
+    /// were the ones with a clear lane, and a clear lane meant "keep it
+    /// on the deck".
+    Cross(CrossType),
+}
+
+impl TrajectoryType {
+    /// Whether the launch solver should buy a ballistic arc (apex-first)
+    /// rather than keeping the calibrated rolling speed and adding lift.
+    fn is_ballistic(self) -> bool {
+        match self {
+            TrajectoryType::MediumArc | TrajectoryType::HighArc | TrajectoryType::Chip => true,
+            TrajectoryType::Cross(ct) => ct.is_lofted(),
+            _ => false,
+        }
+    }
 }
 
 /// How dirty was the foul — drives card probabilities.
@@ -767,18 +790,26 @@ impl PlayerEventDispatcher {
                     field,
                     context,
                 );
-                // Cross detection at emit-time: passer in a wide channel
-                // delivering toward the opposition box. Computed BEFORE
-                // the pass handler runs so crosses can use the dedicated
-                // crossing-skill error term (a low-crossing player's
-                // cross sails harder off-target than their open-play
-                // pass would).
-                let was_cross = if let Some(side) = passer_side {
-                    Self::is_cross_attempt(passer_position, pass_target, side, context)
-                } else {
-                    false
-                };
+                // A delivery the crossing model built declares itself. Any
+                // OTHER pass is still geometry-classified at emit time —
+                // passer in a wide channel delivering toward the box — so
+                // it picks up the dedicated crossing-skill error term (a
+                // low-crossing player's cross sails harder off-target than
+                // their open-play pass would).
+                let declared_cross = pass_event_model.cross_type;
+                let was_cross = declared_cross.is_some()
+                    || passer_side.is_some_and(|side| {
+                        Self::is_cross_attempt(passer_position, pass_target, side, context)
+                    });
                 Self::handle_pass_to_event(pass_event_model, field, context, was_cross);
+                // A modelled cross arms the open-play aerial contest: the
+                // delivery is aimed at a patch of the box, so it must be
+                // contestable rather than reserved for one named receiver
+                // (see `resolve_cross_contest`). Ground deliveries resolve
+                // through the normal reception path and stay disarmed.
+                field.ball.cross_contest_resolved =
+                    !declared_cross.map(|ct| ct.is_lofted()).unwrap_or(false);
+                field.ball.pending_cross_type = declared_cross;
                 // Tag the ball with the passer for pass-accuracy
                 // accounting. Lives for a short window (150 ticks)
                 // and is cleared on opponent touch — see ball.rs
@@ -1763,6 +1794,11 @@ impl PlayerEventDispatcher {
         // Flight-time estimate: we aim `lead_ticks` ahead along the
         // receiver's current velocity, where `lead_ticks` = a fraction
         // of true flight time determined by vision + passing quality.
+        //
+        // A delivery aimed at a SPACE (a cross into a zone of the box)
+        // skips this entirely: the aim point already encodes where the
+        // runner is going, so leading it a second time would push the ball
+        // through the back of the six-yard box.
         let pass_distance_est = (receiver_pos - passer_position).magnitude();
         let flight_time_est = (pass_distance_est * 0.85).clamp(25.0, 95.0);
         // Vision = how well we anticipate the receiver's run.
@@ -1775,7 +1811,11 @@ impl PlayerEventDispatcher {
         // outside the tightest receiver claim windows, enough passes
         // failed to push team accuracy to 72% instead of the 85% target.
         let lead_fraction = 0.60 + anticipation * 0.35; // 0.60..0.95
-        let lead_ticks = flight_time_est * lead_fraction;
+        let lead_ticks = if event_model.target_is_space {
+            0.0
+        } else {
+            flight_time_est * lead_fraction
+        };
         let ideal_target = receiver_pos + receiver_velocity * lead_ticks;
 
         // Always use passer's position as pass origin — ball position may lag behind
@@ -1849,7 +1889,16 @@ impl PlayerEventDispatcher {
             } else {
                 1.0 + crossing_shortfall.powf(1.2) * 1.2
             };
-            base_max_position_error * cross_multiplier
+            // Not every cross is equally hard. A pull-back from the byline
+            // is a short square ball; a whipped delivery that has to drop
+            // inside the six-yard box ahead of a keeper is the hardest ball
+            // in the game. `CrossType::difficulty` carries that spread so
+            // the delivery MIX matters, not just the crosser's rating.
+            let type_difficulty = event_model
+                .cross_type
+                .map(|ct| ct.difficulty())
+                .unwrap_or(1.0);
+            base_max_position_error * cross_multiplier * type_difficulty
         } else if event_model.reason == "DEF_COUNTER_ATTACK" {
             // Counter-attack outlet: the passer just won the ball and
             // had a clear moment to look up. Real football's "the
@@ -1928,6 +1977,44 @@ impl PlayerEventDispatcher {
             }
         }
 
+        // ── SWING ────────────────────────────────────────────────────
+        // An aerial cross is whipped, and whether it swings in toward
+        // goal or away from it is the difference between a ball the
+        // keeper can come for and one he cannot. As with a curled shot,
+        // the delivery is aimed OFF the target and bent back onto it —
+        // the ball genuinely arcs across the box, but the crosser still
+        // hits what he meant to hit.
+        //
+        // Sign is unbiased (in-swinger vs out-swinger), so this adds
+        // shape rather than a systematic drift.
+        let swing_units = match event_model.cross_type {
+            Some(ct) if ct.is_lofted() => {
+                let sign: f32 = if rng.random_range(0.0f32..1.0) < 0.5 {
+                    -1.0
+                } else {
+                    1.0
+                };
+                // Up to ~2 m of swing for an elite crosser; a poor one
+                // barely bends it because he cannot get across the ball.
+                sign * rng.random_range(0.25f32..1.0) * 16.0 * skills.crossing
+            }
+            _ => 0.0,
+        };
+        let swing_perp = if swing_units.abs() > f32::EPSILON {
+            Vector3::new(
+                actual_target.x - pass_origin.x,
+                actual_target.y - pass_origin.y,
+                0.0,
+            )
+            .try_normalize(1.0e-4)
+            .map(|d| Vector3::new(-d.y, d.x, 0.0))
+        } else {
+            None
+        };
+        if let Some(perp) = swing_perp {
+            actual_target -= perp * swing_units;
+        }
+
         let actual_pass_vector = actual_target - pass_origin;
         let actual_horizontal_distance = Self::calculate_horizontal_distance(&actual_pass_vector);
 
@@ -1950,15 +2037,21 @@ impl PlayerEventDispatcher {
         let passer_team_id = passer.team_id;
         let passer_is_goalkeeper = passer.tactical_position.current_position.is_goalkeeper();
 
-        let trajectory_type = Self::select_trajectory_type_contextual(
-            actual_horizontal_distance,
-            &skills,
-            rng,
-            &passer_position,
-            &actual_target,
-            passer_team_id,
-            &field.players,
-        );
+        // A modelled cross carries its own shape. Everything else is
+        // chosen from lane traffic and distance. Keeping these separate is
+        // the whole point — see the `TrajectoryType::Cross` doc.
+        let trajectory_type = match event_model.cross_type {
+            Some(ct) => TrajectoryType::Cross(ct),
+            None => Self::select_trajectory_type_contextual(
+                actual_horizontal_distance,
+                &skills,
+                rng,
+                &passer_position,
+                &actual_target,
+                passer_team_id,
+                &field.players,
+            ),
+        };
 
         // Goalkeeper long kicks must always be high arcs (goal kicks from
         // penalty area). Threshold rescaled with the bands above: 60u was
@@ -2021,6 +2114,31 @@ impl PlayerEventDispatcher {
 
         // Apply ball physics
         field.ball.velocity = final_velocity;
+
+        // Rotation that produces the swing solved for above. With a
+        // constant lateral acceleration `a` over flight time `T` the
+        // deflection is `d = ½aT²`, and the Magnus term contributes
+        // `a_perp = C·ω_z·|v|`, so `ω_z = 2·d·|v| / (C·dist²)`. Solving it
+        // from the deflection rather than picking a spin figure is what
+        // guarantees the ball still arrives where the crosser aimed.
+        field.ball.spin = if swing_units.abs() > f32::EPSILON {
+            let speed =
+                (final_velocity.x * final_velocity.x + final_velocity.y * final_velocity.y).sqrt();
+            if speed > 0.05 && actual_horizontal_distance > 1.0 {
+                Vector3::new(
+                    0.0,
+                    0.0,
+                    2.0 * swing_units * speed
+                        / (SpinModel::MAGNUS_COEFF
+                            * actual_horizontal_distance
+                            * actual_horizontal_distance),
+                )
+            } else {
+                Vector3::zeros()
+            }
+        } else {
+            Vector3::zeros()
+        };
 
         // Remember who put this ball into play, from where. Two consumers:
         // the degenerate self-recollect cycle (`blocked_recollect_player`)
@@ -2093,8 +2211,7 @@ impl PlayerEventDispatcher {
         // designated chaser jogs alongside it unable to touch it.
         let flight_protection = {
             const MARGIN: f32 = 1.35;
-            let vh = (final_velocity.x * final_velocity.x
-                + final_velocity.y * final_velocity.y)
+            let vh = (final_velocity.x * final_velocity.x + final_velocity.y * final_velocity.y)
                 .sqrt()
                 .max(0.01);
             // Airborne leg: a ball launched at `vz` is back on the deck
@@ -2421,6 +2538,11 @@ impl PlayerEventDispatcher {
             TrajectoryType::HighArc => (2.0 + metres * 0.16).clamp(2.0, 12.0),
             // Dinked over a defender standing right in front of you.
             TrajectoryType::Chip => (1.2 + metres * 0.12).clamp(1.2, 3.5),
+            // The crossing model owns its own shape — a floated ball to
+            // the back post and a driven ball across the six-yard line
+            // are different deliveries, not one delivery with different
+            // aim.
+            TrajectoryType::Cross(ct) => ct.apex_metres(distance_units),
         }
     }
 
@@ -2487,14 +2609,18 @@ impl PlayerEventDispatcher {
             TrajectoryType::HighArc => {
                 (skills.overall_quality() + skills.long_shots + skills.crossing) / 3.0
             }
+            // A cross is struck with the crossing foot, so the weighting
+            // reads the crossing skill first — an elite winger hangs the
+            // ball where he means to; a full-back sails it through.
+            TrajectoryType::Cross(_) => {
+                (skills.crossing * 0.6 + skills.technique * 0.25 + skills.passing * 0.15)
+                    * skills.availability_factor
+            }
             _ => skills.overall_quality(),
         };
         let weighting = rng.jitter(1.0, (1.0 - execution) * 0.14);
 
-        if matches!(
-            trajectory_type,
-            TrajectoryType::MediumArc | TrajectoryType::HighArc | TrajectoryType::Chip
-        ) {
+        if trajectory_type.is_ballistic() {
             let apex = Self::target_apex(trajectory_type, distance);
             let vertical = Ball::launch_speed_for_apex(apex);
             let hang = Ball::hang_ticks(vertical);
@@ -2519,13 +2645,35 @@ impl PlayerEventDispatcher {
         // stealing any of its forward pace.
         let lift_apex = match trajectory_type {
             TrajectoryType::Ground => Self::target_apex(TrajectoryType::Ground, distance),
+            // A ground cross keeps its own shape — a driven ball skims the
+            // grass, a cutback rolls. Falling back to the generic
+            // LowDriven apex here would flatten the two into one delivery.
+            TrajectoryType::Cross(ct) => ct.apex_metres(distance),
             // A loft that could not be bought still leaves the deck a
             // little — it is a driven ball, not a pass along the carpet.
             _ => Self::target_apex(TrajectoryType::LowDriven, distance),
         };
         let lift = Ball::launch_speed_for_apex(lift_apex) * rng.random_range(0.85..1.15);
 
-        Vector3::new(rolling_velocity.x, rolling_velocity.y, lift.max(0.0))
+        // A ground cross is struck HARD. `rolling_velocity` is weighted to
+        // arrive at a pace a receiver can take, which is right for a pass
+        // to feet and wrong for a ball fizzed across the six-yard box: the
+        // danger of a driven cross is precisely that nobody has time on
+        // it. Bounded by the same horizontal cap every pass respects.
+        let pace = match trajectory_type {
+            TrajectoryType::Cross(CrossType::DrivenLowCross) => 1.40,
+            TrajectoryType::Cross(CrossType::Cutback) => 1.15,
+            _ => 1.0,
+        };
+        let driven = Vector3::new(rolling_velocity.x * pace, rolling_velocity.y * pace, 0.0);
+        let speed = (driven.x * driven.x + driven.y * driven.y).sqrt();
+        let scale = if speed > Self::MAX_PASS_VELOCITY {
+            Self::MAX_PASS_VELOCITY / speed
+        } else {
+            1.0
+        };
+
+        Vector3::new(driven.x * scale, driven.y * scale, lift.max(0.0))
     }
 
     /// Records a possession gain on the claimant's team coach if this
@@ -2829,13 +2977,13 @@ impl PlayerEventDispatcher {
         // speed ratio observed in real football (vs. the engine's prior ~10×).
         const MAX_SHOT_VELOCITY: f32 = 3.2;
         /// Half-width of the lane a defender must be inside to be credited
-/// with covering a shot, in game units (60u = 7.5m). Wide enough to
-/// mean "in front of goal in the danger zone" rather than "literally
-/// on the ball line" — a defender two yards off the strike still
-/// narrowed the angle it had to beat.
-const COVER_LANE_HALF_WIDTH: f32 = 60.0;
+        /// with covering a shot, in game units (60u = 7.5m). Wide enough to
+        /// mean "in front of goal in the danger zone" rather than "literally
+        /// on the ball line" — a defender two yards off the strike still
+        /// narrowed the angle it had to beat.
+        const COVER_LANE_HALF_WIDTH: f32 = 60.0;
 
-const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
+        const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
 
         let rng = &context.rng;
 
@@ -3345,8 +3493,41 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
             goal_right_post + max_miss_distance,
         );
 
-        // Calculate final shot direction
-        let actual_target = Vector3::new(goal_center.x, clamped_y_target, 0.0);
+        // ── CURL ─────────────────────────────────────────────────────
+        // A curled shot is not aimed at where it ends up: the striker
+        // aims OUTSIDE the target and bends the ball back onto it. So the
+        // launch line is offset by `-curl_units` here and the spin set
+        // below brings it back over the flight, which is the only way to
+        // get a bending shot that still arrives where it was meant to.
+        //
+        // How much bend a player gets is technique first (you have to
+        // strike across the ball cleanly to spin it) and then the
+        // `CurlsBall` trait, which is exactly what that trait describes
+        // and which nothing in the ball physics had ever read.
+        let curls_ball = field
+            .get_player(shoot_event_model.from_player_id)
+            .is_some_and(|p| p.has_trait(PlayerTrait::CurlsBall));
+        let curl_units = {
+            // Most strikes are hit through the ball and barely bend.
+            // 1.4 m of bend over a 25 m shot is a genuine whipped effort;
+            // a specialist gets close to twice that.
+            let ceiling = if curls_ball { 20.0 } else { 11.0 };
+            let side_sign: f32 = if rng.random_range(0.0f32..1.0) < 0.5 {
+                -1.0
+            } else {
+                1.0
+            };
+            // Skewed low: `u²` keeps the median bend small so the
+            // straight-struck shot stays the norm.
+            let u: f32 = rng.random_range(0.0f32..1.0);
+            side_sign * u * u * ceiling * technique_skill
+        };
+
+        // Calculate final shot direction. The keeper's projection further
+        // down reads this LAUNCH line, so he is genuinely beaten by the
+        // part of the bend he doesn't read — see `KEEPER_CURL_READ`.
+        let launch_y_target = clamped_y_target - curl_units;
+        let actual_target = Vector3::new(goal_center.x, launch_y_target, 0.0);
         let shot_vector = actual_target - field.ball.position;
 
         // Skill-based power multiplier — sourced from the unified
@@ -3568,8 +3749,7 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
         // weight of a body genuinely on top of the shot.
         let close_pressure = pressure_10u as f32;
         let ring_pressure = pressure_24u.saturating_sub(pressure_10u) as f32;
-        let pressure_factor =
-            (1.0 - close_pressure * 0.20 - ring_pressure * 0.10).clamp(0.35, 1.0);
+        let pressure_factor = (1.0 - close_pressure * 0.20 - ring_pressure * 0.10).clamp(0.35, 1.0);
         let base_xg = profile
             .expected_xg(horizontal_distance, true)
             .clamp(0.0, 0.82)
@@ -3692,6 +3872,39 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
         field.ball.clear_pending_pass_metadata();
         field.ball.velocity = final_velocity;
 
+        // Rotation to match the strike. Two axes, both of them real:
+        //
+        // * SIDESPIN, solved so the Magnus force bends the ball back by
+        //   exactly the `curl_units` the launch line was offset by. With
+        //   constant lateral acceleration `a` over flight time `T`, the
+        //   deflection is `d = ½aT²`, and the Magnus term contributes
+        //   `a_y = C·ω_z·v_x`, so `ω_z = 2d / (T²·C·v_x)`.
+        // * TOPSPIN on a rising strike, which is what makes a long-range
+        //   effort dip back under the bar. The apex-solved parabola is
+        //   symmetric and can never dip on its own.
+        {
+            let vx = final_velocity.x;
+            let vy = final_velocity.y;
+            let speed = (vx * vx + vy * vy).sqrt();
+            let mut spin = Vector3::zeros();
+            if speed > 0.05 && vx.abs() > 0.05 && horizontal_distance > 1.0 {
+                let ticks = horizontal_distance / speed;
+                if ticks > 1.0 {
+                    let accel_y = 2.0 * curl_units / (ticks * ticks);
+                    spin.z = accel_y / (SpinModel::MAGNUS_COEFF * vx);
+                }
+                // A shot struck to rise is struck with the laces over the
+                // top of the ball. Scaled by how high the strike was
+                // aimed, so a low drive carries none.
+                let rise = (struck_apex - 0.8).max(0.0) / 3.0;
+                if rise > 0.0 {
+                    let dir = Vector3::new(vx / speed, vy / speed, 0.0);
+                    spin += SpinModel::from_strike(dir, 0.0, -rise * 0.55, technique_skill);
+                }
+            }
+            field.ball.spin = spin;
+        }
+
         // Shorter flight protection for shots — allows defenders/GK to claim sooner
         field.ball.flags.in_flight_state = 40;
 
@@ -3753,7 +3966,17 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
                     // sails past into the far corner.
                     original_y_target
                 } else {
-                    field.ball.position.y + final_velocity.y * ticks_to_goal
+                    // Straight-line projection of the LAUNCH velocity —
+                    // which, on a curled shot, is not where the ball ends
+                    // up. A keeper does read spin, but late and
+                    // incompletely: he sets for most of the bend and the
+                    // rest beats him. That residual is what makes a curled
+                    // finish worth striking, and it is bounded so curl
+                    // can't quietly rewrite the save calibration.
+                    const KEEPER_CURL_READ: f32 = 0.65;
+                    field.ball.position.y
+                        + final_velocity.y * ticks_to_goal
+                        + curl_units * KEEPER_CURL_READ
                 };
                 // Arc approximation: z under gravity, from the shared
                 // constant rather than a copy of it. The literal here was
@@ -3869,9 +4092,9 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
                         let span_x = goal_line_x - ball_x;
                         let span_y = goal_line_y - ball_y;
                         let span = (span_x * span_x + span_y * span_y).sqrt().max(1.0);
-                        let cross =
-                            ((p.position.x - ball_x) * span_y - (p.position.y - ball_y) * span_x)
-                                .abs();
+                        let cross = ((p.position.x - ball_x) * span_y
+                            - (p.position.y - ball_y) * span_x)
+                            .abs();
                         if cross / span <= 30.0 {
                             near_line += 1;
                         }
@@ -4873,7 +5096,9 @@ const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from norm
         // arms Law 12's second-touch bar until somebody else plays it.
         if let Some(clearer_id) = field.ball.current_owner {
             let from = field.ball.position;
-            field.ball.note_release(clearer_id, from, context.current_tick());
+            field
+                .ball
+                .note_release(clearer_id, from, context.current_tick());
         }
 
         // Clearance credit. A GK who just deflected a real shot away
@@ -5338,7 +5563,11 @@ mod pass_ballistics_tests {
                         "{trajectory:?} over {distance}u struck at {vh:.2} u/tick"
                     );
                     // Nothing goes into orbit either.
-                    assert!(apex(&v) < 15.0, "{trajectory:?} peaked at {:.1} m", apex(&v));
+                    assert!(
+                        apex(&v) < 15.0,
+                        "{trajectory:?} peaked at {:.1} m",
+                        apex(&v)
+                    );
                 }
             }
         }
@@ -5517,15 +5746,9 @@ mod shot_aim_tests {
         let centre = g.right;
         for offset in [-28.0, -20.0, -5.0, 0.0, 5.0, 20.0, 28.0] {
             let intent = Vector3::new(centre.x, centre.y + offset, 0.0);
-            let frame = PlayerEventDispatcher::resolve_goal_frame(
-                intent,
-                Some(PlayerSide::Left),
-                &g,
-            );
-            assert_eq!(
-                frame, centre,
-                "aim offset {offset} must not move the frame"
-            );
+            let frame =
+                PlayerEventDispatcher::resolve_goal_frame(intent, Some(PlayerSide::Left), &g);
+            assert_eq!(frame, centre, "aim offset {offset} must not move the frame");
         }
     }
 

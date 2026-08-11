@@ -22,14 +22,16 @@ pub use state::*;
 
 // teamplay/ — re-export the modules (preserve `engine::<module>::` paths)
 // and the items previously surfaced at the engine root.
+pub use teamplay::attack::{AttackPlan, AttackRefreshInputs, BoxSlot};
 pub use teamplay::chemistry::{
     ChemistryInputs, ChemistryMap, ChemistryModifiers, Lane, Role, TacticalFamiliarity,
     chemistry_modifiers, initial_chemistry,
 };
 pub use teamplay::coach::*;
+pub use teamplay::defence::{DefenceRefreshInputs, DefensiveDuty, DefensivePlan};
 pub use teamplay::tactical::*;
 pub use teamplay::zones::{LateralLane, MatchZone, ZoneCoeffs, ZoneStats};
-pub use teamplay::{chemistry, coach, tactical, zones};
+pub use teamplay::{attack, chemistry, coach, defence, tactical, zones};
 
 // flow/
 pub use flow::context::*;

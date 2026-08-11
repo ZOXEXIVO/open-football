@@ -1,3 +1,4 @@
+use crate::r#match::defenders::states::common::DefensiveRecovery;
 use crate::r#match::defenders::states::{
     DefenderAttackingCornerState, DefenderClearingState, DefenderCoveringState,
     DefenderCrossingState, DefenderGuardingState, DefenderHeadingState, DefenderHoldingLineState,
@@ -6,7 +7,6 @@ use crate::r#match::defenders::states::{
     DefenderShootingState, DefenderStandingState, DefenderTacklingState, DefenderTakeBallState,
     DefenderTrackingBackState, DefenderWalkingState,
 };
-use crate::r#match::defenders::states::common::DefensiveRecovery;
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use nalgebra::Vector3;
 use std::fmt::Result;

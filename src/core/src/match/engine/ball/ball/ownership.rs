@@ -231,8 +231,7 @@ impl Ball {
         /// Anything with height left is still arriving.
         const SPENT_HEIGHT: f32 = 0.5;
 
-        self.position.z <= SPENT_HEIGHT
-            && self.velocity.norm_squared() < SPENT_SPEED * SPENT_SPEED
+        self.position.z <= SPENT_HEIGHT && self.velocity.norm_squared() < SPENT_SPEED * SPENT_SPEED
     }
 
     /// Skill-rolled first touch at pass reception — the producer for the

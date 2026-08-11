@@ -1,8 +1,8 @@
-use crate::r#match::position_players::PlayerFieldMetadata;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::player::strategies::players::ops::midfielder_skill::MidfielderSkillProfile;
+use crate::r#match::position_players::PlayerFieldMetadata;
 use crate::r#match::{
     MatchField, MatchObjectsPositions, MatchPlayerCollection, MatchPlayerLite, PassOriginRestart,
     PlayerSide, ShotTarget, Space, SpatialGrid,
@@ -777,6 +777,12 @@ pub struct BallMetadata {
     /// Goalkeeper who released the ball from his hands and is waiting for
     /// somebody else to play it before he may handle it again.
     pub hands_released_by: Option<u32>,
+    /// Player an engine-level aerial contest has already awarded the ball
+    /// to (`resolve_corner_contest` / `resolve_cross_contest`). Their
+    /// heading state reads this to take a clean-contact roll instead of
+    /// re-rolling the duel the contest just decided.
+    /// See `Ball::aerial_contest_winner`.
+    pub aerial_contest_winner: Option<u32>,
 }
 
 impl BallMetadata {
@@ -819,6 +825,7 @@ impl BallMetadata {
         self.pass_target = field.ball.pass_target_player_id;
         self.recollect_blocked_player = field.ball.blocked_recollect_player();
         self.held_in_hands = field.ball.held_in_hands;
+        self.aerial_contest_winner = field.ball.aerial_contest_winner;
         self.deliberate_kick_by = if field.ball.last_touch_was_deliberate_kick {
             field
                 .ball
@@ -854,6 +861,7 @@ impl From<&MatchField> for BallMetadata {
             held_in_hands: false,
             deliberate_kick_by: None,
             hands_released_by: None,
+            aerial_contest_winner: None,
         };
         meta.update(field);
         meta

@@ -1,9 +1,11 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
-use crate::r#match::player::strategies::common::states::TackleEngagement;
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, TackleDecision,
+};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
@@ -93,6 +95,35 @@ impl StateProcessingHandler for DefenderTacklingState {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
                 ));
+            }
+
+            // JOCKEY FIRST.
+            //
+            // Reaching contact range is not a reason to lunge. Every tick
+            // spent here used to produce an attempt (bounded only by the
+            // ~1 s cooldown), which is why defenders committed 11.9
+            // tackles a match against a real ~1.6 — they were tackling
+            // roughly as often as the physics allowed rather than as
+            // often as football does.
+            //
+            // `TackleDecision` rolls the moment instead: the defender
+            // stands his man up, and dives in when the carrier's weight
+            // is committed, when there is cover behind, or when the
+            // danger makes waiting worse than missing. Declining keeps
+            // him IN this state — the velocity below then contains
+            // rather than pursues — so he stays on the carrier's
+            // shoulder instead of being handed back to `Pressing`, which
+            // is what containing actually looks like.
+            if !TackleDecision::is_decision_tick(ctx)
+                || !ctx
+                    .context
+                    .rng
+                    .bernoulli(TackleDecision::commit_probability(
+                        ctx,
+                        distance_to_opponent,
+                    ))
+            {
+                return None;
             }
 
             // We're close enough to tackle! One shot per Tackling entry,
@@ -210,6 +241,19 @@ impl DefenderTacklingState {
         let ball_position = ctx.tick_context.positions.ball.position;
         let player_position = ctx.player.position;
         let own_goal_position = ctx.ball().direction_to_own_goal();
+
+        // With a live carrier, the MOVEMENT is always the jockey: get
+        // goal-side of him and stay on his shoulder. The challenge itself
+        // is an instantaneous event decided in `process`, so running
+        // through the man is never the right path — it takes the defender
+        // past the ball whether or not he commits, and it is the visible
+        // half of "defenders lunge at everything".
+        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+            let gap = (carrier.position - player_position).magnitude();
+            if gap <= TackleEngagement::DISENGAGE {
+                return TackleDecision::contain_position(ctx, carrier.position);
+            }
+        }
 
         // Check if ball is dangerously close to own goal
         let ball_distance_to_own_goal = (ball_position - own_goal_position).magnitude();

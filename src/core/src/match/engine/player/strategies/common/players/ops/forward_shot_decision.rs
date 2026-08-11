@@ -50,6 +50,7 @@ pub mod helper_diag {
 ///   * `MID_CUTBACK`        — wide/advanced midfielder laid the cutback.
 #[cfg(feature = "match-logs")]
 pub mod mid_run_diag {
+    use crate::r#match::player::strategies::passing::CrossType;
     use std::sync::atomic::{AtomicU64, Ordering};
     pub static RUNNER_BOX_TICKS: AtomicU64 = AtomicU64::new(0);
     pub static FWD_CUTBACK: AtomicU64 = AtomicU64::new(0);
@@ -97,7 +98,240 @@ pub mod mid_run_diag {
     pub static PENALTY_AWARDED: AtomicU64 = AtomicU64::new(0);
     /// Direct free kicks awarded for fouls outside the box.
     pub static DIRECT_FK_AWARDED: AtomicU64 = AtomicU64::new(0);
+
+    /// Open-play cross deliveries struck, bucketed by
+    /// [`CrossType::diag_index`]. Answers "are we producing a MIX of
+    /// deliveries, or has one branch swallowed the model?".
+    pub static CROSS_BY_TYPE: [AtomicU64; 5] = [
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+    ];
+    /// Open-play cross aerial contests: reached the resolver with an
+    /// armed lofted delivery over the box.
+    pub static CROSS_CONTEST_SEEN: AtomicU64 = AtomicU64::new(0);
+    /// …passed every gate and a contest was actually rolled.
+    pub static CROSS_CONTEST_FIRED: AtomicU64 = AtomicU64::new(0);
+    /// …an attacker won the aerial and the ball was dropped on their head.
+    pub static CROSS_CONTEST_WON: AtomicU64 = AtomicU64::new(0);
+    /// …the keeper claimed the delivery out of the air.
+    pub static CROSS_CONTEST_GK: AtomicU64 = AtomicU64::new(0);
+    /// Headers struck ON GOAL off an open-play cross — the endpoint of
+    /// the whole crossing chain.
+    pub static CROSS_HEADER_ON_GOAL: AtomicU64 = AtomicU64::new(0);
+
+    /// Tactical refreshes seen, and how many produced a live attacking
+    /// plan with at least one box slot filled. A plan that is rarely
+    /// active explains a shot mix that hasn't moved, and is a different
+    /// problem from a plan whose slots are wrong.
+    pub static PLAN_REFRESH: AtomicU64 = AtomicU64::new(0);
+    pub static PLAN_ACTIVE: AtomicU64 = AtomicU64::new(0);
+    /// Box slots filled across all active refreshes — divided by
+    /// `PLAN_ACTIVE` this is "how many of the four zones does a live
+    /// attack actually occupy".
+    pub static PLAN_SLOTS_FILLED: AtomicU64 = AtomicU64::new(0);
+    /// Ticks a player spent moving to an assigned slot rather than to a
+    /// locally-derived target.
+    pub static PLAN_SLOT_TICKS: AtomicU64 = AtomicU64::new(0);
+
+    /// Attacking-plan coverage counters.
+    pub struct PlanDiag;
+
+    impl PlanDiag {
+        pub fn note_refresh(active: bool, slots_filled: usize) {
+            PLAN_REFRESH.fetch_add(1, Ordering::Relaxed);
+            if active {
+                PLAN_ACTIVE.fetch_add(1, Ordering::Relaxed);
+                PLAN_SLOTS_FILLED.fetch_add(slots_filled as u64, Ordering::Relaxed);
+            }
+        }
+
+        pub fn note_slot_tick() {
+            PLAN_SLOT_TICKS.fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// `(refreshes, active, slots_filled, slot_ticks)`
+        pub fn snapshot() -> (u64, u64, u64, u64) {
+            (
+                PLAN_REFRESH.load(Ordering::Relaxed),
+                PLAN_ACTIVE.load(Ordering::Relaxed),
+                PLAN_SLOTS_FILLED.load(Ordering::Relaxed),
+                PLAN_SLOT_TICKS.load(Ordering::Relaxed),
+            )
+        }
+
+        pub fn reset() {
+            for c in [
+                &PLAN_REFRESH,
+                &PLAN_ACTIVE,
+                &PLAN_SLOTS_FILLED,
+                &PLAN_SLOT_TICKS,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Defensive-shape samples: taken while the opposition has the ball
+    /// in our half, so they describe DEFENDING rather than an average
+    /// over a match spent attacking.
+    pub static DEF_SAMPLES: AtomicU64 = AtomicU64::new(0);
+    /// Sum of the back line's depth SPREAD (max x − min x along the
+    /// goal-to-goal axis), in units ×100. A real back four staggers 3-8 m
+    /// — the cover defender drops, the far full-back tucks in. A number
+    /// near zero is a rigid line moving as one body.
+    pub static DEF_DEPTH_SPREAD_X100: AtomicU64 = AtomicU64::new(0);
+    /// Sum of the LATERAL gap between the widest-apart adjacent pair, ×100.
+    pub static DEF_MAX_GAP_X100: AtomicU64 = AtomicU64::new(0);
+    /// Attackers sampled in our defensive third, and how many had NO
+    /// defender within a marking radius.
+    pub static DEF_ATTACKERS_SEEN: AtomicU64 = AtomicU64::new(0);
+    pub static DEF_ATTACKERS_UNMARKED: AtomicU64 = AtomicU64::new(0);
+    /// Sum of each sampled attacker's distance to the nearest defender,
+    /// ×100. Divided by `DEF_ATTACKERS_SEEN` this is "how far away the
+    /// nearest defender actually is" — the direct measure of whether
+    /// anybody meets the attacker.
+    pub static DEF_NEAREST_MARKER_X100: AtomicU64 = AtomicU64::new(0);
+
+    /// Defensive-duty assignment coverage: refreshes seen, refreshes with
+    /// a live plan, and how many of the unit held an INDIVIDUAL duty
+    /// (press / cover / mark) rather than just holding a zone.
+    pub static DEF_PLAN_REFRESH: AtomicU64 = AtomicU64::new(0);
+    pub static DEF_PLAN_ACTIVE: AtomicU64 = AtomicU64::new(0);
+    pub static DEF_PLAN_INDIVIDUAL: AtomicU64 = AtomicU64::new(0);
+
+    /// Defensive-shape counters.
+    pub struct DefenceDiag;
+
+    impl DefenceDiag {
+        pub fn note_plan(active: bool, individual: usize) {
+            DEF_PLAN_REFRESH.fetch_add(1, Ordering::Relaxed);
+            if active {
+                DEF_PLAN_ACTIVE.fetch_add(1, Ordering::Relaxed);
+                DEF_PLAN_INDIVIDUAL.fetch_add(individual as u64, Ordering::Relaxed);
+            }
+        }
+
+        /// `(refreshes, active, mean_individual_duties_when_live)`
+        pub fn plan_snapshot() -> (u64, u64, f32) {
+            let a = DEF_PLAN_ACTIVE.load(Ordering::Relaxed);
+            (
+                DEF_PLAN_REFRESH.load(Ordering::Relaxed),
+                a,
+                if a == 0 {
+                    0.0
+                } else {
+                    DEF_PLAN_INDIVIDUAL.load(Ordering::Relaxed) as f32 / a as f32
+                },
+            )
+        }
+    }
+
+    impl DefenceDiag {
+        pub fn note_shape(depth_spread: f32, max_lateral_gap: f32) {
+            DEF_SAMPLES.fetch_add(1, Ordering::Relaxed);
+            DEF_DEPTH_SPREAD_X100.fetch_add((depth_spread * 100.0) as u64, Ordering::Relaxed);
+            DEF_MAX_GAP_X100.fetch_add((max_lateral_gap * 100.0) as u64, Ordering::Relaxed);
+        }
+
+        pub fn note_attacker(nearest_marker: f32, unmarked: bool) {
+            DEF_ATTACKERS_SEEN.fetch_add(1, Ordering::Relaxed);
+            DEF_NEAREST_MARKER_X100.fetch_add((nearest_marker * 100.0) as u64, Ordering::Relaxed);
+            if unmarked {
+                DEF_ATTACKERS_UNMARKED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(samples, mean_depth_spread, mean_max_gap, attackers, unmarked, mean_nearest)`
+        pub fn snapshot() -> (u64, f32, f32, u64, u64, f32) {
+            let n = DEF_SAMPLES.load(Ordering::Relaxed);
+            let a = DEF_ATTACKERS_SEEN.load(Ordering::Relaxed);
+            let per = |v: u64, d: u64| {
+                if d == 0 {
+                    0.0
+                } else {
+                    v as f32 / 100.0 / d as f32
+                }
+            };
+            (
+                n,
+                per(DEF_DEPTH_SPREAD_X100.load(Ordering::Relaxed), n),
+                per(DEF_MAX_GAP_X100.load(Ordering::Relaxed), n),
+                a,
+                DEF_ATTACKERS_UNMARKED.load(Ordering::Relaxed),
+                per(DEF_NEAREST_MARKER_X100.load(Ordering::Relaxed), a),
+            )
+        }
+
+        pub fn reset() {
+            for c in [
+                &DEF_SAMPLES,
+                &DEF_DEPTH_SPREAD_X100,
+                &DEF_MAX_GAP_X100,
+                &DEF_ATTACKERS_SEEN,
+                &DEF_ATTACKERS_UNMARKED,
+                &DEF_NEAREST_MARKER_X100,
+                &DEF_PLAN_REFRESH,
+                &DEF_PLAN_ACTIVE,
+                &DEF_PLAN_INDIVIDUAL,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Crossing-chain counters. Bundled so the delivery mix, the contest
+    /// funnel and the header endpoint are read and reset as one thing.
+    pub struct CrossDiag;
+
+    impl CrossDiag {
+        /// Record a delivery against its type.
+        pub fn note(cross_type: CrossType) {
+            CROSS_BY_TYPE[cross_type.diag_index()].fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// Deliveries struck, in [`CrossType::ALL`] order.
+        pub fn by_type() -> [u64; 5] {
+            let mut out = [0u64; 5];
+            for (slot, counter) in out.iter_mut().zip(CROSS_BY_TYPE.iter()) {
+                *slot = counter.load(Ordering::Relaxed);
+            }
+            out
+        }
+
+        /// `(seen, fired, attacker_won, keeper_claimed, headers_on_goal)`
+        pub fn contest() -> (u64, u64, u64, u64, u64) {
+            (
+                CROSS_CONTEST_SEEN.load(Ordering::Relaxed),
+                CROSS_CONTEST_FIRED.load(Ordering::Relaxed),
+                CROSS_CONTEST_WON.load(Ordering::Relaxed),
+                CROSS_CONTEST_GK.load(Ordering::Relaxed),
+                CROSS_HEADER_ON_GOAL.load(Ordering::Relaxed),
+            )
+        }
+
+        pub fn reset() {
+            for c in CROSS_BY_TYPE.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
+            for c in [
+                &CROSS_CONTEST_SEEN,
+                &CROSS_CONTEST_FIRED,
+                &CROSS_CONTEST_WON,
+                &CROSS_CONTEST_GK,
+                &CROSS_HEADER_ON_GOAL,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
     pub fn reset() {
+        CrossDiag::reset();
+        PlanDiag::reset();
+        DefenceDiag::reset();
         for c in [
             &RUNNER_BOX_TICKS,
             &FWD_CUTBACK,
@@ -679,7 +913,11 @@ impl BallCarry {
                 // their man instead of going round him, and the ball
                 // going nowhere went 178 -> 449 s a match. Whatever
                 // replaces this has to keep him committing to a side.
-                sidestep = if relative.dot(&lateral) > 0.0 { -1.0 } else { 1.0 };
+                sidestep = if relative.dot(&lateral) > 0.0 {
+                    -1.0
+                } else {
+                    1.0
+                };
             }
         }
         if sidestep == 0.0 {
@@ -1019,8 +1257,7 @@ pub fn evaluate_forward_shot_decision(
     let possession_start = ctx
         .current_tick()
         .saturating_sub(ctx.tick_context.ball.ownership_duration as u64);
-    let opportunity = possession_start
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    let opportunity = possession_start.wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ (ctx.player.id as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     let spread = ((opportunity >> 40) as f32) / ((1u32 << 24) as f32);
     // Players differ in where their bar sits, and the same player differs

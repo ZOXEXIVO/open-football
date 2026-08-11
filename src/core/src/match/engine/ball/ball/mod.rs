@@ -13,7 +13,10 @@
 
 mod goal;
 pub mod interactions;
-mod motion;
+// `pub` for `SpinModel` — the strike sites (shot / cross) solve the
+// rotation they need from the same Magnus coefficient the physics
+// integrates, so the two can never drift apart.
+pub mod motion;
 pub mod ownership;
 mod restart;
 // `pub` for `dead_ball_diag` — the stall attribution counters are read by
@@ -23,6 +26,7 @@ pub mod stall;
 use crate::r#match::engine::ball::events::BallEvent;
 use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::events::EventCollection;
+use crate::r#match::player::strategies::passing::CrossType;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 use std::collections::VecDeque;
@@ -372,6 +376,12 @@ pub struct Ball {
     pub start_position: Vector3<f32>,
     pub position: Vector3<f32>,
     pub velocity: Vector3<f32>,
+    /// Angular velocity in rad/tick. Set at strike time from where on the
+    /// ball the player's foot met it, integrated as a Magnus force while
+    /// airborne, and scrubbed off on contact with the turf or a player.
+    /// This is the only channel in the engine that can turn a flight
+    /// sideways — see [`SpinModel`](super::ball::SpinModel).
+    pub spin: Vector3<f32>,
     pub center_field_position: f32,
 
     pub field_width: f32,
@@ -451,6 +461,27 @@ pub struct Ball {
     /// the near post, far post, penalty spot, or short. Cleared after
     /// the corner resolves. `None` whenever a corner isn't pending.
     pub pending_corner_routine: Option<CornerRoutine>,
+    /// Fire-once guard for the OPEN-PLAY cross aerial contest, the
+    /// sibling of `corner_contest_resolved`. A lofted cross is aimed at a
+    /// patch of the box, not at a pair of feet, so it cannot be settled by
+    /// whichever player's state machine happens to run first — the engine
+    /// resolves one skill-weighted contest (best attacking header vs the
+    /// nearest defenders vs the keeper's command of his area) and drops
+    /// the ball on the winner. `false` = armed (a lofted cross is in the
+    /// air, not yet resolved); `true` = nothing to resolve, which is also
+    /// the resting state for ground deliveries and every ordinary pass.
+    pub cross_contest_resolved: bool,
+    /// Which delivery the crossing model chose for the ball currently in
+    /// flight. Read by the contest (a whipped near-post ball is harder for
+    /// a keeper to claim than a floated one) and cleared with the rest of
+    /// the pending-pass metadata.
+    pub pending_cross_type: Option<CrossType>,
+    /// Player an engine-level aerial contest has already awarded the ball
+    /// to. Their heading state must NOT roll a second duel — the contest
+    /// is the duel, and re-rolling it is double jeopardy (the bug the
+    /// corner path documents and works around with a clean-contact
+    /// floor). Cleared on the next touch or when the ball settles.
+    pub aerial_contest_winner: Option<u32>,
     /// Counter for "ball is owned but nothing is happening" stalls.
     /// The unowned-stall warning can't see these because ownership is
     /// set, but visually the ball sits with a player who isn't moving,
@@ -773,6 +804,7 @@ impl Ball {
             field_width,
             field_height,
             velocity: Vector3::zeros(),
+            spin: Vector3::zeros(),
             center_field_position: x, // initial ball position = center field
             flags: BallFlags::default(),
             previous_owner: None,
@@ -801,6 +833,9 @@ impl Ball {
             pending_corner_teleports: Vec::new(),
             corner_contest_resolved: true,
             pending_corner_routine: None,
+            cross_contest_resolved: true,
+            pending_cross_type: None,
+            aerial_contest_winner: None,
             owned_stuck_ticks: 0,
             owned_stuck_logged: false,
             stall_anchor_pos: Vector3::new(x, y, 0.0),
@@ -904,8 +939,7 @@ impl Ball {
     /// Take the ball into `keeper_id`'s gloves.
     pub fn gather_in_hands(&mut self, keeper_id: u32, team_id: u32, tick: u64) {
         #[cfg(feature = "match-logs")]
-        ownership::reception_diag::GATHERS
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        ownership::reception_diag::GATHERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.record_touch(keeper_id, team_id, tick, true);
         self.held_in_hands = true;
         self.last_release_from_hands = false;
@@ -949,7 +983,10 @@ impl Ball {
     pub fn record_touch(&mut self, player_id: u32, team_id: u32, tick: u64, controlled: bool) {
         // Somebody else has been on the ball — whatever the last releaser
         // did is history, and their re-collect bar lifts.
-        if self.last_release_player_id.is_some_and(|id| id != player_id) {
+        if self
+            .last_release_player_id
+            .is_some_and(|id| id != player_id)
+        {
             self.last_release_player_id = None;
             // Somebody else has played it, so the keeper who put it into
             // play may use his hands again (Law 12's second-touch bar
@@ -960,6 +997,13 @@ impl Ball {
         // re-raises it immediately afterwards for the one touch that
         // should — see its docs.
         self.last_touch_was_deliberate_kick = false;
+        // A touch ends whatever aerial contest awarded the ball: the
+        // planted header has been struck, or somebody else got there
+        // first. Either way the "don't re-roll the duel" grant is spent.
+        self.aerial_contest_winner = None;
+        // A foot or a chest kills the rotation. Whatever the ball was
+        // doing in the air, the next kick decides what it does now.
+        self.spin = Vector3::zeros();
         self.last_touch_player_id = Some(player_id);
         self.last_touch_team_id = Some(team_id);
         self.last_touch_tick = tick;
@@ -1141,8 +1185,8 @@ mod gk_handling_tests {
         // `record_touch` lowering the flag rather than from any explicit
         // clearing, so it holds for touch paths that do not exist yet.
         for (toucher, team, controlled) in [
-            (DEFENDER, KEEPER_TEAM, false), // deflection off a team-mate
-            (OPPONENT, OPPONENT_TEAM, true), // opponent played it
+            (DEFENDER, KEEPER_TEAM, false),   // deflection off a team-mate
+            (OPPONENT, OPPONENT_TEAM, true),  // opponent played it
             (OPPONENT, OPPONENT_TEAM, false), // opponent deflected it
         ] {
             let mut b = ball();
@@ -1667,6 +1711,10 @@ impl Ball {
         self.pending_pass_origin = None;
         self.pending_pass_target = None;
         self.pending_pass_was_cross = false;
+        self.pending_cross_type = None;
+        // Disarm the aerial contest with the delivery it belonged to — a
+        // cross that has been claimed, cleared or intercepted is over.
+        self.cross_contest_resolved = true;
     }
 
     /// Drop any in-flight shot metadata (xG / shooter id). Called once

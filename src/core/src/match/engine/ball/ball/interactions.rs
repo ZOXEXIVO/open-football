@@ -150,7 +150,7 @@ pub mod block_diag {
             )
         }
 
-            pub fn reset() {
+        pub fn reset() {
             for c in [
                 &SHOTS_SEEN,
                 &TOO_HIGH,

@@ -882,6 +882,44 @@ impl PassEvaluator {
             tactical_value += long_pass_bonus * 0.15;
         }
 
+        // ── THE PLAN ─────────────────────────────────────────────────
+        // Everything above scores STATIC GEOMETRY: where the receiver is
+        // standing, how much space he has, whether the ball moves
+        // forward. None of it knows that a run was made, or who it was
+        // made for — so a run and a pass were two independent processes
+        // that only coincided by luck, and the man arriving at the far
+        // post was worth exactly as much as the man standing next to him.
+        //
+        // The team plan closes that loop: the carrier now prefers the
+        // target the attack was built around. Deliberately a bias, not an
+        // override — the plan is a shared intention, and a passer who can
+        // see a better ball is still allowed to play it.
+        let team_ops = ctx.team();
+        let plan = team_ops.attack_plan();
+        if plan.active {
+            if plan.primary_target == Some(receiver.id) {
+                tactical_value += 0.30;
+            } else if plan.slot_of(receiver.id).is_some() {
+                tactical_value += 0.18;
+            } else if plan.far_runner == Some(receiver.id) {
+                // Only worth finding when the ball can actually be played
+                // in behind — otherwise this is a hopeful hoof.
+                if forward_value > 0.0 {
+                    tactical_value += 0.14;
+                }
+            } else if plan.near_support == Some(receiver.id) {
+                // The outlet is valuable precisely when nothing forward
+                // is on, so it is credited as a floor rather than a bonus.
+                tactical_value += 0.06;
+            }
+            // Rest defence is not an attacking option. Playing the ball to
+            // the man whose job is to stay home is how a possession loses
+            // its shape.
+            if plan.is_rest_defence(receiver.id) && forward_value > 0.0 {
+                tactical_value -= 0.10;
+            }
+        }
+
         // Allow negative tactical values for backward passes
         tactical_value.clamp(-0.5, 1.8)
     }

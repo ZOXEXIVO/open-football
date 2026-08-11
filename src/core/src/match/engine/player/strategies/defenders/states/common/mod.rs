@@ -1,3 +1,4 @@
+use crate::r#match::DefensiveDuty;
 use crate::r#match::StateProcessingContext;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
@@ -5,7 +6,9 @@ use crate::r#match::engine::player::strategies::common::{
     ActivityIntensityConfig, ConditionProcessor, FIELD_PLAYER_JADEDNESS_INTERVAL,
     JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD,
 };
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::players::DefensiveRole;
+use nalgebra::Vector3;
 
 /// The one rule every defender obeys regardless of which state he is in:
 /// **do not let the ball sit behind you.**
@@ -121,8 +124,33 @@ impl DefensiveRecovery {
         // Unit direction from me toward my own goal, so the test below
         // reads the same on both sides of the pitch.
         let to_goal = (own_goal_x - me_x).signum();
-        // Am I already at the cover point or goal-side of it?
+
+        // WHAT THIS RULE POINTS AT.
+        //
+        // It used to point at one number: `ball_x ± COVER_MARGIN`, the
+        // same for every defender on the side, driven at the same base
+        // speed. That is a correct rule about DEPTH and it fixed a real
+        // problem — goal-side presence went from 0.18 to 3.28 opposition
+        // outfielders per shot — but because the target was shared, four
+        // defenders of similar pace converged on one x and then slid
+        // together as the ball moved. It is the mechanism behind a back
+        // line that moves as one body.
+        //
+        // The rule now points at the defender's OWN assignment: the
+        // goal-side shoulder of the man he is marking, the cover point
+        // behind the carrier, or — when he has nobody — the shared ball
+        // reference, which is the right answer for a zone-holder and is
+        // exactly the previous behaviour. Same ramp, same speeds, same
+        // exemptions; only the target differs, so what was measured about
+        // this rule still holds while the line stops being rigid.
+        // A defender with an assignment recovers to THAT; one without
+        // keeps the ball-relative reference, which is what a zone-holder
+        // should do and is precisely the old behaviour. The anchor
+        // already includes its own goal-side offset (a marker's shoulder,
+        // a cover point), so it needs no further margin — adding one on
+        // top would stand a marker 4.5 m off his man.
         let ball_x = ctx.tick_context.positions.ball.position.x;
+        let duty_anchor_x = ctx.team().my_duty_anchor().map(|a| a.x);
         // Clamped to the pitch. With the ball inside `COVER_MARGIN` of a
         // goal line — every corner, every goalmouth scramble — the raw
         // cover point lands BEHIND the goal line, i.e. off the field. A
@@ -137,7 +165,16 @@ impl DefensiveRecovery {
         // means arriving at it is possible, which is what lets the rule
         // switch off.
         let field_w = ctx.context.field_size.width as f32;
-        let cover_x = (ball_x + to_goal * Self::COVER_MARGIN).clamp(0.0, field_w);
+        let zone_cover_x = ball_x + to_goal * Self::COVER_MARGIN;
+        let cover_x = match duty_anchor_x {
+            // An assignment must never leave a defender LESS goal-side
+            // than the shared rule would have: marking a man who has
+            // drifted high cannot be allowed to undo the goal-side
+            // guarantee this rule exists to provide.
+            Some(x) if (x - zone_cover_x) * to_goal > 0.0 => x,
+            _ => zone_cover_x,
+        }
+        .clamp(0.0, field_w);
         // How far up-field of the cover point I still am. Positive means
         // there is recovering to do; zero or less and the rule is inert.
         let behind = (cover_x - me_x) * to_goal;
@@ -151,11 +188,16 @@ impl DefensiveRecovery {
         // either end of the band.
         let t = (behind / Self::COVER_MARGIN).clamp(0.0, 1.0);
         let weight = t * t * (3.0 - 2.0 * t);
-        // Somebody has to go to the ball.
-        if matches!(
-            ctx.player().defensive().defensive_role_for_ball_carrier(),
-            DefensiveRole::Primary
-        ) {
+        // Somebody has to go to the ball. The plan's designated presser
+        // is that man; the legacy geometric `Primary` stays as the
+        // fallback for the ticks where no plan is live (a loose ball with
+        // no carrier, the first refresh of a possession).
+        if matches!(ctx.team().my_duty(), DefensiveDuty::Press)
+            || matches!(
+                ctx.player().defensive().defensive_role_for_ball_carrier(),
+                DefensiveRole::Primary
+            )
+        {
             return None;
         }
         // Deliberately the same base speed `DefenderHoldingLineState`
@@ -175,6 +217,143 @@ impl DefensiveRecovery {
             to_goal * Self::RECOVERY_SPEED * pace * profile.recovery_run_mult,
             weight,
         ))
+    }
+}
+
+/// When a defender in contact range actually commits to a challenge,
+/// rather than staying on his feet and containing.
+///
+/// # Why the volume was wrong
+///
+/// The tackling state attempted a challenge on every tick it was in
+/// contact range and off cooldown. That produced **11.9 tackles per
+/// defender per match against a real ~1.6** (84.9 per team against 18),
+/// with 441k state entries collapsing to 9.5k attempts and 4.2k
+/// successes. `TackleEngagement`'s own notes had already established that
+/// the volume does not live in the engagement GEOMETRY — successful
+/// tackles held at 92.8/team across 25u, 16u and 10u commit distances —
+/// so it has to live here, in whether the attempt is made at all.
+///
+/// # The football
+///
+/// A defender does not lunge because he can reach. Most of a duel is
+/// spent containing: standing the carrier up, showing him away from goal,
+/// waiting. He commits when something gives him the moment — the carrier
+/// takes a touch too far, commits his weight, or runs out of pitch — and
+/// he commits more readily when there is somebody behind him to clean up
+/// if he misses.
+///
+/// Every term below is continuous, so the tackle rate emerges from the
+/// situation and the defender's temperament instead of a threshold.
+pub struct TackleDecision;
+
+impl TackleDecision {
+    /// Per-DECISION commitment chance for an ordinary contain, before the
+    /// situational terms. Containing is the default action in a duel, so
+    /// a typical decision lands near 0.25-0.30 once the multipliers are
+    /// applied — a defender who stands his man up for a second or two
+    /// usually does not dive in.
+    const BASE: f32 = 0.16;
+
+    /// How often the decision is taken while containing, in ticks.
+    ///
+    /// ONE ROLL PER MOMENT, not one per tick — the same discipline
+    /// `intercept_rolled` / `save_rolled` / `block_rolled` enforce
+    /// elsewhere, and for the same reason. Rolling every tick makes the
+    /// rate a function of how long the defender happens to stay in range
+    /// rather than of the defending: at 100 ticks in contact and any
+    /// per-tick probability above ~3%, a challenge becomes a certainty,
+    /// so the tackle cooldown (~1 s) silently remained the only real
+    /// limiter and the whole decision was decorative. Measured that way
+    /// it moved tackles per defender only 11.9 → 10.3 against a real 1.6.
+    ///
+    /// One second is the natural cadence: it is roughly how long a
+    /// carrier holds a shape before his next touch, which is what creates
+    /// or denies the moment.
+    const DECISION_INTERVAL_TICKS: u64 = 100;
+
+    /// Is this tick one on which the defender re-decides? Entry always
+    /// counts, so a defender arriving on a carrier who has already lost
+    /// control can challenge immediately.
+    pub fn is_decision_tick(ctx: &StateProcessingContext) -> bool {
+        ctx.in_state_time % Self::DECISION_INTERVAL_TICKS == 0
+    }
+
+    /// Probability this defender commits to a challenge at this decision.
+    ///
+    /// `distance` is defender-to-carrier; closer is a better moment
+    /// because the angle to the ball is better.
+    pub fn commit_probability(ctx: &StateProcessingContext, distance: f32) -> f32 {
+        let skills = &ctx.player.skills;
+        let aggression = (skills.mental.aggression / 20.0).clamp(0.0, 1.0);
+        let decisions = (skills.mental.decisions / 20.0).clamp(0.0, 1.0);
+        let anticipation = (skills.mental.anticipation / 20.0).clamp(0.0, 1.0);
+
+        // Temperament. An aggressive defender dives in; a good
+        // decision-maker picks his moment, which means fewer challenges
+        // but better ones. They pull in opposite directions on purpose.
+        let temperament = 0.55 + aggression * 0.90 - decisions * 0.30;
+
+        // Cover behind me. This is the single biggest real-world licence
+        // to commit: with a spare man you can afford to miss, without one
+        // a failed tackle is a clear run at goal. The plan knows who the
+        // cover is, so this is a fact rather than a guess.
+        let cover_licence = if Self::cover_exists(ctx) { 1.55 } else { 0.75 };
+
+        // Necessity. Near our own goal the cost of NOT engaging rises
+        // faster than the cost of missing — this is where last-ditch
+        // challenges come from.
+        let own_goal = ctx.ball().direction_to_own_goal();
+        let ball_to_goal = (ctx.tick_context.positions.ball.position - own_goal).magnitude();
+        // 1.0 on the goal line, 0 at ~30 m out.
+        let danger = (1.0 - ball_to_goal / 240.0).clamp(0.0, 1.0);
+        let necessity = 1.0 + danger * 1.9;
+
+        // The moment. A carrier moving quickly across or past the
+        // defender has committed his weight and can be challenged; one
+        // standing still shielding cannot. Anticipation is how well the
+        // defender reads that.
+        let carrier_speed = ctx
+            .players()
+            .opponents()
+            .with_ball()
+            .next()
+            .map(|c| c.velocity(ctx).norm())
+            .unwrap_or(0.0);
+        let exposure = (carrier_speed / 0.45).clamp(0.0, 1.0);
+        let timing = 1.0 + exposure * anticipation * 1.1;
+
+        // Angle. At the outer edge of contact range the ball is a lunge
+        // away; at his feet it is a clean block tackle.
+        let proximity = (1.0 - distance / TackleEngagement::CONTACT.max(1.0)).clamp(0.0, 1.0);
+        let reach = 0.65 + proximity * 0.70;
+
+        (Self::BASE * temperament * cover_licence * necessity * timing * reach).clamp(0.0, 0.55)
+    }
+
+    /// Is there a team-mate holding the cover duty who is not me?
+    fn cover_exists(ctx: &StateProcessingContext) -> bool {
+        let team = ctx.team();
+        let plan = team.defensive_plan();
+        if !plan.active {
+            return false;
+        }
+        ctx.players()
+            .teammates()
+            .all()
+            .any(|t| t.id != ctx.player.id && plan.duty_of(t.id) == DefensiveDuty::Cover)
+    }
+
+    /// Where a containing defender stands: goal-side of the carrier, a
+    /// stride off him. This is the jockey — he is between his man and the
+    /// goal, close enough to challenge the moment the touch is loose, and
+    /// NOT running through him.
+    pub fn contain_position(ctx: &StateProcessingContext, carrier: Vector3<f32>) -> Vector3<f32> {
+        let own_goal = ctx.ball().direction_to_own_goal();
+        let to_goal = (own_goal - carrier)
+            .try_normalize(0.01)
+            .unwrap_or_else(|| Vector3::new(1.0, 0.0, 0.0));
+        carrier + to_goal * TackleEngagement::CONTACT * 0.8
     }
 }
 

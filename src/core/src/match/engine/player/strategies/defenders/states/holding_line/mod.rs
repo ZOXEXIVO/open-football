@@ -7,7 +7,7 @@ use crate::r#match::defenders::states::common::{
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    ConditionContext, DefensiveDuty, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
 };
 
@@ -24,6 +24,14 @@ const DANGEROUS_RUN_ANGLE: f32 = 0.5; // Wider angle detection for goal-bound ru
 // state.
 const AERIAL_HEADING_HEIGHT: f32 = 1.5;
 const AERIAL_HEADING_DISTANCE: f32 = 5.0;
+/// How far off the line a covering defender drops (~4.5 m). This is the
+/// near end of the back line's diagonal.
+const COVER_DROP: f32 = 36.0;
+/// How far the far-side defender tucks back when the ball is fully on the
+/// opposite flank (~7.5 m). Scaled continuously by how far across the
+/// pitch the ball actually is, so the diagonal grows and shrinks with the
+/// play instead of switching on.
+const FAR_SIDE_DROP: f32 = 60.0;
 
 #[derive(Default, Clone)]
 pub struct DefenderHoldingLineState {}
@@ -386,7 +394,41 @@ impl DefenderHoldingLineState {
             tactical_position.y + shift
         };
 
-        Vector3::new(target_x, target_y, 0.0)
+        // ── ROLE STAGGER ─────────────────────────────────────────────
+        //
+        // Everything above computes depth from the ball and lateral
+        // position from `start_position` — the kickoff formation slot.
+        // Four defenders whose slots differ by a constant therefore hold
+        // a line whose SHAPE is a constant too: flat, evenly spaced, and
+        // identical in every situation the match produces.
+        //
+        // A real back line is never flat. It is a diagonal, and the
+        // diagonal comes from ROLES: the man covering the presser drops
+        // off him, and the far-side full-back tucks in and drops deeper
+        // still because the ball cannot reach him quickly. Both are depth
+        // offsets relative to what this defender is DOING, which is
+        // exactly the quantity the formation slot cannot express.
+        let stagger = match ctx.team().my_duty() {
+            // Covering — sit off the line, behind whoever is engaging.
+            DefensiveDuty::Cover => COVER_DROP,
+            // Holding the far side of a ball-side overload: tuck in and
+            // drop, scaled by how far across the pitch the ball is, so
+            // the diagonal is proportional rather than switched on.
+            DefensiveDuty::HoldZone => {
+                let ball_offset = (ball_position.y - field_center_y) / field_center_y.max(1.0);
+                let my_offset = (ctx.player.position.y - field_center_y) / field_center_y.max(1.0);
+                // Positive when the ball is on the opposite flank to me.
+                let far_side = (-ball_offset * my_offset).clamp(0.0, 1.0);
+                far_side * FAR_SIDE_DROP
+            }
+            // A presser or a marker is where his job is; his depth is
+            // already set by the duty anchor.
+            _ => 0.0,
+        };
+        let forward_sign = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+        let staggered_x = target_x - forward_sign * stagger;
+
+        Vector3::new(staggered_x, target_y, 0.0)
     }
 
     /// Checks if an opponent player is nearby within the MARKING_DISTANCE_THRESHOLD.

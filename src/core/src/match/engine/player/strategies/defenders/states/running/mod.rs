@@ -1,3 +1,4 @@
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
     ActivityIntensity, DefenderCondition, DefensiveLine,
@@ -11,10 +12,15 @@ use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
-use crate::PlayerFieldPositionGroup;
 use nalgebra::Vector3;
 
 const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Defenders almost never shoot, only from very close
+
+/// How close an assigned man has to be before a defender abandons the
+/// shape logic to go and mark him (~19 m). Wide enough that a marker
+/// genuinely tracks his runner across the final third, tight enough that
+/// he doesn't chase a full-back standing on the halfway line.
+const MARK_BREAK_DISTANCE: f32 = 150.0;
 
 #[derive(Default, Clone)]
 pub struct DefenderRunningState {}
@@ -474,8 +480,7 @@ impl StateProcessingHandler for DefenderRunningState {
                     }
 
                     let home = SteeringBehavior::Arrive {
-                        target: ctx.player.start_position
-                            + ctx.player().separation_offset(),
+                        target: ctx.player.start_position + ctx.player().separation_offset(),
                         slowing_distance: 30.0,
                     }
                     .calculate(ctx.player)
@@ -595,6 +600,31 @@ impl DefenderRunningState {
         let ball_dist = ctx.ball().distance();
         let near_start =
             ctx.player().position_to_distance() != PlayerDistanceFromStartPosition::Big;
+
+        // DUTY BEFORE SHAPE.
+        //
+        // Everything below this point answers "where is the line?" and
+        // nothing below it answers "where is my man?" — no branch in the
+        // phase table consults an opponent at all. That is survivable only
+        // if this state is rare, and it is not: `Running` is 50% of the
+        // back line's state at the moment a shot is struck, and it had no
+        // transition to `Marking` anywhere in the file. Half the defence
+        // was structurally incapable of picking anybody up, which is most
+        // of why 74% of attackers inside our own third had nobody within
+        // three metres.
+        //
+        // A defender the team plan has given a man goes to him. Distance
+        // still decides whether it is worth breaking shape for: a marker
+        // whose man is thirty metres away holds his position and lets the
+        // phase logic run, which is also what a real defender does.
+        if let Some(man) = ctx.team().my_mark() {
+            if (man.position - ctx.player.position).magnitude() < MARK_BREAK_DISTANCE {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Marking,
+                ));
+            }
+        }
+
         match phase {
             // Settled defence in a low block — four defenders form a
             // compact horizontal line. Route to HoldingLine if we're

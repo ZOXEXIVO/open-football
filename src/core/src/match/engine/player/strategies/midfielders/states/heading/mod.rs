@@ -73,7 +73,13 @@ impl StateProcessingHandler for MidfielderHeadingState {
             ));
         }
 
-        if !self.wins_duel(ctx) {
+        // When an engine-level aerial contest (`resolve_cross_contest` /
+        // `resolve_corner_contest`) has already awarded this player the
+        // ball, the duel is settled — rolling `wins_duel` on top of it is
+        // double jeopardy, the same bug the forward heading state and the
+        // CB `AttackingCorner` state both carve out.
+        let contest_awarded = ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id);
+        if !contest_awarded && !self.wins_duel(ctx) {
             // Lost the header — the ball goes on and we react to it.
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,

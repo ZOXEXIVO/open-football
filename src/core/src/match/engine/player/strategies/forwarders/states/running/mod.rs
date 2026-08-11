@@ -1063,6 +1063,35 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
+            // ASSIGNED BOX SLOT: once the team plan has given this forward
+            // a patch of the box, that is where he goes. It supersedes the
+            // generic spread below for the duration of the attack.
+            //
+            // The spread is a good default but it is only a default: its
+            // `slot_y` is derived from a by-id rank among FORWARDS and
+            // blended with the ball's y, so three forwards fan out
+            // relative to each other and to the ball while knowing nothing
+            // about the midfielders arriving into the same space — and
+            // nothing about which parts of the box are actually worth
+            // occupying. The plan assigns exclusive destinations across
+            // the whole side, which is the only thing that stops bodies
+            // converging in front of goal.
+            if let Some(slot_target) = ctx.team().my_box_slot_target() {
+                let dist = (slot_target - ctx.player.position).magnitude();
+                if dist < 8.0 {
+                    return Some(Vector3::zeros());
+                }
+                return Some(
+                    SteeringBehavior::Arrive {
+                        target: slot_target,
+                        slowing_distance: 15.0,
+                    }
+                    .calculate(ctx.player)
+                    .velocity
+                        * fatigue_factor,
+                );
+            }
+
             // ANTI-FOLLOWING: If very close to ball carrier, spread away
             // Use hysteresis: start spreading at 25, stop at 45 to prevent oscillation
             if ball_distance < 25.0 && ctx.team().is_control_ball() {

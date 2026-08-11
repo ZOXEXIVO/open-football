@@ -1450,7 +1450,10 @@ fn dump_wonderkid_ceilings() {
         120,
         PersonAttributes::default(),
     );
-    for (label, p) in [("PA 190 wonderkid", &star), ("PA 120 squad player", &ordinary)] {
+    for (label, p) in [
+        ("PA 190 wonderkid", &star),
+        ("PA 120 squad player", &ordinary),
+    ] {
         println!("\n{label} — wide midfielder");
         println!(
             "{:>4} {:>9} {:>9} {:>7} {:>9} {:>9}",

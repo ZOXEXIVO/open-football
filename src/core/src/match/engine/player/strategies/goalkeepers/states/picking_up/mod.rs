@@ -87,9 +87,7 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
                 StateChangeResult::with_goalkeeper_state(GoalkeeperState::HoldingBall);
 
             // Generate a pickup event
-            state_change
-                .events
-                .add_player_event({
+            state_change.events.add_player_event({
                 #[cfg(feature = "match-logs")]
                 crate::r#match::engine::ball::ball::ownership::reception_diag::GATHER_SOURCE[1]
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

@@ -47,7 +47,10 @@ pub mod dead_ball_diag {
     pub static LONGEST_STUCK: AtomicU64 = AtomicU64::new(0);
 
     pub fn reset() {
-        for c in STUCK_TICKS_BY_STATE.iter().chain(STUCK_EPISODES_BY_STATE.iter()) {
+        for c in STUCK_TICKS_BY_STATE
+            .iter()
+            .chain(STUCK_EPISODES_BY_STATE.iter())
+        {
             c.store(0, Ordering::Relaxed);
         }
         for c in [
@@ -137,8 +140,7 @@ impl Ball {
                     None => {
                         dead_ball_diag::STUCK_TICKS_UNOWNED.fetch_add(1, Ordering::Relaxed);
                         if first {
-                            dead_ball_diag::STUCK_EPISODES_UNOWNED
-                                .fetch_add(1, Ordering::Relaxed);
+                            dead_ball_diag::STUCK_EPISODES_UNOWNED.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                 }

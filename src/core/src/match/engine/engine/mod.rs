@@ -17,8 +17,9 @@ use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::{
-    CoachInstruction, GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad,
-    MatchState, PenaltyShootoutKick, Score, StateManager, SubstitutionInfo, TacticalRefreshInputs,
+    AttackPlan, AttackRefreshInputs, CoachInstruction, DefenceRefreshInputs, DefensivePlan,
+    GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState,
+    PenaltyShootoutKick, Score, StateManager, SubstitutionInfo, TacticalRefreshInputs,
     TeamTacticalState,
 };
 use crate::{MatchRuntime, PlayerFieldPositionGroup};

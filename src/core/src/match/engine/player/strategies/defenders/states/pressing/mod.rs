@@ -1,7 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
-use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{

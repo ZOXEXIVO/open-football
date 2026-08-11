@@ -102,21 +102,18 @@ impl StateProcessingHandler for DefenderClearingState {
         // neither could be reasoned about on its own.
         let apex_metres = if at_boundary { 12.0 } else { 9.0 };
         let apex_mult = 0.85 + (ctx.player.skills.technical.technique / 20.0).powf(1.30) * 0.15;
-        let z_velocity =
-            Ball::launch_speed_for_apex(apex_metres * apex_mult * if poor_clearance {
-                0.55
-            } else {
-                1.0
-            });
+        let z_velocity = Ball::launch_speed_for_apex(
+            apex_metres * apex_mult * if poor_clearance { 0.55 } else { 1.0 },
+        );
 
         let speed_mult =
             (0.85 + def_profile.clearance_profile * 0.30) * def_profile.clearance_condition_mult;
         // Reach the aim point within the hang time, then trim by execution.
         // Clamped to a realistic hoof: 2.6 u/tick = 32 m/s.
         let hang = Ball::hang_ticks(z_velocity).max(1.0);
-        let clear_speed = ((to_target_dist / hang) * speed_mult
-            * if poor_clearance { 0.65 } else { 1.0 })
-        .clamp(0.30, 2.6);
+        let clear_speed =
+            ((to_target_dist / hang) * speed_mult * if poor_clearance { 0.65 } else { 1.0 })
+                .clamp(0.30, 2.6);
         let horizontal_velocity = direction_to_target * clear_speed;
 
         let ball_velocity = Vector3::new(horizontal_velocity.x, horizontal_velocity.y, z_velocity);

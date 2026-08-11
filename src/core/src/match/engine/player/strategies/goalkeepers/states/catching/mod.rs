@@ -77,9 +77,7 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             let mut holding_result =
                 StateChangeResult::with_goalkeeper_state(GoalkeeperState::HoldingBall);
 
-            holding_result
-                .events
-                .add_player_event({
+            holding_result.events.add_player_event({
                 #[cfg(feature = "match-logs")]
                 crate::r#match::engine::ball::ball::ownership::reception_diag::GATHER_SOURCE[0]
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

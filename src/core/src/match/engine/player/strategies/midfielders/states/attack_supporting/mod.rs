@@ -235,6 +235,39 @@ impl MidfielderAttackSupportingState {
 
         let distance_to_goal = (ball_position - goal_position).magnitude();
 
+        // ── ASSIGNED BOX SLOT ────────────────────────────────────────────
+        // If the team plan has given this midfielder a patch of the box,
+        // that IS his run — no local scan, no argmax, and crucially no
+        // chance of arriving at the same point as somebody else.
+        //
+        // This supersedes the elected-arriving-runner block below for
+        // anyone who holds a slot. That election re-derived the same
+        // target for every runner it elected (`MAX_RUNNERS` was 2 and both
+        // got an identical `(x, y)`), which is the specific reason bodies
+        // stacked in front of goal instead of spreading across the box.
+        if let Some(target) = ctx.team().my_box_slot_target() {
+            let target = target.clamp_to_field(field_width, field_height);
+            // Hold the run short of an offside position rather than
+            // abandoning the slot — the slot is where he is going, the
+            // line just decides when.
+            let target = if self.is_offside_risk(ctx, target) {
+                Vector3::new(target.x - attacking_direction * 18.0, target.y, 0.0)
+            } else {
+                target
+            };
+            #[cfg(feature = "match-logs")]
+            {
+                use std::sync::atomic::Ordering;
+                let center_y = field_height / 2.0;
+                let in_box_central = (goal_position - player_position).magnitude() < 110.0
+                    && (player_position.y - center_y).abs() < field_height * 0.17;
+                if in_box_central {
+                    crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::RUNNER_BOX_TICKS.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            return target;
+        }
+
         // ── ARRIVING RUNNER ──────────────────────────────────────────────
         // The attacking central midfielder (highest attacking drive with
         // cover behind — see should_make_attacking_run) makes a timed run
@@ -792,6 +825,15 @@ impl MidfielderAttackSupportingState {
         let _ball_position = ctx.tick_context.positions.ball.position;
         let player_position = ctx.player.position;
         let goal_position = ctx.player().opponent_goal_position();
+
+        // An assigned slot wins over the channel scan for the same reason
+        // as above: `best_free_channel` hands the SAME least-congested gap
+        // to every midfielder that calls it, so unassigned late runs
+        // converge. The scan stays as the fallback for players the plan
+        // gave no slot to.
+        if let Some(target) = ctx.team().my_box_slot_target() {
+            return target.clamp_to_field(field_width, field_height);
+        }
 
         // Identify the best free channel between defenders
         if let Some(best_channel) = self.best_free_channel(ctx, goal_position) {

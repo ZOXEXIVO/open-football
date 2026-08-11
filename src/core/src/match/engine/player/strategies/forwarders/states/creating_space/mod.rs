@@ -91,6 +91,27 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
 
         let goal_pos = ctx.player().opponent_goal_position();
 
+        // An assigned box slot IS this forward's space. The gap scan below
+        // is a good fallback but it only de-duplicates among FORWARDS
+        // (`slot_index` counts forward teammates by id) and cannot see the
+        // midfielders arriving into the same area, so a forward's channel
+        // and an arriving midfielder's were free to be the same patch of
+        // grass. The team plan de-duplicates across the whole side.
+        if let Some(slot_target) = ctx.team().my_box_slot_target() {
+            let dist = (slot_target - ctx.player.position).magnitude();
+            if dist < 8.0 {
+                return Some(Vector3::zeros());
+            }
+            return Some(
+                SteeringBehavior::Arrive {
+                    target: slot_target,
+                    slowing_distance: 20.0,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            );
+        }
+
         // Forwards must always push TOWARD the opponent goal, never drop back.
         // Target X: between the ball and the goal, biased heavily toward goal.
         let forward_x = goal_pos.x * 0.6 + ball_pos.x * 0.4;

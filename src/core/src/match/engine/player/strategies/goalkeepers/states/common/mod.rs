@@ -85,7 +85,11 @@ impl KeeperSetPosition {
     /// `+1` when the goal being defended is the left one, so "out of the
     /// goal" is `+x`; `-1` for the right-hand goal.
     fn into_pitch(own_goal: Vector3<f32>, field_width: f32) -> f32 {
-        if own_goal.x <= field_width * 0.5 { 1.0 } else { -1.0 }
+        if own_goal.x <= field_width * 0.5 {
+            1.0
+        } else {
+            -1.0
+        }
     }
 
     /// The spot to defend a strike from `shot_distance` away, guarding

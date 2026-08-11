@@ -339,10 +339,7 @@ pub fn record_window(
         // Keep the most extreme episode: most ground burnt for least
         // progress. Gives a timestamp to scrub to in the replay viewer.
         let score = path_m - net_m;
-        let better = e
-            .worst
-            .map(|(_, p, n, _)| score > p - n)
-            .unwrap_or(true);
+        let better = e.worst.map(|(_, p, n, _)| score > p - n).unwrap_or(true);
         if better {
             e.worst = Some((t_ms, path_m, net_m, state));
         }

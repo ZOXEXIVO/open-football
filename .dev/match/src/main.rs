@@ -5668,6 +5668,88 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         mr[14], mr[15]
     );
 
+    // ── OPEN-PLAY CROSSING CHAIN ──────────────────────────────────────
+    // Delivery MIX first (has one branch of `pick_cross_type` swallowed
+    // the model?), then the contest funnel: seen → fired → won → header.
+    // A high `seen` with a low `fired` means the resolver's height /
+    // box gates never match; a high `fired` with a low `won` means the
+    // duel is too hard; a high `won` with no headers means the winner's
+    // state machine isn't striking the planted ball.
+    {
+        use core::mid_run_diag::CrossDiag;
+        use core::r#match::player::strategies::passing::CrossType;
+        let by_type = CrossDiag::by_type();
+        let total: u64 = by_type.iter().sum();
+        println!("\n--- OPEN-PLAY CROSSING ---");
+        if total == 0 {
+            println!("  no crosses struck");
+        } else {
+            let mix = CrossType::ALL
+                .iter()
+                .enumerate()
+                .map(|(i, ct)| {
+                    format!(
+                        "{} {} ({:.0}%)",
+                        ct.label(),
+                        by_type[i],
+                        by_type[i] as f64 / total as f64 * 100.0
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("  ");
+            println!("  delivery mix ({total} struck): {mix}");
+        }
+        use core::mid_run_diag::PlanDiag;
+        let (refreshes, active, slots, slot_ticks) = PlanDiag::snapshot();
+        if refreshes > 0 {
+            println!(
+                "  attack plan: active on {:.0}% of refreshes, {:.1} of 4 box slots filled when live, {slot_ticks} slot-driven movement ticks",
+                active as f64 / refreshes as f64 * 100.0,
+                if active > 0 {
+                    slots as f64 / active as f64
+                } else {
+                    0.0
+                }
+            );
+        }
+        use core::mid_run_diag::DefenceDiag;
+        let (samples, depth_spread, max_gap, attackers, unmarked, nearest) = DefenceDiag::snapshot();
+        if samples > 0 {
+            println!("\n--- DEFENSIVE SHAPE (sampled while defending) ---");
+            println!(
+                "  back-line depth spread {:.0}u ({:.1}m)   widest lateral gap {:.0}u ({:.1}m)   (real stagger 25-65u / 3-8m)",
+                depth_spread,
+                depth_spread * 0.125,
+                max_gap,
+                max_gap * 0.125
+            );
+            println!(
+                "  attackers in our third: {attackers}, nearest defender {:.0}u ({:.1}m) on average, {:.0}% with NOBODY within 3m",
+                nearest,
+                nearest * 0.125,
+                unmarked as f64 / attackers.max(1) as f64 * 100.0
+            );
+            let (refresh, active, individual) = DefenceDiag::plan_snapshot();
+            if refresh > 0 {
+                println!(
+                    "  duty plan: live on {:.0}% of refreshes, {individual:.1} of the unit on an individual duty (press/cover/mark) when live",
+                    active as f64 / refresh as f64 * 100.0
+                );
+            }
+        }
+        let (seen, fired, won, gk, header) = CrossDiag::contest();
+        println!(
+            "  aerial contest: seen={seen}  fired={fired}  attacker-won={won}  keeper-claimed={gk}  headers on goal={header}"
+        );
+        if fired > 0 {
+            println!(
+                "  per contest: attacker wins {:.0}%, keeper claims {:.0}%   (real: cross completion ~22-25%)",
+                won as f64 / fired as f64 * 100.0,
+                gk as f64 / fired as f64 * 100.0
+            );
+        }
+    }
+
     // Player state-transition graph — the union of every distinct
     // `from -> to` edge (tagged by source) observed across the batch.
     // Dumped as Graphviz DOT and checked against the structural
