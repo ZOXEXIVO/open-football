@@ -5362,8 +5362,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     too_far,
                     too_far as f32 / n_matches as f32,
                 );
-                let (sw, so, sc_, snt, grj, clamped) =
-                    core::reception_diag::shot_fate_snapshot();
+                let (sw, so, sc_, snt, grj, clamped) = core::reception_diag::shot_fate_snapshot();
                 println!(
                     "  shot fate: wide {}, over the bar {}, claimed mid-flight {}, \
                      no projected target {}, goal REJECTED at the line {}   \
@@ -5398,7 +5397,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     for (id, ticks, eps) in rows.iter().take(8) {
                         println!(
                             "      {:>28}  {:>6.1}s  {:>4} episodes",
-                            label.get(id).cloned().unwrap_or_else(|| format!("state {id}")),
+                            label
+                                .get(id)
+                                .cloned()
+                                .unwrap_or_else(|| format!("state {id}")),
                             *ticks as f64 * 0.02,
                             eps
                         );
@@ -5676,8 +5678,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // duel is too hard; a high `won` with no headers means the winner's
     // state machine isn't striking the planted ball.
     {
-        use core::mid_run_diag::CrossDiag;
         use core::r#match::player::strategies::passing::CrossType;
+        use core::mid_run_diag::CrossDiag;
         let by_type = CrossDiag::by_type();
         let total: u64 = by_type.iter().sum();
         println!("\n--- OPEN-PLAY CROSSING ---");
@@ -5713,7 +5715,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             );
         }
         use core::mid_run_diag::DefenceDiag;
-        let (samples, depth_spread, max_gap, attackers, unmarked, nearest) = DefenceDiag::snapshot();
+        let (samples, depth_spread, max_gap, attackers, unmarked, nearest) =
+            DefenceDiag::snapshot();
         if samples > 0 {
             println!("\n--- DEFENSIVE SHAPE (sampled while defending) ---");
             println!(
@@ -5743,6 +5746,17 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     "  marking duels: marker sits {duel_gap:.0}u ({:.1}m) from his man, attacker got away (>4m) on {:.0}% of samples",
                     duel_gap * 0.125,
                     duels_lost * 100.0
+                );
+                let by_line = DefenceDiag::duel_by_line();
+                let total = by_line.iter().map(|(n, _)| *n).sum::<u64>().max(1);
+                println!(
+                    "    who is being marked: DEF {:.0}% ({:.1}m)  MID {:.0}% ({:.1}m)  FWD {:.0}% ({:.1}m)",
+                    by_line[0].0 as f64 / total as f64 * 100.0,
+                    by_line[0].1 * 0.125,
+                    by_line[1].0 as f64 / total as f64 * 100.0,
+                    by_line[1].1 * 0.125,
+                    by_line[2].0 as f64 / total as f64 * 100.0,
+                    by_line[2].1 * 0.125,
                 );
             }
             let (refresh, active, individual) = DefenceDiag::plan_snapshot();
@@ -6445,12 +6459,18 @@ fn run_paths(matches: usize, level: u8) {
                 } else {
                     !home_attacks_right
                 };
-                if attacks_right { (840.0, 272.5) } else { (0.0, 272.5) }
+                if attacks_right {
+                    (840.0, 272.5)
+                } else {
+                    (0.0, 272.5)
+                }
             };
 
             // Team shape (home outfielders only — one team is enough).
-            let outfield: Vec<&(u32, (f32, f32))> =
-                snap.iter().filter(|(id, _)| *id > 100 && *id < 200).collect();
+            let outfield: Vec<&(u32, (f32, f32))> = snap
+                .iter()
+                .filter(|(id, _)| *id > 100 && *id < 200)
+                .collect();
             if outfield.len() >= 8 {
                 let xs = outfield.iter().map(|(_, p)| p.0);
                 let ys = outfield.iter().map(|(_, p)| p.1);
@@ -6534,7 +6554,10 @@ fn run_paths(matches: usize, level: u8) {
     }
 
     println!();
-    println!("=== PLAYER PATH TRACE ({} matches, level {}) ===", matches, level);
+    println!(
+        "=== PLAYER PATH TRACE ({} matches, level {}) ===",
+        matches, level
+    );
     println!(
         "  {:<5} {:>8} {:>9} {:>7} {:>7} {:>8} {:>8} {:>9} {:>7}",
         "line", "covered", "to goal", "<6m", "<12m", "mate", "opp", "straight", "still"
@@ -6612,7 +6635,10 @@ fn run_record(level_a: Option<u8>, level_b: Option<u8>) {
     let chunks = result.position_data.split_into_chunks(CHUNK_DURATION_MS);
     for (idx, chunk) in chunks.iter().enumerate() {
         let data = serde_json::to_vec(chunk).expect("failed to serialize chunk");
-        save_gzip_json(&out_dir.join(format!("{}_chunk_{}.json.gz", MATCH_ID, idx)), &data);
+        save_gzip_json(
+            &out_dir.join(format!("{}_chunk_{}.json.gz", MATCH_ID, idx)),
+            &data,
+        );
     }
     println!("wrote {} chunks to {}", chunks.len(), out_dir.display());
 }

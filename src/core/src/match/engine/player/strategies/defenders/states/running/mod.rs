@@ -9,8 +9,9 @@ use crate::r#match::player::strategies::common::players::ops::defender_skill::De
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
-    ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
-    StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    ConditionContext, DefensiveDuty, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition,
+    PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -21,6 +22,13 @@ const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Defenders almost never shoot, only f
 /// genuinely tracks his runner across the final third, tight enough that
 /// he doesn't chase a full-back standing on the halfway line.
 const MARK_BREAK_DISTANCE: f32 = 150.0;
+
+/// How far the designated presser will step out to meet the man on the
+/// ball (~19 m). The same distance he will travel to pick a man up —
+/// stepping to the carrier is the same decision as stepping to a runner,
+/// and giving them different numbers is how a back line ends up with a
+/// duty it never acts on.
+const PRESS_BREAK_DISTANCE: f32 = 150.0;
 
 #[derive(Default, Clone)]
 pub struct DefenderRunningState {}
@@ -623,6 +631,32 @@ impl DefenderRunningState {
                     DefenderState::Marking,
                 ));
             }
+        }
+
+        // …and the same for the man on the ball.
+        //
+        // The phase table below engages a carrier only inside 60u — SEVEN
+        // AND A HALF METRES. Past that every defender holds the line, so
+        // a midfielder could carry to the edge of the box completely
+        // unpressed and strike. That is not a theory: 95% of all approved
+        // shots from beyond 22 m were tagged `MID_SHOOT`, midfielders
+        // took 75% of every shot in the game against a target of 32%, and
+        // the marking diagnostic showed why the front line couldn't
+        // compete for them — forwards are marked at 4.7 m while
+        // midfielders sit 13 m from the man nominally assigned to them.
+        //
+        // The plan already nominates a presser. He just had no way to act
+        // on it from the state he spends half his time in.
+        //
+        // Held to our own half so the back line steps out to meet a
+        // carrier rather than chasing him upfield.
+        if matches!(ctx.team().my_duty(), DefensiveDuty::Press)
+            && ctx.ball().on_own_side()
+            && ball_dist < PRESS_BREAK_DISTANCE
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Pressing,
+            ));
         }
 
         match phase {

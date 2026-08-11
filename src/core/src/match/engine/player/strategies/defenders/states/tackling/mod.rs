@@ -1,10 +1,9 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, TackleDecision,
-};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::states::TackleDecision;
 use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -339,7 +338,23 @@ impl DefenderTacklingState {
         // normal contact (whistled at ~0.5 instead of ~0.85), netting
         // only +10% whistles. Real per-duel foul rates are ~15-16%; the
         // engine sat at ~10% after round one.
-        let mut base_foul = 0.075 + aggression01 * 0.12 - def_profile.discipline * 0.075;
+        // A FOUL IS A FAILED CHALLENGE, and the rate has to be read
+        // against the number of challenges actually made.
+        //
+        // These constants were fitted when the engine attempted ten times
+        // as many tackles as football does — the per-attempt rate had to
+        // be tiny to keep the foul TOTAL anywhere near real. With the
+        // jockey model bringing attempts down to a realistic count, the
+        // same rate produced 2.1 fouls per team against a real ~12, 0.88
+        // yellows against 3.5-4.5, and 1.5 direct free kicks against
+        // 20-24: the whole disciplinary chain starved.
+        //
+        // Real football makes roughly 30 challenges a team and fouls on
+        // about 12 of them, so a challenge that does not win the ball
+        // cleanly is a foul a large fraction of the time. Lifted ~3× to
+        // match, with the own-box restraint and the booking damping below
+        // still holding penalties and second yellows down.
+        let mut base_foul = 0.34 + aggression01 * 0.34 - def_profile.discipline * 0.20;
         if !tackle_success {
             base_foul *= 1.80;
         }
@@ -357,7 +372,7 @@ impl DefenderTacklingState {
             .penalty_area(ctx.player.side == Some(PlayerSide::Left))
             .contains(&ctx.tick_context.positions.ball.position);
         if in_own_box {
-            base_foul *= 0.30;
+            base_foul *= 0.04;
         }
         // Self-preservation on a booking: a player carrying a yellow
         // measurably tones the challenges down (and managers hook the
@@ -365,7 +380,7 @@ impl DefenderTacklingState {
         if ctx.player.yellow_cards > 0 {
             base_foul *= 0.70;
         }
-        let foul_chance = base_foul.clamp(0.006, 0.30);
+        let foul_chance = base_foul.clamp(0.006, 0.60);
 
         let committed_foul = rng.random::<f32>() < foul_chance;
 

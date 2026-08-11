@@ -257,13 +257,30 @@ pub mod mid_run_diag {
     pub static DEF_DUEL_GAP_X100: AtomicU64 = AtomicU64::new(0);
     /// Duels where the attacker has genuinely got away (>4 m).
     pub static DEF_DUELS_LOST: AtomicU64 = AtomicU64::new(0);
+    /// The same duels split by the LINE of the man being marked. The
+    /// aggregate cannot answer the question that matters — whether the
+    /// marking that is happening is happening to FORWARDS — and the
+    /// attacking-side evasion work is only wired into forward states, so
+    /// an aggregate dominated by marked midfielders is blind to it.
+    /// Index 0 = defender, 1 = midfielder, 2 = forward.
+    pub static DEF_DUELS_BY_LINE: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    pub static DEF_DUEL_GAP_BY_LINE_X100: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 
     impl DefenceDiag {
-        pub fn note_duel(gap: f32) {
+        pub fn note_duel(gap: f32, marked_line: usize) {
             DEF_DUELS.fetch_add(1, Ordering::Relaxed);
             DEF_DUEL_GAP_X100.fetch_add((gap * 100.0) as u64, Ordering::Relaxed);
             if gap > 32.0 {
                 DEF_DUELS_LOST.fetch_add(1, Ordering::Relaxed);
+            }
+            if let (Some(c), Some(g)) = (
+                DEF_DUELS_BY_LINE.get(marked_line),
+                DEF_DUEL_GAP_BY_LINE_X100.get(marked_line),
+            ) {
+                c.fetch_add(1, Ordering::Relaxed);
+                g.fetch_add((gap * 100.0) as u64, Ordering::Relaxed);
             }
         }
 
@@ -278,6 +295,25 @@ pub mod mid_run_diag {
                 DEF_DUEL_GAP_X100.load(Ordering::Relaxed) as f32 / 100.0 / n as f32,
                 DEF_DUELS_LOST.load(Ordering::Relaxed) as f32 / n as f32,
             )
+        }
+
+        /// Per-line `(count, mean_gap)` for defender / midfielder / forward.
+        pub fn duel_by_line() -> [(u64, f32); 3] {
+            let mut out = [(0u64, 0.0f32); 3];
+            for i in 0..3 {
+                let n = DEF_DUELS_BY_LINE[i].load(Ordering::Relaxed);
+                out[i] = (
+                    n,
+                    if n == 0 {
+                        0.0
+                    } else {
+                        DEF_DUEL_GAP_BY_LINE_X100[i].load(Ordering::Relaxed) as f32
+                            / 100.0
+                            / n as f32
+                    },
+                );
+            }
+            out
         }
 
         pub fn note_plan(active: bool, individual: usize) {
@@ -354,6 +390,12 @@ pub mod mid_run_diag {
                 &DEF_DUEL_GAP_X100,
                 &DEF_DUELS_LOST,
             ] {
+                c.store(0, Ordering::Relaxed);
+            }
+            for c in DEF_DUELS_BY_LINE
+                .iter()
+                .chain(DEF_DUEL_GAP_BY_LINE_X100.iter())
+            {
                 c.store(0, Ordering::Relaxed);
             }
         }
@@ -886,6 +928,19 @@ const LONG_RANGE_RELIEF: f32 = 0.28;
 /// The bar never falls below this, so a hopeful from 40 m is still a
 /// decision and not a reflex.
 const LONG_RANGE_FLOOR: f32 = 0.26;
+/// Height of the shot bar before the per-opportunity spread and the two
+/// distance reliefs. This is the engine's shot-volume knob — see the note
+/// at the threshold.
+const SHOT_BAR_BASE: f32 = 0.534;
+/// How much of the full relief a point-blank chance gets.
+///
+/// Sized against shot QUALITY, not shot count. At 1.0 the close-range
+/// band filled with marginal looks: population xG/shot fell to 0.083
+/// against a real 0.11, on-target→goal to 24.3% against 30%, and the
+/// 6-11 m band took 32% of all shots against a real 25%. The bar should
+/// ease enough that a clear chance is always taken and not so much that a
+/// half-chance is.
+const CLOSE_RANGE_EASE_SCALE: f32 = 0.30;
 
 pub struct StrikingRange;
 
@@ -1390,7 +1445,7 @@ pub fn evaluate_forward_shot_decision(
     // and so got the LEAST encouragement exactly where he is the man who
     // should be shooting, while a poacher at 25 m got the most.
     //
-    // Eases in from 22 m and is full by 36 m.
+    // Eases in from 16 m and is full by 36 m.
     //
     // Where this curve starts matters far more than it looks, because
     // **59% of all shot decisions in a match are taken from beyond 30 m**
@@ -1398,7 +1453,46 @@ pub fn evaluate_forward_shot_decision(
     // slightly too low out there does not produce a few speculative
     // efforts, it floods: easing from 20 m at 0.32 put 20.7% of all shots
     // beyond 30 m against a real 5%, and 32.5 shots per team.
+    //
+    // But starting it at 22 m left a TROUGH: the 16.5-22 m band got no
+    // relief from either end and became the peak of the bar, so it took
+    // 12% of all shots against a real 20% while everything piled into
+    // <11 m. That band is a normal shooting position in football, not a
+    // marginal one — a striker on the edge of the box shoots. Starting
+    // the ease at 16 m fills the trough without touching the far end,
+    // which is pinned by the full-relief point at 36 m.
     let range_ease = ((distance - 176.0) / 112.0).clamp(0.0, 1.0);
+
+    // ── …and it eases CLOSE IN too, for the opposite reason ───────────
+    //
+    // The bar is a cost-of-the-decision model, and the cost is not
+    // monotonic in distance — it is highest in the middle. From 18 m a
+    // pass is often genuinely better, so a high bar is right. From 5 m
+    // there is no better option that will ever exist: you will not get a
+    // cleaner look than this one, and declining it is the expensive
+    // answer. Strikers inside the six-yard box shoot.
+    //
+    // Nothing in the model said so. `reach` is flat at 1.0 inside the
+    // comfortable range — correctly, it only measures whether he CAN
+    // strike it — so appetite close in was set by `poise`, which is
+    // dragged down by the sprint penalty exactly when a forward is
+    // arriving onto a chance. Measured: mean appetite at <6 m was 0.22
+    // against a bar of 0.53-0.77, so a striker five metres out almost
+    // never cleared it, and the release clause below then handed the ball
+    // away. That is the "runs around in the box instead of shooting"
+    // report, and it is the single largest gap between this model and
+    // football.
+    //
+    // Cubed, so the relief is concentrated where the argument actually
+    // holds — genuinely point-blank — and is nearly gone by the edge of
+    // the comfortable range, where a pass really can be the better ball.
+    // Linear was tried and is far too broad: it lifted the 6-11 m band to
+    // 41% of all shots and the match to 6.03 goals, because "there is no
+    // better option than this" is simply not true at eleven metres.
+    let close_ease = (1.0 - distance / comfortable.max(1.0))
+        .clamp(0.0, 1.0)
+        .powi(3);
+    let range_ease = range_ease.max(close_ease * CLOSE_RANGE_EASE_SCALE);
 
     // ── …but only when there is nothing better on ─────────────────────
     //
@@ -1420,14 +1514,37 @@ pub fn evaluate_forward_shot_decision(
         .find_best_pass_option_with_distance(140.0);
     let generosity = (0.78 + decisions * 0.14).clamp(0.78, 0.92);
     let opp_goal = ctx.player().opponent_goal_position();
+    // "Free" at 12u is 1.5 m — a team-mate with a defender two metres off
+    // him failed it, so a genuine lay-off to a better-placed man did not
+    // count as an option and the carrier took the shot on himself. 24u
+    // (3 m) is the distance at which a pass is actually playable, which is
+    // what this test is for.
     let better_placed = outlet.is_some_and(|(t, _)| {
         let their_distance = (opp_goal - t.position).magnitude();
         their_distance < distance * generosity
-            && ctx.tick_context.grid.opponents(t.id, 12.0).next().is_none()
+            && ctx.tick_context.grid.opponents(t.id, 24.0).next().is_none()
     });
     let range_ease = if better_placed { 0.0 } else { range_ease };
 
-    let threshold = (0.527 + spread * 0.24 - range_ease * LONG_RANGE_RELIEF).max(LONG_RANGE_FLOOR);
+    // Base height calibrated against shot VOLUME, which is what it sets:
+    // the answer is deterministic per opportunity, so a player shoots on
+    // the first tick his appetite clears the bar, and the bar alone
+    // decides how many of the looks a team works actually get hit.
+    //
+    // 0.527 was set before the crossing, defending and long-range work
+    // added supply; with those in, teams took 23.8 shots against a real
+    // 13.
+    //
+    // It is a VERY steep knob, and not a share-preserving one. Measured:
+    // 0.527 → 23.8 shots/team, 0.60 → 10.1 — a 14% lift more than halved
+    // the volume, because the appetite distribution is dense right around
+    // here. And because the reliefs subtract from it, a uniform lift
+    // falls entirely on the un-eased middle: at 0.60 the 6-11 m band rose
+    // to 43% of all shots while 11-22 m collapsed to 19%. Move it in
+    // small steps and re-read the whole distance mix, never just the
+    // total.
+    let threshold =
+        (SHOT_BAR_BASE + spread * 0.24 - range_ease * LONG_RANGE_RELIEF).max(LONG_RANGE_FLOOR);
 
     if appetite >= threshold {
         #[cfg(feature = "match-logs")]
@@ -1460,9 +1577,20 @@ pub fn evaluate_forward_shot_decision(
     // a carrier meant advancing. That is the other half of the
     // ran-at-the-goalkeeper report: the decision said no and the carrying
     // states answered by closing the distance.
-    let in_shooting_position = distance <= comfortable && sight.lane > 0.25;
-
-    if better_placed || (in_shooting_position && outlet.is_some()) {
+    //
+    // …but "release" has to mean release to somebody BETTER. It was
+    // `outlet.is_some()` — any outlet at all, and `find_best_pass_option`
+    // almost always finds one — so a striker inside his own range who
+    // declined the shot gave the ball to whoever happened to be nearest,
+    // including a team-mate further from goal than he was. Combined with
+    // the bar he could not clear close in, that is the reported bug in
+    // full: 25% of decisions taken INSIDE SIX METRES resolved as a pass,
+    // frequently a backwards one.
+    //
+    // A man in a shooting position gives it up for a better position or
+    // he shoots. `better_placed` is already the test for that, so the
+    // whole clause collapses into it.
+    if better_placed {
         #[cfg(feature = "match-logs")]
         helper_diag::PASS_DEFERRAL.fetch_add(1, Ordering::Relaxed);
         #[cfg(feature = "match-logs")]

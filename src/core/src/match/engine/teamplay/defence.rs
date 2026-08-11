@@ -192,15 +192,39 @@ struct DutyAssigner<'a> {
 }
 
 impl DutyAssigner<'_> {
-    /// Furthest a defender will travel to pick a man up (~22 m). Beyond
-    /// this he is not marking him, he is abandoning his position.
-    const MARK_REACH: f32 = 175.0;
+    /// Furthest a defender will travel to pick a man up (~19 m).
+    ///
+    /// Must not exceed `MARK_BREAK_DISTANCE`, the distance at which he
+    /// actually breaks shape to go. An assignment beyond it is worse than
+    /// no assignment: the marker holds the duty and never acts on it,
+    /// while the exclusivity that makes this module work stops anybody
+    /// else being given the same man. Measured at 175u against a 150u
+    /// break: midfielders sat **13 m** from the defender nominally
+    /// marking them, unmarked in every sense that matters, and free to
+    /// carry and shoot — which is most of why they took 75% of all shots.
+    const MARK_REACH: f32 = 150.0;
     /// The presser has to be able to actually get there (~25 m).
     const PRESS_REACH: f32 = 200.0;
     /// Cover sits within this of the carrier (~17 m).
     const COVER_REACH: f32 = 140.0;
-    /// Threats are ranked inside our own half plus a margin.
-    const THREAT_DEPTH: f32 = 0.62;
+    /// How far from our own goal an opponent can be and still be somebody
+    /// the BACK LINE takes responsibility for, as a fraction of the pitch
+    /// length. 0.34 ≈ 36 m — the defensive third and the approach to it.
+    ///
+    /// Was 0.62, which is 65 m: two thirds of the pitch. That made every
+    /// central midfielder standing in midfield a "threat" a centre-back
+    /// was assigned to, and because assignments are exclusive it did so
+    /// at the cost of somebody who was actually in the box. It did not
+    /// even produce marking — a defender will not follow a midfielder
+    /// upfield of the ball (the goal-side guarantee in `DefensiveRecovery`
+    /// correctly refuses to), so the assignment resolved as a man
+    /// standing **10.9 m** from the player he was nominally marking while
+    /// that player carried the ball and shot.
+    ///
+    /// Midfield is picked up by midfielders. A back four marks the people
+    /// in and around its own box, and leaving the deep-lying passer to
+    /// somebody else is the correct answer rather than a concession.
+    const THREAT_DEPTH: f32 = 0.34;
 
     fn assign(&self, plan: &mut DefensivePlan, owner_team: Option<u32>) {
         let previous = *plan;

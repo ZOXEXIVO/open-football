@@ -556,7 +556,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     continue;
                 };
                 if let Some(man) = field.players.iter().find(|p| p.id == target) {
-                    DefenceDiag::note_duel((d.position - man.position).magnitude());
+                    let pos = man.tactical_position.current_position;
+                    let line = if pos.is_forward() {
+                        2
+                    } else if pos.is_midfielder() {
+                        1
+                    } else {
+                        0
+                    };
+                    DefenceDiag::note_duel((d.position - man.position).magnitude(), line);
                 }
             }
         }
