@@ -5740,6 +5740,14 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     marked as f64 / calls as f64 * 100.0
                 );
             }
+            let (lag_n, lag_mean, lag_max, dwell, lag_x, lag_y) = DefenceDiag::shape_lag();
+            if lag_n > 0 {
+                println!(
+                    "  shape lag: {lag_n} samples — defender sits {lag_mean:.0}u ({:.1}m) from his shape target, worst {lag_max:.0}u ({:.1}m); depth {lag_x:.0}u width {lag_y:.0}u; mean dwell in state {dwell:.0} ticks",
+                    lag_mean * 0.125,
+                    lag_max * 0.125,
+                );
+            }
             let (duels, duel_gap, duels_lost) = DefenceDiag::duel_snapshot();
             if duels > 0 {
                 println!(

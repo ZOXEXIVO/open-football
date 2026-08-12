@@ -248,6 +248,30 @@ pub mod mid_run_diag {
         }
     }
 
+    /// How far a defender holding shape is from the shape target he is
+    /// steering to, sampled where `DefensiveLine::hold_shape` computes
+    /// it. The shape constraint bounds TARGETS to a 64u span while
+    /// measured POSITIONS spread 137u, and this is the quantity that
+    /// separates the two explanations: a large lag means he is chronically
+    /// failing to arrive (steering, speed, or a target that outruns him),
+    /// a small one means the targets themselves are spread and the
+    /// constraint is not doing what it claims.
+    pub static SHAPE_LAG_X100: AtomicU64 = AtomicU64::new(0);
+    pub static SHAPE_LAG_N: AtomicU64 = AtomicU64::new(0);
+    /// Same, split by whether the defender is in the half of the sample
+    /// nearest his own goal — a lag that only appears deep is a recovery
+    /// problem, one that is flat is a steering problem.
+    pub static SHAPE_LAG_MAX_X100: AtomicU64 = AtomicU64::new(0);
+    /// Summed `in_state_time` over the same samples. A defender who never
+    /// arrives because his STATE keeps changing under him is a different
+    /// problem from one who is steering too slowly, and this separates
+    /// them: a mean dwell of a handful of ticks means he is being handed
+    /// a new target before he can act on the last one.
+    pub static SHAPE_DWELL: AtomicU64 = AtomicU64::new(0);
+    /// Lag split into depth (0) and width (1), so the axis that is
+    /// failing is named rather than inferred.
+    pub static SHAPE_LAG_AXIS_X100: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
     /// Defensive-shape counters.
     pub struct DefenceDiag;
 
@@ -269,6 +293,41 @@ pub mod mid_run_diag {
         [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 
     impl DefenceDiag {
+        /// Record one sample of how far a shape-holding defender is from
+        /// the target the shape constraint just handed him.
+        pub fn note_shape_lag(lag: f32, in_state_time: u64, lag_x: f32, lag_y: f32) {
+            SHAPE_LAG_X100.fetch_add((lag * 100.0) as u64, Ordering::Relaxed);
+            SHAPE_LAG_N.fetch_add(1, Ordering::Relaxed);
+            SHAPE_LAG_MAX_X100.fetch_max((lag * 100.0) as u64, Ordering::Relaxed);
+            SHAPE_DWELL.fetch_add(in_state_time, Ordering::Relaxed);
+            SHAPE_LAG_AXIS_X100[0].fetch_add((lag_x * 100.0) as u64, Ordering::Relaxed);
+            SHAPE_LAG_AXIS_X100[1].fetch_add((lag_y * 100.0) as u64, Ordering::Relaxed);
+        }
+
+        /// `(samples, mean_lag, max_lag, mean_dwell_ticks, mean_lag_x, mean_lag_y)`
+        pub fn shape_lag() -> (u64, f32, f32, f32, f32, f32) {
+            let n = SHAPE_LAG_N.load(Ordering::Relaxed);
+            let per = |v: u64| {
+                if n == 0 {
+                    0.0
+                } else {
+                    v as f32 / 100.0 / n as f32
+                }
+            };
+            (
+                n,
+                per(SHAPE_LAG_X100.load(Ordering::Relaxed)),
+                SHAPE_LAG_MAX_X100.load(Ordering::Relaxed) as f32 / 100.0,
+                if n == 0 {
+                    0.0
+                } else {
+                    SHAPE_DWELL.load(Ordering::Relaxed) as f32 / n as f32
+                },
+                per(SHAPE_LAG_AXIS_X100[0].load(Ordering::Relaxed)),
+                per(SHAPE_LAG_AXIS_X100[1].load(Ordering::Relaxed)),
+            )
+        }
+
         pub fn note_duel(gap: f32, marked_line: usize) {
             DEF_DUELS.fetch_add(1, Ordering::Relaxed);
             DEF_DUEL_GAP_X100.fetch_add((gap * 100.0) as u64, Ordering::Relaxed);
@@ -389,6 +448,12 @@ pub mod mid_run_diag {
                 &DEF_DUELS,
                 &DEF_DUEL_GAP_X100,
                 &DEF_DUELS_LOST,
+                &SHAPE_LAG_X100,
+                &SHAPE_LAG_N,
+                &SHAPE_LAG_MAX_X100,
+                &SHAPE_DWELL,
+                &SHAPE_LAG_AXIS_X100[0],
+                &SHAPE_LAG_AXIS_X100[1],
             ] {
                 c.store(0, Ordering::Relaxed);
             }

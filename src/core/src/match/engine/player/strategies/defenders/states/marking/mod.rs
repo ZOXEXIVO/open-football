@@ -1,5 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefensiveLine,
+};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
@@ -212,6 +214,13 @@ impl StateProcessingHandler for DefenderMarkingState {
             let ball_side_offset = to_ball * mark_dist * (1.0 - goal_side_w);
 
             let desired_position = opponent_future_position + goal_side_offset + ball_side_offset;
+            // …but not at the cost of the unit's shape. Marking is 31% of
+            // everything the back line does and referred to nothing but
+            // its man, so a defender followed a runner clean across the
+            // pitch and took an 18-metre hole in the line with him. The
+            // leash is his zone: a man who runs further than that is the
+            // next defender's. See [`DefensiveLine::hold_shape`].
+            let desired_position = DefensiveLine::hold_shape(ctx, desired_position);
 
             let to_desired = desired_position - ctx.player.position;
             let distance = to_desired.magnitude();

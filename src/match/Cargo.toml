@@ -58,6 +58,7 @@ web-sys = { version = "0.3", features = [
     "Window",
     "MouseEvent",
     "WheelEvent",
+    "KeyboardEvent",
     "AddEventListenerOptions",
     "Element",
     "EventTarget",

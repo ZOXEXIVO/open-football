@@ -457,6 +457,28 @@ impl StateProcessingHandler for DefenderRunningState {
             // the ball while keeping their shape — which is what a back
             // line actually does. There is no distance at which the
             // velocity can jump.
+            // "Home" is the slot in the unit's CURRENT shape, not the
+            // kickoff formation slot.
+            //
+            // Both recovery targets below were `start_position`, so a
+            // defender running back reassembled the line at its kick-off
+            // width every time — and this state is 31% of what the back
+            // line does, so that is most of where the 18-metre gaps came
+            // from. See [`DefensiveLine::compact_slot_y`].
+            // DEPTH deliberately stays the kickoff one. Recovering to
+            // `DefensiveLine::position_x` (the live back-line average)
+            // was tried and REVERTED: it made depth spread WORSE, 137u →
+            // 174u. Only the ~31% of the line in this state converge on
+            // the average, while the ~31% in `Marking` are pulled to
+            // their men's depth — so pulling one group to the mean simply
+            // opened a gap against the other. Depth needs the same
+            // treatment as width, applied everywhere at once; doing it in
+            // one state makes it worse, not better.
+            let home_slot = Vector3::new(
+                ctx.player.start_position.x,
+                DefensiveLine::compact_slot_y(ctx),
+                ctx.player.start_position.z,
+            );
             let carrier = ctx.players().opponents().with_ball().next();
             let engage = carrier
                 .map(|c| {
@@ -488,7 +510,7 @@ impl StateProcessingHandler for DefenderRunningState {
                     }
 
                     let home = SteeringBehavior::Arrive {
-                        target: ctx.player.start_position + ctx.player().separation_offset(),
+                        target: home_slot + ctx.player().separation_offset(),
                         slowing_distance: 30.0,
                     }
                     .calculate(ctx.player)
@@ -507,11 +529,11 @@ impl StateProcessingHandler for DefenderRunningState {
             // largest source of on-the-spot twitch left in the engine.
             // Steering at one shifted target instead lets him settle a
             // step off his mark, which is where he should stand anyway.
-            let dist_to_start = (ctx.player.position - ctx.player.start_position).magnitude();
+            let dist_to_start = (ctx.player.position - home_slot).magnitude();
             let target = if dist_to_start < 40.0 {
-                ctx.player.start_position + ctx.player().separation_offset()
+                home_slot + ctx.player().separation_offset()
             } else {
-                ctx.player.start_position
+                home_slot
             };
             Some(
                 SteeringBehavior::Arrive {

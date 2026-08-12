@@ -1,5 +1,6 @@
 use super::phase_prof::PhaseProf;
 use super::*;
+use crate::PlayerPositionType;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::player::events::players::FoulResolver;
@@ -476,7 +477,41 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 continue;
             }
             let pos = p.tactical_position.current_position;
-            if !pos.is_defender() || pos.is_goalkeeper() {
+            // `is_defender()` is the POSITION GROUP, and that group holds
+            // `DefensiveMidfielder` (see `position_group`). A DM sits ten
+            // to fifteen metres in front of the back four on purpose, so
+            // including him put that gap into `max_x - min_x`
+            // permanently: this printed 17.5 m of "back-line depth
+            // spread" against a real-back-four reference of 3-8 m and
+            // could never have reached it, whatever the defenders did.
+            // Two rounds of shape work were measured against that number
+            // before it was checked. The back LINE is the back four.
+            if !pos.is_defender()
+                || pos.is_goalkeeper()
+                || matches!(pos, PlayerPositionType::DefensiveMidfielder)
+            {
+                continue;
+            }
+            // …and the man who has gone to the ball is not part of the
+            // shape. Somebody always leaves the line to engage — measured
+            // at 25% of the back line at the moment a shot is struck —
+            // and with four defenders that is one man permanently 15 m
+            // upfield, which puts 15 m into `max_x - min_x` on its own.
+            // The number could therefore never approach its own
+            // real-football reference no matter how the line behaved, and
+            // it did not move across two rounds of shape work for exactly
+            // that reason. What the shape constraint governs, and what
+            // this should report, is the spread of the defenders actually
+            // holding shape.
+            if matches!(
+                p.state,
+                PlayerState::Defender(
+                    DefenderState::Pressing
+                        | DefenderState::Tackling
+                        | DefenderState::TakeBall
+                        | DefenderState::Intercepting
+                )
+            ) {
                 continue;
             }
             xs[n] = p.position.x;

@@ -268,10 +268,30 @@ impl DefensiveLine {
     /// `defensive_line_x` rather than overwriting it, so one recovering
     /// defender can't teleport the whole line's reference point.
     pub fn position_x(ctx: &StateProcessingContext) -> f32 {
+        // Average only the defenders who are actually IN the line.
+        //
+        // This averaged every defender on the team, and a centre-half who
+        // has gone up for a corner is at the other end of the pitch — one
+        // of them at x≈800 against three at x≈100 drags the average to
+        // 275 and hands the whole back line a reference two-thirds of the
+        // way up the field. (Attacking corners are not rare here: the
+        // back line spends thousands of seconds a match in that state.)
+        // The same applies to a full-back who has pushed on.
+        //
+        // A positional filter rather than a state one, because the states
+        // that take a defender out of the line are many and the property
+        // that matters is the same for all of them: he is nowhere near
+        // it. 0.60 of the pitch is past halfway, so a genuinely high line
+        // still counts in full; only men who have gone up are excluded.
+        let field_len = ctx.context.field_size.width as f32;
+        let forward = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+        let upfield = |x: f32| if forward > 0.0 { x } else { field_len - x };
+        let line_limit = field_len * 0.60;
         let (sum_x, count) = ctx
             .players()
             .teammates()
             .defenders()
+            .filter(|p| upfield(p.position.x) <= line_limit)
             .map(|p| p.position.x)
             .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
 
@@ -285,12 +305,160 @@ impl DefensiveLine {
             .context
             .tactical_for_team(ctx.player.team_id)
             .defensive_line_x;
-        avg_x * 0.6 + target_line_x * 0.4
+        let blended = avg_x * 0.6 + target_line_x * 0.4;
+
+        // ── A line cannot hold station in front of the ball ───────────
+        //
+        // `defensive_line_x` is a constant per PHASE — a mid block is
+        // 280u (35 m from our own goal) whether the ball is on the
+        // halfway line or in our six-yard box. Blended at 0.4 it dragged
+        // the whole shape reference upfield of wherever the danger
+        // actually was, and every defender was then bounded relative to
+        // that: measured, defenders sat 98u (12.3 m) from their shape
+        // target on the DEPTH axis while the width axis was only 19u out.
+        // They were not failing to steer — they were steering, all match,
+        // at a line that had been placed in front of them.
+        //
+        // No back four defends a ball in its own third from thirty-five
+        // metres. Phase sets how high the line WANTS to be; the ball sets
+        // how high it may actually be, and the ball wins in our own half.
+        // A couple of metres of licence keeps the offside line playable
+        // rather than pinning the line exactly on the ball.
+        if ctx.ball().on_own_side() {
+            let forward = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+            let ball_x = ctx.tick_context.positions.ball.position.x;
+            let ahead_of_ball = (blended - ball_x) * forward;
+            if ahead_of_ball > Self::LINE_AHEAD_OF_BALL {
+                return ball_x + Self::LINE_AHEAD_OF_BALL * forward;
+            }
+        }
+        blended
     }
 
     /// How far this defender is off the line, along the goal-to-goal axis.
     pub fn deviation(ctx: &StateProcessingContext) -> f32 {
         (ctx.player.position.x - Self::position_x(ctx)).abs()
+    }
+
+    /// How far a defender may stray LATERALLY from his compact slot while
+    /// doing an individual job. 60u = 7.5 m — enough to track a man
+    /// through his own zone and into the edge of his neighbour's, not
+    /// enough to follow him across the pitch and take the line with him.
+    pub const SHAPE_LEASH: f32 = 60.0;
+    /// How far a defender holding shape may drop BEHIND the line to
+    /// cover. 48u = 6 m — the covering centre-half sitting off the man
+    /// engaging, which is what makes a back four a diagonal.
+    pub const DEPTH_DROP: f32 = 48.0;
+    /// …and how far he may step UP through it. 16u = 2 m: essentially
+    /// nothing. A defender in front of his own line plays the attack
+    /// onside behind him.
+    pub const DEPTH_STEP_UP: f32 = 16.0;
+    /// How far upfield of the ball the line may sit while the ball is in
+    /// our own half. 16u = 2 m — enough to keep an offside line playable,
+    /// not enough to leave the back four in front of the danger.
+    pub const LINE_AHEAD_OF_BALL: f32 = 16.0;
+
+    /// This defender's lateral anchor in the unit's CURRENT shape.
+    ///
+    /// The line has always had a shared reference for its depth
+    /// (`position_x`) and never one for its width, and that asymmetry is
+    /// the whole of the defensive-shape problem. Depth is a team quantity
+    /// that every state respects; width was left to each defender's
+    /// `start_position` — his KICKOFF slot — so the back four defended
+    /// its own six-yard box at the width it lines up in for kick-off.
+    ///
+    /// A defending back four squeezes toward its own centre as the ball
+    /// comes at it: the far-side full-back tucks in, and a unit spanning
+    /// 50 m at kick-off defends its box across barely 30. That is what
+    /// this returns — the kickoff slot pulled toward the middle by how
+    /// deep the danger is and how compact the side wants to be.
+    pub fn compact_slot_y(ctx: &StateProcessingContext) -> f32 {
+        let centre_y = ctx.context.field_size.height as f32 / 2.0;
+        let field_len = ctx.context.field_size.width as f32;
+        let ball_x = ctx.tick_context.positions.ball.position.x;
+        let own_goal_x = ctx.ball().direction_to_own_goal().x;
+        let danger = (1.0 - (ball_x - own_goal_x).abs() / field_len.max(1.0)).clamp(0.0, 1.0);
+        let compactness = ctx.team().compactness_target();
+        // 0.20/0.25 left the widest adjacent gap at 15.2 m against a real
+        // 3-8 m — the direction was right and the magnitude was half what
+        // it needed to be. At full danger and compactness a back four that
+        // lines up across 50 m now defends its own box across ~27, which
+        // is what a deep block actually looks like.
+        let squeeze = 1.0 - (0.30 + compactness * 0.35) * danger;
+        centre_y + (ctx.player.start_position.y - centre_y) * squeeze
+    }
+
+    /// Constrain a target a state chose for its own reasons so that the
+    /// UNIT keeps its shape.
+    ///
+    /// Individual duties are why the shape breaks: `Marking` goes to a
+    /// man and `Running` goes to the ball, and between them they are 62%
+    /// of everything the back line does. Neither refers to the line at
+    /// all, so the compactness logic — which lives in `HoldingLine`,
+    /// where the back four spends 6% of its time — governs almost
+    /// nothing. Measured: 18-19 m between adjacent defenders against a
+    /// real 3-8 m, and 96% of the defenders inside the block window when
+    /// a shot is struck are wider than the corridor.
+    ///
+    /// This does not replace the state's decision — the defender still
+    /// goes to his man — it bounds how far that job may drag him off his
+    /// slot. A man who runs further than the leash belongs to the next
+    /// defender along, which is what a zone is.
+    ///
+    /// The presser is deliberately exempt: somebody has to leave the line
+    /// to engage the ball, and he is the one doing it.
+    pub fn hold_shape(
+        ctx: &StateProcessingContext,
+        target: Vector3<f32>,
+    ) -> Vector3<f32> {
+        if ctx.player.has_ball(ctx) {
+            return target;
+        }
+        if matches!(ctx.team().my_duty(), DefensiveDuty::Press) {
+            return target;
+        }
+        let slot = Self::compact_slot_y(ctx);
+        let leashed = target.y.clamp(slot - Self::SHAPE_LEASH, slot + Self::SHAPE_LEASH);
+
+        // ── DEPTH, and why it is ASYMMETRIC ──────────────────────────
+        //
+        // Width was the missing team quantity; depth had one all along
+        // (`position_x`) that the individual-duty states simply ignored,
+        // and the result is the same shape of failure — 18 m of depth
+        // spread across a back four against a real 3-8 m.
+        //
+        // The two directions are not equivalent, which is why an
+        // even clamp would be wrong. Dropping OFF the line is ordinary
+        // cover: the spare man sits behind whoever is engaging, and a
+        // back four is a diagonal precisely because of it. Pushing UP
+        // through the line is not — a defender ahead of his line plays
+        // everyone onside behind him and is the one thing a back four
+        // never does by accident. So he may drop a long way and step up
+        // barely at all, and the two together bound the spread at
+        // ~8 m, which is the real number.
+        //
+        // Applied here rather than per-state deliberately: a previous
+        // attempt pulled only `Running` toward the line average while
+        // `Marking` was still following its man's depth, and the spread
+        // got WORSE (137u → 174u) because the two groups were being
+        // pulled to different references. Depth only converges if
+        // everybody holding shape reads the same one.
+        let forward = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+        let line_x = Self::position_x(ctx);
+        let ahead_of_line = (target.x - line_x) * forward;
+        let bounded = ahead_of_line.clamp(-Self::DEPTH_DROP, Self::DEPTH_STEP_UP);
+        let shaped = Vector3::new(line_x + bounded * forward, leashed, target.z);
+        #[cfg(feature = "match-logs")]
+        {
+            let d = shaped - ctx.player.position;
+            crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::DefenceDiag::note_shape_lag(
+                d.magnitude(),
+                ctx.in_state_time,
+                d.x.abs(),
+                d.y.abs(),
+            );
+        }
+        shaped
     }
 
     /// Is this defender part of the line right now?

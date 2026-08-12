@@ -4,10 +4,10 @@ use crate::playback::Playback;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
-use web_sys::{AddEventListenerOptions, MouseEvent, WheelEvent};
+use web_sys::{AddEventListenerOptions, KeyboardEvent, MouseEvent, WheelEvent};
 
 /// How far the lens is pulled in, as a multiple of the default framing.
 ///
@@ -106,10 +106,17 @@ impl CameraOrbit {
 
     /// Right button or wheel button held, and the ground turns under the
     /// pointer.
+    ///
+    /// The same grip aims the free camera once the rig is airborne — see
+    /// [`Airborne::aim`]. One gesture, two frames of reference: from the
+    /// gantry it swings the ground round the centre spot, in flight it turns
+    /// the head. Nothing about the gantry behaviour changed when flight was
+    /// added; it is the branch below that is new.
     pub fn handle_drag(
         mouse: Res<ButtonInput<MouseButton>>,
         mut moved: MessageReader<CursorMoved>,
         mut orbit: ResMut<CameraOrbit>,
+        mut flight: ResMut<CameraFlight>,
     ) {
         // Read every frame, dragging or not. A reader left alone keeps the
         // last couple of frames of motion, which would otherwise all arrive
@@ -120,22 +127,29 @@ impl CameraOrbit {
 
         let held = mouse.pressed(MouseButton::Right) || mouse.pressed(MouseButton::Middle);
         if held && drag != Vec2::ZERO {
-            // The ground follows the pointer rather than the lens: drag right
-            // and the pitch turns right, which means the rig itself travels
-            // the other way round. That is the gesture of spinning a model on
-            // a turntable, and it is what a drag with the cursor still on
-            // screen reads as — the opposite convention belongs to a
-            // mouselook, which needs the pointer out of the way first.
-            orbit.bearing = Self::wrap(orbit.bearing + drag.x * Self::RADIANS_PER_PIXEL);
-            // Pulling the near side of the ground down toward you lifts the
-            // rig over it, which is the same way round.
-            orbit.elevation = (orbit.elevation + drag.y * Self::RADIANS_PER_PIXEL)
-                .clamp(Self::ELEVATION.0, Self::ELEVATION.1);
+            if let Some(airborne) = flight.airborne.as_mut() {
+                airborne.aim(drag);
+            } else {
+                // The ground follows the pointer rather than the lens: drag
+                // right and the pitch turns right, which means the rig itself
+                // travels the other way round. That is the gesture of spinning
+                // a model on a turntable, and it is what a drag with the cursor
+                // still on screen reads as — the opposite convention belongs to
+                // a mouselook, which needs the pointer out of the way first.
+                orbit.bearing = Self::wrap(orbit.bearing + drag.x * Self::RADIANS_PER_PIXEL);
+                // Pulling the near side of the ground down toward you lifts the
+                // rig over it, which is the same way round.
+                orbit.elevation = (orbit.elevation + drag.y * Self::RADIANS_PER_PIXEL)
+                    .clamp(Self::ELEVATION.0, Self::ELEVATION.1);
+            }
         }
 
+        // The detent belongs to the orbit: in flight the rig is nowhere near
+        // the gantry and the way home is the reset button.
         let let_go =
             mouse.just_released(MouseButton::Right) || mouse.just_released(MouseButton::Middle);
         if let_go
+            && !flight.airborne()
             && orbit.bearing.abs() < Self::DETENT
             && (orbit.elevation - TvCamera::rest_elevation()).abs() < Self::DETENT
         {
@@ -216,6 +230,239 @@ impl CameraOrbit {
         menu.forget();
         press.forget();
         wheel.forget();
+    }
+}
+
+/// The rig lifted off its orbit and flown by hand.
+///
+/// A second mode rather than a replacement. Until a movement key is pressed
+/// the broadcast rig, the orbit drag and the wheel behave exactly as they
+/// always did; the moment one is, the camera stops following the ball and
+/// goes where it is pushed. [`CameraRig::reset`] — the button on the transport
+/// bar — puts it back on the gantry.
+///
+/// What flight buys that the orbit cannot is everything at a distance other
+/// than the gantry's: the orbit holds `TvCamera::rest_distance` from the
+/// centre spot by design, so it can walk round the ground but never into it.
+/// A look along the goal line, down onto the six-yard box, or out from the
+/// back row of a stand all need the rig off that sphere.
+#[derive(Resource, Default)]
+pub struct CameraFlight {
+    /// `None` while the broadcast rig has the camera. Seeded at the moment
+    /// the first movement key goes down from wherever the rig was standing,
+    /// so taking off continues the shot instead of cutting to a new one.
+    airborne: Option<Airborne>,
+}
+
+/// Where the free camera is and which way it faces, held in the terms the
+/// controls move it in: a place, a bearing and a tilt. No roll — a camera
+/// flown round a stadium has to come back level or the football stops being
+/// readable, and there is no gesture here that would ever want it.
+struct Airborne {
+    position: Vec3,
+    yaw: f32,
+    pitch: f32,
+}
+
+impl Airborne {
+    /// Turn the head under a drag: the pointer leads and the camera follows
+    /// it. Drag right and the view swings right, drag down and it tilts down
+    /// onto the pitch.
+    ///
+    /// Deliberately NOT the turntable sense [`CameraOrbit::handle_drag`] uses.
+    /// From the gantry the drag pushes the ground round a rig that is looking
+    /// at it, so grabbing the scene is the honest reading of the gesture; in
+    /// flight it turns a head that is standing still, and a head follows where
+    /// it is pointed. Built the other way round first and it read as inverted,
+    /// which is exactly what it was.
+    fn aim(&mut self, drag: Vec2) {
+        self.yaw = CameraOrbit::wrap(self.yaw - drag.x * CameraOrbit::RADIANS_PER_PIXEL);
+        self.pitch = (self.pitch - drag.y * CameraOrbit::RADIANS_PER_PIXEL)
+            .clamp(-CameraFlight::TILT, CameraFlight::TILT);
+    }
+
+    /// Which way the camera is pointed. Yaw then pitch, in that order, which
+    /// is what leaves the horizon level at every tilt.
+    fn facing(&self) -> Quat {
+        Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0)
+    }
+}
+
+impl CameraFlight {
+    /// Metres a second. A stadium is about 120 m end to end, so this crosses
+    /// it in five seconds — quick enough to get behind the far goal without
+    /// waiting, slow enough to place a shot by hand. Flat: the lens does not
+    /// scale it, see the note in [`CameraFlight::steer`].
+    const SPEED: f32 = 26.0;
+    /// Multiplier while a shift key is held.
+    const BOOST: f32 = 3.2;
+    /// Floor and ceiling. The floor is knee height rather than zero: below
+    /// that the near-clip plane eats the turf and the shot is of nothing.
+    const HEIGHT: (f32, f32) = (0.6, 130.0);
+    /// How far outside the playing surface the rig may wander before it stops.
+    /// Enough to sit behind the back wall of any stand and no further — past
+    /// that there is only fog, and a viewer who has flown into it has no
+    /// landmark left to fly back by.
+    const RANGE: f32 = 150.0;
+    /// Tilt stops just short of straight up and straight down, where a camera
+    /// looking along its own up-vector has no way left to decide which way up
+    /// the frame goes — the same reason the orbit's ceiling stops short.
+    const TILT: f32 = FRAC_PI_2 - 0.02;
+
+    pub fn airborne(&self) -> bool {
+        self.airborne.is_some()
+    }
+
+    /// Back on the gantry, and the broadcast rig picks the shot up again from
+    /// wherever the ball is.
+    fn land(&mut self) {
+        self.airborne = None;
+    }
+
+    /// WASD or the arrow keys fly the camera; Q and E take it down and up.
+    ///
+    /// Runs after [`TvCamera::follow_play`], so on the frame the rig takes off
+    /// it seeds itself from the broadcast position that system has just
+    /// written and there is no jump. On every frame after that it simply
+    /// overwrites what `follow_play` skipped.
+    pub fn steer(
+        keys: Res<ButtonInput<KeyCode>>,
+        time: Res<Time>,
+        mut flight: ResMut<CameraFlight>,
+        mut camera: Single<&mut Transform, With<Camera3d>>,
+    ) {
+        let push = Self::push(&keys);
+        // Nothing pressed and still on the gantry: the broadcast rig owns the
+        // transform and this system must not touch it.
+        if push == Vec3::ZERO && !flight.airborne() {
+            return;
+        }
+
+        let airborne = flight.airborne.get_or_insert_with(|| {
+            // `look_at` never rolls the camera, so the Y-then-X decomposition
+            // recovers the bearing and tilt exactly.
+            let (yaw, pitch, _) = camera.rotation.to_euler(EulerRot::YXZ);
+            Airborne {
+                position: camera.translation,
+                yaw,
+                pitch,
+            }
+        });
+
+        let facing = airborne.facing();
+        if push != Vec3::ZERO {
+            // Bevy cameras look down their own −Z.
+            let step = (facing * Vec3::NEG_Z * push.z + facing * Vec3::X * push.x)
+                // Up is world up rather than the camera's: Q and E should
+                // gain height, not slide along a tilted frame.
+                + Vec3::Y * push.y;
+            // Shift is the only thing that changes the pace. The wheel is the
+            // lens and nothing else — it was briefly scaling this too, on the
+            // reasoning that a tight lens magnifies its own motion, and the
+            // result was one control quietly doing two jobs.
+            let boost = if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+                Self::BOOST
+            } else {
+                1.0
+            };
+            airborne.position += step.normalize_or_zero() * Self::SPEED * boost * time.delta_secs();
+
+            let along = Field::HALF_LENGTH + Self::RANGE;
+            let across = Field::HALF_WIDTH + Self::RANGE;
+            airborne.position.x = airborne.position.x.clamp(-along, along);
+            airborne.position.y = airborne.position.y.clamp(Self::HEIGHT.0, Self::HEIGHT.1);
+            airborne.position.z = airborne.position.z.clamp(-across, across);
+        }
+
+        **camera = Transform::from_translation(airborne.position).with_rotation(facing);
+    }
+
+    /// The movement keys as one vector in the camera's own frame: x strafes,
+    /// y climbs, z runs forward. WASD and the arrow keys are the same three
+    /// axes twice over rather than two different controls — whichever hand
+    /// is free gets the same camera.
+    fn push(keys: &ButtonInput<KeyCode>) -> Vec3 {
+        let axis = |plus: &[KeyCode], minus: &[KeyCode]| {
+            f32::from(keys.any_pressed(plus.iter().copied()))
+                - f32::from(keys.any_pressed(minus.iter().copied()))
+        };
+        Vec3::new(
+            axis(
+                &[KeyCode::KeyD, KeyCode::ArrowRight],
+                &[KeyCode::KeyA, KeyCode::ArrowLeft],
+            ),
+            axis(&[KeyCode::KeyE], &[KeyCode::KeyQ]),
+            axis(
+                &[KeyCode::KeyW, KeyCode::ArrowUp],
+                &[KeyCode::KeyS, KeyCode::ArrowDown],
+            ),
+        )
+    }
+
+    /// Takes the arrow keys and the space bar off the page.
+    ///
+    /// Same problem as the pointer buttons next door, and for the same reason
+    /// — the page keeps the keyboard (see [`crate::MatchViewer::start`]), so
+    /// winit's own suppression is off and the browser still answers an arrow
+    /// with a scroll and a space with a page-down. Both would walk the article
+    /// under the canvas while the camera flew.
+    ///
+    /// The listener goes on the canvas, not the document: keydown only reaches
+    /// it while it has focus, so the rest of the page keeps its scrolling.
+    /// WASD needs no such treatment — those keys have no default action.
+    pub fn claim_flight_keys(canvas: &str) {
+        let Some(element) = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.query_selector(canvas).ok().flatten())
+        else {
+            web_sys::console::warn_1(&format!("match viewer: no canvas at {canvas}").into());
+            return;
+        };
+
+        let press = Closure::<dyn FnMut(KeyboardEvent)>::new(|event: KeyboardEvent| {
+            if matches!(
+                event.key().as_str(),
+                "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | " "
+            ) {
+                event.prevent_default();
+            }
+        });
+        if element
+            .add_event_listener_with_callback("keydown", press.as_ref().unchecked_ref())
+            .is_err()
+        {
+            web_sys::console::warn_1(&"match viewer: keydown refused".into());
+        }
+        // Lives as long as the page, like the pointer listeners above.
+        press.forget();
+    }
+}
+
+/// Everything the operator can move: where the rig stands, where it has been
+/// flown, and how tight the lens is.
+///
+/// The three are separate resources because they are moved by separate
+/// gestures, but there is only one shot, and one control that puts all of it
+/// back — which is what this exists to hold.
+pub struct CameraRig;
+
+impl CameraRig {
+    /// Back to the frame the replay opens on: on the gantry, at rest zoom,
+    /// following the ball.
+    pub fn reset(orbit: &mut CameraOrbit, zoom: &mut CameraZoom, flight: &mut CameraFlight) {
+        *orbit = CameraOrbit::default();
+        *zoom = CameraZoom::default();
+        flight.land();
+    }
+
+    /// Has anything been moved off the opening shot? The reset button lights
+    /// up on this, which is the only thing that says out loud that the camera
+    /// is somewhere the replay did not put it.
+    pub fn moved(orbit: &CameraOrbit, zoom: &CameraZoom, flight: &CameraFlight) -> bool {
+        flight.airborne()
+            || orbit.bearing.abs() > 1e-3
+            || (orbit.elevation - TvCamera::rest_elevation()).abs() > 1e-3
+            || (zoom.factor - 1.0).abs() > 1e-3
     }
 }
 
@@ -379,6 +626,7 @@ impl TvCamera {
         time: Res<Time>,
         zoom: Res<CameraZoom>,
         orbit: Res<CameraOrbit>,
+        flight: Res<CameraFlight>,
         mut camera: Single<(&mut TvCamera, &mut Transform, &mut Projection)>,
     ) {
         let (rig, transform, projection) = &mut *camera;
@@ -403,6 +651,15 @@ impl TvCamera {
             // Exponential catch-up, framerate independent.
             let blend = 1.0 - (-time.delta_secs() / Self::RESPONSE).exp();
             rig.focus = rig.focus.lerp(target, blend.clamp(0.0, 1.0));
+        }
+
+        // In flight the transform belongs to `CameraFlight::steer`. The lens
+        // and the focus above are still this system's — the wheel keeps
+        // working in the air, and a focus kept warm means landing picks the
+        // play up where it is rather than swinging across the ground to find
+        // it.
+        if flight.airborne() {
+            return;
         }
 
         // Where the gantry stands for this bearing and height. At rest the

@@ -382,16 +382,53 @@ impl DefenderHoldingLineState {
         // squeezes harder toward the ball side than the legacy 0.12 cap.
         let compactness = ctx.team().compactness_target();
 
+        // ── THE LINE HAS TO NARROW, NOT JUST SLIDE ───────────────────
+        //
+        // Every lateral term below is an offset from `tactical_position.y`
+        // — the KICKOFF FORMATION SLOT — and `shift` applies the same
+        // translation to all four defenders. So the back line moved toward
+        // the ball as a rigid body and its WIDTH never changed: it was the
+        // kickoff width in the 90th minute of a goalmouth siege.
+        //
+        // Measured: widest gap between adjacent defenders 147u (18.4 m)
+        // against a real 3-8 m, 54% of attackers in our own third with
+        // nobody within 3 m, and — the consequence that matters — of the
+        // opponents inside the block window when a shot is struck, 95.8%
+        // are wider than the corridor, mean 102u (12.8 m) off the line.
+        // Defenders are not in front of shots because the back line has
+        // 18-metre holes in it, so only 0.9% of shots are blocked against
+        // a real 18-22%.
+        //
+        // A defending back four is not its kickoff shape. It squeezes
+        // toward its own centre as the ball comes at it — the far-side
+        // full-back tucks in, and the unit that spans 50 m at kickoff
+        // defends its own box across barely 30. So the slot is pulled
+        // toward the middle before anything else is applied to it, by how
+        // deep the danger is and how compact the side wants to be.
+        let field_len = ctx.context.field_size.width as f32;
+        let danger = (1.0 - (ball_position.x - own_goal.x).abs() / field_len.max(1.0))
+            .clamp(0.0, 1.0);
+        let squeeze = 1.0 - (0.20 + compactness * 0.25) * danger;
+        let slot_y = field_center_y + (tactical_position.y - field_center_y) * squeeze;
+
         let target_y = if let Some(opponent) = nearest_opponent_in_zone {
-            // Track opponent laterally but don't go too far from zone
+            // Track opponent laterally but don't go too far from zone.
+            //
+            // `max_drift` was 25u — 3.1 m — while the zone this defender
+            // is responsible for is 50u wide, so he could see a man in his
+            // zone and was forbidden from getting to him. That is the
+            // marking-duel number: markers sat 6.4 m off their man and the
+            // attacker had got away on 47% of samples. He is allowed to go
+            // as far as his zone extends; beyond it the man belongs to
+            // somebody else.
             let opponent_y = opponent.position.y;
-            let max_drift = 25.0;
-            let drift = (opponent_y - tactical_position.y).clamp(-max_drift, max_drift);
-            tactical_position.y + drift
+            let max_drift = zone_half_width;
+            let drift = (opponent_y - slot_y).clamp(-max_drift, max_drift);
+            slot_y + drift
         } else {
             let ball_offset = ball_position.y - field_center_y;
             let shift = ball_offset * (0.08 + compactness * 0.18);
-            tactical_position.y + shift
+            slot_y + shift
         };
 
         // ── ROLE STAGGER ─────────────────────────────────────────────
@@ -428,7 +465,12 @@ impl DefenderHoldingLineState {
         let forward_sign = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
         let staggered_x = target_x - forward_sign * stagger;
 
-        Vector3::new(staggered_x, target_y, 0.0)
+        // Through the same unit constraint the individual-duty states now
+        // use, so the whole back line — whatever each man happens to be
+        // doing — reads ONE reference for its depth and its width. The
+        // role stagger above still shapes the diagonal; `hold_shape` only
+        // bounds how far the result may sit from the line.
+        DefensiveLine::hold_shape(ctx, Vector3::new(staggered_x, target_y, 0.0))
     }
 
     /// Checks if an opponent player is nearby within the MARKING_DISTANCE_THRESHOLD.
