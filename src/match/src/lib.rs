@@ -20,10 +20,10 @@ mod textures;
 mod timeline;
 
 use crate::actors::{Actors, BallState};
-use crate::camera::{CameraZoom, TvCamera};
+use crate::camera::{CameraOrbit, CameraZoom, TvCamera};
 use crate::config::ViewerConfig;
 use crate::loader::ChunkLoader;
-use crate::pitch::Pitch;
+use crate::pitch::{Bank, Pitch};
 use crate::playback::{EventLog, Playback};
 use crate::replay::ReplayTracks;
 use crate::timeline::{DebugOverlay, Timeline};
@@ -56,6 +56,14 @@ impl MatchViewer {
 
         let duration_ms = config.match_time_ms;
         let debug = config.debug;
+
+        // The orbit drag needs the right and wheel buttons, and the browser
+        // answers those with a context menu and autoscroll. Winit would
+        // suppress them, but only via the same switch that swallows the
+        // keyboard, and the page keeps the keyboard — so they are claimed
+        // by hand here. This call had no caller, which is the other half of
+        // the orbit never having been wired up.
+        CameraOrbit::claim_pointer_buttons(&config.canvas);
 
         App::new()
             .add_plugins(
@@ -91,6 +99,14 @@ impl MatchViewer {
             .init_resource::<BallState>()
             .init_resource::<DebugOverlay>()
             .init_resource::<CameraZoom>()
+            // `TvCamera::follow_play` takes `Res<CameraOrbit>` and
+            // `CameraOrbit::handle_drag` takes `ResMut<CameraOrbit>`, but
+            // nothing ever inserted it — so the first `Update` tick
+            // failed parameter validation with "Resource does not exist"
+            // and the WASM viewer aborted before rendering a frame. The
+            // orbit landed next to the zoom in `camera.rs` and its
+            // registration was missed here.
+            .init_resource::<CameraOrbit>()
             .add_systems(
                 Startup,
                 (
@@ -111,7 +127,17 @@ impl MatchViewer {
                     Playback::advance,
                     Actors::follow_playhead,
                     Actors::animate,
+                    // Ahead of `follow_play`, which reads the orbit — so a
+                    // drag lands on the same frame it happened rather than
+                    // the next one. Never registered at all before, so the
+                    // camera could not be turned.
+                    CameraOrbit::handle_drag,
+                    CameraZoom::handle_wheel,
                     TvCamera::follow_play,
+                    // Straight after the camera moves, so the stand the
+                    // rig has just walked into is gone on the same frame
+                    // it entered rather than flashing for one.
+                    Bank::cull,
                     Actors::place_labels,
                     EventLog::follow_playhead,
                     Timeline::refresh,

@@ -38,12 +38,6 @@ pub struct SpeedLabel;
 pub struct StatesButton;
 
 #[derive(Component)]
-pub struct ZoomOutButton;
-
-#[derive(Component)]
-pub struct ZoomInButton;
-
-#[derive(Component)]
 pub struct ZoomLabel;
 
 /// What the debug overlay is showing. Only meaningful when the page asked for
@@ -238,35 +232,14 @@ impl Timeline {
                             TextColor(Color::WHITE),
                         ));
 
-                        // Camera zoom, in place of the ball-coordinate
-                        // readout that used to sit here. Those coordinates
-                        // were only ever for cross-checking against the match
-                        // engine logs; being able to pull the lens in and out
-                        // while watching earns the space better.
-                        // Plain ASCII. The typographic minus (U+2212) is the
-                        // correct character and pairs properly with "+", but
-                        // the default font has no glyph for it and it drew as
-                        // a blank box.
-                        for (glyph, outward) in [("-", true), ("+", false)] {
-                            let mut chip = bar.spawn((
-                                Self::chip(26.0),
-                                Interaction::default(),
-                                BackgroundColor(Self::CHIP_BACKGROUND),
-                            ));
-                            if outward {
-                                chip.insert(ZoomOutButton);
-                            } else {
-                                chip.insert(ZoomInButton);
-                            }
-                            chip.with_child((
-                                Text::new(glyph),
-                                TextFont {
-                                    font_size: FontSize::Px(13.0),
-                                    ..default()
-                                },
-                                TextColor(Color::WHITE),
-                            ));
-                        }
+                        // Camera zoom readout. The chips that used to sit
+                        // in front of it are gone: the wheel does this
+                        // now (`CameraZoom::handle_wheel`), which is where
+                        // a hand already is while watching, and two
+                        // buttons to nudge a lens are a poor substitute
+                        // for turning it. The number stays — it is the
+                        // only feedback that the wheel did anything when
+                        // the shot is of open pitch.
                         bar.spawn((
                             ZoomLabel,
                             Text::new("1.00x"),
@@ -381,20 +354,11 @@ impl Timeline {
     /// Cycles playback speed and flips the state labels. Debug overlay only —
     /// neither button exists otherwise.
     pub fn handle_debug_controls(
-        mut zoom: ResMut<CameraZoom>,
-        zoom_out: Query<&Interaction, (Changed<Interaction>, With<ZoomOutButton>)>,
-        zoom_in: Query<&Interaction, (Changed<Interaction>, With<ZoomInButton>)>,
         speed: Query<&Interaction, (Changed<Interaction>, With<SpeedButton>)>,
         states: Query<&Interaction, (Changed<Interaction>, With<StatesButton>)>,
         mut playback: ResMut<Playback>,
         mut overlay: ResMut<DebugOverlay>,
     ) {
-        if zoom_out.iter().any(|i| *i == Interaction::Pressed) {
-            zoom.step(-1);
-        }
-        if zoom_in.iter().any(|i| *i == Interaction::Pressed) {
-            zoom.step(1);
-        }
         if speed.iter().any(|i| *i == Interaction::Pressed) {
             playback.cycle_speed();
         }

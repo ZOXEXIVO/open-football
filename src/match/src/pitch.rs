@@ -1,4 +1,3 @@
-use crate::camera::TvCamera;
 use crate::field::Field;
 use crate::textures::Textures;
 use bevy::asset::RenderAssetUsages;
@@ -24,11 +23,55 @@ pub struct Bank {
     frame: Quat,
     /// Half the width across the front.
     flank: f32,
-    /// Centre spot to the front row, and to the back of the back wall.
+    /// Centre spot to the front row. There is deliberately no far bound —
+    /// see [`Bank::encloses`] for why the test is a half-space in depth.
     near: f32,
-    far: f32,
     /// Top of the roof.
     top: f32,
+}
+
+impl Bank {
+    /// Is this world-space point inside the bank, or behind it?
+    ///
+    /// "Behind" counts: a lens further out than the front row has the
+    /// whole structure between it and the play, which is the same wall
+    /// whether the rig is among the seats or up in the back row. So the
+    /// test is a half-space in depth, bounded across the front and in
+    /// height — not the closed box, which would pop the stand back on
+    /// the moment the camera drifted past the roof.
+    fn encloses(&self, point: Vec3) -> bool {
+        let local = self.frame * point;
+        local.x.abs() <= self.flank && local.z >= self.near && local.y <= self.top
+    }
+
+    /// Hide whichever banks the camera is standing in.
+    ///
+    /// Without this the fourth stand is simply a wall across the shot for
+    /// the quarter of the arc the rig spends behind it — which is why the
+    /// near touchline was left unbuilt when the camera had one place to
+    /// stand. Now it is built and steps aside instead.
+    ///
+    /// At a corner the rig is behind two front faces at once and both go,
+    /// which is correct: from there you are looking out through the gap
+    /// between them.
+    pub fn cull(
+        camera: Single<&GlobalTransform, With<Camera3d>>,
+        mut banks: Query<(&Bank, &mut Visibility)>,
+    ) {
+        let eye = camera.translation();
+        for (bank, mut visibility) in &mut banks {
+            let wanted = if bank.encloses(eye) {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            };
+            // Only write on a change: `Visibility` is change-detected and
+            // touching it every frame would dirty the whole hierarchy.
+            if *visibility != wanted {
+                *visibility = wanted;
+            }
+        }
+    }
 }
 
 /// Accumulates every pitch marking into a single flat mesh.
@@ -416,20 +459,27 @@ impl Pitch {
         let across_span = along * 2.0 + 30.0;
         let end_span = across * 2.0 + 24.0;
 
-        // Behind the far touchline. The near side is where the broadcast
-        // gantry sits, so nothing is built there.
-        Self::spawn_stand(
-            commands,
-            meshes,
-            &seating,
-            &stand,
-            &trim,
-            across_span,
-            across + 2.1,
-            26.5,
-            13.4,
-            0.0,
-        );
+        // Both touchlines. The near one used to be left out because the
+        // broadcast gantry hangs over it and a stand there is a wall
+        // across the shot — but the rig walks all the way round the
+        // ground now, so leaving it out is a hole in the stadium from
+        // three quarters of the arc. It is built like the others and
+        // `Bank::cull` takes out whichever one the lens is inside, which
+        // is what standing in a stand actually looks like.
+        for turn in [0.0, PI] {
+            Self::spawn_stand(
+                commands,
+                meshes,
+                &seating,
+                &stand,
+                &trim,
+                across_span,
+                across + 2.1,
+                26.5,
+                13.4,
+                turn,
+            );
+        }
         // Both ends, rotated a quarter turn so their rows recede down the x
         // axis instead of the z one — one each way, which is what puts them
         // behind opposite goals.
@@ -485,8 +535,21 @@ impl Pitch {
         // One mesh, reused for every row of every stand.
         let step = meshes.add(Cuboid::new(length, riser * 1.9, TREAD * 0.96));
 
+        // The bank's own extent, so `Bank::cull` can tell whether the
+        // lens has walked into this one. The flank matches the roof and
+        // back wall, which overhang the seating by a metre either side.
+        let bank_extent = Bank {
+            // World → local is the inverse of the placement turn.
+            frame: Quat::from_rotation_y(-turn),
+            flank: length * 0.5 + 1.0,
+            near: from,
+            top: rise + ROOF_CLEARANCE + 0.3,
+        };
+
         let placement = Transform::from_rotation(Quat::from_rotation_y(turn));
-        let anchor = commands.spawn((placement, Visibility::default())).id();
+        let anchor = commands
+            .spawn((placement, Visibility::default(), bank_extent))
+            .id();
 
         commands.entity(anchor).with_children(|bank| {
             for row in 0..rows {

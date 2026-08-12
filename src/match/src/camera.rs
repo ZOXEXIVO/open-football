@@ -6,13 +6,14 @@ use bevy::prelude::*;
 use std::f32::consts::{PI, TAU};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
-use web_sys::MouseEvent;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use web_sys::{AddEventListenerOptions, MouseEvent, WheelEvent};
 
 /// How far the lens is pulled in, as a multiple of the default framing.
 ///
-/// Above 1 is tighter, below 1 is wider. Driven by the two chips on the
-/// transport bar; the camera turns it into a field of view every frame, so
-/// nothing else in the rig has to know about it.
+/// Above 1 is tighter, below 1 is wider. Driven by the mouse wheel; the
+/// camera turns it into a field of view every frame, so nothing else in the
+/// rig has to know about it.
 #[derive(Resource)]
 pub struct CameraZoom {
     pub factor: f32,
@@ -25,19 +26,41 @@ impl Default for CameraZoom {
 }
 
 impl CameraZoom {
-    /// One press of a chip. Geometric rather than additive, so a step out
-    /// undoes a step in exactly and the control feels the same at both ends
-    /// of its range.
+    /// One notch of the wheel. Geometric rather than additive, so a turn
+    /// back out undoes a turn in exactly and the control feels the same at
+    /// both ends of its range.
     const STEP: f32 = 1.10;
     const RANGE: (f32, f32) = (0.45, 3.0);
 
-    pub fn step(&mut self, direction: i32) {
-        let scale = if direction > 0 {
-            Self::STEP
-        } else {
-            1.0 / Self::STEP
-        };
-        self.factor = (self.factor * scale).clamp(Self::RANGE.0, Self::RANGE.1);
+    /// How much of a notch one pixel of a smooth-scrolling wheel is worth.
+    /// Trackpads and high-resolution wheels report pixels rather than
+    /// notches, and a pixel per notch would make them uncontrollable.
+    const PIXELS_PER_NOTCH: f32 = 50.0;
+
+    /// Zoom by a fractional number of notches, so a wheel that reports
+    /// pixels moves the lens as smoothly as it is turned.
+    fn turn(&mut self, notches: f32) {
+        self.factor =
+            (self.factor * Self::STEP.powf(notches)).clamp(Self::RANGE.0, Self::RANGE.1);
+    }
+
+    /// The wheel drives the lens.
+    ///
+    /// Scrolling up pulls the play closer — the direction every map and
+    /// every 3D tool uses, and the one that matches the chips this
+    /// replaced. Both report units are handled: a notched wheel sends
+    /// lines, a trackpad sends pixels.
+    pub fn handle_wheel(mut wheel: MessageReader<MouseWheel>, mut zoom: ResMut<CameraZoom>) {
+        let notches: f32 = wheel
+            .read()
+            .map(|scroll| match scroll.unit {
+                MouseScrollUnit::Line => scroll.y,
+                MouseScrollUnit::Pixel => scroll.y / Self::PIXELS_PER_NOTCH,
+            })
+            .sum();
+        if notches != 0.0 {
+            zoom.turn(notches);
+        }
     }
 }
 
@@ -127,14 +150,17 @@ impl CameraOrbit {
         (angle + PI).rem_euclid(TAU) - PI
     }
 
-    /// Takes the right and wheel buttons off the page.
+    /// Takes the right button, the wheel button and the wheel itself off
+    /// the page.
     ///
-    /// The browser answers a right-press with a context menu and a
-    /// wheel-press with autoscroll, and either would land on top of the drag.
-    /// Winit will suppress both, but only through the same switch that
-    /// swallows the keyboard — and the page keeps the keyboard, F5 included
-    /// (see [`crate::MatchViewer::start`]) — so the two listeners go on by
-    /// hand instead.
+    /// The browser answers a right-press with a context menu, a
+    /// wheel-press with autoscroll, and a wheel turn by scrolling the
+    /// document — the first two would land on top of the drag, and the
+    /// third would walk the page down while the lens zoomed. Winit will
+    /// suppress all three, but only through the same switch that swallows
+    /// the keyboard — and the page keeps the keyboard, F5 included (see
+    /// [`crate::MatchViewer::start`]) — so the listeners go on by hand
+    /// instead.
     pub fn claim_pointer_buttons(canvas: &str) {
         let Some(element) = web_sys::window()
             .and_then(|window| window.document())
@@ -156,6 +182,26 @@ impl CameraOrbit {
             }
         });
 
+        // The wheel drives the zoom, so the document must not move with it.
+        // Registered non-passive — a passive listener is not allowed to
+        // call `prevent_default`, and browsers default wheel listeners on
+        // scrollable elements to passive.
+        let wheel = Closure::<dyn FnMut(WheelEvent)>::new(|event: WheelEvent| {
+            event.prevent_default();
+        });
+        let active = AddEventListenerOptions::new();
+        active.set_passive(false);
+        if element
+            .add_event_listener_with_callback_and_add_event_listener_options(
+                "wheel",
+                wheel.as_ref().unchecked_ref(),
+                &active,
+            )
+            .is_err()
+        {
+            web_sys::console::warn_1(&"match viewer: wheel refused".into());
+        }
+
         for (name, listener) in [("contextmenu", &menu), ("mousedown", &press)] {
             if element
                 .add_event_listener_with_callback(name, listener.as_ref().unchecked_ref())
@@ -165,11 +211,12 @@ impl CameraOrbit {
             }
         }
 
-        // Both live as long as the page does. There is nothing to hang them
-        // on and nothing to reclaim them at teardown, which is what `forget`
-        // says out loud.
+        // All three live as long as the page does. There is nothing to hang
+        // them on and nothing to reclaim them at teardown, which is what
+        // `forget` says out loud.
         menu.forget();
         press.forget();
+        wheel.forget();
     }
 }
 
