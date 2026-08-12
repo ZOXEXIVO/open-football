@@ -44,15 +44,52 @@ pub struct GoalSight {
     /// How clear the path is: immediate pressure and bodies in the
     /// corridor, 1.0 for an unobstructed lane, 0.0 for a blocked one.
     pub lane: f32,
+    /// How much of the run to goal is still covered — 0.0 when nothing
+    /// but the goalkeeper stands between this player and the net.
+    ///
+    /// A different question from [`Self::lane`], and the difference is
+    /// the whole of it. `lane` asks whether the ball can be struck
+    /// cleanly **this instant**; `cover` asks whether the defence has
+    /// been **beaten** — whether anybody is left who could make the look
+    /// better or worse than it already is.
+    ///
+    /// It is the situation every forward is coached to recognise, and
+    /// nothing in the engine represented it. A man clean through on the
+    /// keeper read identically to a man standing unmarked thirty metres
+    /// out with a clear view of the far net: same angle, same lane, same
+    /// answer. So the model had no state of the world in which a striker
+    /// was through on goal, and its strikers behaved accordingly — they
+    /// carried it until the keeper took it off them.
+    ///
+    /// Measured on the same channel as the run rather than the shot: a
+    /// defender is only "in the way" of a strike if he is within a
+    /// stride of the ball's line, but he is in the way of the RUN from
+    /// several metres off, and the further ahead he is the more time he
+    /// has to get across.
+    pub cover: f32,
 }
 
 impl GoalSight {
+    /// Half-width of the channel a defender has to be inside to count
+    /// against the run at all, measured at the player's own feet. 40u =
+    /// 5 m, about as far as a defender can reach with a leg out.
+    const COVER_CHANNEL: f32 = 40.0;
+    /// How much that channel widens per unit further up the pitch. A
+    /// defender fifteen metres ahead has time to shuffle across before
+    /// the ball arrives; the one at your shoulder does not.
+    const COVER_SPLAY: f32 = 0.22;
+
     /// Nothing on: blind angle, or a defender physically in the way.
+    ///
+    /// `cover` is 1.0 by construction — this is only returned when
+    /// somebody is stood in front of the ball, or when the goal is not
+    /// visible at all, and callers treat either as "no shot" anyway.
     pub fn blind() -> Self {
         GoalSight {
             angle_clarity: 0.0,
             angle_quality: 0.0,
             lane: 0.0,
+            cover: 1.0,
         }
     }
 
@@ -62,6 +99,7 @@ impl GoalSight {
             angle_clarity: 1.0,
             angle_quality: 1.0,
             lane: 1.0,
+            cover: 0.0,
         }
     }
 }
@@ -527,19 +565,36 @@ impl<'p> PlayerOperationsImpl<'p> {
         //    next to the shooter block more than ones near the goal).
         let check_distance = distance_to_goal * 0.80;
         let mut corridor_blockage: f32 = 0.0;
+        // …and, off the same walk, how much of the RUN is still covered.
+        // See [`GoalSight::cover`] for why that is a separate question
+        // from the corridor and why the engine needed it.
+        let mut cover: f32 = 0.0;
         for opp in self.ctx.players().opponents().all() {
             if opp.tactical_positions.is_goalkeeper() {
                 continue;
             }
             let to_opp = opp.position - player_position;
             let projection = to_opp.x * direction_to_goal.x + to_opp.y * direction_to_goal.y;
-            if projection < 3.0 || projection > check_distance {
+            // Level with him or behind him is beaten. A defender at the
+            // shooter's shoulder is a reason to hit it NOW rather than to
+            // wait, and `pressure_clarity` above already carries him.
+            if projection <= 0.0 || projection > distance_to_goal {
                 continue;
             }
             let closest_point = player_position + direction_to_goal * projection;
             let perp_distance = ((opp.position.x - closest_point.x).powi(2)
                 + (opp.position.y - closest_point.y).powi(2))
             .sqrt();
+
+            // Compounded rather than counted, so two defenders on the
+            // same shoulder are not twice the obstacle one of them is.
+            let channel = GoalSight::COVER_CHANNEL + projection * GoalSight::COVER_SPLAY;
+            let holding = (1.0 - perp_distance / channel).clamp(0.0, 1.0);
+            cover += (1.0 - cover) * holding;
+
+            if projection < 3.0 || projection > check_distance {
+                continue;
+            }
             let opp_skills = self.skills(opp.id);
             let def_quality = (opp_skills.technical.marking
                 + opp_skills.technical.tackling
@@ -577,6 +632,7 @@ impl<'p> PlayerOperationsImpl<'p> {
             angle_clarity,
             angle_quality,
             lane: (pressure_clarity * corridor_clarity).clamp(0.0, 1.0),
+            cover: cover.clamp(0.0, 1.0),
         }
     }
 

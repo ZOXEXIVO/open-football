@@ -994,6 +994,21 @@ impl StrikingRange {
     }
 }
 
+/// How settled a player is over the ball.
+pub struct Poise;
+
+impl Poise {
+    /// What fraction of his own top speed he is travelling at, 0..1.
+    ///
+    /// Scaled against his CURRENT top speed rather than a league-wide
+    /// one, so a tiring player is not read as composed merely because he
+    /// can no longer run.
+    pub fn pace(ctx: &StateProcessingContext) -> f32 {
+        let top = ctx.player.max_speed_with_condition_cached().max(0.01);
+        (ctx.player.velocity.norm() / top).clamp(0.0, 1.0)
+    }
+}
+
 /// Where a player carrying the ball is actually going.
 pub struct BallCarry;
 
@@ -1265,8 +1280,19 @@ pub fn evaluate_forward_shot_decision(
 
     // ── Is he set? ────────────────────────────────────────────────────
     // A man stretching for a bouncing ball at full tilt does not pick his
-    // corner. `in_state_time` stands in for how long he has been at pace.
-    let sprinting = (ctx.in_state_time as f32 / 120.0).clamp(0.0, 1.0);
+    // corner.
+    //
+    // This read HOW LONG HE HAD BEEN IN THE STATE, which is not his speed
+    // and frequently not even correlated with it. A forward stood still
+    // with the ball at his feet for a second and a quarter scored a full
+    // sprint penalty; so did every striker who had been running for a
+    // second and a quarter, which is every striker through on goal.
+    // Measured across the dev harness the term was saturated at 1.0
+    // essentially always — `poise` came out flat at 0.42 in every
+    // distance band from six metres to thirty — so it was not modelling
+    // being off-balance at all. It was subtracting a constant from the
+    // urge of every shot in the game.
+    let sprinting = Poise::pace(ctx);
     let physical_balance = (skills.physical.strength / 20.0
         + skills.physical.agility / 20.0
         + first_touch
