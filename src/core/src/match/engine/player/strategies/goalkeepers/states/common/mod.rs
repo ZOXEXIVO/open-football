@@ -1,3 +1,4 @@
+use crate::r#match::StateProcessingContext;
 use crate::r#match::engine::player::strategies::common::{
     ActivityIntensityConfig, ConditionProcessor, GOALKEEPER_JADEDNESS_INCREMENT,
     GOALKEEPER_JADEDNESS_INTERVAL, GOALKEEPER_LOW_CONDITION_THRESHOLD,
@@ -129,6 +130,43 @@ impl KeeperSetPosition {
             keeper.y * 0.65 + own_goal.y * 0.35,
             0.0,
         )
+    }
+}
+
+/// Whether a loose ball is the keeper's to claim, or somebody else's.
+///
+/// Every claim gate asked only about the BALL — is it loose, is it near,
+/// is it on our side — and never about the people standing round it. In
+/// a crowded six-yard box that is always true of something, because
+/// possession there flickers constantly: a touch, a challenge or an
+/// owner drifting past the tracking cutoff leaves the ball momentarily
+/// unowned, and the keeper is by definition the man standing next to it.
+/// So he collected it, distributed it, an attacker took it two metres
+/// away, and the next stray touch handed it straight back to him — the
+/// ball ping-ponging between the keeper and the players in front of him
+/// on one spot, which is the reported symptom. Measured: 47.7 gathers a
+/// match against a real 8-12.
+///
+/// A keeper does not grab a ball an opponent is on. He comes for the one
+/// he can get to first, and lets his defenders deal with the rest. That
+/// is the question this asks, and it is the same question the attacker
+/// is implicitly asking, so the two cannot both claim it.
+pub struct KeeperBallClaim;
+
+impl KeeperBallClaim {
+    /// How much nearer the keeper is allowed to let an opponent be while
+    /// still going for it. He has hands and a dive, so he wins a ball
+    /// he is marginally further from — but only marginally. 8u = 1 m.
+    const HANDS_ADVANTAGE: f32 = 8.0;
+
+    /// Is this keeper favourite for the loose ball in front of him?
+    pub fn is_favourite(ctx: &StateProcessingContext) -> bool {
+        let ball = ctx.tick_context.positions.ball.position;
+        let mine = (ball - ctx.player.position).magnitude() - Self::HANDS_ADVANTAGE;
+        !ctx.players()
+            .opponents()
+            .all()
+            .any(|opp| (ball - opp.position).magnitude() < mine)
     }
 }
 

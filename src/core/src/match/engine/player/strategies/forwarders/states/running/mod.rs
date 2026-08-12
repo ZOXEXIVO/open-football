@@ -695,11 +695,27 @@ impl StateProcessingHandler for ForwardRunningState {
                         return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                     }
                     ShotDecision::Hold => {
-                        if distance_to_goal < POINT_BLANK_DISTANCE {
-                            return Some(StateChangeResult::with_forward_state(
-                                ForwardState::Passing,
-                            ));
-                        }
+                        // A forward six metres out who is not shooting this
+                        // instant does NOT turn and lay it off.
+                        //
+                        // This branch did exactly that, and it is the
+                        // reported bug in its purest form: the helper says
+                        // "not yet", the caller answers "then pass", and the
+                        // pass evaluator — which rewards an isolated
+                        // receiver and, for most personalities, does not
+                        // care which way the ball goes — finds the spare man
+                        // BEHIND the ball. Ball in front of goal, played
+                        // backwards, every time the appetite roll came up
+                        // short.
+                        //
+                        // It also contradicts the helper's own contract:
+                        // `Hold` means "keep doing what you were doing so a
+                        // real chance can materialise", and `Pass` is the
+                        // separate answer for "somebody is better placed".
+                        // The helper already returns `Pass` when that is
+                        // true, so converting `Hold` into a pass here
+                        // overrode a decision that had just been made
+                        // properly.
                         return None;
                     }
                 }
@@ -754,10 +770,15 @@ impl StateProcessingHandler for ForwardRunningState {
             // But only if still far from shooting range. Once in range, shooting
             // checks above should have triggered. If they didn't (no clear shot),
             // don't keep running into the GK — fall through to passing/dribbling.
-            if distance_to_goal > MAX_SHOOTING_DISTANCE
-                && distance_to_goal < 180.0
-                && self.has_open_space_ahead(ctx)
-            {
+            // `> MAX_SHOOTING_DISTANCE (320u) && < 180u` — a condition no
+            // distance can satisfy, so this branch had never once run and
+            // the forward had no drive-at-goal path at all. What it means
+            // to say is the comment above it: keep running while still
+            // OUTSIDE normal shooting range, because inside it the shot
+            // blocks have already had their say. 180u is 22.5 m, the point
+            // those blocks take over — so that is the lower bound, not the
+            // upper one.
+            if distance_to_goal > 180.0 && self.has_open_space_ahead(ctx) {
                 let dribbling = ctx.player.skills.technical.dribbling / 20.0;
                 let composure = ctx.player.skills.mental.composure / 20.0;
                 let determination = ctx.player.skills.mental.determination / 20.0;
@@ -2018,9 +2039,38 @@ impl ForwardRunningState {
             // missed that exact boundary case.
             let is_much_closer = teammate_distance <= own_distance * 0.65;
             let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
-            let not_heavily_marked = ctx.tick_context.grid.opponents(teammate.id, 8.0).count() < 2;
+            // "Not heavily marked" asked for TWO opponents inside 8u — and
+            // 8u is one metre, so it took two defenders standing on a man's
+            // toes to disqualify him. In practice every team-mate passed,
+            // which turned this into an unconditional "is anybody nearer the
+            // goal than me" veto — and somebody almost always is.
+            //
+            // That matters more than a mis-set radius, because this veto
+            // does not go through the shot helper: it removes the shot
+            // BLOCK, so the striker never asks the question at all and falls
+            // through to Passing. Measured: it vetoed 12.8% of all in-range
+            // forward ticks.
+            //
+            // Free means free — nobody within 30u (3.75 m), the same
+            // standard `find_cutback_to_arriving_runner` uses for an
+            // arriving runner, because it is the same judgement: can I
+            // actually give him the ball in a better position than mine.
+            let is_free = ctx
+                .tick_context
+                .grid
+                .opponents(teammate.id, 30.0)
+                .next()
+                .is_none();
+            // …and better placed means a better SIGHT of goal, not merely a
+            // smaller number. A man three metres from the byline is nearer
+            // the goal than a striker on the penalty spot and has no angle
+            // to shoot from; deferring to him is how a clear chance became a
+            // square ball. Compare where each of them actually is.
+            let centre_y = ctx.context.field_size.height as f32 / 2.0;
+            let more_central = (teammate.position.y - centre_y).abs()
+                < (ctx.player.position.y - centre_y).abs();
 
-            is_much_closer && has_clear_pass && not_heavily_marked
+            is_much_closer && has_clear_pass && is_free && more_central
         })
     }
 

@@ -486,9 +486,24 @@ impl StateProcessingHandler for MidfielderRunningState {
             // (dribbling / decisions / composure / acceleration / agility
             // composite). Replaces the ad-hoc dribbling+composure+pace
             // blend with the unified midfielder profile.
+            // The upper bound was `field_width * 0.45` — 378u, i.e. 47 m
+            // from the opponent goal. Midfield sits at 420u and beyond, so
+            // a player at or behind the halfway line could never enter
+            // this branch: the one place on the pitch where a man with the
+            // ball and grass in front of him should drive was the one
+            // place the engine forbade it. He fell through to the take-on
+            // (which refuses when nobody is ahead) and then to
+            // `should_pass`, and gave it to someone.
+            //
+            // Carrying out of midfield into space is ordinary football —
+            // it is most of what a driving central midfielder does. The
+            // gate that matters is not WHERE he is but whether the space
+            // is really there and whether he can use it, and both are
+            // already asked below. 0.85 only keeps a keeper's-box carry
+            // out of it.
             let field_width = ctx.context.field_size.width as f32;
             if goal_dist > POINT_BLANK_DISTANCE
-                && goal_dist < field_width * 0.45
+                && goal_dist < field_width * 0.85
                 && self.has_open_space_ahead(ctx)
                 && mid_profile.allows_carry_into_space()
             {
@@ -503,7 +518,12 @@ impl StateProcessingHandler for MidfielderRunningState {
             //   * `allows_take_on_one`  → at most 1 opponent ahead.
             //   * `allows_take_on_two`  → up to 2.
             //   * lower → never dribble into opponents.
-            if ownership_ticks > 5 && ownership_ticks < 60 {
+            // Was `< 60` — the same 0.6 s clock as the old release rule,
+            // so a midfielder who had carried for more than half a second
+            // could no longer take anybody on either. A take-on usually
+            // comes AFTER a carry, which is precisely the window this
+            // excluded.
+            if ownership_ticks > 5 && ownership_ticks < 300 {
                 let goal_pos = ctx.player().opponent_goal_position();
                 let player_pos = ctx.player.position;
                 let to_goal = (goal_pos - player_pos).normalize();
@@ -1290,6 +1310,32 @@ impl MidfielderRunningState {
             return true;
         }
 
+        // 2b. RUNNING INTO SPACE IS NOT INDECISION.
+        //
+        // Nothing below this point asked whether the man had somewhere to
+        // run. Once the two genuine pressure cases above have declined,
+        // every remaining branch is a reason to give the ball away, so a
+        // midfielder who had just broken into open grass was handed the
+        // same answer as one hemmed in on the touchline — and the answer
+        // was "pass". Combined with the take-on refusing when nobody is
+        // ahead (there is no one to beat) and the carry branch being
+        // fenced into the final third, a player with thirty metres in
+        // front of him had no forward option left in the entire state.
+        //
+        // He is not under pressure and he has space: he runs. That is the
+        // whole of it, and it is the single most common attacking action
+        // in football.
+        //
+        // Deliberately a STRICTER test than `has_open_space_ahead`, which
+        // only asks for 3.75 m of clearance — enough to justify a touch
+        // forward, nowhere near enough to justify declining every pass.
+        // Used as a veto it would have turned the midfield into eleven men
+        // dribbling. `has_running_lane` asks for a lane worth running
+        // into, which is the situation being described.
+        if self.has_running_lane(ctx) {
+            return false;
+        }
+
         // 3. TACTICAL PASS: Elite progressive playmakers look for the
         // line-breaking option even without pressure.
         if profile.allows_killer_ball()
@@ -1314,8 +1360,23 @@ impl MidfielderRunningState {
             return self.has_better_positioned_teammate(ctx, distance_to_goal);
         }
 
+        // A carry has to be allowed to LAST.
+        //
+        // 60 ticks is 0.6 s — a hard ceiling on how long any midfielder
+        // could keep the ball under any circumstances, pressure or none.
+        // Nobody in football releases on that clock; a driving run out of
+        // midfield takes three or four seconds, and this made one
+        // impossible before any of the branches above were even consulted.
+        // The engine's default action on the ball became "give it to
+        // someone", which is why it plays 1006 passes a team against a
+        // real ~500.
+        //
+        // 300 ticks (3 s) is a long time to be stood over it with no
+        // pressure and no space — a genuine dwell, and still worth
+        // breaking up. The space case never reaches here: 2b above has
+        // already let him run.
         let ownership_ticks = ctx.tick_context.ball.ownership_duration;
-        if ownership_ticks > 60 {
+        if ownership_ticks > 300 {
             return true;
         }
 
@@ -1649,6 +1710,29 @@ impl MidfielderRunningState {
 
     /// Check if player is stuck in a corner/boundary with multiple players around
     /// Check if there's open space ahead toward the opponent goal
+    /// Is there a lane in front of him actually worth running into?
+    ///
+    /// A stronger reading of space than [`Self::has_open_space_ahead`]:
+    /// that one clears a touch forward at 3.75 m, this one asks for a
+    /// genuine 10 m of running room in the direction of goal, with a
+    /// narrower cone so a defender square of him does not count. This is
+    /// the "empty space in front, nobody near" picture — the one where a
+    /// midfielder drives rather than recycles.
+    fn has_running_lane(&self, ctx: &StateProcessingContext) -> bool {
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let to_goal = (goal_pos - player_pos).normalize();
+
+        !ctx.players().opponents().nearby(80.0).any(|opp| {
+            let offset = opp.position - player_pos;
+            let ahead = offset.normalize().dot(&to_goal);
+            // Only what is genuinely in the running lane: in front of him
+            // (within ~40 degrees of his line to goal) rather than merely
+            // on the same half of the pitch.
+            ahead > 0.76
+        })
+    }
+
     fn has_open_space_ahead(&self, ctx: &StateProcessingContext) -> bool {
         let player_pos = ctx.player.position;
         let goal_pos = ctx.player().opponent_goal_position();

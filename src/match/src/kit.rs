@@ -284,8 +284,16 @@ impl Wardrobe {
             boots,
             gloves,
             markers: [
-                Self::paint(materials, &ring, config.home.background_color(Self::HOME_FALLBACK)),
-                Self::paint(materials, &ring, config.away.background_color(Self::AWAY_FALLBACK)),
+                Self::paint(
+                    materials,
+                    &ring,
+                    config.home.background_color(Self::HOME_FALLBACK),
+                ),
+                Self::paint(
+                    materials,
+                    &ring,
+                    config.away.background_color(Self::AWAY_FALLBACK),
+                ),
             ],
             shadow: materials.add(StandardMaterial {
                 base_color: Color::srgba(0.0, 0.0, 0.0, 0.40),
@@ -355,10 +363,7 @@ impl Wardrobe {
         })
     }
 
-    fn flesh(
-        materials: &mut Assets<StandardMaterial>,
-        color: Color,
-    ) -> Handle<StandardMaterial> {
+    fn flesh(materials: &mut Assets<StandardMaterial>, color: Color) -> Handle<StandardMaterial> {
         materials.add(StandardMaterial {
             base_color: color,
             perceptual_roughness: 0.62,

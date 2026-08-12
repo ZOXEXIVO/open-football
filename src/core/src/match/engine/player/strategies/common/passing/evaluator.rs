@@ -1275,6 +1275,39 @@ impl PassEvaluator {
                 1.0
             };
 
+            // Which way is this ball actually going?
+            //
+            // Only `is_direct` players had an opinion about that (1.4
+            // forward against 0.5 back). Every other personality —
+            // playmaker, conservative, team player, pragmatic, and the plain
+            // default that most players fall into — scored a pass to the man
+            // BEHIND the ball exactly like a pass to the man in front.
+            //
+            // Combined with `congestion_penalty` above, which pays 1.8 for
+            // an isolated receiver and 0.02 for a crowded one, the evaluator
+            // did not merely tolerate retreating, it preferred it: the
+            // penalty area is the most crowded ground on the pitch and the
+            // spare man in the attacking third is the one nobody has
+            // bothered to mark, who is behind the ball. That is the "passes
+            // backwards in front of goal" report, and it is the same
+            // evaluator every declined shot routes into.
+            //
+            // Recycling is a real option, so this is a discount rather than
+            // a veto — scaled by how far up the pitch we are, because
+            // turning away from goal costs more the nearer you are to it.
+            let side_now = ctx.player.side.unwrap_or(PlayerSide::Left);
+            let goes_backward =
+                side_now.forward_delta(ctx.player.position.x, teammate.position.x) < 0.0;
+            let retreat_penalty = if goes_backward {
+                let width = ctx.context.field_size.width as f32;
+                let progress = side_now.attacking_progress_x(ctx.player.position.x, width);
+                // Untouched in our own half, down to a third of the value on
+                // the edge of the opposition box.
+                (1.0 - (progress - 0.5).clamp(0.0, 0.5) * 1.34).clamp(0.33, 1.0)
+            } else {
+                1.0
+            };
+
             // GOALKEEPER PENALTY: Almost completely eliminate passing to goalkeeper
             let is_goalkeeper = matches!(
                 teammate.tactical_positions.position_group(),
@@ -1416,6 +1449,9 @@ impl PassEvaluator {
                         * goalkeeper_penalty
                 }
             };
+            // Applied once, outside the personality branches, so no
+            // archetype can quietly opt out of it.
+            let score = score * retreat_penalty;
 
             // Hard reject: never pass through 2+ opponents unless
             // a playmaker rolls high vision. Vision gate smoothed

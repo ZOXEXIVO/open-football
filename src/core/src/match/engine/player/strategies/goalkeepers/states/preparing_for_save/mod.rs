@@ -1,5 +1,5 @@
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperSetPosition,
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperSetPosition,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -74,9 +74,14 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         // A shot in flight is handled by the branch above and is
         // deliberately untouched — this is about everything that is NOT
         // a shot.
+        // …and it has to be HIS ball. See [`KeeperBallClaim`]: "loose" in
+        // a busy box means "unowned for a tick", which is not the same as
+        // "nobody is on it", and claiming those is what produced the
+        // keeper/attacker ping-pong on one spot in front of goal.
         let loose_ball_claimable = !ctx.ball().is_owned()
             && !ctx.ball().blocked_from_recollecting()
-            && ctx.ball().on_own_side();
+            && ctx.ball().on_own_side()
+            && KeeperBallClaim::is_favourite(ctx);
         if loose_ball_claimable
             && ball_distance < CATCH_DISTANCE
             && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH

@@ -50,5 +50,4 @@ impl Field {
             (y - Self::UNITS_Y * 0.5) * Self::METERS_PER_UNIT,
         )
     }
-
 }

@@ -328,8 +328,28 @@ impl PlayerMatchState {
             player.pending_shot_reason = Some(reason);
         } else if let Some(new_state) = new_state {
             if !Self::is_shot_emitting_state(new_state) {
+                // A STRUCK shot leaves the same way a lost one does, so the
+                // event has to be what separates them.
+                //
+                // The shooting states return `Running` + a `Shoot` event and
+                // no `shot_reason` (the reason was consumed to build the
+                // event), which lands here — so every armed shot that
+                // actually FIRED was being counted as destroyed. The harness
+                // read 632 "queued shots lost" against 985 shots taken and
+                // the number was almost entirely successful strikes.
+                //
+                // A player who struck the ball emits an event; one who was
+                // pulled out of the strike — lost possession, cooldown, a
+                // handler yanking him elsewhere — emits none. Anything
+                // event-carrying is therefore a resolution, not a loss.
+                // NB an armed player who leaves on a DIFFERENT event (laying
+                // it off instead) is not counted either; that is a decision
+                // reversal rather than a dropped strike and belongs to the
+                // pass-deferral counters.
                 #[cfg(feature = "match-logs")]
-                if player.pending_shot_reason.is_some() {
+                if player.pending_shot_reason.is_some()
+                    && !state_change_result.events.has_events()
+                {
                     let goal_x = match player.side {
                         Some(crate::r#match::PlayerSide::Left) => context.field_size.width as f32,
                         _ => 0.0,

@@ -1,4 +1,6 @@
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
@@ -51,6 +53,7 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         if ball_distance < 10.0
             && !ctx.ball().is_owned()
             && !own_dead_delivery
+            && KeeperBallClaim::is_favourite(ctx)
             && ctx.ball().on_own_side()
             && ctx.tick_context.positions.ball.velocity.norm() < 10.0
         {

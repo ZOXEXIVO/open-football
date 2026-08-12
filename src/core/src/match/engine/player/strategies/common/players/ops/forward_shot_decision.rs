@@ -924,10 +924,26 @@ pub enum ShotDecision {
 /// How far the shot-decision bar eases at the very edge of a player's
 /// striking range. See the note at the threshold for why the bar moves
 /// with distance at all.
-const LONG_RANGE_RELIEF: f32 = 0.28;
+/// Raised 0.28 → 0.40 now that the relief is GATED on the lane and the
+/// player's own range (`long_shot_licence`). Un-gated it had to be sized
+/// for the worst long shot in the game, which left the best one — a
+/// striker of the ball with a clear sight from 25 m — unable to clear the
+/// bar either. Gated, it can describe the shot it is actually for.
+/// Bar units of relief for a SPECULATIVE effort — beyond the edge of the
+/// box, gated on `long_shot_licence` and decaying with distance.
+const LONG_RANGE_RELIEF: f32 = 0.06;
+/// Bar units a genuine long-shot specialist earns through
+/// `long_shot_licence` — a clear lane and the range to reach. Does not
+/// decay with distance; see the note at `specialist_tail`.
+const SPECIALIST_RELIEF: f32 = 0.20;
 /// The bar never falls below this, so a hopeful from 40 m is still a
 /// decision and not a reflex.
-const LONG_RANGE_FLOOR: f32 = 0.26;
+///
+/// Lowered 0.26 → 0.20 because this floor is not only a long-range floor:
+/// the close-in relief feeds the same `range_ease`, so it was also
+/// capping how far the bar could fall for a striker inside the six-yard
+/// box — the one look in football that should be close to automatic.
+const LONG_RANGE_FLOOR: f32 = 0.20;
 /// Height of the shot bar before the per-opportunity spread and the two
 /// distance reliefs. This is the engine's shot-volume knob — see the note
 /// at the threshold.
@@ -940,7 +956,15 @@ const SHOT_BAR_BASE: f32 = 0.530;
 /// 6-11 m band took 32% of all shots against a real 25%. The bar should
 /// ease enough that a clear chance is always taken and not so much that a
 /// half-chance is.
-const CLOSE_RANGE_EASE_SCALE: f32 = 0.30;
+/// Raised 0.30 → 0.70. The note above is about SHOT QUALITY and stands,
+/// but 0.30 of a 0.28 relief is 0.084 of bar against a measured shortfall
+/// of ~0.25 between a point-blank appetite and the bar — a rounding
+/// error dressed as a fix, and the reason a striker five metres out still
+/// declined. The cubed falloff is what keeps this honest: it is nearly
+/// gone by the edge of the comfortable range, so it lifts the tap-in
+/// without lifting the eleven-metre half-chance the earlier linear
+/// version did.
+const CLOSE_RANGE_RELIEF: f32 = 0.28;
 
 pub struct StrikingRange;
 
@@ -1487,7 +1511,117 @@ pub fn evaluate_forward_shot_decision(
     // marginal one — a striker on the edge of the box shoots. Starting
     // the ease at 16 m fills the trough without touching the far end,
     // which is pinned by the full-relief point at 36 m.
-    let range_ease = ((distance - 176.0) / 112.0).clamp(0.0, 1.0);
+    //
+    // …and until now it did not do that. 176u at 0.125 m/unit is 22 m —
+    // exactly the start point the note above identifies as the bug. The
+    // trough was diagnosed and the constant describing it was never
+    // moved, so the band went on being the peak of the bar: forwards
+    // took 0.7% of their shots from 16.5-22 m against a real 20%, which
+    // is a striker on the edge of the area declining to shoot. 128u is
+    // the 16 m the comment always meant; 160u of span keeps full relief
+    // at 36 m (288u) where the far end is pinned.
+    let range_ease = ((distance - 128.0) / 160.0).clamp(0.0, 1.0);
+
+    // …and the licence to hit one from out there is not distance alone.
+    //
+    // Distance is only the argument for WHY a speculative effort is cheap.
+    // Whether it is worth taking is the two things a player actually reads
+    // before he lets fly from 25 m: is the lane open, and can I strike it
+    // from here. Relief keyed to distance by itself gave the same
+    // encouragement to a specialist with a clear sight of goal and to a
+    // full-back punting one through three bodies — so it had to be kept
+    // small enough for the second case, which meant it was never enough
+    // for the first, and the first is the shot real football is full of.
+    //
+    // Both terms are already computed and already mean the right thing:
+    // `sight.lane` is what stands between the ball and the net, and
+    // `reach` is this player's own range — a hammer of a centre-half is
+    // still near 1.0 at 30 m where a poacher has fallen away. Gating the
+    // relief on their product means the bar drops for the man who should
+    // be shooting and stays up for the man who should not, which is what
+    // lets the relief be big enough to matter.
+    //
+    // CUBED, and that exponent is the whole calibration. Linear in
+    // `lane * reach` let 22-30 m take 45.3% of every shot in the game
+    // against a real 13%, because out there the lane is usually open
+    // (nobody marks a man 25 m out) and `reach` is still respectable for
+    // an ordinary player — so "clear path and can hit it" was true of
+    // almost everybody, and the band carries 21% of all shot decisions.
+    // A near-miss on either term has to cost real licence, because the
+    // difference between a specialist with a genuinely clean sight and an
+    // average player with a half-open one is exactly the difference
+    // between a shot worth taking from there and a giveaway.
+    let long_shot_licence = (sight.lane * reach).clamp(0.0, 1.0).powi(3);
+    // Two different arguments, so two different reliefs — and they must
+    // not share a magnitude.
+    //
+    // Folding both into one `range_ease` and one constant meant every
+    // attempt to calm the speculative band also flattened the six-yard
+    // box, and every attempt to make a striker finish a tap-in re-opened
+    // 25-yarders. They are separate football propositions: at the edge of
+    // the area a shot is a NORMAL option and needs no licence; beyond it
+    // the shot is speculative and needs one.
+    //
+    // `box_relief` therefore ramps from 11 m (88u) to the edge of the box
+    // and is ungated. `far_relief` starts where that ends and DECAYS with
+    // distance rather than growing — the previous shape grew all the way
+    // to 36 m, which is why the 22-30 m band, already carrying 22% of all
+    // shot decisions, took 36-45% of every shot struck in the game.
+    // One continuous hump, peaking at the edge of the area.
+    //
+    // Two separate ramps were tried first and the split-out `box_relief`
+    // used a `.clamp(0.0, 1.0)` that SATURATED at the box edge — so it
+    // held full relief flat all the way out to 40 m, which is the exact
+    // opposite of what it was for, and 22-30 m took 45% of every shot in
+    // the game. A hump cannot do that: it has to come down the far side.
+    //
+    // Real shot volume peaks around the box and falls away outside it, so
+    // the relief does the same. Nothing steps: the licence phases IN
+    // across the same span the relief decays over, so there is no
+    // discontinuity at the box edge for a carrier to oscillate across.
+    let band = if distance <= 132.0 {
+        ((distance - 88.0) / 44.0).clamp(0.0, 1.0)
+    } else {
+        // Decays over 6 m, not 14. The far side is the steep part of this
+        // knob: 22-30 m carries 22% of all shot decisions in a match, so
+        // relief that is still half-strength out there does not add a few
+        // speculative efforts, it takes 41% of every shot struck (real
+        // 13%). Past the edge of the area the bar has to come back up
+        // quickly, and what carries a genuine long-shot specialist beyond
+        // it is `reach` inside the appetite itself, not the bar.
+        // Falls away over 11 m rather than dropping off a cliff. Every
+        // narrow version of this hump produced a SPIKE wherever it was
+        // placed — 49% of all shots in whichever four-metre band it sat
+        // over — because the appetite distribution is dense right at the
+        // bar, so a large relief applied over a short span converts a
+        // whole population of near-misses at once. Wide and shallow moves
+        // the shape; narrow and deep just moves the pile.
+        (1.0 - (distance - 132.0) / 88.0).clamp(0.0, 1.0)
+    };
+    // 0 at the box edge, 1 by 30 m: how much this is a speculative effort
+    // rather than a normal shooting position, and therefore how much of
+    // the relief has to be EARNED through lane and range.
+    let speculative = ((distance - 132.0) / 108.0).clamp(0.0, 1.0);
+    let licence_gate = 1.0 - speculative * (1.0 - long_shot_licence);
+
+    // ── The specialist's tail ─────────────────────────────────────────
+    //
+    // The hump above decays to nothing past ~27 m, which is right for the
+    // population — and wrong for the one player it should not be right
+    // for. A man with a clear sight of goal and the leg to reach it from
+    // 30 m is exactly who SHOULD be hitting one from there, and with the
+    // hump alone he faced the full bar and the 30 m+ band measured 0.0%.
+    //
+    // So the licence buys a relief that does NOT decay with distance,
+    // available in proportion to how speculative the position is and how
+    // completely he has earned it. `long_shot_licence` is cubed, so this
+    // is worth almost nothing to an ordinary player with a half-open lane
+    // and nearly all of it to a striker of the ball who can see the net —
+    // which is the whole of "more long shots when the path is clear and
+    // he has the skills for it", expressed as a continuous property of
+    // the two things rather than a distance rule.
+    let specialist_tail = long_shot_licence * speculative * SPECIALIST_RELIEF;
+    let range_ease = (band * licence_gate * LONG_RANGE_RELIEF).max(specialist_tail);
 
     // ── …and it eases CLOSE IN too, for the opposite reason ───────────
     //
@@ -1518,7 +1652,7 @@ pub fn evaluate_forward_shot_decision(
     let close_ease = (1.0 - distance / comfortable.max(1.0))
         .clamp(0.0, 1.0)
         .powi(3);
-    let range_ease = range_ease.max(close_ease * CLOSE_RANGE_EASE_SCALE);
+    let range_ease = range_ease.max(close_ease * CLOSE_RANGE_RELIEF);
 
     // ── …but only when there is nothing better on ─────────────────────
     //
@@ -1569,8 +1703,10 @@ pub fn evaluate_forward_shot_decision(
     // to 43% of all shots while 11-22 m collapsed to 19%. Move it in
     // small steps and re-read the whole distance mix, never just the
     // total.
-    let threshold =
-        (SHOT_BAR_BASE + spread * 0.24 - range_ease * LONG_RANGE_RELIEF).max(LONG_RANGE_FLOOR);
+    // `range_ease` is now an ABSOLUTE relief in bar units — each of the
+    // three reliefs carries its own magnitude — so it is subtracted
+    // directly rather than scaled by a shared constant here.
+    let threshold = (SHOT_BAR_BASE + spread * 0.24 - range_ease).max(LONG_RANGE_FLOOR);
 
     if appetite >= threshold {
         #[cfg(feature = "match-logs")]

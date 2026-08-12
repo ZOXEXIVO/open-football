@@ -1,12 +1,12 @@
 use crate::actors::BallState;
 use crate::field::Field;
 use crate::playback::Playback;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use std::f32::consts::{PI, TAU};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use web_sys::{AddEventListenerOptions, MouseEvent, WheelEvent};
 
 /// How far the lens is pulled in, as a multiple of the default framing.
@@ -40,8 +40,7 @@ impl CameraZoom {
     /// Zoom by a fractional number of notches, so a wheel that reports
     /// pixels moves the lens as smoothly as it is turned.
     fn turn(&mut self, notches: f32) {
-        self.factor =
-            (self.factor * Self::STEP.powf(notches)).clamp(Self::RANGE.0, Self::RANGE.1);
+        self.factor = (self.factor * Self::STEP.powf(notches)).clamp(Self::RANGE.0, Self::RANGE.1);
     }
 
     /// The wheel drives the lens.
@@ -134,8 +133,8 @@ impl CameraOrbit {
                 .clamp(Self::ELEVATION.0, Self::ELEVATION.1);
         }
 
-        let let_go = mouse.just_released(MouseButton::Right)
-            || mouse.just_released(MouseButton::Middle);
+        let let_go =
+            mouse.just_released(MouseButton::Right) || mouse.just_released(MouseButton::Middle);
         if let_go
             && orbit.bearing.abs() < Self::DETENT
             && (orbit.elevation - TvCamera::rest_elevation()).abs() < Self::DETENT

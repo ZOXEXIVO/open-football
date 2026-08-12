@@ -511,7 +511,35 @@ impl<'p> PlayerOperationsImpl<'p> {
         const GOAL_HALF_WIDTH: f32 = 29.0;
         let lateral_offset = (player_position.y - goal_position.y).abs();
         let x_offset = distance_to_goal.max(1.0);
-        let near_post_offset = (lateral_offset - GOAL_HALF_WIDTH).max(0.0);
+        // The near post's offset is SIGNED, and clamping it at zero was
+        // throwing away half the goal.
+        //
+        // A player between the posts has one upright to his left and one to
+        // his right, so the opening he sees is the sum of two wedges. `.max(0.0)`
+        // discarded the far-side one, and the loss is worst dead in front of
+        // goal: `near` and `far` both resolved to the same side, giving
+        // `atan(29/x)` where the true opening is `2·atan(29/x)`. Measured
+        // against `central_opening` — which is the correct `2·atan(29/x)` —
+        // that is EXACTLY 0.500 at every distance for a central player, while
+        // one level with the post scored 0.96. The model rated square in front
+        // of goal as the worst shooting position on the pitch, and the
+        // population means showed it: mean `angle_quality` climbed
+        // monotonically with range (0.656 at <6 m to 0.917 beyond 30 m)
+        // because the only shooters it scored well were the laterally
+        // offset ones.
+        //
+        // Signing it makes the subtraction span both wedges: at `lateral = 0`
+        // the near term is `-atan(29/x)` and the difference is the full
+        // `2·atan(29/x)`; level with a post the near term is zero and the
+        // result is unchanged; outside the posts both terms are positive and
+        // it degenerates to the old (correct-in-that-case) formula.
+        //
+        // This also un-blinds long-range central shooting. The 0.14 rad floor
+        // below was being met at 205u (25.7 m) dead centre instead of ~414u
+        // (51.7 m), so a central player beyond 30 m returned `blind()` and the
+        // shot decision hard-rejected before any appetite math ran — which is
+        // why the measured FWD mix held 0.0% beyond 22 m. Not rare: impossible.
+        let near_post_offset = lateral_offset - GOAL_HALF_WIDTH;
         let far_post_offset = lateral_offset + GOAL_HALF_WIDTH;
         let visible_opening =
             (far_post_offset.atan2(x_offset) - near_post_offset.atan2(x_offset)).abs();

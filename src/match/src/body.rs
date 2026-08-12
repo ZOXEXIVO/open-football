@@ -130,8 +130,7 @@ impl Sculptor {
             return;
         }
         let hub = self.positions.len() as u32;
-        self.positions
-            .push([offset.x, offset.y + ring.y, offset.z]);
+        self.positions.push([offset.x, offset.y + ring.y, offset.z]);
         self.uvs.push([0.5, 0.5]);
         for side in 0..Self::SIDES {
             let angle = TAU * side as f32 / Self::SIDES as f32;
@@ -220,6 +219,18 @@ impl Physique {
     /// Crown to turf. Only the name plates want this, to size themselves
     /// against the player they belong to.
     pub const STATURE: f32 = 1.79;
+
+    /// Where a goalkeeper holds the ball once he has gathered it, in his own
+    /// space and before his build is applied.
+    ///
+    /// Not a free choice. It is worked forward down the arm from the shoulder
+    /// socket through [`Joint::CRADLE_SHOULDER`] and [`Joint::CRADLE_ELBOW`],
+    /// which put the wrists at (±0.184, 1.151, 0.325); the ball sits in the
+    /// fork just above and between them. The viewer draws the ball here rather
+    /// than at its recorded position while the keeper has it, so the two MUST
+    /// come out of the same numbers — move one of the three and the gloves
+    /// close on empty air.
+    pub const CRADLE: Vec3 = Vec3::new(0.0, 1.20, 0.32);
 }
 
 /// Every mesh a footballer is made of, built once and shared by all
@@ -448,6 +459,15 @@ pub struct Gait {
     /// Where he is looking, as a yaw off his own facing in radians. A player
     /// watches the ball; his head does not sit welded to his chest.
     pub look: f32,
+    /// 0 for everybody all match; ramps to 1 for the one goalkeeper who has
+    /// the ball in his gloves.
+    ///
+    /// A keeper who had gathered the ball was posed exactly like one who had
+    /// not: arms hanging at his sides, swinging with the run cycle, while the
+    /// ball hung at chest height inside his own torso. This is the signal that
+    /// brings the forearms up and settles the chest so it can sit in his
+    /// hands instead.
+    pub carry: f32,
 }
 
 impl Joint {
@@ -474,6 +494,19 @@ impl Joint {
     const HIP_TWIST: f32 = 0.065;
     /// How far a player leans into a turn at full tilt.
     const BANK: f32 = 0.30;
+    /// The hold, as rotations about X in the shoulder's and the elbow's own
+    /// frames. The upper arm eases forward off the ribs and the forearm comes
+    /// most of the way up, so the two make a shelf in front of the chest —
+    /// which is how a goalkeeper carries a ball he has just claimed, elbows in
+    /// and gloves under it, not out in front of him at arm's length.
+    ///
+    /// [`Physique::CRADLE`] is where these two angles land the wrists. Keep
+    /// them together.
+    const CRADLE_SHOULDER: f32 = -0.12;
+    const CRADLE_ELBOW: f32 = -1.55;
+    /// A little outward roll at the shoulder, so the gloves close on the sides
+    /// of the ball rather than inside it.
+    const CRADLE_SPREAD: f32 = 0.03;
 
     fn new(owner: Entity, limb: Limb, side: f32, origin: Vec3) -> Self {
         Joint {
@@ -497,8 +530,7 @@ impl Joint {
                 let bob = Self::BOB * gait.run * (0.5 + 0.5 * (gait.phase * 2.0).cos());
                 // Breathing, for a player who is not running. Fades out as he
                 // does, where the stride bob takes over.
-                let breathe =
-                    Self::BREATHE * (1.0 - gait.run) * (0.5 + 0.5 * gait.idle.sin());
+                let breathe = Self::BREATHE * (1.0 - gait.run) * (0.5 + 0.5 * gait.idle.sin());
                 self.origin + Vec3::Y * (bob + breathe)
             }
             _ => self.origin,
@@ -545,9 +577,16 @@ impl Joint {
                 let roll = Self::ROCK * gait.run * (gait.phase + FRAC_PI_2).sin()
                     + Self::WEIGHT_SHIFT * 0.8 * weight
                     - Self::BANK * gait.turn;
-                Quat::from_rotation_x(lean * (1.0 + 0.16 * gait.signature))
-                    * Quat::from_rotation_y(-0.14 * gait.run * gait.phase.sin())
-                    * Quat::from_rotation_z(roll)
+                // A keeper with the ball stands up out of all of it. Two
+                // reasons, and the second is the load-bearing one: he does
+                // straighten up, and the arm angles above are measured off an
+                // upright chest — leave the lean and the rock in and the ball
+                // drifts a couple of centimetres out of his gloves every
+                // stride.
+                let settle = 1.0 - gait.carry;
+                Quat::from_rotation_x(lean * (1.0 + 0.16 * gait.signature) * settle)
+                    * Quat::from_rotation_y(-0.14 * gait.run * gait.phase.sin() * settle)
+                    * Quat::from_rotation_z(roll * settle)
             }
             // He watches the ball. The head hangs off the torso, so this yaw
             // is already relative to his chest — turning it is the single
@@ -557,9 +596,7 @@ impl Joint {
             //
             // Still kept level in pitch: a runner leans from the hips and
             // looks up the pitch, not at his own boots.
-            Limb::Head => {
-                Quat::from_rotation_y(gait.look) * Quat::from_rotation_x(-lean * 0.75)
-            }
+            Limb::Head => Quat::from_rotation_y(gait.look) * Quat::from_rotation_x(-lean * 0.75),
             Limb::Shoulder => {
                 // Arms swing against the leg on the same side, and are carried
                 // wider the harder the player is running — and wider again, or
@@ -572,13 +609,24 @@ impl Joint {
                 // the two do not move as a pair.
                 let drift = 0.055 * standing * (gait.idle + self.side).sin();
                 let arm = Self::blend(Self::ARM_SWING, gait.run) * swing * asymmetry + drift;
-                Quat::from_rotation_z(self.side * carriage) * Quat::from_rotation_x(arm)
+                let swinging =
+                    Quat::from_rotation_z(self.side * carriage) * Quat::from_rotation_x(arm);
+                Self::held(
+                    swinging,
+                    Quat::from_rotation_z(self.side * Self::CRADLE_SPREAD)
+                        * Quat::from_rotation_x(Self::CRADLE_SHOULDER),
+                    gait.carry,
+                )
             }
             // Elbow carriage is the most individual thing about a runner:
             // some hold them almost straight, some at a right angle.
-            Limb::Elbow => Quat::from_rotation_x(
-                -Self::blend(Self::ELBOW_FLEX, gait.run) * (1.0 + 0.24 * gait.signature)
-                    - 0.18 * gait.run * swing,
+            Limb::Elbow => Self::held(
+                Quat::from_rotation_x(
+                    -Self::blend(Self::ELBOW_FLEX, gait.run) * (1.0 + 0.24 * gait.signature)
+                        - 0.18 * gait.run * swing,
+                ),
+                Quat::from_rotation_x(Self::CRADLE_ELBOW),
+                gait.carry,
             ),
             Limb::Hip => Quat::from_rotation_x(-Self::blend(Self::HIP_SWING, gait.run) * swing),
             // Deepest as the leg folds through underneath the player, and all
@@ -595,6 +643,18 @@ impl Joint {
 
     fn blend(range: (f32, f32), run: f32) -> f32 {
         range.0 + range.1 * run
+    }
+
+    /// Fades a limb off the run cycle and onto the hold as a keeper gathers
+    /// the ball. Short-circuited at zero because twenty-one players out of
+    /// twenty-two are never holding anything, and a slerp per joint per frame
+    /// for all of them is a cost with nothing to show for it.
+    fn held(swinging: Quat, cradle: Quat, carry: f32) -> Quat {
+        if carry <= 1e-3 {
+            swinging
+        } else {
+            swinging.slerp(cradle, carry.min(1.0))
+        }
     }
 }
 

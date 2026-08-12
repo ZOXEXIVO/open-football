@@ -26,7 +26,9 @@ pub struct Bank {
     /// Centre spot to the front row. There is deliberately no far bound —
     /// see [`Bank::encloses`] for why the test is a half-space in depth.
     near: f32,
-    /// Top of the structure — the crest of the back wall.
+    /// Ceiling on the test: above this the lens is treated as looking over
+    /// the bank rather than through it. Higher than the seating actually
+    /// stands — see `SIGHTLINE_CLEARANCE`.
     top: f32,
 }
 
@@ -391,19 +393,6 @@ impl Pitch {
             perceptual_roughness: 0.4,
             ..default()
         });
-        // Back wall: pale concrete under the floodlights, which is what a
-        // stand is actually made of. It was near-black (0.075/0.082/0.105) —
-        // the whole ground was pitched as an unlit silhouette, and the
-        // structure read as a hole rather than as a building.
-        //
-        // A shaded grey rather than a white: what the camera sees is the
-        // inward face, which stands in its own shade even with the bank open
-        // to the sky.
-        let stand = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.580, 0.600, 0.630),
-            perceptual_roughness: 1.0,
-            ..default()
-        });
 
         let along = Field::HALF_LENGTH + END_MARGIN;
         let across = Field::HALF_WIDTH + SIDE_MARGIN;
@@ -444,9 +433,9 @@ impl Pitch {
         // camera is a flat grey triangle and reads as scenery rather than as
         // a stand. What makes a stand recognisable at distance is not detail
         // but RELIEF: stepped rows catching the light one edge at a time,
-        // read against the back wall standing behind them. That is cheap, and
-        // with the lens widened it is a good deal more visible than it used
-        // to be.
+        // now read against the sky rather than against a wall. That is cheap,
+        // and with the lens widened it is a good deal more visible than it
+        // used to be.
         // The seats themselves, as a texture across the face of every row —
         // see `Textures::seats` for why they cannot be geometry. White base
         // colour so the image supplies the colour unmodified.
@@ -472,7 +461,6 @@ impl Pitch {
                 commands,
                 meshes,
                 &seating,
-                &stand,
                 &trim,
                 across_span,
                 across + 2.1,
@@ -489,7 +477,6 @@ impl Pitch {
                 commands,
                 meshes,
                 &seating,
-                &stand,
                 &trim,
                 end_span,
                 along + 2.4,
@@ -511,7 +498,6 @@ impl Pitch {
         commands: &mut Commands,
         meshes: &mut Assets<Mesh>,
         seating: &Handle<StandardMaterial>,
-        structure: &Handle<StandardMaterial>,
         trim: &Handle<StandardMaterial>,
         length: f32,
         from: f32,
@@ -524,13 +510,24 @@ impl Pitch {
         /// entity count — sensible for a background element that spends most
         /// of its life in the fog.
         const TREAD: f32 = 1.25;
-        /// How far the back wall stands above the back row. The banks are
-        /// open, so the wall alone carries the silhouette — it keeps the full
-        /// height the roof line used to sit at rather than dropping to a
-        /// parapet, which would leave the ground with no skyline at all.
-        const WALL_RISE: f32 = 7.0;
         /// Fraction of the way up the lit walkway runs.
         const TIER: f32 = 0.35;
+        /// How far above the back row the cull still counts a camera as being
+        /// inside the bank.
+        ///
+        /// This is NOT the height of anything. The banks are open and their
+        /// structure stops at the crest — but a lens above the crest is not
+        /// therefore looking over the stand. The broadcast rest shot sits at
+        /// `TvCamera::HEIGHT`, 18 m up and 82 m out, which clears a touchline
+        /// bank's 13.4 m crest by nearly five metres and is still looking
+        /// straight THROUGH its back rows at the play. So the ceiling is a
+        /// sightline margin, and it has to stay above that shot: cut it back
+        /// to the crest and the near stand reappears across the default view,
+        /// which is the one thing [`Bank`] exists to prevent.
+        ///
+        /// It used to be the height of the back wall, which happened to serve.
+        /// With the wall gone the number has to be justified on its own.
+        const SIGHTLINE_CLEARANCE: f32 = 7.3;
 
         let rows = (run / TREAD).round().max(4.0);
         let riser = rise / rows;
@@ -540,14 +537,15 @@ impl Pitch {
         let step = meshes.add(Cuboid::new(length, riser * 1.9, TREAD * 0.96));
 
         // The bank's own extent, so `Bank::cull` can tell whether the
-        // lens has walked into this one. The flank matches the back wall,
-        // which overhangs the seating by a metre either side.
+        // lens has walked into this one. A metre of slack either side of the
+        // seating, so a camera just off the end of a bank still counts as
+        // being behind it.
         let bank_extent = Bank {
             // World → local is the inverse of the placement turn.
             frame: Quat::from_rotation_y(-turn),
             flank: length * 0.5 + 1.0,
             near: from,
-            top: rise + WALL_RISE + 0.3,
+            top: rise + SIGHTLINE_CLEARANCE,
         };
 
         let placement = Transform::from_rotation(Quat::from_rotation_y(turn));
@@ -578,21 +576,14 @@ impl Pitch {
                 Transform::from_xyz(0.0, riser * tier_row, from + TREAD * tier_row),
             ));
 
-            // Back wall, closing the bank off. Without it the top rows are
-            // seen against open sky and the stand looks like a ramp with
-            // nothing behind it.
-            //
-            // These banks used to carry a roof cantilevered forward over the
-            // back two thirds of the seating, sitting at exactly this height.
-            // With it gone the wall is the whole skyline, and the seating is
-            // lit and seen all the way to the back row instead of
-            // disappearing under an overhang.
-            let wall = rise + WALL_RISE;
-            bank.spawn((
-                Mesh3d(meshes.add(Cuboid::new(length + 2.0, wall, 0.9))),
-                MeshMaterial3d(structure.clone()),
-                Transform::from_xyz(0.0, wall * 0.5, from + run + 1.4),
-            ));
+            // No back wall. There used to be one — a slab of pale concrete
+            // standing seven metres above the back row — on the reasoning that
+            // a bank open to the sky reads as a ramp with nothing behind it.
+            // In practice it read as what it was: a flat grey rectangle
+            // filling the top of the frame on every side of the ground, and it
+            // took more attention than the seating in front of it. The rows
+            // now finish against the sky, which is where the eye expects the
+            // structure of an open ground to stop.
         });
     }
 

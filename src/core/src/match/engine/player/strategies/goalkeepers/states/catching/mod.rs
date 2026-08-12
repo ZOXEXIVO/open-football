@@ -1,6 +1,6 @@
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperSetPosition,
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperSetPosition,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -258,6 +258,29 @@ impl GoalkeeperCatchingState {
             }
             let per_tick = prof.per_tick_save(save_prob, EXPECTED_SAVE_TICKS);
             return ctx.context.rng.unit_f32() < per_tick;
+        }
+
+        // Past a shot in flight, the gloves only close on a ball that is
+        // genuinely FREE and genuinely his.
+        //
+        // This roll runs every tick the keeper spends in `Catching` and
+        // asked nothing at all about who the ball belonged to — only how
+        // far away it was, how fast, and whether it was coming towards
+        // him. A forward carrying the ball into the area satisfies all
+        // three, so the keeper rolled `catch_prob` against him on every
+        // tick until the dice came up and then took it off his foot.
+        // That is the ball ping-ponging between the keeper and the
+        // players in front of him, and it is why catches (44 a match)
+        // outnumbered shots (24) — most of them were not saves of
+        // anything.
+        //
+        // The keeper still comes for what is his: a loose ball he is
+        // favourite for. He does not tackle with his hands.
+        if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
+            return false;
+        }
+        if !KeeperBallClaim::is_favourite(ctx) {
+            return false;
         }
 
         let distance_to_ball = ctx.ball().distance();
