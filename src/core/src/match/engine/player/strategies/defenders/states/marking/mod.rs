@@ -1,6 +1,9 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::events::Event;
+use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::states::ContactFoul;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -19,6 +22,29 @@ pub struct DefenderMarkingState {}
 
 impl StateProcessingHandler for DefenderMarkingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // The shirt pull. A marker who is being pulled away from grabs,
+        // leans or blocks — the commonest foul in football and one this
+        // engine could not produce, because tackling was its only foul
+        // source. See `ContactFoul`.
+        if ContactFoul::is_decision_tick(ctx) {
+            if let Some(man) = self.find_best_marking_target(ctx) {
+                let gap = (man.position - ctx.player.position).magnitude();
+                // He is going past me if he is moving and I am not with
+                // him — the moment a beaten defender reaches out.
+                let losing_him = man.velocity(ctx).norm() > ctx.player.velocity.norm() + 0.08;
+                let p = ContactFoul::probability(ctx, gap, losing_him);
+                if ctx.context.rng.bernoulli(p) {
+                    return Some(StateChangeResult::with_defender_state_and_event(
+                        DefenderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::CommitFoul(
+                            ctx.player.id,
+                            ContactFoul::severity(ctx, losing_him),
+                        )),
+                    ));
+                }
+            }
+        }
+
         // BOX EMERGENCY — stop marking an off-ball runner if the
         // carrier is INSIDE our penalty area and we're one of the two
         // closest defenders. A shot is imminent; engage the carrier

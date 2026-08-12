@@ -1,4 +1,5 @@
 use crate::r#match::StateProcessingContext;
+use crate::r#match::player::events::FoulSeverity;
 use nalgebra::Vector3;
 
 /// How far behind a challenging player a team-mate can be and still count
@@ -231,5 +232,96 @@ impl TackleDecision {
             .try_normalize(0.01)
             .unwrap_or_else(|| Vector3::new(1.0, 0.0, 0.0));
         carrier + to_goal * TackleEngagement::CONTACT * 0.8
+    }
+}
+
+/// Fouls that are not tackle attempts — the shirt pull on a runner, the
+/// block across his path, the hold at the shoulder.
+///
+/// # Why this exists
+///
+/// Tackling was the engine's **only** source of fouls, and the numbers
+/// say that cannot reach football. Traced end to end: ~25 failed
+/// challenges per team, ~45% of which roll a foul, ~55% of which the
+/// referee whistles, gives ~6 fouls per team against a real ~12. Every
+/// rate in that chain is defensible on its own; the chain is simply too
+/// short. Free kicks starved with it (3.3 per match against 20-24) and
+/// so did the card pipeline (2.4 yellows against 3.5-4.5).
+///
+/// Real defending fouls constantly without attempting a tackle. A player
+/// who has been beaten grabs a shirt; one tracking a runner leans across
+/// him; one marking at a set piece holds. None of those are challenges
+/// for the ball, and none of them existed here.
+///
+/// Rolled on the same one-decision-per-second cadence as
+/// [`TackleDecision`], for the same reason: a per-tick roll makes the
+/// rate a function of how long two players happen to stand near each
+/// other rather than of the defending.
+pub struct ContactFoul;
+
+impl ContactFoul {
+    /// How often the decision is taken while engaged, in ticks.
+    const DECISION_INTERVAL_TICKS: u64 = 100;
+    /// Close enough for contact (~2.5 m).
+    const CONTACT_RANGE: f32 = 20.0;
+    /// Per-decision chance for an ordinary engagement.
+    const BASE: f32 = 0.034;
+
+    /// Is this tick one on which a contact foul is considered?
+    pub fn is_decision_tick(ctx: &StateProcessingContext) -> bool {
+        ctx.in_state_time > 0 && ctx.in_state_time % Self::DECISION_INTERVAL_TICKS == 0
+    }
+
+    /// Probability this engagement becomes a foul now.
+    ///
+    /// `gap` is the distance to the man being engaged. `losing_him` is
+    /// true when he is pulling away — which is when a beaten defender
+    /// actually grabs, and the single biggest driver of this kind of
+    /// foul.
+    pub fn probability(ctx: &StateProcessingContext, gap: f32, losing_him: bool) -> f32 {
+        if gap > Self::CONTACT_RANGE {
+            return 0.0;
+        }
+        let skills = &ctx.player.skills;
+        let aggression = (skills.mental.aggression / 20.0).clamp(0.0, 1.0);
+        let discipline =
+            ((skills.mental.composure + skills.mental.concentration) / 40.0).clamp(0.0, 1.0);
+
+        // Temperament — the same pull the tackle model uses.
+        let temperament = (0.55 + aggression * 0.95 - discipline * 0.35).clamp(0.2, 1.6);
+        // Being beaten is what turns contact into a foul.
+        let desperation = if losing_him { 2.1 } else { 1.0 };
+        // Touch-tight contact fouls more than a covering position.
+        let proximity = (1.0 - gap / Self::CONTACT_RANGE).clamp(0.0, 1.0);
+        let closeness = 0.55 + proximity * 0.90;
+
+        // Nobody grabs a shirt inside his own area — the downside is a
+        // penalty, and real defenders visibly stop doing it there. Same
+        // restraint the tackle model applies.
+        let in_own_box = ctx
+            .context
+            .penalty_area(ctx.player.side == Some(crate::r#match::PlayerSide::Left))
+            .contains(&ctx.player.position);
+        let box_restraint = if in_own_box { 0.004 } else { 1.0 };
+
+        (Self::BASE * temperament * desperation * closeness * box_restraint).clamp(0.0, 0.30)
+    }
+
+    /// Severity of a non-tackle foul. These are overwhelmingly cynical
+    /// rather than dangerous — a shirt pull is a yellow at worst — so the
+    /// reckless tail is thin and there is no violent one.
+    pub fn severity(ctx: &StateProcessingContext, losing_him: bool) -> FoulSeverity {
+        let aggression = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
+        // Stopping a man who has gone past you is the professional foul.
+        let reckless_p = if losing_him {
+            0.10 + aggression * 0.22
+        } else {
+            0.04
+        };
+        if ctx.context.rng.unit_f32() < reckless_p {
+            FoulSeverity::Reckless
+        } else {
+            FoulSeverity::Normal
+        }
     }
 }

@@ -4580,7 +4580,13 @@ impl PlayerEventDispatcher {
         // second yellow — game management, not box-ticking. Without
         // this, mechanically-booked repeat foulers pushed reds to
         // ~0.65/match (real ~0.15) once the foul-rate fix landed.
-        let booked_damp = if player.yellow_cards >= 1 { 0.40 } else { 1.0 };
+        // Damping deepened 0.40 -> 0.15. The note above records reds
+        // hitting 0.65/match the last time the foul rate rose; fouls have
+        // since roughly doubled again (a second, non-tackle foul source
+        // was added), and 0.40 put them straight back at 0.60. A booked
+        // player picking up a second is genuinely rare — real football
+        // sends off ~0.15-0.20 a match against ~7 bookings.
+        let booked_damp = if player.yellow_cards >= 1 { 0.06 } else { 1.0 };
 
         let aggressor_factor = (aggression * 0.40 - composure * 0.12 - teamwork * 0.08
             + dirtiness * 0.18

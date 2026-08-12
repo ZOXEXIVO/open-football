@@ -1,5 +1,8 @@
+use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::strategies::common::states::ContactFoul;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
@@ -31,6 +34,25 @@ pub struct MidfielderGuardingState {}
 
 impl StateProcessingHandler for MidfielderGuardingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // The shirt pull — see `ContactFoul` and the defender marking
+        // state, which carries the same block for the same reason.
+        if ContactFoul::is_decision_tick(ctx) {
+            if let Some(man) = self.find_guard_target(ctx) {
+                let gap = (man.position - ctx.player.position).magnitude();
+                let losing_him = man.velocity(ctx).norm() > ctx.player.velocity.norm() + 0.08;
+                let p = ContactFoul::probability(ctx, gap, losing_him);
+                if ctx.context.rng.bernoulli(p) {
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::CommitFoul(
+                            ctx.player.id,
+                            ContactFoul::severity(ctx, losing_him),
+                        )),
+                    ));
+                }
+            }
+        }
+
         // If we have the ball, run with it
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(

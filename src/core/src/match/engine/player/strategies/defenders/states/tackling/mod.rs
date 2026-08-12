@@ -372,7 +372,7 @@ impl DefenderTacklingState {
             .penalty_area(ctx.player.side == Some(PlayerSide::Left))
             .contains(&ctx.tick_context.positions.ball.position);
         if in_own_box {
-            base_foul *= 0.04;
+            base_foul *= 0.008;
         }
         // Self-preservation on a booking: a player carrying a yellow
         // measurably tones the challenges down (and managers hook the
@@ -398,7 +398,7 @@ impl DefenderTacklingState {
             FoulSeverity::Normal
         } else if aggression01 > 0.75 && !tackle_success && rng.random::<f32>() < 0.008 {
             FoulSeverity::Violent
-        } else if !tackle_success && aggression01 > 0.55 && rng.random::<f32>() < 0.35 {
+        } else if !tackle_success && aggression01 > 0.55 && rng.random::<f32>() < 0.16 {
             FoulSeverity::Reckless
         } else {
             FoulSeverity::Normal

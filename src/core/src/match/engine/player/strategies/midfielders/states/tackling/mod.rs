@@ -242,7 +242,7 @@ impl MidfielderTacklingState {
             .penalty_area(ctx.player.side == Some(PlayerSide::Left))
             .contains(&ctx.tick_context.positions.ball.position);
         if in_own_box {
-            base_foul *= 0.04;
+            base_foul *= 0.008;
         }
         // Self-preservation on a booking — see defenders/tackling.
         if ctx.player.yellow_cards > 0 {
