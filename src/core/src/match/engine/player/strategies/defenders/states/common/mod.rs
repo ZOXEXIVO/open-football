@@ -417,6 +417,17 @@ impl DefensiveLine {
         centre_y + (ctx.player.start_position.y - centre_y) * squeeze
     }
 
+    /// Is `target` inside our own penalty area? Real dimensions at
+    /// 0.125 m/unit: 16.5 m deep (132u) and 20.16 m either side of the
+    /// centre (161u).
+    fn target_in_own_box(ctx: &StateProcessingContext, target: Vector3<f32>) -> bool {
+        const BOX_DEPTH: f32 = 132.0;
+        const BOX_HALF_WIDTH: f32 = 161.0;
+        let own_goal = ctx.ball().direction_to_own_goal();
+        let centre_y = ctx.context.field_size.height as f32 / 2.0;
+        (target.x - own_goal.x).abs() <= BOX_DEPTH && (target.y - centre_y).abs() <= BOX_HALF_WIDTH
+    }
+
     /// Constrain a target a state chose for its own reasons so that the
     /// UNIT keeps its shape.
     ///
@@ -444,6 +455,30 @@ impl DefensiveLine {
             return target;
         }
         if matches!(ctx.team().my_duty(), DefensiveDuty::Press) {
+            return target;
+        }
+        // ── …and inside our own box, the MAN beats the shape ──────────
+        //
+        // Everything above this line is a zonal argument, and a zonal
+        // argument stops being the right one at the edge of your own
+        // penalty area: that is where every defence in football goes
+        // man-to-man, because the cost of losing your man is a goal
+        // rather than a gap.
+        //
+        // Left in, the leash is what produced the point-blank supply.
+        // A runner arriving from deep drags his marker to the edge of a
+        // 60u lateral / 34u depth box drawn around a line that sits ~8 m
+        // off the goal — and there the marker STOPS, while the man he is
+        // marking carries on into the six-yard box and receives free.
+        // Measured: markers sat 5.2 m off their man against an
+        // `ideal_marking_distance` of 0.9-1.75 m, midfield runners 9.7 m
+        // off, 47% of attackers in our third with nobody within 3 m, and
+        // 34% of all shots struck from inside 6 m against a real 15%.
+        //
+        // Keyed to where the TARGET is, not to where the defender is, so
+        // it releases him to follow a man in rather than releasing anyone
+        // who happens to be standing in his own area.
+        if Self::target_in_own_box(ctx, target) {
             return target;
         }
         let slot = Self::compact_slot_y(ctx);

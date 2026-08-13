@@ -614,7 +614,56 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     } else {
                         0
                     };
-                    DefenceDiag::note_duel((d.position - man.position).magnitude(), line);
+                    // Is the assigned marker in a state that actually
+                    // HONOURS the assignment? The plan hands out duties
+                    // to the whole unit, but only two states read them —
+                    // `Marking` for a defender and `Guarding` for a
+                    // midfielder — so a marker in any other state is
+                    // carrying a duty nothing acts on, and tuning the
+                    // marking distance reaches none of those ticks. Same
+                    // failure shape as the back line's shape code living
+                    // in `HoldingLine`.
+                    // 0 marking, 1 playing the ball (legitimate), 2
+                    // pressing/covering, 3 running/recovering, 4 idle.
+                    // Only bucket 4 — and most of 3 — is a duty nobody
+                    // is acting on.
+                    let bucket = match d.state {
+                        PlayerState::Defender(DefenderState::Marking)
+                        | PlayerState::Midfielder(MidfielderState::Guarding) => 0,
+                        PlayerState::Defender(
+                            DefenderState::Tackling
+                            | DefenderState::Intercepting
+                            | DefenderState::TakeBall
+                            | DefenderState::Clearing
+                            | DefenderState::Heading
+                            | DefenderState::Passing,
+                        )
+                        | PlayerState::Midfielder(
+                            MidfielderState::Tackling
+                            | MidfielderState::Intercepting
+                            | MidfielderState::TakeBall
+                            | MidfielderState::Heading
+                            | MidfielderState::Passing,
+                        ) => 1,
+                        PlayerState::Defender(
+                            DefenderState::Pressing | DefenderState::Covering,
+                        )
+                        | PlayerState::Midfielder(MidfielderState::Pressing) => 2,
+                        PlayerState::Defender(
+                            DefenderState::Running
+                            | DefenderState::Returning
+                            | DefenderState::TrackingBack,
+                        )
+                        | PlayerState::Midfielder(
+                            MidfielderState::Running | MidfielderState::Returning,
+                        ) => 3,
+                        _ => 4,
+                    };
+                    DefenceDiag::note_duel(
+                        (d.position - man.position).magnitude(),
+                        line,
+                        bucket,
+                    );
                 }
             }
         }

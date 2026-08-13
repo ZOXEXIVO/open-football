@@ -10,6 +10,18 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const GUARD_DISTANCE: f32 = 25.0; // Keep a realistic marking distance (don't sit on top of opponent)
+/// …and how tight that becomes on a man deep in our own third. 10u =
+/// 1.25 m — touch-tight, the distance the back line's own
+/// `ideal_marking_distance` already asks for. See the note at the call site.
+const TIGHT_GUARD_DISTANCE: f32 = 10.0;
+/// Fraction of the pitch, measured from our own goal, over which
+/// `danger` ramps from 0 to 1. 0.30 ≈ 31 m: our defensive third and the
+/// approach to it, which is where a screening job becomes a marking one.
+const DANGER_SPAN: f32 = 0.30;
+/// How strongly a guard is pulled back toward his own tactical slot when
+/// the man he is on poses no immediate danger. Faded to zero as `danger`
+/// rises — see the call site.
+const TETHER_STRENGTH: f32 = 0.2;
 const MAX_GUARD_RANGE: f32 = 100.0; // Give up guarding if attacker moves too far
 /// Range within which a midfielder will TAKE UP a guard, as opposed to
 /// the wider `MAX_GUARD_RANGE` at which he gives one up.
@@ -179,12 +191,45 @@ impl StateProcessingHandler for MidfielderGuardingState {
             // Predict where opponent is heading
             let opponent_future = opponent.position + opponent_velocity * PREDICTION_TIME;
 
-            // Position between opponent and our goal at GUARD_DISTANCE away
+            // ── How tight, and how tethered — both scale with danger ──
+            //
+            // A midfielder tracking a runner into our penalty area is
+            // marking, not screening, and the two are different jobs at
+            // different distances. Measured before this: midfield runners
+            // were held at **9.8 m** by the man nominally marking them
+            // (forwards, marked by defenders, sat at 2.8 m), and
+            // midfielders went on to take 63% of every shot struck from
+            // inside six metres.
+            //
+            // Both halves of that gap are here. A flat 25u is 3.1 m — a
+            // screening distance, fine at the edge of the middle third
+            // and nowhere near a man about to receive on the penalty
+            // spot; it now closes to 10u (1.25 m) as the man he is
+            // marking gets deep, which is what the defenders'
+            // `ideal_marking_distance` already asks of them.
+            //
+            // And the tether was a LERP toward `start_position` — the
+            // KICKOFF slot. Blending 20% of a fixed point 40 m upfield
+            // into the target pulls the marker off his man in proportion
+            // to how deep the man has run, which is exactly backwards:
+            // the deeper the run, the more dangerous it is and the more
+            // this let go of it. On a runner arriving at the penalty spot
+            // it accounted for most of the 9.8 m on its own. It fades out
+            // over the same band the marking distance tightens across, so
+            // near our own goal the man wins outright — the same rule the
+            // back line now follows in `DefensiveLine::hold_shape`.
+            let field_len = ctx.context.field_size.width as f32;
+            let danger = (1.0
+                - (opponent_future.x - own_goal.x).abs() / (field_len * DANGER_SPAN).max(1.0))
+            .clamp(0.0, 1.0);
+            let guard_distance = GUARD_DISTANCE + (TIGHT_GUARD_DISTANCE - GUARD_DISTANCE) * danger;
+
+            // Position between opponent and our goal at guard_distance away
             let to_goal = (own_goal - opponent_future).normalize();
-            let desired_position = opponent_future + to_goal * GUARD_DISTANCE;
+            let desired_position = opponent_future + to_goal * guard_distance;
 
             // Blend with tactical position to avoid straying too far
-            let tether_strength = 0.2;
+            let tether_strength = TETHER_STRENGTH * (1.0 - danger);
             let desired_position = desired_position * (1.0 - tether_strength)
                 + ctx.player.start_position * tether_strength;
 

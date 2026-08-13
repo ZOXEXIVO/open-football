@@ -4457,16 +4457,25 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         }
 
         let wf = core::time_band_diag::will_factor_snapshot();
+        // These MUST track `record_will_factors`' slot order in
+        // `forward_shot_decision.rs`. They did not: the labels still named
+        // a willingness model that was replaced (xg_boost / body_ctl /
+        // gk_ctx no longer exist), so the table was printing `lane` under
+        // "body_ctl" and `poise` under "condition" — which is how a
+        // 0.27 lane in the six-yard box read as a body-control problem.
         let wnames = [
-            "base",
-            "xg_boost",
-            "clarity",
-            "body_ctl",
-            "condition",
-            "gk_ctx",
-            "balance",
+            "urge",
+            "reach",
+            "angle_q",
+            "lane",
+            "poise",
+            "boldness",
+            "situatnl",
             "psych",
-            "FINAL",
+            "APPETITE",
+            "  ├ press",
+            "  └ corrid",
+            "BAR",
         ];
         println!();
         println!("  willingness factor MEANS by distance band (roll samples):");
@@ -5369,6 +5378,51 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                      (vs saves+goals = the credited on-target count)",
                     sw, so, sc_, snt, grj,
                 );
+                {
+                    // Complete partition of every struck shot. The
+                    // `shot fate` line above is a set of per-site flags
+                    // that between them catch ~0.5% of shots; this is
+                    // the census, and it must sum to STRUCK.
+                    let c = core::reception_diag::fate_census();
+                    let (struck, goal, gk, out, cdef, catt, stopped, timeout) =
+                        (c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]);
+                    let (live_ticks, struck_d, reached_d) = (c[8], c[9], c[10]);
+                    let s = struck.max(1) as f64;
+                    let reached = goal + gk;
+                    println!(
+                        "  SHOT LIFECYCLE CENSUS — {} struck, {:.1} live ticks each, \
+                         struck from {:.0}u avg",
+                        struck,
+                        live_ticks as f64 / s,
+                        struck_d as f64 / 100.0 / s,
+                    );
+                    for (label, v, note) in [
+                        ("reached the goal (goal + keeper)", reached, "real ~35-40%"),
+                        ("  ├ goal", goal, ""),
+                        ("  └ keeper gathered/saved", gk, ""),
+                        ("out of play (corner/goal kick/throw)", out, "real ~45%"),
+                        ("claimed mid-flight by a DEFENDER", cdef, "real ~15% (blocks)"),
+                        ("claimed mid-flight by an ATTACKER", catt, "real ~5%"),
+                        ("came to rest on the pitch", stopped, "real ~0%"),
+                        ("still live at the 400-tick timeout", timeout, "real 0%"),
+                    ] {
+                        println!(
+                            "    {:<38} {:>6} ({:>5.1}%)  {}",
+                            label,
+                            v,
+                            v as f64 / s * 100.0,
+                            note
+                        );
+                    }
+                    if reached > 0 {
+                        println!(
+                            "    avg strike distance: all {:.0}u vs reached-goal {:.0}u  \
+                             (a big gap = the leak is distance-selective)",
+                            struck_d as f64 / 100.0 / s,
+                            reached_d as f64 / 100.0 / reached as f64,
+                        );
+                    }
+                }
                 println!(
                     "  stranded in the goalmouth (endline clamp, MUST be 0): {}{}",
                     clamped,
@@ -5797,6 +5851,23 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     "  marking duels: marker sits {duel_gap:.0}u ({:.1}m) from his man, attacker got away (>4m) on {:.0}% of samples",
                     duel_gap * 0.125,
                     duels_lost * 100.0
+                );
+                let (on_task, on_task_gap) = DefenceDiag::duel_on_task();
+                println!(
+                    "    ...and only {:.0}% of those markers were in a state that ACTS on the \
+                     duty (Marking/Guarding); those sit {:.1}m off",
+                    on_task * 100.0,
+                    on_task_gap * 0.125,
+                );
+                let by_state = DefenceDiag::duel_by_state();
+                let bs_total = by_state.iter().sum::<u64>().max(1);
+                println!(
+                    "    what the OTHERS were doing: playing-the-ball {:.0}%  press/cover {:.0}%  \
+                     running/recovering {:.0}%  idle {:.0}%   (the last two are duties nobody acts on)",
+                    by_state[1] as f64 / bs_total as f64 * 100.0,
+                    by_state[2] as f64 / bs_total as f64 * 100.0,
+                    by_state[3] as f64 / bs_total as f64 * 100.0,
+                    by_state[4] as f64 / bs_total as f64 * 100.0,
                 );
                 let by_line = DefenceDiag::duel_by_line();
                 let total = by_line.iter().map(|(n, _)| *n).sum::<u64>().max(1);

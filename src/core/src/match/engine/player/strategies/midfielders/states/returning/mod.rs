@@ -10,6 +10,11 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
+/// How close an assigned man has to be before a recovering midfielder
+/// abandons the run to his slot and goes to him instead (~19 m). Same
+/// figure the running state and the back line use.
+const MARK_RECOVERY_DISTANCE: f32 = 150.0;
+
 #[derive(Default, Clone)]
 pub struct MidfielderReturningState {}
 
@@ -70,6 +75,22 @@ impl StateProcessingHandler for MidfielderReturningState {
         // instead of a 1-tick one — still ~2,900 round trips a match
         // (`dev_match trace`). Asking the destination's own question is
         // what removes it; the delay stays as a debounce on top.
+        // An ASSIGNED man is not subject to the commit range. The plan
+        // has already decided he is this midfielder's problem, and
+        // `find_committable_guard_target` only commits inside
+        // `GUARD_COMMIT_RANGE` (10 m) — so a runner picked out by the
+        // plan from fifteen metres was left alone while his marker jogged
+        // back to a slot. Measured: 30% of every marking duty in the game
+        // was held by somebody in a recovery state, acting on none of it.
+        if ctx.in_state_time > 30 && !ctx.team().is_control_ball() {
+            if let Some(man) = ctx.team().my_mark() {
+                if (man.position - ctx.player.position).magnitude() < MARK_RECOVERY_DISTANCE {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Guarding,
+                    ));
+                }
+            }
+        }
         if ctx.in_state_time > 30
             && !ctx.team().is_control_ball()
             && ctx.ball().on_own_side()

@@ -329,6 +329,22 @@ pub mod mid_run_diag {
     pub static DEF_DUEL_GAP_X100: AtomicU64 = AtomicU64::new(0);
     /// Duels where the attacker has genuinely got away (>4 m).
     pub static DEF_DUELS_LOST: AtomicU64 = AtomicU64::new(0);
+    /// Duels where the assigned marker was in a state that actually acts
+    /// on the assignment (`Marking` / `Guarding`), and their gap sum. A
+    /// low share here means the marking DISTANCE is not the thing to
+    /// tune — most markers are not marking.
+    pub static DEF_DUELS_ON_TASK: AtomicU64 = AtomicU64::new(0);
+    pub static DEF_DUEL_GAP_ON_TASK_X100: AtomicU64 = AtomicU64::new(0);
+    /// Duels bucketed by what the marker was actually doing: 0 marking,
+    /// 1 playing the ball, 2 pressing/covering, 3 running/recovering,
+    /// 4 idle. Buckets 3 and 4 are duties nobody is acting on.
+    pub static DEF_DUEL_BY_STATE: [AtomicU64; 5] = [
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+    ];
     /// The same duels split by the LINE of the man being marked. The
     /// aggregate cannot answer the question that matters — whether the
     /// marking that is happening is happening to FORWARDS — and the
@@ -376,9 +392,16 @@ pub mod mid_run_diag {
             )
         }
 
-        pub fn note_duel(gap: f32, marked_line: usize) {
+        pub fn note_duel(gap: f32, marked_line: usize, bucket: usize) {
             DEF_DUELS.fetch_add(1, Ordering::Relaxed);
             DEF_DUEL_GAP_X100.fetch_add((gap * 100.0) as u64, Ordering::Relaxed);
+            if let Some(c) = DEF_DUEL_BY_STATE.get(bucket) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
+            if bucket == 0 {
+                DEF_DUELS_ON_TASK.fetch_add(1, Ordering::Relaxed);
+                DEF_DUEL_GAP_ON_TASK_X100.fetch_add((gap * 100.0) as u64, Ordering::Relaxed);
+            }
             if gap > 32.0 {
                 DEF_DUELS_LOST.fetch_add(1, Ordering::Relaxed);
             }
@@ -401,6 +424,28 @@ pub mod mid_run_diag {
                 n,
                 DEF_DUEL_GAP_X100.load(Ordering::Relaxed) as f32 / 100.0 / n as f32,
                 DEF_DUELS_LOST.load(Ordering::Relaxed) as f32 / n as f32,
+            )
+        }
+
+        /// Duel counts by what the marker was doing — see `DEF_DUEL_BY_STATE`.
+        pub fn duel_by_state() -> [u64; 5] {
+            let mut out = [0u64; 5];
+            for i in 0..5 {
+                out[i] = DEF_DUEL_BY_STATE[i].load(Ordering::Relaxed);
+            }
+            out
+        }
+
+        /// `(share of duels where the marker was in a marking state, their mean gap)`
+        pub fn duel_on_task() -> (f32, f32) {
+            let n = DEF_DUELS.load(Ordering::Relaxed);
+            let k = DEF_DUELS_ON_TASK.load(Ordering::Relaxed);
+            if n == 0 || k == 0 {
+                return (0.0, 0.0);
+            }
+            (
+                k as f32 / n as f32,
+                DEF_DUEL_GAP_ON_TASK_X100.load(Ordering::Relaxed) as f32 / 100.0 / k as f32,
             )
         }
 
@@ -496,6 +541,13 @@ pub mod mid_run_diag {
                 &DEF_DUELS,
                 &DEF_DUEL_GAP_X100,
                 &DEF_DUELS_LOST,
+                &DEF_DUELS_ON_TASK,
+                &DEF_DUEL_GAP_ON_TASK_X100,
+                &DEF_DUEL_BY_STATE[0],
+                &DEF_DUEL_BY_STATE[1],
+                &DEF_DUEL_BY_STATE[2],
+                &DEF_DUEL_BY_STATE[3],
+                &DEF_DUEL_BY_STATE[4],
                 &SHAPE_LAG_X100,
                 &SHAPE_LAG_N,
                 &SHAPE_LAG_MAX_X100,
@@ -803,10 +855,20 @@ pub mod time_band_diag {
     /// Per-distance-band sums (x1000) of each multiplicative factor in
     /// the willingness product, so the distance-correlated suppressor
     /// can be READ rather than guessed at. Order:
-    /// 0 base, 1 xg_boost, 2 clarity_mult, 3 body_control_mult,
-    /// 4 condition_mult, 5 gk_context_mult, 6 balance_factor,
-    /// 7 psychology, 8 final willingness.
-    pub const WFACTORS: usize = 9;
+    /// 0 urge, 1 reach, 2 angle_quality, 3 lane, 4 poise, 5 boldness,
+    /// 6 situational, 7 psychology, 8 final appetite,
+    /// 9 pressure_clarity, 10 corridor_clarity, 11 threshold.
+    ///
+    /// The last three are the ones that make this table decidable.
+    /// `lane` is a PRODUCT of the first two, and the two halves argue in
+    /// opposite directions with distance — immediate pressure is worst in
+    /// the six-yard box, corridor obstruction is worst from range — so a
+    /// single number for it cannot say which is suppressing a band.
+    /// `threshold` is the bar the appetite is actually being compared
+    /// against: without it the table shows an appetite with nothing to
+    /// read it against, and the appetite-vs-bar GAP is the whole
+    /// question.
+    pub const WFACTORS: usize = 12;
     const ZERO_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
     pub static WILL_FACTOR_SUM: [[AtomicU64; BANDS]; WFACTORS] = [ZERO_BAND; WFACTORS];
 
@@ -1051,11 +1113,11 @@ pub enum ShotDecision {
 /// right on the bar, so it is the most sensitive place on the curve —
 /// a 0.06 change in relief swings it by 30 points of share. Move it in
 /// steps of 0.02 and read the mix, never the total.
-const LONG_RANGE_RELIEF: f32 = 0.08;
-/// Bar units a genuine long-shot specialist earns through
-/// `long_shot_licence` — a clear lane and the range to reach. Does not
-/// decay with distance; see the note at `specialist_tail`.
-const SPECIALIST_RELIEF: f32 = 0.20;
+/// Now the WHOLE speculative relief, at full speculation — the
+/// ability-gated `SPECIALIST_RELIEF` half is gone (see `range_ease`), so
+/// this carries both. Everyone gets it; who actually shoots from there
+/// is settled by `reach`, `boldness` and `discernment` in the appetite.
+const LONG_RANGE_RELIEF: f32 = 0.48;
 /// The bar never falls below this, so a hopeful from 40 m is still a
 /// decision and not a reflex.
 ///
@@ -1080,7 +1142,37 @@ const LONG_RANGE_FLOOR: f32 = 0.20;
 /// Move it in small steps and re-read the whole distance mix, never just
 /// the total: the reliefs subtract from this, so a uniform lift falls
 /// entirely on the un-eased middle of the pitch.
-const SHOT_BAR_BASE: f32 = 0.575;
+const SHOT_BAR_BASE: f32 = 0.780;
+/// How much of the urge a man stretching at full tilt for a ball he has
+/// not got under control gives up. See `poise`.
+const STRETCH_COST: f32 = 0.45;
+/// How much of the urge survives a corridor that is completely blocked
+/// by outfield bodies. Not zero: a shot into traffic is a real shot, and
+/// whether the body gets in the way is largely `try_block_shot`'s
+/// question rather than the decision's. See `corridor`.
+///
+/// 0.60 was sized on the assumption that the block model absorbs the
+/// traffic. Measured, it does not: `try_block_shot` stops 8.9% of shots
+/// against a real 18-22%, and defenders sit in the lane on only ~9.6% of
+/// in-window samples. Until the defensive shape puts bodies where they
+/// belong, the decision has to carry more of it — and this is the term
+/// that discriminates, because corridor clarity runs 0.37 in the
+/// six-yard box against 0.94 from thirty metres. Dropping the floor
+/// therefore bites almost entirely on point-blank volume and leaves the
+/// long-range band alone, which is the exact axis that needed moving.
+const CORRIDOR_FLOOR: f32 = 0.15;
+/// Exponent on `angle_clarity` — how strongly the SIZE of the visible
+/// goal drives the urge, as against merely being central
+/// (`angle_quality`). This is the decision's distance spine; there is no
+/// other one inside the player's comfortable range, where `reach` is
+/// flat at 1.0.
+///
+/// Shallow on purpose. `angle_clarity` spans 0.93 at the six-yard box
+/// down to 0.15 beyond 30 m — raw, it would flatten long shots out of
+/// the game altogether, which is the failure this whole term exists to
+/// undo. At 0.30 the same span becomes 0.98 → 0.58: a real preference
+/// for the closer look, not a veto on the far one.
+const TARGET_SIZE_WEIGHT: f32 = 0.22;
 /// How much of the full relief a point-blank chance gets.
 ///
 /// Sized against shot QUALITY, not shot count. At 1.0 the close-range
@@ -1104,7 +1196,18 @@ const SHOT_BAR_BASE: f32 = 0.575;
 /// (real 15%) and 11-22 m collapsed to 21% (real 42%) — forwards back to
 /// hunting tap-ins. The point of the close relief is that a striker in
 /// the six-yard box shoots, not that he only shoots there.
-const CLOSE_RANGE_RELIEF: f32 = 0.17;
+/// Trimmed 0.22 → 0.16 now that `target_size` gives the APPETITE its own
+/// close-in gradient. Before that the bar was the only thing that knew a
+/// five-metre chance is different from an eighteen-metre one; with both
+/// carrying it the six-yard box was being paid twice.
+const CLOSE_RANGE_RELIEF: f32 = 0.06;
+/// Bar units of relief at the peak of the normal-shooting band (~14 m).
+/// See the note at `box_relief`.
+const BOX_RELIEF: f32 = 0.22;
+/// How much further from goal than the carrier a lay-off target may be
+/// and still count as a release rather than a recycle. 20u = 2.5 m — a
+/// square ball, not a pass back into midfield. See the release clause.
+const RELEASE_BACKWARD_TOLERANCE: f32 = 20.0;
 
 pub struct StrikingRange;
 
@@ -1456,27 +1559,94 @@ pub fn evaluate_forward_shot_decision(
     // distance band from six metres to thirty — so it was not modelling
     // being off-balance at all. It was subtracting a constant from the
     // urge of every shot in the game.
+    // …and it was doing it again. Measured across every distance band:
+    // 0.485 / 0.415 / 0.377 / 0.365 / 0.366 / 0.366. A term that reads
+    // the same from the six-yard box as from thirty-five metres is not
+    // telling the decision anything; entered as `0.45 + poise * 0.55` it
+    // was a flat 33% haircut on the urge of every shot in the game — the
+    // third of four such haircuts (see `boldness`, `situational`).
+    //
+    // The reason is `physical_balance`: a mean of four normalised skills,
+    // which for any real player lands near 0.7 whatever those skills are,
+    // multiplied by two sub-1.0 factors. It described the population, not
+    // the moment.
+    //
+    // So invert the shape. Composure over the ball is NEUTRAL — a player
+    // in normal control of it strikes as he means to — and what the model
+    // owes the decision is the cost of NOT being in control: a man at
+    // full tilt with the ball running away from him. That is `sprinting`
+    // against `body_control`, which is what "stretching for it" means,
+    // and it is a term that varies with the moment instead of with the
+    // roster.
     let sprinting = Poise::pace(ctx);
     let physical_balance = (skills.physical.strength / 20.0
         + skills.physical.agility / 20.0
         + first_touch
         + composure)
         / 4.0;
-    let poise = (physical_balance * (1.0 - sprinting * 0.40) * (0.70 + body_control * 0.30))
+    let stretched = (sprinting * (1.0 - body_control)).clamp(0.0, 1.0);
+    let poise = ((1.0 - stretched * STRETCH_COST) * (0.80 + physical_balance * 0.20))
         .clamp(0.0, 1.0);
 
     // ── Being closed down ─────────────────────────────────────────────
-    // Pressure is already in `sight.lane` as an obstruction. It also
-    // changes the CHOICE: a man about to be tackled hits it now or loses
-    // it, so it lifts the urge of someone who can see the goal.
-    let pressure = pressure_penalty.clamp(0.0, 1.0);
+    //
+    // A man about to be tackled hits it now or loses it. This is the
+    // ONLY place immediate pressure enters the decision, and that is the
+    // correction: it used to be counted twice and in both directions —
+    // here as a small bonus, and inside `sight.lane` as a large penalty —
+    // so the net effect of being closed down was that the player DIDN'T
+    // shoot. Football says the opposite, and the engine already resolves
+    // what a defender at your shoulder actually does to the strike, twice
+    // over: `pressure_penalty` degrades the accuracy of it in
+    // `ShotSkillProfile`, and `try_block_shot` puts a body in front of it
+    // in flight.
+    let pressure = pressure_penalty
+        .max(1.0 - sight.pressure_clarity)
+        .clamp(0.0, 1.0);
 
     // ── The urge ──────────────────────────────────────────────────────
-    let urge = (sight.angle_quality.powf(0.65)
-        * sight.lane.powf(0.55)
+    //
+    // How big the goal looks, how central he is, what is in the way, can
+    // he reach it, is he balanced, and is he about to be tackled.
+    //
+    // `angle_clarity` — the size of the opening in ABSOLUTE terms — was
+    // deliberately excluded here, on the grounds that distance is
+    // "handled by `reach` below, so it is not counted twice". But `reach`
+    // is flat at 1.0 everywhere inside the player's comfortable range,
+    // which for an average player is 17.7 m — so distance was handled
+    // NOWHERE inside 17.7 m, and the only term left with any range in it
+    // was the corridor, which gets WORSE the closer you are to goal.
+    //
+    // The engine's appetite therefore rose with distance out to the edge
+    // of the box: measured 0.222 at <6 m against 0.382 at 16.5-22 m. It
+    // was least willing to shoot in the six-yard box, which is the
+    // reported behaviour exactly — a striker who runs into the area and
+    // then squares it.
+    //
+    // `angle_clarity` fixes it with something the player actually
+    // perceives rather than a statistic: 2·atan(29/d) is how much of the
+    // net is in front of him, and it falls away with range on its own.
+    // No xG is consulted (see the standing rule) — this is the size of
+    // the target, which is the thing a footballer is looking at.
+    let target_size = sight.angle_clarity.clamp(0.0, 1.0).powf(TARGET_SIZE_WEIGHT);
+    // Bodies in the corridor are a DISCOUNT, not a veto.
+    //
+    // A shot through traffic is a worse choice than a shot at an open
+    // net, and the model should say so — but as `lane^0.55` it said far
+    // more than that: corridor clarity measures 0.380 at <6 m against
+    // 0.935 beyond 30 m, so the term swung the appetite by 2.5× in the
+    // direction of shooting from range. Whether the body actually gets in
+    // the way is `try_block_shot`'s question and it already answers it on
+    // ~15% of shots; charging the same defenders again here is a
+    // double-count, and it is the one that made the box the least
+    // attractive place on the pitch to shoot from.
+    let corridor = CORRIDOR_FLOOR + (1.0 - CORRIDOR_FLOOR) * sight.corridor_clarity;
+    let urge = (target_size
+        * sight.angle_quality.powf(0.45)
+        * corridor
         * reach
-        * (0.45 + poise * 0.55)
-        * (1.0 + pressure * 0.35))
+        * poise
+        * (1.0 + pressure * 0.30))
         .clamp(0.0, 1.0);
 
     // Selection SHARPENS rather than shifts. A discerning forward's
@@ -1491,11 +1661,16 @@ pub fn evaluate_forward_shot_decision(
     // from 25 yards; `initiative_for` carries the in-match swing — a man
     // who has just scored backs himself, one who has shanked two and been
     // booked takes the extra touch.
-    let boldness = (0.50
-        + sc::n(sc::eff(ctx.player, mental, |p| p.skills.mental.flair)) * 0.25
-        + composure_skill * 0.15
-        + execution_skill * 0.15)
-        .clamp(0.45, 1.15);
+    //
+    // Centred on 1.0. Personality SHIFTS the appetite; it does not halve
+    // it. The old form measured 0.814-0.834 across every distance band —
+    // i.e. it was a fourth flat tax with a little variation riding on
+    // top, and the bar had been calibrated against the depressed
+    // distribution the four of them produced together.
+    let temperament = sc::n(sc::eff(ctx.player, mental, |p| p.skills.mental.flair)) * 0.45
+        + composure_skill * 0.25
+        + execution_skill * 0.30;
+    let boldness = (1.0 + (temperament - 0.5) * 0.55).clamp(0.70, 1.30);
     appetite *= boldness;
     appetite *= Psychology::initiative_for(&ctx.context.psychology, ctx.player.id);
     appetite *= (1.0 - low_condition_penalty * 0.20).clamp(0.60, 1.0);
@@ -1540,36 +1715,6 @@ pub fn evaluate_forward_shot_decision(
     // is still worth seeing; it just no longer DRIVES anything.
     #[cfg(feature = "match-logs")]
     let xg_for_diag = profile.expected_xg(distance, ctx.player().has_clear_shot());
-
-    #[cfg(feature = "match-logs")]
-    {
-        use std::sync::atomic::Ordering;
-        helper_diag::REACHED_ROLL.fetch_add(1, Ordering::Relaxed);
-        let dband = time_band_diag::band_for_distance(distance);
-        time_band_diag::ROLLS_BY_DIST[dband].fetch_add(1, Ordering::Relaxed);
-        // Factor vector re-pointed at the new model. Slots in order:
-        // urge, reach, angle_quality, lane, poise, boldness, situational,
-        // psychology, final appetite.
-        time_band_diag::record_will_factors(
-            dband,
-            [
-                urge,
-                reach,
-                sight.angle_quality,
-                sight.lane,
-                poise,
-                boldness,
-                situational,
-                Psychology::initiative_for(&ctx.context.psychology, ctx.player.id),
-                appetite,
-            ],
-        );
-        helper_diag::SUM_XG_X1000.fetch_add((xg_for_diag * 1000.0) as u64, Ordering::Relaxed);
-        helper_diag::SUM_WILLINGNESS_X1000.fetch_add((appetite * 1000.0) as u64, Ordering::Relaxed);
-        let band =
-            time_band_diag::band_for_minute(sc::minute_from_ms(ctx.context.total_match_time));
-        time_band_diag::ROLL_REACHED_BY_BAND[band].fetch_add(1, Ordering::Relaxed);
-    }
 
     // ── Decide, once per opportunity ──────────────────────────────────
     //
@@ -1635,33 +1780,11 @@ pub fn evaluate_forward_shot_decision(
     // and so got the LEAST encouragement exactly where he is the man who
     // should be shooting, while a poacher at 25 m got the most.
     //
-    // Eases in from 16 m and is full by 36 m.
+    // (A plain `((distance - 128) / 160)` ramp used to be bound here and
+    // then immediately shadowed by the hump below without ever being
+    // read — thirty lines of tuning notes attached to dead code. The
+    // shape those notes describe is the one the hump implements.)
     //
-    // Where this curve starts matters far more than it looks, because
-    // **59% of all shot decisions in a match are taken from beyond 30 m**
-    // — that is simply where the ball spends its time. A bar that is
-    // slightly too low out there does not produce a few speculative
-    // efforts, it floods: easing from 20 m at 0.32 put 20.7% of all shots
-    // beyond 30 m against a real 5%, and 32.5 shots per team.
-    //
-    // But starting it at 22 m left a TROUGH: the 16.5-22 m band got no
-    // relief from either end and became the peak of the bar, so it took
-    // 12% of all shots against a real 20% while everything piled into
-    // <11 m. That band is a normal shooting position in football, not a
-    // marginal one — a striker on the edge of the box shoots. Starting
-    // the ease at 16 m fills the trough without touching the far end,
-    // which is pinned by the full-relief point at 36 m.
-    //
-    // …and until now it did not do that. 176u at 0.125 m/unit is 22 m —
-    // exactly the start point the note above identifies as the bug. The
-    // trough was diagnosed and the constant describing it was never
-    // moved, so the band went on being the peak of the bar: forwards
-    // took 0.7% of their shots from 16.5-22 m against a real 20%, which
-    // is a striker on the edge of the area declining to shoot. 128u is
-    // the 16 m the comment always meant; 160u of span keeps full relief
-    // at 36 m (288u) where the far end is pinned.
-    let range_ease = ((distance - 128.0) / 160.0).clamp(0.0, 1.0);
-
     // …and the licence to hit one from out there is not distance alone.
     //
     // Distance is only the argument for WHY a speculative effort is cheap.
@@ -1691,77 +1814,103 @@ pub fn evaluate_forward_shot_decision(
     // difference between a specialist with a genuinely clean sight and an
     // average player with a half-open one is exactly the difference
     // between a shot worth taking from there and a giveaway.
-    let long_shot_licence = (sight.lane * reach).clamp(0.0, 1.0).powi(3);
-    // Two different arguments, so two different reliefs — and they must
-    // not share a magnitude.
+    // ── The bar comes down as the shot gets longer ────────────────────
     //
-    // Folding both into one `range_ease` and one constant meant every
-    // attempt to calm the speculative band also flattened the six-yard
-    // box, and every attempt to make a striker finish a tap-in re-opened
-    // 25-yarders. They are separate football propositions: at the edge of
-    // the area a shot is a NORMAL option and needs no licence; beyond it
-    // the shot is speculative and needs one.
+    // One ramp, not a hump. The hump this replaces peaked at the edge of
+    // the box and decayed to nothing past ~27 m, on the argument that
+    // "real shot volume peaks around the box and falls away outside it".
+    // That is true of the SHOT COUNT — and the shot count is the product
+    // of the bar and the appetite, not of the bar alone. The appetite now
+    // falls away with distance on its own (`target_size`, `reach`), so
+    // building the same fall into the bar counted it twice and produced
+    // the measured 0.0% beyond 30 m.
     //
-    // `box_relief` therefore ramps from 11 m (88u) to the edge of the box
-    // and is ungated. `far_relief` starts where that ends and DECAYS with
-    // distance rather than growing — the previous shape grew all the way
-    // to 36 m, which is why the 22-30 m band, already carrying 22% of all
-    // shot decisions, took 36-45% of every shot struck in the game.
-    // One continuous hump, peaking at the edge of the area.
+    // What the bar is for is the COST OF THE DECISION, and that genuinely
+    // falls the further out you are: from 25 m a miss costs a goal kick,
+    // and the alternatives — another sideways pass, another recycle — are
+    // no better. That argument only strengthens with distance, so the
+    // relief only grows with it.
     //
-    // Two separate ramps were tried first and the split-out `box_relief`
-    // used a `.clamp(0.0, 1.0)` that SATURATED at the box edge — so it
-    // held full relief flat all the way out to 40 m, which is the exact
-    // opposite of what it was for, and 22-30 m took 45% of every shot in
-    // the game. A hump cannot do that: it has to come down the far side.
+    // Ramps from 11 m rather than from the edge of the box. At 16.5 m the
+    // ramp start left the 11-16.5 m band with no relief from either end
+    // and the full base bar to clear, which is the trough this file has
+    // now diagnosed three times: it is a normal shooting position in
+    // football, not a marginal one.
     //
-    // Real shot volume peaks around the box and falls away outside it, so
-    // the relief does the same. Nothing steps: the licence phases IN
-    // across the same span the relief decays over, so there is no
-    // discontinuity at the box edge for a carrier to oscillate across.
-    let band = if distance <= 132.0 {
-        ((distance - 88.0) / 44.0).clamp(0.0, 1.0)
-    } else {
-        // Decays over 6 m, not 14. The far side is the steep part of this
-        // knob: 22-30 m carries 22% of all shot decisions in a match, so
-        // relief that is still half-strength out there does not add a few
-        // speculative efforts, it takes 41% of every shot struck (real
-        // 13%). Past the edge of the area the bar has to come back up
-        // quickly, and what carries a genuine long-shot specialist beyond
-        // it is `reach` inside the appetite itself, not the bar.
-        // Falls away over 11 m rather than dropping off a cliff. Every
-        // narrow version of this hump produced a SPIKE wherever it was
-        // placed — 49% of all shots in whichever four-metre band it sat
-        // over — because the appetite distribution is dense right at the
-        // bar, so a large relief applied over a short span converts a
-        // whole population of near-misses at once. Wide and shallow moves
-        // the shape; narrow and deep just moves the pile.
-        (1.0 - (distance - 132.0) / 88.0).clamp(0.0, 1.0)
-    };
-    // 0 at the box edge, 1 by 30 m: how much this is a speculative effort
-    // rather than a normal shooting position, and therefore how much of
-    // the relief has to be EARNED through lane and range.
-    let speculative = ((distance - 132.0) / 108.0).clamp(0.0, 1.0);
-    let licence_gate = 1.0 - speculative * (1.0 - long_shot_licence);
+    // Linear, and not full until 37.5 m. A convex version was tried to
+    // separate 22-30 m from beyond it and starved the whole 11-22 m
+    // stretch instead: it holds only 3% of the relief at 13 m and 16% at
+    // 19 m, and those two bands went to 10.2% and 1.3% of all shots
+    // against a real 22% and 20%. The bands are ordered by the appetite
+    // falling away with distance; the bar does not need to bend as well.
+    let speculative = ((distance - 88.0) / 212.0).clamp(0.0, 1.0);
 
-    // ── The specialist's tail ─────────────────────────────────────────
+    // …and it is NOT gated on ability.
     //
-    // The hump above decays to nothing past ~27 m, which is right for the
-    // population — and wrong for the one player it should not be right
-    // for. A man with a clear sight of goal and the leg to reach it from
-    // 30 m is exactly who SHOULD be hitting one from there, and with the
-    // hump alone he faced the full bar and the 30 m+ band measured 0.0%.
+    // It used to be, through a `(corridor * reach)³` licence, so only a
+    // specialist with a clean sight got the eased bar. That is the wrong
+    // football and it is why the 30 m+ band measured exactly 0.0% for so
+    // long. An ordinary player with no vision hits a hopeful one from
+    // thirty metres — he is arguably the man MOST likely to, because the
+    // alternative he cannot see is the pass a better player would find.
+    // Gating the relief on his ability said the opposite twice over: the
+    // appetite already prices whether he can reach it (`reach`), whether
+    // he fancies it (`boldness`), and how readily he settles for a poor
+    // look (`discernment`, which is DELIBERATELY kinder to a rash player).
+    // The bar is not about the player at all — it is the cost of the
+    // decision, and from thirty metres a miss costs a goal kick whoever
+    // takes it.
     //
-    // So the licence buys a relief that does NOT decay with distance,
-    // available in proportion to how speculative the position is and how
-    // completely he has earned it. `long_shot_licence` is cubed, so this
-    // is worth almost nothing to an ordinary player with a half-open lane
-    // and nearly all of it to a striker of the ball who can see the net —
-    // which is the whole of "more long shots when the path is clear and
-    // he has the skills for it", expressed as a continuous property of
-    // the two things rather than a distance rule.
-    let specialist_tail = long_shot_licence * speculative * SPECIALIST_RELIEF;
-    let range_ease = (band * licence_gate * LONG_RANGE_RELIEF).max(specialist_tail);
+    // What that leaves is the hopeful long shot arriving in a crowded
+    // goalmouth: blocked, deflected, parried, scrambled. That is the
+    // realistic outcome of the shot, and it belongs to the block, save
+    // and rebound models rather than to a veto here.
+    // ── …and one band that needs no licence at all ────────────────────
+    //
+    // A strike from the edge of the area is not a speculative effort and
+    // not a tap-in — it is the NORMAL shot in football, the single most
+    // common shooting position there is, and the only band where nothing
+    // in the model was arguing for it. The close relief is gone by 11 m
+    // and the speculative ramp has barely started, so 11-16.5 m sat at
+    // the full base bar: measured 0.977 against an appetite of 0.344,
+    // the highest effective bar on the pitch, and it took **8.2% of all
+    // shots against a real 22%**. A midfielder standing fourteen metres
+    // out with the ball declined and laid it off — the reported bug.
+    //
+    // Deliberately a bounded hump rather than a lower ramp. Both were
+    // measured: lowering the ramp instead (concave, base 0.87) reaches
+    // 11-16.5 m only by also relieving 22-30 m, and that band carries
+    // 12% of every shot decision in a match against this band's 8% — it
+    // went to **43% of all shots** and the match to 5.29 goals. The
+    // relief has to be spent where the football is, and come back up on
+    // both sides of it.
+    //
+    // A PLATEAU, not a peak, and that matters more than its height.
+    //
+    // The `spread` half of the bar is drawn once per possession, but the
+    // relief is a function of DISTANCE — so any gradient in it is
+    // something a carrier can walk down. A triangular hump peaking at
+    // 14 m was measured doing exactly that: 11-16.5 m went 8.2% → 20.1%
+    // and 16.5-22 m FELL 17.3% → 6.4% at an unchanged bar, because men
+    // who used to strike from twenty metres now carried to fourteen and
+    // struck there. The per-opportunity threshold stops "ask again next
+    // tick" from being a winning strategy; a sloped bar reintroduced the
+    // same exploit in space instead of time.
+    //
+    // Flat across 12-23 m, so anywhere in the normal shooting band is
+    // equally a shot and there is nothing to walk toward. Rises quickly
+    // from 9 m (below that the close relief and the appetite's own
+    // `target_size` already own the decision) and fades into the
+    // speculative ramp by 30 m.
+    let box_relief = BOX_RELIEF
+        * if distance < 96.0 {
+            ((distance - 72.0) / 24.0).clamp(0.0, 1.0)
+        } else if distance <= 184.0 {
+            1.0
+        } else {
+            (1.0 - (distance - 184.0) / 56.0).clamp(0.0, 1.0)
+        };
+    let range_ease = (speculative * LONG_RANGE_RELIEF).max(box_relief);
 
     // ── …and it eases CLOSE IN too, for the opposite reason ───────────
     //
@@ -1848,6 +1997,39 @@ pub fn evaluate_forward_shot_decision(
     // directly rather than scaled by a shared constant here.
     let threshold = (SHOT_BAR_BASE + spread * 0.24 - range_ease).max(LONG_RANGE_FLOOR);
 
+    // Sampled HERE rather than at the top of the roll so the table can
+    // carry `threshold` alongside the appetite. Nothing between the two
+    // points returns, so the sample population is identical.
+    #[cfg(feature = "match-logs")]
+    {
+        use std::sync::atomic::Ordering;
+        helper_diag::REACHED_ROLL.fetch_add(1, Ordering::Relaxed);
+        let dband = time_band_diag::band_for_distance(distance);
+        time_band_diag::ROLLS_BY_DIST[dband].fetch_add(1, Ordering::Relaxed);
+        time_band_diag::record_will_factors(
+            dband,
+            [
+                urge,
+                reach,
+                sight.angle_quality,
+                sight.lane,
+                poise,
+                boldness,
+                situational,
+                Psychology::initiative_for(&ctx.context.psychology, ctx.player.id),
+                appetite,
+                sight.pressure_clarity,
+                sight.corridor_clarity,
+                threshold,
+            ],
+        );
+        helper_diag::SUM_XG_X1000.fetch_add((xg_for_diag * 1000.0) as u64, Ordering::Relaxed);
+        helper_diag::SUM_WILLINGNESS_X1000.fetch_add((appetite * 1000.0) as u64, Ordering::Relaxed);
+        let band =
+            time_band_diag::band_for_minute(sc::minute_from_ms(ctx.context.total_match_time));
+        time_band_diag::ROLL_REACHED_BY_BAND[band].fetch_add(1, Ordering::Relaxed);
+    }
+
     if appetite >= threshold {
         #[cfg(feature = "match-logs")]
         helper_diag::ROLL_PASSED.fetch_add(1, Ordering::Relaxed);
@@ -1893,6 +2075,55 @@ pub fn evaluate_forward_shot_decision(
     // he shoots. `better_placed` is already the test for that, so the
     // whole clause collapses into it.
     if better_placed {
+        #[cfg(feature = "match-logs")]
+        helper_diag::PASS_DEFERRAL.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "match-logs")]
+        time_band_diag::record_reject(4, distance);
+        return ShotDecision::Pass;
+    }
+
+    // …and the note above still did not reach the code.
+    //
+    // `Hold` remained the answer for a player who is ALREADY in a
+    // shooting position and has decided against it, and `Hold` means
+    // "carry on doing what you were doing". What he was doing is
+    // carrying, and the carry target stops at `carry_hold` — so he
+    // arrives twelve metres out, declines, and then stands there with the
+    // ball, re-asking a question whose answer is fixed for the whole
+    // possession. That is the "hovers around the goal" half of the
+    // report, and it is a state football does not have: a man in a
+    // shooting position either shoots or gives it, and taking it nearer
+    // only narrows the angle and brings the keeper out.
+    //
+    // ⚠ AND IT HAS TO BE A BALL WORTH PLAYING, OR THIS IS A BACKWARD-PASS
+    // MACHINE. It was `distance <= comfortable && outlet.is_some()`, and
+    // both halves were far too loose:
+    //
+    //   * `comfortable` is 0.45 of a player's striking range — 11-22 m —
+    //     so the clause covered essentially every touch in the attacking
+    //     third rather than a man stood in a shooting position;
+    //   * `outlet` is `find_best_pass_option`, which almost always finds
+    //     SOMEBODY, and the best-scoring somebody in a congested attacking
+    //     third is routinely the man BEHIND the ball.
+    //
+    // Measured: `pass_defer` went 52k → **734k** and midfielders in
+    // shooting positions laid the ball backwards instead of striking it.
+    // The anti-hover intent stands, but the situation it describes is
+    // narrow: he is being closed down, so he cannot simply keep the ball
+    // and work a better angle. Free, with the shot declined, the right
+    // answer is still `Hold` — carry, shift the angle, ask again from a
+    // better position.
+    //
+    // And a release is never backwards. A team-mate materially further
+    // from goal than the carrier is a recycle, not a lay-off; that is the
+    // ball the report is about.
+    let releasable = outlet.is_some_and(|(t, _)| {
+        (opp_goal - t.position).magnitude() <= distance + RELEASE_BACKWARD_TOLERANCE
+    });
+    if distance <= comfortable
+        && releasable
+        && ctx.player().pressure().is_under_immediate_pressure()
+    {
         #[cfg(feature = "match-logs")]
         helper_diag::PASS_DEFERRAL.fetch_add(1, Ordering::Relaxed);
         #[cfg(feature = "match-logs")]

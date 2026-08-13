@@ -3343,14 +3343,22 @@ impl PlayerEventDispatcher {
         // without distorting conversion. Pushing these bases a further
         // 25% was tried and reverted: on-target reached 39.2% but
         // conversion hit 40.8% and saves 59.2%, i.e. all cost, no gain.
+        // Raised ~1.5x 2026-08-13, with `over_bar_base` below. Every
+        // previous titration of this pair was made while ~73% of all
+        // shots were being picked out of the air by a defender within a
+        // tick of the strike (see `try_intercept`), so the population
+        // these rolls were calibrated against was the ~11% of shots that
+        // survived — and those were the short ones. With shots now
+        // living their full flight, on-frame-at-strike measured 63%
+        // against a real ~52% (Opta: ~33% on target plus ~19% blocked).
         let wide_base = if horizontal_distance < 30.0 {
-            0.060
+            0.132
         } else if horizontal_distance < 60.0 {
-            0.120
+            0.247
         } else if horizontal_distance < 100.0 {
-            0.195
+            0.357
         } else {
-            0.285
+            0.483
         };
         // Skill-and-condition contributions trimmed (0.07/0.05 → 0.05/0.03)
         // because they compound with `random_error_scale`, `over_bar_chance`,
@@ -3610,13 +3618,13 @@ impl PlayerEventDispatcher {
         // the same ratio — the two forced-miss rolls are one lever and
         // must move together or the wide/over split distorts.
         let over_bar_base = if horizontal_distance < 30.0 {
-            0.030
+            0.067
         } else if horizontal_distance < 60.0 {
-            0.060
+            0.132
         } else if horizontal_distance < 100.0 {
-            0.105
+            0.178
         } else {
-            0.150
+            0.253
         };
         // Skill contributions trimmed (0.04 / 0.04 → 0.025 / 0.025) — same
         // logic as `wide_miss_chance` above: the over-bar term compounds
@@ -3911,6 +3919,20 @@ impl PlayerEventDispatcher {
 
         // Shorter flight protection for shots — allows defenders/GK to claim sooner
         field.ball.flags.in_flight_state = 40;
+
+        // Arm the shot-lifecycle census (diagnostic only). See
+        // `Ball::census_shot_fate`.
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering;
+            crate::r#match::engine::ball::ball::ownership::reception_diag::FATE_STRUCK
+                .fetch_add(1, Ordering::Relaxed);
+            crate::r#match::engine::ball::ball::ownership::reception_diag::FATE_STRUCK_DIST_X100
+                .fetch_add((horizontal_distance * 100.0) as u64, Ordering::Relaxed);
+            field.ball.census_shot_live = true;
+            field.ball.census_shot_dist = horizontal_distance;
+            field.ball.census_shot_side = shooter_side;
+        }
 
         // Project where the ball will cross the goal line so the
         // defending keeper can commit to an intercept line rather than

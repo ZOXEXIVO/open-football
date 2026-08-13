@@ -219,9 +219,29 @@ impl SaveModel {
     /// keeper's committed line now carrying a reading error, the
     /// dead-centre case is rare again and the ceiling can be what it
     /// says it is: the chance for a shot hit straight at him.
-    const CENTRED_BASE: f32 = 0.82;
+    ///
+    /// Re-anchored 0.82 → 0.99 (with `STRETCH_PENALTY` 0.58 → 0.42)
+    /// 2026-08-13, when shots started reaching the keeper at all. Every
+    /// previous setting of this pair was calibrated against a population
+    /// in which ~73% of shots were picked out of the air by an outfield
+    /// defender within a tick of the strike (see `try_intercept`), so the
+    /// keeper only ever faced the ~11% that survived — the short ones,
+    /// hit from 73u against 102u for the population. With the full
+    /// distribution arriving, the same curve saved 56% of what it faced
+    /// against a real ~67%.
+    ///
+    /// ⚠ The population save rate belongs HERE, in the geometry, and not
+    /// in `SKILL_FLOOR`. Lifting the floor instead was tried and is what
+    /// `keeper_skill_spread_stays_wide` and
+    /// `an_ordinary_duel_holds_the_calibrated_population_save_rate` exist
+    /// to catch: the multiplier is a CONTEST pinned at `FLOOR + SLOPE/2`
+    /// for an even duel, so raising the floor both breaks level-parity
+    /// and squeezes the keeper-quality axis against `MAX_SAVE` — at 0.86
+    /// the spread between the worst keeper alive and the best collapsed
+    /// to 12.9 points against a real ~20.
+    const CENTRED_BASE: f32 = 1.03;
     /// How much of that ceiling a full-stretch shot gives away.
-    const STRETCH_PENALTY: f32 = 0.58;
+    const STRETCH_PENALTY: f32 = 0.42;
     /// Save probability for the worst keeper alive on a centred shot,
     /// before geometry: `SKILL_FLOOR`. Real weak top-flight keepers save
     /// ~58% of what they face across a season; elite ones ~78%.
@@ -567,24 +587,48 @@ impl Ball {
         // reach — that is the moment the ball comes past him, and he gets
         // one go at it, exactly as `try_block_shot` gives one roll per
         // shot. Rate is now independent of the window length.
-        // A live SHOT keeps the old per-tick deterministic path. This
-        // site is where the engine actually models a defender getting a
-        // body in front of a strike — the event is already reclassified
-        // as a `block` on the stat sheet — and `try_block_shot`'s own
-        // corridor currently fires on 0.3% of checks against a real
-        // 18-22%. Latching shots here removed that channel outright and
-        // sent on-target from 32% to 59% and goals to 5.8 a game.
-        let is_live_shot = self.cached_shot_target.is_some();
-        let may_attempt = is_live_shot || !self.intercept_rolled;
-        if let Some(interceptor_id) = best_interceptor.filter(|_| may_attempt) {
-            if !is_live_shot {
-                self.intercept_rolled = true;
-            }
-            let fires = if is_live_shot {
-                best_chance > 0.030
-            } else {
-                context.rng.unit_f32() < best_chance
-            };
+        // ── A SHOT IS NOT A PASS, AND THIS SITE ONLY KNOWS ABOUT PASSES ──
+        //
+        // Live shots used to keep a per-tick DETERMINISTIC path here
+        // (`best_chance > 0.030`, re-evaluated every tick of the flight),
+        // on the argument that `try_block_shot` was too weak to carry the
+        // channel. Measured with the shot-lifecycle census, that is what
+        // it was actually doing:
+        //
+        //   * **72.6% of every shot struck ended here** — claimed clean,
+        //     mid-flight, by an outfield defender. Not blocked, not
+        //     deflected: `velocity = zeros()` and possession handed over.
+        //   * Shots lived **8.3 ticks** on average despite being struck
+        //     from 102u (12.8 m), a distance that needs 40-60 ticks of
+        //     flight. They were being eaten within a tick of leaving the
+        //     boot.
+        //   * Only 11% of shots ever reached the goal at all, and those
+        //     that did were struck from 74u against 102u for the
+        //     population — so the leak was distance-selective and long
+        //     shots produced essentially no goals.
+        //
+        // That is the "aimed on frame but never resolves" report: 63% of
+        // shots leave the boot between the posts and 9% are credited on
+        // target. It is also why blocks read 4.84 per defender against a
+        // real ~0.9 — this path was filing its takings as blocks.
+        //
+        // A defender getting a body in front of a strike is
+        // `try_block_shot`: one roll per shot, a real corridor, a real
+        // height limit, and a DEFLECTION rather than a clean pick-up.
+        // Shots are excluded here so that model owns them, which is also
+        // what makes its rate rise — it rolls on the first tick a
+        // defender is in the lane, and shots now survive long enough to
+        // find one.
+        // `cached_shot_target` is exactly the right test: it is set at the
+        // strike and cleared the moment anybody touches the ball, so a
+        // shot the keeper has parried or a defender has deflected is a
+        // genuine loose ball again and IS interceptable from here.
+        if self.cached_shot_target.is_some() {
+            return;
+        }
+        if let Some(interceptor_id) = best_interceptor.filter(|_| !self.intercept_rolled) {
+            self.intercept_rolled = true;
+            let fires = context.rng.unit_f32() < best_chance;
             if fires {
                 // Snap the ball to the interceptor and zero the
                 // velocity. Before this, velocity was just scaled to

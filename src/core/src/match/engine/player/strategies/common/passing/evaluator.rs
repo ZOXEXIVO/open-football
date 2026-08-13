@@ -1301,9 +1301,39 @@ impl PassEvaluator {
             let retreat_penalty = if goes_backward {
                 let width = ctx.context.field_size.width as f32;
                 let progress = side_now.attacking_progress_x(ctx.player.position.x, width);
-                // Untouched in our own half, down to a third of the value on
-                // the edge of the opposition box.
-                (1.0 - (progress - 0.5).clamp(0.0, 0.5) * 1.34).clamp(0.33, 1.0)
+                // ── HOW FAR BACK, not just how far forward he is ──────
+                //
+                // This read the PASSER's position only, so a two-metre
+                // lay-back and a seventy-metre ball to your own
+                // centre-half were penalised identically — and it floored
+                // at a third of the value, which is nowhere near enough
+                // to stop one. That is the reported bug in full: a
+                // midfielder carries into the opposition goal area and
+                // plays it the length of the pitch to his own goal.
+                //
+                // It survives because FOUR of the six personality
+                // branches below score on `success_probability` and
+                // `positioning_bonus` alone and never read
+                // `tactical_value`, which is the only other term that
+                // knows which way the ball is going. An unmarked
+                // team-mate seventy metres behind the play is the best
+                // pass on the pitch by both of those measures: nobody is
+                // near him, so he is certain to receive it. This
+                // multiplier is the one direction guard every archetype
+                // must pass through, so it has to carry the distance
+                // itself.
+                //
+                // `retreat` is the share of the pitch the pass gives
+                // back. Cost is the product of the two: giving up ground
+                // is free in your own half, ordinary in midfield, and
+                // effectively forbidden once you are in the area — which
+                // is where a real player either shoots, holds it, or
+                // squares it, and never turns and hits it seventy metres.
+                let retreat = (-side_now.forward_delta(ctx.player.position.x, teammate.position.x)
+                    / width)
+                    .clamp(0.0, 1.0);
+                let advanced = ((progress - 0.40) / 0.60).clamp(0.0, 1.0);
+                (1.0 - advanced * (0.55 + retreat * 3.0)).clamp(0.02, 1.0)
             } else {
                 1.0
             };

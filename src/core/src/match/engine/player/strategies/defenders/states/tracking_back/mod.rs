@@ -6,6 +6,12 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
+/// How close an assigned man has to be before a recovering defender
+/// abandons the run to his slot and goes to him instead (~19 m). Same
+/// figure `running` uses, so a duty means the same thing in every state
+/// that holds it.
+const MARK_RECOVERY_DISTANCE: f32 = 150.0;
+
 const CLOSE_TO_START_DISTANCE: f32 = 10.0;
 const BALL_INTERCEPTION_DISTANCE: f32 = 30.0;
 
@@ -19,6 +25,18 @@ impl StateProcessingHandler for DefenderTrackingBackState {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TakeBall,
             ));
+        }
+
+        // DUTY BEFORE POSITION — see the note in `returning`. A recovery
+        // run with a man assigned is a run at that man, and this state is
+        // literally the hard sprint back into shape, so it is the last
+        // place the assignment should be dropped.
+        if let Some(man) = ctx.team().my_mark() {
+            if (man.position - ctx.player.position).magnitude() < MARK_RECOVERY_DISTANCE {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Marking,
+                ));
+            }
         }
 
         // Check if the defender has reached their starting position

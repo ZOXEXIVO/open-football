@@ -106,6 +106,61 @@ pub mod reception_diag {
     /// the invariant: any non-zero reading means a hole has reopened.
     pub static ENDLINE_CLAMPED_IN_MOUTH: AtomicU64 = AtomicU64::new(0);
 
+    /// ── Shot LIFECYCLE census ────────────────────────────────────────
+    ///
+    /// The counters above are all "a shot ended THIS way" flags planted
+    /// at individual sites, and between them they accounted for ~20 of
+    /// every 3500 shots struck — so the question "where do shots
+    /// actually go" had no answer. These are the complete partition:
+    /// every struck shot lands in exactly one bucket, and STRUCK equals
+    /// their sum plus whatever is still in the air.
+    ///
+    /// Read them as a waterfall against `STRUCK`. Anything large in
+    /// `CLAIMED_*` or `STOPPED` is a shot that never got a chance to be
+    /// a shot.
+    pub static FATE_STRUCK: AtomicU64 = AtomicU64::new(0);
+    /// Ended in the net.
+    pub static FATE_GOAL: AtomicU64 = AtomicU64::new(0);
+    /// The defending keeper finished with it — caught, gathered, held.
+    pub static FATE_GK: AtomicU64 = AtomicU64::new(0);
+    /// Went out of play: corner, goal kick or throw.
+    pub static FATE_OUT: AtomicU64 = AtomicU64::new(0);
+    /// An OUTFIELD defender took control of it mid-flight.
+    pub static FATE_CLAIMED_DEF: AtomicU64 = AtomicU64::new(0);
+    /// A team-mate of the shooter took control of it mid-flight
+    /// (rebound, deflection into a striker's path, or a shot walked
+    /// straight back into an attacker's feet).
+    pub static FATE_CLAIMED_ATT: AtomicU64 = AtomicU64::new(0);
+    /// Came to rest on the pitch, still unowned. A shot that stopped.
+    pub static FATE_STOPPED: AtomicU64 = AtomicU64::new(0);
+    /// Still live when the census window (400 ticks) expired.
+    pub static FATE_TIMEOUT: AtomicU64 = AtomicU64::new(0);
+    /// Sum of ticks a shot spent live, and how far from goal each was
+    /// struck (x100) — the two numbers that say whether shots are
+    /// getting a flight at all.
+    pub static FATE_LIVE_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static FATE_STRUCK_DIST_X100: AtomicU64 = AtomicU64::new(0);
+    /// …and the same distance sum, for the shots that DID resolve at the
+    /// goal (goal / keeper). Compared with the one above it says whether
+    /// the leak is distance-selective.
+    pub static FATE_REACHED_DIST_X100: AtomicU64 = AtomicU64::new(0);
+
+    pub fn fate_census() -> [u64; 11] {
+        [
+            FATE_STRUCK.load(Ordering::Relaxed),
+            FATE_GOAL.load(Ordering::Relaxed),
+            FATE_GK.load(Ordering::Relaxed),
+            FATE_OUT.load(Ordering::Relaxed),
+            FATE_CLAIMED_DEF.load(Ordering::Relaxed),
+            FATE_CLAIMED_ATT.load(Ordering::Relaxed),
+            FATE_STOPPED.load(Ordering::Relaxed),
+            FATE_TIMEOUT.load(Ordering::Relaxed),
+            FATE_LIVE_TICKS.load(Ordering::Relaxed),
+            FATE_STRUCK_DIST_X100.load(Ordering::Relaxed),
+            FATE_REACHED_DIST_X100.load(Ordering::Relaxed),
+        ]
+    }
+
     pub fn shot_fate_snapshot() -> (u64, u64, u64, u64, u64, u64) {
         (
             SHOT_WIDE.load(Ordering::Relaxed),
@@ -144,6 +199,17 @@ pub mod reception_diag {
             &SHOT_NO_TARGET,
             &GOAL_REJECTED,
             &ENDLINE_CLAMPED_IN_MOUTH,
+            &FATE_STRUCK,
+            &FATE_GOAL,
+            &FATE_GK,
+            &FATE_OUT,
+            &FATE_CLAIMED_DEF,
+            &FATE_CLAIMED_ATT,
+            &FATE_STOPPED,
+            &FATE_TIMEOUT,
+            &FATE_LIVE_TICKS,
+            &FATE_STRUCK_DIST_X100,
+            &FATE_REACHED_DIST_X100,
         ] {
             c.store(0, Ordering::Relaxed);
         }
@@ -224,7 +290,7 @@ impl Ball {
     /// True when the current delivery has stopped being one: on the deck
     /// and slower than a walking pace. See the call site in
     /// [`Ball::process_ownership`].
-    fn is_delivery_spent(&self) -> bool {
+    pub(super) fn is_delivery_spent(&self) -> bool {
         /// 2.5 m/s. Below this the ball is trickling, not travelling — the
         /// same physical meaning `MIN_INTERCEPTABLE_SPEED` carries.
         const SPENT_SPEED: f32 = 0.20;

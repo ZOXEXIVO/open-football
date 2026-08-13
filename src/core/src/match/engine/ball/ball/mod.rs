@@ -603,6 +603,17 @@ pub struct Ball {
     /// single largest reason the engine scored 1.6 goals a game.
     pub last_shot_struck_tick: u64,
 
+    /// Shot-lifecycle census state (`match-logs` only). Set at the strike
+    /// and cleared the moment the shot resolves; see
+    /// [`Ball::census_shot_fate`], which is the only reader. `0.0` in
+    /// `census_shot_dist` means no shot is being tracked.
+    #[cfg(feature = "match-logs")]
+    pub census_shot_live: bool,
+    #[cfg(feature = "match-logs")]
+    pub census_shot_dist: f32,
+    #[cfg(feature = "match-logs")]
+    pub census_shot_side: Option<PlayerSide>,
+
     /// Tick of the most recent live rebound — a dangerous GK parry or
     /// a loose shot-block deflection that left the ball contestable in
     /// front of goal. Read by the team shot gate: within the rebound
@@ -860,6 +871,12 @@ impl Ball {
             last_shot_xgot: 0.0,
             last_shot_shooter_id: None,
             last_shot_struck_tick: 0,
+            #[cfg(feature = "match-logs")]
+            census_shot_live: false,
+            #[cfg(feature = "match-logs")]
+            census_shot_dist: 0.0,
+            #[cfg(feature = "match-logs")]
+            census_shot_side: None,
             last_rebound_tick: 0,
             last_giveaway_player_id: None,
             last_giveaway_team_id: None,
@@ -1382,6 +1399,68 @@ impl Ball {
         self.check_boundary_collision(context);
         self.expire_offside_snapshot(context);
         self.update_landing_cache();
+
+        #[cfg(feature = "match-logs")]
+        self.census_shot_fate(context, players);
+    }
+
+    /// Classify how the shot in flight ended, exactly once, at the end of
+    /// the tick it ended on. Diagnostic only — see the `FATE_*` counters
+    /// in `ownership::reception_diag` for why this exists.
+    ///
+    /// Deliberately central rather than a flag planted at each exit: the
+    /// per-site counters that came before it accounted for ~20 of every
+    /// 3500 shots struck, because most shots do not leave through any of
+    /// the sites that had one.
+    #[cfg(feature = "match-logs")]
+    fn census_shot_fate(&mut self, context: &MatchContext, players: &[MatchPlayer]) {
+        use ownership::reception_diag as d;
+        use std::sync::atomic::Ordering;
+
+        if !self.census_shot_live {
+            return;
+        }
+        d::FATE_LIVE_TICKS.fetch_add(1, Ordering::Relaxed);
+
+        let dist_x100 = (self.census_shot_dist * 100.0) as u64;
+        let mut resolve = |counter: &'static std::sync::atomic::AtomicU64, reached_goal: bool| {
+            counter.fetch_add(1, Ordering::Relaxed);
+            if reached_goal {
+                d::FATE_REACHED_DIST_X100.fetch_add(dist_x100, Ordering::Relaxed);
+            }
+        };
+
+        if self.goal_scored {
+            resolve(&d::FATE_GOAL, true);
+        } else if self.pass_origin_restart != PassOriginRestart::OpenPlay {
+            // A restart was staged this tick — corner, goal kick or
+            // throw. The shot went out of play.
+            resolve(&d::FATE_OUT, false);
+        } else if let Some(owner) = self.current_owner {
+            let owner_p = players.iter().find(|p| p.id == owner);
+            let is_gk = owner_p
+                .map(|p| p.tactical_position.current_position.is_goalkeeper())
+                .unwrap_or(false);
+            let same_side = owner_p.and_then(|p| p.side) == self.census_shot_side;
+            if is_gk && !same_side {
+                resolve(&d::FATE_GK, true);
+            } else if same_side {
+                resolve(&d::FATE_CLAIMED_ATT, false);
+            } else {
+                resolve(&d::FATE_CLAIMED_DEF, false);
+            }
+        } else if self.is_delivery_spent() {
+            resolve(&d::FATE_STOPPED, false);
+        } else if context
+            .current_tick()
+            .saturating_sub(self.last_shot_struck_tick)
+            > 400
+        {
+            resolve(&d::FATE_TIMEOUT, false);
+        } else {
+            return; // still in the air
+        }
+        self.census_shot_live = false;
     }
 
     /// Light update: full ball logic but reads owner position from players slice directly.

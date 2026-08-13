@@ -385,6 +385,16 @@ impl MatchCoach {
         // gate blocked EVERY second-chance strike — contradicting the
         // possession-cap design note below, and deleting one of
         // football's core goal patterns (~4-6% of real goals).
+        //
+        // Suspected 2026-08-13 of costing more than it saves: it filters
+        // by TIMING rather than by chance quality, so a speculative
+        // 25-yarder locks the team out of a tap-in four seconds later,
+        // and across the shot-bar titration ON-TARGET shots FELL 3.0 →
+        // 2.4 per team while total shots went 12.6 → 30.1. Tried at 250
+        // ticks: goals 1.90 → 2.00 and 0-0 15% → 13%, both inside the
+        // n=60 noise floor, and `ball STUCK` went the wrong way (29.9 →
+        // 47.8 s/match). Left at 750 for want of evidence — re-test it
+        // with n≥300 alongside the chance-supply work.
         let shot_spaced = rebound_live || current_tick.saturating_sub(self.last_shot_tick) >= 750;
         // Build-up gate: a team that just won possession can't fire
         // within ~1 second. Real football: even elite counter-attacks

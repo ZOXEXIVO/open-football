@@ -43,7 +43,27 @@ pub struct GoalSight {
     pub angle_quality: f32,
     /// How clear the path is: immediate pressure and bodies in the
     /// corridor, 1.0 for an unobstructed lane, 0.0 for a blocked one.
+    ///
+    /// The PRODUCT of [`Self::pressure_clarity`] and
+    /// [`Self::corridor_clarity`]. Correct as a chance-quality reading;
+    /// see those two fields for why the decision reads them apart.
     pub lane: f32,
+    /// How far off the nearest defender is, 0..1 — 1.0 when nobody is
+    /// within a stride and 0.0 when somebody is stood on the ball.
+    ///
+    /// Kept separate from [`Self::corridor_clarity`] because the two
+    /// argue in OPPOSITE directions with distance, and folding them into
+    /// one number hides that. A man is closed down hardest in the
+    /// six-yard box and least on the halfway line; the corridor to goal
+    /// is emptiest in the six-yard box and fullest from range. Their
+    /// product is a reasonable measure of how cleanly the ball can be
+    /// struck — but as an input to the DECISION they mean different
+    /// things: a body in the corridor is a reason not to shoot, and a
+    /// defender closing you down is a reason to shoot NOW.
+    pub pressure_clarity: f32,
+    /// How clear the corridor to goal is of bodies between the ball and
+    /// the net, 0..1. See [`Self::pressure_clarity`].
+    pub corridor_clarity: f32,
     /// How much of the run to goal is still covered — 0.0 when nothing
     /// but the goalkeeper stands between this player and the net.
     ///
@@ -89,6 +109,8 @@ impl GoalSight {
             angle_clarity: 0.0,
             angle_quality: 0.0,
             lane: 0.0,
+            pressure_clarity: 0.0,
+            corridor_clarity: 0.0,
             cover: 1.0,
         }
     }
@@ -99,6 +121,8 @@ impl GoalSight {
             angle_clarity: 1.0,
             angle_quality: 1.0,
             lane: 1.0,
+            pressure_clarity: 1.0,
+            corridor_clarity: 1.0,
             cover: 0.0,
         }
     }
@@ -658,9 +682,26 @@ impl<'p> PlayerOperationsImpl<'p> {
                 + opp_skills.technical.tackling
                 + opp_skills.mental.positioning)
                 / 60.0; // 0..1
-            // Effective corridor half-width: 5-11 u. Soft falloff:
-            // perp 0 = full block, perp = corridor → no block.
-            let corridor_half = 5.0 + def_quality * 6.0;
+            // Effective corridor half-width: 12-24 u (1.5-3 m). Soft
+            // falloff: perp 0 = full block, perp = corridor → no block.
+            //
+            // Was 5-11 u — 0.6 to 1.4 METRES. At that width the question
+            // being asked is "is a defender standing exactly on the line
+            // of the shot", not "is the lane obstructed", and the answer
+            // was almost always no: corridor clarity measured 0.71-0.94
+            // from 11 m out while the same shots recorded **2.03
+            // opposition outfielders within 3.75 m of the ball's line to
+            // goal**. The bodies were there; the corridor simply could
+            // not see them.
+            //
+            // 16u (2 m) is what `try_block_shot` uses for the same
+            // defenders in flight — deliberately, as "a committed lunge
+            // rather than a standing body". The decision and the block
+            // model have to agree about who is in the way, and of the two
+            // widths the blocking one is the measured, calibrated one.
+            // Scaled by defender quality around it rather than replacing
+            // it: a good defender commits from further off.
+            let corridor_half = 12.0 + def_quality * 12.0;
             if perp_distance > corridor_half {
                 continue;
             }
@@ -690,6 +731,8 @@ impl<'p> PlayerOperationsImpl<'p> {
             angle_clarity,
             angle_quality,
             lane: (pressure_clarity * corridor_clarity).clamp(0.0, 1.0),
+            pressure_clarity,
+            corridor_clarity,
             cover: cover.clamp(0.0, 1.0),
         }
     }
