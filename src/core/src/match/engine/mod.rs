@@ -34,13 +34,14 @@ pub use teamplay::zones::{LateralLane, MatchZone, ZoneCoeffs, ZoneStats};
 pub use teamplay::{attack, chemistry, coach, defence, tactical, zones};
 
 // flow/
+pub use flow::celebration::GoalCelebration;
 pub use flow::context::*;
 pub use flow::environment::{EnvModifiers, MatchEnvironment, Pitch, Weather};
 pub use flow::field::*;
 pub use flow::goal::*;
 pub use flow::result::*;
 pub use flow::rng::MatchRng;
-pub use flow::{context, environment, field, goal, result, rng};
+pub use flow::{celebration, context, environment, field, goal, result, rng};
 
 // officiating/
 pub use officiating::management::{

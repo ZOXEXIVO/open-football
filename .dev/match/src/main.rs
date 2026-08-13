@@ -5552,6 +5552,36 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     );
                     println!("      spell length (full ticks): {}", spell_str);
                     {
+                        let (buckets, thirds, mean, engagers) =
+                            core::dead_ball_diag::carrier_pressure_snapshot();
+                        let tot: u64 = buckets.iter().sum::<u64>().max(1);
+                        let row = |v: &[u64], t: u64| {
+                            v.iter()
+                                .enumerate()
+                                .map(|(i, n)| {
+                                    format!(
+                                        "{} {:.0}%",
+                                        core::dead_ball_diag::PRESSURE_LABELS[i],
+                                        *n as f64 / t.max(1) as f64 * 100.0
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join("  ")
+                        };
+                        println!();
+                        println!("--- PRESSURE ON THE MAN IN POSSESSION ---");
+                        println!(
+                            "  nearest opponent to the carrier: mean {:.1} m, {:.2} opponents within 10 m",
+                            mean, engagers
+                        );
+                        println!("  all: {}   (real: a carrier is engaged inside 5 m most of the time)", row(&buckets, tot));
+                        for (i, label) in ["own third", "middle", "attacking"].iter().enumerate() {
+                            let slice = &thirds[i * 5..i * 5 + 5];
+                            let t: u64 = slice.iter().sum();
+                            println!("  {:<10} {}", label, row(slice, t));
+                        }
+                    }
+                    {
                         let (fo, yi, fl) = core::chase_diag::snapshot();
                         println!("      chase designation: {:.0} forces/match, {:.0} yields/match ({:.0}% of forces during a delivery in flight)", fo as f64 / n_matches as f64, yi as f64 / n_matches as f64, fl as f64 / fo.max(1) as f64 * 100.0);
                     }

@@ -13,6 +13,7 @@ mod config;
 mod field;
 mod kit;
 mod loader;
+mod net;
 mod pitch;
 mod playback;
 mod replay;
@@ -23,6 +24,7 @@ use crate::actors::{Actors, BallState};
 use crate::camera::{CameraFlight, CameraOrbit, CameraZoom, TvCamera};
 use crate::config::ViewerConfig;
 use crate::loader::ChunkLoader;
+use crate::net::Netting;
 use crate::pitch::{Bank, Pitch};
 use crate::playback::{EventLog, Playback};
 use crate::replay::ReplayTracks;
@@ -149,6 +151,11 @@ impl MatchViewer {
                         // Straight after, so the dive `animate` has just read
                         // out of the recording is on the body the same frame.
                         Actors::carry_body,
+                        // After `follow_playhead`, which is what moves the
+                        // ball: the netting is deformed by wherever the ball
+                        // has just been put, so a frame's lag here would show
+                        // the mesh trailing the ball through it.
+                        Netting::ripple,
                     ),
                     (
                         // Ahead of `follow_play`, which reads the orbit — so a

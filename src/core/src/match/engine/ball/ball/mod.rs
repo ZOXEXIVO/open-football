@@ -8,11 +8,16 @@
 //! | [`ownership`]   | Pass-target claims, deadlock resolution, stall safety nets, ball-ownership claim flow |
 //! | [`interactions`]| Intercept / shot-block / shot-save resolution                |
 //! | [`goal`]        | Goal / over-the-bar / wide-of-goal handling                  |
+//! | [`net`]         | What the ball does after it crosses the line                 |
 //! | [`motion`]      | Velocity integration, owner tracking, boundary inset         |
 //! | [`stall`]       | Position-anchor stall detector + snapshot diagnostics        |
 
 mod goal;
 pub mod interactions;
+// `pub` for `GoalNet` / `BallInNet` — the celebration choreography in the
+// flow layer reads the goal geometry to send a keeper in after the ball,
+// and the replay viewer needs the same net depth to draw it.
+pub mod net;
 // `pub` for `SpinModel` — the strike sites (shot / cross) solve the
 // rotation they need from the same Magnus coefficient the physics
 // integrates, so the two can never drift apart.
@@ -24,6 +29,7 @@ mod restart;
 pub mod stall;
 
 use crate::r#match::engine::ball::events::BallEvent;
+use crate::r#match::engine::ball::ball::net::BallInNet;
 use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::strategies::passing::CrossType;
@@ -861,6 +867,13 @@ pub struct Ball {
     /// the duration. Cleared on ownership resume.
     pub stall_start_snapshot: Option<String>,
     pub goal_scored: bool,
+    /// The ball is in the goal — see [`BallInNet`]. Set the instant it
+    /// crosses the line and cleared by the restart, so it outlives
+    /// `goal_scored` (which the flow layer consumes on the same tick to arm
+    /// the celebration). Every resolver that would otherwise see a ball
+    /// behind the goal line and award a corner, a goal kick or a boundary
+    /// clamp keys off this being `Some`.
+    pub in_net: Option<BallInNet>,
     pub kickoff_team_side: Option<PlayerSide>,
     pub cached_landing_position: Vector3<f32>,
     /// When a set-piece (corner, goal kick) rewrites ownership to a
@@ -1276,6 +1289,7 @@ impl Ball {
             unowned_ticks: 0,
             stall_start_snapshot: None,
             goal_scored: false,
+            in_net: None,
             kickoff_team_side: None,
             cached_landing_position: Vector3::new(x, y, 0.0),
             pending_set_piece_teleport: None,
@@ -1916,6 +1930,19 @@ impl Ball {
             }
         }
 
+        // The ball is in the goal: the netting owns it and play is dead
+        // until the restart. Nothing below applies — there is no pass to
+        // intercept, no shot to save, no owner to track and no boundary to
+        // clamp against — and several of those passes would actively
+        // misread it (see the guards in `goal.rs`). The celebration drives
+        // the ball from here; this covers the ticks between the goal and
+        // the flow layer noticing it, plus any caller driving `update`
+        // directly.
+        if self.in_net.is_some() {
+            self.tick_net(&context.goal_positions);
+            return;
+        }
+
         // Decrement claim cooldown
         if self.claim_cooldown > 0 {
             self.claim_cooldown -= 1;
@@ -2027,6 +2054,64 @@ impl Ball {
             // checks, without a counter planted at each.
             use crate::r#match::engine::ball::ball::stall::dead_ball_diag as dbd;
             use std::sync::atomic::Ordering;
+
+            // Pressure on the man in possession — the "is anybody coming
+            // to him" number. Sampled here rather than in any state
+            // because it is a property of the SITUATION, and every state
+            // that could measure it has already decided not to engage.
+            if let Some(owner) = self
+                .current_owner
+                .and_then(|id| players.iter().find(|p| p.id == id))
+            {
+                let mut nearest = f32::MAX;
+                let mut engagers = 0u64;
+                for opp in players.iter() {
+                    if opp.team_id == owner.team_id || opp.is_sent_off {
+                        continue;
+                    }
+                    let d = (opp.position - owner.position).magnitude();
+                    nearest = nearest.min(d);
+                    if d < 80.0 {
+                        engagers += 1;
+                    }
+                }
+                if nearest < f32::MAX {
+                    let m = nearest * 0.125;
+                    let bucket = if m < 2.0 {
+                        0
+                    } else if m < 5.0 {
+                        1
+                    } else if m < 10.0 {
+                        2
+                    } else if m < 20.0 {
+                        3
+                    } else {
+                        4
+                    };
+                    dbd::CARRIER_PRESSURE[bucket].fetch_add(1, Ordering::Relaxed);
+                    // Thirds from the CARRIER's point of view, so "own
+                    // third" means his own regardless of which way he
+                    // is playing.
+                    let attacking_right = owner.side == Some(crate::r#match::PlayerSide::Left);
+                    let progress = if attacking_right {
+                        self.position.x / self.field_width
+                    } else {
+                        1.0 - self.position.x / self.field_width
+                    };
+                    let third = if progress < 0.333 {
+                        0
+                    } else if progress < 0.667 {
+                        1
+                    } else {
+                        2
+                    };
+                    dbd::CARRIER_PRESSURE_BY_THIRD[third * 5 + bucket]
+                        .fetch_add(1, Ordering::Relaxed);
+                    dbd::CARRIER_NEAREST_X10.fetch_add((nearest * 10.0) as u64, Ordering::Relaxed);
+                    dbd::CARRIER_ENGAGERS.fetch_add(engagers, Ordering::Relaxed);
+                    dbd::CARRIER_SAMPLES.fetch_add(1, Ordering::Relaxed);
+                }
+            }
 
             // Whole-match TakeBall ownership, not just stalls: is this a
             // state that holds the ball, or the state everybody is in on
@@ -2144,6 +2229,12 @@ impl Ball {
         events: &mut EventCollection,
     ) {
         self.current_tick_cached = context.current_tick();
+
+        // See `Ball::update` — the netting owns a ball that has gone in.
+        if self.in_net.is_some() {
+            self.tick_net(&context.goal_positions);
+            return;
+        }
 
         if self.claim_cooldown > 0 {
             self.claim_cooldown -= 1;
@@ -2266,7 +2357,20 @@ impl Ball {
         self.position.z = 0.0;
 
         self.velocity = Vector3::zeros();
+        // The goal is over — whatever is left of it goes with the restart.
+        self.in_net = None;
 
+        self.clear_for_dead_ball();
+    }
+
+    /// Everything [`Ball::reset`] drops apart from where the ball IS.
+    ///
+    /// Split out for the goal path: a ball that has just crossed the line is
+    /// as dead as one on the centre spot — no owner, no pass in flight, no
+    /// shot target, no offside snapshot — but it is emphatically not on the
+    /// centre spot, it is in the net travelling at whatever it was hit at.
+    /// Sharing the body is what stops the two drifting apart.
+    fn clear_for_dead_ball(&mut self) {
         self.current_owner = None;
         self.previous_owner = None;
         self.ownership_duration = 0;

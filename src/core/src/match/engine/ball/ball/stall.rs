@@ -74,6 +74,49 @@ pub mod dead_ball_diag {
     pub static TAKEBALL_OWN_TICKS: AtomicU64 = AtomicU64::new(0);
     pub static TAKEBALL_OWN_SPELLS: AtomicU64 = AtomicU64::new(0);
 
+    /// Is anybody actually pressing the man on the ball?
+    ///
+    /// The single most-reported thing you cannot see in any existing
+    /// counter: tackles and interceptions only count contact that
+    /// HAPPENED, and the defensive-shape block measures where the line
+    /// sits, not whether anyone engages the carrier. This samples the
+    /// distance from the ball's owner to his nearest opponent on every
+    /// full tick he holds it, bucketed in metres.
+    ///
+    /// 0 <2m, 1 2-5m, 2 5-10m, 3 10-20m, 4 20m+.
+    pub static CARRIER_PRESSURE: [AtomicU64; 5] = [ZERO; 5];
+    pub const PRESSURE_LABELS: [&str; 5] = ["<2m", "2-5m", "5-10m", "10-20m", "20m+"];
+    /// Same, split by which third of the pitch the carrier is in
+    /// (own / middle / attacking, from the CARRIER's point of view),
+    /// flattened `third * 5 + bucket`.
+    pub static CARRIER_PRESSURE_BY_THIRD: [AtomicU64; 15] = [ZERO; 15];
+    /// Summed nearest-opponent distance in tenths of a unit, for a mean.
+    pub static CARRIER_NEAREST_X10: AtomicU64 = AtomicU64::new(0);
+    pub static CARRIER_SAMPLES: AtomicU64 = AtomicU64::new(0);
+    /// How many opponents are within 10 m of the carrier — the "does
+    /// anyone come to him" number, not just the nearest.
+    pub static CARRIER_ENGAGERS: AtomicU64 = AtomicU64::new(0);
+
+    /// `(bucket counts, by-third counts, mean nearest in metres, mean
+    /// engagers within 10 m)`.
+    pub fn carrier_pressure_snapshot() -> ([u64; 5], [u64; 15], f32, f32) {
+        let mut buckets = [0u64; 5];
+        for i in 0..5 {
+            buckets[i] = CARRIER_PRESSURE[i].load(Ordering::Relaxed);
+        }
+        let mut thirds = [0u64; 15];
+        for i in 0..15 {
+            thirds[i] = CARRIER_PRESSURE_BY_THIRD[i].load(Ordering::Relaxed);
+        }
+        let n = CARRIER_SAMPLES.load(Ordering::Relaxed).max(1);
+        (
+            buckets,
+            thirds,
+            CARRIER_NEAREST_X10.load(Ordering::Relaxed) as f32 / n as f32 / 10.0 * 0.125,
+            CARRIER_ENGAGERS.load(Ordering::Relaxed) as f32 / n as f32,
+        )
+    }
+
     /// What actually happens INSIDE a stall.
     ///
     /// Every remaining row in the stuck table now reads 100% in the 0-1
@@ -192,6 +235,8 @@ pub mod dead_ball_diag {
             .chain(TAKEBALL_DWELL.iter())
             .chain(SPELL_LENGTH.iter())
             .chain(STALL_ZONE.iter())
+            .chain(CARRIER_PRESSURE.iter())
+            .chain(CARRIER_PRESSURE_BY_THIRD.iter())
         {
             c.store(0, Ordering::Relaxed);
         }
@@ -199,6 +244,9 @@ pub mod dead_ball_diag {
             &STALL_TURNOVERS,
             &STALL_TURNOVERS_CROSS_TEAM,
             &STALL_IN_FLIGHT,
+            &CARRIER_NEAREST_X10,
+            &CARRIER_SAMPLES,
+            &CARRIER_ENGAGERS,
             &STUCK_TICKS_UNOWNED,
             &STUCK_EPISODES_UNOWNED,
             &LONGEST_STUCK,

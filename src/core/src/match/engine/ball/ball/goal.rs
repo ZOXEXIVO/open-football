@@ -14,9 +14,18 @@ use nalgebra::Vector3;
 use std::cmp::Ordering;
 
 impl Ball {
-    pub(super) fn check_goal(&mut self, context: &MatchContext, result: &mut EventCollection) {
-        // Guard: don't detect another goal if one was already scored this tick
-        if self.goal_scored {
+    // `pub(crate)` rather than `pub(super)` so the goal / celebration
+    // integration tests can drive a goal directly. The alternative is
+    // standing up a full `GameTickContext` to reach it through `update`,
+    // which tests the tick orchestration rather than the goal.
+    pub(crate) fn check_goal(&mut self, context: &MatchContext, result: &mut EventCollection) {
+        // Guard: don't detect another goal if one was already scored this
+        // tick, and none at all while the ball is still in the goal from the
+        // last one. `goal_scored` alone used to be enough because the ball
+        // was teleported to the centre spot on the same tick; it now lives
+        // in the net until the restart, sitting permanently inside
+        // `is_goal`, so the durable marker is the one that has to gate this.
+        if self.goal_scored || self.in_net.is_some() {
             return;
         }
 
@@ -163,6 +172,14 @@ impl Ball {
                 };
 
                 result.add_ball_event(BallEvent::Goal(goal_event_metadata));
+
+                // Hand the ball to the netting rather than teleporting it to
+                // the centre spot. It keeps the pace it crossed the line
+                // with, stretches the mesh, and settles in the goal — see
+                // `net.rs` for why the ball used to appear to stop dead on
+                // the line. The restart puts it back on the centre spot
+                // once the celebration is over.
+                self.enter_net(goal_side, final_scorer, final_is_auto_goal);
             }
 
             // Determine which side should kick off (the conceding team)
@@ -174,7 +191,13 @@ impl Ball {
             };
 
             self.goal_scored = true;
-            self.reset();
+            // No scorer could be credited (a goal with no owner and no
+            // previous owner — a ball that crossed the line off nobody).
+            // There is no goal event and no celebration to run, so the ball
+            // still needs the old behaviour: straight back to the centre.
+            if self.in_net.is_none() {
+                self.reset();
+            }
         }
     }
 
@@ -217,6 +240,13 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        // A ball already in the goal is not a ball going out of play — see
+        // `Ball::in_net`. Without this, one settling against the roof
+        // netting reads as a skied shot and awards a goal kick.
+        if self.goal_scored || self.in_net.is_some() {
+            return;
+        }
+
         let over_side = match context.goal_positions.is_over_goal(self.position) {
             Some(side) => side,
             None => return,
@@ -286,6 +316,16 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        // The ball is in the net. It is past the endline and between the
+        // posts, which is precisely the shape this resolver exists to catch
+        // — and it must not, because a ball that has gone IN is not a ball
+        // that has gone OUT. Ahead of everything else in here: the corner /
+        // goal-kick decision below would otherwise fire on every tick of
+        // every celebration.
+        if self.goal_scored || self.in_net.is_some() {
+            return;
+        }
+
         let field_width = context.field_size.width as f32;
         let goal_half_width = GOAL_WIDTH;
 

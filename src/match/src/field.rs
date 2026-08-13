@@ -33,6 +33,16 @@ impl Field {
     pub const GOAL_WIDTH: f32 = 7.32;
     pub const GOAL_HEIGHT: f32 = 2.44;
 
+    /// Goal-line to the back of the net, and the height of the netting where
+    /// it gets there.
+    ///
+    /// These must agree with the engine's `GoalNet::DEPTH` (15.2 game units)
+    /// and `GoalNet::BACK_HEIGHT`, because the engine settles the ball inside
+    /// that volume and this is where the volume gets drawn. If they drift,
+    /// the ball comes to rest somewhere the netting isn't.
+    pub const NET_DEPTH: f32 = 1.9;
+    pub const NET_BACK_HEIGHT: f32 = 1.15;
+
     /// Recorded engine coordinates to world space (metres).
     ///
     /// `x` and `y` are grid units and get scaled; **`z` is already in

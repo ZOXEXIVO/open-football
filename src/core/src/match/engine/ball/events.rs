@@ -168,7 +168,12 @@ impl BallEventDispatcher {
                     remaining_events.add(Event::PlayerEvent(PlayerEvent::Assist(assist_id)));
                 }
 
-                field.reset_players_positions();
+                // The formation rebuild used to happen here as well as in
+                // `handle_goal_reset` — the same call, twice, on the same
+                // tick. It now belongs solely to the restart at the END of
+                // the post-goal window, because teleporting everybody onto
+                // their formation spot the instant the ball crosses the line
+                // is precisely what left nobody to celebrate.
             }
             BallEvent::Claimed(player_id) => {
                 // Settle the pass window HERE rather than leaving it to

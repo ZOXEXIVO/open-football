@@ -706,6 +706,46 @@ impl PlayerEventDispatcher {
             }
         }
 
+        // The ball is in the net: the whistle has gone and nothing anybody
+        // does with it counts.
+        //
+        // This is a one-tick window — `handle_goal_reset` freezes the world
+        // at the end of the same tick the goal is scored in — but the events
+        // queued during that tick are still waiting to be dispatched, and
+        // several of them WRITE the ball: a keeper beaten on his line is
+        // within `KICKABLE_DISTANCE` of a ball that has just crossed it, so a
+        // pass or a clearance he asked for a moment earlier would drag it
+        // straight back out of the goal. (The old engine hid this by
+        // teleporting everybody into formation mid-dispatch, so the reach
+        // check failed by accident.)
+        //
+        // Allow-list rather than deny-list: `Goal` and `Assist` ARE the goal
+        // — they are queued by the goal handler itself and credit it — and
+        // the rest are bookkeeping the goal does not invalidate.
+        if field.ball.in_net.is_some() {
+            let touches_the_ball = matches!(
+                event,
+                PlayerEvent::PassTo(_)
+                    | PlayerEvent::Shoot(_)
+                    | PlayerEvent::ClearBall(_)
+                    | PlayerEvent::MoveBall(_, _)
+                    | PlayerEvent::ClaimBall(_)
+                    | PlayerEvent::GainBall(_)
+                    | PlayerEvent::CaughtBall(_)
+                    | PlayerEvent::ParriedBall(_)
+                    | PlayerEvent::TakeBall(_)
+                    | PlayerEvent::TacklingBall(_)
+                    | PlayerEvent::BallCollision(_)
+                    | PlayerEvent::BallOwnerChange(_)
+                    | PlayerEvent::RequestHeading(_, _)
+                    | PlayerEvent::RequestShot(_, _)
+                    | PlayerEvent::RequestBallReceive(_)
+            );
+            if touches_the_ball {
+                return remaining_events;
+            }
+        }
+
         match event {
             PlayerEvent::Goal(player_id, is_auto_goal) => {
                 Self::handle_goal_event(player_id, is_auto_goal, field, context);
@@ -1236,12 +1276,14 @@ impl PlayerEventDispatcher {
             }
         }
 
-        field.ball.previous_owner = None;
-        field.ball.current_owner = None;
-        field.ball.pass_target_player_id = None;
-
-        field.reset_players_positions();
-        field.ball.reset();
+        // The restart used to happen here — formation rebuild, ball back on
+        // the centre spot — as well as in the ball-event handler and again in
+        // `handle_goal_reset`, three times on the tick the ball crossed the
+        // line. It now belongs solely to the end of the post-goal window (see
+        // `GoalCelebration`), because putting the ball on the centre spot the
+        // instant it goes in is exactly what left it looking like it stopped
+        // dead on the goal line. `Ball::enter_net` has already dropped the
+        // ownership and pass state this used to clear by hand.
     }
 
     fn handle_assist_event(player_id: u32, field: &mut MatchField, context: &mut MatchContext) {

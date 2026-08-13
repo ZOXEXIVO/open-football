@@ -2,7 +2,9 @@ use crate::r#match::PlayerSide;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::context::SubstitutionRecord;
 use crate::r#match::engine::events::dispatcher::EventCollection;
-use crate::r#match::engine::goal::{assign_kickoff, handle_goal_reset};
+use crate::r#match::engine::goal::{
+    advance_goal_celebration, assign_kickoff, finish_goal_celebration, handle_goal_reset,
+};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
 use crate::r#match::engine::rating::RatingContext;

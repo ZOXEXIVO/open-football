@@ -56,9 +56,10 @@ impl MatchEngineConfig {
     }
 }
 use crate::r#match::{
-    AttackPlan, DefensivePlan, GameState, GoalDetail, GoalPosition, MATCH_EXTRA_TIME_MS,
-    MATCH_HALF_TIME_MS, MatchCoach, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState,
-    MatchTime, PlayerSide, Score, TeamSkillAggregates, TeamTacticalState, TeamsTactics,
+    AttackPlan, DefensivePlan, GameState, GoalCelebration, GoalDetail, GoalPosition,
+    MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchCoach, MatchField, MatchFieldSize,
+    MatchPlayerCollection, MatchState, MatchTime, PlayerSide, Score, TeamSkillAggregates,
+    TeamTacticalState, TeamsTactics,
 };
 use nalgebra::Vector3;
 
@@ -212,6 +213,11 @@ pub struct MatchContext {
     /// equalizer-within-5-minutes rate ran 2.5x real), and it means
     /// play always resumes against a SET defense. 0 = play is live.
     pub dead_ball_until_ms: u64,
+    /// The goal currently being celebrated, if any — the choreography that
+    /// plays out inside the `dead_ball_until_ms` window and performs the
+    /// restart at the end of it. `None` whenever play is live. See
+    /// [`GoalCelebration`](crate::r#match::GoalCelebration).
+    pub goal_celebration: Option<GoalCelebration>,
     /// Sim-minute at which the FIRST shape change fired in this match
     /// (any side). Stamped once and never overwritten so the result
     /// summary can show the moment the manager pivoted. `None` while
@@ -390,6 +396,7 @@ impl MatchContext {
             tactical_familiarity_away: TacticalFamiliarity::default(),
             last_shape_change_tick: u64::MAX,
             dead_ball_until_ms: 0,
+            goal_celebration: None,
             first_shape_change_minute: None,
             starting_home_tactic: None,
             starting_away_tactic: None,

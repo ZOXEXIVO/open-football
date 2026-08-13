@@ -266,7 +266,7 @@ pub struct Actors;
 impl Actors {
     /// A match ball is 22 cm across. This one is half again as big: at the
     /// distance a broadcast camera sits, a regulation ball is four pixels.
-    const BALL_RADIUS: f32 = 0.16;
+    pub(crate) const BALL_RADIUS: f32 = 0.16;
     /// Width of the shadow and the team ring on the turf, in metres.
     const FOOTPRINT: f32 = 1.32;
     /// Ground speed, in metres per second, that counts as flat out.

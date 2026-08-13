@@ -1,6 +1,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::GoalSide;
 use crate::r#match::field::MatchField;
+use crate::r#match::flow::celebration::GoalCelebration;
 use crate::r#match::{MatchContext, PlayerSide, TransitionSource};
 use nalgebra::Vector3;
 
@@ -113,7 +114,17 @@ pub fn assign_kickoff(field: &mut MatchField, side: PlayerSide) {
     }
 }
 
-/// Reset field after a goal: reposition players, assign kickoff possession.
+/// A goal has gone in: arm the celebration.
+///
+/// This used to BE the restart — players teleported into formation, ball
+/// teleported to the centre spot, all on the tick the ball crossed the line,
+/// after which the engine loop skipped 45-75 s of match clock with the world
+/// frozen. The restart still happens at exactly the same instant and leaves
+/// exactly the same state; what changed is that the window in between is now
+/// played out rather than skipped, so the ball goes into the net and the
+/// players celebrate instead of the recording holding one frame for a minute.
+/// See [`GoalCelebration`] for what happens in there and why none of it can
+/// move a calibrated number.
 pub fn handle_goal_reset(field: &mut MatchField, context: &mut MatchContext) {
     if !field.ball.goal_scored {
         return;
@@ -121,24 +132,20 @@ pub fn handle_goal_reset(field: &mut MatchField, context: &mut MatchContext) {
 
     let kickoff_side = field.ball.kickoff_team_side;
 
-    field.reset_players_positions();
-    field.ball.reset();
-
-    if let Some(side) = kickoff_side {
-        assign_kickoff(field, side);
-    }
-
     field.ball.goal_scored = false;
     field.ball.kickoff_team_side = None;
     context.record_goal_tick();
     // Post-goal dead time: celebration + walk-back + the referee's
-    // restart — 45-75 s of match clock during which the engine loop
-    // advances only time (see `MatchContext::dead_ball_until_ms`).
-    // Everything is already reset and the kicker stands on the ball,
-    // so when the clock crosses the threshold play resumes instantly —
-    // against a fully SET defense, which is the realism point: the
-    // engine's freshly-reset formations were measurably easy to attack
-    // and goals begat goals through that window.
+    // restart — 45-75 s of match clock during which no ball physics,
+    // player AI or events run (see `MatchContext::dead_ball_until_ms`).
+    // The pause is load-bearing for realism: it consumes the post-goal
+    // window in which the engine's freshly-reset formations were
+    // measurably easy to attack (goals begat goals), and it means play
+    // always resumes against a fully SET defense.
+    //
+    // NB the single RNG draw here is the only one the whole post-goal
+    // path takes, and it must stay that way — the stream is shared with
+    // every calibrated roll in the match.
     context.dead_ball_until_ms = context.total_match_time + context.rng.range_u64(45, 75) * 1000;
     // The side kicking off after a goal IS the side that just conceded.
     // Mark them so the forward shot-decision dampens willingness in the
@@ -147,5 +154,43 @@ pub fn handle_goal_reset(field: &mut MatchField, context: &mut MatchContext) {
     // scoreline distribution.
     if let Some(conceding_side) = kickoff_side {
         context.record_conceded(conceding_side);
+    }
+
+    let Some(side) = kickoff_side else {
+        // No conceding side could be resolved — nothing to restart toward.
+        // Put the world back the way the old path did and move on.
+        field.reset_players_positions();
+        field.ball.reset();
+        return;
+    };
+
+    let restart_at_ms = context.dead_ball_until_ms;
+    context.goal_celebration = Some(GoalCelebration::arm(field, context, side, restart_at_ms));
+}
+
+/// Play one tick of the post-goal window, if there is one.
+///
+/// Called from the engine loop's dead-ball branch — the only ticks in which
+/// it can do anything, because that is the only time a celebration is live.
+/// Returns `true` if something moved and the tick is therefore worth
+/// recording.
+pub fn advance_goal_celebration(field: &mut MatchField, context: &mut MatchContext) -> bool {
+    let Some(mut celebration) = context.goal_celebration.take() else {
+        return false;
+    };
+    if celebration.advance(field, context) {
+        context.goal_celebration = Some(celebration);
+    }
+    true
+}
+
+/// Force any pending celebration to its restart immediately.
+///
+/// The whistle for half time can go while the ball is still in the net. Play
+/// must never resume — nor a period end — with a goal half-processed, so the
+/// period boundary settles it.
+pub fn finish_goal_celebration(field: &mut MatchField, context: &mut MatchContext) {
+    if let Some(celebration) = context.goal_celebration.take() {
+        GoalCelebration::restart(field, celebration.kickoff_side);
     }
 }

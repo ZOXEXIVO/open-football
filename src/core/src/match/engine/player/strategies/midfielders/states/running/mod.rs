@@ -846,15 +846,26 @@ impl StateProcessingHandler for MidfielderRunningState {
             // the defender — he shields and turns, which is a STEERING
             // answer, not a state change. See `carry_steering`.
         } else {
-            // Without ball - check for opponent with ball first
-            // Only the closest player should chase — others hold tactical shape
-            if let Some(opponent) = ctx
-                .players()
-                .opponents()
-                .nearby(150.0)
-                .with_ball(ctx)
-                .next()
-            {
+            // Without ball — go to the man who has it.
+            //
+            // ⚠ THE PROXIMITY SCAN CANNOT COME FIRST. This was
+            // `.nearby(150.0)`, which is **18.75 m**, and everything
+            // below — including `is_best_player_to_chase_ball`, the
+            // team-wide designation of who chases — sat inside it. So a
+            // midfielder who WAS his side's designated chaser but stood
+            // twenty-five metres away never entered the block at all and
+            // did nothing. The designation has already picked the nearest
+            // able man; bounding it by distance defeats the whole point
+            // of having one, and when the carrier is beyond the bound
+            // NOBODY on the team reacts.
+            //
+            // Measured with the carrier-pressure census: in the MIDDLE
+            // THIRD, 24% of carrier ticks had no opponent within 10 m,
+            // against 7% in the defensive third — a man walking through
+            // the centre circle completely unopposed. The defender
+            // equivalent of this block already scans unbounded
+            // (`opponents().with_ball()`); this is the same shape.
+            if let Some(opponent) = ctx.players().opponents().with_ball().next() {
                 let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
                 // Close — tackle regardless (reactive)

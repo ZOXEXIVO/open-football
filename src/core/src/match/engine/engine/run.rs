@@ -781,16 +781,40 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let track_positions = match_data.is_tracking_positions();
 
         while context.increment_time() {
-            // Post-goal dead time: only the match clock advances while
-            // the players celebrate / walk back / wait for the restart
-            // whistle. No ball physics, no AI, no events, no coach
-            // evals — the world is already reset and frozen in
-            // formation, so skipping the tick body IS the celebration.
-            // See `MatchContext::dead_ball_until_ms` for why this pause
-            // is load-bearing (it consumed the post-goal hot window
-            // that made goals beget goals).
+            // Post-goal dead time. No ball physics, no AI, no events, no
+            // coach evals — see `MatchContext::dead_ball_until_ms` for why
+            // the pause is load-bearing (it consumed the post-goal hot
+            // window that made goals beget goals).
+            //
+            // What DOES run is the celebration: the ball settling in the
+            // net, the scorer's run, the pile-on, somebody fetching the ball
+            // back. It is a cutscene — no decision inside it can reach a
+            // ball, a duel or the RNG stream — and the restart it performs
+            // at the end of the window leaves precisely the state the old
+            // instant reset left at the start of it. Recording it is the
+            // point: with the tick body skipped outright the replay held
+            // the last pre-goal frame for a minute, which is why the ball
+            // appeared to stop dead on the goal line.
             if context.total_match_time < context.dead_ball_until_ms {
+                let celebrating = advance_goal_celebration(field, context);
+                if celebrating
+                    && track_positions
+                    && context.total_match_time >= next_position_record_ms
+                {
+                    Self::write_match_positions(field, context.total_match_time, match_data);
+                    next_position_record_ms += Self::POSITION_RECORD_INTERVAL_MS;
+                }
                 continue;
+            }
+
+            // The window has closed. Any celebration still standing performs
+            // its restart here, BEFORE the first live tick — so play resumes
+            // from the kickoff set-up, exactly as it did when the reset
+            // happened at the far end of the window. It cannot be done inside
+            // the branch above, whose own condition is what keeps the clock
+            // short of the restart instant.
+            if context.goal_celebration.is_some() {
+                advance_goal_celebration(field, context);
             }
 
             tick_parity += 1;
@@ -1010,6 +1034,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 }
             }
         }
+
+        // The whistle can go while the ball is still in the net. Settle the
+        // goal before the period boundary runs its own resets, so nothing
+        // downstream sees a half-processed one.
+        finish_goal_celebration(field, context);
 
         result
     }

@@ -28,8 +28,9 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        // Already resolved this tick (goal scored, etc.).
-        if self.goal_scored {
+        // Already resolved this tick (goal scored, etc.), or the ball is
+        // still in the goal from the last one.
+        if self.goal_scored || self.in_net.is_some() {
             return;
         }
         let field_height = context.field_size.height as f32;

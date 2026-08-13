@@ -553,6 +553,14 @@ impl Ball {
     }
 
     pub(super) fn check_boundary_collision(&mut self, context: &MatchContext) {
+        // A ball in the goal is BEHIND the endline by design and the netting
+        // owns it (see `net.rs`). Clamping it back onto the pitch here is
+        // exactly the bug this whole path used to have — the ball reappeared
+        // a metre in front of the goal the instant it went in.
+        if self.in_net.is_some() {
+            return;
+        }
+
         let field_width = context.field_size.width as f32;
         let field_height = context.field_size.height as f32;
 

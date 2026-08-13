@@ -1,4 +1,5 @@
 use crate::field::Field;
+use crate::net::Netting;
 use crate::textures::Textures;
 use bevy::asset::RenderAssetUsages;
 use bevy::math::Affine2;
@@ -218,7 +219,9 @@ impl Pitch {
 
         Self::spawn_turf(&mut commands, &mut meshes, &mut materials);
         Self::spawn_markings(&mut commands, &mut meshes, &mut materials);
-        Self::spawn_goals(&mut commands, &mut meshes, &mut materials);
+        // Frame and netting both. The netting is no longer scenery — it is
+        // deformable, and `Netting::ripple` drives it from the ball.
+        Netting::spawn(&mut commands, &mut meshes, &mut materials);
         Self::spawn_ground(&mut commands, &mut meshes, &mut materials, &mut images);
 
         // A stadium is lit from four corners at once, so almost nothing on the
@@ -652,72 +655,4 @@ impl Pitch {
         });
     }
 
-    fn spawn_goals(
-        commands: &mut Commands,
-        meshes: &mut Assets<Mesh>,
-        materials: &mut Assets<StandardMaterial>,
-    ) {
-        const POST_RADIUS: f32 = 0.07;
-        const NET_DEPTH: f32 = 1.9;
-
-        let frame = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.97, 0.97, 0.97),
-            perceptual_roughness: 0.5,
-            ..default()
-        });
-        let netting = materials.add(StandardMaterial {
-            base_color: Color::srgba(1.0, 1.0, 1.0, 0.09),
-            alpha_mode: AlphaMode::Blend,
-            cull_mode: None,
-            double_sided: true,
-            perceptual_roughness: 1.0,
-            ..default()
-        });
-
-        let post = meshes.add(Cylinder::new(POST_RADIUS, Field::GOAL_HEIGHT));
-        let bar = meshes.add(Cylinder::new(
-            POST_RADIUS,
-            Field::GOAL_WIDTH + POST_RADIUS * 2.0,
-        ));
-        let half_goal = Field::GOAL_WIDTH * 0.5;
-
-        for side in [-1.0f32, 1.0] {
-            let goal_line = side * Field::HALF_LENGTH;
-
-            for post_side in [-1.0f32, 1.0] {
-                commands.spawn((
-                    Mesh3d(post.clone()),
-                    MeshMaterial3d(frame.clone()),
-                    Transform::from_xyz(goal_line, Field::GOAL_HEIGHT * 0.5, post_side * half_goal),
-                ));
-            }
-
-            commands.spawn((
-                Mesh3d(bar.clone()),
-                MeshMaterial3d(frame.clone()),
-                Transform::from_xyz(goal_line, Field::GOAL_HEIGHT, 0.0)
-                    .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
-            ));
-
-            let behind = goal_line + side * NET_DEPTH;
-            let middle = goal_line + side * NET_DEPTH * 0.5;
-            commands.spawn((
-                Mesh3d(meshes.add(Cuboid::new(0.04, Field::GOAL_HEIGHT, Field::GOAL_WIDTH))),
-                MeshMaterial3d(netting.clone()),
-                Transform::from_xyz(behind, Field::GOAL_HEIGHT * 0.5, 0.0),
-            ));
-            commands.spawn((
-                Mesh3d(meshes.add(Cuboid::new(NET_DEPTH, 0.04, Field::GOAL_WIDTH))),
-                MeshMaterial3d(netting.clone()),
-                Transform::from_xyz(middle, Field::GOAL_HEIGHT, 0.0),
-            ));
-            for post_side in [-1.0f32, 1.0] {
-                commands.spawn((
-                    Mesh3d(meshes.add(Cuboid::new(NET_DEPTH, Field::GOAL_HEIGHT, 0.04))),
-                    MeshMaterial3d(netting.clone()),
-                    Transform::from_xyz(middle, Field::GOAL_HEIGHT * 0.5, post_side * half_goal),
-                ));
-            }
-        }
-    }
 }
