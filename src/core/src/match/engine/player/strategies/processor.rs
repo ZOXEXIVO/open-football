@@ -30,6 +30,34 @@ pub trait StateProcessingHandler {
     fn process_conditions(&self, _ctx: ConditionContext) {}
 }
 
+#[cfg(feature = "match-logs")]
+pub mod chase_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Times the dispatcher forced a player into TakeBall, and times it
+    /// yielded him back out. If the two are close and both large, the
+    /// chase DESIGNATION is flip-flopping rather than the ball changing
+    /// hands — the hysteresis is not holding.
+    pub static FORCE: AtomicU64 = AtomicU64::new(0);
+    pub static YIELD: AtomicU64 = AtomicU64::new(0);
+    /// Of the forces, how many happened while a delivery was in flight.
+    pub static FORCE_IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
+
+    pub fn reset() {
+        for c in [&FORCE, &YIELD, &FORCE_IN_FLIGHT] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub fn snapshot() -> (u64, u64, u64) {
+        (
+            FORCE.load(Ordering::Relaxed),
+            YIELD.load(Ordering::Relaxed),
+            FORCE_IN_FLIGHT.load(Ordering::Relaxed),
+        )
+    }
+}
+
 impl PlayerFieldPositionGroup {
     pub fn process(
         &self,
@@ -58,6 +86,18 @@ impl PlayerFieldPositionGroup {
         // That is what made a goalkeeper redirected into `TakeBall` trip
         // its own `in_state_time > 200` give-up guard on tick two and
         // flap straight back to `Standing`.
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering;
+            if Self::should_yield_takeball(*self, player, tick_context) {
+                chase_diag::YIELD.fetch_add(1, Ordering::Relaxed);
+            } else if Self::should_force_takeball(*self, player, tick_context) {
+                chase_diag::FORCE.fetch_add(1, Ordering::Relaxed);
+                if tick_context.ball.is_in_flight_state > 0 {
+                    chase_diag::FORCE_IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
         let override_state_time = if Self::should_yield_takeball(*self, player, tick_context) {
             player.redirect_to_fresh(
                 Self::yield_state_for(*self),
@@ -200,6 +240,40 @@ impl PlayerFieldPositionGroup {
         // every tick, turning the chase into a ping-pong where each
         // player keeps yielding to the other and nobody commits long
         // enough to cover the final few units into the claim radius.
+        //
+        // ⚠ AND IT HAS TO BE WIDER WHILE THE BALL IS IN THE AIR, because
+        // then the target itself is moving: `landing_position` slides as
+        // the ball travels, so "closest man to where it will land" is a
+        // different player from tick to tick and a 1 m margin on a moving
+        // point buys nothing.
+        //
+        // Measured: **4,987 forces and 17,505 yields a match, 98% of the
+        // forces during a delivery in flight** — three and a half yields
+        // per force, and `Midfielder: Running <-> Take Ball` the second
+        // largest loop in the engine (~20,500 round trips per three
+        // matches).
+        //
+        // ⚠ …AND SUPPRESSING IT COSTS GOALS. Both ways of doing so were
+        // measured over three runs each, and both lose in proportion to
+        // how much churn they remove:
+        //
+        //   | variant                    | yields/match | goals |
+        //   |----------------------------|--------------|-------|
+        //   | as written (8u)            | 17,505       | 4.4   |
+        //   | 40u margin while in flight | ~15,100      | 4.95  |
+        //   | hold the chase all flight  | 9,952        | 5.25  |
+        //
+        // The re-election IS the defending. Because `landing_position`
+        // moves, asking every tick is how the man who is ACTUALLY closest
+        // to where the ball ends up gets there; freezing the designation
+        // at the first tick of a delivery commits the wrong man and the
+        // pass completes. The churn is a symptom of a moving target, not
+        // a bug in the hand-off, and `Midfielder: Running <-> Take Ball`
+        // stays near the top of the loop table because of it.
+        //
+        // Same lesson as the `Running <-> Marking` loop in
+        // `defenders/states/marking`: in this engine a two-state cycle is
+        // often load-bearing. Measure the match, not the loop count.
         const HYSTERESIS: f32 = 8.0;
         let yield_threshold_sq = {
             let my_dist = my_dist_sq.sqrt();

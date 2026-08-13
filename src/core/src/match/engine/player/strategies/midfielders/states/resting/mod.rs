@@ -1,5 +1,7 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, Interception, MidfielderCondition,
+};
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -25,10 +27,12 @@ impl StateProcessingHandler for MidfielderRestingState {
         }
 
         if ctx.ball().distance() < BALL_PROXIMITY_THRESHOLD {
-            // If the ball is close, check for nearby opponents
+            // If the ball is close, check for nearby opponents.
+            // A ball somebody is carrying is a challenge, not an
+            // interception — see the note on the guards elsewhere.
             let opponent_nearby = self.is_opponent_nearby(ctx);
             return Some(StateChangeResult::with_midfielder_state(
-                if opponent_nearby {
+                if opponent_nearby || !Interception::is_available(ctx) {
                     MidfielderState::Tackling
                 } else {
                     MidfielderState::Intercepting

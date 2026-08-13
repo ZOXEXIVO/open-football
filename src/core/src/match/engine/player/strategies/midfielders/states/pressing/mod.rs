@@ -1,5 +1,7 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, Interception, MidfielderCondition,
+};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::player::strategies::common::states::TackleEngagement;
@@ -21,14 +23,14 @@ impl StateProcessingHandler for MidfielderPressingState {
         }
 
         // Ball coming toward this player (pass to us) — intercept it
-        if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 150.0 {
+        if Interception::is_available(ctx) && ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 150.0 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Intercepting,
             ));
         }
 
         // Loose ball very close — take it regardless of speed
-        if !ctx.ball().is_owned() && ctx.ball().distance() < 30.0 {
+        if Interception::is_available(ctx) && ctx.ball().distance() < 30.0 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::TakeBall,
             ));
@@ -228,7 +230,7 @@ impl StateProcessingHandler for MidfielderPressingState {
             };
 
             Some(pressing_velocity + separation)
-        } else if !ctx.ball().is_owned() && ctx.ball().distance() < 100.0 {
+        } else if Interception::is_available(ctx) && ctx.ball().distance() < 100.0 {
             // Loose ball — pursue it directly
             let direction =
                 (ctx.tick_context.positions.ball.position - ctx.player.position).normalize();

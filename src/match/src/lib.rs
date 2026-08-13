@@ -123,41 +123,58 @@ impl MatchViewer {
             )
             .add_systems(
                 Update,
+                // Split into two nested groups purely to stay inside
+                // Bevy's maximum tuple arity — `.chain()` still orders the
+                // whole thing end to end, so the ordering notes below mean
+                // exactly what they say across the boundary.
                 (
-                    ChunkLoader::pump,
-                    Timeline::handle_toggle,
-                    Timeline::handle_seek,
-                    // Ahead of every camera system below, so a click on the
-                    // reset chip lands on the frame it happened.
-                    Timeline::handle_camera_reset,
-                    Playback::handle_keyboard,
-                    Playback::advance,
-                    Actors::follow_playhead,
-                    Actors::animate,
-                    // Straight after, so the dive `animate` has just read out
-                    // of the recording is on the body the same frame.
-                    Actors::carry_body,
-                    // Ahead of `follow_play`, which reads the orbit — so a
-                    // drag lands on the same frame it happened rather than
-                    // the next one. Never registered at all before, so the
-                    // camera could not be turned.
-                    CameraOrbit::handle_drag,
-                    CameraZoom::handle_wheel,
-                    TvCamera::follow_play,
-                    // After `follow_play` rather than before it: on the frame
-                    // the rig takes off, flight seeds itself from the
-                    // broadcast position that system has just written, so the
-                    // first key press continues the shot instead of cutting.
-                    CameraFlight::steer,
-                    // Straight after the camera moves, so the stand the
-                    // rig has just walked into is gone on the same frame
-                    // it entered rather than flashing for one.
-                    Bank::cull,
-                    Actors::place_labels,
-                    EventLog::follow_playhead,
-                    Timeline::refresh,
-                    Timeline::refresh_camera_reset,
-                    Playback::end_frame,
+                    (
+                        ChunkLoader::pump,
+                        Timeline::handle_toggle,
+                        Timeline::handle_seek,
+                        // Ahead of `Playback::advance`, so a change of speed
+                        // applies to the frame it was asked for. Registered
+                        // here rather than with the debug systems below: the
+                        // speed chip is part of the transport bar in the
+                        // game too, and a button whose handler never runs is
+                        // worse than no button.
+                        Timeline::handle_speed,
+                        // Ahead of every camera system below, so a click on
+                        // the reset chip lands on the frame it happened.
+                        Timeline::handle_camera_reset,
+                        Playback::handle_keyboard,
+                        Playback::advance,
+                        Actors::follow_playhead,
+                        Actors::animate,
+                        // Straight after, so the dive `animate` has just read
+                        // out of the recording is on the body the same frame.
+                        Actors::carry_body,
+                    ),
+                    (
+                        // Ahead of `follow_play`, which reads the orbit — so a
+                        // drag lands on the same frame it happened rather than
+                        // the next one. Never registered at all before, so the
+                        // camera could not be turned.
+                        CameraOrbit::handle_drag,
+                        CameraZoom::handle_wheel,
+                        TvCamera::follow_play,
+                        // After `follow_play` rather than before it: on the
+                        // frame the rig takes off, flight seeds itself from the
+                        // broadcast position that system has just written, so
+                        // the first key press continues the shot instead of
+                        // cutting.
+                        CameraFlight::steer,
+                        // Straight after the camera moves, so the stand the
+                        // rig has just walked into is gone on the same frame
+                        // it entered rather than flashing for one.
+                        Bank::cull,
+                        Actors::place_labels,
+                        EventLog::follow_playhead,
+                        Timeline::refresh,
+                        Timeline::refresh_camera_reset,
+                        Timeline::refresh_speed,
+                        Playback::end_frame,
+                    ),
                 )
                     .chain(),
             )

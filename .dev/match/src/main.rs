@@ -2468,6 +2468,12 @@ fn print_usage() {
         "                                      bypasses generator; reveals engine-only response to skill gap"
     );
     eprintln!(
+        "  dev_match fwdpath [min] [level] forward path trace: where each forward runs over the first N minutes,"
+    );
+    eprintln!(
+        "                                      distance-to-goal profile, box occupancy, and an ASCII map"
+    );
+    eprintln!(
         "  dev_match trace [N] [level]     runtime per-player trace: position flicker + state looping"
     );
     eprintln!(
@@ -2728,6 +2734,13 @@ fn main() {
         // Substitution-usage diagnostic: plays N matches with full benches
         // and reports the per-team subs-count distribution split by final
         // result. Reproduces "some teams never sub" reports from production.
+        // Where the forwards actually RUN, over a short window, and what
+        // they were doing while they were there. See `run_forward_paths`.
+        "fwdpath" => {
+            let minutes = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(5u64);
+            let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
+            run_forward_paths(minutes, lvl);
+        }
         "paths" => {
             let n = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(2usize);
             let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
@@ -3376,6 +3389,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::mid_run_diag::reset();
     core::mid_onball_diag::reset();
     core::stuck_exit_stats::reset();
+    core::chase_diag::reset();
     core::dead_ball_diag::reset();
     core::time_band_diag::reset();
     core::r#match::TransitionGraph::reset();
@@ -5538,6 +5552,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     );
                     println!("      spell length (full ticks): {}", spell_str);
                     {
+                        let (fo, yi, fl) = core::chase_diag::snapshot();
+                        println!("      chase designation: {:.0} forces/match, {:.0} yields/match ({:.0}% of forces during a delivery in flight)", fo as f64 / n_matches as f64, yi as f64 / n_matches as f64, fl as f64 / fo.max(1) as f64 * 100.0);
+                    }
+                    {
                         let (tv, cross, zones, inflight) = core::dead_ball_diag::stall_churn_snapshot();
                         let zt: u64 = zones.iter().sum::<u64>().max(1);
                         let zrow = zones.iter().enumerate().map(|(i,n)| format!("{} {:.0}%", core::dead_ball_diag::ZONE_LABELS[i], *n as f64 / zt as f64 * 100.0)).collect::<Vec<_>>().join("  ");
@@ -6743,6 +6761,290 @@ fn run_trace(matches: usize, level: u8) {
 ///   * **straight** — net displacement over path length in 3 s windows.
 ///     1.0 is a purposeful run, near 0 is jitter on the spot.
 ///   * **still** — share of samples under 0.5 m/s.
+/// Where the forwards go, and whether they ever get anywhere worth
+/// shooting from.
+///
+/// The shot model answers "does he hit it when he is there". This answers
+/// the question underneath it — **is he ever there at all** — which no
+/// other mode reports: `paths` aggregates by line and hides the
+/// individual, and `stats` only counts shots that happened.
+///
+/// One match, the first `minutes` of it, sampled off the recorded replay
+/// track. Per forward: how his time divides by distance from the goal he
+/// is attacking, how much of it is spent in the box, how much of THAT is
+/// while the ball is in the final third (i.e. arriving with play, not
+/// standing there while it is up the other end), and a coarse map of the
+/// pitch showing where he spent it.
+fn run_forward_paths(minutes: u64, level: u8) {
+    use std::collections::HashMap;
+
+    const SAMPLE_MS: u64 = 30;
+    const M_PER_UNIT: f64 = 0.125;
+    // Bands in metres from the goal he is attacking.
+    const BANDS: [f64; 6] = [6.0, 11.0, 16.5, 22.0, 30.0, 45.0];
+    const BAND_LABELS: [&str; 7] = ["<6", "6-11", "11-16", "16-22", "22-30", "30-45", "45+"];
+    // Map resolution. The pitch is 840 x 545 units (105 x 68 m).
+    const COLS: usize = 60;
+    const ROWS: usize = 17;
+
+    let window_ms = minutes * 60 * 1000;
+
+    println!(
+        "Forward path trace: first {} min of one match, both squads level {}",
+        minutes, level
+    );
+
+    MatchRuntime::set_events_mode(true);
+    let (home, hj) = make_squad_viewer(1, HOME_TEAM_NAME, level, 0);
+    let (away, aj) = make_squad_viewer(2, AWAY_TEAM_NAME, level, 11);
+    let mut names: HashMap<u32, String> = HashMap::new();
+    for pl in hj.iter().chain(aj.iter()) {
+        names.insert(pl.id, format!("{} {}", pl.position, pl.last_name));
+    }
+    let result = FootballEngine::<840, 545>::play(home, away, true, false, false);
+    let data = &result.position_data;
+    let ids = data.get_player_ids();
+    let last = data.max_timestamp().min(window_ms);
+
+    // The two forward slots of the starting XI. `POSITIONS_442` puts
+    // them at indices 9 and 10, so their ids are base+9 and base+10.
+    //
+    // NOT `id % 100 >= 9`, which is what `paths` uses to bucket by line:
+    // the bench is generated after the XI, so ids ending 11 and up came
+    // back as forwards too — and they are parked off-pitch, which showed
+    // up as four "forwards" covering 0.00 km and standing still 100% of
+    // the time. Substitutes are therefore out of scope here; over a
+    // five-minute window nobody has come on yet.
+    let is_forward = |id: u32| matches!(id % 100, 9 | 10);
+    let forwards: Vec<u32> = ids.iter().copied().filter(|id| is_forward(*id)).collect();
+    if forwards.is_empty() {
+        println!("  no forwards on the team sheet");
+        return;
+    }
+
+    #[derive(Default, Clone)]
+    struct Fwd {
+        samples: u64,
+        bands: [u64; 7],
+        in_box: u64,
+        in_box_live: u64,
+        path_units: f64,
+        still: u64,
+        nearest_opp: f64,
+        grid: Vec<u64>,
+        prev: Option<(f32, f32)>,
+    }
+
+    let mut fwd: HashMap<u32, Fwd> = forwards
+        .iter()
+        .map(|id| {
+            (
+                *id,
+                Fwd {
+                    grid: vec![0; COLS * ROWS],
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+
+    let mut t = 0_u64;
+    while t <= last {
+        let mut snap: Vec<(u32, (f32, f32))> = Vec::with_capacity(24);
+        for id in &ids {
+            if let Some(pos) = data.get_player_position_at(*id, t) {
+                snap.push((*id, (pos.x, pos.y)));
+            }
+        }
+        if snap.len() < 4 {
+            t += SAMPLE_MS;
+            continue;
+        }
+        let ball = data.get_ball_position_at(t);
+
+        // Which end each side attacks, read from where its keeper stands
+        // rather than assumed — sides swap at half time.
+        let keeper_x = |team_home: bool| -> Option<f32> {
+            snap.iter()
+                .find(|(id, _)| (*id < 200) == team_home && *id % 100 == 0)
+                .map(|(_, pos)| pos.0)
+        };
+        let home_attacks_right = keeper_x(true).map(|x| x < 420.0).unwrap_or(true);
+        let attacks_right = |id: u32| {
+            if id < 200 {
+                home_attacks_right
+            } else {
+                !home_attacks_right
+            }
+        };
+        let goal_for = |id: u32| -> (f32, f32) {
+            if attacks_right(id) {
+                (840.0, 272.5)
+            } else {
+                (0.0, 272.5)
+            }
+        };
+
+        for (id, pos) in &snap {
+            if !is_forward(*id) {
+                continue;
+            }
+            let Some(entry) = fwd.get_mut(id) else {
+                continue;
+            };
+            let goal = goal_for(*id);
+            let dx = (goal.0 - pos.0) as f64;
+            let dy = (goal.1 - pos.1) as f64;
+            let to_goal_m = (dx * dx + dy * dy).sqrt() * M_PER_UNIT;
+
+            entry.samples += 1;
+            let band = BANDS.iter().position(|edge| to_goal_m < *edge).unwrap_or(6);
+            entry.bands[band] += 1;
+            if to_goal_m < 16.5 {
+                entry.in_box += 1;
+                // …and the ball is in the third he is attacking, so this
+                // is arriving with the play rather than loitering while
+                // it is at the other end.
+                if let Some(b) = ball {
+                    let ball_in_third = if attacks_right(*id) {
+                        b.x > 560.0
+                    } else {
+                        b.x < 280.0
+                    };
+                    if ball_in_third {
+                        entry.in_box_live += 1;
+                    }
+                }
+            }
+
+            if let Some(prev) = entry.prev {
+                let step = (((pos.0 - prev.0) as f64).powi(2) + ((pos.1 - prev.1) as f64).powi(2))
+                    .sqrt();
+                entry.path_units += step;
+                // 0.5 m/s over a 30 ms sample is 0.015 m.
+                if step * M_PER_UNIT < 0.015 {
+                    entry.still += 1;
+                }
+            }
+            entry.prev = Some(*pos);
+
+            // Nearest opponent, for whether he is ever free.
+            let mut nearest = f64::MAX;
+            for (other, opos) in &snap {
+                if (*other < 200) == (*id < 200) || *other % 100 == 0 {
+                    continue;
+                }
+                let d = (((opos.0 - pos.0) as f64).powi(2) + ((opos.1 - pos.1) as f64).powi(2))
+                    .sqrt();
+                nearest = nearest.min(d);
+            }
+            if nearest < f64::MAX {
+                entry.nearest_opp += nearest * M_PER_UNIT;
+            }
+
+            // Map cell, always drawn attacking to the RIGHT so the two
+            // teams' maps read the same way round.
+            let x = if attacks_right(*id) {
+                pos.0
+            } else {
+                840.0 - pos.0
+            };
+            let y = if attacks_right(*id) {
+                pos.1
+            } else {
+                545.0 - pos.1
+            };
+            let col = ((x / 840.0 * COLS as f32) as usize).min(COLS - 1);
+            let row = ((y / 545.0 * ROWS as f32) as usize).min(ROWS - 1);
+            entry.grid[row * COLS + col] += 1;
+        }
+
+        t += SAMPLE_MS;
+    }
+
+    // ── per-forward table ──────────────────────────────────────────────
+    println!();
+    println!(
+        "  {:<16} {:>7} {:>7}  {}",
+        "forward",
+        "km",
+        "still%",
+        BAND_LABELS
+            .iter()
+            .map(|l| format!("{:>6}", l))
+            .collect::<Vec<_>>()
+            .join("")
+    );
+    let mut order: Vec<u32> = forwards.clone();
+    order.sort();
+    for id in &order {
+        let Some(e) = fwd.get(id) else { continue };
+        let n = e.samples.max(1) as f64;
+        println!(
+            "  {:<16} {:>7.2} {:>6.0}%  {}",
+            names.get(id).map(|s| s.as_str()).unwrap_or("?"),
+            e.path_units * M_PER_UNIT / 1000.0,
+            e.still as f64 / n * 100.0,
+            e.bands
+                .iter()
+                .map(|b| format!("{:>5.1}%", *b as f64 / n * 100.0))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+    }
+
+    println!();
+    println!(
+        "  {:<16} {:>10} {:>12} {:>14}",
+        "forward", "in box %", "…with play", "nearest opp"
+    );
+    for id in &order {
+        let Some(e) = fwd.get(id) else { continue };
+        let n = e.samples.max(1) as f64;
+        println!(
+            "  {:<16} {:>9.1}% {:>11.1}% {:>12.1} m",
+            names.get(id).map(|s| s.as_str()).unwrap_or("?"),
+            e.in_box as f64 / n * 100.0,
+            e.in_box_live as f64 / n * 100.0,
+            e.nearest_opp / n,
+        );
+    }
+
+    // ── maps ───────────────────────────────────────────────────────────
+    // Everyone drawn attacking to the right. Density is logarithmic: the
+    // point is where he goes at all, not the exact dwell.
+    println!();
+    println!("  Occupancy, all forwards drawn attacking RIGHT (goal at the right edge).");
+    println!("  '.' rare  ':' some  '+' often  '#' most; box edge marked |");
+    let box_col = ((840.0 - 132.0) / 840.0 * COLS as f32) as usize;
+    for id in &order {
+        let Some(e) = fwd.get(id) else { continue };
+        let peak = e.grid.iter().copied().max().unwrap_or(1).max(1) as f64;
+        println!();
+        println!("  {}", names.get(id).map(|s| s.as_str()).unwrap_or("?"));
+        for row in 0..ROWS {
+            let mut line = String::with_capacity(COLS + 4);
+            line.push_str("    ");
+            for col in 0..COLS {
+                let v = e.grid[row * COLS + col] as f64 / peak;
+                let ch = if v <= 0.0 {
+                    if col == box_col { '|' } else { ' ' }
+                } else if v < 0.10 {
+                    '.'
+                } else if v < 0.30 {
+                    ':'
+                } else if v < 0.60 {
+                    '+'
+                } else {
+                    '#'
+                };
+                line.push(ch);
+            }
+            println!("{}", line);
+        }
+    }
+}
+
 fn run_paths(matches: usize, level: u8) {
     use std::collections::HashMap;
 

@@ -1,7 +1,7 @@
 use crate::r#match::midfielders::states::MidfielderGuardingState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, MidfielderCondition, ShapeStation,
+    ActivityIntensity, Interception, MidfielderCondition, ShapeStation,
 };
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
@@ -56,6 +56,7 @@ impl StateProcessingHandler for MidfielderReturningState {
         }
 
         if !ctx.team().is_control_ball()
+            && Interception::is_available(ctx)
             && ctx.ball().distance() < 250.0
             && ctx.ball().is_towards_player_with_angle(0.8)
         {

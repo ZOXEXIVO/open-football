@@ -1,6 +1,8 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, Interception, MidfielderCondition,
+};
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::common::states::ContactFoul;
 use crate::r#match::{
@@ -130,7 +132,7 @@ impl StateProcessingHandler for MidfielderGuardingState {
             }
 
             // Ball coming toward guarded opponent — intercept
-            if ctx.ball().distance() < 80.0 && ctx.ball().is_towards_player_with_angle(0.7) {
+            if Interception::is_available(ctx) && ctx.ball().distance() < 80.0 && ctx.ball().is_towards_player_with_angle(0.7) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
                 ));

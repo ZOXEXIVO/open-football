@@ -63,14 +63,34 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        // If ball is close and moving toward player
-        if ctx.ball().distance() < 100.0 && ctx.ball().is_towards_player_with_angle(0.8) {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Intercepting,
-            ));
-        }
+        // A branch routing to `Intercepting` used to sit here. Like the
+        // one in `assisting`, it is only reachable while OUR side has the
+        // ball (the check above returns `Running` otherwise), and
+        // `Intercepting` rejects that on its first line — so a forward
+        // with a pass coming to him abandoned his run. See the note in
+        // `assisting`; the receiver is the dispatcher's business.
 
         // Check if created good space
+        //
+        // ⚠ THE HOP THROUGH `Assisting` LOOKS POINTLESS AND IS NOT.
+        // `Assisting` is an on-ball state by design — its first act for a
+        // player without the ball is to hand him to `CreatingSpace` or
+        // `Running` — and a forward who has just created space does not
+        // have the ball, so this transition always bounces.
+        // `Creating Space <-> Assisting` is the third-largest loop in the
+        // engine at ~15,000 round trips per three matches.
+        //
+        // Routing straight to `Running` when off-ball (the destination
+        // `Assisting` picks for him a tick later) was measured and is
+        // WORSE: FWD goal share 60% -> 47-53%, FWD shots 1120 -> ~965,
+        // and flips/min went UP 149 -> 154. The bounce is doing work —
+        // `Assisting` re-asks `should_create_space` on the way through,
+        // so the round trip is how a forward decides to keep making the
+        // run instead of dropping into the generic off-ball repertoire.
+        //
+        // Third measured case in this engine of a two-state cycle being
+        // load-bearing; see also `defenders/states/marking` and the
+        // in-flight chase designation in `strategies/processor.rs`.
         if self.has_created_good_space(ctx) {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Assisting,

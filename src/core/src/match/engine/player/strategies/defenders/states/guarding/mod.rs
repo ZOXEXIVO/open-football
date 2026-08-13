@@ -1,5 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, Interception,
+};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -134,7 +136,8 @@ impl StateProcessingHandler for DefenderGuardingState {
             }
 
             // 4. Ball coming towards our guarded opponent — try to intercept
-            if ball_distance < 80.0
+            if Interception::is_available(ctx)
+                && ball_distance < 80.0
                 && ctx.ball().is_towards_player_with_angle(0.7)
                 && ball_distance < distance_to_opponent + 10.0
             {

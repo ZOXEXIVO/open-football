@@ -1,5 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, Interception,
+};
 use crate::r#match::{
     ConditionContext, MATCH_TIME_MS, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -82,7 +84,7 @@ impl StateProcessingHandler for DefenderReturningState {
                 }
             }
 
-            if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 200.0 {
+            if Interception::is_available(ctx) && ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 200.0 {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Intercepting,
                 ));

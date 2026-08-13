@@ -2,7 +2,7 @@ use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, DefensiveLine,
+    ActivityIntensity, DefenderCondition, DefensiveLine, Interception,
 };
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
@@ -234,7 +234,7 @@ impl StateProcessingHandler for DefenderHoldingLineState {
                     ball_pos.x > ctx.player.position.x - 15.0
                 };
 
-                if is_behind_or_level {
+                if is_behind_or_level && Interception::is_available(ctx) {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Intercepting,
                     ));

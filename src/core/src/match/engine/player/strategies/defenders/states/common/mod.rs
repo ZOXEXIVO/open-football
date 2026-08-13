@@ -48,6 +48,28 @@ use nalgebra::Vector3;
 /// is every possession spent in the opposition half.
 pub struct DefensiveRecovery;
 
+/// Is there a ball here that could actually be intercepted?
+///
+/// `DefenderInterceptingState` splits a ball nobody is carrying into a
+/// claim (`TakeBall`) or a chase, and hands anything else straight to
+/// `Tackling` or `Pressing`. Eleven separate entry points each drew
+/// their own condition for going in, most of them without asking whether
+/// anybody had the ball at all — so the state was routinely entered for
+/// one it would refuse on the next line, and spent its life as a
+/// one-tick pass-through: 11,328 exits across three matches at a mean
+/// dwell of 1.4 AI ticks, 95.5% of visits lasting a single tick.
+///
+/// One predicate mirroring the state's own contract is the only version
+/// that cannot drift out of step with it. Same fix as the midfielder and
+/// forward trees.
+pub struct Interception;
+
+impl Interception {
+    pub fn is_available(ctx: &StateProcessingContext) -> bool {
+        !ctx.player.has_ball(ctx) && !ctx.ball().is_owned()
+    }
+}
+
 impl DefensiveRecovery {
     /// Base recovery speed, before the pace and recovery multipliers.
     /// See the note at the call site for why this is the line-holding

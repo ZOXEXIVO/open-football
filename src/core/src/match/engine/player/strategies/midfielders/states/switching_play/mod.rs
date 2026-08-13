@@ -76,15 +76,43 @@ impl MidfielderSwitchingPlayState {
         // — the ball snaps to its owner — so its normalize() was NaN and
         // no target ever matched; the state always fell through to plain
         // Passing.)
+        // …ranked on where it leaves the attack, not on space alone.
+        //
+        // Space was the only term, and the freest man on the far side is
+        // routinely the deepest one — so a winger switching from the edge
+        // of the box picked out a full-back forty metres behind the play,
+        // and from inside the area that ball travels across his own goal.
+        // Reported as "midfielders switching in the GK area".
+        //
+        // ⚠ RANKED, NOT FILTERED. Excluding the backward options instead
+        // was tried and is far worse: `find_switch_play_target` returns
+        // `None`, the state has nothing to do, and the carrier stands on
+        // the ball for ten ticks before bailing. The switch is a
+        // POSSESSION TERMINATOR — cutting it leaves attacks alive in the
+        // final third that used to end there, and the engine's chance
+        // supply is already ~2.3x real. Measured: `no-decision` holds
+        // 3.5% -> 11.4% of on-ball ticks, passes/team 862 -> 1300,
+        // goals 5.4 -> 8.5. Same lesson as the `Marking <-> Running`
+        // loop: measure the match, not the thing that looks wrong.
+        //
+        // So every candidate still qualifies and a switch still happens
+        // at the same rate; only the destination moves up the pitch.
+        let goal = ctx.player().opponent_goal_position();
+        let my_goal_distance = (goal - player_position).magnitude();
+        let score = |teammate: &MatchPlayerLite| -> f32 {
+            let space = self.calculate_space_around_player(ctx, teammate);
+            // Ground the switch gains or gives up, in units, folded into
+            // the same score. Bounded so it breaks ties and outranks a
+            // marginally freer man without ever vetoing the only option.
+            let gained = my_goal_distance - (goal - teammate.position).magnitude();
+            space + (gained / 40.0).clamp(-6.0, 6.0)
+        };
+
         ctx.players()
             .teammates()
             .all()
             .filter(|teammate| (teammate.position.y - player_position.y).abs() > field_height * 0.3)
-            .max_by(|a, b| {
-                let space_a = self.calculate_space_around_player(ctx, a);
-                let space_b = self.calculate_space_around_player(ctx, b);
-                space_a.total_cmp(&space_b)
-            })
+            .max_by(|a, b| score(a).total_cmp(&score(b)))
             .map(|teammate| (teammate.id, teammate.position))
     }
 

@@ -49,6 +49,31 @@ impl ShapeStation {
     }
 }
 
+/// Is there a ball here that could actually be intercepted?
+///
+/// `MidfielderInterceptingState` rejects three situations on sight — he
+/// has the ball, somebody is carrying it, or our own side is in control
+/// of it — and eleven separate entry points each drew their own,
+/// different condition for going in. So the state was routinely entered
+/// for a ball it would refuse on the very next line, and it spent its
+/// life as a one-tick pass-through: measured at **15,969 exits across
+/// three matches with a mean dwell of 0.7 AI ticks, 93.8% of visits
+/// lasting a single tick**.
+///
+/// Patching the guards one at a time does not hold — the first pass
+/// added `!is_owned` to seven of them and moved the number by 2%,
+/// because the dominant case was our OWN pass in flight (no owner, but
+/// `is_control_ball`, which is a reception rather than an interception).
+/// One predicate that mirrors the state's own contract is the only
+/// version that cannot drift out of step with it.
+pub struct Interception;
+
+impl Interception {
+    pub fn is_available(ctx: &StateProcessingContext) -> bool {
+        !ctx.player.has_ball(ctx) && !ctx.ball().is_owned() && !ctx.team().is_control_ball()
+    }
+}
+
 /// A decision taken once, for as long as this passage of play lasts.
 ///
 /// Several midfielder decisions used to be a fresh `rng` roll on every

@@ -66,9 +66,28 @@ impl StateProcessingHandler for ForwardReturningState {
 
         // Commit at the INNER band — `Intercepting` gives up at the outer
         // one, so the two can never both be true (see `InterceptionRange`).
+        //
+        // ⚠ ONLY FOR A BALL THAT CAN ACTUALLY BE INTERCEPTED. This used
+        // to send a forward after a ball an OPPONENT WAS CARRYING, and
+        // `Intercepting` then asked whether he could reach the
+        // interception point before any opponent — against a man standing
+        // on the ball, whose distance to it is zero. He always lost, so
+        // the state handed him to `Pressing`, which sends him back here
+        // the moment the ball is beyond its own 120u range. Three states
+        // traversed at roughly one tick each, ~5,100 times a match:
+        // `Returning -> Intercepting -> Pressing -> Returning`, and the
+        // reason all three sat at the top of the shortest-dwell table
+        // (99.7% / 97.5% / 74.4% of visits lasting a single AI tick).
+        //
+        // A ball at an opponent's feet is a PRESS. Going there directly
+        // is the same destination two hops earlier.
         if !ctx.team().is_control_ball() && ctx.ball().distance() < InterceptionRange::COMMIT {
             return Some(StateChangeResult::with_forward_state(
-                ForwardState::Intercepting,
+                if ctx.ball().is_owned() {
+                    ForwardState::Pressing
+                } else {
+                    ForwardState::Intercepting
+                },
             ));
         }
 
@@ -91,7 +110,10 @@ impl StateProcessingHandler for ForwardReturningState {
         // branch re-entered `Intercepting` for a ball the intercepting
         // state would abandon on its very next tick, which is the same
         // two-cycle from a different door.
+        // Same rule as the commit branch above: a ball coming toward him
+        // is only interceptable if nobody is carrying it.
         if !ctx.team().is_control_ball()
+            && !ctx.ball().is_owned()
             && ctx.ball().distance() < InterceptionRange::GIVE_UP
             && ctx.ball().is_towards_player_with_angle(0.9)
         {

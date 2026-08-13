@@ -1160,7 +1160,69 @@ const STRETCH_COST: f32 = 0.45;
 /// six-yard box against 0.94 from thirty metres. Dropping the floor
 /// therefore bites almost entirely on point-blank volume and leaves the
 /// long-range band alone, which is the exact axis that needed moving.
-const CORRIDOR_FLOOR: f32 = 0.15;
+///
+/// ⚠ AND THAT IS WHY IT CANNOT BE ONE NUMBER. Reported again as
+/// "midfielders near goal do not shoot, they pass". Measured, the whole
+/// mechanism is here:
+///
+/// | band | <6m | 6-11 | 11-16.5 | 16.5-22 | 22-30 | 30m+ |
+/// |---|---|---|---|---|---|---|
+/// | corridor clarity | **0.153** | 0.524 | 0.663 | 0.660 | 0.738 | 0.871 |
+/// | APPETITE | **0.200** | 0.356 | 0.414 | 0.387 | 0.330 | 0.179 |
+/// | BAR | 0.754 | 0.876 | 0.809 | 0.802 | 0.750 | 0.602 |
+///
+/// A flat floor turns that clarity row into a 3× swing IN FAVOUR OF
+/// SHOOTING FROM RANGE — appetite a quarter of the bar at point blank
+/// against half of it at the edge of the box — which is the inversion
+/// the note on `corridor` in `evaluate_forward_shot_decision` says was
+/// already fixed once. It came back because the corridor was later
+/// widened to 12-24u, and a wider corridor collapses close-range clarity
+/// (0.38 -> 0.15) far more than it moves the long-range figure.
+///
+/// The floor is not a fudge, it is the modelled quantity: **how much of
+/// a shot survives traffic**, and that genuinely depends on range. Over
+/// twenty-five metres the ball spends most of a second in front of
+/// bodies that have time to move into it. From five metres it is past
+/// them before they react, deflections go in as often as not, and the
+/// only obstacle that really counts is the goalkeeper — who is
+/// deliberately excluded from clarity (see `GoalSight`). So traffic
+/// barely discounts a point-blank shot and heavily discounts a long one.
+const CORRIDOR_FLOOR_FAR: f32 = 0.15;
+const CORRIDOR_FLOOR_NEAR: f32 = 0.85;
+
+/// How much of a player's willingness survives being past his own
+/// striking range. See `reach`: at zero, nobody in the engine ever hit a
+/// speculative shot, which is a thing footballers plainly do.
+///
+/// ⚠ EXTREMELY steep, because the 30 m+ band carries ~57% of all shot
+/// DECISIONS in the engine — midfielders spend most of their on-ball
+/// time out there — so any willingness at range is multiplied by a huge
+/// supply. Measured share of all shots struck from beyond 30 m against a
+/// real ~5%: floor 0.62 -> 0.8%, **0.70 -> 4.2%**, 0.76 -> 11.8%,
+/// 0.95 -> 53.3% (shots/team 40, everyone shelling it from distance).
+/// Re-titrate against that table, never by reasoning about the curve.
+const REACH_FLOOR: f32 = 0.70;
+
+/// How far the team's `risk_appetite` swings the urge — least when the
+/// chance is a tap-in, most when it is speculative.
+///
+/// `risk_appetite` is the tactical layer's answer to "do we want a goal
+/// right now": it rises chasing a game late and falls protecting a lead.
+/// The pass evaluator reads it, the goalkeeper reads it, and the SHOT
+/// DECISION never did — so a side a goal down in the 88th minute passed
+/// more adventurously and shot exactly as often as one seeing out a 3-0.
+/// That absence is what "players do not want to score" looks like from
+/// the stands.
+///
+/// Weighted toward range because that is where wanting a goal actually
+/// changes a decision: nobody declines a tap-in for want of urgency, and
+/// nobody hits one from thirty yards without it.
+const DESIRE_NEAR: f32 = 0.08;
+const DESIRE_FAR: f32 = 0.70;
+/// Range over which the floor falls from its point-blank value to its
+/// long-range one: 22 m, the far edge of the band where shots are
+/// actually worked.
+const CORRIDOR_FLOOR_SPAN: f32 = 176.0;
 /// Exponent on `angle_clarity` — how strongly the SIZE of the visible
 /// goal drives the urge, as against merely being central
 /// (`angle_quality`). This is the decision's distance spine; there is no
@@ -1563,7 +1625,18 @@ pub fn evaluate_forward_shot_decision(
         1.0
     } else {
         let past = (distance - comfortable) / (striking_range - comfortable).max(1.0);
-        (1.0 - past.clamp(0.0, 1.0).powf(1.6)).clamp(0.0, 1.0)
+        // …and it does not fall to nothing at the edge of his range.
+        //
+        // It used to, and the consequence is the whole of the missing
+        // long shot: measured `reach` 0.43 in the 30 m+ band, appetite
+        // 0.175 against a bar of 0.602, and **0.1% of all shots struck
+        // from beyond 30 m against a real ~5%**. Past his range a
+        // footballer does not stop being able to hit it — he becomes
+        // unlikely to score, which is the xG model's job and the
+        // goalkeeper's, not the decision's. A hopeful thirty-yarder is a
+        // real thing players do; this term was the reason nobody in the
+        // engine ever did it.
+        (1.0 - past.clamp(0.0, 1.0).powf(1.6)).max(REACH_FLOOR)
     };
 
     // ── Is he set? ────────────────────────────────────────────────────
@@ -1661,7 +1734,13 @@ pub fn evaluate_forward_shot_decision(
     // ~15% of shots; charging the same defenders again here is a
     // double-count, and it is the one that made the box the least
     // attractive place on the pitch to shoot from.
-    let corridor = CORRIDOR_FLOOR + (1.0 - CORRIDOR_FLOOR) * sight.corridor_clarity;
+    // …and the size of the discount depends on how long the ball is in
+    // front of the bodies. See `CORRIDOR_FLOOR_NEAR`.
+    let corridor_floor = {
+        let near = 1.0 - (distance / CORRIDOR_FLOOR_SPAN).clamp(0.0, 1.0);
+        CORRIDOR_FLOOR_FAR + (CORRIDOR_FLOOR_NEAR - CORRIDOR_FLOOR_FAR) * near
+    };
+    let corridor = corridor_floor + (1.0 - corridor_floor) * sight.corridor_clarity;
 
     // ── HE IS THROUGH ON GOAL ─────────────────────────────────────────
     //
@@ -1742,6 +1821,19 @@ pub fn evaluate_forward_shot_decision(
         situational *= 0.55 + 0.45 * progress;
     }
     appetite *= situational;
+
+    // ── Do we want a goal? ────────────────────────────────────────────
+    // The one thing the decision had no term for at all. See
+    // `DESIRE_NEAR` — `risk_appetite` was computed every tick, read by
+    // the pass evaluator and by the goalkeeper, and never once by the
+    // model that decides whether to shoot.
+    let desire = {
+        let risk = ctx.team().risk_appetite().clamp(0.0, 1.0);
+        let speculative = (distance / striking_range.max(1.0)).clamp(0.0, 1.0);
+        (1.0 + (risk - 0.5) * (DESIRE_NEAR + (DESIRE_FAR - DESIRE_NEAR) * speculative))
+            .clamp(0.55, 1.45)
+    };
+    appetite *= desire;
 
     // ── Team-mates demand the ball ────────────────────────────────────
     // A social force, not a quality filter: defenders key on the man who
@@ -2023,9 +2115,28 @@ pub fn evaluate_forward_shot_decision(
     // count as an option and the carrier took the shot on himself. 24u
     // (3 m) is the distance at which a pass is actually playable, which is
     // what this test is for.
+    // ⚠ "BETTER PLACED" HAS TO MEAN BETTER, NOT A RATIO.
+    //
+    // `their_distance < distance * generosity` is purely relative, so it
+    // scales all the way down to the goal line: at 5 m out it accepts a
+    // team-mate 1.1 m nearer, and at 3 m one 66 cm nearer. Nobody in
+    // football squares it from the six-yard box because a colleague is a
+    // stride closer — and this test does not merely suggest the pass, it
+    // ZEROES the close-range relief below AND returns `Pass` outright at
+    // the bottom of the function. That is the reported behaviour: a
+    // midfielder near goal who lays it off instead of hitting it.
+    //
+    // An absolute margin on top of the ratio. Four metres is the
+    // difference that makes somebody genuinely better placed; below that
+    // the two of you are in the same position and the man with the ball
+    // shoots. From range the ratio still dominates (at 25 m it demands
+    // 5.5 m, well past the margin), so the long-range judgement the
+    // ratio was written for is untouched.
+    const BETTER_PLACED_MARGIN: f32 = 32.0; // 4 m
     let better_placed = outlet.is_some_and(|(t, _)| {
         let their_distance = (opp_goal - t.position).magnitude();
         their_distance < distance * generosity
+            && their_distance < distance - BETTER_PLACED_MARGIN
             && ctx.tick_context.grid.opponents(t.id, 24.0).next().is_none()
     });
     let range_ease = if better_placed { 0.0 } else { range_ease };

@@ -85,11 +85,19 @@ impl ForwardInterceptingState {
         let defender_speed = ctx.player.skills.physical.pace.max(0.1); // Avoid division by zero
         let defender_time = defender_distance / defender_speed;
 
-        // Find the minimum time for any opponent to reach the interception point
+        // Find the minimum time for any opponent to reach the interception point.
+        //
+        // The man CARRYING the ball is excluded: his distance to the
+        // interception point is zero, so including him made this test
+        // `false` for every owned ball and the whole state a pass-through
+        // to `Pressing`. You do not race someone for a ball he already
+        // has — you press him, which is what the callers now do directly.
+        let carrier = ctx.ball().owner_id();
         let opponent_time = ctx
             .players()
             .opponents()
             .all()
+            .filter(|opponent| Some(opponent.id) != carrier)
             .map(|opponent| {
                 let player = ctx.player();
                 let skills = player.skills(opponent.id);

@@ -234,23 +234,30 @@ impl Timeline {
                         },
                     ));
 
-                    if config.debug {
-                        bar.spawn((
-                            SpeedButton,
-                            Interaction::default(),
-                            Self::chip(40.0),
-                            BackgroundColor(Self::CHIP_BACKGROUND),
-                        ))
-                        .with_child((
-                            SpeedLabel,
-                            Text::new("1x"),
-                            TextFont {
-                                font_size: FontSize::Px(12.0),
-                                ..default()
-                            },
-                            TextColor(Color::WHITE),
-                        ));
+                    // Playback speed. NOT debug-only: slow motion is what
+                    // a replay is for. The cycle runs 0.25x through 16x
+                    // (see `Playback::SPEEDS`) — the slow half to watch a
+                    // decision actually happen, the fast half to skim.
+                    bar.spawn((
+                        SpeedButton,
+                        Interaction::default(),
+                        // Wide enough for the longest label the cycle can
+                        // produce ("0.25x"); 40 px fitted only the
+                        // whole-number speeds it used to carry.
+                        Self::chip(52.0),
+                        BackgroundColor(Self::CHIP_BACKGROUND),
+                    ))
+                    .with_child((
+                        SpeedLabel,
+                        Text::new("1x"),
+                        TextFont {
+                            font_size: FontSize::Px(12.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
 
+                    if config.debug {
                         bar.spawn((
                             StatesButton,
                             Interaction::default(),
@@ -402,37 +409,53 @@ impl Timeline {
         }
     }
 
-    /// Cycles playback speed and flips the state labels. Debug overlay only —
-    /// neither button exists otherwise.
-    pub fn handle_debug_controls(
+    /// Cycles playback speed.
+    ///
+    /// Registered unconditionally, unlike the debug controls below: the
+    /// speed chip is part of the transport bar in the game as well, so
+    /// its handler has to run there. Leaving it in `handle_debug_controls`
+    /// would draw a button that does nothing.
+    pub fn handle_speed(
         speed: Query<&Interaction, (Changed<Interaction>, With<SpeedButton>)>,
-        states: Query<&Interaction, (Changed<Interaction>, With<StatesButton>)>,
         mut playback: ResMut<Playback>,
-        mut overlay: ResMut<DebugOverlay>,
     ) {
         if speed.iter().any(|i| *i == Interaction::Pressed) {
             playback.cycle_speed();
         }
+    }
+
+    /// Keeps the speed chip's label in step. Also unconditional — see
+    /// [`Self::handle_speed`].
+    pub fn refresh_speed(
+        playback: Res<Playback>,
+        mut speed: Query<&mut Text, With<SpeedLabel>>,
+    ) {
+        if let Ok(mut text) = speed.single_mut() {
+            let wanted = playback.speed_label();
+            if text.as_str() != wanted {
+                **text = wanted;
+            }
+        }
+    }
+
+    /// Flips the state labels. Debug overlay only — the button does not
+    /// exist otherwise.
+    pub fn handle_debug_controls(
+        states: Query<&Interaction, (Changed<Interaction>, With<StatesButton>)>,
+        mut overlay: ResMut<DebugOverlay>,
+    ) {
         if states.iter().any(|i| *i == Interaction::Pressed) {
             overlay.states = !overlay.states;
         }
     }
 
     pub fn refresh_debug(
-        playback: Res<Playback>,
         overlay: Res<DebugOverlay>,
         _ball: Res<BallState>,
-        mut speed: Query<&mut Text, With<SpeedLabel>>,
         mut states: Query<&mut BackgroundColor, With<StatesButton>>,
         zoom: Res<CameraZoom>,
-        mut readout: Query<&mut Text, (With<ZoomLabel>, Without<SpeedLabel>)>,
+        mut readout: Query<&mut Text, With<ZoomLabel>>,
     ) {
-        if let Ok(mut text) = speed.single_mut() {
-            let wanted = format!("{}x", playback.speed as u32);
-            if text.as_str() != wanted {
-                **text = wanted;
-            }
-        }
         if let Ok(mut background) = states.single_mut() {
             let wanted = if overlay.states {
                 Self::CHIP_ACTIVE

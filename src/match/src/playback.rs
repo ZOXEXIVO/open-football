@@ -20,8 +20,16 @@ pub struct Playback {
 }
 
 impl Playback {
-    /// Speeds the debug overlay cycles through.
-    pub const SPEEDS: [f32; 5] = [1.0, 2.0, 4.0, 8.0, 16.0];
+    /// Speeds the debug overlay cycles through, slowest first.
+    ///
+    /// The slow half is the half that earns its keep: reading whether a
+    /// midfielder shoots or squares it, or whether a marker is goal-side,
+    /// is not something you can see at real time, let alone at 16x. The
+    /// fast half is for skimming a whole match.
+    ///
+    /// 1x is the DEFAULT (see `new`) — the cycle merely starts wherever
+    /// the playhead currently is.
+    pub const SPEEDS: [f32; 7] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0];
 
     pub fn new(duration_ms: f64) -> Self {
         Playback {
@@ -33,14 +41,32 @@ impl Playback {
         }
     }
 
-    /// Steps to the next speed, wrapping back to 1x.
+    /// Steps to the next speed, wrapping from the fastest back to the
+    /// slowest. An unrecognised speed lands on 1x rather than on the top
+    /// of the list, so the control always has a way home to real time.
     pub fn cycle_speed(&mut self) {
         let next = Self::SPEEDS
             .iter()
             .position(|candidate| (*candidate - self.speed).abs() < f32::EPSILON)
             .map(|index| (index + 1) % Self::SPEEDS.len())
-            .unwrap_or(0);
+            .unwrap_or(Self::DEFAULT_INDEX);
         self.speed = Self::SPEEDS[next];
+    }
+
+    /// Index of 1x in [`Self::SPEEDS`].
+    const DEFAULT_INDEX: usize = 2;
+
+    /// How the speed reads on the chip.
+    ///
+    /// `speed as u32` was fine for a list of whole numbers and rounds
+    /// every slow speed to **"0x"** — 0.25 and 0.5 both truncate to zero.
+    /// Whole speeds still print bare (`2x`, not `2.00x`).
+    pub fn speed_label(&self) -> String {
+        if (self.speed - self.speed.round()).abs() < 1e-3 {
+            format!("{}x", self.speed.round() as u32)
+        } else {
+            format!("{}x", self.speed)
+        }
     }
 
     pub fn progress(&self) -> f32 {

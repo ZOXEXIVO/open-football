@@ -1,6 +1,8 @@
 use crate::IntegerUtils;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, Interception,
+};
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
     ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext,
@@ -99,7 +101,8 @@ impl StateProcessingHandler for DefenderWalkingState {
         }
 
         // Priority 3: Intercept ball if it's coming towards player
-        if ctx.ball().is_towards_player_with_angle(0.8)
+        if Interception::is_available(ctx)
+            && ctx.ball().is_towards_player_with_angle(0.8)
             && ctx.ball().distance() < INTERCEPTION_DISTANCE
         {
             return Some(StateChangeResult::with_defender_state(

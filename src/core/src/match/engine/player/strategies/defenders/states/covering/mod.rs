@@ -1,6 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, DefensiveLine,
+    ActivityIntensity, DefenderCondition, DefensiveLine, Interception,
 };
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
@@ -226,7 +226,7 @@ impl StateProcessingHandler for DefenderCoveringState {
             }
         }
 
-        if ball_ops.is_towards_player() && ball_ops.distance() < INTERCEPTION_DISTANCE {
+        if Interception::is_available(ctx) && ball_ops.is_towards_player() && ball_ops.distance() < INTERCEPTION_DISTANCE {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Intercepting,
             ));

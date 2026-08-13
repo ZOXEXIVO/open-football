@@ -1,5 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, Interception,
+};
 use crate::r#match::{
     ConditionContext, MATCH_TIME_MS, PlayerDistanceFromStartPosition, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -63,7 +65,7 @@ impl StateProcessingHandler for DefenderTrackingBackState {
         }
 
         // Check if the ball is close and moving towards the player
-        if ctx.ball().distance() < BALL_INTERCEPTION_DISTANCE && ctx.ball().is_towards_player() {
+        if Interception::is_available(ctx) && ctx.ball().distance() < BALL_INTERCEPTION_DISTANCE && ctx.ball().is_towards_player() {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Intercepting,
             ));

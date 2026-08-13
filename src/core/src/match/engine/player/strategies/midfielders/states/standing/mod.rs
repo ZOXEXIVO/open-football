@@ -1,5 +1,7 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, Interception, MidfielderCondition,
+};
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -121,7 +123,7 @@ impl StateProcessingHandler for MidfielderStandingState {
                 // us. Midfielders are the default contester of loose
                 // balls in the middle third; the predicted landing
                 // position gives them a runway to reach it.
-                if !ctx.ball().is_owned() && ctx.ball().is_in_flight() {
+                if Interception::is_available(ctx) && ctx.ball().is_in_flight() {
                     let landing = ctx.tick_context.positions.ball.landing_position;
                     let dist_to_landing = (landing - ctx.player.position).magnitude();
                     if dist_to_landing < 100.0 {
@@ -134,7 +136,7 @@ impl StateProcessingHandler for MidfielderStandingState {
                 // Loose + heading toward us — stay with the original tight
                 // trigger (angle gate filters passes that aren't coming
                 // our way).
-                if !ctx.ball().is_owned()
+                if Interception::is_available(ctx)
                     && ctx.ball().distance() < 250.0
                     && ctx.ball().is_towards_player_with_angle(0.8)
                 {

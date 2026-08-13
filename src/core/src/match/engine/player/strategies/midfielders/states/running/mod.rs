@@ -82,6 +82,7 @@ const SNAPSHOT_RATE: f32 = 0.55;
 /// uses, so a duty means the same thing wherever it is held.
 const MARK_BREAK_DISTANCE: f32 = 150.0;
 
+
 /// Depth of the penalty area from the goal line (16.5 m). Inside it, a
 /// midfielder arriving onto the ball is in a shooting position — same
 /// figure and same rule as the forward's box block.
@@ -744,6 +745,19 @@ impl StateProcessingHandler for MidfielderRunningState {
             // when it was allowed to run before the carry. A switch is a
             // ball you play because THEY are all on one side and there
             // is a free man on the other.
+            //
+            // ⚠ AND IT IS A BUILD-UP BALL, NOT A FINAL-THIRD ONE. There
+            // was no distance gate here at all, so a wide midfielder
+            // inside the penalty area — which in a 442 is the winger, the
+            // man most likely to be there — would switch the play across
+            // the pitch instead of crossing, cutting back or shooting.
+            // Worse, this branch sits BELOW the carry, so it only reaches
+            // a carrier whose lane is blocked: a winger stuck near the
+            // byline, which is precisely the picture where the ball goes
+            // INTO the box, not forty metres backwards to the far flank.
+            //
+            // Switches are how you move the point of attack while you are
+            // still building. Inside 22 m the point of attack is the goal.
             if settled && ctx.ball().has_stable_possession() {
                 let field_height = ctx.context.field_size.height as f32;
                 let field_center_y = field_height / 2.0;

@@ -1,6 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, DefensiveLine,
+    ActivityIntensity, DefenderCondition, DefensiveLine, Interception,
 };
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
@@ -182,7 +182,7 @@ impl StateProcessingHandler for DefenderMarkingState {
 
             // If ball is close and unmarked, consider intercepting
             if ctx.ball().distance() < BALL_PROXIMITY_THRESHOLD && !opponent.has_ball(ctx) {
-                if ctx.ball().is_towards_player_with_angle(0.7) {
+                if Interception::is_available(ctx) && ctx.ball().is_towards_player_with_angle(0.7) {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Intercepting,
                     ));
