@@ -28,19 +28,18 @@ pub struct MatchGetTemplate {
     pub computer_name: &'static str,
     pub cpu_brand: &'static str,
     pub cores_count: usize,
+    /// The browser tab and the page's hidden heading. The header itself shows
+    /// the scoreboard instead of a title, so this template overrides
+    /// `header_title` and carries none of the layout's sub-title fields.
     pub title: String,
-    pub sub_title_prefix: String,
-    pub sub_title_suffix: String,
-    pub sub_title: String,
-    pub sub_title_link: String,
-    pub sub_title_country_code: String,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub i18n: I18n,
     pub lang: String,
-    pub league_slug: String,
-    pub league_name: String,
+    pub competition_name: String,
+    /// Empty for a match that belongs to no page of its own.
+    pub competition_url: String,
     pub home_team_name: String,
     pub home_team_slug: String,
     pub home_goals: u8,
@@ -427,7 +426,13 @@ pub async fn match_get_action(
 
     let title = format!("{} - {}", home_team_name, away_team_name);
 
-    let (sub_title, sub_title_link) = if let Some(l) = league {
+    // What the header's left rail names the match after. This used to be the
+    // layout's sub-title, and the scoreboard that replaced it inherits the
+    // sub-title's resolution rather than the raw league name: the display name
+    // is the localised, country-qualified one, and a continental tie is not a
+    // league at all — it has its own page, and `/leagues/champions-league`
+    // is not it.
+    let (competition_name, competition_url) = if let Some(l) = league {
         (
             views::league_display_name(l, &i18n, simulator_data),
             format!("/{}/leagues/{}", &route_params.lang, &l.slug),
@@ -469,22 +474,13 @@ pub async fn match_get_action(
         cpu_brand: &CPU_BRAND,
         cores_count: *CPU_CORES,
         title,
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title,
-        sub_title_link,
-        sub_title_country_code: String::new(),
         header_color: String::new(),
         foreground_color: String::new(),
         menu_sections: vec![],
         i18n,
         lang: route_params.lang.clone(),
-        league_slug: league
-            .map(|l| l.slug.clone())
-            .unwrap_or_else(|| "international".to_string()),
-        league_name: league
-            .map(|l| l.name.clone())
-            .unwrap_or_else(|| "International".to_string()),
+        competition_name,
+        competition_url,
         home_team_name: home_team_name.clone(),
         home_team_slug: home_team_slug.clone(),
         home_goals,

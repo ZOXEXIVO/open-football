@@ -1,51 +1,7 @@
-{% extends "layout.html" %}
+{% extends "match/match_layout.html" %}
 
 {% block content %}
 <div class="fm-page fm-match-page">
-    <div class="fm-match-scoreboard">
-        <a href="/{{ lang }}/leagues/{{ league_slug }}" class="fm-sb-league">{{ league_name }}</a>
-        <div class="fm-sb-main">
-            <div class="fm-sb-team fm-sb-team-home">
-                <a href="/{{ lang }}/teams/{{ home_team_slug }}" class="fm-sb-team-name">{{ home_team_name }}</a>
-                <div class="fm-sb-goals{% if home_goal_events.len() <= 5 %} fm-sb-goals-expanded{% endif %}" id="home-goals">
-                    {% for goal in home_goal_events %}
-                    <a href="/{{ lang }}/players/{{ goal.player_slug }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} (OG){% endif %}</a>
-                    {% endfor %}
-                </div>
-                {% if home_goal_events.len() > 5 %}
-                <button class="fm-sb-expander" onclick="var g=document.getElementById('home-goals');g.classList.toggle('fm-sb-goals-expanded');this.textContent=g.classList.contains('fm-sb-goals-expanded')?'−':'···  +{{ home_goal_events.len() - 5 }}'">
-                    ···  +{{ home_goal_events.len() - 5 }}
-                </button>
-                {% endif %}
-            </div>
-            <div class="fm-sb-score">
-                <span class="fm-sb-digit">{{ home_goals }}</span>
-                <span class="fm-sb-sep"></span>
-                <span class="fm-sb-digit">{{ away_goals }}</span>
-            </div>
-            <div class="fm-sb-team fm-sb-team-away">
-                <a href="/{{ lang }}/teams/{{ away_team_slug }}" class="fm-sb-team-name">{{ away_team_name }}</a>
-                <div class="fm-sb-goals{% if away_goal_events.len() <= 5 %} fm-sb-goals-expanded{% endif %}" id="away-goals">
-                    {% for goal in away_goal_events %}
-                    <a href="/{{ lang }}/players/{{ goal.player_slug }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} (OG){% endif %}</a>
-                    {% endfor %}
-                </div>
-                {% if away_goal_events.len() > 5 %}
-                <button class="fm-sb-expander" onclick="var g=document.getElementById('away-goals');g.classList.toggle('fm-sb-goals-expanded');this.textContent=g.classList.contains('fm-sb-goals-expanded')?'−':'···  +{{ away_goal_events.len() - 5 }}'">
-                    ···  +{{ away_goal_events.len() - 5 }}
-                </button>
-                {% endif %}
-            </div>
-        </div>
-        <div class="fm-sb-ft">{{ i18n.t("full_time") }}</div>
-        {% if player_of_the_match_id > 0 %}
-        <div class="fm-sb-motm">
-            <span class="fm-motm-star">&#9733;</span>
-            <span class="fm-motm-label">{{ i18n.t("player_of_the_match") }}</span>
-            <a href="/{{ lang }}/players/{{ player_of_the_match_slug }}" class="fm-motm-name">{{ player_of_the_match_name }}</a>
-        </div>
-        {% endif %}
-    </div>
     <div class="container-fluid">
         <div class="row">
             <div class="col-xl-2 d-none d-xl-block">
@@ -215,6 +171,46 @@
 
 {% block scripts %}
 {% if match_recordings_enabled && match_viewer_available %}
+<script>
+    // Two measurements the stylesheet cannot take for itself, both explained
+    // where they are used: `--match-chrome` (the stage is sized against what
+    // the header leaves of the viewport, and this header grows with the number
+    // of scorers) and `--fm-actions-w` (the left rail carries the width of the
+    // header actions so the score lands on the page's centre line). Writing
+    // only on change keeps the observer from ringing itself.
+    (function () {
+        var header = document.querySelector(".fm-header");
+        var actions = header && header.querySelector(".fm-header-actions");
+        var area = document.getElementById("match-play-area");
+        if (!header || !area) {
+            return;
+        }
+
+        function set(element, name, value) {
+            if (element.style.getPropertyValue(name) !== value) {
+                element.style.setProperty(name, value);
+            }
+        }
+
+        function apply() {
+            set(area, "--match-chrome", header.getBoundingClientRect().height + "px");
+            if (actions) {
+                set(header, "--fm-actions-w", actions.getBoundingClientRect().width + "px");
+            }
+        }
+
+        apply();
+        if (window.ResizeObserver) {
+            var observer = new ResizeObserver(apply);
+            observer.observe(header);
+            if (actions) {
+                observer.observe(actions);
+            }
+        } else {
+            window.addEventListener("resize", apply);
+        }
+    })();
+</script>
 <script>
     // Fullscreen for the replay stage. Deliberately a plain script rather than
     // part of the module below: it is the one control that has to work even

@@ -1,0 +1,59 @@
+{% extends "layout.html" %}
+
+{# A match has no page title of its own: the scoreboard IS the header. The
+   competition and the status take the left rail, the result the middle, man of
+   the match the right — and the replay below starts that much higher up.
+   It lives here rather than in the page so the chrome and the content stay
+   apart, the way the club, player and country sections do it. #}
+{% block header_title %}
+<div class="fm-header-scoreboard">
+    <h1 class="visually-hidden">{{ title }}</h1>
+    <div class="fm-sb-meta">
+        {% if competition_url.is_empty() %}
+        <span class="fm-sb-league">{{ competition_name }}</span>
+        {% else %}
+        <a href="{{ competition_url }}" class="fm-sb-league">{{ competition_name }}</a>
+        {% endif %}
+        <span class="fm-sb-ft">{{ i18n.t("full_time") }}</span>
+    </div>
+    <div class="fm-sb-main">
+        <div class="fm-sb-team fm-sb-team-home">
+            <a href="/{{ lang }}/teams/{{ home_team_slug }}" class="fm-sb-team-name">{{ home_team_name }}</a>
+            <div class="fm-sb-goals{% if home_goal_events.len() <= 5 %} fm-sb-goals-expanded{% endif %}" id="home-goals">
+                {% for goal in home_goal_events %}
+                <a href="/{{ lang }}/players/{{ goal.player_slug }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} (OG){% endif %}</a>
+                {% endfor %}
+            </div>
+            {% if home_goal_events.len() > 5 %}
+            <button class="fm-sb-expander" onclick="var g=document.getElementById('home-goals');g.classList.toggle('fm-sb-goals-expanded');this.textContent=g.classList.contains('fm-sb-goals-expanded')?'−':'+{{ home_goal_events.len() - 2 }}'">+{{ home_goal_events.len() - 2 }}</button>
+            {% endif %}
+        </div>
+        <div class="fm-sb-score">
+            <span class="fm-sb-digit">{{ home_goals }}</span>
+            <span class="fm-sb-sep"></span>
+            <span class="fm-sb-digit">{{ away_goals }}</span>
+        </div>
+        <div class="fm-sb-team fm-sb-team-away">
+            <a href="/{{ lang }}/teams/{{ away_team_slug }}" class="fm-sb-team-name">{{ away_team_name }}</a>
+            <div class="fm-sb-goals{% if away_goal_events.len() <= 5 %} fm-sb-goals-expanded{% endif %}" id="away-goals">
+                {% for goal in away_goal_events %}
+                <a href="/{{ lang }}/players/{{ goal.player_slug }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} (OG){% endif %}</a>
+                {% endfor %}
+            </div>
+            {% if away_goal_events.len() > 5 %}
+            <button class="fm-sb-expander" onclick="var g=document.getElementById('away-goals');g.classList.toggle('fm-sb-goals-expanded');this.textContent=g.classList.contains('fm-sb-goals-expanded')?'−':'+{{ away_goal_events.len() - 2 }}'">+{{ away_goal_events.len() - 2 }}</button>
+            {% endif %}
+        </div>
+    </div>
+    <div class="fm-sb-motm">
+        {% if player_of_the_match_id > 0 %}
+        <span class="fm-motm-label"><span class="fm-motm-star">&#9733;</span>{{ i18n.t("player_of_the_match") }}</span>
+        <a href="/{{ lang }}/players/{{ player_of_the_match_slug }}" class="fm-motm-name">{{ player_of_the_match_name }}</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}{% endblock %}
+
+{% block scripts %}{% endblock %}

@@ -5594,98 +5594,142 @@ a:active {
     padding: 0 !important;
 }
 
-/* --- Scoreboard Header --- */
+/* --- Match header scoreboard ---
+   The match page has no title of its own: this takes the place of
+   `.fm-header-title`, so the competition, the result and the man of the match
+   all ride in the app header and the replay stage starts directly under it.
+   It replaced a separate dark band below the header that cost ~220px of page
+   before the stage even began — and the stage is the point of the page.
+   Its height is not fixed (scorers stack under the club names), so the page
+   MEASURES it into `--match-chrome` rather than assuming a number. */
 
-.fm-match-scoreboard {
-    background: linear-gradient(135deg, #0d1b2a 0%, #1b2a3a 40%, #0d1b2a 100%);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    padding: 20px 24px 16px;
-    position: relative;
-    overflow: hidden;
+.fm-header-scoreboard {
+    /* The rails are fractions of the header, not their own content: two equal
+       rails are what holds the score on the centre line whatever the
+       competition is called. Content-sized rails also measure the middle by
+       its MIN-content — a nested flex container reports its children's text
+       width, not the basis they were given — which squeezes the result down
+       to one scorer per line and hands the slack to the small caps. */
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
+    padding: 8px 16px 8px 0;
 }
 
-.fm-match-scoreboard::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background:
-        radial-gradient(
-            ellipse 80% 50% at 20% 50%,
-            rgba(0, 48, 125, 0.08) 0%,
-            transparent 70%
-        ),
-        radial-gradient(
-            ellipse 80% 50% at 80% 50%,
-            rgba(179, 63, 0, 0.08) 0%,
-            transparent 70%
-        );
-    pointer-events: none;
+/* Left rail: which competition, and that the match is over. Both lines are
+   held to one line each — a rail that wraps deepens the header, and the
+   header's depth is the stage's size. */
+
+.fm-sb-meta {
+    display: flex;
+    flex: 0 0 18%;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+
+.fm-sb-league,
+.fm-sb-ft {
+    font-weight: 600;
+    text-transform: uppercase;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .fm-sb-league {
-    display: block;
-    text-align: center;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: rgba(255, 255, 255, 0.35);
-    margin-bottom: 12px;
-    position: relative;
+    font-size: 10px;
+    letter-spacing: 1.2px;
+    color: #6b7580;
     transition: color 0.12s;
 }
 
 .fm-sb-league:hover {
-    color: rgba(255, 255, 255, 0.55);
+    color: #0d6efd;
 }
 
+.fm-sb-ft {
+    font-size: 9px;
+    letter-spacing: 1px;
+    color: #9aa4ad;
+}
+
+/* Baseline, not centre: the digits sit on the same line as the club names, so
+   the score reads as part of the result rather than as a graphic beside it.
+   The scorers hang below both. */
 .fm-sb-main {
     display: flex;
-    align-items: flex-start;
+    flex: 1 1 0;
+    align-items: baseline;
     justify-content: center;
     gap: 0;
-    position: relative;
+    min-width: 0;
+    /* Nudge right, so the score lands on the PAGE's centre line rather than
+       the scoreboard's — the replay below it is page-centred, and the two
+       reading straight down from one another is the point of putting the
+       result up here. The header actions sit to the right of the scoreboard,
+       and between equal rails this margin moves the middle by half of itself,
+       so a margin of exactly the actions' width lands it. That width is a
+       locale-dependent measurement the stylesheet cannot take, so the page
+       writes it into `--fm-actions-w`.
+       Spent only out of width the result does not need: 64% is what is left
+       of the header once the two 18% rails are taken, and 560px is the floor
+       under the result itself, so the nudge can never ellipse the club names
+       to "Arse…" to buy centring. Between the two it takes what there is, and
+       the result glides onto the centre line as the window widens rather than
+       jumping there. */
+    margin-left: min(var(--fm-actions-w, 0px), max(0px, 64% - 560px));
 }
 
+/* Equal halves of what the score leaves, so four scorers on one side and none
+   on the other still hang the digits on the centre line. */
 .fm-sb-team {
-    flex: 1;
-    max-width: 360px;
+    flex: 1 1 0;
     min-width: 0;
 }
 
 .fm-sb-team-home {
     text-align: right;
-    padding-right: 32px;
+    padding-right: 18px;
 }
 
 .fm-sb-team-away {
     text-align: left;
-    padding-left: 32px;
+    padding-left: 18px;
 }
 
 .fm-sb-team-name {
     display: block;
-    font-size: 22px;
+    font-size: 17px;
     font-weight: 700;
-    color: #fff;
-    letter-spacing: -0.3px;
-    line-height: 1.2;
+    color: #1e272d;
+    letter-spacing: -0.2px;
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     transition: color 0.15s;
 }
 
 .fm-sb-team-name:hover {
-    color: rgba(255, 255, 255, 0.8);
+    color: #0d6efd;
 }
 
+/* Scorers stack under the club name, newest at the bottom, and read outward
+   from the score: right-aligned on the home side, left on the away. Two rows
+   show by default; the expander lifts the lid on the rest. */
+
 .fm-sb-goals {
-    margin-top: 6px;
     display: flex;
     flex-direction: column;
     gap: 1px;
-    max-height: 34px;
+    margin-top: 3px;
+    /* Two 15px rows plus room for a descender, and short of the 47px a third
+       row would need. */
+    max-height: 35px;
     overflow: hidden;
     transition: max-height 0.35s ease;
 }
@@ -5694,50 +5738,8 @@ a:active {
     max-height: none;
 }
 
-.fm-sb-expander {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-top: 4px;
-    padding: 2px 8px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.04);
-    cursor: pointer;
-    font-size: 10px;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.3);
-    letter-spacing: 0.3px;
-    transition:
-        color 0.15s,
-        background 0.15s,
-        border-color 0.15s;
-}
-
-.fm-sb-expander:hover {
-    color: rgba(255, 255, 255, 0.6);
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.18);
-}
-
-.fm-sb-expander .fm-sb-exp-dots {
-    display: inline-block;
-    width: 14px;
-    height: 3px;
-    border-bottom: 1px dashed rgba(255, 255, 255, 0.2);
-    transition: border-color 0.15s;
-}
-
-.fm-sb-expander:hover .fm-sb-exp-dots {
-    border-color: rgba(255, 255, 255, 0.4);
-}
-
 .fm-sb-team-home .fm-sb-goals {
     align-items: flex-end;
-}
-
-.fm-sb-team-home .fm-sb-expander {
-    float: right;
 }
 
 .fm-sb-team-away .fm-sb-goals {
@@ -5746,62 +5748,107 @@ a:active {
 
 .fm-sb-goal {
     display: block;
+    /* Never shrink: these are flex items in a column with a capped height, so
+       the default would squeeze six scorers into the two rows' worth of space
+       and clip every one of them through the middle rather than hiding the
+       rows that do not fit. */
+    flex: 0 0 auto;
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.45);
+    line-height: 15px;
+    color: #6b7580;
     font-weight: 400;
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     transition: color 0.12s;
 }
 
 .fm-sb-goal:hover {
-    color: rgba(255, 255, 255, 0.75);
+    color: #0d6efd;
+}
+
+.fm-sb-expander {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 15px;
+    margin-top: 2px;
+    padding: 0 6px;
+    border: 1px solid #dfe3e7;
+    border-radius: 8px;
+    background: #f3f5f7;
+    cursor: pointer;
+    font-size: 10px;
+    line-height: 1;
+    font-weight: 600;
+    color: #8a939c;
+    transition:
+        color 0.15s,
+        background 0.15s,
+        border-color 0.15s;
+}
+
+.fm-sb-expander:hover {
+    color: #47535d;
+    background: #e9edf1;
+    border-color: #cdd4da;
+}
+
+.fm-sb-team-home .fm-sb-expander {
+    float: right;
 }
 
 .fm-sb-score {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     flex-shrink: 0;
-    padding: 0 4px;
+    padding: 0 2px;
 }
 
 .fm-sb-digit {
-    font-size: 52px;
+    font-size: 30px;
     font-weight: 700;
-    color: #fff;
+    color: #1e272d;
     line-height: 1;
-    min-width: 40px;
+    min-width: 24px;
     text-align: center;
-    letter-spacing: -2px;
+    letter-spacing: -1.2px;
+    font-variant-numeric: tabular-nums;
 }
 
 .fm-sb-sep {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.25);
+    background: #c3cad1;
     flex-shrink: 0;
+    /* Baseline-aligned like its siblings, so it needs lifting to the middle of
+       the digits rather than sitting on their baseline. */
+    align-self: center;
 }
 
-.fm-sb-ft {
-    text-align: center;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: rgba(255, 255, 255, 0.2);
-    margin-top: 12px;
-    position: relative;
-}
+/* Right rail: the one award the page carries, set against the left rail so
+   the score keeps the middle to itself. Rendered even with no man of the
+   match to name — an empty rail is what balances the left one, and without it
+   the score sits off-centre on every goalless draw. */
 
 .fm-sb-motm {
-    text-align: center;
-    margin-top: 10px;
-    padding: 6px 0;
+    display: flex;
+    flex: 0 0 18%;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+    min-width: 0;
+    text-align: right;
 }
 
 .fm-motm-star {
-    color: #f5c518;
-    font-size: 14px;
+    /* Darker than the gold used on the squad lists: that one sits on a near
+       black panel, this one on white. */
+    color: #d99e00;
+    font-size: 11px;
     margin-right: 4px;
 }
 
@@ -5810,18 +5857,26 @@ a:active {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: rgba(255, 255, 255, 0.35);
-    margin-right: 6px;
+    color: #8a939c;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
 }
 
 .fm-motm-name {
     font-size: 12px;
     font-weight: 600;
-    color: #f5c518;
+    color: #1e272d;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    transition: color 0.15s;
 }
 
 .fm-motm-name:hover {
-    color: #ffd84a;
+    color: #0d6efd;
 }
 
 .fm-motm-badge {
@@ -5836,73 +5891,66 @@ a:active {
 
 /* --- Scoreboard Responsive --- */
 
+/* No room for three modules across a phone header, so they stack — the rails
+   laying themselves out along the line, which keeps the header two rows
+   shallower than stacking every line would. */
+
 @media (max-width: 768px) {
-    .fm-match-scoreboard {
-        padding: 14px 12px 12px;
+    .fm-header-scoreboard {
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 8px 10px;
+    }
+
+    .fm-sb-meta,
+    .fm-sb-motm {
+        flex: 0 0 auto;
+        flex-direction: row;
+        align-items: baseline;
+        justify-content: center;
+        gap: 8px;
+        max-width: 100%;
+        text-align: center;
     }
 
     .fm-sb-main {
-        flex-direction: column;
-        align-items: center;
-        gap: 0;
+        align-self: stretch;
     }
 
-    .fm-sb-score {
-        order: -1;
-        margin-bottom: 10px;
-        gap: 8px;
+    .fm-sb-team-home {
+        padding-right: 10px;
+    }
+
+    .fm-sb-team-away {
+        padding-left: 10px;
+    }
+
+    /* Club names wrap here rather than ellipsing: the column is too narrow to
+       tell "Manchester City" from "Manchester United" on one clipped line. */
+    .fm-sb-team-name {
+        font-size: 14px;
+        white-space: normal;
     }
 
     .fm-sb-digit {
-        font-size: 38px;
-        min-width: 30px;
-    }
-
-    .fm-sb-team {
-        max-width: 100%;
-        width: 100%;
-    }
-
-    .fm-sb-team-home,
-    .fm-sb-team-away {
-        text-align: center;
-        padding: 0;
-    }
-
-    .fm-sb-team-home .fm-sb-goals,
-    .fm-sb-team-away .fm-sb-goals {
-        align-items: center;
-    }
-
-    .fm-sb-team-home .fm-sb-expander {
-        float: none;
-    }
-
-    .fm-sb-team-name {
-        font-size: 17px;
-    }
-
-    .fm-sb-team-away {
-        margin-top: 8px;
-        padding-top: 8px;
-        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        font-size: 26px;
+        min-width: 20px;
     }
 }
 
 @media (max-width: 480px) {
-    .fm-sb-digit {
-        font-size: 30px;
-        min-width: 24px;
+    .fm-sb-team-name {
+        font-size: 13px;
     }
 
-    .fm-sb-team-name {
-        font-size: 15px;
+    .fm-sb-digit {
+        font-size: 22px;
+        min-width: 18px;
     }
 
     .fm-sb-league {
-        font-size: 10px;
         letter-spacing: 1px;
-        margin-bottom: 8px;
     }
 }
 
@@ -6098,14 +6146,30 @@ a:active {
 
 #match-play-area {
     width: 100%;
+    /* Everything above the stage on this page — which since the scoreboard
+       moved into it is just the app header. The header carries the scorers,
+       so its height moves with the result (68px goalless, ~95px with three
+       stacked under a club name); the page overwrites this variable with the
+       measured height on load and on resize. This value is the fallback for
+       a page whose script has not run: the tall end, because too large only
+       costs the stage some width on a short window, where too small puts the
+       far touchline under the fold. */
+    --match-chrome: 100px;
 }
 
 /* The viewer's canvas resizes itself to this box, so the box is what pins the
    aspect ratio. The placeholder sits behind the canvas and is simply painted
-   over once the first frame lands — no script has to clear it. */
+   over once the first frame lands — no script has to clear it.
+   The whole pitch has to be on screen when the page opens, so the stage gives
+   up width before it gives up being wholly above the fold: the column width is
+   only its upper bound, and what is left of the viewport under the chrome sets
+   the rest. `min()` keeps 16/9 intact by driving the width — clamping the
+   height instead would letterbox the replay inside its own box. */
 .match-stage {
     position: relative;
-    width: 100%;
+    width: min(100%, max(420px, (100vh - var(--match-chrome)) * 16 / 9));
+    width: min(100%, max(420px, (100dvh - var(--match-chrome)) * 16 / 9));
+    margin: 0 auto;
     aspect-ratio: 16 / 9;
     overflow: hidden;
     border-radius: 6px;
@@ -7130,7 +7194,8 @@ html.match-scroll-locked body {
         padding-left: 0;
     }
 
-    .fm-header-title {
+    .fm-header-title,
+    .fm-header-scoreboard {
         padding-left: 16px;
     }
 
@@ -7500,7 +7565,8 @@ html.match-scroll-locked body {
         padding-left: 0;
     }
 
-    .fm-header-title {
+    .fm-header-title,
+    .fm-header-scoreboard {
         padding-left: 10px;
     }
 

@@ -92,6 +92,7 @@
                                     <span></span>
                                 </button>
                                 {% endif %}
+                                {% block header_title %}
                                 <div class="fm-header-title">
                                     <h1>{{ title }}</h1>
                                     <span class="fm-header-sub">{% if !sub_title_prefix.is_empty() %}<span>{{ sub_title_prefix }}</span>  -  {% endif %}{% if !sub_title_country_code.is_empty() %}<a
@@ -100,6 +101,7 @@
                                             style="vertical-align: middle; margin-right: 6px;"></span></a>{% endif %}<a
                                             href="{{ sub_title_link }}">{{ sub_title }}{% if !sub_title_suffix.is_empty() %} {{ sub_title_suffix }}{% endif %}</a></span>
                                 </div>
+                                {% endblock %}
                                 {% block header_center %}{% endblock %}
                                 <div class="fm-header-actions">
                                     <a class="fm-ai-icon fm-header-search" href="/{{ lang }}/search" title="{{ i18n.t("search") }}">
