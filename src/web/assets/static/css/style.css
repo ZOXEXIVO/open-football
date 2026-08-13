@@ -6134,6 +6134,90 @@ a:active {
     touch-action: none;
 }
 
+/* Fullscreen toggle, top-right of the stage.
+   A SIBLING of the canvas rather than a child of it — the viewer claims the
+   pointer buttons and the arrow keys on the canvas element itself, so anything
+   inside it would be fighting for the same events. Painted over the canvas by
+   z-index, which the canvas (position: relative, z-index: auto) does not
+   contest. */
+.match-fullscreen {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 3;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    /* Same translucent slab as the viewer's own transport bar, so the two read
+       as one overlay rather than as page chrome sitting on top of a render. */
+    background: rgba(8, 13, 20, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: #c6d3e4;
+    font-size: 14px;
+    cursor: pointer;
+    /* The replay is mostly green; at 55% the button stays legible without
+       drawing the eye away from the play. */
+    opacity: 0.55;
+    transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.match-stage:hover .match-fullscreen {
+    opacity: 1;
+}
+
+.match-fullscreen:hover {
+    opacity: 1;
+    background: rgba(8, 13, 20, 0.92);
+    color: #fff;
+}
+
+.match-fullscreen:focus-visible {
+    opacity: 1;
+    outline: 2px solid #4a9eff;
+    outline-offset: 2px;
+}
+
+/* A touch device has no hover to reveal the button with. */
+@media (hover: none) {
+    .match-fullscreen {
+        opacity: 0.85;
+    }
+}
+
+/* Fullscreen, both ways of getting there.
+   `aspect-ratio` has to go: it is what pins the stage to 16/9 in the page, and
+   left on it would letterbox the viewer inside a screen that is already the
+   right shape. */
+.match-stage:fullscreen,
+.match-stage:-webkit-full-screen,
+.match-stage-faux-fullscreen {
+    width: 100%;
+    height: 100%;
+    aspect-ratio: auto;
+    border-radius: 0;
+}
+
+/* The fallback for browsers with no element fullscreen (iOS Safari). Covers
+   the viewport instead of the screen — the browser's own chrome stays, but the
+   replay gets everything below it. */
+.match-stage-faux-fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 1080;
+}
+
+/* Native fullscreen hides the page's scrollbar on its own; the fallback has
+   to be told, or the bar stays and takes a strip off the width the stage is
+   supposed to be covering. */
+html.match-scroll-locked,
+html.match-scroll-locked body {
+    overflow: hidden;
+}
+
 .fm-match-recording-disabled {
     color: #8a9bb5;
     font-size: 14px;

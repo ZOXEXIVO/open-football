@@ -83,12 +83,19 @@
             <div class="col-xl-8">
                 {% if match_recordings_enabled && match_viewer_available %}
                 <div id="match-play-area">
-                    <div class="match-stage">
+                    <div class="match-stage" id="match-stage">
                         <div class="match-stage-placeholder">
                             <i class="fas fa-spinner fa-spin fa-2x"></i>
                             <p>{{ i18n.t("loading_match") }}</p>
                         </div>
                         <canvas id="match-canvas" class="match-canvas"></canvas>
+                        <button type="button" id="match-fullscreen" class="match-fullscreen"
+                                title="{{ i18n.t("match_fullscreen") }}"
+                                aria-label="{{ i18n.t("match_fullscreen") }}"
+                                data-enter-label="{{ i18n.t("match_fullscreen") }}"
+                                data-exit-label="{{ i18n.t("match_exit_fullscreen") }}">
+                            <i class="fas fa-expand" aria-hidden="true"></i>
+                        </button>
                     </div>
                 </div>
                 {% else if match_recordings_enabled %}
@@ -208,6 +215,105 @@
 
 {% block scripts %}
 {% if match_recordings_enabled && match_viewer_available %}
+<script>
+    // Fullscreen for the replay stage. Deliberately a plain script rather than
+    // part of the module below: it is the one control that has to work even
+    // when the WebAssembly viewer fails to load, and a module that throws on
+    // import takes everything in it down with it.
+    (function () {
+        var stage = document.getElementById("match-stage");
+        var button = document.getElementById("match-fullscreen");
+        if (!stage || !button) {
+            return;
+        }
+
+        var icon = button.querySelector("i");
+        // Safari still ships the prefixed names, and the unprefixed ones are
+        // simply absent there rather than aliased.
+        var request = stage.requestFullscreen || stage.webkitRequestFullscreen;
+        var exit = document.exitFullscreen || document.webkitExitFullscreen;
+
+        // iOS Safari has no element fullscreen at all — only video gets it. The
+        // fallback pins the stage over the viewport, which is the same picture
+        // minus the browser chrome, and is why the Escape handler below is not
+        // redundant with the browser's own. Native fullscreen suppresses the
+        // page's scrollbar itself; the fallback has to be told, or the bar
+        // stays and takes a strip off the width the stage is covering.
+        var FALLBACK = "match-stage-faux-fullscreen";
+        var LOCK = "match-scroll-locked";
+
+        function isNative() {
+            return (document.fullscreenElement || document.webkitFullscreenElement) === stage;
+        }
+
+        function isOpen() {
+            return isNative() || stage.classList.contains(FALLBACK);
+        }
+
+        function sync() {
+            var open = isOpen();
+            var label = button.getAttribute(open ? "data-exit-label" : "data-enter-label");
+            button.setAttribute("title", label);
+            button.setAttribute("aria-label", label);
+            icon.classList.toggle("fa-expand", !open);
+            icon.classList.toggle("fa-compress", open);
+        }
+
+        function open() {
+            if (request) {
+                // A rejected promise means the browser declined (an iframe
+                // without the permission, a policy block) — fall back rather
+                // than leave the button dead.
+                var started = request.call(stage);
+                if (started && typeof started.catch === "function") {
+                    started.catch(function () {
+                        openFallback();
+                    });
+                }
+            } else {
+                openFallback();
+            }
+            sync();
+        }
+
+        function openFallback() {
+            stage.classList.add(FALLBACK);
+            document.documentElement.classList.add(LOCK);
+            sync();
+        }
+
+        function close() {
+            if (isNative() && exit) {
+                exit.call(document);
+            }
+            stage.classList.remove(FALLBACK);
+            document.documentElement.classList.remove(LOCK);
+            sync();
+        }
+
+        button.addEventListener("click", function () {
+            if (isOpen()) {
+                close();
+            } else {
+                open();
+            }
+        });
+
+        // Escape. The browser already exits NATIVE fullscreen on it, and this
+        // handler is what covers the fallback — plus the case where the canvas
+        // has keyboard focus, since the viewer claims keys on it.
+        document.addEventListener("keydown", function (event) {
+            if ((event.key === "Escape" || event.key === "Esc") && isOpen()) {
+                close();
+            }
+        });
+
+        // Leaving fullscreen any other way — the browser's own chrome, a
+        // window-manager shortcut — has to put the icon back.
+        document.addEventListener("fullscreenchange", sync);
+        document.addEventListener("webkitfullscreenchange", sync);
+    })();
+</script>
 <script type="module">
     // Everything the replay does lives in the WebAssembly viewer built from
     // `src/match`; this hands it the canvas and the fixture, and steps back.
