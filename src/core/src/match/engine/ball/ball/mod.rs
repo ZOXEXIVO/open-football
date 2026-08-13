@@ -920,6 +920,11 @@ pub struct Ball {
     /// warning. Reset whenever owner changes or any meaningful motion
     /// resumes; fires a separate warning once it crosses the threshold.
     pub owned_stuck_ticks: u32,
+    /// Diagnostic only: was the ball owned by a player in a TakeBall
+    /// state on the previous full tick? Used to count spells rather
+    /// than ticks — see `dead_ball_diag::TAKEBALL_OWN_SPELLS`.
+    #[cfg(feature = "match-logs")]
+    pub takeball_owned_last_tick: bool,
     pub owned_stuck_logged: bool,
     /// Position-based stall detector — catches cases the owned/unowned
     /// counters miss, specifically: rapid ownership flipping keeps
@@ -1281,6 +1286,8 @@ impl Ball {
             pending_cross_type: None,
             aerial_contest_winner: None,
             owned_stuck_ticks: 0,
+            #[cfg(feature = "match-logs")]
+            takeball_owned_last_tick: false,
             owned_stuck_logged: false,
             stall_anchor_pos: Vector3::new(x, y, 0.0),
             stall_anchor_tick: 0,
@@ -1897,6 +1904,10 @@ impl Ball {
     ) {
         self.current_tick_cached = context.current_tick();
         #[cfg(feature = "match-logs")]
+        let owner_at_entry = self.current_owner;
+        #[cfg(feature = "match-logs")]
+        let spell_at_entry = self.ownership_duration;
+        #[cfg(feature = "match-logs")]
         {
             use std::sync::atomic::Ordering;
             ownership::reception_diag::TOTAL_TICKS.fetch_add(1, Ordering::Relaxed);
@@ -2009,6 +2020,58 @@ impl Ball {
                 self.current_owner.is_some(),
             );
             self.settled_vz = self.velocity.z;
+
+            // Possession churn, sampled once per full tick around the
+            // whole ball update — so it catches every release site,
+            // including the ones inside `move_to` and the boundary
+            // checks, without a counter planted at each.
+            use crate::r#match::engine::ball::ball::stall::dead_ball_diag as dbd;
+            use std::sync::atomic::Ordering;
+
+            // Whole-match TakeBall ownership, not just stalls: is this a
+            // state that holds the ball, or the state everybody is in on
+            // the tick they claim it?
+            let tb_now = self
+                .current_owner
+                .and_then(|id| players.iter().find(|p| p.id == id))
+                .is_some_and(|p| p.state.is_take_ball());
+            if tb_now {
+                dbd::TAKEBALL_OWN_TICKS.fetch_add(1, Ordering::Relaxed);
+                if !self.takeball_owned_last_tick || owner_at_entry != self.current_owner {
+                    dbd::TAKEBALL_OWN_SPELLS.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            self.takeball_owned_last_tick = tb_now;
+
+            if owner_at_entry != self.current_owner {
+                // Turnovers that happen while the ball is already judged
+                // stuck. Cross-team means a real scramble; same-team
+                // means it is bouncing around one side, which would be a
+                // passing problem rather than a contest.
+                if self.stall_anchor_tick >= 250 && self.current_owner.is_some() {
+                    dbd::STALL_TURNOVERS.fetch_add(1, Ordering::Relaxed);
+                    let team_of = |id: Option<u32>| {
+                        id.and_then(|i| players.iter().find(|p| p.id == i))
+                            .map(|p| p.team_id)
+                    };
+                    let before = team_of(owner_at_entry);
+                    let after = team_of(self.current_owner);
+                    if before.is_some() && after.is_some() && before != after {
+                        dbd::STALL_TURNOVERS_CROSS_TEAM.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                if owner_at_entry.is_some() {
+                    dbd::OWNERSHIP_LOST.fetch_add(1, Ordering::Relaxed);
+                    dbd::SPELL_LENGTH[dbd::spell_bucket(spell_at_entry)]
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                if self.current_owner.is_some() {
+                    dbd::OWNERSHIP_GAINED.fetch_add(1, Ordering::Relaxed);
+                    if self.current_owner == self.previous_owner {
+                        dbd::OWNERSHIP_RECLAIMED_SELF.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
         }
         #[cfg(feature = "match-logs")]
         self.census_shot_fate(context, players);

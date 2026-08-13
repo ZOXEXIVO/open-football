@@ -240,7 +240,10 @@ impl MidfielderStandingState {
     /// possession held. That is when a midfielder recycles — sideways and
     /// backwards into space — instead of forcing the ball forward.
     fn should_recycle_possession(&self, ctx: &StateProcessingContext) -> bool {
-        const PRESSURE_RADIUS: f32 = 20.0;
+        // 20u is 2.5 m. A man closing from six metres is pressure a
+        // midfielder reacts to, and this test exists precisely to say
+        // "no time to pick out space" — so it has to see him.
+        const PRESSURE_RADIUS: f32 = 48.0;
         const FINAL_THIRD_PROGRESS: f32 = 0.66;
 
         // Under pressure there is no time to pick out space — the passing

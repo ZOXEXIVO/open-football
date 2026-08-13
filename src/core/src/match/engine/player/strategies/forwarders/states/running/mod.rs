@@ -26,6 +26,71 @@ use std::cmp::Ordering;
 // `fired` is the rng drop inside the willingness roll.
 // ───────────────────────────────────────────────────────────────────────────
 #[cfg(feature = "match-logs")]
+/// Which `return None` a stuck forward is taking.
+///
+/// `Forward: Running` is the last row in the ball-stuck table that is a
+/// genuine freeze rather than the claim-tick label (96-98% of its stuck
+/// ticks have the owner 250-plus AI ticks into the state). Only a
+/// `return None` keeps him in Running — every other exit changes state
+/// and resets the clock — so counting them under exactly that condition
+/// names the branch without a replay dump.
+#[cfg(feature = "match-logs")]
+pub mod stuck_exit_stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub const EXITS: usize = 5;
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    /// 0 tempo-hold, 1 point-blank Hold, 2 box Hold, 3 drive-at-goal,
+    /// 4 fell off the end of the tree.
+    pub static EXIT: [AtomicU64; EXITS] = [ZERO; EXITS];
+    pub const NAMES: [&str; EXITS] = [
+        "tempo-hold",
+        "point-blank Hold",
+        "box Hold",
+        "drive-at-goal",
+        "end of tree",
+    ];
+    /// Speed at the moment, in hundredths of a unit per tick — a frozen
+    /// carrier reads ~0, one oscillating in place reads high.
+    pub static SPEED_X100: AtomicU64 = AtomicU64::new(0);
+    pub static SAMPLES: AtomicU64 = AtomicU64::new(0);
+
+    /// Only counts while the carrier is deep enough into the state to be
+    /// what the stuck table is measuring.
+    pub fn note(slot: usize, in_state_time: u64, speed: f32) {
+        if in_state_time <= 250 {
+            return;
+        }
+        EXIT[slot].fetch_add(1, Ordering::Relaxed);
+        SPEED_X100.fetch_add((speed * 100.0) as u64, Ordering::Relaxed);
+        SAMPLES.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn reset() {
+        for c in EXIT.iter() {
+            c.store(0, Ordering::Relaxed);
+        }
+        SPEED_X100.store(0, Ordering::Relaxed);
+        SAMPLES.store(0, Ordering::Relaxed);
+    }
+
+    /// `(per-exit counts, mean speed in units/tick)`.
+    pub fn snapshot() -> ([u64; EXITS], f32) {
+        let mut out = [0u64; EXITS];
+        for (i, c) in EXIT.iter().enumerate() {
+            out[i] = c.load(Ordering::Relaxed);
+        }
+        let n = SAMPLES.load(Ordering::Relaxed).max(1);
+        (out, SPEED_X100.load(Ordering::Relaxed) as f32 / n as f32 / 100.0)
+    }
+}
+
+#[cfg(not(feature = "match-logs"))]
+pub mod stuck_exit_stats {
+    #[inline(always)]
+    pub fn note(_slot: usize, _in_state_time: u64, _speed: f32) {}
+}
+
 pub mod shot_gate_stats {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -341,6 +406,7 @@ impl StateProcessingHandler for ForwardRunningState {
                 let min_hold = base_hold.max(gm_hold);
                 let ownership_ticks = ctx.tick_context.ball.ownership_duration;
                 if ownership_ticks < min_hold {
+                    stuck_exit_stats::note(0, ctx.in_state_time, ctx.player.velocity.norm());
                     return None;
                 }
             }
@@ -448,10 +514,42 @@ impl StateProcessingHandler for ForwardRunningState {
                         return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                     }
                     ShotDecision::Hold => {
-                        // Hesitated this tick — stay in Running and re-roll
-                        // next tick. Inside-six floor (0.30) inside the helper
-                        // means most box entries still produce a shot across
-                        // the 5-10 ticks a forward spends inside.
+                        // "Hesitated this tick — stay in Running and
+                        // re-roll next tick" is what this used to say, and
+                        // THERE IS NO RE-ROLL. The shot threshold is drawn
+                        // once per POSSESSION (see the note at `spread`),
+                        // so a forward who declines a point-blank chance
+                        // declines it for as long as he keeps the ball —
+                        // and `return None` keeps him in `Running`, where
+                        // the only thing left to do is carry. He circles
+                        // in front of goal until somebody takes it off him
+                        // or the stall detector fires 20 s later.
+                        //
+                        // Measured with a stuck-exit census over exactly
+                        // the ticks the stall table counts (owner 250-plus
+                        // AI ticks into `Running`): **97% of them leave
+                        // through this branch**, at a mean speed of 0.245
+                        // u/tick — not frozen, circling. It is the last
+                        // genuine freeze in the ball-stuck table and the
+                        // same fault as the box `Hold` one block below.
+                        //
+                        // The appetite itself is NOT fixed — distance,
+                        // clarity and pressure all move — so a short hold
+                        // is worth having: a touch that improves the angle
+                        // can clear the standing bar. What is not worth
+                        // having is an unbounded one. Past the cap the
+                        // chance has not materialised and he squares it,
+                        // which is what a striker who did not fancy it
+                        // actually does. Going backwards out of the area
+                        // is separately prevented by
+                        // `PassEvaluator::retreat_penalty`.
+                        const POINT_BLANK_PATIENCE: u64 = 150; // 1.5 s
+                        stuck_exit_stats::note(1, ctx.in_state_time, ctx.player.velocity.norm());
+                        if ctx.in_state_time > POINT_BLANK_PATIENCE {
+                            return Some(StateChangeResult::with_forward_state(
+                                ForwardState::Passing,
+                            ));
+                        }
                         return None;
                     }
                 }
@@ -698,25 +796,71 @@ impl StateProcessingHandler for ForwardRunningState {
                         // A forward six metres out who is not shooting this
                         // instant does NOT turn and lay it off.
                         //
-                        // This branch did exactly that, and it is the
+                        // This branch used to do that, and it was the
                         // reported bug in its purest form: the helper says
                         // "not yet", the caller answers "then pass", and the
                         // pass evaluator — which rewards an isolated
                         // receiver and, for most personalities, does not
                         // care which way the ball goes — finds the spare man
                         // BEHIND the ball. Ball in front of goal, played
-                        // backwards, every time the appetite roll came up
-                        // short.
+                        // backwards, every time the appetite came up short.
                         //
-                        // It also contradicts the helper's own contract:
-                        // `Hold` means "keep doing what you were doing so a
-                        // real chance can materialise", and `Pass` is the
-                        // separate answer for "somebody is better placed".
-                        // The helper already returns `Pass` when that is
-                        // true, so converting `Hold` into a pass here
-                        // overrode a decision that had just been made
-                        // properly.
-                        return None;
+                        // ⚠ BUT IT MUST NOT `return None` EITHER, AND THAT
+                        // WAS THE BIGGER BUG. `return` here skips the whole
+                        // rest of the tree — the cutback, the one-two, and
+                        // the 1.2 s anti-oscillation release at the bottom
+                        // of it — and the appetite threshold is drawn ONCE
+                        // PER POSSESSION, so `Hold` is the fixed answer for
+                        // as long as he keeps the ball. Meanwhile
+                        // `BallCarry::target` collapses onto the carrier's
+                        // own feet in exactly this situation (`advance` is
+                        // zero inside `carry_hold`, and a central man has no
+                        // sidestep left), and the carry deadband turns that
+                        // into a hard `Vector3::zeros()`. Decision frozen,
+                        // velocity zero, same question next tick: a fixed
+                        // point, broken only by the stall detector 20 s
+                        // later.
+                        //
+                        // Measured with the per-state dwell split:
+                        // `Forward: Running` was the largest stuck bucket in
+                        // the game at **98% in the 250-plus dwell bucket**,
+                        // 86 episodes a match at a mean of 10.5 s each —
+                        // the only row in the table that was a genuine
+                        // freeze rather than the claim-tick label.
+                        //
+                        // …but HOLDING IS NOT FREEZING, and `return None`
+                        // here made it one. It skips the whole rest of the
+                        // tree, including the 1.2 s release at the bottom,
+                        // and the appetite threshold is drawn once per
+                        // possession — so `Hold` is the fixed answer for as
+                        // long as he keeps the ball. Paired with a carry
+                        // target that collapses onto his own feet inside
+                        // `carry_hold`, that is a fixed point only the
+                        // stall detector breaks, 20 s later.
+                        //
+                        // Measured with the per-state dwell split:
+                        // `Forward: Running` was the largest genuine freeze
+                        // in the game — 98% of its stuck ticks with the
+                        // owner 250-plus AI ticks into the state, ~10.5 s
+                        // an episode.
+                        //
+                        // So he holds, but not forever. Under the cap he
+                        // keeps the ball and works for the chance, which is
+                        // the behaviour the note above is protecting; over
+                        // it the possession has become a stall and the rest
+                        // of the tree gets its say.
+                        //
+                        // ⚠ Do NOT drop the cap and fall through always.
+                        // Measured: the first branch below is the cutback
+                        // to an arriving runner, so a striker holding in
+                        // the area handed it to a midfielder instead — FWD
+                        // goal share 60.7% → 49.1%, MID 38.5% → 50.4%,
+                        // against a real 58/32.
+                        const HOLD_PATIENCE: u64 = 300; // 3 s
+                        if ctx.in_state_time <= HOLD_PATIENCE {
+                            stuck_exit_stats::note(2, ctx.in_state_time, ctx.player.velocity.norm());
+                            return None;
+                        }
                     }
                 }
             }
@@ -786,6 +930,7 @@ impl StateProcessingHandler for ForwardRunningState {
                 let carry_quality =
                     dribbling * 0.35 + composure * 0.25 + determination * 0.2 + pace * 0.2;
                 if carry_quality > 0.55 {
+                    stuck_exit_stats::note(3, ctx.in_state_time, ctx.player.velocity.norm());
                     return None;
                 }
             }
@@ -930,6 +1075,7 @@ impl StateProcessingHandler for ForwardRunningState {
             }
 
             // Continue running with ball briefly while looking for an opening
+            stuck_exit_stats::note(4, ctx.in_state_time, ctx.player.velocity.norm());
             return None;
         }
         // Handle cases when player doesn't have the ball
@@ -1786,7 +1932,7 @@ impl ForwardRunningState {
 
         if let Some(target_position) = self.find_optimal_attacking_path(ctx) {
             if (target_position - ctx.player.position).magnitude() < CARRY_DEADBAND {
-                return Vector3::zeros();
+                return self.settle_over_the_ball(ctx);
             }
             return SteeringBehavior::Arrive {
                 target: target_position,
@@ -1802,7 +1948,7 @@ impl ForwardRunningState {
         // case against a set defence.
         let carry_target = BallCarry::target(ctx);
         if (carry_target - ctx.player.position).magnitude() < CARRY_DEADBAND {
-            return Vector3::zeros();
+            return self.settle_over_the_ball(ctx);
         }
         SteeringBehavior::Arrive {
             target: carry_target,
@@ -1810,6 +1956,67 @@ impl ForwardRunningState {
         }
         .calculate(ctx.player)
         .velocity
+    }
+
+    /// What a carrier does when the carry model has run out of things to
+    /// say — the target has collapsed to within touching distance of his
+    /// own feet.
+    ///
+    /// This used to be `Vector3::zeros()`, and the note above explains
+    /// why: chasing a target inside your own per-tick step is a limit
+    /// cycle, and standing still is honester than vibrating. True, but
+    /// the situation it produces is a man standing motionless on the ball
+    /// in the penalty area, and paired with a shot threshold drawn once
+    /// per possession that is a fixed point the stall detector has to
+    /// break twenty seconds later.
+    ///
+    /// A footballer in that position is never still. Which thing he does
+    /// depends on one reading — is anybody near him:
+    ///
+    /// * **Being closed down** — he shields, turning his body between the
+    ///   defender and the ball. Away from the nearest man, slowly.
+    /// * **Nobody near him** — then he is through, and the thing to do is
+    ///   go at the goalkeeper. `carry_hold` normally stops him closing,
+    ///   and that rule is right in general, but it cannot be right when
+    ///   the alternative is not moving at all.
+    ///
+    /// Both are absolute directions rather than offsets from his own
+    /// position, so neither reproduces the treadmill the deadband was
+    /// introduced to stop: he moves, the geometry changes, and ordinary
+    /// steering takes over again on the next tick.
+    fn settle_over_the_ball(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        const SHIELD_REACH: f32 = 24.0; // 3 m
+        let me = ctx.player.position;
+        let speed = ctx.player.skills.physical.pace * 0.30;
+
+        let nearest = ctx
+            .players()
+            .opponents()
+            .nearby(SHIELD_REACH)
+            .min_by(|a, b| {
+                let da = (a.position - me).magnitude();
+                let db = (b.position - me).magnitude();
+                da.partial_cmp(&db).unwrap_or(Ordering::Equal)
+            });
+
+        let direction = match nearest {
+            Some(opponent) => {
+                let away = me - opponent.position;
+                if away.norm_squared() < 1.0e-4 {
+                    return Vector3::zeros();
+                }
+                away.normalize()
+            }
+            None => {
+                let to_goal = ctx.player().opponent_goal_position() - me;
+                if to_goal.norm_squared() < 1.0e-4 {
+                    return Vector3::zeros();
+                }
+                to_goal.normalize()
+            }
+        };
+
+        direction * speed
     }
 
     /// Find optimal path considering opponents and teammates

@@ -1335,14 +1335,28 @@ impl BallCarry {
             let d = relative.magnitude();
             if d < blocker_distance {
                 blocker_distance = d;
-                // NB a square-on defender has a lateral offset near zero,
-                // so this signum flips as the carrier jitters. Gating it
-                // with a 1 m dead zone and deferring to the centre drift
-                // was tried and REVERTED: square on is the common case in
-                // front of goal, so carriers stopped dead in front of
-                // their man instead of going round him, and the ball
-                // going nowhere went 178 -> 449 s a match. Whatever
-                // replaces this has to keep him committing to a side.
+                // A square-on defender has a lateral offset near zero, so
+                // a bare signum flips as the carrier jitters: the target
+                // jumps from 26u left to 26u right and back, which is a
+                // limit cycle with the ball in it. Gating it with a 1 m
+                // dead zone and deferring to the centre drift was tried
+                // and REVERTED — square on is the common case in front of
+                // goal, so carriers stopped dead in front of their man
+                // instead of going round him and the ball going nowhere
+                // went 178 -> 449 s a match. The requirement recorded
+                // there was that whatever replaces it has to keep him
+                // COMMITTING to a side.
+                //
+                // ⚠ A COMMITTED side was then tried — 1 m dead zone, the
+                // sign inside it drawn once per (possession, defender),
+                // the same device the shot threshold uses — and it is
+                // ALSO worse: `Forward: Running` stuck time 10.5 → 18.5 s
+                // a match, total ball-stuck 49 → 99 s. Committing to a
+                // side the geometry disagrees with walks the carrier into
+                // his man. Two attempts, two regressions: leave the
+                // signum alone. The freeze it was suspected of is on the
+                // CALLER's side — see `settle_over_the_ball` and the
+                // box-hold patience cap in `forwarders/states/running`.
                 sidestep = if relative.dot(&lateral) > 0.0 {
                     -1.0
                 } else {

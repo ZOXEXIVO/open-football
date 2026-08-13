@@ -1,6 +1,8 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, MidfielderCondition, Opportunity, U_PER_M,
+};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
@@ -12,6 +14,9 @@ use nalgebra::Vector3;
 /// Depth of the penalty area from the goal line (16.5 m). Same figure the
 /// forward and midfielder box blocks use.
 const PENALTY_AREA_DEPTH: f32 = 132.0;
+
+/// Per-call-site salt for `Opportunity`.
+const LONG_SHOT_SALT: u64 = 0xC2B2_AE3D_27D4_EB4F;
 
 #[derive(Default, Clone)]
 pub struct MidfielderDistanceShootingState {}
@@ -127,39 +132,60 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
 }
 
 impl MidfielderDistanceShootingState {
+    /// Fallback for a player who reached this state without a
+    /// helper-approved strike behind him.
+    ///
+    /// Was three distance tiers each with its own absolute bar on
+    /// `mid_shot_selection` (0.44 / 0.50 / 0.58) plus an xG floor. Two
+    /// problems, one of them fatal: the bars are ABSOLUTE, so whether a
+    /// long shot exists in a division depended on the division rather
+    /// than on the situation — senior football reached an 18% outside-box
+    /// share and youth football 2.5% on identical code — and a tier
+    /// boundary at 15 m means a man one step further back is a different
+    /// footballer.
+    ///
+    /// One continuous willingness instead, falling with distance and
+    /// with traffic, rising with the striking skills, against a bar
+    /// drawn once per possession so he does not re-ask it every tick.
     fn is_favorable_shooting_opportunity(&self, ctx: &StateProcessingContext) -> bool {
         let distance_to_goal = ctx.player().goal_distance();
         // A long shot only needs a *sight* of goal, not a fully clear
         // lane — it's struck through traffic and the xG model discounts
         // the low clarity. A point-blank wall of defenders (clarity ~0)
-        // or being swarmed still aborts.
+        // still aborts.
         let clarity = ctx.player().shot_clarity();
-        let close_opponents = ctx.tick_context.grid.opponents(ctx.player.id, 10.0).count();
-        if clarity < 0.22 || close_opponents >= 3 {
+        if clarity < 0.22 {
             return false;
         }
 
         let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
         let shot_profile = ctx.player().shooting().shot_profile();
 
-        // Tier the distance gates by midfielder shot selection. Lowered
-        // from the previous specialist-only bars (0.58 / 0.72) so a
-        // competent playmaker — not just a 1-in-a-squad long-range
-        // specialist — drives the occasional shot from range.
-        if distance_to_goal <= 120.0 {
-            mid_profile.mid_shot_selection >= 0.44
-                && shot_profile.expected_xg(distance_to_goal, true) >= 0.16
-        } else if distance_to_goal <= 160.0 {
-            mid_profile.mid_shot_selection >= 0.50
-                && close_opponents <= 2
-                && shot_profile.expected_xg(distance_to_goal, true) >= 0.10
-        } else if distance_to_goal <= 200.0 {
-            mid_profile.mid_shot_selection >= 0.58
-                && shot_profile.execution_skill >= 0.50
-                && shot_profile.expected_xg(distance_to_goal, true) >= 0.055
-        } else {
-            false
+        // Room to strike: each man near him takes something off the
+        // swing, on a curve rather than at a head-count of three.
+        const CROWD_REACH: f32 = 4.0 * U_PER_M;
+        let mut crowding = 0.0f32;
+        for (_id, dist) in ctx.tick_context.grid.opponents(ctx.player.id, CROWD_REACH) {
+            let proximity = 1.0 - (dist / CROWD_REACH).clamp(0.0, 1.0);
+            crowding += proximity;
         }
+        let room = 1.0 / (1.0 + crowding * 0.9);
+
+        // Distance: comfortable at the edge of the area, fading out to
+        // the 40 m the helper itself calls hopeless.
+        const COMFORTABLE: f32 = 16.5 * U_PER_M;
+        const HOPELESS: f32 = 40.0 * U_PER_M;
+        let reach = 1.0
+            - ((distance_to_goal - COMFORTABLE) / (HOPELESS - COMFORTABLE)).clamp(0.0, 1.0);
+
+        let strike = (mid_profile.mid_shot_selection * 0.60
+            + shot_profile.execution_skill * 0.40)
+            .clamp(0.0, 1.0);
+
+        let willingness = strike * reach.powf(0.75) * room * clarity.clamp(0.0, 1.0).powf(0.35);
+
+        let spread = Opportunity::draw(ctx, LONG_SHOT_SALT);
+        willingness >= 0.24 + spread * 0.26
     }
 
     fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
@@ -185,9 +211,12 @@ impl MidfielderDistanceShootingState {
     }
 
     fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        // Check if a teammate is open to receive a pass
+        // 30u is 3.75 m, so "in passing range" excluded every pass a
+        // footballer would call a pass and this whole `should_pass`
+        // branch could not fire. 30 m is a midfield ball.
+        const PASSING_RANGE: f32 = 30.0 * U_PER_M;
         let is_in_passing_range =
-            (teammate.position - ctx.player.position).norm_squared() <= 30.0 * 30.0;
+            (teammate.position - ctx.player.position).norm_squared() <= PASSING_RANGE * PASSING_RANGE;
         let has_clear_passing_lane = self.has_clear_passing_lane(ctx, teammate);
 
         is_in_passing_range && has_clear_passing_lane
@@ -218,7 +247,9 @@ impl MidfielderDistanceShootingState {
     }
 
     fn has_space_to_dribble(&self, ctx: &StateProcessingContext) -> bool {
-        let dribble_distance = 10.0;
-        !ctx.players().opponents().exists(dribble_distance)
+        // 10u was 1.25 m — nobody within arm's length, which is not what
+        // "space to dribble" means.
+        const DRIBBLE_SPACE: f32 = 4.0 * U_PER_M;
+        !ctx.players().opponents().exists(DRIBBLE_SPACE)
     }
 }

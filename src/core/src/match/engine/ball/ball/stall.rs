@@ -40,26 +40,192 @@ pub mod dead_ball_diag {
     /// it, and how many separate episodes that was.
     pub static STUCK_TICKS_BY_STATE: [AtomicU64; STATES] = [ZERO; STATES];
     pub static STUCK_EPISODES_BY_STATE: [AtomicU64; STATES] = [ZERO; STATES];
+    /// The dwell split, per state. Without it a row in the stuck table
+    /// does not say which of the two failures it is — see the module
+    /// note on `OWNER_DWELL`. Flattened `state * 5 + bucket`.
+    pub static STUCK_DWELL_BY_STATE: [AtomicU64; STATES * 5] = [ZERO; STATES * 5];
     /// Same, for a stall nobody owned — a loose ball sitting untouched.
     pub static STUCK_TICKS_UNOWNED: AtomicU64 = AtomicU64::new(0);
     pub static STUCK_EPISODES_UNOWNED: AtomicU64 = AtomicU64::new(0);
     /// Longest single stall seen, in full ticks.
     pub static LONGEST_STUCK: AtomicU64 = AtomicU64::new(0);
 
+    /// How long the owner had been in his state when a stuck tick was
+    /// attributed to him, bucketed 0-1 / 2-10 / 11-50 / 51-250 / 250+ AI
+    /// ticks. This separates the two ways a state can top the stuck
+    /// table and they need opposite fixes: a state everybody passes
+    /// THROUGH on the way into possession collects one tick per
+    /// ownership grant and reads 0-1; a state that genuinely holds the
+    /// ball and does nothing reads high.
+    pub static OWNER_DWELL: [AtomicU64; 5] = [ZERO; 5];
+    /// Same split, restricted to the four TakeBall states.
+    pub static TAKEBALL_DWELL: [AtomicU64; 5] = [ZERO; 5];
+    /// Distance from the attributed owner to the ball, in tenths of a
+    /// unit, summed — so the mean says whether he is standing on it.
+    pub static TAKEBALL_OWNER_DIST_X10: AtomicU64 = AtomicU64::new(0);
+    pub static TAKEBALL_SAMPLES: AtomicU64 = AtomicU64::new(0);
+
+    /// Every full tick the ball was owned by a player in a `TakeBall`
+    /// state, and how many separate spells that was — over the WHOLE
+    /// match, not just stalls. Mean ticks per spell settles the question
+    /// the stuck table cannot: is `TakeBall` a state that holds the ball
+    /// and does nothing, or is it just the state everybody is in on the
+    /// tick they claim it?
+    pub static TAKEBALL_OWN_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static TAKEBALL_OWN_SPELLS: AtomicU64 = AtomicU64::new(0);
+
+    /// What actually happens INSIDE a stall.
+    ///
+    /// Every remaining row in the stuck table now reads 100% in the 0-1
+    /// dwell bucket, i.e. it is the state a player happens to be in on
+    /// the tick he claims the ball. So the question is no longer "which
+    /// state holds it" but "why does it keep changing hands inside two
+    /// metres". These answer that: how many times possession turns over
+    /// during a stall, whether it alternates between the SIDES (a real
+    /// scramble) or bounces around one of them (a passing problem), and
+    /// where on the pitch it happens.
+    pub static STALL_TURNOVERS: AtomicU64 = AtomicU64::new(0);
+    pub static STALL_TURNOVERS_CROSS_TEAM: AtomicU64 = AtomicU64::new(0);
+    /// Stall ticks by zone: 0 near a corner flag, 1 in either penalty
+    /// area, 2 near a touchline, 3 open play.
+    pub static STALL_ZONE: [AtomicU64; 4] = [ZERO; 4];
+    pub const ZONE_LABELS: [&str; 4] = ["corner flag", "penalty area", "touchline", "open play"];
+    /// Stall ticks where the ball was in a protected flight window (a
+    /// pass or set-piece delivery in progress).
+    pub static STALL_IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
+
+    /// `(turnovers during stalls, of which cross-team, zone histogram,
+    /// in-flight ticks)`.
+    pub fn stall_churn_snapshot() -> (u64, u64, [u64; 4], u64) {
+        let mut zones = [0u64; 4];
+        for i in 0..4 {
+            zones[i] = STALL_ZONE[i].load(Ordering::Relaxed);
+        }
+        (
+            STALL_TURNOVERS.load(Ordering::Relaxed),
+            STALL_TURNOVERS_CROSS_TEAM.load(Ordering::Relaxed),
+            zones,
+            STALL_IN_FLIGHT.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Ownership churn. A stall whose owner is always freshly-entered
+    /// into `TakeBall` means possession is being granted and revoked in
+    /// a tight cycle; these say how tight and how often.
+    pub static OWNERSHIP_GAINED: AtomicU64 = AtomicU64::new(0);
+    pub static OWNERSHIP_LOST: AtomicU64 = AtomicU64::new(0);
+    /// Gains where the SAME player had it a moment ago — a re-claim
+    /// rather than a genuine change of possession.
+    pub static OWNERSHIP_RECLAIMED_SELF: AtomicU64 = AtomicU64::new(0);
+    /// How long each spell of possession lasted, bucketed in full ticks:
+    /// 1 / 2-5 / 6-25 / 26-100 / 100+.
+    pub static SPELL_LENGTH: [AtomicU64; 5] = [ZERO; 5];
+
+    #[inline]
+    pub fn spell_bucket(ticks: u32) -> usize {
+        match ticks {
+            0..=1 => 0,
+            2..=5 => 1,
+            6..=25 => 2,
+            26..=100 => 3,
+            _ => 4,
+        }
+    }
+
+    pub const SPELL_LABELS: [&str; 5] = ["1", "2-5", "6-25", "26-100", "100+"];
+
+    /// Dwell split for one state id, as percentages of its stuck ticks.
+    pub fn dwell_for_state(state: u16) -> [u64; 5] {
+        let mut out = [0u64; 5];
+        let base = state as usize * 5;
+        for i in 0..5 {
+            out[i] = STUCK_DWELL_BY_STATE[base + i].load(Ordering::Relaxed);
+        }
+        out
+    }
+
+    /// `(ticks a TakeBall state owned the ball, distinct spells)`.
+    pub fn takeball_ownership_snapshot() -> (u64, u64) {
+        (
+            TAKEBALL_OWN_TICKS.load(Ordering::Relaxed),
+            TAKEBALL_OWN_SPELLS.load(Ordering::Relaxed),
+        )
+    }
+
+    /// `(gained, lost, self-reclaims, spell-length histogram)`.
+    pub fn churn_snapshot() -> (u64, u64, u64, [u64; 5]) {
+        let mut spells = [0u64; 5];
+        for i in 0..5 {
+            spells[i] = SPELL_LENGTH[i].load(Ordering::Relaxed);
+        }
+        (
+            OWNERSHIP_GAINED.load(Ordering::Relaxed),
+            OWNERSHIP_LOST.load(Ordering::Relaxed),
+            OWNERSHIP_RECLAIMED_SELF.load(Ordering::Relaxed),
+            spells,
+        )
+    }
+
+    #[inline]
+    pub fn dwell_bucket(in_state_time: u64) -> usize {
+        match in_state_time {
+            0..=1 => 0,
+            2..=10 => 1,
+            11..=50 => 2,
+            51..=250 => 3,
+            _ => 4,
+        }
+    }
+
+    pub const DWELL_LABELS: [&str; 5] = ["0-1", "2-10", "11-50", "51-250", "250+"];
+
     pub fn reset() {
         for c in STUCK_TICKS_BY_STATE
             .iter()
             .chain(STUCK_EPISODES_BY_STATE.iter())
+            .chain(STUCK_DWELL_BY_STATE.iter())
+        {
+            c.store(0, Ordering::Relaxed);
+        }
+        for c in OWNER_DWELL
+            .iter()
+            .chain(TAKEBALL_DWELL.iter())
+            .chain(SPELL_LENGTH.iter())
+            .chain(STALL_ZONE.iter())
         {
             c.store(0, Ordering::Relaxed);
         }
         for c in [
+            &STALL_TURNOVERS,
+            &STALL_TURNOVERS_CROSS_TEAM,
+            &STALL_IN_FLIGHT,
             &STUCK_TICKS_UNOWNED,
             &STUCK_EPISODES_UNOWNED,
             &LONGEST_STUCK,
+            &TAKEBALL_OWNER_DIST_X10,
+            &TAKEBALL_SAMPLES,
+            &OWNERSHIP_GAINED,
+            &OWNERSHIP_LOST,
+            &OWNERSHIP_RECLAIMED_SELF,
+            &TAKEBALL_OWN_TICKS,
+            &TAKEBALL_OWN_SPELLS,
         ] {
             c.store(0, Ordering::Relaxed);
         }
+    }
+
+    /// `(owner dwell histogram, TakeBall dwell histogram, mean owner→ball
+    /// distance in units while a TakeBall state held a stuck ball)`.
+    pub fn dwell_snapshot() -> ([u64; 5], [u64; 5], f32) {
+        let mut all = [0u64; 5];
+        let mut tb = [0u64; 5];
+        for i in 0..5 {
+            all[i] = OWNER_DWELL[i].load(Ordering::Relaxed);
+            tb[i] = TAKEBALL_DWELL[i].load(Ordering::Relaxed);
+        }
+        let n = TAKEBALL_SAMPLES.load(Ordering::Relaxed).max(1);
+        let mean = TAKEBALL_OWNER_DIST_X10.load(Ordering::Relaxed) as f32 / n as f32 / 10.0;
+        (all, tb, mean)
     }
 
     /// `(rows of (compact_id, ticks, episodes), unowned ticks, unowned
@@ -124,14 +290,58 @@ impl Ball {
             const DEAD_AFTER: u32 = 250;
             if self.stall_anchor_tick >= DEAD_AFTER {
                 let first = self.stall_anchor_tick == DEAD_AFTER;
-                let bucket = self
+                let owner = self
                     .current_owner
-                    .and_then(|id| players.iter().find(|p| p.id == id))
+                    .and_then(|id| players.iter().find(|p| p.id == id));
+                if let Some(p) = owner {
+                    let d = dead_ball_diag::dwell_bucket(p.in_state_time);
+                    dead_ball_diag::OWNER_DWELL[d].fetch_add(1, Ordering::Relaxed);
+                    if p.state.is_take_ball() {
+                        dead_ball_diag::TAKEBALL_DWELL[d].fetch_add(1, Ordering::Relaxed);
+                        let dist = (p.position - self.position).magnitude();
+                        dead_ball_diag::TAKEBALL_OWNER_DIST_X10
+                            .fetch_add((dist * 10.0) as u64, Ordering::Relaxed);
+                        dead_ball_diag::TAKEBALL_SAMPLES.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                // Where, and whether a delivery is in the air.
+                let zone = {
+                    let x = self.position.x;
+                    let y = self.position.y;
+                    let w = self.field_width;
+                    let h = self.field_height;
+                    const FLAG: f32 = 80.0; // 10 m of the corner
+                    const TOUCH: f32 = 40.0; // 5 m of a touchline
+                    let near_end = x < FLAG || x > w - FLAG;
+                    let near_side = y < FLAG || y > h - FLAG;
+                    if near_end && near_side {
+                        0
+                    } else if (x < 132.0 || x > w - 132.0)
+                        && (y - h * 0.5).abs() < h * 0.35
+                    {
+                        1
+                    } else if y < TOUCH || y > h - TOUCH {
+                        2
+                    } else {
+                        3
+                    }
+                };
+                dead_ball_diag::STALL_ZONE[zone].fetch_add(1, Ordering::Relaxed);
+                if self.flags.in_flight_state > 0 {
+                    dead_ball_diag::STALL_IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+                }
+
+                let bucket = owner
                     .map(|p| p.state.compact_id() as usize)
                     .filter(|b| *b < dead_ball_diag::STATES);
                 match bucket {
                     Some(b) => {
                         dead_ball_diag::STUCK_TICKS_BY_STATE[b].fetch_add(1, Ordering::Relaxed);
+                        if let Some(p) = owner {
+                            let d = dead_ball_diag::dwell_bucket(p.in_state_time);
+                            dead_ball_diag::STUCK_DWELL_BY_STATE[b * 5 + d]
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
                         if first {
                             dead_ball_diag::STUCK_EPISODES_BY_STATE[b]
                                 .fetch_add(1, Ordering::Relaxed);

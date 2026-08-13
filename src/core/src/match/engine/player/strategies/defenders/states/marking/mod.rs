@@ -24,6 +24,34 @@ pub struct DefenderMarkingState {}
 
 impl StateProcessingHandler for DefenderMarkingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // A MAN WITH THE BALL IS NOT MARKING ANYBODY.
+        //
+        // Nothing in this state ever asked whether the defender himself
+        // had won it. Every `has_ball` here is a question about the
+        // OPPONENT — is my man carrying it — which reads as coverage
+        // until you look for the other one. So a defender who intercepted
+        // or was simply the nearest body when the ball arrived carried on
+        // marking: `process` fell through to `None` (keep marking) and
+        // `velocity` steered him onto his marking position, where
+        // `distance < 1.0` cuts the velocity to almost nothing. Settled
+        // on his mark with the ball at his feet, re-deciding the same
+        // thing every tick — a fixed point, broken only by the stall
+        // detector 20 s later.
+        //
+        // Measured with the per-state dwell split: `Defender: Marking`
+        // was **99% in the 250-plus dwell bucket** — after
+        // `Forward: Running` was fixed, the last genuine freeze in the
+        // table rather than a claim-tick label.
+        //
+        // `Running` is where a defender's on-ball decisions live, and
+        // this is the same hand-off `DefenderStandingState` has always
+        // made.
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Running,
+            ));
+        }
+
         // The shirt pull. A marker who is being pulled away from grabs,
         // leans or blocks — the commonest foul in football and one this
         // engine could not produce, because tackling was its only foul
@@ -115,11 +143,36 @@ impl StateProcessingHandler for DefenderMarkingState {
                 }
             }
 
-            // If opponent is too far, switch to running to catch up.
-            // The "too far" threshold is the marking_profile-driven
-            // ideal_marking_distance scaled 2x, so a poor marker has a
-            // wider tolerance (he stands further off anyway) and an
-            // elite marker breaks contact earlier.
+            // Has he lost him?
+            //
+            // ⚠ THIS DISAGREES WITH `DefenderRunningState` BY AN ORDER OF
+            // MAGNITUDE, AND THE DISAGREEMENT IS LOAD-BEARING. It
+            // releases at `ideal_marking_distance * 2` (14-28u, i.e.
+            // 1.75-3.5 m) while `Running` picks a man up at
+            // `MARK_BREAK_DISTANCE` (150u, 18.75 m) — so every man
+            // between the two figures satisfies both conditions at once
+            // and the pair runs as a two-tick oscillator. Measured with
+            // `dev_match trace`: ~191,000 `Running <-> Marking` loops
+            // across three matches, an order of magnitude above anything
+            // else in the engine.
+            //
+            // Replacing it with one hysteretic pair (engage 150u, release
+            // 200u — the `ShapeStation` idiom) DOES remove the loop:
+            // flips/min 164.6 -> 140.4, pong 36.2% -> 23.0%, and the loop
+            // leaves the table entirely. It also makes the match WORSE on
+            // every axis measured: goals 4.4 -> 5.2, passes/team 890 ->
+            // 1050, ball-stuck 45 -> 114 s/match, FWD goal share 58% ->
+            // 46%.
+            //
+            // The flicker is doing real work. Alternating between this
+            // state's MAN-oriented steering and `Running`'s SHAPE-oriented
+            // steering blends the two; pinning a defender in `Marking`
+            // lets him follow his man out of the line, and
+            // `DefensiveLine::hold_shape` is not a strong enough leash to
+            // hold him there for seconds at a time.
+            //
+            // So the loop stays until `Marking`'s own steering is
+            // shape-safe. Do not "fix" it in isolation.
             let def_profile = DefenderSkillProfile::from_ctx(ctx);
             if distance_to_opponent > def_profile.ideal_marking_distance * 2.0 {
                 return Some(StateChangeResult::with_defender_state(

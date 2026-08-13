@@ -1,5 +1,7 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, LaneAhead, MidfielderCondition, Opportunity, TakeOn, U_PER_M,
+};
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
@@ -10,6 +12,15 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 use std::cmp::Ordering;
+
+/// Range at which a shot is point blank rather than a chance — 6 m.
+const POINT_BLANK: f32 = 6.0 * U_PER_M;
+
+/// AI ticks in a second (`MATCH_TIME_INCREMENT_MS` is 10).
+const TICKS_PER_SECOND: f32 = 100.0;
+
+/// Per-call-site salt for `Opportunity`.
+const POINT_BLANK_SALT: u64 = 0x6A09_E667_F3BC_C909;
 
 #[derive(Default, Clone)]
 pub struct MidfielderDribblingState {}
@@ -25,7 +36,7 @@ impl StateProcessingHandler for MidfielderDribblingState {
         let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
         let shot_profile = ctx.player().shooting().shot_profile();
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        let has_clear_shot = ctx.player().has_clear_shot();
+        let lane = LaneAhead::read(ctx);
 
         // Shot pivot from a dribble — every midfielder (AM and CM alike)
         // consults the shared forward helper, which scales the decision
@@ -45,16 +56,27 @@ impl StateProcessingHandler for MidfielderDribblingState {
             );
         }
 
-        // Point-blank — inside the box, but with a skill-graded
-        // willingness so 5/20 midfielders can still pass instead of
-        // miscueing the easy chance. Real point-blank shots succeed for
-        // composed finishers; panicked low-skill players hit the keeper.
-        if distance_to_goal < 22.0 {
+        // Point-blank — with a skill-graded willingness so 5/20
+        // midfielders can still pass instead of miscueing the easy
+        // chance. Real point-blank shots succeed for composed finishers;
+        // panicked low-skill players hit the keeper.
+        //
+        // The range was 22u. That reads like twenty-two of something and
+        // is 2.75 m — inside the six-yard line, closer to the net than a
+        // goalkeeper stands — so the branch described a situation that
+        // barely occurs. 6 m is point blank.
+        if distance_to_goal < POINT_BLANK {
             let point_blank_willingness = (0.10
                 + shot_profile.selection_skill * 0.30
                 + mid_profile.mid_shot_selection * 0.20)
                 .clamp(0.12, 0.65);
-            if ctx.context.rng.unit_f32() < point_blank_willingness {
+            // Once per possession, not once per tick. At 12-65% a tick
+            // the answer was "yes" within a few hundredths of a second
+            // of entering the box, so the willingness curve above — the
+            // whole point of which is that a poor finisher sometimes
+            // squares it instead — was being integrated away to a
+            // certainty. See `Opportunity`.
+            if Opportunity::draw(ctx, POINT_BLANK_SALT) < point_blank_willingness {
                 return Some(
                     StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
                         .with_shot_reason("MID_DRIB_POINT_BLANK"),
@@ -68,29 +90,36 @@ impl StateProcessingHandler for MidfielderDribblingState {
             }
         }
 
-        // Carry budget scaled by carry_selection (skill-blended) instead
-        // of raw dribbling — a poor dribbler with high decisions still
-        // gets some carry tolerance via composure / decisions weighting.
-        let max_dribble_ticks = (25.0 + mid_profile.carry_selection * 55.0) as u64;
+        // HE'S BEATEN HIM — go back to running with it.
+        //
+        // Nothing used to notice. The state's only exits were a timeout
+        // and a pressure bail, so a successful take-on was followed by
+        // the same "find a pass or time out" script as a failed one, and
+        // the carry that should follow a beaten man never happened.
+        if !lane.has_man_to_beat() && ctx.in_state_time > 8 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
+        }
 
-        // Under heavy pressure — defer to press_resistance: high
-        // resistance lets us shield/pass cleanly, low resistance forces
-        // a hurried release.
-        let close_opponents = ctx.players().opponents().nearby(15.0).count();
-        if close_opponents >= 2 {
-            if distance_to_goal < 32.0 && has_clear_shot && mid_profile.mid_shot_selection >= 0.42 {
-                return Some(
-                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
-                        .with_shot_reason("MID_DRIB_PRESSURED_SHOOT"),
-                );
-            }
+        // Swarmed — two or more of them genuinely on him. `nearby(15.0)`
+        // was 1.9 m, so this asked for two opponents inside two metres
+        // and effectively never fired; 3 m is being closed down by two.
+        // Press resistance buys the extra beat before he has to give it.
+        let swarm_radius = (2.4 + mid_profile.press_resistance * 1.4) * U_PER_M;
+        if ctx.players().opponents().nearby(swarm_radius).count() >= 2 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Passing,
             ));
         }
 
-        // Timeout — force a decision
-        if ctx.in_state_time > max_dribble_ticks {
+        // How long the take-on gets. A dribble is a second or two of
+        // football; the old budget was 0.25-0.80 s, over before the
+        // duel it models could resolve. Scaled by carry quality so a
+        // Zidane keeps it under his foot longer than a holding player.
+        let max_dribble_ticks =
+            ((0.9 + mid_profile.carry_selection * 1.6) * TICKS_PER_SECOND) as u64;
+        if ctx.in_state_time as u64 > max_dribble_ticks {
             if PassEvaluator::find_best_pass_option(ctx, 200.0).is_some() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Passing,
@@ -101,9 +130,12 @@ impl StateProcessingHandler for MidfielderDribblingState {
             ));
         }
 
-        // If carry quality is low and a pass opens up mid-dribble, take
-        // it. Replaces the raw `dribbling_skill < 0.7` heuristic.
-        if ctx.in_state_time > 15 && !mid_profile.allows_take_on_one() {
+        // He committed and it hasn't come off — the appetite that sent
+        // him here has drained (a second man has arrived, or the man in
+        // front has closed the space down). Give it rather than run into
+        // him. Continuous: the same quantity that opened the take-on
+        // closes it, so there is no separate rule to disagree with.
+        if ctx.in_state_time > 20 && TakeOn::appetite(ctx, &lane, &mid_profile) < 0.10 {
             if PassEvaluator::find_best_pass_option(ctx, 200.0).is_some() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Passing,

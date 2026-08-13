@@ -113,6 +113,20 @@ impl PlayerState {
     /// every nearby player were committed, the per-state
     /// `is_best_player_to_chase_ball` path still claims loose balls, so
     /// this can never deadlock possession.
+    /// Any of the four position-group TakeBall states — the loose-ball
+    /// chase. Used by the stall diagnostic to separate "a state everybody
+    /// passes through on the way into possession" from "a state that
+    /// holds the ball and does nothing".
+    pub fn is_take_ball(&self) -> bool {
+        matches!(
+            self,
+            PlayerState::Goalkeeper(GoalkeeperState::TakeBall)
+                | PlayerState::Defender(DefenderState::TakeBall)
+                | PlayerState::Midfielder(MidfielderState::TakeBall)
+                | PlayerState::Forward(ForwardState::TakeBall)
+        )
+    }
+
     pub fn is_committed_action(&self) -> bool {
         match self {
             // An injured player is on the floor — they chase nothing.

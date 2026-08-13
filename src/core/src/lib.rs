@@ -440,7 +440,11 @@ pub use crate::r#match::engine::player::events::players::shot_accuracy_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::strategies::forwarders::states::running::shot_gate_stats;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::player::strategies::forwarders::states::running::stuck_exit_stats;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::strategies::forwarders::states::running::tackle_stats;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::midfielders::states::common::onball_diag as mid_onball_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::motion_diag;
 #[cfg(feature = "match-logs")]

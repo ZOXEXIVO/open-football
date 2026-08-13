@@ -1021,12 +1021,32 @@ impl Ball {
 
         // CRITICAL: Early validation - if current owner is too far AND ball is moving, clear ownership
         // This catches cases where ball flies away from owner but ownership wasn't properly cleared
+        //
+        // ⚠ IT MUST READ THE LIVE ROSTER. This compared the ball against
+        // `context.players`, which is a copy of the squad taken before
+        // kick-off and never moved again — only substitutions write to it
+        // — so `owner.position` was the player's KICKOFF SLOT for the
+        // whole match. The test therefore read "is the ball more than
+        // 25 cm from where this man stood at kick-off", which is true
+        // from the first pass onward, and cleared possession from anyone
+        // carrying the ball away from his own starting position at pace.
+        // The live slice was already a parameter of this function and is
+        // used for the pass-target claim forty lines below.
+        //
+        // Signature of the resulting bug, from the stall diagnostic: the
+        // owner of a stuck ball was in a `TakeBall` state with
+        // `in_state_time` of 0 or 1 on **100%** of stuck ticks, standing
+        // **0.0 units** from the ball. Not a state that dwells — a state
+        // being re-entered every tick, because possession was granted and
+        // revoked in a two-tick cycle (claim → this check clears it → the
+        // dispatcher's loose-ball override forces `TakeBall` → claim …)
+        // while the ball sat still under his feet.
         const MAX_OWNERSHIP_DISTANCE: f32 = 2.0; // Maximum distance to maintain ownership (tightened)
         const MAX_OWNERSHIP_DISTANCE_SQUARED: f32 = MAX_OWNERSHIP_DISTANCE * MAX_OWNERSHIP_DISTANCE;
         const MIN_VELOCITY_FOR_DISTANCE_CHECK: f32 = 0.5; // Check distance if ball is moving at all
 
         if let Some(current_owner_id) = self.current_owner {
-            if let Some(owner) = context.players.by_id(current_owner_id) {
+            if let Some(owner) = players.iter().find(|p| p.id == current_owner_id) {
                 let dx = owner.position.x - self.position.x;
                 let dy = owner.position.y - self.position.y;
                 let distance_squared = dx * dx + dy * dy;
@@ -1066,8 +1086,13 @@ impl Ball {
 
         // Check if previous owner is still within range
         // Clear previous_owner once they're far enough away to allow normal claiming
+        //
+        // Same frozen-snapshot fault as the block above: measured against
+        // a kick-off slot, "far enough away" was answered by where the
+        // man started rather than where he is, so `previous_owner` was
+        // dropped on the first tick after almost every release.
         if let Some(previous_owner_id) = self.previous_owner {
-            if let Some(owner) = context.players.by_id(previous_owner_id) {
+            if let Some(owner) = players.iter().find(|p| p.id == previous_owner_id) {
                 let dx = owner.position.x - self.position.x;
                 let dy = owner.position.y - self.position.y;
                 let dz = self.position.z;
@@ -1268,9 +1293,18 @@ impl Ball {
                     if let Some(current_owner_id) = self.current_owner {
                         // Check if current owner is among nearby players
                         if nearby_slice.contains(&current_owner_id) {
+                            // Live roster, not `context.players`: the
+                            // scores being compared are fatigue-scaled
+                            // (`calculate_tackling_score` reads condition
+                            // through the skill composites) and the
+                            // `best_tackler` selection twenty lines above
+                            // computes the same score from the live slice.
+                            // Read two different ways, the comparison was
+                            // between a kick-off-fresh challenger and a
+                            // kick-off-fresh owner in the 80th minute.
                             if let (Some(current_owner_full), Some(challenger_full)) = (
-                                context.players.by_id(current_owner_id),
-                                context.players.by_id(player.id),
+                                players.iter().find(|p| p.id == current_owner_id),
+                                players.iter().find(|p| p.id == player.id),
                             ) {
                                 let current_score =
                                     Self::calculate_tackling_score(current_owner_full, minute);

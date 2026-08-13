@@ -3374,6 +3374,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     BlockDiag::reset();
     core::helper_diag::reset();
     core::mid_run_diag::reset();
+    core::mid_onball_diag::reset();
+    core::stuck_exit_stats::reset();
     core::dead_ball_diag::reset();
     core::time_band_diag::reset();
     core::r#match::TransitionGraph::reset();
@@ -5450,16 +5452,32 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         longest as f64 * 0.02,
                     );
                     for (id, ticks, eps) in rows.iter().take(8) {
+                        // Dwell split per row: a state that HOLDS the ball
+                        // reads high, a state everybody passes THROUGH on
+                        // the tick they claim it reads 0-1. The two need
+                        // opposite fixes, and the row alone cannot tell
+                        // them apart.
+                        let d = core::dead_ball_diag::dwell_for_state(*id);
+                        let dt: u64 = d.iter().sum::<u64>().max(1);
                         println!(
-                            "      {:>28}  {:>6.1}s  {:>4} episodes",
+                            "      {:>28}  {:>6.1}s  {:>4} episodes   dwell {:.0}/{:.0}/{:.0}/{:.0}/{:.0}%",
                             label
                                 .get(id)
                                 .cloned()
                                 .unwrap_or_else(|| format!("state {id}")),
                             *ticks as f64 * 0.02,
-                            eps
+                            eps,
+                            d[0] as f64 / dt as f64 * 100.0,
+                            d[1] as f64 / dt as f64 * 100.0,
+                            d[2] as f64 / dt as f64 * 100.0,
+                            d[3] as f64 / dt as f64 * 100.0,
+                            d[4] as f64 / dt as f64 * 100.0,
                         );
                     }
+                    println!(
+                        "      (dwell buckets = owner's in-state AI ticks: {})",
+                        core::dead_ball_diag::DWELL_LABELS.join(" / ")
+                    );
                     if un_ticks > 0 {
                         println!(
                             "      {:>28}  {:>6.1}s  {:>4} episodes",
@@ -5468,6 +5486,77 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                             un_eps
                         );
                     }
+                    // How long the owner had been in his state. A state
+                    // everybody passes THROUGH on the way into possession
+                    // collects one tick per ownership grant and reads
+                    // 0-1; a state that holds the ball and does nothing
+                    // reads high. The two need opposite fixes.
+                    let (all_dwell, tb_dwell, tb_dist) = core::dead_ball_diag::dwell_snapshot();
+                    let dsum: u64 = all_dwell.iter().sum::<u64>().max(1);
+                    let tsum: u64 = tb_dwell.iter().sum::<u64>().max(1);
+                    let pct = |v: &[u64; 5], t: u64| {
+                        v.iter()
+                            .enumerate()
+                            .map(|(i, n)| {
+                                format!(
+                                    "{} {:.0}%",
+                                    core::dead_ball_diag::DWELL_LABELS[i],
+                                    *n as f64 / t as f64 * 100.0
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("  ")
+                    };
+                    println!("      owner in-state ticks when stuck: {}", pct(&all_dwell, dsum));
+                    println!(
+                        "      …of which TakeBall ({} ticks): {}   owner sits {:.1}u ({:.2}m) off the ball",
+                        tb_dwell.iter().sum::<u64>(),
+                        pct(&tb_dwell, tsum),
+                        tb_dist,
+                        tb_dist * 0.125,
+                    );
+                    let (gained, lost, self_reclaim, spells) =
+                        core::dead_ball_diag::churn_snapshot();
+                    let ssum: u64 = spells.iter().sum::<u64>().max(1);
+                    let spell_str = spells
+                        .iter()
+                        .enumerate()
+                        .map(|(i, n)| {
+                            format!(
+                                "{} {:.0}%",
+                                core::dead_ball_diag::SPELL_LABELS[i],
+                                *n as f64 / ssum as f64 * 100.0
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("  ");
+                    println!(
+                        "      possession churn: {:.0} claims/match, {:.0} losses/match, {:.0}% of claims re-claimed by the man who just lost it",
+                        gained as f64 / n_matches as f64,
+                        lost as f64 / n_matches as f64,
+                        self_reclaim as f64 / gained.max(1) as f64 * 100.0,
+                    );
+                    println!("      spell length (full ticks): {}", spell_str);
+                    {
+                        let (tv, cross, zones, inflight) = core::dead_ball_diag::stall_churn_snapshot();
+                        let zt: u64 = zones.iter().sum::<u64>().max(1);
+                        let zrow = zones.iter().enumerate().map(|(i,n)| format!("{} {:.0}%", core::dead_ball_diag::ZONE_LABELS[i], *n as f64 / zt as f64 * 100.0)).collect::<Vec<_>>().join("  ");
+                        println!("      inside stalls: {:.1} turnovers/match, {:.0}% of them cross-team; {:.0}% of stuck ticks had a delivery in the air", tv as f64 / n_matches as f64, cross as f64 / tv.max(1) as f64 * 100.0, inflight as f64 / zt as f64 * 100.0);
+                        println!("      stall zone: {}", zrow);
+                    }
+                    {
+                        let (ex, sp) = core::stuck_exit_stats::snapshot();
+                        let t: u64 = ex.iter().sum::<u64>().max(1);
+                        let row = ex.iter().enumerate().map(|(i,n)| format!("{} {:.0}%", core::stuck_exit_stats::NAMES[i], *n as f64 / t as f64 * 100.0)).collect::<Vec<_>>().join("  ");
+                        println!("      FWD Running stuck-exit ({} ticks, mean speed {:.3} u/tick): {}", t, sp, row);
+                    }
+                    let (tb_ticks, tb_spells) = core::dead_ball_diag::takeball_ownership_snapshot();
+                    println!(
+                        "      TakeBall held the ball {:.1}s/match over {:.0} spells — {:.1} full ticks each (1-2 = a pass-through, not a dwell)",
+                        tb_ticks as f64 * 0.02 / n_matches as f64,
+                        tb_spells as f64 / n_matches as f64,
+                        tb_ticks as f64 / tb_spells.max(1) as f64,
+                    );
                 }
                 // ── BALL FLIGHT CENSUS ──────────────────────────────
                 //
@@ -5861,6 +5950,47 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         "  block→corner branch fired={}  save-parry→corner branch fired={}",
         mr[14], mr[15]
     );
+
+    // ── MIDFIELDER ON-BALL DECISION CENSUS ─────────────────────────────
+    // One row per exit of `MidfielderRunningState::process`, counted per
+    // tick a midfielder had the ball at his feet. The aggregate stats can
+    // only show that a pass happened; this shows WHICH of the eleven
+    // pass-emitting branches produced it, and how much of the possession
+    // never reaches the carry / dribble / shoot branches at all.
+    {
+        use core::mid_onball_diag as onball_diag;
+        let (exits, ahead, skill_refused, allowed) = onball_diag::snapshot();
+        let total: u64 = exits.iter().sum();
+        println!();
+        println!("--- MIDFIELDER ON-BALL DECISION CENSUS (ticks with the ball) ---");
+        println!("  total on-ball ticks: {}", total);
+        let mut rows: Vec<(usize, u64)> = exits.iter().copied().enumerate().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        for (i, n) in rows {
+            if n == 0 {
+                continue;
+            }
+            println!(
+                "  {:<22} {:>10}  {:>5.1}%",
+                onball_diag::NAMES[i],
+                n,
+                n as f64 / total.max(1) as f64 * 100.0
+            );
+        }
+        let ahead_total: u64 = ahead.iter().sum();
+        println!(
+            "  take-on gate reached {} ticks — opponents in cone: 0 {:.1}%  1 {:.1}%  2 {:.1}%  3+ {:.1}%",
+            ahead_total,
+            ahead[0] as f64 / ahead_total.max(1) as f64 * 100.0,
+            ahead[1] as f64 / ahead_total.max(1) as f64 * 100.0,
+            ahead[2] as f64 / ahead_total.max(1) as f64 * 100.0,
+            ahead[3] as f64 / ahead_total.max(1) as f64 * 100.0,
+        );
+        println!(
+            "  of the ticks with somebody to beat: allowed {}  refused on skill {}",
+            allowed, skill_refused
+        );
+    }
 
     // ── OPEN-PLAY CROSSING CHAIN ──────────────────────────────────────
     // Delivery MIX first (has one branch of `pick_cross_type` swallowed

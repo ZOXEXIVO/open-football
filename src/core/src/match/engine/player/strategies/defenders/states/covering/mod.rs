@@ -30,6 +30,22 @@ pub struct DefenderCoveringState {}
 
 impl StateProcessingHandler for DefenderCoveringState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // A player who has won the ball is not doing this any more.
+        //
+        // Nothing here asked whether HE had it, so a defender who
+        // intercepted or was simply the nearest body when it arrived
+        // carried on with an off-ball job while holding it — the same
+        // fixed point `Defender: Marking` was measured freezing on
+        // (99% of its stuck ticks with the owner 250-plus AI ticks into
+        // the state). `Running` is where a defender's on-ball decisions
+        // live, and this is the hand-off `DefenderStandingState` has
+        // always made.
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Running,
+            ));
+        }
+
         // AERIAL BALL — a cross dropping onto a covering defender is
         // headed clear. Checked first: the heading window is a couple of
         // ticks wide and everything below assumes a ball playable with
