@@ -1,5 +1,5 @@
 use bevy::asset::RenderAssetUsages;
-use bevy::image::{Image, ImageSampler};
+use bevy::image::{Image, ImageAddressMode, ImageSampler};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
@@ -45,13 +45,8 @@ impl Textures {
         const HEIGHT: u32 = 44;
         const SAMPLES: u32 = 4;
 
-        let digits: Vec<usize> = if number >= 10 {
-            vec![(number / 10) as usize, (number % 10) as usize]
-        } else {
-            vec![number as usize]
-        };
-        // Glyphs are 5 grid columns with one column of air between them.
-        let span = digits.len() as f32 * 6.0 - 1.0;
+        let glyphs = Self::glyphs(&number.to_string());
+        let span = Self::span(&glyphs);
         let cell = (WIDTH as f32 / (span + 1.2)).min(HEIGHT as f32 / 8.2);
         let left = (WIDTH as f32 - span * cell) * 0.5;
         let top = (HEIGHT as f32 - 7.0 * cell) * 0.5;
@@ -59,44 +54,84 @@ impl Textures {
         let mut data = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
-                let mut hits = 0u32;
-                for sub_y in 0..SAMPLES {
-                    for sub_x in 0..SAMPLES {
-                        let sample = Vec2::new(
-                            x as f32 + (sub_x as f32 + 0.5) / SAMPLES as f32,
-                            y as f32 + (sub_y as f32 + 0.5) / SAMPLES as f32,
-                        );
-                        let column = (sample.x - left) / cell;
-                        let row = (sample.y - top) / cell;
-                        if Self::glyph_covers(&digits, column, row) {
-                            hits += 1;
-                        }
-                    }
-                }
-                let alpha = (hits * 255 / (SAMPLES * SAMPLES)) as u8;
-                data.extend_from_slice(&[255, 255, 255, alpha]);
+                let ink = Self::ink(&glyphs, x, y, left, top, cell, SAMPLES);
+                data.extend_from_slice(&[255, 255, 255, (ink * 255.0) as u8]);
             }
         }
 
         images.add(Self::image(WIDTH, HEIGHT, data))
     }
 
+    /// How much of this texel the text covers, 0..1, supersampled `samples`
+    /// squared. `left`/`top` place the first glyph's top-left corner and
+    /// `cell` is the size of one grid unit, both in texels.
+    fn ink(
+        glyphs: &[[u8; 7]],
+        x: u32,
+        y: u32,
+        left: f32,
+        top: f32,
+        cell: f32,
+        samples: u32,
+    ) -> f32 {
+        let mut hits = 0u32;
+        for sub_y in 0..samples {
+            for sub_x in 0..samples {
+                let sample = Vec2::new(
+                    x as f32 + (sub_x as f32 + 0.5) / samples as f32,
+                    y as f32 + (sub_y as f32 + 0.5) / samples as f32,
+                );
+                if Self::glyph_covers(glyphs, (sample.x - left) / cell, (sample.y - top) / cell) {
+                    hits += 1;
+                }
+            }
+        }
+        hits as f32 / (samples * samples) as f32
+    }
+
+    /// Width of a run of glyphs in grid units — 5 columns each with one column
+    /// of air between them, and no trailing air.
+    fn span(glyphs: &[[u8; 7]]) -> f32 {
+        (glyphs.len() as f32 * 6.0 - 1.0).max(0.0)
+    }
+
     /// Whether the glyph grid is inked at this point, in grid units with the
-    /// origin at the top-left of the first digit.
-    fn glyph_covers(digits: &[usize], column: f32, row: f32) -> bool {
-        if row < 0.0 || row >= 7.0 || column < 0.0 {
+    /// origin at the top-left of the first glyph.
+    fn glyph_covers(glyphs: &[[u8; 7]], column: f32, row: f32) -> bool {
+        if !(0.0..7.0).contains(&row) || column < 0.0 {
             return false;
         }
         let index = (column / 6.0) as usize;
-        let Some(digit) = digits.get(index) else {
+        let Some(glyph) = glyphs.get(index) else {
             return false;
         };
         let local = column - index as f32 * 6.0;
         if local >= 5.0 {
             return false;
         }
-        let bits = Self::DIGITS[*digit][row as usize];
-        bits & (1 << (4 - local as u8)) != 0
+        glyph[row as usize] & (1 << (4 - local as u8)) != 0
+    }
+
+    /// One 5×7 pattern per character. Unknown characters come back blank,
+    /// which prints as a space rather than as a missing-glyph box — a
+    /// hoarding is not a place to report a typo.
+    fn glyphs(text: &str) -> Vec<[u8; 7]> {
+        text.chars().map(Self::glyph).collect()
+    }
+
+    fn glyph(character: char) -> [u8; 7] {
+        const BLANK: [u8; 7] = [0; 7];
+        match character.to_ascii_uppercase() {
+            digit @ '0'..='9' => Self::DIGITS[digit as usize - '0' as usize],
+            letter @ 'A'..='Z' => Self::LETTERS[letter as usize - 'A' as usize],
+            '-' => [0, 0, 0, 0b01110, 0, 0, 0],
+            '.' => [0, 0, 0, 0, 0, 0b01100, 0b01100],
+            ':' => [0, 0b01100, 0b01100, 0, 0b01100, 0b01100, 0],
+            '/' => [
+                0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000,
+            ],
+            _ => BLANK,
+        }
     }
 
     /// 5×7 glyphs, one `u8` per row, high bit leftmost.
@@ -132,6 +167,170 @@ impl Textures {
             0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100,
         ],
     ];
+
+    /// 5×7 capitals, sharing the row format and the renderer with the digits
+    /// above. `A` first; index with `letter - 'A'`.
+    const LETTERS: [[u8; 7]; 26] = [
+        [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ], // A
+        [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ], // B
+        [
+            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+        ], // C
+        [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ], // D
+        [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ], // E
+        [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ], // F
+        [
+            0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111,
+        ], // G
+        [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ], // H
+        [
+            0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ], // I
+        [
+            0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100,
+        ], // J
+        [
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ], // K
+        [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ], // L
+        [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ], // M
+        [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ], // N
+        [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ], // O
+        [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ], // P
+        [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101,
+        ], // Q
+        [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ], // R
+        [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ], // S
+        [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ], // T
+        [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ], // U
+        [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ], // V
+        [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
+        ], // W
+        [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+        ], // X
+        [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ], // Y
+        [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
+        ], // Z
+    ];
+
+    /// One advertising panel for the perimeter boards, to be tiled along
+    /// them: the wordmark in lit white on the board's own dark tone, with an
+    /// accent rule under it.
+    ///
+    /// **The height is the constraint, not the width.** A board is 0.95 m
+    /// tall and lands about 60 px on screen from the near touchline and 22 px
+    /// from the far one, so 64 texels tall is roughly 1:1 where it matters
+    /// and a mild minification where it does not. There are no mipmaps in
+    /// this scene — see [`Self::seats`] and [`Self::number`], which are sized
+    /// against the same problem — and a sharper board would crawl and sparkle
+    /// along the touchline every time the camera panned, which is the one
+    /// thing that would make advertising look worse than no advertising.
+    ///
+    /// The panel is therefore 512 × 64 for roughly 7.6 m of hoarding, which
+    /// puts the cap height at half the board and the text at a size a
+    /// broadcast camera can actually read.
+    pub fn hoarding(images: &mut Assets<Image>, text: &str) -> Handle<Image> {
+        const WIDTH: u32 = 512;
+        const HEIGHT: u32 = 64;
+        const SAMPLES: u32 = 4;
+        /// Share of the panel width the wordmark is allowed, so consecutive
+        /// panels do not run into each other where they tile.
+        const MARGIN: f32 = 0.88;
+        /// Cap height as a fraction of the board — a real perimeter wordmark
+        /// runs about half of one.
+        const CAP: f32 = 0.46;
+        /// Air between the baseline and the accent rule, and the rule's own
+        /// thickness, both in grid units.
+        const RULE_GAP: f32 = 0.9;
+        const RULE_THICKNESS: f32 = 0.5;
+
+        // Exactly the board's own colour, so the seam between an advertised
+        // panel and the plain structure behind it never shows.
+        let ground = Vec3::new(0.200, 0.230, 0.300);
+        let letters = Vec3::new(0.95, 0.96, 0.99);
+        // The seats' cyan. One accent runs through this ground rather than
+        // three unrelated brand colours.
+        let accent = Vec3::new(0.160, 0.600, 0.720);
+
+        let glyphs = Self::glyphs(text);
+        let span = Self::span(&glyphs);
+        let cell = ((WIDTH as f32 * MARGIN) / span.max(1.0)).min(HEIGHT as f32 * CAP / 7.0);
+        let left = (WIDTH as f32 - span * cell) * 0.5;
+        // Wordmark and rule centred as one block, so the panel does not sit
+        // high on the board with a band of empty ground under it.
+        let rule = (cell * RULE_THICKNESS).max(1.5);
+        let block = 7.0 * cell + RULE_GAP * cell + rule;
+        let top = (HEIGHT as f32 - block) * 0.5;
+
+        // A rule the width of the wordmark, a little under it.
+        let rule_top = top + (7.0 + RULE_GAP) * cell;
+        let rule_bottom = rule_top + rule;
+
+        let mut data = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
+        for y in 0..HEIGHT {
+            let on_rule = (y as f32 + 0.5) >= rule_top && (y as f32 + 0.5) < rule_bottom;
+            for x in 0..WIDTH {
+                let within = (x as f32 + 0.5) >= left && (x as f32 + 0.5) < left + span * cell;
+                let ink = Self::ink(&glyphs, x, y, left, top, cell, SAMPLES);
+                let mut colour = ground + (letters - ground) * ink;
+                if on_rule && within {
+                    colour = accent;
+                }
+                data.extend_from_slice(&[
+                    (colour.x * 255.0) as u8,
+                    (colour.y * 255.0) as u8,
+                    (colour.z * 255.0) as u8,
+                    255,
+                ]);
+            }
+        }
+
+        let mut image = Self::image(WIDTH, HEIGHT, data);
+        // Tiled along boards of two different lengths, so the repeat lives in
+        // the sampler and the count in each board's `uv_transform`.
+        if let ImageSampler::Descriptor(descriptor) = &mut image.sampler {
+            descriptor.address_mode_u = ImageAddressMode::Repeat;
+        }
+        images.add(image)
+    }
 
     /// The classic black-and-white football, as an equirectangular map for a
     /// UV sphere.

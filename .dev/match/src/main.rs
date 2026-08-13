@@ -5434,13 +5434,33 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     x as f32 / seen as f32 * 100.0
                 }
             };
+            // NB every percentage here is per BALL-TICK IN FLIGHT, not
+            // per shot — `seen` counts each tick a live shot spends in
+            // the check, ~15 of them per shot. Printing "blocked 1.0%"
+            // beside "(real: ~18-22% of shots blocked)" invited exactly
+            // the comparison it looks like, and that comparison is wrong
+            // by the flight length: 1.0% of ticks is ~7 blocks a match, a
+            // NORMAL number. Two rounds of defensive work were read as
+            // having achieved nothing on the strength of it. The per-shot
+            // rate is derived below; the per-player-per-match count in
+            // the RATING VOLUME PROFILE (`blocks`, real ~0.9 for a
+            // defender) is the other honest readout.
+            let per_shot = if total_shots > 0 {
+                fired as f32 / total_shots as f32 * 100.0
+            } else {
+                0.0
+            };
             println!(
-                "  block window: {} shots reached the check — above blocking height {:.1}%, \
-                 defender in the lane {:.1}%, blocked {:.1}%   (real: ~18-22% of shots blocked)",
+                "  block window: {} ball-ticks in flight reached the check — above blocking \
+                 height {:.1}%, defender in the lane {:.1}%, blocked {:.1}% (all PER TICK)",
                 seen,
                 bpct(too_high),
                 bpct(candidates),
                 bpct(fired),
+            );
+            println!(
+                "    → {} blocks over {} shots = {:.1}% of shots blocked   (real: ~18-22%)",
+                fired, total_shots, per_shot,
             );
             let (opp, behind, beyond, wide, in_win, mean_perp) = BlockDiag::lane_snapshot();
             let opct = |x: u64| {
@@ -5739,6 +5759,29 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     "  marker evasion: {:.0}% of attacker off-ball ticks had a marker, mean tightness {tightness:.2}, mean edge {edge:.2} ({marked} of {calls})",
                     marked as f64 / calls as f64 * 100.0
                 );
+            }
+            {
+                use core::mid_run_diag::{CLEAR_REASON_NAMES, ClearDiag};
+                let by_reason = ClearDiag::snapshot();
+                let total: u64 = by_reason.iter().sum();
+                if total > 0 {
+                    println!(
+                        "  clearance reasons ({} total, {:.1}/team/match):",
+                        total,
+                        total as f32 / (2.0 * n_matches as f32)
+                    );
+                    let mut rows: Vec<(usize, u64)> =
+                        by_reason.iter().copied().enumerate().collect();
+                    rows.sort_by(|a, b| b.1.cmp(&a.1));
+                    for (i, c) in rows.into_iter().filter(|(_, c)| *c > 0) {
+                        println!(
+                            "    {:<26} {:>8}  {:>5.1}%",
+                            CLEAR_REASON_NAMES[i],
+                            c,
+                            c as f32 / total as f32 * 100.0
+                        );
+                    }
+                }
             }
             let (lag_n, lag_mean, lag_max, dwell, lag_x, lag_y) = DefenceDiag::shape_lag();
             if lag_n > 0 {

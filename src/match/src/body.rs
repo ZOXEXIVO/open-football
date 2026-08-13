@@ -468,6 +468,19 @@ pub struct Gait {
     /// brings the forearms up and settles the chest so it can sit in his
     /// hands instead.
     pub carry: f32,
+    /// 0..1: how far into a full-stretch dive. Only ever non-zero for a
+    /// goalkeeper — see [`crate::actors::Actors::animate`] for how a dive is
+    /// told from a run.
+    ///
+    /// The topple itself is not here: a body going horizontal is a rotation
+    /// of the WHOLE figure and belongs on [`Carriage`]. What this drives is
+    /// everything the limbs do differently once he has left his feet — legs
+    /// together and straight instead of running, chest out of its lean.
+    pub dive: f32,
+    /// 0..1: both arms thrown out to their full length, for the dive and for
+    /// the standing leap at a cross. Held apart from `dive` because a keeper
+    /// jumping at a corner reaches without toppling at all.
+    pub reach: f32,
 }
 
 impl Joint {
@@ -507,6 +520,24 @@ impl Joint {
     /// A little outward roll at the shoulder, so the gloves close on the sides
     /// of the ball rather than inside it.
     const CRADLE_SPREAD: f32 = 0.03;
+    /// The reach, as rotations in the shoulder's and elbow's own frames. Both
+    /// arms go past the head and the elbows come nearly straight — a keeper at
+    /// full stretch is measured from his fingertips, and every degree left in
+    /// the elbow is a centimetre he does not cover.
+    ///
+    /// Read together with the topple on [`Carriage`]: rolled onto his side,
+    /// arms along his own up-axis point ACROSS the goal, which is what makes
+    /// the same two angles serve both the dive and the standing leap.
+    const REACH_SHOULDER: f32 = -2.42;
+    const REACH_ELBOW: f32 = -0.09;
+    /// Hands apart rather than together — he is covering an area, not
+    /// catching a pass.
+    const REACH_SPREAD: f32 = 0.16;
+    /// The legs in a dive: trailing slightly behind the hips and all but
+    /// straight. A footballer in the air has nothing to push against, so the
+    /// run cycle has to stop dead rather than fade out over a stride.
+    const DIVE_HIP: f32 = 0.22;
+    const DIVE_KNEE: f32 = 0.12;
 
     fn new(owner: Entity, limb: Limb, side: f32, origin: Vec3) -> Self {
         Joint {
@@ -583,7 +614,11 @@ impl Joint {
                 // upright chest — leave the lean and the rock in and the ball
                 // drifts a couple of centimetres out of his gloves every
                 // stride.
-                let settle = 1.0 - gait.carry;
+                //
+                // A diving keeper comes out of it for the same reason and one
+                // more: the lean is the forward pitch of a man driving off the
+                // ground, and there is no ground under him.
+                let settle = (1.0 - gait.carry) * (1.0 - gait.dive);
                 Quat::from_rotation_x(lean * (1.0 + 0.16 * gait.signature) * settle)
                     * Quat::from_rotation_y(-0.14 * gait.run * gait.phase.sin() * settle)
                     * Quat::from_rotation_z(roll * settle)
@@ -611,32 +646,53 @@ impl Joint {
                 let arm = Self::blend(Self::ARM_SWING, gait.run) * swing * asymmetry + drift;
                 let swinging =
                     Quat::from_rotation_z(self.side * carriage) * Quat::from_rotation_x(arm);
-                Self::held(
+                let holding = Self::held(
                     swinging,
                     Quat::from_rotation_z(self.side * Self::CRADLE_SPREAD)
                         * Quat::from_rotation_x(Self::CRADLE_SHOULDER),
                     gait.carry,
+                );
+                // Reach last, so a keeper who takes the ball cleanly at the
+                // top of a leap has his arms come down into the cradle rather
+                // than stay up around a ball he is already holding.
+                Self::held(
+                    holding,
+                    Quat::from_rotation_z(self.side * Self::REACH_SPREAD)
+                        * Quat::from_rotation_x(Self::REACH_SHOULDER),
+                    gait.reach,
                 )
             }
             // Elbow carriage is the most individual thing about a runner:
             // some hold them almost straight, some at a right angle.
             Limb::Elbow => Self::held(
-                Quat::from_rotation_x(
-                    -Self::blend(Self::ELBOW_FLEX, gait.run) * (1.0 + 0.24 * gait.signature)
-                        - 0.18 * gait.run * swing,
+                Self::held(
+                    Quat::from_rotation_x(
+                        -Self::blend(Self::ELBOW_FLEX, gait.run) * (1.0 + 0.24 * gait.signature)
+                            - 0.18 * gait.run * swing,
+                    ),
+                    Quat::from_rotation_x(Self::CRADLE_ELBOW),
+                    gait.carry,
                 ),
-                Quat::from_rotation_x(Self::CRADLE_ELBOW),
-                gait.carry,
+                Quat::from_rotation_x(Self::REACH_ELBOW),
+                gait.reach,
             ),
-            Limb::Hip => Quat::from_rotation_x(-Self::blend(Self::HIP_SWING, gait.run) * swing),
+            Limb::Hip => Self::held(
+                Quat::from_rotation_x(-Self::blend(Self::HIP_SWING, gait.run) * swing),
+                Quat::from_rotation_x(Self::DIVE_HIP),
+                gait.dive,
+            ),
             // Deepest as the leg folds through underneath the player, and all
             // but straight again by the time it reaches out to land. Squaring
             // the curve is what narrows the tuck to that one part of the
             // cycle; a plain cosine leaves the leading leg bent on touchdown,
             // which reads as a stumble rather than a stride.
-            Limb::Knee => Quat::from_rotation_x(
-                0.07 + Self::blend(Self::KNEE_FLEX, gait.run)
-                    * (0.5 + 0.5 * (leg - 0.5).cos()).powi(2),
+            Limb::Knee => Self::held(
+                Quat::from_rotation_x(
+                    0.07 + Self::blend(Self::KNEE_FLEX, gait.run)
+                        * (0.5 + 0.5 * (leg - 0.5).cos()).powi(2),
+                ),
+                Quat::from_rotation_x(Self::DIVE_KNEE),
+                gait.dive,
             ),
         }
     }
@@ -658,20 +714,76 @@ impl Joint {
     }
 }
 
+/// The whole figure, hung off the actor so it can leave the ground without
+/// taking the actor's own marks with it.
+///
+/// Everything else in this rig moves a limb against a body that is standing
+/// on the turf. A dive is the one thing that moves the body itself: the man
+/// goes horizontal and airborne, and no arrangement of hips and knees
+/// expresses that. Putting one node between the actor and the figure is what
+/// lets [`crate::actors::Actors::animate`] topple and lift the lot in one
+/// transform — while the contact shadow and the team ring, which stay
+/// children of the actor, stay flat on the grass where they belong.
+#[derive(Component)]
+pub struct Carriage {
+    /// The actor this figure belongs to; the dive is kept there.
+    pub owner: Entity,
+}
+
+impl Carriage {
+    /// Height of the point the body turns about, in metres — the hips.
+    ///
+    /// A diving keeper pivots around his middle: head one way, boots the
+    /// other, weight staying over the spot the recording puts him on. Turning
+    /// him about his feet instead would swing his whole body a metre sideways
+    /// out of his own shadow.
+    pub const PIVOT: f32 = Physique::HIP;
+
+    /// The transform that tips a figure `pitch` radians over its toes and
+    /// `roll` radians onto its side, `lift` metres off the turf, pivoting at
+    /// the hips.
+    ///
+    /// Two axes because a keeper's dive mostly is not the poster one: across
+    /// a recorded match, seven dives in ten travel more up the pitch than
+    /// across it — a man going down at a striker's feet rather than flying
+    /// into a top corner. Roll alone drew every one of those side-on.
+    ///
+    /// A Bevy `Transform` is translate-rotate-scale, so the pivot cannot be
+    /// expressed directly — it is folded into the translation instead, which
+    /// is what the second term is: rotate about the origin, then put the hips
+    /// back where they were.
+    pub fn placed(pitch: f32, roll: f32, lift: f32) -> Transform {
+        let rotation = Quat::from_rotation_x(pitch) * Quat::from_rotation_z(roll);
+        let pivot = Vec3::Y * Self::PIVOT;
+        Transform::from_translation(pivot - rotation * pivot + Vec3::Y * lift)
+            .with_rotation(rotation)
+    }
+}
+
 /// Hangs one footballer's meshes off an actor entity.
 pub struct Footballer;
 
 impl Footballer {
     /// Builds the rig under `root`, which carries the player's position, facing
-    /// and stride. Legs hang from the root so the torso can lean without taking
-    /// the feet with it; arms and head hang from the torso so that they do.
+    /// and stride. Legs hang from the [`Carriage`] so the torso can lean without
+    /// taking the feet with it; arms and head hang from the torso so that they
+    /// do.
     pub fn assemble(commands: &mut Commands, root: Entity, parts: &BodyParts, outfit: &Outfit) {
         let hips = Vec3::new(0.0, Physique::HIP, 0.0);
         let neck = Vec3::new(0.0, Physique::TORSO, 0.0);
         let elbow = Vec3::new(0.0, -Physique::UPPER_ARM, 0.0);
         let knee = Vec3::new(0.0, -Physique::THIGH, 0.0);
 
-        commands.entity(root).with_children(|body| {
+        let carriage = commands
+            .spawn((
+                Carriage { owner: root },
+                Transform::default(),
+                Visibility::default(),
+            ))
+            .id();
+        commands.entity(root).add_child(carriage);
+
+        commands.entity(carriage).with_children(|body| {
             body.spawn((
                 Joint::new(root, Limb::Pelvis, 0.0, hips),
                 Mesh3d(parts.pelvis.clone()),

@@ -1,4 +1,4 @@
-use crate::body::{BodyParts, Footballer, Gait, Joint, Physique};
+use crate::body::{BodyParts, Carriage, Footballer, Gait, Joint, Physique};
 use crate::config::{PlayerInfo, ViewerConfig};
 use crate::field::Field;
 use crate::kit::{Complexion, Wardrobe};
@@ -43,10 +43,38 @@ pub struct PlayerActor {
     /// Smoothed yaw from his facing to the ball: where he is looking.
     look: f32,
     /// Whether this is a goalkeeper. Only a keeper ever takes the ball in his
-    /// hands, so only a keeper is a candidate for the cradle.
+    /// hands or leaves his feet, so only a keeper is a candidate for the
+    /// cradle, the dive and the leap.
     is_goalkeeper: bool,
     /// How far into the hold he is, 0..1. See [`Gait::carry`].
     carry: f32,
+    /// How far into a dive, 0..1 — a body off its feet and extended rather
+    /// than a body running.
+    ///
+    /// Driven by the recorded height, because that is the only honest signal
+    /// there is: `PreparingForSave` shares the dive's speed band and reaches
+    /// the same 12 m/s shuffling along the line, so no test on speed or
+    /// direction can separate them. Measured against a real recording, a
+    /// speed-and-lateral test caught 2 dives in 10 and fired for minutes on
+    /// the shuffle. Leaving the ground is what only a dive does.
+    dive: f32,
+    /// Which way he is tipping, in his own frame: x onto his right, y over
+    /// his toes, each −1..1.
+    ///
+    /// Latched as he leaves the ground and then held — a keeper does not
+    /// change his mind halfway across his goal. Both axes, because keepers
+    /// mostly do NOT dive sideways: measured, 7 dives in 10 travel more up
+    /// the pitch than across it, which is a man going down at a striker's
+    /// feet rather than the poster save.
+    tip: Vec2,
+    /// How far off the turf the RECORDING says he is, in metres.
+    ///
+    /// Not inferred, unlike the topple above: the engine gives a keeper a
+    /// real vertical axis on the tick he commits to a jump or a dive
+    /// (`MatchPlayer::leap`), so the height is measured and comes down the
+    /// wire as the fourth element of his position sample. Everything on this
+    /// pitch that can be recorded should be read rather than guessed.
+    height: f32,
 }
 
 /// The name plate for one player, positioned each frame from the rig's
@@ -306,6 +334,37 @@ impl Actors {
     /// The engine's own roll/fly split sits at 0.1 m; this is under it so a
     /// ball is spinning as it flies rather than as it lands.
     const AIRBORNE: f32 = 0.05;
+    /// Height, in metres, at which a keeper counts as fully off his feet.
+    ///
+    /// Low, because the engine's dive apex starts at 0.16 m — a save along
+    /// the floor is still a man leaving the ground, just not by much — while
+    /// a standing leap at a cross runs 0.34 to 0.75. Both should read as
+    /// extended; what tells them apart is where he is going, not how high.
+    const SPRAWL_HEIGHT: f32 = 0.12;
+    /// Ground speed, in metres per second, at which a man off his feet is
+    /// travelling as flat as he ever gets.
+    ///
+    /// Not a threshold — the tip is proportional to speed over this — so a
+    /// keeper going straight up at a corner barely leans and one thrown full
+    /// length is horizontal, with every real dive somewhere between. The
+    /// number is the top of the engine's explosive band: base `max_speed` is
+    /// 0.36–0.63 u/tick, a tick is 10 ms and a unit 0.125 m, so the
+    /// goalkeeper's explosive multiplier lands at 10.5–12.5 m/s. Measured
+    /// peak across a whole recorded match: 12.3.
+    const SPRAWL_SPEED: f32 = 11.0;
+    /// Seconds of match time to get back up. There is no attack time: the
+    /// engine's own arc is the take-off, and going up is already as fast as
+    /// gravity says. Landing is where a keeper takes his time.
+    const SPRAWL_RECOVERY: f32 = 0.42;
+    /// How far the body goes over at full stretch, in radians, on whichever
+    /// axis he is travelling along — not the full quarter turn, because a
+    /// keeper lands on his shoulder and hip, not flat on his back.
+    const SPRAWL_ANGLE: f32 = 1.32;
+    /// How far off the ground, in metres, counts as fully airborne for the
+    /// arms. The engine's own leap apex runs 0.34 m for a poor jumper to
+    /// 0.75 for a good one, so this reaches full stretch partway up rather
+    /// than only at the very top of the best keeper's jump.
+    const REACH_HEIGHT: f32 = 0.35;
 
     pub fn spawn(
         mut commands: Commands,
@@ -426,7 +485,7 @@ impl Actors {
         loader: Res<ChunkLoader>,
         mut tracks: ResMut<ReplayTracks>,
         mut ball_state: ResMut<BallState>,
-        mut players: Query<(&PlayerActor, &mut Transform, &mut Visibility)>,
+        mut players: Query<(&mut PlayerActor, &mut Transform, &mut Visibility)>,
         mut ball: Query<(&mut Transform, &mut Visibility), (With<BallActor>, Without<PlayerActor>)>,
         mut shadow: Query<
             (&mut Transform, &mut Visibility),
@@ -454,16 +513,23 @@ impl Actors {
         // the same pass that places the players, because the answer depends on
         // where they have just been put.
         let mut holder: Option<(u32, Vec3)> = None;
-        for (actor, mut transform, mut visibility) in &mut players {
+        for (mut actor, mut transform, mut visibility) in &mut players {
             let position = tracks
                 .players
                 .get_mut(&actor.id)
                 .and_then(|track| track.position_at(now));
             match position {
-                Some([x, y, _]) => {
-                    let world = Field::to_world(x, y, 0.0);
+                Some([x, y, z]) => {
+                    let world = Field::to_world(x, y, z);
                     transform.translation.x = world.x;
                     transform.translation.z = world.z;
+                    // Height is kept OFF the actor transform on purpose. The
+                    // contact shadow and the team ring hang off the actor and
+                    // belong flat on the grass, so the rise is handed to the
+                    // `Carriage` instead — which is also what stops it
+                    // leaking into the ground speed `animate` reads out of
+                    // consecutive positions.
+                    actor.height = world.y;
                     *visibility = Visibility::Inherited;
                 }
                 None if covered => *visibility = Visibility::Hidden,
@@ -486,7 +552,14 @@ impl Actors {
                     // Players are root entities, so the local transform is the
                     // world one and the cradle can be carried straight out of
                     // the rig's own space through the man's height and build.
-                    holder = Some((actor.id, transform.transform_point(Physique::CRADLE)));
+                    //
+                    // Plus however far off the ground he currently is: a keeper
+                    // who claims a cross at the top of his jump is holding it
+                    // half a metre above where a standing one would, and the
+                    // engine cannot say so — it parks every gathered ball at
+                    // one height because it has no vertical axis for players.
+                    let gloves = Physique::CRADLE + Vec3::Y * actor.lift();
+                    holder = Some((actor.id, transform.transform_point(gloves)));
                 }
             }
         }
@@ -711,7 +784,44 @@ impl Actors {
                 }
             }
 
-            let facing = if let Some((direction, _)) = actor.strike {
+            // Off his feet, and therefore extended. Straight off the recorded
+            // height — the engine takes a keeper off the ground on a real
+            // ballistic arc, so the rise needs no ramp of its own. Only the
+            // landing does: a keeper stays sprawled for a moment after the
+            // turf has stopped him.
+            let sprawl = (actor.height / Self::SPRAWL_HEIGHT).clamp(0.0, 1.0);
+            let match_delta = delta * playback.speed.max(0.1);
+            actor.dive = if playback.seeked || sprawl >= actor.dive {
+                sprawl
+            } else {
+                actor.dive
+                    + (sprawl - actor.dive) * (1.0 - (-match_delta / Self::SPRAWL_RECOVERY).exp())
+            };
+
+            // And which way he is going over, latched as he leaves the
+            // ground. How far he tips is how fast he is travelling: straight
+            // up at a corner and he barely leans, thrown full length and he
+            // is horizontal. `heading` is where he was looking as he went —
+            // at the ball — so his own right and forward are the axes the
+            // tip decomposes onto.
+            if actor.dive > 0.0 && actor.dive >= sprawl - 1e-4 && sprawl > 0.0 {
+                let forward = Vec3::new(actor.heading.sin(), 0.0, actor.heading.cos());
+                let right = Vec3::new(actor.heading.cos(), 0.0, -actor.heading.sin());
+                if let Some(going) = Vec3::new(step.x, 0.0, step.z).try_normalize() {
+                    let flat = (actor.speed / Self::SPRAWL_SPEED).clamp(0.0, 1.0);
+                    actor.tip = Vec2::new(going.dot(right), going.dot(forward)) * flat;
+                }
+            }
+
+            let facing = if actor.dive > 1e-3 && ball.on_pitch {
+                // A keeper off his feet stays square to the shot and lets his
+                // body go over; he does not turn to face the corner he is
+                // diving into. Outranks the run for the same reason the strike
+                // does — this is a man travelling one way and pointed
+                // another, and it is also what makes `tip` decomposable onto
+                // his own right and forward.
+                ball.position - position
+            } else if let Some((direction, _)) = actor.strike {
                 // Opened up to where he played it, for as long as the follow
                 // through lasts. Outranks the run: this is the one moment a
                 // footballer is not facing where he is going.
@@ -788,6 +898,35 @@ impl Actors {
             let gait = actor.gait();
             transform.rotation = joint.pose(gait);
             transform.translation = joint.place(gait);
+        }
+    }
+
+    /// Takes the whole figure off its feet: the topple that puts a diving
+    /// keeper horizontal and the lift that gets him off the grass.
+    ///
+    /// Its own system rather than a second loop inside [`Actors::animate`]
+    /// because the carriage and the joints both want `&mut Transform`, and
+    /// two mutable transform queries in one system have to be proved
+    /// disjoint by filters that say nothing about why they are there.
+    ///
+    /// The transform lands on the [`Carriage`] and not on the actor, so the
+    /// contact shadow and the team ring — which hang off the actor itself —
+    /// stay flat on the turf underneath him.
+    pub fn carry_body(
+        actors: Query<&PlayerActor>,
+        mut carriages: Query<(&Carriage, &mut Transform)>,
+    ) {
+        for (carriage, mut transform) in &mut carriages {
+            let Ok(actor) = actors.get(carriage.owner) else {
+                continue;
+            };
+            // Rotating about +Z carries the head toward −X, so going over onto
+            // his own right is the NEGATIVE of the sideways tip — the same
+            // sign convention as the bank into a turn in `Joint::pose`. About
+            // +X carries the head forward, which is a keeper going down at a
+            // striker's feet and needs no flip.
+            let tip = actor.tip * Self::SPRAWL_ANGLE * actor.dive;
+            *transform = Carriage::placed(tip.y, -tip.x, actor.lift());
         }
     }
 
@@ -882,6 +1021,9 @@ impl PlayerActor {
             id,
             is_goalkeeper,
             carry: 0.0,
+            dive: 0.0,
+            tip: Vec2::ZERO,
+            height: 0.0,
             previous: None,
             heading: 0.0,
             // Start everyone at a different point in the run cycle. The
@@ -899,15 +1041,40 @@ impl PlayerActor {
         }
     }
 
+    /// How far off the turf he is, in metres, straight off the recording.
+    ///
+    /// Nothing is added to it here. The engine launches a keeper on a
+    /// ballistic arc out of his `jumping` attribute and lets gravity bring
+    /// him down, so the rise and the landing are already a physical
+    /// trajectory rather than an animation curve — anything this end could
+    /// contribute would be fighting it.
+    fn lift(&self) -> f32 {
+        self.height
+    }
+
     fn gait(&self) -> Gait {
         Gait {
+            // A man in the air is not running, whatever the ground he is
+            // covering says. Fading the run out through this one number
+            // stops the stride, the bob, the arm swing and the lean all at
+            // once — a diving keeper windmilling his legs is the single
+            // thing that would give the whole animation away.
+            run: (self.speed / Actors::SPRINT).clamp(0.0, 1.0) * (1.0 - self.dive),
             phase: self.phase,
-            run: (self.speed / Actors::SPRINT).clamp(0.0, 1.0),
             signature: Complexion::carriage(self.id),
             idle: self.idle,
             turn: self.turn,
             look: self.look,
             carry: self.carry,
+            dive: self.dive,
+            // Both arms go out for the dive and for the leap — but not once
+            // the ball is actually in his gloves, where the cradle takes
+            // them back in. A man off the ground is reaching for something;
+            // there is no other reason for a footballer to be up there.
+            reach: self
+                .dive
+                .max((self.height / Actors::REACH_HEIGHT).clamp(0.0, 1.0))
+                * (1.0 - self.carry),
         }
     }
 }

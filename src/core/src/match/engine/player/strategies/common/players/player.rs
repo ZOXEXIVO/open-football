@@ -430,21 +430,51 @@ impl<'p> PlayerOperationsImpl<'p> {
         }
     }
 
+    /// Is the lane to this team-mate clear of opponents?
+    ///
+    /// This raycast `cast_ray(.., include_players: false)`, and the only
+    /// non-player collider in the space is the BALL — a sphere of radius
+    /// 0.11u, about a centimetre and a half. So the one thing it could
+    /// ever hit was a ball that happened to lie within a centimetre of
+    /// the pass line, and it returned "clear" essentially always.
+    ///
+    /// It is used as the lane test by the cut-back finder, the
+    /// better-placed-team-mate deferral, the emergency outlet and both
+    /// safe-pass searches — every one of which believed it was asking
+    /// whether the ball could actually get there, and none of which was.
+    ///
+    /// Done directly rather than through the raycaster because the
+    /// raycaster cannot exclude colliders: with `include_players: true`
+    /// the passer's OWN sphere sits on the ray origin, so every pass
+    /// would report blocked instead — the same bug with the sign
+    /// flipped. The corridor walk below is the same shape as the one
+    /// `goal_sight` uses for the shot lane.
     pub fn has_clear_pass(&self, player_id: u32) -> bool {
-        let player_position = self.ctx.player.position;
-        let target_player_position = self.ctx.tick_context.positions.players.position(player_id);
-        let direction_to_player = (target_player_position - player_position).normalize();
+        let from = self.ctx.player.position;
+        let to = self.ctx.tick_context.positions.players.position(player_id);
+        let delta = to - from;
+        let distance = delta.magnitude();
+        if distance < 1.0 {
+            return true;
+        }
+        let dir = delta / distance;
 
-        let distance_to_player = self.distance_to_player(player_id);
+        /// How near the line an opponent has to be to cut the pass out.
+        /// 12u = 1.5 m — a leg and a lean, not a body width.
+        const LANE_HALF_WIDTH: f32 = 12.0;
+        /// Ignored at either end: a man level with the passer has been
+        /// gone past, and one standing on the receiver is his marker,
+        /// which is a different question from whether the ball arrives.
+        const END_EXCLUSION: f32 = 8.0;
 
-        let ray_cast_result = self.ctx.tick_context.space.cast_ray(
-            player_position,
-            direction_to_player,
-            distance_to_player,
-            false,
-        );
-
-        ray_cast_result.is_none()
+        !self.ctx.players().opponents().all().any(|opp| {
+            let relative = opp.position - from;
+            let along = relative.dot(&dir);
+            if along <= END_EXCLUSION || along >= distance - END_EXCLUSION {
+                return false;
+            }
+            (relative - dir * along).magnitude() < LANE_HALF_WIDTH
+        })
     }
 
     /// Can this player physically strike the ball right now? Gated by

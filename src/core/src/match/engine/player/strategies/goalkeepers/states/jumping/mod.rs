@@ -45,6 +45,15 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
         None
     }
 
+    /// The GROUND part of the jump — where he travels while he is up.
+    ///
+    /// The rise itself is not here and must not be: this vector is put
+    /// through an acceleration limiter and a `max_speed` clamp that both take
+    /// its 3-D norm, and a vertical term in metres inside a horizontal vector
+    /// in grid units is measured against the wrong limit and then dropped by
+    /// `MatchPlayer::move_to`, which integrates x and y only. The leap is a
+    /// take-off, requested once on entering this state — see
+    /// `PlayerMatchState::leap_apex`.
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Calculate base jump vector
         let jump_vector = self.calculate_jump_vector(ctx);
@@ -56,12 +65,10 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
             Vector3::zeros()
         };
 
-        // Calculate vertical component based on jump phase
-        let vertical_component = self.calculate_vertical_motion(ctx);
-
-        // Combine all motion components
-        let combined_velocity =
-            jump_vector + diving_vector + Vector3::new(0.0, 0.0, vertical_component);
+        // Combine all motion components, flat: whatever vertical lean the
+        // bearing to a high ball put into them belongs to the take-off.
+        let mut combined_velocity = jump_vector + diving_vector;
+        combined_velocity.z = 0.0;
 
         // Explosive scaling — gated by the unified explosive multiplier
         // and aerial command so weak keepers can't cover the full goal.
@@ -89,6 +96,12 @@ impl GoalkeeperJumpingState {
         // Vertical reach is jumping + aerial-command driven; weak GKs
         // cannot cover the full crossbar even though JUMP_HEIGHT is
         // generous.
+        //
+        // `max_reach` is a whole envelope — the leap and the arms together —
+        // and `keeper_pos.z` is 0 for every player by design (the real leap
+        // lives in `MatchPlayer::height`, out of reach of every distance
+        // helper), so this reads as "how far up is the ball" and counts the
+        // jump exactly once.
         let max_reach = JUMP_HEIGHT * (0.40 + prof.aerial_command * 0.45 + prof.dive_reach * 0.25);
         let vertical_reach = (ball_pos.z - keeper_pos.z).abs() <= max_reach;
         let horizontal_max =
@@ -167,16 +180,5 @@ impl GoalkeeperJumpingState {
         } else {
             Vector3::zeros()
         }
-    }
-
-    /// Calculate vertical motion based on jump phase
-    fn calculate_vertical_motion(&self, ctx: &StateProcessingContext) -> f32 {
-        let jump_phase = ctx.in_state_time as f32 / JUMP_DURATION as f32;
-        let jump_curve = (std::f32::consts::PI * jump_phase).sin(); // Smooth jump curve
-
-        // Scale jump height based on goalkeeper's jumping ability
-        let max_height = JUMP_HEIGHT * (ctx.player.skills.physical.jumping as f32 / 20.0);
-
-        jump_curve * max_height
     }
 }

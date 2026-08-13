@@ -272,6 +272,54 @@ pub mod mid_run_diag {
     /// failing is named rather than inferred.
     pub static SHAPE_LAG_AXIS_X100: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
 
+    /// Which branch actually sent a defender into `Clearing`.
+    ///
+    /// Clearances measure 10.2 per defender per match against a real
+    /// ~3.5, and three rounds of narrowing individual gates by
+    /// inspection moved the total once and then not at all — because the
+    /// branch being narrowed was not the one firing. There are nine
+    /// separate routes into that state across two files and no way to
+    /// tell them apart from the outside.
+    pub const CLEAR_REASONS: usize = 9;
+    const ZERO_C: AtomicU64 = AtomicU64::new(0);
+    pub static CLEAR_BY_REASON: [AtomicU64; CLEAR_REASONS] = [ZERO_C; CLEAR_REASONS];
+    pub const CLEAR_REASON_NAMES: [&str; CLEAR_REASONS] = [
+        "run:box-pressed",
+        "run:congested",
+        "run:no-pass-target",
+        "run:immediate-pressure",
+        "run:250t-force",
+        "pass:must-clear",
+        "pass:no-safe-option",
+        "pass:dangerous-position",
+        "pass:65t-no-safe",
+    ];
+
+    pub struct ClearDiag;
+
+    impl ClearDiag {
+        #[inline]
+        pub fn note(reason: usize) {
+            if let Some(c) = CLEAR_BY_REASON.get(reason) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; CLEAR_REASONS] {
+            let mut out = [0u64; CLEAR_REASONS];
+            for (o, c) in out.iter_mut().zip(CLEAR_BY_REASON.iter()) {
+                *o = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+
+        pub fn reset() {
+            for c in CLEAR_BY_REASON.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
     /// Defensive-shape counters.
     pub struct DefenceDiag;
 
@@ -516,6 +564,7 @@ pub mod mid_run_diag {
         CrossDiag::reset();
         PlanDiag::reset();
         DefenceDiag::reset();
+        ClearDiag::reset();
         EvasionDiag::reset();
         for c in [
             &RUNNER_BOX_TICKS,
@@ -996,7 +1045,13 @@ pub enum ShotDecision {
 /// bar either. Gated, it can describe the shot it is actually for.
 /// Bar units of relief for a SPECULATIVE effort — beyond the edge of the
 /// box, gated on `long_shot_licence` and decaying with distance.
-const LONG_RANGE_RELIEF: f32 = 0.06;
+/// 0.06 → 0.12 → 0.08. The higher base bar crushed the normal shooting
+/// band hardest and this hump is what holds 11-22 m open, but 0.12 put
+/// 41% of all shots into 16.5-22 m alone (real 20%). That band sits
+/// right on the bar, so it is the most sensitive place on the curve —
+/// a 0.06 change in relief swings it by 30 points of share. Move it in
+/// steps of 0.02 and read the mix, never the total.
+const LONG_RANGE_RELIEF: f32 = 0.08;
 /// Bar units a genuine long-shot specialist earns through
 /// `long_shot_licence` — a clear lane and the range to reach. Does not
 /// decay with distance; see the note at `specialist_tail`.
@@ -1012,7 +1067,20 @@ const LONG_RANGE_FLOOR: f32 = 0.20;
 /// Height of the shot bar before the per-opportunity spread and the two
 /// distance reliefs. This is the engine's shot-volume knob — see the note
 /// at the threshold.
-const SHOT_BAR_BASE: f32 = 0.530;
+/// Raised 0.530 → 0.575 now that the DEFENCE is doing its share.
+///
+/// The bar was left deliberately low through the shooting work on the
+/// standing instruction that shot volume must be restrained by better
+/// defending rather than by suppressing the decision. That side is now
+/// done — 16.5% of shots blocked against a real 18-22%, clearances 4.2
+/// per defender against ~3.5, tackles 1.75 against ~1.6 — and volume is
+/// still 21.7 shots a team against a real 13, so the remainder is the
+/// bar's to carry after all.
+///
+/// Move it in small steps and re-read the whole distance mix, never just
+/// the total: the reliefs subtract from this, so a uniform lift falls
+/// entirely on the un-eased middle of the pitch.
+const SHOT_BAR_BASE: f32 = 0.575;
 /// How much of the full relief a point-blank chance gets.
 ///
 /// Sized against shot QUALITY, not shot count. At 1.0 the close-range
@@ -1029,7 +1097,14 @@ const SHOT_BAR_BASE: f32 = 0.530;
 /// gone by the edge of the comfortable range, so it lifts the tap-in
 /// without lifting the eleven-metre half-chance the earlier linear
 /// version did.
-const CLOSE_RANGE_RELIEF: f32 = 0.28;
+/// Trimmed 0.28 → 0.17 alongside the base-bar lift. The reliefs subtract
+/// from `SHOT_BAR_BASE`, so raising the base while leaving these alone
+/// falls entirely on the bands that have no relief: at 0.575/0.28 the
+/// total landed on 12.7 shots (real 13) but <6 m took 34.6% of them
+/// (real 15%) and 11-22 m collapsed to 21% (real 42%) — forwards back to
+/// hunting tap-ins. The point of the close relief is that a striker in
+/// the six-yard box shoots, not that he only shoots there.
+const CLOSE_RANGE_RELIEF: f32 = 0.17;
 
 pub struct StrikingRange;
 

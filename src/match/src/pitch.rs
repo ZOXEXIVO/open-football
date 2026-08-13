@@ -1,6 +1,7 @@
 use crate::field::Field;
 use crate::textures::Textures;
 use bevy::asset::RenderAssetUsages;
+use bevy::math::Affine2;
 use bevy::mesh::Indices;
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
@@ -371,6 +372,11 @@ impl Pitch {
         const END_MARGIN: f32 = 4.6;
         const HOARDING_HEIGHT: f32 = 0.95;
         const HOARDING_DEPTH: f32 = 0.14;
+        // How wide one advert reads on the boards, in metres. Matched to the
+        // panel `Textures::hoarding` draws — 512 texels against 64 for the
+        // 0.95 m height — so a texel is square and the wordmark is neither
+        // stretched nor squashed.
+        const AD_PANEL: f32 = 7.6;
 
         // Advertising hoardings. Lifted out of near-black too, but only to a
         // mid tone: these run the full length of the touchline right at the
@@ -394,24 +400,40 @@ impl Pitch {
             ..default()
         });
 
+        // What the boards actually advertise. One panel, tiled — which is what
+        // a ground with a single perimeter sponsor looks like, and the only
+        // honest thing to put here: this is the project's own address, not an
+        // invented brand.
+        let advert = Textures::hoarding(images, "OPEN-FOOTBALL.ORG");
+
         let along = Field::HALF_LENGTH + END_MARGIN;
         let across = Field::HALF_WIDTH + SIDE_MARGIN;
-        for (size, position) in [
+        // `turn` points a panel at the pitch: a `Rectangle` faces +Z, and
+        // rotating about Y by `turn` carries that onto `(sin, 0, cos)`.
+        for (size, position, length, turn) in [
             (
                 Vec3::new(along * 2.0, HOARDING_HEIGHT, HOARDING_DEPTH),
                 Vec3::new(0.0, 0.0, across),
+                along * 2.0,
+                PI,
             ),
             (
                 Vec3::new(along * 2.0, HOARDING_HEIGHT, HOARDING_DEPTH),
                 Vec3::new(0.0, 0.0, -across),
+                along * 2.0,
+                0.0,
             ),
             (
                 Vec3::new(HOARDING_DEPTH, HOARDING_HEIGHT, across * 2.0),
                 Vec3::new(along, 0.0, 0.0),
+                across * 2.0,
+                -FRAC_PI_2,
             ),
             (
                 Vec3::new(HOARDING_DEPTH, HOARDING_HEIGHT, across * 2.0),
                 Vec3::new(-along, 0.0, 0.0),
+                across * 2.0,
+                FRAC_PI_2,
             ),
         ] {
             commands.spawn((
@@ -423,6 +445,49 @@ impl Pitch {
                 Mesh3d(meshes.add(Cuboid::new(size.x, 0.07, size.z + 0.04))),
                 MeshMaterial3d(trim.clone()),
                 Transform::from_translation(position + Vec3::Y * HOARDING_HEIGHT),
+            ));
+
+            // The advert itself, as a face hung a few millimetres in front of
+            // the board rather than as a texture on the box. The box is a
+            // cuboid: texturing it would print the wordmark on the top, the
+            // back and both ends as well, and the top is where the lit trim
+            // goes.
+            //
+            // A whole number of panels per side, so the tiling seam lands
+            // between two words instead of through the middle of one. The
+            // two sides of a ground are different lengths, hence a material
+            // each — the repeat count is the only thing that differs.
+            let panels = (length / AD_PANEL).round().max(1.0);
+            let facing = Quat::from_rotation_y(turn);
+            commands.spawn((
+                Mesh3d(meshes.add(Rectangle::new(length, HOARDING_HEIGHT).mesh().build())),
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color: Color::WHITE,
+                    base_color_texture: Some(advert.clone()),
+                    // Perimeter boards at a floodlit ground are lit panels,
+                    // and the emissive TEXTURE is what keeps that honest: the
+                    // wordmark glows and the dark ground behind it does not,
+                    // where a flat emissive would have the whole board give
+                    // off light like a lightbox.
+                    //
+                    // Held to roughly the lit trim's level above, and for the
+                    // reason the boards are a mid tone rather than a bright
+                    // one in the first place: this runs the full length of the
+                    // touchline at the very edge of the play, and anything
+                    // here that out-glows the one crisp line in the background
+                    // is competing with the ball for the eye.
+                    emissive: LinearRgba::rgb(0.20, 0.24, 0.30),
+                    emissive_texture: Some(advert.clone()),
+                    uv_transform: Affine2::from_scale(Vec2::new(panels, 1.0)),
+                    perceptual_roughness: 0.55,
+                    ..default()
+                })),
+                Transform::from_translation(
+                    position
+                        + Vec3::Y * HOARDING_HEIGHT * 0.5
+                        + facing * Vec3::Z * (HOARDING_DEPTH * 0.5 + 0.006),
+                )
+                .with_rotation(facing),
             ));
         }
 

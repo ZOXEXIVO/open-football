@@ -1,6 +1,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::engine::flow::goal::GOAL_HEIGHT;
 use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
@@ -367,6 +368,16 @@ impl PlayerMatchState {
 
         if let Some(state) = new_state {
             Self::change_state(player, state);
+            // A player who has just committed to leaving the ground does so
+            // now, on the tick he decided. The rise lives outside `velocity`
+            // and outside everything below — see `MatchPlayer::vertical_speed`
+            // for why a metric axis cannot travel inside a vector the
+            // horizontal speed limits are going to normalise.
+            if let Some(apex) =
+                Self::leap_apex(player, state, tick_context.positions.ball.position.z)
+            {
+                player.leap(apex);
+            }
         } else {
             player.in_state_time += 1;
         }
@@ -497,6 +508,43 @@ impl PlayerMatchState {
         }
 
         state_change_result.events
+    }
+
+    /// How high a player takes himself, in metres, on entering `state` —
+    /// `None` for every state that keeps both feet on the grass, which is
+    /// all but two of them.
+    ///
+    /// Scaled by `jumping`, which is the attribute that means exactly this.
+    /// The numbers are the rise of the player's HIPS, so they can be checked
+    /// against a human being: a poor leaper gets about a third of a metre off
+    /// the ground and a good one three quarters, which puts a keeper's gloves
+    /// comfortably over a 2.44 m crossbar.
+    fn leap_apex(player: &MatchPlayer, state: PlayerState, ball_height: f32) -> Option<f32> {
+        let spring = ((player.skills.physical.jumping - 1.0) / 19.0).clamp(0.0, 1.0);
+        match state {
+            // A standing leap at a cross or a corner — the one moment a
+            // keeper is going straight up.
+            PlayerState::Goalkeeper(GoalkeeperState::Jumping) => Some(0.34 + spring * 0.41),
+            // A dive is leaving your feet, and that is as true of a save
+            // along the floor as of one into the top corner — what the height
+            // of the ball changes is how far he still has to climb, not
+            // whether he takes off at all. Hence a floor and then a term
+            // measured against the crossbar, the highest a shot can be and
+            // still be worth diving for.
+            //
+            // The floor is also load-bearing downstream. `PreparingForSave`
+            // shares this state's speed band and reaches the same 12 m/s
+            // shuffling along the line, so nothing in a position track can
+            // tell the two apart — measured, a speed-and-direction test got
+            // 2 of 10 real dives and fired constantly on the shuffle. Leaving
+            // the ground is the one thing only a dive does, so it has to
+            // actually register.
+            PlayerState::Goalkeeper(GoalkeeperState::Diving) => {
+                let high = (ball_height / GOAL_HEIGHT).clamp(0.0, 1.0);
+                Some(0.16 + spring * 0.14 + high * (0.10 + spring * 0.24))
+            }
+            _ => None,
+        }
     }
 
     /// Movement band for each goalkeeper state.

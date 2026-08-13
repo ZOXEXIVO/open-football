@@ -58,7 +58,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // flight. Refresh the *existing* tick_ctx in place instead of
         // allocating a fresh GameTickContext (grid+space buffers) every
         // light tick during the shot window.
-        if field.ball.cached_shot_target.is_some() {
+        let shot_in_flight = field.ball.cached_shot_target.is_some();
+        if shot_in_flight {
             tick_ctx.update_for_goalkeeper_shot(field, &context.players);
             Self::play_goalkeepers(field, context, tick_ctx, events);
         }
@@ -91,6 +92,20 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
 
         for player in field.players.iter_mut().filter(|p| !p.is_sent_off) {
+            // A keeper the shot branch above just ran has ALREADY been moved:
+            // `MatchPlayer::update` ends in `move_to` + the boundary clamp.
+            // Moving him again here integrated his velocity twice on every
+            // light tick of every shot — so for the one passage of play the
+            // branch exists to sharpen, the two goalkeepers covered double
+            // the ground their own speed limit allows. Harmless-looking while
+            // the vertical axis was dead; with a real leap it also applied
+            // gravity twice and collapsed the arc.
+            if shot_in_flight
+                && player.tactical_position.current_position.position_group()
+                    == PlayerFieldPositionGroup::Goalkeeper
+            {
+                continue;
+            }
             // Move first, then clamp — see `MatchPlayer::update`.
             player.move_to();
             player.check_boundary_collision(context);

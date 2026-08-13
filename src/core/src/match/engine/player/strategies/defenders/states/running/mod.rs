@@ -113,7 +113,43 @@ impl StateProcessingHandler for DefenderRunningState {
                         )),
                     ));
                 }
-                // No pass target — clear the ball rather than lose it
+                // Nothing from the bespoke search — ask the real one
+                // before hoofing it.
+                //
+                // `find_emergency_pass_target` is a local, hand-rolled
+                // scan and it comes up empty far more often than the
+                // situation warrants: instrumented, this branch alone is
+                // 59% of every clearance in the match (~25 per team per
+                // match) and is why defenders measure 10 clearances each
+                // against a real ~3.5. The engine already has a pass
+                // search that knows about congestion, interception risk,
+                // personality and direction; a defender under pressure
+                // should consult THAT before deciding there is no ball on.
+                // NB `find_safe_pass_option()` is NOT the search to use
+                // here: it scans `nearby(50.0)` — fifty units is 6.25 m —
+                // so it only ever sees a team-mate close enough to be in
+                // the same huddle, and it comes up empty for the same
+                // reason the bespoke scan does. `find_best_pass_option`
+                // is the evaluator every other line on the pitch uses,
+                // at a distance a defender can actually pass.
+                if let Some((safe, _)) = ctx
+                    .player()
+                    .passing()
+                    .find_best_pass_option_with_distance(220.0)
+                {
+                    return Some(StateChangeResult::with_defender_state_and_event(
+                        DefenderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(safe.id)
+                                .with_reason("DEF_EMERGENCY_SAFE_PASS")
+                                .build(ctx),
+                        )),
+                    ));
+                }
+                #[cfg(feature = "match-logs")]
+                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(2);
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
                 ));
@@ -342,11 +378,27 @@ impl StateProcessingHandler for DefenderRunningState {
 
         // SMART BUILD-UP: Graduated response instead of always clearing
         if ctx.player.has_ball(ctx) && ctx.in_state_time > 80 {
-            // Under immediate pressure — clear immediately
-            if ctx.players().opponents().exists(15.0) && ctx.in_state_time > 80 {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Clearing,
-                ));
+            // Under immediate pressure — clear, but only with nothing on.
+            //
+            // This sat ABOVE the safe-pass search below it and returned
+            // unconditionally, so the "graduated response" the block is
+            // named for never graduated: any opponent within 15u (1.9 m)
+            // after 0.8 s on the ball meant hoof, and the 80-150 tick
+            // look-for-a-pass rung underneath was unreachable whenever a
+            // defender was actually being closed down — which is the only
+            // time it matters. A defender under pressure looks for the
+            // out FIRST; that is what playing out of the back is.
+            if ctx.players().opponents().exists(15.0) {
+                let def_profile = DefenderSkillProfile::from_ctx(ctx);
+                if def_profile.must_clear_under_pressure()
+                    || self.find_safe_buildup_pass(ctx, 150.0).is_none()
+                {
+                    #[cfg(feature = "match-logs")]
+                    crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(3);
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Clearing,
+                    ));
+                }
             }
 
             // 80-150 ticks: Look for safe short pass to nearby midfielder or defender
@@ -383,6 +435,8 @@ impl StateProcessingHandler for DefenderRunningState {
 
             // 250+ ticks: Force clear as last resort
             if ctx.in_state_time > 250 {
+                #[cfg(feature = "match-logs")]
+                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(4);
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
                 ));
@@ -791,13 +845,47 @@ impl DefenderRunningState {
     }
 
     pub fn should_clear(&self, ctx: &StateProcessingContext) -> bool {
-        // Clear if in own penalty area with opponents pressing close
-        if ctx.ball().in_own_penalty_area() && ctx.players().opponents().exists(30.0) {
-            return true;
+        // Clear if in own penalty area under REAL pressure, and only if
+        // this defender is not the sort who plays out of it.
+        //
+        // The test was `in_own_penalty_area() && opponents().exists(30.0)`
+        // — 30u is 3.75 m, which in a defended penalty area is true of
+        // essentially every touch a defender takes. So every centre-half
+        // hoofed every ball he received in his own box, whoever he was:
+        // measured 15.2 clearances per defender per match against a real
+        // ~3.5. It also asked nothing about the man. `buildup_profile`
+        // already models exactly this distinction — and
+        // `must_clear_under_pressure()` was being consulted on the
+        // PASSING path while the far busier running path ignored it.
+        //
+        // Real defending: a ball-playing centre-half under close pressure
+        // looks for the out and only clears when there isn't one; a
+        // limited one clears on principle. Both clear when nobody is
+        // available. 14u (1.75 m) is a man actually on you rather than a
+        // man in the same part of the pitch.
+        if ctx.ball().in_own_penalty_area() && ctx.players().opponents().exists(14.0) {
+            let def_profile = DefenderSkillProfile::from_ctx(ctx);
+            // Same search as the emergency branch, for the same reason:
+            // `find_safe_pass_option()` only looks 6.25 m and so reports
+            // "no pass" whenever the nearest team-mate is a normal
+            // distance away.
+            if def_profile.must_clear_under_pressure()
+                || ctx
+                    .player()
+                    .passing()
+                    .find_best_pass_option_with_distance(220.0)
+                    .is_none()
+            {
+                #[cfg(feature = "match-logs")]
+                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(0);
+                return true;
+            }
         }
 
         // Clear if congested anywhere (not just boundaries)
         if self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested() {
+            #[cfg(feature = "match-logs")]
+            crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(1);
             return true;
         }
 
@@ -1091,8 +1179,23 @@ impl DefenderRunningState {
             let opp_velocity = ctx.tick_context.positions.players.velocity(_opp_id);
             let opp_speed = opp_velocity.magnitude();
 
-            // Must be moving fast (sprinting)
-            if opp_speed < 1.5 {
+            // Must be moving fast (sprinting).
+            //
+            // 1.5 is in u/tick, and a human's maximum in this engine is
+            // 0.63 — so this `continue` skipped EVERY opponent and the
+            // whole predictive read below it (alignment, closing speed,
+            // time-to-arrival) has never once executed. The same
+            // wrong-scale class of bug as the old `DANGEROUS_RUN_SPEED`
+            // values, which "exceeded human max speed, so run-tracking
+            // never fired".
+            //
+            // With it dead, `is_opponent_closing_fast` collapsed to the
+            // crude `dist < 10.0` above — an opponent within 1.25 m,
+            // whatever he was doing — and that is what has been sending
+            // defenders to `Clearing`: 59.5% of every clearance in the
+            // match comes from this branch failing to find a pass.
+            // 0.40 u/tick is 5 m/s, a genuine attacking run.
+            if opp_speed < 0.40 {
                 continue;
             }
 
@@ -1124,7 +1227,22 @@ impl DefenderRunningState {
         let mut best: Option<(MatchPlayerLite, f32)> = None;
 
         for teammate in ctx.players().teammates().nearby(250.0) {
-            if teammate.tactical_positions.is_goalkeeper() {
+            // The keeper is an OUTLET, not an exclusion.
+            //
+            // Skipping him outright meant a defender with his back to
+            // goal and a man on him had no ball to play except forward
+            // into traffic — and when that wasn't on, the caller hoofed
+            // it. Playing back to the goalkeeper is the single most
+            // common answer to exactly this situation in real football,
+            // and the pass evaluator's own build-up logic already treats
+            // it as a legitimate pattern under press.
+            //
+            // Scored below every outfield option so it stays the last
+            // resort it should be, and only when he is genuinely free —
+            // a back-pass to a pressed keeper is how goals get given
+            // away.
+            let is_gk = teammate.tactical_positions.is_goalkeeper();
+            if is_gk && ctx.tick_context.grid.opponents(teammate.id, 40.0).next().is_some() {
                 continue;
             }
 
@@ -1146,6 +1264,11 @@ impl DefenderRunningState {
             }
             if teammate.tactical_positions.is_midfielder() {
                 score += 15.0;
+            }
+            // Behind every outfield option: taken when there is nothing
+            // else, which is the point of him.
+            if is_gk {
+                score -= 60.0;
             }
 
             if let Some((_, best_score)) = &best {

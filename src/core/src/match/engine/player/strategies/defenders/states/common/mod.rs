@@ -305,7 +305,31 @@ impl DefensiveLine {
             .context
             .tactical_for_team(ctx.player.team_id)
             .defensive_line_x;
-        let blended = avg_x * 0.6 + target_line_x * 0.4;
+        // 0.6/0.4 → 0.85/0.15, because this is a DESCRIPTION, not an
+        // instruction.
+        //
+        // `position_x` answers "where is the line", and every shape
+        // constraint bounds defenders relative to it. `defensive_line_x`
+        // answers something else — "how high does the phase want to
+        // play" — and it is a constant per phase (mid block 280u, attack
+        // 462u) that never reads the ball. Defenders sit ~215u from it,
+        // so blending it at 0.4 put the shape reference 86u from the men
+        // it describes and left it there: measured depth lag was 85-102u
+        // all match while the width axis, which has no such aspirational
+        // term, sat at 18u. 0.4 × 215u = 86u — the lag WAS this blend.
+        //
+        // The reference is also partly the thing being corrected, so the
+        // fixed point of the old weighting required the whole line to
+        // travel the entire distance to the tactical line before the lag
+        // closed. It never did, because the ball kept it where it was.
+        //
+        // A small pull is kept: the aspiration should still bias the
+        // line, and the live average is what stops one recovering
+        // defender teleporting the reference (helped now that men who
+        // have gone up are excluded from it). Pushing UP to the phase
+        // line is a movement decision that belongs to `PushingUp`, not
+        // something to be smuggled into the shape reference.
+        let blended = avg_x * 0.85 + target_line_x * 0.15;
 
         // ── A line cannot hold station in front of the ball ───────────
         //
@@ -348,7 +372,12 @@ impl DefensiveLine {
     /// How far a defender holding shape may drop BEHIND the line to
     /// cover. 48u = 6 m — the covering centre-half sitting off the man
     /// engaging, which is what makes a back four a diagonal.
-    pub const DEPTH_DROP: f32 = 48.0;
+    /// Tightened 48u → 34u. The band `DEPTH_DROP + DEPTH_STEP_UP` is the
+    /// spread the line is ALLOWED, and the defenders' residual lag adds
+    /// to it on top — at 64u of band the measured spread could not have
+    /// come under ~130u however well anyone steered. 34u (4.25 m) is the
+    /// real distance a covering centre-half sits off the man engaging.
+    pub const DEPTH_DROP: f32 = 34.0;
     /// …and how far he may step UP through it. 16u = 2 m: essentially
     /// nothing. A defender in front of his own line plays the attack
     /// onside behind him.

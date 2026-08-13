@@ -67,7 +67,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     player.velocity.y,
                 );
             }
-            match_data.add_player_positions(player.id, timestamp, player.position);
+            // `recorded_position`, not `position`: a player's real height is
+            // kept out of `position.z` so no decision can read it by accident
+            // (see `MatchPlayer::height`), and the two are only brought back
+            // together here, on the way into a file.
+            match_data.add_player_positions(player.id, timestamp, player.recorded_position());
             if track_events {
                 match_data.add_player_state(player.id, timestamp, player.state.compact_id(), &player.state);
             }

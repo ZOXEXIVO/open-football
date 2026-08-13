@@ -63,6 +63,8 @@ impl StateProcessingHandler for DefenderPassingState {
             // press_resistance lets us play out via a safe pass.
             let def_profile = DefenderSkillProfile::from_ctx(ctx);
             if def_profile.must_clear_under_pressure() {
+                #[cfg(feature = "match-logs")]
+                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(5);
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
                 ));
@@ -79,6 +81,8 @@ impl StateProcessingHandler for DefenderPassingState {
                     )),
                 ))
             } else {
+                #[cfg(feature = "match-logs")]
+                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(6);
                 Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
                 ))
@@ -141,6 +145,31 @@ impl StateProcessingHandler for DefenderPassingState {
 
         // If no good passing option and close to own goal, consider clearing
         if ctx.player().defensive().in_dangerous_position() {
+            // "If no good passing option" is what the comment says and
+            // what this never checked: being in a dangerous position was
+            // the whole test, so a defender near his own goal cleared
+            // regardless of what was on. Third-largest clearance source
+            // at 24% of all of them. Ask the evaluator first — a
+            // dangerous position is a reason to be careful with the ball,
+            // not a reason to have no ball to play.
+            if let Some((safe, _)) = ctx
+                .player()
+                .passing()
+                .find_best_pass_option_with_distance(220.0)
+            {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(safe.id)
+                            .with_reason("DEF_DANGEROUS_SAFE_PASS")
+                            .build(ctx),
+                    )),
+                ));
+            }
+            #[cfg(feature = "match-logs")]
+            crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(7);
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Clearing,
             ));
@@ -180,6 +209,8 @@ impl StateProcessingHandler for DefenderPassingState {
 
             // If no safe option, clear the ball rather than making a wild pass
             if ctx.in_state_time > 65 {
+                #[cfg(feature = "match-logs")]
+                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(8);
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
                 ));

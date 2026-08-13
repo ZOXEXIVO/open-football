@@ -134,6 +134,9 @@ impl MatchViewer {
                     Playback::advance,
                     Actors::follow_playhead,
                     Actors::animate,
+                    // Straight after, so the dive `animate` has just read out
+                    // of the recording is on the body the same frame.
+                    Actors::carry_body,
                     // Ahead of `follow_play`, which reads the orbit — so a
                     // drag lands on the same frame it happened rather than
                     // the next one. Never registered at all before, so the
