@@ -423,6 +423,17 @@ pub enum PlayerEvent {
     RushOut(u32),
     Shoot(ShootingEventContext),
     MovePlayer(u32, Vector3<f32>),
+    /// `(player_id, apex_metres)` — take this player off the ground.
+    ///
+    /// A leap is normally requested by the state machine on the tick a
+    /// player commits to an aerial action (see
+    /// `PlayerMatchState::leap_apex`). The ball's own passes decide some
+    /// aerial contests themselves — an interception plucked out of the
+    /// air is the clearest — and they hold the players immutably, so they
+    /// ask for the jump instead of performing it. Without this a defender
+    /// took balls at head height standing perfectly still, which is the
+    /// single most visible wrong thing in the 3D replay.
+    Leap(u32, f32),
     StayInGoal(u32),
     MoveBall(u32, Vector3<f32>),
     CommunicateMessage(u32, &'static str),
@@ -1056,6 +1067,9 @@ impl PlayerEventDispatcher {
             }
             PlayerEvent::MovePlayer(player_id, position) => {
                 Self::handle_move_player_event(player_id, position, field);
+            }
+            PlayerEvent::Leap(player_id, apex) => {
+                Self::handle_leap_event(player_id, apex, field);
             }
             PlayerEvent::TakeBall(player_id) => {
                 Self::handle_take_ball_event(player_id, field);
@@ -2087,9 +2101,15 @@ impl PlayerEventDispatcher {
             || final_velocity.y.is_infinite()
             || final_velocity.z.is_infinite()
         {
-            // Fallback to a safe default velocity
+            // Fallback to a safe default velocity. The `z` is an apex in
+            // metres solved into a launch speed, not a raw number — the
+            // 0.3 this used to carry meant a 46 m apex.
             let safe_direction = actual_pass_vector.normalize();
-            final_velocity = Vector3::new(safe_direction.x * 1.5, safe_direction.y * 1.5, 0.3);
+            final_velocity = Vector3::new(
+                safe_direction.x * 1.5,
+                safe_direction.y * 1.5,
+                Ball::launch_speed_for_apex(1.5),
+            );
         }
 
         // Safety net only — `calculate_pass_velocity` is budgeted by
@@ -2121,18 +2141,22 @@ impl PlayerEventDispatcher {
         // `a_perp = C·ω_z·|v|`, so `ω_z = 2·d·|v| / (C·dist²)`. Solving it
         // from the deflection rather than picking a spin figure is what
         // guarantees the ball still arrives where the crosser aimed.
+        // Solved, then CLAMPED — `dist²` in the denominator means a short
+        // delivery asked to swing asks for a physically impossible
+        // rotation, and an unclamped Magnus force is a catapult. See
+        // `SpinModel::clamped`.
         field.ball.spin = if swing_units.abs() > f32::EPSILON {
             let speed =
                 (final_velocity.x * final_velocity.x + final_velocity.y * final_velocity.y).sqrt();
             if speed > 0.05 && actual_horizontal_distance > 1.0 {
-                Vector3::new(
+                SpinModel::clamped(Vector3::new(
                     0.0,
                     0.0,
                     2.0 * swing_units * speed
                         / (SpinModel::MAGNUS_COEFF
                             * actual_horizontal_distance
                             * actual_horizontal_distance),
-                )
+                ))
             } else {
                 Vector3::zeros()
             }
@@ -3014,9 +3038,16 @@ impl PlayerEventDispatcher {
             )
         {
             let dir = (shoot_event_model.target - field.ball.position).normalize();
-            // Deflect upward and slightly away — the ball clears
-            // the wall but loses most of its goalward energy.
-            field.ball.velocity = Vector3::new(dir.x * 0.6, dir.y * 0.6, 1.4);
+            // Deflect upward and slightly away — the ball clears the wall
+            // but loses most of its goalward energy. The apex is solved,
+            // not written: the vertical axis is in metres, and the 1.4
+            // this used to carry was 140 m/s — a kilometre straight up.
+            const WALL_DEFLECT_APEX_M: f32 = 4.0;
+            field.ball.velocity = Vector3::new(
+                dir.x * 0.6,
+                dir.y * 0.6,
+                Ball::launch_speed_for_apex(WALL_DEFLECT_APEX_M),
+            );
             field.ball.flags.in_flight_state = 30;
             field.ball.previous_owner = Some(shoot_event_model.from_player_id);
             field.ball.current_owner = None;
@@ -3668,9 +3699,15 @@ impl PlayerEventDispatcher {
             || final_velocity.y.is_infinite()
             || final_velocity.z.is_infinite()
         {
-            // Fallback to a safe default velocity toward the goal
+            // Fallback to a safe default velocity toward the goal. Both
+            // components were pre-metric: 5.0 u/tick is 62 m/s and a `z`
+            // of 1.0 is a 510 m apex.
             let safe_direction = (goal_center - field.ball.position).normalize();
-            final_velocity = Vector3::new(safe_direction.x * 5.0, safe_direction.y * 5.0, 1.0);
+            final_velocity = Vector3::new(
+                safe_direction.x * 2.4,
+                safe_direction.y * 2.4,
+                Ball::launch_speed_for_apex(1.5),
+            );
         }
 
         // Clamp velocity magnitude to maximum realistic shot speed
@@ -3914,7 +3951,11 @@ impl PlayerEventDispatcher {
                     spin += SpinModel::from_strike(dir, 0.0, -rise * 0.55, technique_skill);
                 }
             }
-            field.ball.spin = spin;
+            // The curl term above is solved by division (`accel_y / vx`),
+            // so a shot struck slowly across the face of goal can ask for
+            // a rotation no human generates. Clamped for the same reason
+            // the cross path is — see `SpinModel::clamped`.
+            field.ball.spin = SpinModel::clamped(spin);
         }
 
         // Shorter flight protection for shots — allows defenders/GK to claim sooner
@@ -4426,6 +4467,15 @@ impl PlayerEventDispatcher {
         // are no-ops rather than crashes.
         if let Some(player) = field.get_player_mut(player_id) {
             player.position = position;
+        }
+    }
+
+    /// Take a player off the ground. `MatchPlayer::leap` is a no-op for
+    /// anyone already airborne, so a repeated request during a contest
+    /// cannot hold him up there.
+    fn handle_leap_event(player_id: u32, apex: f32, field: &mut MatchField) {
+        if let Some(player) = field.get_player_mut(player_id) {
+            player.leap(apex);
         }
     }
 

@@ -183,12 +183,27 @@ impl Ball {
                 .current_owner
                 .and_then(|id| players.iter().find(|p| p.id == id))
                 .and_then(|p| p.side);
+            // Both components were pre-metric. 7.0 u/tick is 87 m/s —
+            // faster than any ball in the history of football — and a
+            // `z` of 1.5 is 150 m/s straight up, an apex of 1.1 km. A
+            // stall-breaker firing on a ball nobody had touched is
+            // exactly the "the ball suddenly shot off for no reason"
+            // case: there is no player action behind it to explain it.
+            //
+            // It still has to be a decisive kick — the whole point is to
+            // clear the stall radius before the same player re-claims —
+            // so it is a firm 30 m outlet, solved from its apex like
+            // every other kick.
             let push_x: f32 = match owner_side {
-                Some(PlayerSide::Left) => 7.0,
-                Some(PlayerSide::Right) => -7.0,
-                _ => 7.0,
+                Some(PlayerSide::Left) => 1.0,
+                Some(PlayerSide::Right) => -1.0,
+                _ => 1.0,
             };
-            self.velocity = Vector3::new(push_x, 0.0, 1.5);
+            const STALL_KICK_APEX_M: f32 = 8.0;
+            const STALL_KICK_RANGE_U: f32 = 240.0; // 30 m
+            let vz = Ball::launch_speed_for_apex(STALL_KICK_APEX_M);
+            let speed = STALL_KICK_RANGE_U / Ball::hang_ticks(vz).max(1.0);
+            self.velocity = Vector3::new(push_x * speed, 0.0, vz);
             self.previous_owner = self.current_owner;
             self.current_owner = None;
             self.ownership_duration = 0;

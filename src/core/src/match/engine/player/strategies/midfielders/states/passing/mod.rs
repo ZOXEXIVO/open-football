@@ -8,7 +8,7 @@ use crate::r#match::player::strategies::common::players::ops::forward_shot_decis
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
+    Ball, ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
@@ -524,8 +524,18 @@ impl MidfielderPassingState {
         let dist = to_target.norm().max(0.1);
         let dir = to_target / dist;
 
-        let horizontal_speed = 4.0_f32;
-        let z_velocity = 5.0_f32;
+        // Solved from an apex, not written. The vertical axis is in
+        // METRES (see `GRAVITY_PER_TICK`), so the `5.0` this used to
+        // carry was 500 m/s straight up — a **12.7 km** apex and a hang
+        // time of a minute and a half. It was the single worst launch
+        // left in the engine after the metric conversion, and the ball
+        // flight census pinned it by its apex alone.
+        const OUTLET_APEX_M: f32 = 10.0;
+        let z_velocity = Ball::launch_speed_for_apex(OUTLET_APEX_M);
+        // The arc's hang time is the budget: reach the aim point inside
+        // it and the hoof lands where it was aimed.
+        let hang = Ball::hang_ticks(z_velocity).max(1.0);
+        let horizontal_speed = (dist / hang).clamp(0.30, 2.6);
 
         let ball_velocity = Vector3::new(
             dir.x * horizontal_speed,

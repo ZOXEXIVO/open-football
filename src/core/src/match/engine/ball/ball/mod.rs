@@ -188,6 +188,323 @@ pub mod assist_diag {
     }
 }
 
+/// Where the ball actually goes, and which line of code sent it there.
+///
+/// Two symptoms motivated this and neither is visible in any existing
+/// counter: balls that climb absurdly high, and balls that arrive
+/// somewhere far away in a single tick without having travelled. Both
+/// are silent — the physics never complains, the stat sheet is
+/// unaffected, and only somebody watching the 3D replay sees it.
+///
+/// # Why a launch census rather than a height histogram
+///
+/// The vertical axis is in METRES while `x`/`y` are in game units (see
+/// [`GRAVITY_PER_TICK`]). A hand-written `z` therefore reads as a
+/// perfectly sane number and means something absurd: `4.5` looks like a
+/// firm hoof and is a 10 km apex. Sampling `position.z` per tick would
+/// mostly measure how long the ball spends on the deck; sampling the
+/// APEX IMPLIED AT LAUNCH names the offending kick directly, which is
+/// what a fix needs.
+///
+/// # Why teleports are attributed per stage
+///
+/// `Ball::update` runs seventeen passes over the ball and six of them
+/// can move it without touching the velocity. "The ball jumped" is not
+/// actionable; "the ball jumped 91u inside `try_block_shot`" is.
+#[cfg(feature = "match-logs")]
+pub mod flight_diag {
+    use nalgebra::Vector3;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Apex bands in metres. A real football tops out around 30 m from
+    /// the most violent hoof, so everything from `Absurd` up is a bug by
+    /// construction — the bands exist to say HOW absurd, because the
+    /// error is a unit confusion and the magnitude identifies which one.
+    pub const APEX_BANDS: [f32; 8] = [1.0, 3.0, 6.0, 12.0, 30.0, 100.0, 1000.0, f32::INFINITY];
+    pub const APEX_LABELS: [&str; 8] = [
+        "<1m", "1-3m", "3-6m", "6-12m", "12-30m", "30-100m", "0.1-1km", ">1km",
+    ];
+
+    /// One counter per band, over every launch the ball takes.
+    pub static APEX_HIST: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+    /// Highest apex any single launch implied, x1000 (millimetres).
+    pub static APEX_MAX_MM: AtomicU64 = AtomicU64::new(0);
+    /// Launches seen.
+    pub static LAUNCHES: AtomicU64 = AtomicU64::new(0);
+    /// Launches above 30 m — impossible for a human — split by the state
+    /// the striker was in. Sized past the state machine's 78 variants so
+    /// a newly added state cannot silently fall off the end.
+    pub static ABSURD_BY_STATE: [AtomicU64; 96] = [const { AtomicU64::new(0) }; 96];
+
+    /// Highest the ball's own `position.z` ever actually reached, in mm.
+    /// Read against `APEX_MAX_MM`: a launch apex that never materialises
+    /// means something cut the flight short (a boundary clamp, a claim),
+    /// which is its own bug.
+    pub static PEAK_Z_MM: AtomicU64 = AtomicU64::new(0);
+
+    /// Fastest horizontal speed observed on an unowned ball, x1000.
+    pub static PEAK_SPEED_X1000: AtomicU64 = AtomicU64::new(0);
+
+    /// The passes of `Ball::update` that can relocate the ball, in the
+    /// order they run.
+    ///
+    /// The four endline / touchline resolvers are listed separately from
+    /// `boundary` on purpose. They were folded into it at first and the
+    /// bucket read 64 unexplained relocations a match with a worst case
+    /// of 53 m, which looks exactly like a bug and is not one: a throw-in
+    /// puts the ball on the touchline and a goal kick puts it in the six-
+    /// yard box, and both are supposed to move it a long way. Only the
+    /// LAST entry is a genuine "nothing decided this" clamp.
+    pub const STAGES: [&str; 12] = [
+        "intercept",
+        "block_shot",
+        "save_shot",
+        "deadlock_claim",
+        "position_stall",
+        "ownership",
+        "move_to",
+        "restart:goal",
+        "restart:over_bar",
+        "restart:wide",
+        "restart:throw_in",
+        "boundary_clamp",
+    ];
+    pub const STAGE_INTERCEPT: usize = 0;
+    pub const STAGE_BLOCK: usize = 1;
+    pub const STAGE_SAVE: usize = 2;
+    pub const STAGE_DEADLOCK: usize = 3;
+    pub const STAGE_STALL: usize = 4;
+    pub const STAGE_OWNERSHIP: usize = 5;
+    pub const STAGE_MOVE: usize = 6;
+    pub const STAGE_GOAL: usize = 7;
+    pub const STAGE_OVER_BAR: usize = 8;
+    pub const STAGE_WIDE: usize = 9;
+    pub const STAGE_THROW_IN: usize = 10;
+    pub const STAGE_BOUNDARY: usize = 11;
+
+    /// The stages above that are RESTARTS — moving the ball is their job,
+    /// so their relocations are reported apart from the unexplained ones.
+    pub const RESTART_STAGES: std::ops::Range<usize> = STAGE_GOAL..STAGE_BOUNDARY;
+
+    /// Horizontal jumps a stage produced that its own velocity cannot
+    /// explain, and their summed / worst magnitude in game units.
+    pub static JUMPS: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+    pub static JUMP_SUM_X100: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+    pub static JUMP_MAX_X100: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+    /// Fastest the ball was travelling as each stage left it, x1000.
+    /// `PEAK_SPEED_X1000` says a runaway speed exists; this says which
+    /// pass over the ball put it there.
+    pub static STAGE_PEAK_SPEED_X1000: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+
+    /// Height (mm) at which an interception fired, summed, and how many
+    /// fired above a standing player's reach — the ones that need a leap
+    /// and never get one.
+    pub static INTERCEPTS: AtomicU64 = AtomicU64::new(0);
+    pub static INTERCEPT_Z_SUM_MM: AtomicU64 = AtomicU64::new(0);
+    pub static INTERCEPTS_ABOVE_REACH: AtomicU64 = AtomicU64::new(0);
+    /// Interceptions taken with both feet on the floor at a height that
+    /// needs a jump. `INTERCEPTS_ABOVE_REACH` minus this is the number
+    /// that were properly won in the air.
+    pub static INTERCEPTS_NO_LEAP: AtomicU64 = AtomicU64::new(0);
+
+    /// Headers contested, and how many of those were won by a player who
+    /// actually left the ground.
+    pub static HEADERS: AtomicU64 = AtomicU64::new(0);
+    pub static HEADERS_AIRBORNE: AtomicU64 = AtomicU64::new(0);
+
+    /// Accessors. Grouped on a struct so the module exposes no free
+    /// functions; the statics stay module-level because Rust has no
+    /// associated statics.
+    pub struct FlightDiag;
+
+    impl FlightDiag {
+        /// Record a kick: `vz` is the launch speed in m/tick, `z` the
+        /// height it was struck from. `striker_state` is the compact id
+        /// of the state the player who last had the ball was in, which is
+        /// what names the offending site when an apex comes back absurd —
+        /// a bare count says a bug exists but not which kick wrote it.
+        pub fn note_launch(vz: f32, z: f32, striker_state: Option<usize>) {
+            let apex = super::Ball::apex_for_launch(vz) + z.max(0.0);
+            LAUNCHES.fetch_add(1, Ordering::Relaxed);
+            let band = APEX_BANDS.iter().position(|&b| apex < b).unwrap_or(7);
+            APEX_HIST[band].fetch_add(1, Ordering::Relaxed);
+            APEX_MAX_MM.fetch_max((apex.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+            // Only the absurd ones are worth attributing; a histogram over
+            // every launch in the match would be all noise.
+            if apex > 30.0 {
+                if let Some(id) = striker_state {
+                    if let Some(c) = ABSURD_BY_STATE.get(id) {
+                        c.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+
+        /// Per-state count of launches above 30 m, indexed by
+        /// `PlayerState::compact_id`.
+        pub fn absurd_by_state() -> [u64; 96] {
+            std::array::from_fn(|i| ABSURD_BY_STATE[i].load(Ordering::Relaxed))
+        }
+
+        /// Sample the ball's realised flight once per tick.
+        pub fn note_tick(position: Vector3<f32>, velocity: Vector3<f32>, owned: bool) {
+            PEAK_Z_MM.fetch_max((position.z.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+            if !owned {
+                let speed = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
+                PEAK_SPEED_X1000.fetch_max((speed.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+            }
+        }
+
+        /// Book a relocation `stage` produced beyond what its velocity
+        /// accounts for.
+        pub fn note_jump(stage: usize, distance: f32) {
+            if stage >= STAGES.len() {
+                return;
+            }
+            JUMPS[stage].fetch_add(1, Ordering::Relaxed);
+            let x100 = (distance.max(0.0) * 100.0) as u64;
+            JUMP_SUM_X100[stage].fetch_add(x100, Ordering::Relaxed);
+            JUMP_MAX_X100[stage].fetch_max(x100, Ordering::Relaxed);
+        }
+
+        /// Book an interception at `z` metres, by a player `airborne` or
+        /// not. `reach` is a standing player's ceiling.
+        pub fn note_intercept(z: f32, reach: f32, airborne: bool) {
+            INTERCEPTS.fetch_add(1, Ordering::Relaxed);
+            INTERCEPT_Z_SUM_MM.fetch_add((z.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+            if z > reach {
+                INTERCEPTS_ABOVE_REACH.fetch_add(1, Ordering::Relaxed);
+                if !airborne {
+                    INTERCEPTS_NO_LEAP.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        pub fn note_header(airborne: bool) {
+            HEADERS.fetch_add(1, Ordering::Relaxed);
+            if airborne {
+                HEADERS_AIRBORNE.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(launches, apex_hist, apex_max_m, peak_z_m, peak_speed)`
+        pub fn launch_snapshot() -> (u64, [u64; 8], f32, f32, f32) {
+            (
+                LAUNCHES.load(Ordering::Relaxed),
+                std::array::from_fn(|i| APEX_HIST[i].load(Ordering::Relaxed)),
+                APEX_MAX_MM.load(Ordering::Relaxed) as f32 / 1000.0,
+                PEAK_Z_MM.load(Ordering::Relaxed) as f32 / 1000.0,
+                PEAK_SPEED_X1000.load(Ordering::Relaxed) as f32 / 1000.0,
+            )
+        }
+
+        /// Per-stage `(count, mean_units, max_units, peak_speed)`.
+        pub fn jump_snapshot() -> [(u64, f32, f32, f32); 12] {
+            std::array::from_fn(|i| {
+                let n = JUMPS[i].load(Ordering::Relaxed);
+                let mean = if n == 0 {
+                    0.0
+                } else {
+                    JUMP_SUM_X100[i].load(Ordering::Relaxed) as f32 / 100.0 / n as f32
+                };
+                (
+                    n,
+                    mean,
+                    JUMP_MAX_X100[i].load(Ordering::Relaxed) as f32 / 100.0,
+                    STAGE_PEAK_SPEED_X1000[i].load(Ordering::Relaxed) as f32 / 1000.0,
+                )
+            })
+        }
+
+        /// `(intercepts, mean_z_m, above_reach, above_reach_no_leap,
+        ///   headers, headers_airborne)`
+        pub fn aerial_snapshot() -> (u64, f32, u64, u64, u64, u64) {
+            let n = INTERCEPTS.load(Ordering::Relaxed);
+            let mean = if n == 0 {
+                0.0
+            } else {
+                INTERCEPT_Z_SUM_MM.load(Ordering::Relaxed) as f32 / 1000.0 / n as f32
+            };
+            (
+                n,
+                mean,
+                INTERCEPTS_ABOVE_REACH.load(Ordering::Relaxed),
+                INTERCEPTS_NO_LEAP.load(Ordering::Relaxed),
+                HEADERS.load(Ordering::Relaxed),
+                HEADERS_AIRBORNE.load(Ordering::Relaxed),
+            )
+        }
+
+        pub fn reset() {
+            for c in APEX_HIST.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
+            for c in ABSURD_BY_STATE.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
+            for i in 0..STAGES.len() {
+                JUMPS[i].store(0, Ordering::Relaxed);
+                JUMP_SUM_X100[i].store(0, Ordering::Relaxed);
+                JUMP_MAX_X100[i].store(0, Ordering::Relaxed);
+                STAGE_PEAK_SPEED_X1000[i].store(0, Ordering::Relaxed);
+            }
+            for c in [
+                &APEX_MAX_MM,
+                &LAUNCHES,
+                &PEAK_Z_MM,
+                &PEAK_SPEED_X1000,
+                &INTERCEPTS,
+                &INTERCEPT_Z_SUM_MM,
+                &INTERCEPTS_ABOVE_REACH,
+                &INTERCEPTS_NO_LEAP,
+                &HEADERS,
+                &HEADERS_AIRBORNE,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Walks `Ball::update` alongside the ball, comparing where each pass
+    /// left it against where its velocity said it should be.
+    pub struct StageProbe {
+        position: Vector3<f32>,
+    }
+
+    impl StageProbe {
+        pub fn new(position: Vector3<f32>) -> Self {
+            Self { position }
+        }
+
+        /// Book whatever `stage` did. `allowance` is the horizontal
+        /// distance the stage was entitled to move the ball — its own
+        /// velocity for `move_to`, nothing for a pass that is only
+        /// supposed to change ownership.
+        pub fn note(
+            &mut self,
+            stage: usize,
+            position: Vector3<f32>,
+            velocity: Vector3<f32>,
+            allowance: f32,
+        ) {
+            let dx = position.x - self.position.x;
+            let dy = position.y - self.position.y;
+            let moved = (dx * dx + dy * dy).sqrt();
+            // 1u (12.5 cm) of slack absorbs the sub-unit nudges several
+            // passes legitimately apply.
+            if moved > allowance + 1.0 {
+                FlightDiag::note_jump(stage, moved - allowance);
+            }
+            if stage < STAGES.len() {
+                let speed = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
+                STAGE_PEAK_SPEED_X1000[stage]
+                    .fetch_max((speed.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+            }
+            self.position = position;
+        }
+    }
+}
+
 /// Per-tick rolling-friction decay for a ball on the ground: each tick
 /// its horizontal speed is multiplied by `1 - GROUND_FRICTION`.
 ///
@@ -265,6 +582,113 @@ impl Ball {
     #[inline]
     pub fn apex_for_launch(vertical_speed: f32) -> f32 {
         vertical_speed * vertical_speed / (2.0 * GRAVITY_PER_TICK)
+    }
+}
+
+/// How high a footballer can play the ball, and what it costs him to do
+/// it. All heights in metres, matching the ball's vertical axis (see
+/// [`GRAVITY_PER_TICK`]).
+///
+/// # Why this is one model rather than a constant per call site
+///
+/// Every aerial decision in the engine used to carry its own literal —
+/// `2.5` in the intercept gate, `3.5` in the claim loop, `2.8` for a pass
+/// receiver, `1.5` to enter a header — and none of them agreed with any
+/// other or with a human being. Worse, all of them were BINARY: below the
+/// number the ball was as easy to play as one rolling along the floor,
+/// above it the ball did not exist. A binary gate is what produces the
+/// two symptoms that look opposite and share a cause — a defender picking
+/// a ball out of the air at shoulder height without moving, and nobody at
+/// all going for one a few centimetres higher.
+///
+/// Height is a difficulty, not a door. [`Self::reach_difficulty`] is the
+/// curve; [`Self::ceiling`] is the only genuine door, and it is a
+/// property of the player rather than of the engine.
+pub struct AerialReach;
+
+impl AerialReach {
+    /// Head height of an average player.
+    pub const HEAD: f32 = 1.8;
+
+    /// The highest a player can play the ball with both feet on the
+    /// floor: a raised boot, a stretched neck, a chest-high volley.
+    /// Above this he has to leave the ground, and if he does not, he
+    /// should not be getting the ball.
+    pub const STANDING: f32 = 2.2;
+
+    /// Ball height a poor leaper reaches at the top of a jump.
+    const JUMP_MIN: f32 = 2.5;
+    /// Ball height an elite leaper reaches at the top of a jump. Real
+    /// aerial specialists head the ball around 2.9-3.0 m.
+    const JUMP_MAX: f32 = 3.1;
+
+    /// The highest ball this player can play, given his `jumping`
+    /// attribute on the raw 1-20 scale.
+    #[inline]
+    pub fn ceiling(jumping: f32) -> f32 {
+        let spring = ((jumping - 1.0) / 19.0).clamp(0.0, 1.0);
+        Self::JUMP_MIN + spring * (Self::JUMP_MAX - Self::JUMP_MIN)
+    }
+
+    /// True when the ball is high enough that playing it means leaving
+    /// the ground.
+    #[inline]
+    pub fn needs_leap(ball_z: f32) -> bool {
+        ball_z > Self::STANDING
+    }
+
+    /// How much of his usual chance a player keeps at this ball height,
+    /// 1.0 on the deck falling to 0 at his own ceiling.
+    ///
+    /// Squared rather than linear because the hard part of an aerial ball
+    /// is the last few centimetres: a ball at knee height and one at
+    /// chest height are both simply *there*, while one at the very top of
+    /// the jump is a fingertip touch that mostly does not come off.
+    #[inline]
+    pub fn reach_difficulty(ball_z: f32, jumping: f32) -> f32 {
+        if ball_z <= Self::HEAD {
+            return 1.0;
+        }
+        let ceiling = Self::ceiling(jumping);
+        if ball_z >= ceiling {
+            return 0.0;
+        }
+        let over = (ball_z - Self::HEAD) / (ceiling - Self::HEAD);
+        (1.0 - over * over).clamp(0.0, 1.0)
+    }
+
+    /// Apex, in metres, of the jump this player must make to meet a ball
+    /// at `ball_z` with whatever he plays it with — a boot, a knee, a
+    /// shoulder. Zero when he can reach it standing.
+    ///
+    /// He jumps to bring his own reach up to the ball and no further —
+    /// an aerial challenge is timed, not maximal, and a player who
+    /// launched himself to his ceiling for every ball above his head
+    /// would spend the match in orbit.
+    #[inline]
+    pub fn leap_for(ball_z: f32, jumping: f32) -> f32 {
+        Self::leap_from(ball_z, jumping, Self::STANDING)
+    }
+
+    /// The same, for a ball he is going to HEAD.
+    ///
+    /// A header is played off the forehead, not off a raised boot, so it
+    /// is measured from [`Self::HEAD`] — 40 cm lower than
+    /// [`Self::STANDING`]. Using the standing reach here is what would
+    /// keep a player flat-footed for every header between 1.8 m and
+    /// 2.2 m, which is most of them.
+    #[inline]
+    pub fn header_leap_for(ball_z: f32, jumping: f32) -> f32 {
+        Self::leap_from(ball_z, jumping, Self::HEAD)
+    }
+
+    #[inline]
+    fn leap_from(ball_z: f32, jumping: f32, reach: f32) -> f32 {
+        if ball_z <= reach {
+            return 0.0;
+        }
+        let ceiling = Self::ceiling(jumping);
+        (ball_z - reach).min((ceiling - reach).max(0.0)).max(0.0)
     }
 }
 
@@ -382,6 +806,13 @@ pub struct Ball {
     /// This is the only channel in the engine that can turn a flight
     /// sideways — see [`SpinModel`](super::ball::SpinModel).
     pub spin: Vector3<f32>,
+    /// `velocity.z` as this tick's physics left it, so the next tick can
+    /// tell a KICK from the rest of the flight. Anything that raises the
+    /// vertical speed between two `update` calls came from outside the
+    /// physics — a clearance, a punch, a shot — and is the only event the
+    /// apex census wants to count. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub settled_vz: f32,
     pub center_field_position: f32,
 
     pub field_width: f32,
@@ -816,6 +1247,8 @@ impl Ball {
             field_height,
             velocity: Vector3::zeros(),
             spin: Vector3::zeros(),
+            #[cfg(feature = "match-logs")]
+            settled_vz: 0.0,
             center_field_position: x, // initial ball position = center field
             flags: BallFlags::default(),
             previous_owner: None,
@@ -1175,6 +1608,115 @@ impl Ball {
 }
 
 #[cfg(test)]
+mod aerial_reach_tests {
+    use super::*;
+
+    /// Height must be a difficulty, not a door. The engine's aerial gates
+    /// were all binary: below the number the ball was as easy to play as
+    /// one on the floor, above it the ball did not exist. That single
+    /// shape produced both reported symptoms — defenders picking balls
+    /// out of the air without moving, and nobody at all going for one a
+    /// few centimetres higher.
+    #[test]
+    fn reach_difficulty_falls_away_smoothly_instead_of_switching_off() {
+        let jumping = 12.0;
+        let ceiling = AerialReach::ceiling(jumping);
+        assert_eq!(
+            AerialReach::reach_difficulty(0.0, jumping),
+            1.0,
+            "a ball on the deck is no harder than a ball on the deck"
+        );
+        assert_eq!(
+            AerialReach::reach_difficulty(AerialReach::HEAD, jumping),
+            1.0,
+            "up to head height costs nothing"
+        );
+        assert_eq!(
+            AerialReach::reach_difficulty(ceiling + 0.01, jumping),
+            0.0,
+            "past his own ceiling he cannot play it at all"
+        );
+
+        // Strictly decreasing in between — no plateau a player could sit
+        // on, and no cliff.
+        let mut previous = 1.0;
+        let mut z = AerialReach::HEAD;
+        while z < ceiling {
+            let d = AerialReach::reach_difficulty(z, jumping);
+            assert!(
+                d <= previous,
+                "difficulty must not rise as the ball climbs (at {z} m)"
+            );
+            assert!((0.0..=1.0).contains(&d), "difficulty stays a fraction");
+            previous = d;
+            z += 0.05;
+        }
+        assert!(
+            previous < 0.25,
+            "a ball at the very top of the jump must be a fingertip touch, got {previous}"
+        );
+    }
+
+    /// The ceiling belongs to the PLAYER. The old flat `2.5` gate meant
+    /// the best header of the ball in the division and the worst had
+    /// exactly the same aerial range.
+    #[test]
+    fn a_better_leaper_reaches_a_higher_ball() {
+        let poor = AerialReach::ceiling(1.0);
+        let elite = AerialReach::ceiling(20.0);
+        assert!(
+            elite > poor + 0.4,
+            "jumping must be worth real height: {poor} vs {elite}"
+        );
+        // A ball an elite leaper can just about reach is out of a poor
+        // one's range entirely.
+        let z = poor + 0.1;
+        assert_eq!(AerialReach::reach_difficulty(z, 1.0), 0.0);
+        assert!(AerialReach::reach_difficulty(z, 20.0) > 0.0);
+    }
+
+    /// A jump is timed to the ball, not maximal — otherwise a player
+    /// would launch himself to his ceiling for every ball above his head.
+    #[test]
+    fn a_leap_reaches_the_ball_and_no_further() {
+        let jumping = 14.0;
+        assert_eq!(
+            AerialReach::leap_for(AerialReach::STANDING - 0.1, jumping),
+            0.0,
+            "a ball he can reach standing needs no jump"
+        );
+        let low = AerialReach::leap_for(AerialReach::STANDING + 0.2, jumping);
+        let high = AerialReach::leap_for(AerialReach::STANDING + 0.6, jumping);
+        assert!(low > 0.0 && high > low, "higher ball, bigger jump");
+        // Never asked to jump past his own ceiling.
+        let ceiling = AerialReach::ceiling(jumping);
+        let beyond = AerialReach::leap_for(ceiling + 5.0, jumping);
+        assert!(
+            beyond <= ceiling - AerialReach::STANDING + 1.0e-4,
+            "the leap is bounded by what he can actually jump"
+        );
+    }
+
+    /// A header is played off the forehead, not off a raised boot, so it
+    /// starts 40 cm lower. Measuring it from the standing reach is what
+    /// would keep a player flat-footed for most real headers.
+    #[test]
+    fn a_header_leaves_the_ground_earlier_than_a_boot_does() {
+        let jumping = 12.0;
+        let z = AerialReach::HEAD + 0.15; // 1.95 m — a normal header
+        assert_eq!(
+            AerialReach::leap_for(z, jumping),
+            0.0,
+            "a boot can still reach this standing"
+        );
+        assert!(
+            AerialReach::header_leap_for(z, jumping) > 0.0,
+            "but heading it means jumping"
+        );
+    }
+}
+
+#[cfg(test)]
 mod gk_handling_tests {
     use super::*;
 
@@ -1368,15 +1910,41 @@ impl Ball {
             self.claim_cooldown -= 1;
         }
 
+        // A vertical speed that is higher than the one this ball's own
+        // physics produced last tick was put there by a kick — see
+        // `settled_vz`. Sampled before `update_velocity` so the bounce
+        // it applies is not mistaken for one.
+        #[cfg(feature = "match-logs")]
+        {
+            if self.velocity.z > self.settled_vz + 1.0e-5 && self.velocity.z > 0.0 {
+                let striker = self
+                    .current_owner
+                    .or(self.previous_owner)
+                    .and_then(|id| players.iter().find(|p| p.id == id))
+                    .map(|p| p.state.compact_id() as usize);
+                flight_diag::FlightDiag::note_launch(self.velocity.z, self.position.z, striker);
+            }
+        }
+        #[cfg(feature = "match-logs")]
+        let mut probe = flight_diag::StageProbe::new(self.position);
+
         self.update_velocity();
 
         self.try_intercept(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_INTERCEPT, self.position, self.velocity, 0.0);
         self.try_block_shot(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_BLOCK, self.position, self.velocity, 0.0);
         self.try_save_shot(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_SAVE, self.position, self.velocity, 0.0);
         self.try_notify_standing_ball(players, events);
 
         // NUCLEAR OPTION: Force claiming if ball unowned and stopped for too long
         self.force_claim_if_deadlock(players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_DEADLOCK, self.position, self.velocity, 0.0);
 
         // Unconditional unowned safety net - forces nearest players to TakeBall
         self.force_takeball_if_unowned_too_long(players, events);
@@ -1386,20 +1954,62 @@ impl Ball {
         // hasn't moved ANYWHERE in 1000 ticks, regardless of who owns
         // it. That's a real stall.
         self.detect_position_stall(players);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_STALL, self.position, self.velocity, 0.0);
 
         self.process_ownership(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_OWNERSHIP, self.position, self.velocity, 0.0);
         self.tick_carry_tracker(events);
 
         // Move ball FIRST, then check goal/boundary on new position
+        // `move_to` is entitled to a tick of its own velocity, plus the
+        // owner-tracking step it uses instead when the ball is carried.
+        #[cfg(feature = "match-logs")]
+        let move_allowance = (self.velocity.x * self.velocity.x
+            + self.velocity.y * self.velocity.y)
+            .sqrt()
+            .max(1.5);
         self.move_to(tick_context);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_MOVE, self.position, self.velocity, move_allowance);
         self.check_goal(context, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_GOAL, self.position, self.velocity, 0.0);
         self.check_over_goal(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(
+            flight_diag::STAGE_OVER_BAR,
+            self.position,
+            self.velocity,
+            0.0,
+        );
         self.check_wide_of_goal(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_WIDE, self.position, self.velocity, 0.0);
         self.check_throw_in(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(
+            flight_diag::STAGE_THROW_IN,
+            self.position,
+            self.velocity,
+            0.0,
+        );
         self.check_boundary_collision(context);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_BOUNDARY, self.position, self.velocity, 0.0);
         self.expire_offside_snapshot(context);
         self.update_landing_cache();
 
+        #[cfg(feature = "match-logs")]
+        {
+            flight_diag::FlightDiag::note_tick(
+                self.position,
+                self.velocity,
+                self.current_owner.is_some(),
+            );
+            self.settled_vz = self.velocity.z;
+        }
         #[cfg(feature = "match-logs")]
         self.census_shot_fate(context, players);
     }
@@ -1476,6 +2086,16 @@ impl Ball {
             self.claim_cooldown -= 1;
         }
 
+        #[cfg(feature = "match-logs")]
+        if self.velocity.z > self.settled_vz + 1.0e-5 && self.velocity.z > 0.0 {
+            let striker = self
+                .current_owner
+                .or(self.previous_owner)
+                .and_then(|id| players.iter().find(|p| p.id == id))
+                .map(|p| p.state.compact_id() as usize);
+            flight_diag::FlightDiag::note_launch(self.velocity.z, self.position.z, striker);
+        }
+
         self.update_velocity();
         self.try_intercept(context, players, events);
         self.try_block_shot(context, players, events);
@@ -1492,6 +2112,16 @@ impl Ball {
         self.check_boundary_collision(context);
         self.expire_offside_snapshot(context);
         self.update_landing_cache();
+
+        #[cfg(feature = "match-logs")]
+        {
+            flight_diag::FlightDiag::note_tick(
+                self.position,
+                self.velocity,
+                self.current_owner.is_some(),
+            );
+            self.settled_vz = self.velocity.z;
+        }
     }
 
     /// Calculate where an aerial ball will land (when z reaches 0).

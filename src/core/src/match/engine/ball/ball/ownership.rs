@@ -2,11 +2,12 @@
 //! safety nets, the standing-ball notification dance, and the per-tick
 //! ownership claim that decides who is on the ball.
 
-use super::Ball;
+use super::{AerialReach, Ball};
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::events::EventCollection;
+use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
 #[cfg(feature = "match-logs")]
@@ -1305,6 +1306,26 @@ impl Ball {
                 self.claim_cooldown = cooldown;
                 // Also set in_flight to prevent ClaimBall events from tackling states
                 self.flags.in_flight_state = cooldown as usize;
+
+                // A ball taken above standing reach is taken in the air.
+                //
+                // The height gate above (`ball_height_reachable`) has
+                // always allowed claims all the way to `PLAYER_JUMP_REACH`
+                // — a jumping player's ceiling — while nothing anywhere
+                // made the player jump. So the commonest aerial moment in
+                // the match, a lofted ball dropping onto somebody's head,
+                // was resolved by a man standing still with the ball
+                // passing through his skull.
+                //
+                // WHO wins the ball is deliberately untouched here: the
+                // claim ranking is load-bearing for the possession model
+                // and changing its ceiling would move numbers this fix has
+                // no business moving. This adds the jump that the outcome
+                // already implies.
+                let leap = AerialReach::leap_for(self.position.z, player.skills.physical.jumping);
+                if leap > 0.0 {
+                    events.add_player_event(PlayerEvent::Leap(player.id, leap));
+                }
 
                 events.add_ball_event(BallEvent::Claimed(player.id));
             } else {

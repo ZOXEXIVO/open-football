@@ -1,6 +1,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::engine::ball::ball::AerialReach;
 use crate::r#match::engine::flow::goal::GOAL_HEIGHT;
 use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
@@ -373,9 +374,19 @@ impl PlayerMatchState {
             // and outside everything below — see `MatchPlayer::vertical_speed`
             // for why a metric axis cannot travel inside a vector the
             // horizontal speed limits are going to normalise.
-            if let Some(apex) =
-                Self::leap_apex(player, state, tick_context.positions.ball.position.z)
-            {
+            let apex = Self::leap_apex(player, state, tick_context.positions.ball.position.z);
+            #[cfg(feature = "match-logs")]
+            if matches!(
+                state,
+                PlayerState::Defender(DefenderState::Heading)
+                    | PlayerState::Midfielder(MidfielderState::Heading)
+                    | PlayerState::Forward(ForwardState::Heading)
+            ) {
+                crate::r#match::engine::ball::ball::flight_diag::FlightDiag::note_header(
+                    apex.is_some(),
+                );
+            }
+            if let Some(apex) = apex {
                 player.leap(apex);
             }
         } else {
@@ -511,17 +522,43 @@ impl PlayerMatchState {
     }
 
     /// How high a player takes himself, in metres, on entering `state` —
-    /// `None` for every state that keeps both feet on the grass, which is
-    /// all but two of them.
+    /// `None` for every state that keeps both feet on the grass.
     ///
     /// Scaled by `jumping`, which is the attribute that means exactly this.
     /// The numbers are the rise of the player's HIPS, so they can be checked
     /// against a human being: a poor leaper gets about a third of a metre off
     /// the ground and a good one three quarters, which puts a keeper's gloves
     /// comfortably over a 2.44 m crossbar.
+    ///
+    /// # Outfielders used to be in the `None` arm, all of them
+    ///
+    /// Only the two goalkeeper states below ever left the ground. Every
+    /// header in the engine — a centre-back attacking a corner, a striker
+    /// meeting a cross, a midfielder winning a second ball — was played by
+    /// a man standing perfectly still while the ball passed through him,
+    /// because `Heading` resolved as a skill roll and nothing in it ever
+    /// touched the vertical axis. The state machine already had the
+    /// mechanism; the heading states simply were not listed.
+    ///
+    /// A header is a TIMED jump, not a maximal one, so the apex asked for
+    /// here is the one that brings the player's head to the ball
+    /// ([`AerialReach::leap_for`]) rather than the highest he could
+    /// manage. A ball he can already reach standing gets no jump at all,
+    /// which is correct and is why the helper returns zero rather than a
+    /// token hop.
     fn leap_apex(player: &MatchPlayer, state: PlayerState, ball_height: f32) -> Option<f32> {
         let spring = ((player.skills.physical.jumping - 1.0) / 19.0).clamp(0.0, 1.0);
         match state {
+            // Every outfield aerial challenge. The apex is measured from
+            // the ball, so a low header is a low jump and a ball at the
+            // very top of his range is a full one.
+            PlayerState::Defender(DefenderState::Heading)
+            | PlayerState::Midfielder(MidfielderState::Heading)
+            | PlayerState::Forward(ForwardState::Heading) => {
+                let apex =
+                    AerialReach::header_leap_for(ball_height, player.skills.physical.jumping);
+                (apex > 0.0).then_some(apex)
+            }
             // A standing leap at a cross or a corner — the one moment a
             // keeper is going straight up.
             PlayerState::Goalkeeper(GoalkeeperState::Jumping) => Some(0.34 + spring * 0.41),

@@ -3370,6 +3370,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::key_pass_diag::reset();
     core::assist_diag::reset();
     core::reception_diag::reset();
+    core::flight_diag::FlightDiag::reset();
     BlockDiag::reset();
     core::helper_diag::reset();
     core::mid_run_diag::reset();
@@ -5468,6 +5469,123 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         );
                     }
                 }
+                // ── BALL FLIGHT CENSUS ──────────────────────────────
+                //
+                // Where the ball actually goes, and which pass of
+                // `Ball::update` sent it there. Two failure modes live
+                // here and neither shows up in any other counter: kicks
+                // whose vertical velocity is in the wrong units (the
+                // vertical axis is in METRES, so a hand-written `z` of
+                // 4.5 is a ten-kilometre apex) and passes that relocate
+                // the ball without any velocity behind the move.
+                {
+                    let (launches, hist, apex_max, peak_z, peak_speed) =
+                        core::flight_diag::FlightDiag::launch_snapshot();
+                    println!(
+                        "  BALL FLIGHT — {} launches, worst apex {:.1}m, highest the ball got {:.1}m, \
+                         fastest loose ball {:.2}u/tick ({:.0} m/s)",
+                        launches,
+                        apex_max,
+                        peak_z,
+                        peak_speed,
+                        peak_speed * 0.125 * 100.0,
+                    );
+                    let ls = launches.max(1) as f32;
+                    let bands: Vec<String> = core::flight_diag::APEX_LABELS
+                        .iter()
+                        .zip(hist.iter())
+                        .map(|(l, c)| format!("{l} {:.1}%", *c as f32 / ls * 100.0))
+                        .collect();
+                    println!("    launch apex: {}", bands.join(" | "));
+                    // Everything from 30 m up is beyond any football ever
+                    // kicked, so it is a unit bug by construction.
+                    let absurd: u64 = hist[5..].iter().sum();
+                    if absurd > 0 {
+                        println!(
+                            "    ^^ {} launches ({:.2}%) above 30m — a kick site is still \
+                             writing a raw z instead of solving an apex",
+                            absurd,
+                            absurd as f32 / ls * 100.0
+                        );
+                        let by_state = core::flight_diag::FlightDiag::absurd_by_state();
+                        let mut label = std::collections::HashMap::new();
+                        for st in core::r#match::player::state::PlayerState::all() {
+                            label.insert(st.compact_id(), format!("{}", st));
+                        }
+                        let mut rows: Vec<(usize, u64)> = by_state
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, c)| **c > 0)
+                            .map(|(i, c)| (i, *c))
+                            .collect();
+                        rows.sort_by(|a, b| b.1.cmp(&a.1));
+                        for (id, c) in rows.iter().take(6) {
+                            println!(
+                                "       struck by a player in {:<28} {:>5}",
+                                label
+                                    .get(&(*id as u16))
+                                    .cloned()
+                                    .unwrap_or_else(|| format!("state {id}")),
+                                c
+                            );
+                        }
+                    }
+
+                    let jumps = core::flight_diag::FlightDiag::jump_snapshot();
+                    // Restarts move the ball on purpose (a throw-in puts
+                    // it on the touchline); only the rest are unexplained.
+                    let restart_total: u64 = core::flight_diag::RESTART_STAGES
+                        .map(|i| jumps[i].0)
+                        .sum();
+                    let jump_total: u64 =
+                        jumps.iter().map(|j| j.0).sum::<u64>() - restart_total;
+                    println!(
+                        "    relocations: {} unexplained ({:.1}/match) + {} restart placements \
+                         ({:.1}/match)",
+                        jump_total,
+                        jump_total as f32 / n_matches as f32,
+                        restart_total,
+                        restart_total as f32 / n_matches as f32,
+                    );
+                    for (stage, (n, mean, max, peak)) in
+                        core::flight_diag::STAGES.iter().zip(jumps.iter())
+                    {
+                        // A stage with no jumps still matters if it left
+                        // the ball travelling faster than the physics cap
+                        // — that is where a runaway velocity is born.
+                        if *n > 0 || *peak > 8.0 {
+                            println!(
+                                "      {:<16} {:>7} jumps, mean {:>6.1}u, worst {:>6.1}u ({:.1}m), peak speed {:.2}u/tick",
+                                stage,
+                                n,
+                                mean,
+                                max,
+                                max * 0.125,
+                                peak
+                            );
+                        }
+                    }
+
+                    let (icept, mean_z, above, no_leap, headers, headers_air) =
+                        core::flight_diag::FlightDiag::aerial_snapshot();
+                    println!(
+                        "    interceptions {} at mean height {:.2}m — {} above standing reach \
+                         ({:.1}%), of which {} taken WITHOUT leaving the ground (must be 0)",
+                        icept,
+                        mean_z,
+                        above,
+                        above as f32 / icept.max(1) as f32 * 100.0,
+                        no_leap,
+                    );
+                    if headers > 0 {
+                        println!(
+                            "    headers {} — {:.1}% won in the air",
+                            headers,
+                            headers_air as f32 / headers as f32 * 100.0
+                        );
+                    }
+                }
+
                 let (emitted, superseded, dead, out_of_reach) =
                     core::reception_diag::pass_outcome_snapshot();
                 println!(

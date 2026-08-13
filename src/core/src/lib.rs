@@ -422,6 +422,8 @@ pub use club::{
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::assist_diag;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::ball::ball::flight_diag;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::interactions::block_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::ownership::reception_diag;

@@ -64,7 +64,43 @@ impl SpinModel {
 
     /// Ceiling on imparted rotation, rad/tick. 1.2 rad/tick is ~19 rev/s
     /// — beyond anything a human generates, so it only ever catches a bug.
-    const MAX_SPIN: f32 = 1.2;
+    pub const MAX_SPIN: f32 = 1.2;
+
+    /// Bring any rotation inside [`Self::MAX_SPIN`], preserving its axis.
+    ///
+    /// # Why this is a public helper and not just an internal detail
+    ///
+    /// [`Self::from_strike`] applies the ceiling itself, but it is not the
+    /// only producer of spin. The cross and shot paths do not pick a
+    /// rotation — they SOLVE for the one that delivers a wanted sideways
+    /// deflection, inverting `d = ½·C·ω·|v|·T²` to get
+    /// `ω = 2·d·|v| / (C·dist²)`. That expression has `dist²` in the
+    /// denominator, so a delivery aimed to swing a couple of metres over a
+    /// very short distance asks for a rotation in the thousands of
+    /// rad/tick, and both sites assigned it raw.
+    ///
+    /// The consequence was not a slightly bent flight. Magnus acceleration
+    /// is `C·(ω × v)`, so a spin three orders of magnitude too large
+    /// produces a force three orders of magnitude too large, applied every
+    /// tick and perpendicular to travel — the ball leaves at colossal
+    /// speed in a direction nobody kicked it. That is the "ball suddenly
+    /// shoots off for no reason" report, and because the force is a
+    /// rotation of the velocity vector it also converts that speed into
+    /// VERTICAL speed, which is how a pass ended up with a 700 m apex.
+    ///
+    /// Every producer must route through here.
+    #[inline]
+    pub fn clamped(spin: Vector3<f32>) -> Vector3<f32> {
+        if !spin.x.is_finite() || !spin.y.is_finite() || !spin.z.is_finite() {
+            return Vector3::zeros();
+        }
+        let mag = spin.norm();
+        if mag > Self::MAX_SPIN {
+            spin * (Self::MAX_SPIN / mag)
+        } else {
+            spin
+        }
+    }
 
     /// Magnus acceleration for a ball spinning at `spin` (rad/tick) and
     /// travelling at `velocity` (mixed units, as stored). Returns an
@@ -121,13 +157,7 @@ impl SpinModel {
         let perp = Vector3::new(-dir.y, dir.x, 0.0);
         let back_spin = -perp * (vertical * SPIN_PER_OFFSET * power);
 
-        let total = side_spin + back_spin;
-        let mag = total.norm();
-        if mag > Self::MAX_SPIN {
-            total * (Self::MAX_SPIN / mag)
-        } else {
-            total
-        }
+        Self::clamped(side_spin + back_spin)
     }
 
     /// Decay applied once per airborne tick.
@@ -156,10 +186,31 @@ impl SpinModel {
         let perp = Vector3::new(-dir.y, dir.x, 0.0);
         let rolling = spin.dot(&perp);
 
-        // Contact converts some rotation into translation. 26 u/tick per
-        // rad/tick lands a heavy backspin check inside a metre or two of
-        // pace change, which is what one looks like.
-        const GRIP: f32 = 26.0;
+        // Contact converts some rotation into translation.
+        //
+        // # This was 26 and it launched the ball into orbit
+        //
+        // The old value was justified as landing "a heavy backspin check
+        // inside a metre or two of pace change" — a distance, where the
+        // quantity being set is a SPEED. 26 u/tick per rad/tick means a
+        // normally-struck ball (`from_strike` produces ~0.17 rad/tick for
+        // a 0.3-radius contact) picked up 4.4 u/tick — 55 m/s — on its
+        // first bounce, and the value is added AFTER `update_velocity`'s
+        // speed clamp, so nothing downstream could take it back.
+        //
+        // Worse, it did not stay horizontal. The Magnus term is a
+        // rotation of the velocity vector about the spin axis, so a ball
+        // carrying a runaway horizontal speed has that speed steadily
+        // turned into VERTICAL speed over a long flight. The two together
+        // are what produced launches with a 640 m apex in the flight
+        // census: nothing kicked the ball that hard, the bounce did, and
+        // the spin then pointed it at the sky.
+        //
+        // Derived rather than fitted: a strongly backspun ball checks
+        // roughly 30-40% off its own pace on contact. A ball arriving at
+        // 15 m/s (1.2 u/tick) carrying ~0.55 rad/tick of backspin should
+        // lose about 0.45 u/tick, which puts the coefficient near 0.8.
+        const GRIP: f32 = 0.8;
         let along = dir * (rolling * GRIP);
         // Sidespin skews the bounce across the direction of travel.
         let across = perp * (spin.z * GRIP * 0.35);
@@ -185,6 +236,23 @@ impl Ball {
         // the highest-magnitude legitimate action because they stack
         // meaningful horizontal AND vertical velocity for lofted hoofs.
         const MAX_VELOCITY: f32 = 8.0;
+        // ...and the same for the VERTICAL axis, which the cap above
+        // cannot police.
+        //
+        // `MAX_VELOCITY` is a norm over a vector whose axes carry
+        // different units — `x`/`y` in game units, `z` in metres (see
+        // `GRAVITY_PER_TICK`). 8.0 is a sane horizontal ceiling and a
+        // meaningless vertical one: 8 m/tick is 800 m/s, so the safety
+        // net let every mis-united kick through untouched. That is how a
+        // hand-written `z` of 5.0 stayed in the engine as a 12.7 km apex
+        // — nothing was in a position to notice.
+        //
+        // 40 m is comfortably above the highest ball in football (a
+        // goalkeeper's kick from hand tops out near 30 m) so this never
+        // binds on a legitimate strike, and it is a hard ceiling on how
+        // wrong a future unit slip can go.
+        const MAX_APEX_METRES: f32 = 40.0;
+        let max_vertical = super::Ball::launch_speed_for_apex(MAX_APEX_METRES);
 
         // Physics constants for realistic ball behavior
         // Air drag: affects aerial balls (proportional to v²)
@@ -208,6 +276,15 @@ impl Ball {
         {
             self.velocity = Vector3::zeros();
             return;
+        }
+
+        // Clamp the vertical axis on its own terms, BEFORE the norm below
+        // — trimming `z` first means the norm clamp is not asked to
+        // absorb a launch that is wrong by three orders of magnitude, and
+        // so cannot shrink a perfectly good horizontal component along
+        // with it.
+        if self.velocity.z > max_vertical {
+            self.velocity.z = max_vertical;
         }
 
         let mut velocity_norm_sq = self.velocity.norm_squared();
@@ -242,10 +319,29 @@ impl Ball {
             // checks it back, sidespin skews it across. Computed BEFORE
             // the flat speed loss so it reads as a change of pace and
             // direction rather than a rescale of one.
+            let incoming_horizontal =
+                (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
             let (kick, spin_retained) = SpinModel::bounce_kick(self.spin, self.velocity);
             self.velocity.x += kick.x;
             self.velocity.y += kick.y;
             self.spin *= spin_retained;
+
+            // A bounce redirects momentum; it never creates it. Contact
+            // friction can stop a backspun ball dead or skew a sidespun
+            // one across its line, but it cannot send the ball off faster
+            // than it arrived — and nothing else in the integrator is in
+            // a position to say so, because this runs AFTER the speed
+            // clamp above. Without this the spin term was free to add
+            // pace on every bounce, and a ball with the rotation the
+            // solved-spin sites used to produce simply accelerated off
+            // the pitch.
+            let after = (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y)
+                .sqrt();
+            if after > incoming_horizontal && after > 1.0e-6 {
+                let scale = incoming_horizontal / after;
+                self.velocity.x *= scale;
+                self.velocity.y *= scale;
+            }
 
             // Horizontal speed loss on bounce.
             self.velocity.x *= 0.95;
@@ -598,6 +694,93 @@ mod tests {
             ball.spin,
             Vector3::zeros(),
             "a touch kills the rotation — the next kick decides the flight"
+        );
+    }
+
+    /// The Magnus force is `C·(ω × v)`, so it scales with the rotation
+    /// without limit. The cross and shot paths do not pick a spin — they
+    /// invert `ω = 2·d·|v| / (C·dist²)` to get the one that delivers a
+    /// wanted swing, and that expression runs away as the distance
+    /// shrinks. Both used to assign it raw, which turned the ball into a
+    /// projectile nobody had kicked.
+    #[test]
+    fn a_solved_spin_can_never_exceed_what_a_human_could_impart() {
+        // The cross path's own expression, at a distance short enough to
+        // make it explode: 5u of swing over 2u of travel.
+        let absurd = 2.0 * 5.0 * 2.0 / (SpinModel::MAGNUS_COEFF * 2.0 * 2.0);
+        assert!(
+            absurd > 1000.0,
+            "the solve really does run away; test is meaningless otherwise"
+        );
+        let clamped = SpinModel::clamped(Vector3::new(0.0, 0.0, absurd));
+        assert!(
+            clamped.norm() <= SpinModel::MAX_SPIN + 1.0e-4,
+            "a solved spin must be clamped to something a player can produce, got {}",
+            clamped.norm()
+        );
+        // The axis has to survive, or the ball bends the wrong way.
+        assert!(clamped.z > 0.0, "clamping must preserve the direction");
+        assert_eq!(
+            SpinModel::clamped(Vector3::new(f32::NAN, 0.0, 0.0)),
+            Vector3::zeros(),
+            "a poisoned spin resolves to none, not to NaN in the physics"
+        );
+    }
+
+    /// A bounce redirects momentum; it cannot manufacture it. The spin
+    /// grip term is applied AFTER `update_velocity`'s speed clamp, so if
+    /// it is free to add pace nothing downstream can take it back — which
+    /// is how a spinning ball used to accelerate off the pitch.
+    #[test]
+    fn a_bounce_never_leaves_the_ball_faster_than_it_arrived() {
+        for spin_z in [-1.2f32, -0.5, 0.0, 0.5, 1.2] {
+            for rolling in [-1.2f32, 0.0, 1.2] {
+                let mut ball = Ball::with_coord(840.0, 545.0);
+                ball.position = Vector3::new(100.0, 272.0, 0.0);
+                ball.velocity = Vector3::new(2.0, 0.0, -0.08);
+                // Rotation about both axes at the engine's ceiling.
+                ball.spin = Vector3::new(0.0, rolling, spin_z);
+                let before = (ball.velocity.x * ball.velocity.x
+                    + ball.velocity.y * ball.velocity.y)
+                    .sqrt();
+                ball.update_velocity();
+                let after = (ball.velocity.x * ball.velocity.x
+                    + ball.velocity.y * ball.velocity.y)
+                    .sqrt();
+                assert!(
+                    after <= before + 1.0e-4,
+                    "bounce with spin ({rolling}, {spin_z}) sped the ball up: {before} -> {after}"
+                );
+            }
+        }
+    }
+
+    /// The vertical axis is in METRES while `x`/`y` are in game units, so
+    /// the engine's `MAX_VELOCITY` norm cannot police it — 8.0 there means
+    /// 800 m/s of climb. Every unit slip the flight census found was a
+    /// hand-written `z` that this guard now catches.
+    #[test]
+    fn no_kick_can_climb_higher_than_a_football_ever_goes() {
+        let mut ball = Ball::with_coord(840.0, 545.0);
+        ball.position = Vector3::new(100.0, 272.0, 0.0);
+        // The literal that sat in the goalkeeper's clearance: a 10 km apex.
+        ball.velocity = Vector3::new(1.0, 0.0, 4.5);
+        ball.update_velocity();
+        let apex = Ball::apex_for_launch(ball.velocity.z);
+        assert!(
+            apex <= 41.0,
+            "a launch must be clamped to a reachable apex, got {apex} m"
+        );
+        // A legitimate goalkeeper's kick from hand must pass untouched.
+        // One tick of gravity and drag comes off it — that is the physics
+        // doing its job, not the guard binding — so the bar is "still
+        // essentially a 24 m kick" rather than an exact equality.
+        ball.velocity = Vector3::new(1.0, 0.0, Ball::launch_speed_for_apex(24.0));
+        ball.update_velocity();
+        let realised = Ball::apex_for_launch(ball.velocity.z);
+        assert!(
+            realised > 23.0,
+            "a real 24 m kick must not be clamped, got {realised} m"
         );
     }
 

@@ -3,7 +3,7 @@ use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    Ball, ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
 
@@ -51,10 +51,15 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
             // Punch AWAY from the own goal, through the ball, with real
             // loft. `direction_to_own_goal()` returns the own-goal
             // POSITION (not a direction), so the outward line is
-            // ball-minus-goal. A punch is a shorter, flatter contact
-            // than the Clearing hoof (3.8-4.8 h / 4.5-5.5 v): strong
-            // aerial keepers push it toward midfield, weak ones only
-            // shift the danger a few metres.
+            // ball-minus-goal. A punch is a shorter, flatter contact than
+            // the Clearing hoof: strong aerial keepers push it toward
+            // midfield, weak ones only shift the danger a few metres.
+            //
+            // Both components were pre-metric, calibrated against the
+            // Clearing hoof this comment used to quote — and that hoof
+            // was itself a 10 km rocket (see `GoalkeeperClearingState`).
+            // A `z` of 2.6 is 260 m/s, an apex of ~3.4 km. Solved from an
+            // apex now, like every other kick in the engine.
             let ball_pos = ctx.tick_context.positions.ball.position;
             let own_goal = ctx.ball().direction_to_own_goal();
             let fallback_x = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
@@ -68,11 +73,18 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
             let punch_dir = Vector3::new(outward_dir.x, outward_dir.y + y_jitter, 0.0)
                 .try_normalize(1e-4)
                 .unwrap_or(outward_dir);
-            let punch_power = 2.8 + prof.aerial_command * 1.2; // 2.8 - 4.0 u/tick
+            // Flatter and shorter than the kicked clearance: a punch is
+            // struck off the fist under pressure, so it goes up 6-10 m
+            // and travels 15-25 m rather than clearing the halfway line.
+            let punch_apex = 6.0 + prof.aerial_command * 4.0;
+            let punch_vz = Ball::launch_speed_for_apex(punch_apex);
+            let punch_range = 120.0 + prof.aerial_command * 80.0; // 15 - 25 m
+            let hang = Ball::hang_ticks(punch_vz).max(1.0);
+            let punch_power = (punch_range / hang).clamp(0.30, 2.2);
             let punch_velocity = Vector3::new(
                 punch_dir.x * punch_power,
                 punch_dir.y * punch_power,
-                2.6 + prof.aerial_command * 0.8, // flatter arc than a kicked clearance
+                punch_vz,
             );
 
             // Generate a punch event

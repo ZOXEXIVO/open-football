@@ -3,9 +3,10 @@
 //! unowned balls with `in_flight_state > 0` so routine possession
 //! play isn't disturbed.
 
-use super::Ball;
+use super::{AerialReach, Ball};
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
+use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
@@ -465,8 +466,28 @@ impl Ball {
             return;
         }
 
-        // Don't intercept aerial balls above player reach
-        if self.position.z > 2.5 {
+        // HEIGHT IS A DIFFICULTY, NOT A DOOR.
+        //
+        // This was a single `z > 2.5` gate and nothing else in the whole
+        // pass read the height again. Both halves of that were wrong, and
+        // they produce the two complaints that sound like opposites:
+        //
+        //   * Below the bar, a ball at 2.4 m — a foot above a standing
+        //     player's head — was exactly as interceptable as one rolling
+        //     along the floor. A defender plucked it out of the air
+        //     without moving, because nothing asked him to jump and
+        //     nothing made it harder that he hadn't.
+        //   * Above the bar the ball simply did not exist, whoever was
+        //     under it and however well he leaps. 2.51 m was unreachable
+        //     for the best header of the ball in the division.
+        //
+        // The ceiling now belongs to the PLAYER (`AerialReach::ceiling`,
+        // from his `jumping`), the chance falls away as the ball climbs
+        // toward it, and a defender who takes one above his standing
+        // reach actually leaves the ground for it — see the `Leap` event
+        // below. The flat cut here only skips the loop early for balls
+        // beyond any human being.
+        if self.position.z > AerialReach::ceiling(20.0) {
             return;
         }
 
@@ -533,6 +554,15 @@ impl Ball {
                 continue;
             }
 
+            // How high the ball is, measured against THIS player's leap.
+            // Zero means it is over him however well he reads the play,
+            // and he is skipped rather than scored at a token chance.
+            let height_factor =
+                AerialReach::reach_difficulty(self.position.z, player.skills.physical.jumping);
+            if height_factor <= 0.0 {
+                continue;
+            }
+
             // Base chance: dedicated `interception` composite — anticipation,
             // positioning, concentration, marking, etc. routed through
             // `effective_skill` so fatigue applies. Drop-in replacement for
@@ -561,7 +591,7 @@ impl Ball {
             // ~0.07, while still leaving peripheral or off-the-pace
             // defenders below the bar. Population per-team
             // interceptions land near 12–13/match.
-            let chance = skill_factor * proximity_factor * speed_penalty * 0.16;
+            let chance = skill_factor * proximity_factor * speed_penalty * height_factor * 0.16;
 
             if chance > best_chance {
                 best_chance = chance;
@@ -630,6 +660,35 @@ impl Ball {
             self.intercept_rolled = true;
             let fires = context.rng.unit_f32() < best_chance;
             if fires {
+                // A ball taken above standing reach is taken in the air.
+                // The ball code holds the squad immutably, so it asks for
+                // the jump rather than performing it — see
+                // `PlayerEvent::Leap`.
+                let interceptor_jumping = players
+                    .iter()
+                    .find(|p| p.id == interceptor_id)
+                    .map_or(10.0, |p| p.skills.physical.jumping);
+                let leap = AerialReach::leap_for(self.position.z, interceptor_jumping);
+                if leap > 0.0 {
+                    events.add_player_event(PlayerEvent::Leap(interceptor_id, leap));
+                }
+
+                // How high was it, and was he off the ground? A ball
+                // picked out of the air at head height by a man standing
+                // flat-footed is the reported symptom, and no existing
+                // counter can see it.
+                #[cfg(feature = "match-logs")]
+                {
+                    let airborne = players
+                        .iter()
+                        .find(|p| p.id == interceptor_id)
+                        .is_some_and(|p| p.is_airborne());
+                    super::flight_diag::FlightDiag::note_intercept(
+                        self.position.z,
+                        AerialReach::STANDING,
+                        airborne || leap > 0.0,
+                    );
+                }
                 // Snap the ball to the interceptor and zero the
                 // velocity. Before this, velocity was just scaled to
                 // Zeroing velocity + handing ownership to the defender
@@ -932,8 +991,20 @@ impl Ball {
         let composure = (blocker.skills.mental.composure / 20.0).clamp(0.0, 1.0);
         let technique = (blocker.skills.technical.technique / 20.0).clamp(0.0, 1.0);
         let ball_speed_low_bonus = if ball_velocity_2d < 2.0 { 0.06 } else { 0.0 };
-        let controlled_block_prob =
-            (0.06 + composure * 0.05 + technique * 0.04 + ball_speed_low_bonus).clamp(0.06, 0.30);
+        // Taking the ball cleanly off a block means having it at your
+        // feet, so it is only available to a defender the ball actually
+        // reached — see the position note below. Blocking at a stretch
+        // from range always leaves a loose ball. Without this the
+        // controlled branch could hand ownership to a man 11 m away, and
+        // `move_to` would drop it again on the next tick as an
+        // unreachable owner.
+        let blocker_gap = (blocker_pos.x - self.position.x).hypot(blocker_pos.y - self.position.y);
+        let blocker_in_reach = blocker_gap <= super::CONTROL_DISTANCE;
+        let controlled_block_prob = if blocker_in_reach {
+            (0.06 + composure * 0.05 + technique * 0.04 + ball_speed_low_bonus).clamp(0.06, 0.30)
+        } else {
+            0.0
+        };
 
         // Deflection direction: away from the shot line, with a random ±45° spread.
         let angle: f32 = (context.rng.unit_f32() - 0.5) * 1.56;
@@ -948,7 +1019,24 @@ impl Ball {
         let p_loose = p_safe + 0.40; // ~40% loose central rebound
         // remainder ~14% → unlucky deflection toward goal (slows but stays live)
 
-        self.position = blocker_pos;
+        // A block happens where the BALL is, not where the defender is.
+        //
+        // This used to be an unconditional `self.position = blocker_pos`,
+        // and the block window reaches 90u ahead and 16u across — so a
+        // successful block could pick the ball up in mid-flight and set
+        // it down eleven metres away inside a single tick. That is the
+        // "ball suddenly somewhere else for no reason" report exactly:
+        // there is no kick, no bounce and no carry to explain it, the
+        // ball is simply elsewhere on the next frame.
+        //
+        // Moving the ball to the blocker at all is only defensible when
+        // he is close enough that the two were going to meet anyway.
+        // Beyond that the contact is a stretched leg or a slide, and the
+        // ball deflects from its own position. `CONTROL_DISTANCE` is the
+        // engine's existing answer to "close enough to have played it".
+        if blocker_in_reach {
+            self.position = blocker_pos;
+        }
         self.position.z = 0.0;
         self.previous_owner = self.current_owner.or(self.previous_owner);
         self.pass_target_player_id = None;

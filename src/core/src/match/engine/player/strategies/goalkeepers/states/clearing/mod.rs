@@ -1,3 +1,4 @@
+use crate::r#match::Ball;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
@@ -47,10 +48,36 @@ impl GoalkeeperClearingState {
     ///
     /// Old implementation used `MoveBall` with z=0, so the "clearance"
     /// was a ground roll that got intercepted 20m upfield. Now it emits
-    /// a proper `ClearBall` event with significant vertical velocity so
-    /// the ball flies over pressing opponents and lands in contested
-    /// midfield. In-engine gravity is strong, so z needs to be ~5 u/tick
-    /// for the ball to stay airborne through its horizontal travel.
+    /// a proper `ClearBall` event with a solved ballistic arc.
+    ///
+    /// # This kick used to leave the pitch entirely
+    ///
+    /// The vertical velocity here was a hand-written `4.5 + skill`, with
+    /// a comment explaining that "in-engine gravity is strong, so z needs
+    /// to be ~5 u/tick". That was true of the gravity it was written
+    /// against. The vertical axis is now in METRES and gravity with it
+    /// (see [`GRAVITY_PER_TICK`](crate::r#match::engine::ball::ball::GRAVITY_PER_TICK)),
+    /// and 4.5 m/tick is 450 m/s straight up — an apex of about **ten
+    /// kilometres** and a hang time of a minute and a half.
+    ///
+    /// What that looked like from the stands is every one of the reported
+    /// symptoms at once: the ball leaves the keeper at colossal speed,
+    /// climbs out of sight, crosses the whole pitch in a couple of
+    /// seconds, sails over the opposite goal, hits the far boundary and
+    /// gets clamped back inside with its velocity zeroed — at which point
+    /// it drops from altitude to the turf in a single tick. `Clearing` is
+    /// the terminal state of nearly every keeper possession (Catching,
+    /// PickingUp, Passing, Kicking, Distributing and Throwing all fall
+    /// through to it), so it happened constantly.
+    ///
+    /// The conversion sweep that moved the engine onto a metric vertical
+    /// axis rewrote the defender's clearance, the headed clearance and the
+    /// shot arc in terms of an APEX, and every one of those carries a
+    /// comment warning that a hand-written `z` reads as a sane number
+    /// while meaning something absurd. This site was missed. It is now
+    /// solved the same way they are: choose how high the hoof goes, which
+    /// fixes the hang time, and let the horizontal speed follow from the
+    /// distance it has to cover.
     fn execute_clearance(&self, ctx: &StateProcessingContext) -> Option<Event> {
         use crate::r#match::PlayerSide;
 
@@ -82,14 +109,19 @@ impl GoalkeeperClearingState {
         let horizontal_dist = horizontal_to_target.norm().max(0.1);
         let horizontal_dir = horizontal_to_target / horizontal_dist;
 
-        // Horizontal speed scaled by kicking skill.
-        let horizontal_speed = 3.8 + kicking_power * 1.0; // 3.8 - 4.8 u/tick
-        let horizontal_velocity = horizontal_dir * horizontal_speed;
+        // Apex of the hoof, in metres. A goalkeeper's kick from hand is
+        // the highest ball in football — 20 m at the top of the arc is
+        // normal, and a better striker of the ball gets it higher.
+        let apex_metres = 16.0 + kicking_power * 8.0; // 16 - 24 m
+        let z_velocity = Ball::launch_speed_for_apex(apex_metres);
 
-        // Lofted z — strong vertical so the ball flies over the defensive
-        // line and clears the danger zone. Skilled keepers loft it a
-        // touch higher.
-        let z_velocity = 4.5 + kicking_power * 1.0; // 4.5 - 5.5 u/tick
+        // The arc's own hang time is the whole budget: reach the aim
+        // point inside it and the ball lands where it was aimed. Clamped
+        // to a realistic kick — 2.6 u/tick is 32 m/s — so a keeper stuck
+        // very deep in his own half cannot solve his way to a rocket.
+        let hang = Ball::hang_ticks(z_velocity).max(1.0);
+        let horizontal_speed = (horizontal_dist / hang).clamp(0.30, 2.6);
+        let horizontal_velocity = horizontal_dir * horizontal_speed;
 
         let ball_velocity = Vector3::new(horizontal_velocity.x, horizontal_velocity.y, z_velocity);
 
