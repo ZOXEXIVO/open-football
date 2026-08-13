@@ -22,6 +22,17 @@ pub struct DefenderGuardingState {}
 
 impl StateProcessingHandler for DefenderGuardingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Won it — a defender with the ball is not guarding anybody any
+        // more. `Guarding` had no `has_ball` exit at all, so a defender
+        // who ended up on the ball stood over it marking his man until
+        // the ball's stall detector took it off him ~16 s later. Same
+        // hole `GoalkeeperComingOutState` had; see the sweep note there.
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Passing,
+            ));
+        }
+
         // BOX EMERGENCY — engage the carrier immediately if they're in
         // our box and we're one of the two closest defenders. Guarding
         // an off-ball runner is the wrong duty at that moment.

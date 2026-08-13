@@ -1,5 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefensiveLine,
+};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
@@ -230,6 +232,14 @@ impl StateProcessingHandler for DefenderCoveringState {
                 // are in Cover-adjacent states.
                 let tether = 0.2;
                 let target = cover_point * (1.0 - tether) + ctx.player.start_position * tether;
+                // The last shape-holding state that still answered only to
+                // its own job. Cover is a line role — sitting behind the
+                // presser is exactly the `DEPTH_DROP` this constraint
+                // exists to allow — so it belongs inside the shape, not
+                // outside it. The `start_position` tether above is also
+                // the kickoff slot, the same anchor the rest of the back
+                // line has now stopped using.
+                let target = DefensiveLine::hold_shape(ctx, target);
                 let to_target = target - ctx.player.position;
                 let distance = to_target.magnitude();
 

@@ -1,6 +1,6 @@
 use crate::actors::BallState;
+use crate::camera::{CameraFlight, CameraOrbit, CameraRig, CameraZoom};
 use crate::config::ViewerConfig;
-use crate::field::Field;
 use crate::loader::ChunkLoader;
 use crate::playback::Playback;
 use bevy::prelude::*;
@@ -38,7 +38,10 @@ pub struct SpeedLabel;
 pub struct StatesButton;
 
 #[derive(Component)]
-pub struct BallCoordsLabel;
+pub struct CameraResetButton;
+
+#[derive(Component)]
+pub struct ZoomLabel;
 
 /// What the debug overlay is showing. Only meaningful when the page asked for
 /// it; in the game itself nothing ever reads or flips this.
@@ -54,8 +57,9 @@ impl Default for DebugOverlay {
 }
 
 /// The transport bar along the bottom of the canvas: play/pause, a scrub track
-/// with goal markers, and the match clock. It lives inside the viewer rather
-/// than in the page so that the recording UI travels with the renderer.
+/// with goal markers, a camera reset and the match clock. It lives inside the
+/// viewer rather than in the page so that the recording UI travels with the
+/// renderer.
 ///
 /// In debug mode it also carries the match harness's controls — playback speed,
 /// a state-label toggle and the ball's engine coordinates.
@@ -200,6 +204,36 @@ impl Timeline {
                         ));
                     });
 
+                    // Puts the camera back on the gantry. The rig can now be
+                    // flown clear of the ground (`CameraFlight`), and a free
+                    // camera without a way home is a way to lose the match —
+                    // so this is the one camera control that is not a gesture
+                    // over the canvas but a button that is always in view.
+                    //
+                    // Labelled in English rather than through `ViewerLabels`:
+                    // the viewer draws with Bevy's built-in font, which
+                    // carries ASCII and nothing else, so a translated string
+                    // would come out as blank boxes in most of the locales
+                    // that asked for it.
+                    bar.spawn((
+                        CameraResetButton,
+                        Interaction::default(),
+                        Self::chip(84.0),
+                        BackgroundColor(Self::CHIP_BACKGROUND),
+                    ))
+                    .with_child((
+                        Text::new("Reset view"),
+                        TextFont {
+                            font_size: FontSize::Px(12.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        TextLayout {
+                            linebreak: LineBreak::NoWrap,
+                            ..default()
+                        },
+                    ));
+
                     if config.debug {
                         bar.spawn((
                             SpeedButton,
@@ -232,9 +266,17 @@ impl Timeline {
                             TextColor(Color::WHITE),
                         ));
 
+                        // Camera zoom readout. The chips that used to sit
+                        // in front of it are gone: the wheel does this
+                        // now (`CameraZoom::handle_wheel`), which is where
+                        // a hand already is while watching, and two
+                        // buttons to nudge a lens are a poor substitute
+                        // for turning it. The number stays — it is the
+                        // only feedback that the wheel did anything when
+                        // the shot is of open pitch.
                         bar.spawn((
-                            BallCoordsLabel,
-                            Text::new(""),
+                            ZoomLabel,
+                            Text::new("1.00x"),
                             TextFont {
                                 font_size: FontSize::Px(11.0),
                                 ..default()
@@ -245,7 +287,7 @@ impl Timeline {
                                 ..default()
                             },
                             Node {
-                                width: px(168),
+                                width: px(52),
                                 flex_shrink: 0.0,
                                 justify_content: JustifyContent::Center,
                                 ..default()
@@ -343,6 +385,23 @@ impl Timeline {
         }
     }
 
+    /// Puts the camera back where the replay opened: on the gantry, at rest
+    /// zoom, following the ball again.
+    ///
+    /// Runs ahead of the camera systems so a click lands on the frame it
+    /// happened rather than the next one — the same reason the orbit drag
+    /// sits where it does.
+    pub fn handle_camera_reset(
+        button: Query<&Interaction, (Changed<Interaction>, With<CameraResetButton>)>,
+        mut orbit: ResMut<CameraOrbit>,
+        mut zoom: ResMut<CameraZoom>,
+        mut flight: ResMut<CameraFlight>,
+    ) {
+        if button.iter().any(|i| *i == Interaction::Pressed) {
+            CameraRig::reset(&mut orbit, &mut zoom, &mut flight);
+        }
+    }
+
     /// Cycles playback speed and flips the state labels. Debug overlay only —
     /// neither button exists otherwise.
     pub fn handle_debug_controls(
@@ -362,10 +421,11 @@ impl Timeline {
     pub fn refresh_debug(
         playback: Res<Playback>,
         overlay: Res<DebugOverlay>,
-        ball: Res<BallState>,
+        _ball: Res<BallState>,
         mut speed: Query<&mut Text, With<SpeedLabel>>,
         mut states: Query<&mut BackgroundColor, With<StatesButton>>,
-        mut coords: Query<&mut Text, (With<BallCoordsLabel>, Without<SpeedLabel>)>,
+        zoom: Res<CameraZoom>,
+        mut readout: Query<&mut Text, (With<ZoomLabel>, Without<SpeedLabel>)>,
     ) {
         if let Ok(mut text) = speed.single_mut() {
             let wanted = format!("{}x", playback.speed as u32);
@@ -381,15 +441,8 @@ impl Timeline {
             };
             background.set_if_neq(BackgroundColor(wanted));
         }
-        if let Ok(mut text) = coords.single_mut() {
-            // Engine units, not metres: this readout exists to be compared
-            // against the numbers in the match engine's own logs.
-            let wanted = if ball.on_pitch {
-                let engine = Field::to_engine(ball.position);
-                format!("ball {:.1}, {:.1}, {:.1}", engine[0], engine[1], engine[2])
-            } else {
-                "ball —".to_string()
-            };
+        if let Ok(mut text) = readout.single_mut() {
+            let wanted = format!("{:.2}x", zoom.factor);
             if text.as_str() != wanted {
                 **text = wanted;
             }
@@ -428,6 +481,28 @@ impl Timeline {
             } else {
                 Visibility::Inherited
             };
+        }
+    }
+
+    /// Lights the reset chip whenever the shot is not the one the replay
+    /// opened on.
+    ///
+    /// On a canvas of open pitch there is nothing else that says the camera
+    /// has been moved, and someone who has flown behind a stand and lost the
+    /// ball needs telling which button gets it back.
+    pub fn refresh_camera_reset(
+        orbit: Res<CameraOrbit>,
+        zoom: Res<CameraZoom>,
+        flight: Res<CameraFlight>,
+        mut reset: Query<&mut BackgroundColor, With<CameraResetButton>>,
+    ) {
+        if let Ok(mut background) = reset.single_mut() {
+            let wanted = if CameraRig::moved(&orbit, &zoom, &flight) {
+                Self::CHIP_ACTIVE
+            } else {
+                Self::CHIP_BACKGROUND
+            };
+            background.set_if_neq(BackgroundColor(wanted));
         }
     }
 }

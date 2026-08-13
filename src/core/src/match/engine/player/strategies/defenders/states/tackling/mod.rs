@@ -3,6 +3,8 @@ use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondi
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::states::TackleDecision;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
@@ -12,12 +14,9 @@ use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 10.0; // ~1.25m — proper engagement range.
-// Previously 14u (~1.75m). Even with that, attempts ran at 174/team/match
-// because longer possessions in attacking zones create more chances to
-// hit the gate. 10u forces actual contact range — a defender who's
-// still half a stride away has to keep pressing rather than committing
-// to a slide that won't connect.
+// Contact / commit / disengage distances live on `TackleEngagement` in
+// `defenders::states::common`, shared with `DefenderPressingState` so the
+// two states can no longer disagree about the same carrier.
 const PRESSING_DISTANCE: f32 = 80.0;
 const RETURN_DISTANCE: f32 = 120.0;
 
@@ -48,18 +47,24 @@ impl StateProcessingHandler for DefenderTacklingState {
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let distance_to_opponent = opponent.distance(ctx);
 
-            // If opponent is too far for tackling, press instead
-            if distance_to_opponent > PRESSING_DISTANCE {
+            // The carrier got away — break off and press the space.
+            // `DISENGAGE` sits outside the `COMMIT` distance `Pressing`
+            // uses to send us here, so the two states can't hand the
+            // defender back and forth (see `TackleEngagement`).
+            if distance_to_opponent > TackleEngagement::DISENGAGE {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
                 ));
             }
 
-            // If opponent is close but not in tackle range, keep pressing
-            if distance_to_opponent > TACKLE_DISTANCE_THRESHOLD {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Pressing,
-                ));
+            // Committed but not yet in contact range: keep closing. The
+            // velocity fn below is already a Pursuit onto the carrier, so
+            // holding the state IS the closing-down run. This branch used
+            // to bounce straight back to Pressing, which is why a tackle
+            // never survived past its entry tick. The `in_state_time > 30`
+            // guard further down still bounds how long we can chase.
+            if distance_to_opponent > TackleEngagement::CONTACT {
+                return None;
             }
 
             // Per-player tackle cooldown: a single per-state-machine gate
@@ -82,10 +87,42 @@ impl StateProcessingHandler for DefenderTacklingState {
             // primary driver of ~370 tackle events/team/match (real
             // football: ~18). Only the best-positioned teammate
             // engages; the rest fall back to Pressing to cover angles.
-            if !ctx.team().is_best_player_to_chase_ball() {
+            // Entry condition only — see the midfielder/forward variants.
+            // Re-checking a flickering designation every tick could only
+            // abandon a challenge already under way.
+            if ctx.in_state_time == 0 && !ctx.team().is_best_player_to_chase_ball() {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
                 ));
+            }
+
+            // JOCKEY FIRST.
+            //
+            // Reaching contact range is not a reason to lunge. Every tick
+            // spent here used to produce an attempt (bounded only by the
+            // ~1 s cooldown), which is why defenders committed 11.9
+            // tackles a match against a real ~1.6 — they were tackling
+            // roughly as often as the physics allowed rather than as
+            // often as football does.
+            //
+            // `TackleDecision` rolls the moment instead: the defender
+            // stands his man up, and dives in when the carrier's weight
+            // is committed, when there is cover behind, or when the
+            // danger makes waiting worse than missing. Declining keeps
+            // him IN this state — the velocity below then contains
+            // rather than pursues — so he stays on the carrier's
+            // shoulder instead of being handed back to `Pressing`, which
+            // is what containing actually looks like.
+            if !TackleDecision::is_decision_tick(ctx)
+                || !ctx
+                    .context
+                    .rng
+                    .bernoulli(TackleDecision::commit_probability(
+                        ctx,
+                        distance_to_opponent,
+                    ))
+            {
+                return None;
             }
 
             // We're close enough to tackle! One shot per Tackling entry,
@@ -204,6 +241,19 @@ impl DefenderTacklingState {
         let player_position = ctx.player.position;
         let own_goal_position = ctx.ball().direction_to_own_goal();
 
+        // With a live carrier, the MOVEMENT is always the jockey: get
+        // goal-side of him and stay on his shoulder. The challenge itself
+        // is an instantaneous event decided in `process`, so running
+        // through the man is never the right path — it takes the defender
+        // past the ball whether or not he commits, and it is the visible
+        // half of "defenders lunge at everything".
+        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+            let gap = (carrier.position - player_position).magnitude();
+            if gap <= TackleEngagement::DISENGAGE {
+                return TackleDecision::contain_position(ctx, carrier.position);
+            }
+        }
+
         // Check if ball is dangerously close to own goal
         let ball_distance_to_own_goal = (ball_position - own_goal_position).magnitude();
         let is_ball_near_own_goal =
@@ -288,7 +338,23 @@ impl DefenderTacklingState {
         // normal contact (whistled at ~0.5 instead of ~0.85), netting
         // only +10% whistles. Real per-duel foul rates are ~15-16%; the
         // engine sat at ~10% after round one.
-        let mut base_foul = 0.075 + aggression01 * 0.12 - def_profile.discipline * 0.075;
+        // A FOUL IS A FAILED CHALLENGE, and the rate has to be read
+        // against the number of challenges actually made.
+        //
+        // These constants were fitted when the engine attempted ten times
+        // as many tackles as football does — the per-attempt rate had to
+        // be tiny to keep the foul TOTAL anywhere near real. With the
+        // jockey model bringing attempts down to a realistic count, the
+        // same rate produced 2.1 fouls per team against a real ~12, 0.88
+        // yellows against 3.5-4.5, and 1.5 direct free kicks against
+        // 20-24: the whole disciplinary chain starved.
+        //
+        // Real football makes roughly 30 challenges a team and fouls on
+        // about 12 of them, so a challenge that does not win the ball
+        // cleanly is a foul a large fraction of the time. Lifted ~3× to
+        // match, with the own-box restraint and the booking damping below
+        // still holding penalties and second yellows down.
+        let mut base_foul = 0.34 + aggression01 * 0.34 - def_profile.discipline * 0.20;
         if !tackle_success {
             base_foul *= 1.80;
         }
@@ -306,7 +372,7 @@ impl DefenderTacklingState {
             .penalty_area(ctx.player.side == Some(PlayerSide::Left))
             .contains(&ctx.tick_context.positions.ball.position);
         if in_own_box {
-            base_foul *= 0.30;
+            base_foul *= 0.008;
         }
         // Self-preservation on a booking: a player carrying a yellow
         // measurably tones the challenges down (and managers hook the
@@ -314,7 +380,7 @@ impl DefenderTacklingState {
         if ctx.player.yellow_cards > 0 {
             base_foul *= 0.70;
         }
-        let foul_chance = base_foul.clamp(0.006, 0.30);
+        let foul_chance = base_foul.clamp(0.006, 0.60);
 
         let committed_foul = rng.random::<f32>() < foul_chance;
 
@@ -332,7 +398,7 @@ impl DefenderTacklingState {
             FoulSeverity::Normal
         } else if aggression01 > 0.75 && !tackle_success && rng.random::<f32>() < 0.008 {
             FoulSeverity::Violent
-        } else if !tackle_success && aggression01 > 0.55 && rng.random::<f32>() < 0.35 {
+        } else if !tackle_success && aggression01 > 0.55 && rng.random::<f32>() < 0.16 {
             FoulSeverity::Reckless
         } else {
             FoulSeverity::Normal
@@ -364,7 +430,7 @@ impl DefenderTacklingState {
                 ball_position + ball_velocity.normalize() * ball_travel_distance;
             let player_intercept_distance = (ball_intercept_position - player_position).magnitude();
 
-            player_intercept_distance <= TACKLE_DISTANCE_THRESHOLD
+            player_intercept_distance <= TackleEngagement::CONTACT
         } else {
             false
         }

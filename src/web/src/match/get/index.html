@@ -211,9 +211,9 @@
 <script type="module">
     // Everything the replay does lives in the WebAssembly viewer built from
     // `src/match`; this hands it the canvas and the fixture, and steps back.
-    import init, { MatchViewer } from "/static/match/match_viewer.js?v={{ match_viewer_version }}";
+    import init, { MatchViewer } from "/static/viewer/match_viewer.js?v={{ match_viewer_version }}";
 
-    init({ module_or_path: "/static/match/match_viewer_bg.wasm?v={{ match_viewer_version }}" })
+    init({ module_or_path: "/static/viewer/match_viewer_bg.wasm?v={{ match_viewer_version }}" })
         .then(() => MatchViewer.start(JSON.stringify({{ viewer_config_json|safe }})))
         .catch((error) => console.error("match viewer failed to start", error));
 </script>

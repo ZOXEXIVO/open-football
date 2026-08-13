@@ -595,7 +595,13 @@ mod tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
-        MatchPlayer::from_player(1, &player, PlayerPositionType::MidfielderCenter, false, None)
+        MatchPlayer::from_player(
+            1,
+            &player,
+            PlayerPositionType::MidfielderCenter,
+            false,
+            None,
+        )
     }
 
     fn default_inputs() -> MidfielderSkillInputs {

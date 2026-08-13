@@ -6,6 +6,12 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
+/// How close an assigned man has to be before a recovering defender
+/// abandons the run to his slot and goes to him instead (~19 m). Same
+/// figure `running` uses, so a duty means the same thing in every state
+/// that holds it.
+const MARK_RECOVERY_DISTANCE: f32 = 150.0;
+
 #[derive(Default, Clone)]
 pub struct DefenderReturningState {}
 
@@ -30,6 +36,25 @@ impl StateProcessingHandler for DefenderReturningState {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TakeBall,
             ));
+        }
+
+        // DUTY BEFORE POSITION — you recover goal-side of your MAN, not
+        // to a slot.
+        //
+        // Only `Running` and `Guarding` read the plan; every recovery
+        // state ignored it, and measured that is where the duties go:
+        // **30% of all marking assignments were held by somebody in
+        // Running / Returning / TrackingBack** — a duty nobody was acting
+        // on — against 1% legitimately playing the ball. A defender
+        // jogging back to his kickoff slot while the man he has been
+        // given runs past him is the whole of "attackers in our third
+        // with nobody within three metres".
+        if let Some(man) = ctx.team().my_mark() {
+            if (man.position - ctx.player.position).magnitude() < MARK_RECOVERY_DISTANCE {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Marking,
+                ));
+            }
         }
 
         if ctx.player().distance_from_start_position() < 10.0 {

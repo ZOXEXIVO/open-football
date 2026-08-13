@@ -1,10 +1,15 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefensiveLine,
+};
+use crate::r#match::events::Event;
+use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::states::ContactFoul;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -19,6 +24,29 @@ pub struct DefenderMarkingState {}
 
 impl StateProcessingHandler for DefenderMarkingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // The shirt pull. A marker who is being pulled away from grabs,
+        // leans or blocks — the commonest foul in football and one this
+        // engine could not produce, because tackling was its only foul
+        // source. See `ContactFoul`.
+        if ContactFoul::is_decision_tick(ctx) {
+            if let Some(man) = self.find_best_marking_target(ctx) {
+                let gap = (man.position - ctx.player.position).magnitude();
+                // He is going past me if he is moving and I am not with
+                // him — the moment a beaten defender reaches out.
+                let losing_him = man.velocity(ctx).norm() > ctx.player.velocity.norm() + 0.08;
+                let p = ContactFoul::probability(ctx, gap, losing_him);
+                if ctx.context.rng.bernoulli(p) {
+                    return Some(StateChangeResult::with_defender_state_and_event(
+                        DefenderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::CommitFoul(
+                            ctx.player.id,
+                            ContactFoul::severity(ctx, losing_him),
+                        )),
+                    ));
+                }
+            }
+        }
+
         // BOX EMERGENCY — stop marking an off-ball runner if the
         // carrier is INSIDE our penalty area and we're one of the two
         // closest defenders. A shot is imminent; engage the carrier
@@ -143,7 +171,35 @@ impl StateProcessingHandler for DefenderMarkingState {
             let own_goal = ctx.ball().direction_to_own_goal();
             let opponent_velocity = opponent_to_mark.velocity(ctx);
 
-            let prediction_time = 0.3;
+            // READING THE RUN — signed, and the defender's own property.
+            //
+            // This was a flat `0.3`: every marker in the game predicted
+            // his man's movement forward, perfectly, whoever he was. A
+            // pursuer who re-aims at where you are GOING every tick
+            // cannot be beaten by movement, which is why the attacking
+            // side's evasion work moved attacker separation not at all —
+            // 5.0 m and 56% unmarked before and after, at every
+            // amplitude tried.
+            //
+            // Real marking is a contest of reading. A defender who reads
+            // it arrives before you do; one who doesn't is a step behind
+            // and gets spun, and a check-and-spin beats him precisely
+            // BECAUSE he extrapolated the first movement. Signing this
+            // quantity is what makes that true: lead for the good
+            // reader, trail for the poor one.
+            //
+            // Scored on the same three attributes `MarkerEvasion` reads
+            // him on, so the two halves of the duel are one contest.
+            let reading = {
+                let s = &ctx.player.skills.mental;
+                ((s.positioning / 20.0) * 0.40
+                    + (s.anticipation / 20.0) * 0.35
+                    + (s.concentration / 20.0) * 0.25)
+                    .clamp(0.0, 1.0)
+            };
+            // −MAX_READ_LAG (a step behind) … +MAX_READ_LAG (a step ahead).
+            const MAX_READ_LAG: f32 = 14.0;
+            let prediction_time = (reading - 0.5) * 2.0 * MAX_READ_LAG;
             let opponent_future_position =
                 opponent_to_mark.position + opponent_velocity * prediction_time;
 
@@ -158,6 +214,13 @@ impl StateProcessingHandler for DefenderMarkingState {
             let ball_side_offset = to_ball * mark_dist * (1.0 - goal_side_w);
 
             let desired_position = opponent_future_position + goal_side_offset + ball_side_offset;
+            // …but not at the cost of the unit's shape. Marking is 31% of
+            // everything the back line does and referred to nothing but
+            // its man, so a defender followed a runner clean across the
+            // pitch and took an 18-metre hole in the line with him. The
+            // leash is his zone: a man who runs further than that is the
+            // next defender's. See [`DefensiveLine::hold_shape`].
+            let desired_position = DefensiveLine::hold_shape(ctx, desired_position);
 
             let to_desired = desired_position - ctx.player.position;
             let distance = to_desired.magnitude();
@@ -166,13 +229,8 @@ impl StateProcessingHandler for DefenderMarkingState {
                 return Some(to_desired * 0.5);
             }
 
-            let direction = to_desired.normalize();
             // Urgency relative to the profile-driven mark distance.
             let urgency = (distance / mark_dist.max(4.0)).clamp(0.6, 2.0);
-            // Recovery-run mult bakes pace/stamina/condition into a
-            // 0.58..1.05 multiplier so tired markers can't keep up
-            // with fast attackers.
-            let speed = ctx.player.skills.physical.pace * urgency * def_profile.recovery_run_mult;
 
             let threat_boost = if opponent_to_mark.has_ball(ctx) && distance < 20.0 {
                 1.3
@@ -180,7 +238,41 @@ impl StateProcessingHandler for DefenderMarkingState {
                 1.0
             };
 
-            Some(direction * speed * threat_boost + ctx.player().separation_velocity() * 0.2)
+            // Steer onto the marking position rather than assigning the
+            // velocity outright.
+            //
+            // `direction * (pace * urgency * mult)` produced an absolute
+            // velocity of up to ~40 u/tick against a ~0.63 u/tick top
+            // speed, with no reference to the velocity the defender
+            // already had — so the engine clamp kept whatever heading
+            // `desired_position` implied on that tick. Since the marking
+            // TARGET is a discrete choice (`find_best_marking_target`
+            // picks a man), every time the chosen man changed the
+            // defender's heading inverted at full speed rather than
+            // curving across. The per-tick dumps show exactly that shape:
+            // four or five ticks of smooth, steadily rotating movement at
+            // a constant 0.407, then an abrupt snap to the opposite
+            // heading AT A DIFFERENT SPEED — a changed target, not an
+            // overshoot (`dev_match trace` reversal dumps). `Defender:
+            // Marking` was the top fast-reversal state once the goal-side
+            // override was fixed.
+            //
+            // `Arrive` integrates from the current velocity under a force
+            // limit and decelerates into the mark, which is also what
+            // marking looks like: you settle alongside your man rather
+            // than arriving at a sprint. Urgency and the threat boost
+            // still scale the result, and the recovery multiplier still
+            // reaches the speed through the profile.
+            let base = SteeringBehavior::Arrive {
+                target: desired_position,
+                slowing_distance: mark_dist.max(4.0),
+            }
+            .calculate(ctx.player)
+            .velocity;
+            Some(
+                base * urgency * threat_boost * def_profile.recovery_run_mult
+                    + ctx.player().separation_velocity() * 0.2,
+            )
         } else {
             Some(Vector3::new(0.0, 0.0, 0.0))
         }
@@ -276,6 +368,41 @@ impl DefenderMarkingState {
                 + (opponent_skills.mental.composure / 20.0).powf(1.20) * 0.08)
                 .clamp(0.0, 1.0);
             danger_score += receiver_threat * 30.0;
+
+            // COMMITMENT: keep the man you are already going to.
+            //
+            // Everything above scores the SITUATION, and several of the
+            // terms sit within a few points of each other for two
+            // attackers in the same area. The argmax therefore swapped
+            // between them on tiny frame-to-frame changes, and because
+            // the marking velocity is `direction * (pace * urgency)` —
+            // saturated by the engine clamp — a swap does not nudge the
+            // defender, it inverts him at full speed. The per-tick dumps
+            // show exactly that: four or five ticks of smooth, steadily
+            // rotating movement at a constant 0.407, then an abrupt snap
+            // to the opposite heading at a different speed, which is a
+            // changed target rather than an overshoot (`dev_match trace`
+            // reversal dumps). `Defender: Marking` was left as the top
+            // fast-reversal state once the goal-side override was fixed.
+            //
+            // The defender's own velocity is the memory of who he chose —
+            // he has been running at that man — so aligning with it
+            // rewards continuing. A genuinely more dangerous opponent
+            // still wins: this is worth ~15 points against the 100 a ball
+            // carrier scores and the 30 a goalward run does, so it breaks
+            // ties without overriding a real threat. Continuous in the
+            // geometry, so it cannot itself introduce a step.
+            let my_velocity = ctx.player.velocity;
+            let my_speed_sq = my_velocity.norm_squared();
+            if my_speed_sq > 0.0025 {
+                let to_opponent = opponent.position - ctx.player.position;
+                let to_opp_dist = to_opponent.magnitude();
+                if to_opp_dist > 0.01 {
+                    let heading = my_velocity * (1.0 / my_speed_sq.sqrt());
+                    let alignment = heading.dot(&(to_opponent * (1.0 / to_opp_dist)));
+                    danger_score += alignment.max(0.0) * 15.0;
+                }
+            }
 
             if danger_score > best_score {
                 best_score = danger_score;

@@ -1,5 +1,6 @@
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -39,7 +40,13 @@ impl StateProcessingHandler for ForwardPressingState {
             ));
         }
 
-        if ctx.ball().distance() < 30.0 && ctx.ball().is_owned() {
+        // Commit to a challenge only at genuine contact range, and only
+        // when this forward can actually make one. At the old flat 30u
+        // this fed `Tackling` continuously — including throughout the
+        // tackle cooldown, which `Tackling` answers by handing him back —
+        // and the pair ran ~15k round trips a match with 98.8% of
+        // `Forward: Tackling` visits lasting a single tick.
+        if ctx.ball().is_owned() && TackleEngagement::should_commit(ctx, ctx.ball().distance()) {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Tackling,
             ));

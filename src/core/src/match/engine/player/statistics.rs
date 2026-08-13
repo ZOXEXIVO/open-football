@@ -159,10 +159,8 @@ impl MatchPlayerStatistics {
     /// for — positional defending. See
     /// [`ZoneStats::shots_covered_in_position`].
     pub fn note_shot_covered_in_position(&mut self) {
-        self.zone_stats.shots_covered_in_position = self
-            .zone_stats
-            .shots_covered_in_position
-            .saturating_add(1);
+        self.zone_stats.shots_covered_in_position =
+            self.zone_stats.shots_covered_in_position.saturating_add(1);
     }
 
     pub fn add_clearance(&mut self) {

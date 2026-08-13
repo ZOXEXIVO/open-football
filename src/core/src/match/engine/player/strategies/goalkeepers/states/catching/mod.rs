@@ -1,5 +1,7 @@
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperSetPosition,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -55,12 +57,32 @@ pub struct GoalkeeperCatchingState {}
 impl StateProcessingHandler for GoalkeeperCatchingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if self.is_catch_successful(ctx) {
+            // Are hands legal on THIS ball? Asked at the moment the gloves
+            // close, NOT while he is moving to it. The Laws bite on the act
+            // of handling, and a keeper crossing his own box to reach a
+            // shot spends most of that journey with the ball still outside
+            // the area — judging it per-tick made him abandon virtually
+            // every save from range (goals went 2.3 → 4.0 a match).
+            //
+            // Illegal means he plays it with his feet, which is what a
+            // keeper receiving a back-pass actually does. `Clearing` is the
+            // honest default: he is on the ball, usually with a forward
+            // bearing down.
+            if !ctx.ball().handling_verdict().is_legal() {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Clearing,
+                ));
+            }
+
             let mut holding_result =
                 StateChangeResult::with_goalkeeper_state(GoalkeeperState::HoldingBall);
 
-            holding_result
-                .events
-                .add_player_event(PlayerEvent::CaughtBall(ctx.player.id));
+            holding_result.events.add_player_event({
+                #[cfg(feature = "match-logs")]
+                crate::r#match::engine::ball::ball::ownership::reception_diag::GATHER_SOURCE[0]
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                PlayerEvent::CaughtBall(ctx.player.id)
+            });
 
             return Some(holding_result);
         }
@@ -132,7 +154,15 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
         // outrunning the keeper's pursuit steering).
         if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
             let goal_pos = ctx.ball().direction_to_own_goal();
-            let intercept = Vector3::new(goal_pos.x, target.goal_line_y, 0.0);
+            // Off the line, not on it — see `KeeperSetPosition`. This is
+            // the site that decides where a CAUGHT ball ends up, because
+            // the physics save snaps the ball onto the keeper.
+            let intercept = KeeperSetPosition::set_point(
+                goal_pos,
+                target.goal_line_y,
+                (ctx.tick_context.positions.ball.position - goal_pos).magnitude(),
+                ctx.context.field_size.width as f32,
+            );
             return Some(
                 SteeringBehavior::Arrive {
                     target: intercept,
@@ -228,6 +258,29 @@ impl GoalkeeperCatchingState {
             }
             let per_tick = prof.per_tick_save(save_prob, EXPECTED_SAVE_TICKS);
             return ctx.context.rng.unit_f32() < per_tick;
+        }
+
+        // Past a shot in flight, the gloves only close on a ball that is
+        // genuinely FREE and genuinely his.
+        //
+        // This roll runs every tick the keeper spends in `Catching` and
+        // asked nothing at all about who the ball belonged to — only how
+        // far away it was, how fast, and whether it was coming towards
+        // him. A forward carrying the ball into the area satisfies all
+        // three, so the keeper rolled `catch_prob` against him on every
+        // tick until the dice came up and then took it off his foot.
+        // That is the ball ping-ponging between the keeper and the
+        // players in front of him, and it is why catches (44 a match)
+        // outnumbered shots (24) — most of them were not saves of
+        // anything.
+        //
+        // The keeper still comes for what is his: a loose ball he is
+        // favourite for. He does not tackle with his hands.
+        if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
+            return false;
+        }
+        if !KeeperBallClaim::is_favourite(ctx) {
+            return false;
         }
 
         let distance_to_ball = ctx.ball().distance();

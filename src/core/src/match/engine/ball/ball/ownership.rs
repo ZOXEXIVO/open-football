@@ -45,6 +45,37 @@ pub mod reception_diag {
     /// passer's reach.
     pub static OUT_OF_REACH: AtomicU64 = AtomicU64::new(0);
 
+    /// Ticks the ball spent in a keeper's gloves, against total ticks.
+    ///
+    /// `held_in_hands` suppresses claiming, interception and — since
+    /// `carrier_id` — every press and tackle decision, so if it ever fails
+    /// to clear it does not misbehave subtly, it switches the defending
+    /// half of the engine off. Two counters settle "is this stuck?" in one
+    /// run instead of by reading clearing paths and hoping.
+    /// Real football: a keeper holds the ball for roughly 3-6% of a match.
+    pub static HELD_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static TOTAL_TICKS: AtomicU64 = AtomicU64::new(0);
+    /// Times a keeper closed his gloves on it. Held ticks divided by this
+    /// is the mean hold, which separates "holds too long" from "gathers
+    /// far too often" — the two have completely different causes.
+    pub static GATHERS: AtomicU64 = AtomicU64::new(0);
+    /// Gathers split by the state that emitted `CaughtBall`:
+    /// 0 catching, 1 picking up, 2 diving, 3 anything else.
+    pub static GATHER_SOURCE: [AtomicU64; 4] = [ZERO2; 4];
+    const ZERO2: AtomicU64 = AtomicU64::new(0);
+    pub fn gather_source_snapshot() -> [u64; 4] {
+        std::array::from_fn(|i| GATHER_SOURCE[i].load(Ordering::Relaxed))
+    }
+
+    /// `(held, total, gathers)`
+    pub fn hold_snapshot() -> (u64, u64, u64) {
+        (
+            HELD_TICKS.load(Ordering::Relaxed),
+            TOTAL_TICKS.load(Ordering::Relaxed),
+            GATHERS.load(Ordering::Relaxed),
+        )
+    }
+
     // ── Shot fate ────────────────────────────────────────────────────
     // ~80% of shots are AIMED between the posts (`on_target` at emit),
     // yet only ~23% ever resolve as a save or a goal. These say where
@@ -61,14 +92,83 @@ pub mod reception_diag {
     /// Ball crossed the goal line but `check_goal` refused it (no recent
     /// shot on record and no live shot target).
     pub static GOAL_REJECTED: AtomicU64 = AtomicU64::new(0);
+    /// MUST STAY 0. A loose ball that reached `check_boundary_collision`
+    /// still past an endline and still between the posts — i.e. one that
+    /// every endline resolver declined, so the boundary clamp teleported
+    /// it back to x = ±10 with zero velocity and left it dead in the
+    /// goalmouth instead of restarting play.
+    ///
+    /// This was the "ball appears at a single point in front of the goal"
+    /// bug: `check_goal` refuses a ball with no shot behind it and
+    /// returned without a restart, `check_over_goal` only takes balls
+    /// above the bar, and `check_wide_of_goal` only took balls outside
+    /// the posts. 22 balls a match fell through all three. The counter is
+    /// the invariant: any non-zero reading means a hole has reopened.
+    pub static ENDLINE_CLAMPED_IN_MOUTH: AtomicU64 = AtomicU64::new(0);
 
-    pub fn shot_fate_snapshot() -> (u64, u64, u64, u64, u64) {
+    /// ── Shot LIFECYCLE census ────────────────────────────────────────
+    ///
+    /// The counters above are all "a shot ended THIS way" flags planted
+    /// at individual sites, and between them they accounted for ~20 of
+    /// every 3500 shots struck — so the question "where do shots
+    /// actually go" had no answer. These are the complete partition:
+    /// every struck shot lands in exactly one bucket, and STRUCK equals
+    /// their sum plus whatever is still in the air.
+    ///
+    /// Read them as a waterfall against `STRUCK`. Anything large in
+    /// `CLAIMED_*` or `STOPPED` is a shot that never got a chance to be
+    /// a shot.
+    pub static FATE_STRUCK: AtomicU64 = AtomicU64::new(0);
+    /// Ended in the net.
+    pub static FATE_GOAL: AtomicU64 = AtomicU64::new(0);
+    /// The defending keeper finished with it — caught, gathered, held.
+    pub static FATE_GK: AtomicU64 = AtomicU64::new(0);
+    /// Went out of play: corner, goal kick or throw.
+    pub static FATE_OUT: AtomicU64 = AtomicU64::new(0);
+    /// An OUTFIELD defender took control of it mid-flight.
+    pub static FATE_CLAIMED_DEF: AtomicU64 = AtomicU64::new(0);
+    /// A team-mate of the shooter took control of it mid-flight
+    /// (rebound, deflection into a striker's path, or a shot walked
+    /// straight back into an attacker's feet).
+    pub static FATE_CLAIMED_ATT: AtomicU64 = AtomicU64::new(0);
+    /// Came to rest on the pitch, still unowned. A shot that stopped.
+    pub static FATE_STOPPED: AtomicU64 = AtomicU64::new(0);
+    /// Still live when the census window (400 ticks) expired.
+    pub static FATE_TIMEOUT: AtomicU64 = AtomicU64::new(0);
+    /// Sum of ticks a shot spent live, and how far from goal each was
+    /// struck (x100) — the two numbers that say whether shots are
+    /// getting a flight at all.
+    pub static FATE_LIVE_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static FATE_STRUCK_DIST_X100: AtomicU64 = AtomicU64::new(0);
+    /// …and the same distance sum, for the shots that DID resolve at the
+    /// goal (goal / keeper). Compared with the one above it says whether
+    /// the leak is distance-selective.
+    pub static FATE_REACHED_DIST_X100: AtomicU64 = AtomicU64::new(0);
+
+    pub fn fate_census() -> [u64; 11] {
+        [
+            FATE_STRUCK.load(Ordering::Relaxed),
+            FATE_GOAL.load(Ordering::Relaxed),
+            FATE_GK.load(Ordering::Relaxed),
+            FATE_OUT.load(Ordering::Relaxed),
+            FATE_CLAIMED_DEF.load(Ordering::Relaxed),
+            FATE_CLAIMED_ATT.load(Ordering::Relaxed),
+            FATE_STOPPED.load(Ordering::Relaxed),
+            FATE_TIMEOUT.load(Ordering::Relaxed),
+            FATE_LIVE_TICKS.load(Ordering::Relaxed),
+            FATE_STRUCK_DIST_X100.load(Ordering::Relaxed),
+            FATE_REACHED_DIST_X100.load(Ordering::Relaxed),
+        ]
+    }
+
+    pub fn shot_fate_snapshot() -> (u64, u64, u64, u64, u64, u64) {
         (
             SHOT_WIDE.load(Ordering::Relaxed),
             SHOT_OVER.load(Ordering::Relaxed),
             SHOT_CLAIMED.load(Ordering::Relaxed),
             SHOT_NO_TARGET.load(Ordering::Relaxed),
             GOAL_REJECTED.load(Ordering::Relaxed),
+            ENDLINE_CLAMPED_IN_MOUTH.load(Ordering::Relaxed),
         )
     }
 
@@ -98,6 +198,18 @@ pub mod reception_diag {
             &SHOT_CLAIMED,
             &SHOT_NO_TARGET,
             &GOAL_REJECTED,
+            &ENDLINE_CLAMPED_IN_MOUTH,
+            &FATE_STRUCK,
+            &FATE_GOAL,
+            &FATE_GK,
+            &FATE_OUT,
+            &FATE_CLAIMED_DEF,
+            &FATE_CLAIMED_ATT,
+            &FATE_STOPPED,
+            &FATE_TIMEOUT,
+            &FATE_LIVE_TICKS,
+            &FATE_STRUCK_DIST_X100,
+            &FATE_REACHED_DIST_X100,
         ] {
             c.store(0, Ordering::Relaxed);
         }
@@ -150,9 +262,42 @@ impl Ball {
             self.flags.in_flight_state -= 1;
             // Allow pass target to claim during flight
             self.try_pass_target_claim(context, players, events);
+            // A delivery that has come to rest is not "in flight", whatever
+            // the counter says.
+            //
+            // The window is an EXCLUSION: while it runs, `check_ball_ownership`
+            // never executes, `force_claim_if_deadlock` and
+            // `try_notify_standing_ball` return early, and `ClaimBall` is
+            // rejected for anyone but the intended receiver. That is correct
+            // for a ball genuinely travelling to its man and indefensible for
+            // one lying still — and the two used to be indistinguishable,
+            // because the window was sized from a velocity the ball never
+            // got. The result was a stationary ball nobody was permitted to
+            // touch, with the designated chaser stuck in TakeBall beside it
+            // for as long as four seconds.
+            //
+            // Checked AFTER the receiver's own attempt, so his priority is
+            // never cut short by his pass arriving gently.
+            if self.current_owner.is_none() && self.is_delivery_spent() {
+                self.flags.in_flight_state = 0;
+                self.check_ball_ownership(context, players, events);
+            }
         } else {
             self.check_ball_ownership(context, players, events);
         }
+    }
+
+    /// True when the current delivery has stopped being one: on the deck
+    /// and slower than a walking pace. See the call site in
+    /// [`Ball::process_ownership`].
+    pub(super) fn is_delivery_spent(&self) -> bool {
+        /// 2.5 m/s. Below this the ball is trickling, not travelling — the
+        /// same physical meaning `MIN_INTERCEPTABLE_SPEED` carries.
+        const SPENT_SPEED: f32 = 0.20;
+        /// Anything with height left is still arriving.
+        const SPENT_HEIGHT: f32 = 0.5;
+
+        self.position.z <= SPENT_HEIGHT && self.velocity.norm_squared() < SPENT_SPEED * SPENT_SPEED
     }
 
     /// Skill-rolled first touch at pass reception — the producer for the
@@ -420,6 +565,11 @@ impl Ball {
         // This prevents the passer from immediately reclaiming on low-force passes
         if self.flags.in_flight_state < 10 {
             if let Some(prev_id) = self.previous_owner {
+                // …but not if he is the man who just put it into play and it
+                // has gone nowhere. See `blocked_recollect_player`.
+                if self.blocked_recollect_player() == Some(prev_id) {
+                    return;
+                }
                 if let Some(prev_player) = players.iter().find(|p| p.id == prev_id) {
                     let dx = prev_player.position.x - self.position.x;
                     let dy = prev_player.position.y - self.position.y;
@@ -639,8 +789,14 @@ impl Ball {
             if should_claim {
                 // Find nearest player within current claim distance (use squared to avoid sqrt)
                 let claim_distance_sq = claim_distance * claim_distance;
+                // Same self-recollect bar as the normal claim path. Safe to
+                // apply even in the deadlock resolver because the bar itself
+                // expires on a timer (`blocked_recollect_player`), so it can
+                // never be the thing that keeps the ball stuck.
+                let blocked_recollect = self.blocked_recollect_player();
                 if let Some(nearest_player) = players
                     .iter()
+                    .filter(|p| blocked_recollect != Some(p.id))
                     .filter_map(|p| {
                         let dx = p.position.x - self.position.x;
                         let dy = p.position.y - self.position.y;
@@ -818,6 +974,16 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        // The ball is in the keeper's gloves. Nobody takes it off him —
+        // not the best tackler within 5u, not anybody. Without this the
+        // generic claim below treated a caught cross as a loose ball at
+        // the keeper's feet and handed it to whichever forward happened to
+        // be standing closest.
+        if self.held_in_hands {
+            self.ownership_duration += 1;
+            return;
+        }
+
         // COOLDOWN CHECK: If cooldown is active and there's an owner, skip ownership checks
         // This prevents rapid ping-pong between players
         if self.claim_cooldown > 0 && self.current_owner.is_some() {
@@ -983,8 +1149,18 @@ impl Ball {
         let mut nearby_count: usize = 0;
 
         let ball_height_reachable = self.position.z <= PLAYER_JUMP_REACH;
+        // The man who just released the ball doesn't get it straight back
+        // while it is still sitting on top of him — see
+        // `blocked_recollect_player`. This is the generic half of the
+        // fix; the goalkeeper's own Standing-state door is guarded too,
+        // because his pick-up path grants ownership directly.
+        let blocked_recollect = self.blocked_recollect_player();
 
         for player in players.iter() {
+            if blocked_recollect == Some(player.id) {
+                continue;
+            }
+
             let dx = player.position.x - self.position.x;
             let dy = player.position.y - self.position.y;
             let dist_sq = dx * dx + dy * dy;

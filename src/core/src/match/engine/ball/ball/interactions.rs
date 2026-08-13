@@ -150,7 +150,7 @@ pub mod block_diag {
             )
         }
 
-            pub fn reset() {
+        pub fn reset() {
             for c in [
                 &SHOTS_SEEN,
                 &TOO_HIGH,
@@ -211,9 +211,37 @@ pub(crate) struct SaveModel;
 impl SaveModel {
     /// Geometric ceiling for a dead-centre shot. Pure geometry — the
     /// keeper is standing where the ball is going.
-    const CENTRED_BASE: f32 = 0.88;
+    /// Re-anchored 0.88 → 0.76. The old value was calibrated for a
+    /// keeper genuinely standing on the ball's line, which was ALWAYS
+    /// true while the shot cache handed him the exact crossing point —
+    /// so the geometric ceiling applied to essentially every shot and
+    /// the population save rate sat at 82% against a real 67%. With the
+    /// keeper's committed line now carrying a reading error, the
+    /// dead-centre case is rare again and the ceiling can be what it
+    /// says it is: the chance for a shot hit straight at him.
+    ///
+    /// Re-anchored 0.82 → 0.99 (with `STRETCH_PENALTY` 0.58 → 0.42)
+    /// 2026-08-13, when shots started reaching the keeper at all. Every
+    /// previous setting of this pair was calibrated against a population
+    /// in which ~73% of shots were picked out of the air by an outfield
+    /// defender within a tick of the strike (see `try_intercept`), so the
+    /// keeper only ever faced the ~11% that survived — the short ones,
+    /// hit from 73u against 102u for the population. With the full
+    /// distribution arriving, the same curve saved 56% of what it faced
+    /// against a real ~67%.
+    ///
+    /// ⚠ The population save rate belongs HERE, in the geometry, and not
+    /// in `SKILL_FLOOR`. Lifting the floor instead was tried and is what
+    /// `keeper_skill_spread_stays_wide` and
+    /// `an_ordinary_duel_holds_the_calibrated_population_save_rate` exist
+    /// to catch: the multiplier is a CONTEST pinned at `FLOOR + SLOPE/2`
+    /// for an even duel, so raising the floor both breaks level-parity
+    /// and squeezes the keeper-quality axis against `MAX_SAVE` — at 0.86
+    /// the spread between the worst keeper alive and the best collapsed
+    /// to 12.9 points against a real ~20.
+    const CENTRED_BASE: f32 = 1.03;
     /// How much of that ceiling a full-stretch shot gives away.
-    const STRETCH_PENALTY: f32 = 0.58;
+    const STRETCH_PENALTY: f32 = 0.42;
     /// Save probability for the worst keeper alive on a centred shot,
     /// before geometry: `SKILL_FLOOR`. Real weak top-flight keepers save
     /// ~58% of what they face across a season; elite ones ~78%.
@@ -430,8 +458,10 @@ impl Ball {
         // wiring (slide tackle range, sliding_tackle_success) lands
         // without changing the signature again.
         let _ = context;
-        // Only intercept unowned balls that are in flight (active pass)
-        if self.current_owner.is_some() || self.flags.in_flight_state == 0 {
+        // Only intercept unowned balls that are in flight (active pass).
+        // A ball in a keeper's gloves is neither, but guard it explicitly
+        // — it is the one state where "unowned" could ever be wrong.
+        if self.current_owner.is_some() || self.held_in_hands || self.flags.in_flight_state == 0 {
             return;
         }
 
@@ -557,24 +587,48 @@ impl Ball {
         // reach — that is the moment the ball comes past him, and he gets
         // one go at it, exactly as `try_block_shot` gives one roll per
         // shot. Rate is now independent of the window length.
-        // A live SHOT keeps the old per-tick deterministic path. This
-        // site is where the engine actually models a defender getting a
-        // body in front of a strike — the event is already reclassified
-        // as a `block` on the stat sheet — and `try_block_shot`'s own
-        // corridor currently fires on 0.3% of checks against a real
-        // 18-22%. Latching shots here removed that channel outright and
-        // sent on-target from 32% to 59% and goals to 5.8 a game.
-        let is_live_shot = self.cached_shot_target.is_some();
-        let may_attempt = is_live_shot || !self.intercept_rolled;
-        if let Some(interceptor_id) = best_interceptor.filter(|_| may_attempt) {
-            if !is_live_shot {
-                self.intercept_rolled = true;
-            }
-            let fires = if is_live_shot {
-                best_chance > 0.030
-            } else {
-                context.rng.unit_f32() < best_chance
-            };
+        // ── A SHOT IS NOT A PASS, AND THIS SITE ONLY KNOWS ABOUT PASSES ──
+        //
+        // Live shots used to keep a per-tick DETERMINISTIC path here
+        // (`best_chance > 0.030`, re-evaluated every tick of the flight),
+        // on the argument that `try_block_shot` was too weak to carry the
+        // channel. Measured with the shot-lifecycle census, that is what
+        // it was actually doing:
+        //
+        //   * **72.6% of every shot struck ended here** — claimed clean,
+        //     mid-flight, by an outfield defender. Not blocked, not
+        //     deflected: `velocity = zeros()` and possession handed over.
+        //   * Shots lived **8.3 ticks** on average despite being struck
+        //     from 102u (12.8 m), a distance that needs 40-60 ticks of
+        //     flight. They were being eaten within a tick of leaving the
+        //     boot.
+        //   * Only 11% of shots ever reached the goal at all, and those
+        //     that did were struck from 74u against 102u for the
+        //     population — so the leak was distance-selective and long
+        //     shots produced essentially no goals.
+        //
+        // That is the "aimed on frame but never resolves" report: 63% of
+        // shots leave the boot between the posts and 9% are credited on
+        // target. It is also why blocks read 4.84 per defender against a
+        // real ~0.9 — this path was filing its takings as blocks.
+        //
+        // A defender getting a body in front of a strike is
+        // `try_block_shot`: one roll per shot, a real corridor, a real
+        // height limit, and a DEFLECTION rather than a clean pick-up.
+        // Shots are excluded here so that model owns them, which is also
+        // what makes its rate rise — it rolls on the first tick a
+        // defender is in the lane, and shots now survive long enough to
+        // find one.
+        // `cached_shot_target` is exactly the right test: it is set at the
+        // strike and cleared the moment anybody touches the ball, so a
+        // shot the keeper has parried or a defender has deflected is a
+        // genuine loose ball again and IS interceptable from here.
+        if self.cached_shot_target.is_some() {
+            return;
+        }
+        if let Some(interceptor_id) = best_interceptor.filter(|_| !self.intercept_rolled) {
+            self.intercept_rolled = true;
+            let fires = context.rng.unit_f32() < best_chance;
             if fires {
                 // Snap the ball to the interceptor and zero the
                 // velocity. Before this, velocity was just scaled to
@@ -682,7 +736,10 @@ impl Ball {
         // which excluded 23% of all shot-ticks outright. A defender
         // blocks with whatever he can get in the way, up to a raised
         // boot or a head: 16u is 2 m.
-        const MAX_BLOCK_HEIGHT: f32 = 16.0;
+        // 2.2 m — a defender's raised-arm reach. Was 16.0, which on a
+        // vertical axis measured in metres put the block ceiling above the
+        // stands; it never rejected anything.
+        const MAX_BLOCK_HEIGHT: f32 = 2.2;
         if self.position.z > MAX_BLOCK_HEIGHT {
             #[cfg(feature = "match-logs")]
             block_diag::TOO_HIGH.fetch_add(1, Ordering::Relaxed);
@@ -1059,11 +1116,6 @@ impl Ball {
             return;
         }
 
-        // Ball well over the bar — not a save situation.
-        if self.position.z > 2.8 {
-            return;
-        }
-
         // Only consider the shot once it's close to the goal line —
         // the save resolves at the moment of contact. Distance in
         // x-units the ball will cover in a single tick determines the
@@ -1101,6 +1153,32 @@ impl Ball {
             save_accounting_stats::SAVE_TICKS_OUT_OF_REACH.fetch_add(1, Ordering::Relaxed);
             return;
         }
+        // The ball has reached the goal line. Anything off the frame at
+        // this point is a MISS, and the shot is over — retire it.
+        //
+        // Retiring matters as much as not saving it. `cached_shot_target`
+        // is what `gk_clearing_shot` reads to decide that a keeper who
+        // has just gathered the ball made a save, and it credits the
+        // shooter an on-target shot at the same time. Leaving the cache
+        // armed on a miss meant every skied or wide shot the keeper
+        // subsequently collected — which is most of them, since the
+        // restart is his goal kick — was booked as a save on target.
+        //
+        // That is why the on-target rate would not respond to the aim
+        // model: forcing 8 percentage points more shots off the frame
+        // moved the measured rate by ~2, because the misses were being
+        // credited anyway. The over-the-bar test in particular used to
+        // sit ABOVE the arrival-window check and return without
+        // clearing, so it fired mid-flight on any shot whose apex
+        // cleared 2.8 m and left the cache armed for the rest of the
+        // flight.
+        let off_frame_high = self.position.z > 2.8;
+        let off_frame_wide = (self.position.y - goal_y).abs() > GOAL_WIDTH + 1.0;
+        if off_frame_high || off_frame_wide {
+            self.cached_shot_target = None;
+            return;
+        }
+
         // One shot, one roll — see `ShotTarget::save_rolled`.
         if shot_target.save_rolled {
             return;
@@ -1117,11 +1195,8 @@ impl Ball {
             return;
         }
 
-        // Ball must be within goal width (else it's wide and the
-        // post / out-of-play handler catches it).
-        if (self.position.y - goal_y).abs() > GOAL_WIDTH + 1.0 {
-            return;
-        }
+        // Frame test already applied above, where a miss also retires
+        // the shot.
 
         // Find the defending keeper.
         let keeper = players.iter().find(|p| {

@@ -1,7 +1,9 @@
+use crate::r#match::StateProcessingContext;
 use crate::r#match::engine::player::strategies::common::{
     ActivityIntensityConfig, ConditionProcessor, GOALKEEPER_JADEDNESS_INCREMENT,
     GOALKEEPER_JADEDNESS_INTERVAL, GOALKEEPER_LOW_CONDITION_THRESHOLD,
 };
+use nalgebra::Vector3;
 
 /// Goalkeeper-specific activity intensity configuration
 pub struct GoalkeeperConfig;
@@ -49,6 +51,122 @@ impl ActivityIntensityConfig for GoalkeeperConfig {
 
     fn jadedness_increment() -> i16 {
         GOALKEEPER_JADEDNESS_INCREMENT
+    }
+}
+
+/// Where a keeper sets his feet to face a shot, and where he takes the
+/// ball once he has gathered it.
+///
+/// Both save states used to steer to `(own_goal.x, goal_line_y)` — the
+/// goal LINE itself. No keeper faces a shot standing on his line; he sets
+/// a yard or so off it so he can attack the ball rather than carry it
+/// back over the line behind him. It also had a very visible
+/// consequence: the physics save snaps the ball to the keeper's
+/// position, so every catch parked the ball at **x ≈ 839 of 840** at
+/// glove height — hanging inside the goal frame, on the same spot, about
+/// 160 times a match. Measured from a replay dump: the ball sat at
+/// (839.3, 223.6, 1.20) without moving for 3.5 seconds.
+///
+/// UNITS: 1 unit = 0.125 m.
+pub struct KeeperSetPosition;
+
+impl KeeperSetPosition {
+    /// Set position for a point-blank strike — 1.25 m off the line.
+    /// Tight, because there is no time to come and meet it.
+    const MIN_DEPTH: f32 = 10.0;
+    /// Set position against a long-range effort — 3.5 m off, where a
+    /// keeper stands when he can see it coming.
+    const MAX_DEPTH: f32 = 28.0;
+    /// Shot range over which the depth opens up (~11 m).
+    const DEPTH_RANGE: f32 = 90.0;
+    /// Where he takes the ball to release it — 10.6 m out, around the
+    /// edge of the six-yard box.
+    const RELEASE_DEPTH: f32 = 85.0;
+
+    /// `+1` when the goal being defended is the left one, so "out of the
+    /// goal" is `+x`; `-1` for the right-hand goal.
+    fn into_pitch(own_goal: Vector3<f32>, field_width: f32) -> f32 {
+        if own_goal.x <= field_width * 0.5 {
+            1.0
+        } else {
+            -1.0
+        }
+    }
+
+    /// The spot to defend a strike from `shot_distance` away, guarding
+    /// `goal_line_y`.
+    pub fn set_point(
+        own_goal: Vector3<f32>,
+        goal_line_y: f32,
+        shot_distance: f32,
+        field_width: f32,
+    ) -> Vector3<f32> {
+        let opened = (shot_distance / Self::DEPTH_RANGE).clamp(0.0, 1.0);
+        let depth = Self::MIN_DEPTH + (Self::MAX_DEPTH - Self::MIN_DEPTH) * opened;
+        Vector3::new(
+            own_goal.x + Self::into_pitch(own_goal, field_width) * depth,
+            goal_line_y,
+            0.0,
+        )
+    }
+
+    /// Where a keeper walks the ball once it is in his gloves. Real
+    /// keepers get up and carry it out to the edge of their area to
+    /// release it; this engine's stood exactly where it caught it for up
+    /// to five and a half seconds.
+    ///
+    /// He walks OUT from his line while holding most of his lateral
+    /// position, drifting gently back towards the middle. Keeping it
+    /// continuous in where he gathered the ball matters: an absolute
+    /// target would just move the single point everyone converges on
+    /// further off the line rather than removing it.
+    pub fn release_point(
+        own_goal: Vector3<f32>,
+        keeper: Vector3<f32>,
+        field_width: f32,
+    ) -> Vector3<f32> {
+        Vector3::new(
+            own_goal.x + Self::into_pitch(own_goal, field_width) * Self::RELEASE_DEPTH,
+            keeper.y * 0.65 + own_goal.y * 0.35,
+            0.0,
+        )
+    }
+}
+
+/// Whether a loose ball is the keeper's to claim, or somebody else's.
+///
+/// Every claim gate asked only about the BALL — is it loose, is it near,
+/// is it on our side — and never about the people standing round it. In
+/// a crowded six-yard box that is always true of something, because
+/// possession there flickers constantly: a touch, a challenge or an
+/// owner drifting past the tracking cutoff leaves the ball momentarily
+/// unowned, and the keeper is by definition the man standing next to it.
+/// So he collected it, distributed it, an attacker took it two metres
+/// away, and the next stray touch handed it straight back to him — the
+/// ball ping-ponging between the keeper and the players in front of him
+/// on one spot, which is the reported symptom. Measured: 47.7 gathers a
+/// match against a real 8-12.
+///
+/// A keeper does not grab a ball an opponent is on. He comes for the one
+/// he can get to first, and lets his defenders deal with the rest. That
+/// is the question this asks, and it is the same question the attacker
+/// is implicitly asking, so the two cannot both claim it.
+pub struct KeeperBallClaim;
+
+impl KeeperBallClaim {
+    /// How much nearer the keeper is allowed to let an opponent be while
+    /// still going for it. He has hands and a dive, so he wins a ball
+    /// he is marginally further from — but only marginally. 8u = 1 m.
+    const HANDS_ADVANTAGE: f32 = 8.0;
+
+    /// Is this keeper favourite for the loose ball in front of him?
+    pub fn is_favourite(ctx: &StateProcessingContext) -> bool {
+        let ball = ctx.tick_context.positions.ball.position;
+        let mine = (ball - ctx.player.position).magnitude() - Self::HANDS_ADVANTAGE;
+        !ctx.players()
+            .opponents()
+            .all()
+            .any(|opp| (ball - opp.position).magnitude() < mine)
     }
 }
 

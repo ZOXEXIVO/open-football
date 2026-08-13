@@ -40,14 +40,14 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
         <canvas id="match-canvas"></canvas>
     </div>
 </div>
-<div class="hint">space toggles playback &middot; drag the bar to scrub &middot; engine events go to the browser console</div>
+<div class="hint">space toggles playback &middot; drag the bar to scrub &middot; WASD / arrows fly the camera, Q and E drop and lift it, shift for speed &middot; right-drag aims &middot; wheel zooms &middot; "Reset view" puts the shot back &middot; engine events go to the browser console</div>
 
 <script type="module">
     // Rendering, playback and the debug overlays all live in the WebAssembly
     // viewer built from src/match; this hands it the canvas and the fixture.
-    import init, { MatchViewer } from "/static/match/match_viewer.js";
+    import init, { MatchViewer } from "/static/viewer/match_viewer.js";
 
-    init({ module_or_path: "/static/match/match_viewer_bg.wasm" })
+    init({ module_or_path: "/static/viewer/match_viewer_bg.wasm" })
         .then(() => MatchViewer.start(JSON.stringify(__CONFIG__)))
         .catch((error) => {
             console.error("match viewer failed to start", error);

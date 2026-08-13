@@ -112,26 +112,47 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 }
 
 impl DefenderSkillProfile {
-    /// Memoized per (player, tick) — a defender's state machine reaches
-    /// this from both `velocity()` and `process()` within one tick, and
-    /// the ~26 banded skill reads + ~40 `powf` curves are the single
-    /// costliest pure computation in the AI. Every input is tick-frozen
-    /// (skills static in-match, condition updated once before the state
-    /// runs, grid / ball / in_state_time snapshots), so the memo is
-    /// bit-identical; the debug oracle recomputes and compares on every
-    /// hit.
+    /// Memoized per (player, tick, vitals) — a defender's state machine
+    /// reaches this from both `velocity()` and `process()` within one tick,
+    /// and the ~26 banded skill reads + ~40 `powf` curves are the single
+    /// costliest pure computation in the AI.
+    ///
+    /// Almost every input is tick-frozen: skills are static in-match, and
+    /// the grid / ball / `in_state_time` reads are snapshots. Condition is
+    /// the exception. It is applied once per tick, at the top of
+    /// `StateProcessor::process` — but `DefenderStrategies::process` asks
+    /// for a profile *before* it dispatches into that, to resolve the
+    /// goal-side rule, so a single tick can ask for a profile on both
+    /// sides of the fatigue update. Keying on condition and jadedness is
+    /// what keeps the memo returning what a fresh computation would: the
+    /// pre-dispatch read is answered with the pre-dispatch condition, and
+    /// the state's own reads with the condition it is actually running
+    /// under. The debug oracle recomputes and compares on every hit.
     pub fn from_ctx(ctx: &StateProcessingContext) -> Self {
         let tick = ctx.current_tick();
+        let vitals = Self::vitals(ctx.player);
         let cached = ctx
             .tick_context
             .player_agg_cache
             .borrow_mut()
             .slot_mut(ctx.player.id, tick)
-            .defender_profile;
+            .defender_profile
+            .filter(|(cached_vitals, _)| *cached_vitals == vitals)
+            .map(|(_, profile)| profile);
         if let Some(profile) = cached {
+            // A bare "mismatch" is a dead end: every input is either frozen
+            // for the tick or in the key, so a failure means one of them is
+            // neither — and the report is what identifies it.
             debug_assert!(
                 profile == Self::compute_from_ctx(ctx),
-                "defender-profile memo mismatch"
+                "defender-profile memo mismatch: player={} tick={} condition={} jadedness={}\n  inputs={:?}\n  cached={:?}\n   fresh={:?}",
+                ctx.player.id,
+                tick,
+                ctx.player.player_attributes.condition,
+                ctx.player.player_attributes.jadedness,
+                Self::inputs_from_ctx(ctx),
+                profile,
+                Self::compute_from_ctx(ctx),
             );
             return profile;
         }
@@ -140,11 +161,26 @@ impl DefenderSkillProfile {
             .player_agg_cache
             .borrow_mut()
             .slot_mut(ctx.player.id, tick)
-            .defender_profile = Some(profile);
+            .defender_profile = Some((vitals, profile));
         profile
     }
 
+    /// The two attributes that can move between two reads inside one tick.
+    /// Everything else the profile is built from is either static for the
+    /// match or snapshotted at the top of the tick.
+    #[inline]
+    fn vitals(player: &MatchPlayer) -> u32 {
+        (player.player_attributes.condition as u16 as u32)
+            | (player.player_attributes.jadedness as u16 as u32) << 16
+    }
+
     fn compute_from_ctx(ctx: &StateProcessingContext) -> Self {
+        Self::from_player_memo(ctx, &Self::inputs_from_ctx(ctx))
+    }
+
+    /// Everything the profile reads off the tick, gathered in one place so the
+    /// memo oracle can report the inputs it was handed.
+    fn inputs_from_ctx(ctx: &StateProcessingContext) -> DefenderSkillInputs {
         let player = ctx.player;
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let condition_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
@@ -158,7 +194,7 @@ impl DefenderSkillProfile {
             pressure_10u += 1;
         }
 
-        let inputs = DefenderSkillInputs {
+        DefenderSkillInputs {
             minute,
             condition_pct,
             pressure_count_5u: pressure_5u,
@@ -166,8 +202,7 @@ impl DefenderSkillProfile {
             distance_to_own_goal: ctx.ball().distance_to_own_goal(),
             distance_to_opponent_goal: ctx.ball().distance_to_opponent_goal(),
             recent_high_intensity: ctx.in_state_time as f32 > 30.0,
-        };
-        Self::from_player_memo(ctx, &inputs)
+        }
     }
 
     /// Everything `from_player` reads that can vary in-match, packed into

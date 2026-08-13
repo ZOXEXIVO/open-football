@@ -32,15 +32,41 @@ const THREAT_SCAN_DISTANCE: f32 = 100.0;
 const DANGEROUS_RUN_SPEED: f32 = 0.40; // 5 m/s in u/tick (1u=0.125m, 10ms tick) — a genuine attacking run. Old values 1.0-3.0 exceeded human max speed (0.63 u/tick), so run-tracking never fired.
 const DANGEROUS_RUN_ANGLE: f32 = 0.5;
 
-// Coordination constants
-const ENGAGEMENT_DISTANCE: f32 = 20.0; // Distance at which a defender is considered "engaging" an opponent
+// ── Coordination distances ──────────────────────────────────────────────
+//
+// ALL of these are GAME UNITS, and **1u = 0.125 m** (the field is 840u =
+// 105 m). They were written as if a unit were a metre, which made every
+// defensive engagement radius eight times too small — the same class of
+// error the pass model documents ("the old bands were annotated `1 unit ≈
+// 0.5m` and were therefore four times too small"), fixed there and never
+// swept through here.
+//
+// What that cost, measured: a `Help` defender could only see an attacker
+// within 3.5 m, so 74% of attackers inside our own defensive third had NO
+// defender within 3 m of them, the average nearest defender was 6.4 m
+// away, and `Marking` sat at ~2% of back-line state at the moment a shot
+// was struck. The values below are the distances the names always
+// claimed.
+
+/// A defender inside this radius of an opponent is contesting him — used
+/// to stop two defenders taking the same man. 60u = 7.5 m: close enough
+/// to actually be a challenge, wide enough that "he's got him" is true.
+const ENGAGEMENT_DISTANCE: f32 = 60.0;
+/// Minimum spacing between defenders marking different opponents (~4 m).
 #[allow(dead_code)]
-const MIN_MARKING_SEPARATION: f32 = 15.0; // Minimum distance between defenders marking different opponents
+const MIN_MARKING_SEPARATION: f32 = 32.0;
 
 // Role assignment thresholds
-const COVER_MAX_DISTANCE: f32 = 45.0; // Too far from carrier to be useful as cover
-const HELP_SCAN_RADIUS: f32 = 28.0; // Range in which Help defender looks for a pass option
-const COVER_GOAL_SIDE_OFFSET: f32 = 12.0; // Cover sits this far goal-side of carrier
+/// Beyond this the second defender is too far from the carrier to be
+/// useful as cover (~17 m).
+const COVER_MAX_DISTANCE: f32 = 140.0;
+/// Range in which a `Help` defender looks for someone to pick up (~15 m).
+const HELP_SCAN_RADIUS: f32 = 120.0;
+/// Cover sits this far goal-side of the carrier (~1.5 m). Deliberately
+/// NOT rescaled: this one is an offset along the carrier-to-goal line,
+/// and it was already a sane football distance — a covering defender is a
+/// stride behind his man, not fifteen metres.
+const COVER_GOAL_SIDE_OFFSET: f32 = 12.0;
 
 impl<'p> DefensiveOperationsImpl<'p> {
     pub fn new(ctx: &'p StateProcessingContext<'p>) -> Self {

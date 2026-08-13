@@ -2468,6 +2468,9 @@ fn print_usage() {
         "                                      bypasses generator; reveals engine-only response to skill gap"
     );
     eprintln!(
+        "  dev_match trace [N] [level]     runtime per-player trace: position flicker + state looping"
+    );
+    eprintln!(
         "  dev_match subs [N] [level]      substitution-usage diagnostic: per-team subs distribution by result"
     );
     eprintln!(
@@ -2676,6 +2679,15 @@ fn main() {
             let level_b: Option<u8> = args.get(3).and_then(|s| s.parse().ok());
             run_viewer(level_a, level_b);
         }
+        // Headless replay dump: writes exactly the chunk files `viewer`
+        // writes, then exits — no server, no browser. Use this when the
+        // question is "what does the ball actually DO", because the answer
+        // is in the recorded track and the track is what the viewer draws.
+        "record" => {
+            let level_a: Option<u8> = args.get(2).and_then(|s| s.parse().ok());
+            let level_b: Option<u8> = args.get(3).and_then(|s| s.parse().ok());
+            run_record(level_a, level_b);
+        }
         // Deterministic seeded timing + calibration-neutrality benchmark.
         "bench" => {
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
@@ -2716,6 +2728,20 @@ fn main() {
         // Substitution-usage diagnostic: plays N matches with full benches
         // and reports the per-team subs-count distribution split by final
         // result. Reproduces "some teams never sub" reports from production.
+        "paths" => {
+            let n = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(2usize);
+            let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
+            run_paths(n, lvl);
+        }
+        // Runtime per-player flicker / state-churn trace. Samples every
+        // simulation tick inside the engine rather than reading the
+        // deduped replay track, so on-the-spot jitter and per-tick state
+        // oscillation are both visible. See `run_trace`.
+        "trace" => {
+            let n = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(1usize);
+            let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
+            run_trace(n, lvl);
+        }
         "subs" => {
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(100);
             let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);
@@ -3347,6 +3373,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     BlockDiag::reset();
     core::helper_diag::reset();
     core::mid_run_diag::reset();
+    core::dead_ball_diag::reset();
     core::time_band_diag::reset();
     core::r#match::TransitionGraph::reset();
     {
@@ -3560,6 +3587,22 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         "on-target rate      : {:.1}%  (real ~33%)",
         total_on_target as f32 / total_shots.max(1) as f32 * 100.0
     );
+    // Why shots end up off target. The aim band is documented as NOT
+    // being the population lever — these three forced-miss rolls are —
+    // so this breaks the rate down into the terms that actually set it.
+    {
+        let sa = core::shot_accuracy_diag::snapshot();
+        let struck = sa[0].max(1) as f32;
+        println!(
+            "  off-target causes  : wide {:.1}%  over-bar {:.1}%  miskick {:.1}%  \
+             → aim between posts {:.1}%, on frame {:.1}%",
+            sa[1] as f32 / struck * 100.0,
+            sa[2] as f32 / struck * 100.0,
+            sa[3] as f32 / struck * 100.0,
+            sa[4] as f32 / struck * 100.0,
+            sa[5] as f32 / struck * 100.0,
+        );
+    }
     let conversion = total_goals as f32 / total_on_target.max(1) as f32 * 100.0;
     println!("on-target→goal rate : {:.1}%  (real ~30%)", conversion);
     let saves_vs_ontarget = total_saves as f32 / total_on_target.max(1) as f32 * 100.0;
@@ -4342,6 +4385,43 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             }
         }
 
+        {
+            let (held, total, gathers) = core::reception_diag::hold_snapshot();
+            println!();
+            println!(
+                "  ball in the keepers gloves: {:.1}% of all ticks   (real ~3-6%)",
+                held as f64 / total.max(1) as f64 * 100.0
+            );
+            println!(
+                "    gathers {:.1}/match, mean hold {:.2}s   (real ~8-12/match, ~4s)",
+                gathers as f64 / n_matches as f64,
+                held as f64 / gathers.max(1) as f64 / 50.0
+            );
+            let src = core::reception_diag::gather_source_snapshot();
+            println!(
+                "    by state: catching {:.1}  picking-up {:.1}  diving {:.1}  other {:.1} per match",
+                src[0] as f64 / n_matches as f64,
+                src[1] as f64 / n_matches as f64,
+                src[2] as f64 / n_matches as f64,
+                src[3] as f64 / n_matches as f64
+            );
+        }
+
+        let ct = core::time_band_diag::close_tag_snapshot();
+        let cttotal: u64 = ct.iter().sum();
+        println!();
+        println!("  <6m EMITTED shots by reason (carried in, or arriving onto it?):");
+        for (i, name) in core::time_band_diag::ETAG_NAMES.iter().enumerate() {
+            if ct[i] > 0 {
+                println!(
+                    "    {:<18} {:>7}  {:>5.1}%",
+                    name,
+                    ct[i],
+                    ct[i] as f64 / cttotal.max(1) as f64 * 100.0
+                );
+            }
+        }
+
         let tg = core::time_band_diag::tag_snapshot();
         let tgtotal: u64 = tg.iter().sum();
         println!();
@@ -4377,16 +4457,25 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         }
 
         let wf = core::time_band_diag::will_factor_snapshot();
+        // These MUST track `record_will_factors`' slot order in
+        // `forward_shot_decision.rs`. They did not: the labels still named
+        // a willingness model that was replaced (xg_boost / body_ctl /
+        // gk_ctx no longer exist), so the table was printing `lane` under
+        // "body_ctl" and `poise` under "condition" — which is how a
+        // 0.27 lane in the six-yard box read as a body-control problem.
         let wnames = [
-            "base",
-            "xg_boost",
-            "clarity",
-            "body_ctl",
-            "condition",
-            "gk_ctx",
-            "balance",
+            "urge",
+            "reach",
+            "angle_q",
+            "lane",
+            "poise",
+            "boldness",
+            "situatnl",
             "psych",
-            "FINAL",
+            "APPETITE",
+            "  ├ press",
+            "  └ corrid",
+            "BAR",
         ];
         println!();
         println!("  willingness factor MEANS by distance band (roll samples):");
@@ -5282,13 +5371,103 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     too_far,
                     too_far as f32 / n_matches as f32,
                 );
-                let (sw, so, sc_, snt, grj) = core::reception_diag::shot_fate_snapshot();
+                let (sw, so, sc_, snt, grj, clamped) = core::reception_diag::shot_fate_snapshot();
                 println!(
                     "  shot fate: wide {}, over the bar {}, claimed mid-flight {}, \
                      no projected target {}, goal REJECTED at the line {}   \
                      (vs saves+goals = the credited on-target count)",
                     sw, so, sc_, snt, grj,
                 );
+                {
+                    // Complete partition of every struck shot. The
+                    // `shot fate` line above is a set of per-site flags
+                    // that between them catch ~0.5% of shots; this is
+                    // the census, and it must sum to STRUCK.
+                    let c = core::reception_diag::fate_census();
+                    let (struck, goal, gk, out, cdef, catt, stopped, timeout) =
+                        (c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]);
+                    let (live_ticks, struck_d, reached_d) = (c[8], c[9], c[10]);
+                    let s = struck.max(1) as f64;
+                    let reached = goal + gk;
+                    println!(
+                        "  SHOT LIFECYCLE CENSUS — {} struck, {:.1} live ticks each, \
+                         struck from {:.0}u avg",
+                        struck,
+                        live_ticks as f64 / s,
+                        struck_d as f64 / 100.0 / s,
+                    );
+                    for (label, v, note) in [
+                        ("reached the goal (goal + keeper)", reached, "real ~35-40%"),
+                        ("  ├ goal", goal, ""),
+                        ("  └ keeper gathered/saved", gk, ""),
+                        ("out of play (corner/goal kick/throw)", out, "real ~45%"),
+                        ("claimed mid-flight by a DEFENDER", cdef, "real ~15% (blocks)"),
+                        ("claimed mid-flight by an ATTACKER", catt, "real ~5%"),
+                        ("came to rest on the pitch", stopped, "real ~0%"),
+                        ("still live at the 400-tick timeout", timeout, "real 0%"),
+                    ] {
+                        println!(
+                            "    {:<38} {:>6} ({:>5.1}%)  {}",
+                            label,
+                            v,
+                            v as f64 / s * 100.0,
+                            note
+                        );
+                    }
+                    if reached > 0 {
+                        println!(
+                            "    avg strike distance: all {:.0}u vs reached-goal {:.0}u  \
+                             (a big gap = the leak is distance-selective)",
+                            struck_d as f64 / 100.0 / s,
+                            reached_d as f64 / 100.0 / reached as f64,
+                        );
+                    }
+                }
+                println!(
+                    "  stranded in the goalmouth (endline clamp, MUST be 0): {}{}",
+                    clamped,
+                    if clamped == 0 {
+                        ""
+                    } else {
+                        "   <-- an endline resolver is declining balls again"
+                    },
+                );
+                // Who the ball dies on. A stalled ball is nearly always a
+                // state with no way to act on possession — see
+                // `dead_ball_diag`. Ticks here are FULL ticks (~20 ms).
+                {
+                    let (rows, un_ticks, un_eps, longest) = core::dead_ball_diag::snapshot();
+                    let mut label = std::collections::HashMap::new();
+                    for st in core::r#match::player::state::PlayerState::all() {
+                        label.insert(st.compact_id(), format!("{}", st));
+                    }
+                    let total: u64 = rows.iter().map(|r| r.1).sum::<u64>() + un_ticks;
+                    println!(
+                        "  ball STUCK (inside 15u for 5s+): {:.1}s/match over {} episodes, longest {:.1}s",
+                        total as f64 * 0.02 / n_matches as f64,
+                        rows.iter().map(|r| r.2).sum::<u64>() + un_eps,
+                        longest as f64 * 0.02,
+                    );
+                    for (id, ticks, eps) in rows.iter().take(8) {
+                        println!(
+                            "      {:>28}  {:>6.1}s  {:>4} episodes",
+                            label
+                                .get(id)
+                                .cloned()
+                                .unwrap_or_else(|| format!("state {id}")),
+                            *ticks as f64 * 0.02,
+                            eps
+                        );
+                    }
+                    if un_ticks > 0 {
+                        println!(
+                            "      {:>28}  {:>6.1}s  {:>4} episodes",
+                            "(nobody — loose ball)",
+                            un_ticks as f64 * 0.02,
+                            un_eps
+                        );
+                    }
+                }
                 let (emitted, superseded, dead, out_of_reach) =
                     core::reception_diag::pass_outcome_snapshot();
                 println!(
@@ -5309,13 +5488,33 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     x as f32 / seen as f32 * 100.0
                 }
             };
+            // NB every percentage here is per BALL-TICK IN FLIGHT, not
+            // per shot — `seen` counts each tick a live shot spends in
+            // the check, ~15 of them per shot. Printing "blocked 1.0%"
+            // beside "(real: ~18-22% of shots blocked)" invited exactly
+            // the comparison it looks like, and that comparison is wrong
+            // by the flight length: 1.0% of ticks is ~7 blocks a match, a
+            // NORMAL number. Two rounds of defensive work were read as
+            // having achieved nothing on the strength of it. The per-shot
+            // rate is derived below; the per-player-per-match count in
+            // the RATING VOLUME PROFILE (`blocks`, real ~0.9 for a
+            // defender) is the other honest readout.
+            let per_shot = if total_shots > 0 {
+                fired as f32 / total_shots as f32 * 100.0
+            } else {
+                0.0
+            };
             println!(
-                "  block window: {} shots reached the check — above blocking height {:.1}%, \
-                 defender in the lane {:.1}%, blocked {:.1}%   (real: ~18-22% of shots blocked)",
+                "  block window: {} ball-ticks in flight reached the check — above blocking \
+                 height {:.1}%, defender in the lane {:.1}%, blocked {:.1}% (all PER TICK)",
                 seen,
                 bpct(too_high),
                 bpct(candidates),
                 bpct(fired),
+            );
+            println!(
+                "    → {} blocks over {} shots = {:.1}% of shots blocked   (real: ~18-22%)",
+                fired, total_shots, per_shot,
             );
             let (opp, behind, beyond, wide, in_win, mean_perp) = BlockDiag::lane_snapshot();
             let opct = |x: u64| {
@@ -5544,6 +5743,164 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         "  block→corner branch fired={}  save-parry→corner branch fired={}",
         mr[14], mr[15]
     );
+
+    // ── OPEN-PLAY CROSSING CHAIN ──────────────────────────────────────
+    // Delivery MIX first (has one branch of `pick_cross_type` swallowed
+    // the model?), then the contest funnel: seen → fired → won → header.
+    // A high `seen` with a low `fired` means the resolver's height /
+    // box gates never match; a high `fired` with a low `won` means the
+    // duel is too hard; a high `won` with no headers means the winner's
+    // state machine isn't striking the planted ball.
+    {
+        use core::r#match::player::strategies::passing::CrossType;
+        use core::mid_run_diag::CrossDiag;
+        let by_type = CrossDiag::by_type();
+        let total: u64 = by_type.iter().sum();
+        println!("\n--- OPEN-PLAY CROSSING ---");
+        if total == 0 {
+            println!("  no crosses struck");
+        } else {
+            let mix = CrossType::ALL
+                .iter()
+                .enumerate()
+                .map(|(i, ct)| {
+                    format!(
+                        "{} {} ({:.0}%)",
+                        ct.label(),
+                        by_type[i],
+                        by_type[i] as f64 / total as f64 * 100.0
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("  ");
+            println!("  delivery mix ({total} struck): {mix}");
+        }
+        use core::mid_run_diag::PlanDiag;
+        let (refreshes, active, slots, slot_ticks) = PlanDiag::snapshot();
+        if refreshes > 0 {
+            println!(
+                "  attack plan: active on {:.0}% of refreshes, {:.1} of 4 box slots filled when live, {slot_ticks} slot-driven movement ticks",
+                active as f64 / refreshes as f64 * 100.0,
+                if active > 0 {
+                    slots as f64 / active as f64
+                } else {
+                    0.0
+                }
+            );
+        }
+        use core::mid_run_diag::DefenceDiag;
+        let (samples, depth_spread, max_gap, attackers, unmarked, nearest) =
+            DefenceDiag::snapshot();
+        if samples > 0 {
+            println!("\n--- DEFENSIVE SHAPE (sampled while defending) ---");
+            println!(
+                "  back-line depth spread {:.0}u ({:.1}m)   widest lateral gap {:.0}u ({:.1}m)   (real stagger 25-65u / 3-8m)",
+                depth_spread,
+                depth_spread * 0.125,
+                max_gap,
+                max_gap * 0.125
+            );
+            println!(
+                "  attackers in our third: {attackers}, nearest defender {:.0}u ({:.1}m) on average, {:.0}% with NOBODY within 3m",
+                nearest,
+                nearest * 0.125,
+                unmarked as f64 / attackers.max(1) as f64 * 100.0
+            );
+            use core::mid_run_diag::EvasionDiag;
+            let (calls, marked, tightness, edge) = EvasionDiag::snapshot();
+            if calls > 0 {
+                println!(
+                    "  marker evasion: {:.0}% of attacker off-ball ticks had a marker, mean tightness {tightness:.2}, mean edge {edge:.2} ({marked} of {calls})",
+                    marked as f64 / calls as f64 * 100.0
+                );
+            }
+            {
+                use core::mid_run_diag::{CLEAR_REASON_NAMES, ClearDiag};
+                let by_reason = ClearDiag::snapshot();
+                let total: u64 = by_reason.iter().sum();
+                if total > 0 {
+                    println!(
+                        "  clearance reasons ({} total, {:.1}/team/match):",
+                        total,
+                        total as f32 / (2.0 * n_matches as f32)
+                    );
+                    let mut rows: Vec<(usize, u64)> =
+                        by_reason.iter().copied().enumerate().collect();
+                    rows.sort_by(|a, b| b.1.cmp(&a.1));
+                    for (i, c) in rows.into_iter().filter(|(_, c)| *c > 0) {
+                        println!(
+                            "    {:<26} {:>8}  {:>5.1}%",
+                            CLEAR_REASON_NAMES[i],
+                            c,
+                            c as f32 / total as f32 * 100.0
+                        );
+                    }
+                }
+            }
+            let (lag_n, lag_mean, lag_max, dwell, lag_x, lag_y) = DefenceDiag::shape_lag();
+            if lag_n > 0 {
+                println!(
+                    "  shape lag: {lag_n} samples — defender sits {lag_mean:.0}u ({:.1}m) from his shape target, worst {lag_max:.0}u ({:.1}m); depth {lag_x:.0}u width {lag_y:.0}u; mean dwell in state {dwell:.0} ticks",
+                    lag_mean * 0.125,
+                    lag_max * 0.125,
+                );
+            }
+            let (duels, duel_gap, duels_lost) = DefenceDiag::duel_snapshot();
+            if duels > 0 {
+                println!(
+                    "  marking duels: marker sits {duel_gap:.0}u ({:.1}m) from his man, attacker got away (>4m) on {:.0}% of samples",
+                    duel_gap * 0.125,
+                    duels_lost * 100.0
+                );
+                let (on_task, on_task_gap) = DefenceDiag::duel_on_task();
+                println!(
+                    "    ...and only {:.0}% of those markers were in a state that ACTS on the \
+                     duty (Marking/Guarding); those sit {:.1}m off",
+                    on_task * 100.0,
+                    on_task_gap * 0.125,
+                );
+                let by_state = DefenceDiag::duel_by_state();
+                let bs_total = by_state.iter().sum::<u64>().max(1);
+                println!(
+                    "    what the OTHERS were doing: playing-the-ball {:.0}%  press/cover {:.0}%  \
+                     running/recovering {:.0}%  idle {:.0}%   (the last two are duties nobody acts on)",
+                    by_state[1] as f64 / bs_total as f64 * 100.0,
+                    by_state[2] as f64 / bs_total as f64 * 100.0,
+                    by_state[3] as f64 / bs_total as f64 * 100.0,
+                    by_state[4] as f64 / bs_total as f64 * 100.0,
+                );
+                let by_line = DefenceDiag::duel_by_line();
+                let total = by_line.iter().map(|(n, _)| *n).sum::<u64>().max(1);
+                println!(
+                    "    who is being marked: DEF {:.0}% ({:.1}m)  MID {:.0}% ({:.1}m)  FWD {:.0}% ({:.1}m)",
+                    by_line[0].0 as f64 / total as f64 * 100.0,
+                    by_line[0].1 * 0.125,
+                    by_line[1].0 as f64 / total as f64 * 100.0,
+                    by_line[1].1 * 0.125,
+                    by_line[2].0 as f64 / total as f64 * 100.0,
+                    by_line[2].1 * 0.125,
+                );
+            }
+            let (refresh, active, individual) = DefenceDiag::plan_snapshot();
+            if refresh > 0 {
+                println!(
+                    "  duty plan: live on {:.0}% of refreshes, {individual:.1} of the unit on an individual duty (press/cover/mark) when live",
+                    active as f64 / refresh as f64 * 100.0
+                );
+            }
+        }
+        let (seen, fired, won, gk, header) = CrossDiag::contest();
+        println!(
+            "  aerial contest: seen={seen}  fired={fired}  attacker-won={won}  keeper-claimed={gk}  headers on goal={header}"
+        );
+        if fired > 0 {
+            println!(
+                "  per contest: attacker wins {:.0}%, keeper claims {:.0}%   (real: cross completion ~22-25%)",
+                won as f64 / fired as f64 * 100.0,
+                gk as f64 / fired as f64 * 100.0
+            );
+        }
+    }
 
     // Player state-transition graph — the union of every distinct
     // `from -> to` edge (tagged by source) observed across the batch.
@@ -5803,6 +6160,611 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     );
 }
 
+/// Runtime per-player trace of the two failure modes you can only see by
+/// watching, never by counting events: a player who twitches on the spot,
+/// and a player whose state flips back and forth every tick.
+///
+/// Unlike `paths`, this does NOT read the recorded 30 ms replay track —
+/// that track is deduped (samples under 0.3 u are dropped), so the very
+/// jitter we're hunting is partly filtered out of it. Instead the engine
+/// samples EVERY simulation tick as it runs (`MatchPlayer::trace_motion`)
+/// and rolls the result up per player.
+///
+/// Reported per player:
+///
+///   * **twitch%** — share of one-second windows where the player covered
+///     ≥1.5 m of ground but finished <0.30 m from where they started.
+///     That is the flicker, quantified: motion without displacement.
+///   * **rev/s** — velocity direction reversals per second. A purposeful
+///     run has ~0; a player fought over by two steering targets has many.
+///   * **flips/min** — state transitions per minute, and **pong%**, the
+///     share of them that bounce straight back to the state just left.
+///   * **inst%** — share of transitions that left a state after ≤1 AI
+///     tick, i.e. the state was entered and abandoned immediately.
+fn run_trace(matches: usize, level: u8) {
+    use core::motion_diag;
+    use std::collections::HashMap;
+
+    motion_diag::reset();
+    core::r#match::TransitionGraph::reset();
+
+    let mut names: HashMap<u32, String> = HashMap::new();
+    for m in 0..matches {
+        MatchRuntime::set_events_mode(true);
+        let (home, hj) = make_squad_viewer(1, HOME_TEAM_NAME, level, 0);
+        let (away, aj) = make_squad_viewer(2, AWAY_TEAM_NAME, level, 11);
+        for p in hj.iter().chain(aj.iter()) {
+            names.insert(p.id, format!("{} {}", p.position, p.last_name));
+        }
+        let _ = FootballEngine::<840, 545>::play(home, away, true, false, false);
+        eprintln!("  trace: match {}/{} played", m + 1, matches);
+    }
+
+    let snap = motion_diag::snapshot();
+    let secs_per_window = motion_diag::WINDOW_TICKS as f64 / 100.0;
+
+    println!();
+    println!(
+        "=== RUNTIME PLAYER TRACE ({} match(es), level {}) ===",
+        matches, level
+    );
+    println!(
+        "  window = {} ticks ({:.0} s);  twitch = path >= {:.1} m AND net < {:.2} m",
+        motion_diag::WINDOW_TICKS,
+        secs_per_window,
+        motion_diag::TWITCH_PATH_M,
+        motion_diag::TWITCH_NET_M
+    );
+
+    // ── per-player motion + churn ──────────────────────────────────────
+    let mut rows: Vec<(u32, motion_diag::PlayerMotion)> =
+        snap.players.iter().map(|(k, v)| (*k, v.clone())).collect();
+    rows.sort_by(|a, b| {
+        let ta = a.1.twitch_windows as f64 / a.1.windows.max(1) as f64;
+        let tb = b.1.twitch_windows as f64 / b.1.windows.max(1) as f64;
+        tb.partial_cmp(&ta).unwrap()
+    });
+
+    println!();
+    println!(
+        "  {:<5} {:<10} {:>6} {:>8} {:>8} {:>7} {:>8} {:>7} {:>9} {:>6} {:>6}  {}",
+        "id",
+        "player",
+        "wins",
+        "twitch%",
+        "still%",
+        "rev/s",
+        "rev-in-st",
+        "m/s",
+        "flips/min",
+        "pong%",
+        "inst%",
+        "worst twitch window",
+    );
+    for (id, p) in rows.iter().take(24) {
+        let wins = p.windows.max(1) as f64;
+        let mins = p.windows as f64 * secs_per_window / 60.0;
+        let worst = p
+            .worst
+            .map(|(t, path, net, st)| {
+                format!(
+                    "{:>2}:{:02} path {:.1}m net {:.2}m  {}",
+                    t / 60_000,
+                    (t % 60_000) / 1000,
+                    path,
+                    net,
+                    st
+                )
+            })
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "  {:<5} {:<10} {:>6} {:>7.1}% {:>7.1}% {:>7.2} {:>7.0}% {:>7.2} {:>9.1} {:>5.1}% {:>5.1}%  {}",
+            id,
+            names.get(id).map(|s| s.as_str()).unwrap_or("?"),
+            p.windows,
+            p.twitch_windows as f64 / wins * 100.0,
+            p.still_ticks as f64 / p.ticks.max(1) as f64 * 100.0,
+            p.reversals as f64 / (p.windows as f64 * secs_per_window).max(1.0),
+            p.reversals_in_state as f64 / p.reversals.max(1) as f64 * 100.0,
+            p.path_u as f64 * motion_diag::M_PER_UNIT as f64
+                / (p.windows as f64 * secs_per_window).max(1.0),
+            p.transitions as f64 / mins.max(0.001),
+            p.ping_pongs as f64 / p.transitions.max(1) as f64 * 100.0,
+            p.instant_exits as f64 / p.transitions.max(1) as f64 * 100.0,
+            worst,
+        );
+    }
+
+    // Squad-wide aggregate — the single number to watch across a fix.
+    let tot_win: u64 = snap.players.values().map(|p| p.windows).sum();
+    let tot_twitch: u64 = snap.players.values().map(|p| p.twitch_windows).sum();
+    let tot_rev: u64 = snap.players.values().map(|p| p.reversals).sum();
+    let tot_rev_in: u64 = snap.players.values().map(|p| p.reversals_in_state).sum();
+    let tot_tr: u64 = snap.players.values().map(|p| p.transitions).sum();
+    let tot_pong: u64 = snap.players.values().map(|p| p.ping_pongs).sum();
+    let tot_self: u64 = snap.players.values().map(|p| p.self_transitions).sum();
+    let tot_inst: u64 = snap.players.values().map(|p| p.instant_exits).sum();
+    println!();
+    println!(
+        "  ALL: twitch {:.1}%  rev/s {:.2} (in-state {:.0}%)  flips/min {:.1}  pong {:.1}%  self {:.1}%  inst {:.1}%",
+        tot_twitch as f64 / tot_win.max(1) as f64 * 100.0,
+        tot_rev as f64 / (tot_win as f64 * secs_per_window).max(1.0),
+        tot_rev_in as f64 / tot_rev.max(1) as f64 * 100.0,
+        tot_tr as f64 / (tot_win as f64 * secs_per_window / 60.0).max(0.001),
+        tot_pong as f64 / tot_tr.max(1) as f64 * 100.0,
+        tot_self as f64 / tot_tr.max(1) as f64 * 100.0,
+        tot_inst as f64 / tot_tr.max(1) as f64 * 100.0,
+    );
+
+    // ── which state's own steering reverses under the player ───────────
+    // A high rate here means that state's `velocity()` flips direction
+    // between consecutive ticks with the player never leaving it — a
+    // steering bug, localised to one function.
+    {
+        use std::sync::atomic::Ordering;
+        let mut rows: Vec<(f64, f64, u64, u64, String)> = Vec::new();
+        for st in core::r#match::player::state::PlayerState::all() {
+            let slot = st.compact_id() as usize;
+            let ticks = motion_diag::TICKS_BY_STATE[slot].load(Ordering::Relaxed);
+            let revs = motion_diag::REV_BY_STATE[slot].load(Ordering::Relaxed);
+            let fast = motion_diag::REV_FAST_BY_STATE[slot].load(Ordering::Relaxed);
+            if ticks < 1000 {
+                continue;
+            }
+            // Reversals per second of occupancy (100 ticks = 1 s).
+            let rate = revs as f64 / ticks as f64 * 100.0;
+            let fast_rate = fast as f64 / ticks as f64 * 100.0;
+            rows.push((fast_rate, rate, revs, ticks, st.to_string()));
+        }
+        // Sorted by the FAST rate — that is the one that reads as a twitch
+        // on screen. A high total with a near-zero fast rate is a player
+        // settling onto a target, not flicker.
+        rows.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        println!();
+        println!("--- IN-STATE VELOCITY REVERSALS (state's own steering flips direction) ---");
+        println!(
+            "  {:<34} {:>9} {:>9} {:>12} {:>12}",
+            "state", "FAST/s", "rev/s", "reversals", "ticks held"
+        );
+        for (fast_rate, rate, revs, ticks, name) in rows.iter().take(12) {
+            println!(
+                "  {:<34} {:>9.2} {:>9.2} {:>12} {:>12}",
+                name, fast_rate, rate, revs, ticks
+            );
+        }
+        // Control: the ball's OWN direction stability. Chase states aim at
+        // a point derived from the ball, so a chaser cannot be steadier
+        // than what he is chasing.
+        let ball_rev = motion_diag::BALL_REVERSALS.load(Ordering::Relaxed);
+        let ball_ticks = motion_diag::BALL_TICKS.load(Ordering::Relaxed);
+        println!(
+            "  {:<34} {:>9.2} {:>9.2} {:>12} {:>12}   <- the ball itself",
+            "(ball direction changes)",
+            0.0,
+            ball_rev as f64 / ball_ticks.max(1) as f64 * 100.0,
+            ball_rev,
+            ball_ticks,
+        );
+    }
+
+    // ── raw velocity dumps around captured reversals ───────────────────
+    // Counting reversals says WHICH state; only the vectors say WHY.
+    // Each row is one sampled tick: where the player was, how fast and
+    // which way he was going, and where the ball was relative to him.
+    {
+        let eps = motion_diag::episodes();
+        let states = core::r#match::player::state::PlayerState::all();
+        // Only dump the worst few states — otherwise this buries the report.
+        // Ranked by the COUNT of fast reversals, not the rate: a state
+        // occupied for a handful of ticks can top a rate table without
+        // mattering, and the dumps are for chasing what actually happens
+        // most.
+        let mut ranked: Vec<(u64, u16)> = eps
+            .keys()
+            .map(|id| {
+                use std::sync::atomic::Ordering;
+                let fast = motion_diag::REV_FAST_BY_STATE[*id as usize].load(Ordering::Relaxed);
+                (fast, *id)
+            })
+            .collect();
+        ranked.sort_by(|a, b| b.0.cmp(&a.0));
+
+        println!();
+        println!("--- REVERSAL DUMPS (the ticks around a fast in-state reversal) ---");
+        for (_, id) in ranked.iter().take(6) {
+            let name = states
+                .iter()
+                .find(|s| s.compact_id() == *id)
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let Some(list) = eps.get(id) else { continue };
+            println!();
+            println!("  === {} ===", name);
+            for ep in list.iter().take(3) {
+                println!(
+                    "   t={}:{:02}  player {}   ball ({:.1},{:.1},{:.2}) vel ({:.3},{:.3},{:.3})",
+                    ep.t_ms / 60_000,
+                    (ep.t_ms % 60_000) / 1000,
+                    ep.player_id,
+                    ep.ball_pos.x,
+                    ep.ball_pos.y,
+                    ep.ball_pos.z,
+                    ep.ball_vel.x,
+                    ep.ball_vel.y,
+                    ep.ball_vel.z,
+                );
+                println!(
+                    "     {:>4} {:>17} {:>17} {:>7} {:>8} {:>9}",
+                    "tick", "position", "velocity", "speed", "dist_ball", "cos(v,ball)"
+                );
+                for (i, (p, v)) in ep.samples.iter().enumerate() {
+                    let to_ball = ep.ball_pos - p;
+                    let d = to_ball.magnitude();
+                    let sp = v.magnitude();
+                    // Is the player moving TOWARD the ball this tick?
+                    let cos = if d > 0.001 && sp > 0.001 {
+                        (v.x * to_ball.x + v.y * to_ball.y) / (d * sp)
+                    } else {
+                        0.0
+                    };
+                    println!(
+                        "     {:>4} ({:>7.1},{:>7.1}) ({:>7.3},{:>7.3}) {:>7.3} {:>8.1} {:>9.2}",
+                        i, p.x, p.y, v.x, v.y, sp, d, cos
+                    );
+                }
+            }
+        }
+    }
+
+    // ── states that are entered and abandoned immediately ──────────────
+    let mut dwell: Vec<_> = snap.dwell.values().cloned().collect();
+    dwell.sort_by_key(|(d, _)| std::cmp::Reverse(d.le1));
+    println!();
+    println!("--- SHORTEST-DWELL STATES (AI ticks held before leaving) ---");
+    println!(
+        "  {:<34} {:>8} {:>7} {:>8} {:>8} {:>7}",
+        "state", "exits", "mean", "<=1 tick", "<=3 tick", "max"
+    );
+    for (d, st) in dwell.iter().take(14) {
+        println!(
+            "  {:<34} {:>8} {:>7.1} {:>7.1}% {:>7.1}% {:>7}",
+            st.to_string(),
+            d.exits,
+            d.dwell_sum as f64 / d.exits.max(1) as f64,
+            d.le1 as f64 / d.exits.max(1) as f64 * 100.0,
+            d.le3 as f64 / d.exits.max(1) as f64 * 100.0,
+            d.max,
+        );
+    }
+
+    // ── the loops themselves ───────────────────────────────────────────
+    let mut pong: Vec<_> = snap
+        .ping_pong
+        .iter()
+        .map(|((_, _, src), (n, a, b))| (*n, *a, *b, *src))
+        .collect();
+    pong.sort_by_key(|(n, _, _, _)| std::cmp::Reverse(*n));
+    println!();
+    println!("--- STATE LOOPS (A -> B -> A, by return-leg source) ---");
+    println!("  {:>9}  {:<14}  {}", "count", "source", "loop");
+    for (n, a, b, src) in pong.iter().take(18) {
+        println!(
+            "  {:>9}  {:<14}  {}  <->  {}",
+            n,
+            src.as_tag(),
+            a.to_string(),
+            b.to_string()
+        );
+    }
+
+    // ── self-transitions: the timer-reset trap ─────────────────────────
+    let mut selfs: Vec<_> = snap
+        .self_edges
+        .iter()
+        .map(|((_, src), (n, st))| (*n, *st, *src))
+        .collect();
+    selfs.sort_by_key(|(n, _, _)| std::cmp::Reverse(*n));
+    println!();
+    println!("--- SELF-TRANSITIONS (A -> A: resets in_state_time, so A's timeouts never fire) ---");
+    println!("  {:>9}  {:<14}  {}", "count", "source", "state");
+    for (n, st, src) in selfs.iter().take(18) {
+        println!("  {:>9}  {:<14}  {}", n, src.as_tag(), st.to_string());
+    }
+    if selfs.is_empty() {
+        println!("  none");
+    }
+}
+
+/// Trace where players actually GO, as opposed to what they decide.
+///
+/// Every other diagnostic in this harness samples events — a shot, a pass,
+/// a tackle. None of them can see a player standing still in the six-yard
+/// box for a minute, drifting sideways for no reason, or shadowing a
+/// team-mate two metres away all match. Those are path properties, and
+/// they are what "the match does not look like football" usually means.
+///
+/// Reads the recorded position track (30 ms cadence, the same data the
+/// replay viewer renders) and reports, per line:
+///
+///   * **covered** — kilometres per match. Real: GK ~5, DEF ~10, MID ~11,
+///     FWD ~10. The single best sanity check on movement as a whole.
+///   * **to goal** — mean distance from the opposition goal, and the share
+///     of the match spent inside 6 m and 12 m of it. Camping check.
+///   * **mate / opp** — mean distance to the nearest team-mate and the
+///     nearest opponent. Spacing and whether anyone is ever in space.
+///   * **straight** — net displacement over path length in 3 s windows.
+///     1.0 is a purposeful run, near 0 is jitter on the spot.
+///   * **still** — share of samples under 0.5 m/s.
+fn run_paths(matches: usize, level: u8) {
+    use std::collections::HashMap;
+
+    const SAMPLE_MS: u64 = 30;
+    const WINDOW_MS: u64 = 3_000;
+    const M_PER_UNIT: f64 = 0.125;
+
+    #[derive(Default, Clone)]
+    struct LineStats {
+        samples: u64,
+        covered_units: f64,
+        to_goal_units: f64,
+        inside_6m: u64,
+        inside_12m: u64,
+        nearest_mate: f64,
+        nearest_opp: f64,
+        straightness: f64,
+        straight_windows: u64,
+        still: u64,
+        players: u64,
+    }
+
+    // 0 GK, 1 DEF, 2 MID, 3 FWD
+    let line_of = |id: u32| -> usize {
+        match id % 100 {
+            0 => 0,
+            1..=4 => 1,
+            5..=8 => 2,
+            _ => 3,
+        }
+    };
+
+    let mut lines: [LineStats; 4] = Default::default();
+    let mut team_length = 0.0_f64;
+    let mut team_width = 0.0_f64;
+    let mut team_samples = 0_u64;
+
+    for m in 0..matches {
+        MatchRuntime::set_events_mode(true);
+        let (home, _) = make_squad_viewer(1, HOME_TEAM_NAME, level, 0);
+        let (away, _) = make_squad_viewer(2, AWAY_TEAM_NAME, level, 11);
+        let result = FootballEngine::<840, 545>::play(home, away, true, false, false);
+        let data = &result.position_data;
+
+        let ids = data.get_player_ids();
+        let last = data.max_timestamp();
+        // Which end each team attacks, derived from where its KEEPER is
+        // standing at this moment rather than assumed. Teams swap ends at
+        // half time, and an assumed direction silently inverts every
+        // goal-relative number for one half of the match.
+
+        let mut prev: HashMap<u32, (f32, f32)> = HashMap::new();
+        let mut window_start: HashMap<u32, (f32, f32)> = HashMap::new();
+        let mut window_path: HashMap<u32, f64> = HashMap::new();
+
+        for id in &ids {
+            lines[line_of(*id)].players += 1;
+        }
+
+        let mut t = 0_u64;
+        while t <= last {
+            // Gather everyone once so the pairwise reads are cheap.
+            let mut snap: Vec<(u32, (f32, f32))> = Vec::with_capacity(24);
+            for id in &ids {
+                if let Some(p) = data.get_player_position_at(*id, t) {
+                    snap.push((*id, (p.x, p.y)));
+                }
+            }
+            if snap.len() < 4 {
+                t += SAMPLE_MS;
+                continue;
+            }
+
+            // Own goal per team = the end its keeper is nearest.
+            let keeper_x = |team_home: bool| -> Option<f32> {
+                snap.iter()
+                    .find(|(id, _)| (*id < 200) == team_home && *id % 100 == 0)
+                    .map(|(_, p)| p.0)
+            };
+            let home_attacks_right = keeper_x(true).map(|x| x < 420.0).unwrap_or(true);
+            let goal_for = |id: u32| -> (f32, f32) {
+                let attacks_right = if id < 200 {
+                    home_attacks_right
+                } else {
+                    !home_attacks_right
+                };
+                if attacks_right {
+                    (840.0, 272.5)
+                } else {
+                    (0.0, 272.5)
+                }
+            };
+
+            // Team shape (home outfielders only — one team is enough).
+            let outfield: Vec<&(u32, (f32, f32))> = snap
+                .iter()
+                .filter(|(id, _)| *id > 100 && *id < 200)
+                .collect();
+            if outfield.len() >= 8 {
+                let xs = outfield.iter().map(|(_, p)| p.0);
+                let ys = outfield.iter().map(|(_, p)| p.1);
+                let (min_x, max_x) = xs.fold((f32::MAX, f32::MIN), |a, v| (a.0.min(v), a.1.max(v)));
+                let (min_y, max_y) = ys.fold((f32::MAX, f32::MIN), |a, v| (a.0.min(v), a.1.max(v)));
+                team_length += (max_x - min_x) as f64;
+                team_width += (max_y - min_y) as f64;
+                team_samples += 1;
+            }
+
+            for (id, pos) in &snap {
+                let li = line_of(*id);
+                let s = &mut lines[li];
+                s.samples += 1;
+
+                let (gx, gy) = goal_for(*id);
+                let dg = (((pos.0 - gx).powi(2) + (pos.1 - gy).powi(2)).sqrt()) as f64;
+                s.to_goal_units += dg;
+                if dg * M_PER_UNIT < 6.0 {
+                    s.inside_6m += 1;
+                }
+                if dg * M_PER_UNIT < 12.0 {
+                    s.inside_12m += 1;
+                }
+
+                let same_team = |a: u32, b: u32| (a < 200) == (b < 200);
+                let mut best_mate = f64::MAX;
+                let mut best_opp = f64::MAX;
+                for (oid, opos) in &snap {
+                    if oid == id {
+                        continue;
+                    }
+                    let d = (((pos.0 - opos.0).powi(2) + (pos.1 - opos.1).powi(2)).sqrt()) as f64;
+                    if same_team(*id, *oid) {
+                        best_mate = best_mate.min(d);
+                    } else {
+                        best_opp = best_opp.min(d);
+                    }
+                }
+                if best_mate < f64::MAX {
+                    s.nearest_mate += best_mate;
+                }
+                if best_opp < f64::MAX {
+                    s.nearest_opp += best_opp;
+                }
+
+                if let Some(p0) = prev.get(id) {
+                    let step = (((pos.0 - p0.0).powi(2) + (pos.1 - p0.1).powi(2)).sqrt()) as f64;
+                    s.covered_units += step;
+                    *window_path.entry(*id).or_insert(0.0) += step;
+                    // 0.5 m/s over a 30 ms step = 0.015 m = 0.12 units.
+                    if step < 0.12 {
+                        s.still += 1;
+                    }
+                }
+                prev.insert(*id, *pos);
+                window_start.entry(*id).or_insert(*pos);
+            }
+
+            if t > 0 && t % WINDOW_MS == 0 {
+                for (id, pos) in &snap {
+                    if let (Some(start), Some(path)) =
+                        (window_start.get(id), window_path.get(id).copied())
+                    {
+                        if path > 1.0 {
+                            let net = (((pos.0 - start.0).powi(2) + (pos.1 - start.1).powi(2))
+                                .sqrt()) as f64;
+                            let s = &mut lines[line_of(*id)];
+                            s.straightness += net / path;
+                            s.straight_windows += 1;
+                        }
+                    }
+                }
+                window_start.clear();
+                window_path.clear();
+            }
+
+            t += SAMPLE_MS;
+        }
+        eprintln!("  paths: match {}/{} traced", m + 1, matches);
+    }
+
+    println!();
+    println!(
+        "=== PLAYER PATH TRACE ({} matches, level {}) ===",
+        matches, level
+    );
+    println!(
+        "  {:<5} {:>8} {:>9} {:>7} {:>7} {:>8} {:>8} {:>9} {:>7}",
+        "line", "covered", "to goal", "<6m", "<12m", "mate", "opp", "straight", "still"
+    );
+    let names = ["GK", "DEF", "MID", "FWD"];
+    let real_km = [5.0, 10.0, 11.0, 10.0];
+    for (i, name) in names.iter().enumerate() {
+        let s = &lines[i];
+        if s.samples == 0 {
+            continue;
+        }
+        let per_player = (s.players.max(1) / matches.max(1) as u64).max(1) as f64;
+        let km = s.covered_units * M_PER_UNIT / 1000.0 / per_player / matches as f64;
+        let n = s.samples as f64;
+        println!(
+            "  {:<5} {:>6.1}km {:>7.1}m {:>6.1}% {:>6.1}% {:>6.1}m {:>6.1}m {:>8.2} {:>6.1}%  (real ~{:.0}km)",
+            name,
+            km,
+            s.to_goal_units / n * M_PER_UNIT,
+            s.inside_6m as f64 / n * 100.0,
+            s.inside_12m as f64 / n * 100.0,
+            s.nearest_mate / n * M_PER_UNIT,
+            s.nearest_opp / n * M_PER_UNIT,
+            s.straightness / s.straight_windows.max(1) as f64,
+            s.still as f64 / n * 100.0,
+            real_km[i],
+        );
+    }
+    if team_samples > 0 {
+        println!();
+        println!(
+            "  team shape (home outfield): length {:.1}m  width {:.1}m   (real ~35-45m x ~45-55m)",
+            team_length / team_samples as f64 * M_PER_UNIT,
+            team_width / team_samples as f64 * M_PER_UNIT,
+        );
+    }
+    println!();
+    println!("  reference: nearest team-mate ~15-20m, nearest opponent ~5-12m,");
+    println!("             straightness ~0.6-0.9 for purposeful movement, still ~15-25%");
+}
+
+/// Headless sibling of `run_viewer`: play one match with position
+/// recording on and write the same chunk files, then exit. No axum
+/// server, no browser launch — so a replay can be captured and inspected
+/// without taking over the machine.
+fn run_record(level_a: Option<u8>, level_b: Option<u8>) {
+    MatchRuntime::set_events_mode(true);
+
+    let level_a = level_a.unwrap_or_else(random_level);
+    let level_b = level_b.unwrap_or_else(random_level);
+
+    let (home_squad, _) = make_squad_viewer(1, HOME_TEAM_NAME, level_a, 0);
+    let (away_squad, _) = make_squad_viewer(2, AWAY_TEAM_NAME, level_b, 11);
+
+    let result = FootballEngine::<840, 545>::play(home_squad, away_squad, true, false, false);
+    let score = result.score.as_ref().unwrap();
+    println!(
+        "recorded: {}:{} (level {} vs {})",
+        score.home_team.get(),
+        score.away_team.get(),
+        level_a,
+        level_b
+    );
+
+    let out_dir = PathBuf::from("match_results").join(LEAGUE_SLUG);
+    std::fs::create_dir_all(&out_dir).expect("failed to create output dir");
+    // Stale chunks from a longer previous match would be read back as part
+    // of this one — the analysis concatenates every chunk in the folder.
+    if let Ok(entries) = std::fs::read_dir(&out_dir) {
+        for entry in entries.flatten() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+
+    let chunks = result.position_data.split_into_chunks(CHUNK_DURATION_MS);
+    for (idx, chunk) in chunks.iter().enumerate() {
+        let data = serde_json::to_vec(chunk).expect("failed to serialize chunk");
+        save_gzip_json(
+            &out_dir.join(format!("{}_chunk_{}.json.gz", MATCH_ID, idx)),
+            &data,
+        );
+    }
+    println!("wrote {} chunks to {}", chunks.len(), out_dir.display());
+}
+
 fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
     // Route `log::warn!` from core (notably the ball-stall snapshot) to
     // stderr. Override with `RUST_LOG=info` or `RUST_LOG=debug` for more.
@@ -5951,9 +6913,9 @@ async fn serve() {
         )
         // Same URLs the web server uses, so the page markup is identical on
         // both sides.
-        .route("/static/match/match_viewer.js", get(viewer_script_handler))
+        .route("/static/viewer/match_viewer.js", get(viewer_script_handler))
         .route(
-            "/static/match/match_viewer_bg.wasm",
+            "/static/viewer/match_viewer_bg.wasm",
             get(viewer_wasm_handler),
         );
 

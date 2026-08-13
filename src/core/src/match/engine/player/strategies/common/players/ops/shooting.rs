@@ -350,7 +350,11 @@ pub struct ShootingOperationsImpl<'p> {
 // 1u = 0.125m. Real football: ~60% of shots inside the 16.5m box
 // (132u), ~10% beyond 25m (200u). The previous values were written on
 // a ~0.5m/unit assumption, capping ALL shooting at ~12.5m real.
-const MAX_SHOOTING_DISTANCE: f32 = 220.0; // 27.5m - absolute max for elite long shots
+// 40 m — the same absolute cap `evaluate_forward_shot_decision` uses, so
+// the ops layer and the decision layer agree on where a strike stops
+// being worth considering. Was 27.5 m, which cut the tail off the shot
+// distribution before the per-player `StrikingRange` model ever saw it.
+const MAX_SHOOTING_DISTANCE: f32 = 320.0;
 const MIN_SHOOTING_DISTANCE: f32 = 1.0;
 const VERY_CLOSE_RANGE_DISTANCE: f32 = 60.0; // 7.5m - anyone can shoot
 const CLOSE_RANGE_DISTANCE: f32 = 100.0; // 12.5m - close range shots

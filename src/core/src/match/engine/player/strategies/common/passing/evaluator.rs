@@ -882,6 +882,44 @@ impl PassEvaluator {
             tactical_value += long_pass_bonus * 0.15;
         }
 
+        // ── THE PLAN ─────────────────────────────────────────────────
+        // Everything above scores STATIC GEOMETRY: where the receiver is
+        // standing, how much space he has, whether the ball moves
+        // forward. None of it knows that a run was made, or who it was
+        // made for — so a run and a pass were two independent processes
+        // that only coincided by luck, and the man arriving at the far
+        // post was worth exactly as much as the man standing next to him.
+        //
+        // The team plan closes that loop: the carrier now prefers the
+        // target the attack was built around. Deliberately a bias, not an
+        // override — the plan is a shared intention, and a passer who can
+        // see a better ball is still allowed to play it.
+        let team_ops = ctx.team();
+        let plan = team_ops.attack_plan();
+        if plan.active {
+            if plan.primary_target == Some(receiver.id) {
+                tactical_value += 0.30;
+            } else if plan.slot_of(receiver.id).is_some() {
+                tactical_value += 0.18;
+            } else if plan.far_runner == Some(receiver.id) {
+                // Only worth finding when the ball can actually be played
+                // in behind — otherwise this is a hopeful hoof.
+                if forward_value > 0.0 {
+                    tactical_value += 0.14;
+                }
+            } else if plan.near_support == Some(receiver.id) {
+                // The outlet is valuable precisely when nothing forward
+                // is on, so it is credited as a floor rather than a bonus.
+                tactical_value += 0.06;
+            }
+            // Rest defence is not an attacking option. Playing the ball to
+            // the man whose job is to stay home is how a possession loses
+            // its shape.
+            if plan.is_rest_defence(receiver.id) && forward_value > 0.0 {
+                tactical_value -= 0.10;
+            }
+        }
+
         // Allow negative tactical values for backward passes
         tactical_value.clamp(-0.5, 1.8)
     }
@@ -1237,6 +1275,69 @@ impl PassEvaluator {
                 1.0
             };
 
+            // Which way is this ball actually going?
+            //
+            // Only `is_direct` players had an opinion about that (1.4
+            // forward against 0.5 back). Every other personality —
+            // playmaker, conservative, team player, pragmatic, and the plain
+            // default that most players fall into — scored a pass to the man
+            // BEHIND the ball exactly like a pass to the man in front.
+            //
+            // Combined with `congestion_penalty` above, which pays 1.8 for
+            // an isolated receiver and 0.02 for a crowded one, the evaluator
+            // did not merely tolerate retreating, it preferred it: the
+            // penalty area is the most crowded ground on the pitch and the
+            // spare man in the attacking third is the one nobody has
+            // bothered to mark, who is behind the ball. That is the "passes
+            // backwards in front of goal" report, and it is the same
+            // evaluator every declined shot routes into.
+            //
+            // Recycling is a real option, so this is a discount rather than
+            // a veto — scaled by how far up the pitch we are, because
+            // turning away from goal costs more the nearer you are to it.
+            let side_now = ctx.player.side.unwrap_or(PlayerSide::Left);
+            let goes_backward =
+                side_now.forward_delta(ctx.player.position.x, teammate.position.x) < 0.0;
+            let retreat_penalty = if goes_backward {
+                let width = ctx.context.field_size.width as f32;
+                let progress = side_now.attacking_progress_x(ctx.player.position.x, width);
+                // ── HOW FAR BACK, not just how far forward he is ──────
+                //
+                // This read the PASSER's position only, so a two-metre
+                // lay-back and a seventy-metre ball to your own
+                // centre-half were penalised identically — and it floored
+                // at a third of the value, which is nowhere near enough
+                // to stop one. That is the reported bug in full: a
+                // midfielder carries into the opposition goal area and
+                // plays it the length of the pitch to his own goal.
+                //
+                // It survives because FOUR of the six personality
+                // branches below score on `success_probability` and
+                // `positioning_bonus` alone and never read
+                // `tactical_value`, which is the only other term that
+                // knows which way the ball is going. An unmarked
+                // team-mate seventy metres behind the play is the best
+                // pass on the pitch by both of those measures: nobody is
+                // near him, so he is certain to receive it. This
+                // multiplier is the one direction guard every archetype
+                // must pass through, so it has to carry the distance
+                // itself.
+                //
+                // `retreat` is the share of the pitch the pass gives
+                // back. Cost is the product of the two: giving up ground
+                // is free in your own half, ordinary in midfield, and
+                // effectively forbidden once you are in the area — which
+                // is where a real player either shoots, holds it, or
+                // squares it, and never turns and hits it seventy metres.
+                let retreat = (-side_now.forward_delta(ctx.player.position.x, teammate.position.x)
+                    / width)
+                    .clamp(0.0, 1.0);
+                let advanced = ((progress - 0.40) / 0.60).clamp(0.0, 1.0);
+                (1.0 - advanced * (0.55 + retreat * 3.0)).clamp(0.02, 1.0)
+            } else {
+                1.0
+            };
+
             // GOALKEEPER PENALTY: Almost completely eliminate passing to goalkeeper
             let is_goalkeeper = matches!(
                 teammate.tactical_positions.position_group(),
@@ -1378,6 +1479,9 @@ impl PassEvaluator {
                         * goalkeeper_penalty
                 }
             };
+            // Applied once, outside the personality branches, so no
+            // archetype can quietly opt out of it.
+            let score = score * retreat_penalty;
 
             // Hard reject: never pass through 2+ opponents unless
             // a playmaker rolls high vision. Vision gate smoothed

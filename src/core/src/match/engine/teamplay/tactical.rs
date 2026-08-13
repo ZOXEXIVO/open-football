@@ -328,6 +328,20 @@ impl TeamTacticalState {
         )
     }
 
+    /// Whether this phase is one where committing players into the
+    /// opposition box is the right call. Broader than
+    /// [`is_attacking`](Self::is_attacking): a move is built in
+    /// `Progression`, and the runs that arrive in the box have to start
+    /// before the ball reaches the final third or they arrive late.
+    /// Read by [`AttackPlan::refresh`](crate::r#match::AttackPlan::refresh).
+    pub fn wants_bodies_forward(&self) -> bool {
+        self.in_possession
+            && matches!(
+                self.phase,
+                GamePhase::Attack | GamePhase::AttackingTransition | GamePhase::Progression
+            )
+    }
+
     /// Recompute both teams' tactical state in-place. Called periodically
     /// from the match tick loop (every ~10 ticks is enough — phase shifts
     /// settle over multiple seconds, not every frame).

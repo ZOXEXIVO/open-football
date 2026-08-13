@@ -460,6 +460,43 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             &inputs,
         );
 
+        // Attacking roles are assigned on the same cadence and read the
+        // tactical state that was just produced — the phase decides
+        // WHETHER to commit bodies forward, the plan decides WHO and
+        // WHERE. Without this second half every player derives his own
+        // destination from the same geometry and they all arrive at the
+        // same one; see `teamplay::attack`.
+        let attack_inputs = AttackRefreshInputs {
+            field,
+            home_team_id: context.field_home_team_id,
+            away_team_id: context.field_away_team_id,
+            home_attacking: context.tactical_home.wants_bodies_forward(),
+            away_attacking: context.tactical_away.wants_bodies_forward(),
+            home_rest_defence: context.tactical_home.rest_defense_count,
+            away_rest_defence: context.tactical_away.rest_defense_count,
+        };
+        AttackPlan::refresh(
+            &mut context.attack_home,
+            &mut context.attack_away,
+            &attack_inputs,
+        );
+
+        // The defensive half of the same idea. Assigned on the same
+        // cadence so the two plans always describe the same instant, and
+        // unconditionally on phase — a side without the ball is defending
+        // whatever the tactical phase says, and the duties are what stop
+        // the back line computing its position from the ball alone.
+        let defence_inputs = DefenceRefreshInputs {
+            field,
+            home_team_id: context.field_home_team_id,
+            away_team_id: context.field_away_team_id,
+        };
+        DefensivePlan::refresh(
+            &mut context.defence_home,
+            &mut context.defence_away,
+            &defence_inputs,
+        );
+
         // Cumulative possession + field-tilt counters feed the rolling
         // metrics consumed by the smart coach evaluator. Updated here
         // (every ~10 ticks) so the per-coach-eval pass doesn't have to

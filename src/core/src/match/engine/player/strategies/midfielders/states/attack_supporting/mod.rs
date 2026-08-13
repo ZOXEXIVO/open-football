@@ -12,7 +12,9 @@ use std::cmp::Ordering;
 const TACKLE_RANGE: f32 = 40.0;
 const ATTACK_SUPPORT_TIME_LIMIT: u64 = 300;
 const MIN_STAY_TIME: u64 = 60; // Minimum ticks before allowing non-urgent exit to Running
-const CHANNEL_WIDTH: f32 = 15.0; // Width of vertical channels for runs
+/// Width of the vertical channels a runner attacks (~10 m). Was 15u —
+/// 1.9 m, which is narrower than a player.
+const CHANNEL_WIDTH: f32 = 80.0;
 
 #[derive(Default, Clone)]
 pub struct MidfielderAttackSupportingState {}
@@ -191,6 +193,28 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Attack supporting is high intensity - sustained running to support attacks
+        //
+        // NOTE — `Moderate` was tried here and REVERTED; don't repeat it
+        // without a plan for the cost. The argument for it is good on
+        // paper: the declared intensity is also the speed cap
+        // (`MovementEffort::speed_fraction`: High 0.78 vs Moderate 0.52),
+        // this is where midfielders spend most of the match (7.3M of
+        // ~14M midfielder ticks, ~24 minutes each), and `Moderate` is the
+        // tier documented as "jogging into space" while `High` reads
+        // "pressing, marking, covering, tracking back".
+        //
+        // Measured over 5x60 matches it bought less than it cost: MID
+        // distance 20.1 -> 18.2 km against a real ~11 (only -9%, because
+        // midfielders are in SOME motion state ~75% of the time either
+        // way), while goals went 4.19 -> 4.64 per match against a real
+        // ~2.5 — slower support means less presence around the ball.
+        //
+        // The real problem is not this tier, it is that midfielders never
+        // stand still: they have no low-intensity dwell state in their
+        // rotation the way defenders have `HoldingLine` (`Recovery`),
+        // which is why DEF measures a realistic 10.0 km on the same
+        // model. Fixing the distance means giving midfielders somewhere
+        // to rest, not making their running slower.
         MidfielderCondition::with_velocity(ActivityIntensity::High).process(ctx);
     }
 }
@@ -212,6 +236,39 @@ impl MidfielderAttackSupportingState {
         };
 
         let distance_to_goal = (ball_position - goal_position).magnitude();
+
+        // ── ASSIGNED BOX SLOT ────────────────────────────────────────────
+        // If the team plan has given this midfielder a patch of the box,
+        // that IS his run — no local scan, no argmax, and crucially no
+        // chance of arriving at the same point as somebody else.
+        //
+        // This supersedes the elected-arriving-runner block below for
+        // anyone who holds a slot. That election re-derived the same
+        // target for every runner it elected (`MAX_RUNNERS` was 2 and both
+        // got an identical `(x, y)`), which is the specific reason bodies
+        // stacked in front of goal instead of spreading across the box.
+        if let Some(target) = ctx.team().my_box_slot_target() {
+            let target = target.clamp_to_field(field_width, field_height);
+            // Hold the run short of an offside position rather than
+            // abandoning the slot — the slot is where he is going, the
+            // line just decides when.
+            let target = if self.is_offside_risk(ctx, target) {
+                Vector3::new(target.x - attacking_direction * 18.0, target.y, 0.0)
+            } else {
+                target
+            };
+            #[cfg(feature = "match-logs")]
+            {
+                use std::sync::atomic::Ordering;
+                let center_y = field_height / 2.0;
+                let in_box_central = (goal_position - player_position).magnitude() < 110.0
+                    && (player_position.y - center_y).abs() < field_height * 0.17;
+                if in_box_central {
+                    crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::RUNNER_BOX_TICKS.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            return target;
+        }
 
         // ── ARRIVING RUNNER ──────────────────────────────────────────────
         // The attacking central midfielder (highest attacking drive with
@@ -366,22 +423,41 @@ impl MidfielderAttackSupportingState {
             return false;
         }
 
-        // Highest attacking drive among central-mid teammates wins the run.
+        // The most attack-minded central midfielders make the run.
+        //
+        // This used to be a strict argmax — `!beaten` — so no matter the
+        // situation exactly ONE midfielder ever arrived in the box.
+        // Measured off replay dumps: only **1.3-1.9 team-mates ahead of
+        // the ball** when a shot was struck (real 2-4) and 2.1-3.2 inside
+        // the box (real 3-5). A real attack puts an arriving #8 in
+        // ALONGSIDE the front line, not instead of the other midfielder,
+        // and the shortage is also why a forward's final-third passes go
+        // backward half the time: there is nobody ahead of him to find.
+        //
+        // `cover_behind` above is what keeps this honest — the deepest
+        // central midfielder still has to be behind the ball before
+        // anyone goes, so widening the count cannot empty the middle.
+        const MAX_RUNNERS: usize = 2;
         let my_drive = Self::attacking_drive(&ctx.player.skills);
         let my_id = ctx.player.id;
-        let beaten = ctx.players().teammates().all().any(|t| {
-            if !t.tactical_positions.is_central_midfielder() {
-                return false;
-            }
-            let t_drive = ctx
-                .context
-                .players
-                .by_id(t.id)
-                .map(|tp| Self::attacking_drive(&tp.skills))
-                .unwrap_or(0.0);
-            t_drive > my_drive + 0.01 || ((t_drive - my_drive).abs() <= 0.01 && t.id < my_id)
-        });
-        !beaten
+        let outranked = ctx
+            .players()
+            .teammates()
+            .all()
+            .filter(|t| {
+                if !t.tactical_positions.is_central_midfielder() {
+                    return false;
+                }
+                let t_drive = ctx
+                    .context
+                    .players
+                    .by_id(t.id)
+                    .map(|tp| Self::attacking_drive(&tp.skills))
+                    .unwrap_or(0.0);
+                t_drive > my_drive + 0.01 || ((t_drive - my_drive).abs() <= 0.01 && t.id < my_id)
+            })
+            .count();
+        outranked < MAX_RUNNERS
     }
 
     /// A central midfielder's drive to get into the box. Off-the-ball is
@@ -751,6 +827,15 @@ impl MidfielderAttackSupportingState {
         let _ball_position = ctx.tick_context.positions.ball.position;
         let player_position = ctx.player.position;
         let goal_position = ctx.player().opponent_goal_position();
+
+        // An assigned slot wins over the channel scan for the same reason
+        // as above: `best_free_channel` hands the SAME least-congested gap
+        // to every midfielder that calls it, so unassigned late runs
+        // converge. The scan stays as the fallback for players the plan
+        // gave no slot to.
+        if let Some(target) = ctx.team().my_box_slot_target() {
+            return target.clamp_to_field(field_width, field_height);
+        }
 
         // Identify the best free channel between defenders
         if let Some(best_channel) = self.best_free_channel(ctx, goal_position) {

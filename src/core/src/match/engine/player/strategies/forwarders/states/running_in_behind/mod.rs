@@ -3,9 +3,11 @@ use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondi
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
+use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -119,13 +121,39 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
         let direction = (to_goal + lateral_offset).normalize();
 
         // Sprint at maximum pace with acceleration bonus
-        let pace = ctx.player.skills.physical.pace;
         let acceleration = ctx.player.skills.physical.acceleration / 20.0;
         // Counter-attack: extra burst of speed
         let counter_bonus = if is_counter { 0.3 } else { 0.0 };
-        let sprint_speed = pace * (1.5 + acceleration * 0.5 + counter_bonus);
 
-        Some(direction * sprint_speed)
+        // Steer toward a point out ahead on the run rather than assigning
+        // the velocity outright.
+        //
+        // `direction * (pace * 1.5..)` produced an absolute velocity of up
+        // to ~40 u/tick against a ~0.63 u/tick top speed, with no
+        // reference to the velocity the forward already had. The
+        // engine-wide clamp scaled it back to a full sprint along
+        // whichever way `direction` happened to point that tick — and
+        // `direction` swings, because the curved-run term above sways on a
+        // sine wave and `to_goal` rotates as the player moves. So the
+        // forward could invert his heading between consecutive ticks at
+        // full pace. `Seek` takes the same direction and integrates it
+        // from the current velocity under a force limit, which cut this
+        // state from 9.8 reversals per second held to 5.3.
+        const RUN_LOOKAHEAD: f32 = 60.0;
+        // Run ACROSS the marker, not just at the goal. A run in behind is
+        // beaten by a defender who simply runs the same line goal-side of
+        // you; what beats HIM is going across his body onto his blind
+        // side, so he has to turn and you do not. `MarkerEvasion` supplies
+        // that offset and the separation burst, both scaled by this
+        // forward's timing and pace against his marker's reading of it.
+        let aim = MarkerEvasion::evade(ctx, current_position + direction * RUN_LOOKAHEAD);
+        Some(
+            SteeringBehavior::Seek { target: aim }
+                .calculate(ctx.player)
+                .velocity
+                * (1.0 + acceleration * 0.15 + counter_bonus)
+                * MarkerEvasion::burst(ctx),
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

@@ -148,8 +148,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // with results at 35.6 / 36.3 / 28.1 against this module's own
         // documented target of 42-48 / 23-30 / 27-34 — home wins 7pp
         // short and draws 6pp long.
-        let home_arousal = 1.0 + 0.26 * home_edge;
-        let away_arousal = 1.0 - 0.15 * home_edge;
+        // Re-titrated again 2026-08-11 (0.26 / 0.15 → 0.13 / 0.075). The
+        // engine's response to an effective-skill edge moved a SECOND
+        // time, and in the opposite direction: with man-marking assigned
+        // per-opponent and defenders actually engaging carriers, a small
+        // skill edge now compounds through every duel in a possession
+        // instead of washing out. Measured at the old values: **70.0 /
+        // 25.0 / 5.0** with home 1.77 goals against away 0.43, against
+        // this module's documented target of 42-48 / 23-30 / 27-34 and a
+        // real home-goal edge of ~+0.35.
+        //
+        // The lesson the two re-titrations share: this constant is not a
+        // property of home advantage, it is a property of how strongly
+        // THIS engine converts skill into goals, so it has to be re-read
+        // after any change to the duel model.
+        let home_arousal = 1.0 + 0.13 * home_edge;
+        let away_arousal = 1.0 - 0.075 * home_edge;
         let home_team_id = field.home_team_id;
         for p in field.players.iter_mut().chain(field.substitutes.iter_mut()) {
             p.crowd_arousal = if p.team_id == home_team_id {

@@ -25,10 +25,26 @@ enum GoalkeeperDistributionType {
     Throw,
 }
 
-const UNDER_PRESSURE_DISTANCE: f32 = 1.0;
-const SAFE_PASS_DISTANCE: f32 = 30.0;
-const MEDIUM_PASS_DISTANCE: f32 = 60.0;
-const LONG_KICK_MIN_DISTANCE: f32 = 60.0; // Reduced from 100.0
+// GAME UNITS, and **1u = 0.125 m** — the field is 840u = 105 m. Every
+// constant here was written as if a unit were a metre, which is the same
+// error the pass model and the defensive engagement radii both carried
+// and had fixed. Restated at the true scale the old values meant:
+//
+//   * pressure at **12.5 cm** — a keeper counted as closed down only
+//     when two opponents were inside a hand's breadth of him, i.e. never,
+//     so he never once distributed under pressure;
+//   * a "short" option at **3.75 m** and a "medium" one at **7.5 m**,
+//     when a keeper's short option is the centre-back fifteen metres
+//     away. All three bands collapsed onto the same answer, so the
+//     distribution choice was not a choice.
+/// An opponent this close is closing the keeper down (~3 m).
+const UNDER_PRESSURE_DISTANCE: f32 = 24.0;
+/// Roll it out to a defender (~20 m).
+const SAFE_PASS_DISTANCE: f32 = 160.0;
+/// Clip it into midfield (~30 m).
+const MEDIUM_PASS_DISTANCE: f32 = 240.0;
+/// Beyond this it is a kick, not a pass (~35 m).
+const LONG_KICK_MIN_DISTANCE: f32 = 280.0;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperPassingState {}

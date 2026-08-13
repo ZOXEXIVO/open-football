@@ -8,6 +8,85 @@ use super::Ball;
 use crate::r#match::{MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 
+/// Who the ball dies on.
+///
+/// A stalled ball is nearly always a state machine with no way to act on
+/// possession: the player owns the ball, his state has no `has_ball`
+/// exit (or returns "stay put"), his `velocity()` is zero, and the same
+/// evaluation runs again next tick. It is a fixed point, and the only
+/// thing that ends it is `detect_position_stall` force-kicking the ball
+/// clear — 1000 ticks later.
+///
+/// Three of those were found by hand off a replay dump, which does not
+/// scale: by the time the obvious ones are fixed the rest are too rare to
+/// catch in a handful of matches. This attributes every stuck tick to the
+/// state that was holding the ball, so the next one shows up as a row in
+/// a 200-match table instead of a needle in a replay.
+///
+/// TICKS ARE FULL TICKS (~20 ms) — `detect_position_stall` runs from
+/// `Ball::update` only, never `update_light`. That is also why the
+/// safety net fires at ~19.5 s rather than the 10 s its own constant
+/// comment claims.
+#[cfg(feature = "match-logs")]
+pub mod dead_ball_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Widest `PlayerState::compact_id()` plus headroom (forwards top
+    /// out at 418 today).
+    pub const STATES: usize = 448;
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+
+    /// Full ticks the ball spent stuck while a player in this state held
+    /// it, and how many separate episodes that was.
+    pub static STUCK_TICKS_BY_STATE: [AtomicU64; STATES] = [ZERO; STATES];
+    pub static STUCK_EPISODES_BY_STATE: [AtomicU64; STATES] = [ZERO; STATES];
+    /// Same, for a stall nobody owned — a loose ball sitting untouched.
+    pub static STUCK_TICKS_UNOWNED: AtomicU64 = AtomicU64::new(0);
+    pub static STUCK_EPISODES_UNOWNED: AtomicU64 = AtomicU64::new(0);
+    /// Longest single stall seen, in full ticks.
+    pub static LONGEST_STUCK: AtomicU64 = AtomicU64::new(0);
+
+    pub fn reset() {
+        for c in STUCK_TICKS_BY_STATE
+            .iter()
+            .chain(STUCK_EPISODES_BY_STATE.iter())
+        {
+            c.store(0, Ordering::Relaxed);
+        }
+        for c in [
+            &STUCK_TICKS_UNOWNED,
+            &STUCK_EPISODES_UNOWNED,
+            &LONGEST_STUCK,
+        ] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// `(rows of (compact_id, ticks, episodes), unowned ticks, unowned
+    /// episodes, longest stall in ticks)`. Rows are only the states that
+    /// actually stalled, so the caller can print a short table.
+    pub fn snapshot() -> (Vec<(u16, u64, u64)>, u64, u64, u64) {
+        let mut rows = Vec::new();
+        for id in 0..STATES {
+            let t = STUCK_TICKS_BY_STATE[id].load(Ordering::Relaxed);
+            if t > 0 {
+                rows.push((
+                    id as u16,
+                    t,
+                    STUCK_EPISODES_BY_STATE[id].load(Ordering::Relaxed),
+                ));
+            }
+        }
+        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        (
+            rows,
+            STUCK_TICKS_UNOWNED.load(Ordering::Relaxed),
+            STUCK_EPISODES_UNOWNED.load(Ordering::Relaxed),
+            LONGEST_STUCK.load(Ordering::Relaxed),
+        )
+    }
+}
+
 impl Ball {
     /// Position-based stall: the ball hasn't left a small region in N
     /// ticks, regardless of who owns it. Catches the case where
@@ -35,6 +114,40 @@ impl Ball {
         }
 
         self.stall_anchor_tick += 1;
+
+        // Attribute the stall long before the safety net fires. Inside a
+        // 15u (1.9 m) circle for five seconds is not build-up play — the
+        // ball is stuck, and whoever is standing on it is the bug.
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering;
+            const DEAD_AFTER: u32 = 250;
+            if self.stall_anchor_tick >= DEAD_AFTER {
+                let first = self.stall_anchor_tick == DEAD_AFTER;
+                let bucket = self
+                    .current_owner
+                    .and_then(|id| players.iter().find(|p| p.id == id))
+                    .map(|p| p.state.compact_id() as usize)
+                    .filter(|b| *b < dead_ball_diag::STATES);
+                match bucket {
+                    Some(b) => {
+                        dead_ball_diag::STUCK_TICKS_BY_STATE[b].fetch_add(1, Ordering::Relaxed);
+                        if first {
+                            dead_ball_diag::STUCK_EPISODES_BY_STATE[b]
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    None => {
+                        dead_ball_diag::STUCK_TICKS_UNOWNED.fetch_add(1, Ordering::Relaxed);
+                        if first {
+                            dead_ball_diag::STUCK_EPISODES_UNOWNED.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+                dead_ball_diag::LONGEST_STUCK
+                    .fetch_max(self.stall_anchor_tick as u64, Ordering::Relaxed);
+            }
+        }
 
         if self.stall_anchor_tick == STALL_TICKS {
             #[cfg(feature = "match-logs")]

@@ -1,15 +1,36 @@
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperSetPosition,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::teamplay::coach::CoachInstruction;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
-const MIN_HOLDING_DURATION: u64 = 25;
-const MAX_HOLDING_DURATION: u64 = 60;
+/// How long a keeper keeps the ball in his hands before releasing it, in
+/// ticks (100 = 1 s).
+///
+/// Law 12 gives him six seconds; in practice a keeper takes two on a quick
+/// counter and five when his side is happy to slow the game down, and the
+/// referee's whistle is close to a dead letter. These bracket that.
+///
+/// They were 25 and 60 — half a second to one and a quarter, which is
+/// physically impossible: he had not finished catching it. The engine's
+/// keepers released the ball almost the instant they claimed it, which
+/// removed the natural pause in play after every save and cross.
+///
+/// UNITS: `in_state_time` counts AI TICKS, not engine ticks. Only full
+/// ticks run the state machine — `game_tick_light` deliberately leaves
+/// the counter alone — so one unit here is 20 ms, not 10. The first pass
+/// at this used 200-550 believing they were 10 ms ticks, which made a
+/// keeper hold the ball for four to eleven seconds and put the ball in
+/// his gloves for 27.9% of the match against a real 3-6%.
+const MIN_HOLDING_DURATION: u64 = 100;
+const MAX_HOLDING_DURATION: u64 = 275;
 
 /// Furthest a keeper can realistically throw. Beyond this the ball has
 /// to be kicked.
@@ -79,8 +100,34 @@ impl StateProcessingHandler for GoalkeeperHoldingState {
         None
     }
 
-    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(Vector3::new(0.0, 0.0, 0.0))
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Carry it out. This used to return a hard zero, so a keeper stood
+        // rooted on the exact spot he gathered it for the whole 2-5.5 s
+        // hold — and the ball tracks its owner, so the ball did not move
+        // either. Caught on the goal line, that is a ball hanging
+        // motionless in the goalmouth at glove height, ~160 times a match:
+        // the "the ball always ends up at one point in front of the goal"
+        // report. A real keeper gets up and walks it out towards the edge
+        // of his area, which is where he releases it from anyway.
+        let own_goal = ctx.ball().direction_to_own_goal();
+        let release = KeeperSetPosition::release_point(
+            own_goal,
+            ctx.player.position,
+            ctx.context.field_size.width as f32,
+        );
+        // Walking pace: he is managing the game, not sprinting, and the
+        // ball's own tracking speed is the ceiling that keeps it at his
+        // feet rather than trailing behind him.
+        const CARRY_PACE: f32 = 0.45;
+        Some(
+            SteeringBehavior::Arrive {
+                target: release,
+                slowing_distance: 25.0,
+            }
+            .calculate(ctx.player)
+            .velocity
+                * CARRY_PACE,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

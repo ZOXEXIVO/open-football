@@ -1,14 +1,17 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
-const TACKLING_DISTANCE_THRESHOLD: f32 = 25.0; // Commit from ~2.5× the old 20u lunge range — carriers can't brush past at 21u
+// Commit distance moved to `TackleEngagement::COMMIT` — same value,
+// now shared with `DefenderTacklingState` so the hand-off is ordered.
 const BASE_PRESSING_DISTANCE: f32 = 45.0;
 const MAX_PRESSING_BONUS: f32 = 35.0; // effective range: 45-80
 const BASE_PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 40.0;
@@ -55,8 +58,12 @@ impl StateProcessingHandler for DefenderPressingState {
             // If close enough to tackle, transition to Tackling state.
             // Repeat-tackle prevention lives on the player via
             // `tackle_cooldown` — a single-state cooldown here wouldn't
-            // cover the Standing/Running/Covering re-entry paths.
-            if distance_to_opponent < TACKLING_DISTANCE_THRESHOLD {
+            // cover the Standing/Running/Covering re-entry paths — and
+            // `should_commit` reads it here too, so a defender who has
+            // just lunged and missed contains the carrier instead of
+            // being handed into a `Tackling` state whose first act is to
+            // send him straight back.
+            if TackleEngagement::should_commit(ctx, distance_to_opponent) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
                 ));
@@ -147,7 +154,6 @@ impl StateProcessingHandler for DefenderPressingState {
             // chasing without ever making contact.
             let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
             let opp_speed = opp_velocity.magnitude();
-            let pace = ctx.player.skills.physical.pace;
             // Press boost from the unified profile (press_profile +
             // mobility composite). Tired / low-stamina chasers drop
             // into a softer press; elite pressers genuinely outsprint
@@ -158,17 +164,15 @@ impl StateProcessingHandler for DefenderPressingState {
             let mobility = sc::mobility(ctx.player, minute);
             let press_composite = 0.65 * def_profile.press_profile + 0.35 * mobility;
             let press_boost = (1.40 + (press_composite - 0.50) * 0.50).clamp(1.15, 1.65);
-            let speed = pace * press_boost;
-
-            // Crude lead time: distance / (our speed). If the carrier is
-            // moving quickly, aim ahead along their velocity so we meet
-            // them. If they're stationary, aim right at the ball.
-            let lead_ticks = if speed > 0.01 {
-                (distance_to_opponent / speed).min(30.0)
-            } else {
-                0.0
-            };
-            let predicted = opponent.position + opp_velocity * lead_ticks;
+            // Goal-side bias only; `SteeringBehavior::Pursuit` below derives
+            // the interception from the defender's real u/tick speed.
+            //
+            // The lead time used to be `distance / speed` where `speed` is
+            // `pace * press_boost` — `pace` being a 1-20 SKILL, not a
+            // velocity. Dividing a field-unit distance by a skill rating
+            // produced a tick count roughly 30x short that lurched as the
+            // gap closed, moving the aim point every tick.
+            let predicted = opponent.position;
 
             // Bias predicted point toward the goal-side so we close the
             // shooting lane even on chase — the defender wants to be
@@ -196,14 +200,20 @@ impl StateProcessingHandler for DefenderPressingState {
             };
             let intercept_target = predicted + to_own_goal * shot_zone_bias;
 
-            let to_target = intercept_target - ctx.player.position;
-            let direction = if to_target.magnitude() > 0.01 {
-                to_target.normalize()
-            } else {
-                Vector3::zeros()
-            };
-
-            let pressing_velocity = direction * speed;
+            // Steer rather than assign — see `MidfielderPressingState` for
+            // the same change. `direction * speed` set an absolute
+            // velocity of up to ~33 u/tick (pace 20 x press_boost 1.65)
+            // against a ~0.63 u/tick top speed, ignoring the velocity the
+            // defender already had, so the engine-wide clamp kept whatever
+            // heading this tick produced. `press_boost` still applies, as
+            // a multiplier on the achievable result.
+            let pressing_velocity = SteeringBehavior::Pursuit {
+                target: intercept_target,
+                target_velocity: opp_velocity,
+            }
+            .calculate(ctx.player)
+            .velocity
+                * press_boost;
 
             // Reduce separation velocity when actively pressing to allow close approach
             // When very close, disable separation entirely to enable tackling

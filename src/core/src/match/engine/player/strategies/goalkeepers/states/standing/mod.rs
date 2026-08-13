@@ -1,4 +1,6 @@
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
@@ -39,9 +41,19 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         // implemented but previously unreachable — and stops a stationary
         // ball at the keeper's feet being modelled as a claim out of the
         // air.
+        // …unless this is the ball we ourselves just put into play and it
+        // has not travelled. A keeper whose delivery drops back at his feet
+        // used to collect it and distribute again on the spot, over and
+        // over — the pick-up path grants ownership directly, so the
+        // ownership layer's own guard never saw it. Declining here is what
+        // breaks the cycle: the ball stays live and an outfielder takes it.
+        let own_dead_delivery = ctx.ball().blocked_from_recollecting();
+
         let ball_distance = ctx.ball().distance();
         if ball_distance < 10.0
             && !ctx.ball().is_owned()
+            && !own_dead_delivery
+            && KeeperBallClaim::is_favourite(ctx)
             && ctx.ball().on_own_side()
             && ctx.tick_context.positions.ball.velocity.norm() < 10.0
         {
@@ -127,8 +139,11 @@ impl StateProcessingHandler for GoalkeeperStandingState {
             // enough to matter.
         }
 
-        // Check for loose ball in dangerous area
+        // Check for loose ball in dangerous area — same self-recollect bar
+        // as the close-ball branch above, or `ComingOut` simply becomes the
+        // second door into the same cycle.
         if !ctx.ball().is_owned()
+            && !own_dead_delivery
             && ball_on_own_side
             && ball_distance < 40.0 * (1.0 + command_of_area * 0.3)
         {
@@ -311,6 +326,31 @@ impl GoalkeeperStandingState {
         // ordinary keeper keeps the pre-existing gate.
         let risk_appetite =
             (ctx.player.skills.goalkeeping.eccentricity / 20.0).clamp(0.0, 1.0) - 0.5;
+
+        // A man dribbling at the goal has to be MET. This is the constraint
+        // that was missing entirely: the race conditions below only ever
+        // fired for a loose ball or a poor controller, so a forward with
+        // the ball at his feet and decent first touch was free to carry it
+        // all the way in while the keeper stood on his line and watched.
+        // That is why forwards were seen running to within a couple of feet
+        // of the keeper before shooting — there was nothing there to stop
+        // them, and no amount of restraint on the FORWARD is the right fix
+        // for a goalkeeper who does not come out.
+        //
+        // He is not racing for the ball here, he is closing the angle, so
+        // this deliberately bypasses `can_reach_first` — a keeper who only
+        // advances when he can win the ball first never advances at all
+        // against a carrier.
+        //
+        // 150u ≈ 19 m: the carrier is into the area the keeper is
+        // responsible for. Risk appetite widens it, so an eccentric sweeper
+        // comes further and a cautious one holds his line longer.
+        let carrier_bearing_down = ctx.ball().is_owned()
+            && keeper_to_ball < 150.0 * (1.0 + risk_appetite * 0.4)
+            && !ctx.ball().is_held_by_opponent_goalkeeper();
+        if carrier_bearing_down {
+            return true;
+        }
 
         let can_reach_first =
             keeper_time < opponent_time * (1.0 + rushing_out * 0.2 + risk_appetite * 0.15);

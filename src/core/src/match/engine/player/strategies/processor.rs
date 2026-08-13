@@ -11,6 +11,7 @@ use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, 
 use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
 use crate::r#match::player::transition::TransitionSource;
+use crate::r#match::player_context::LooseBallChase;
 use crate::r#match::team::TeamOperationsImpl;
 use crate::r#match::{BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer, PlayerSide};
 use log::debug;
@@ -236,8 +237,7 @@ impl PlayerFieldPositionGroup {
             if tm.player_id == player.id || tm.side != my_side || !tm.chase_eligible {
                 continue;
             }
-            let d_sq = (ball_pos - tm.position).norm_squared();
-            if d_sq < yield_threshold_sq {
+            if LooseBallChase::chase_dist_sq(tm, ball_pos) < yield_threshold_sq {
                 return true;
             }
         }
@@ -374,7 +374,10 @@ impl PlayerFieldPositionGroup {
             if tm.player_id == player.id || tm.side != my_side || !tm.chase_eligible {
                 continue;
             }
-            let d_sq = (ball_pos - tm.position).norm_squared();
+            // `my_dist_sq` is deliberately the caller's raw distance, as the
+            // table query compares it: only the teammate being weighed gets
+            // the striker gamble.
+            let d_sq = LooseBallChase::chase_dist_sq(tm, ball_pos);
             if d_sq < my_dist_sq {
                 return false;
             }

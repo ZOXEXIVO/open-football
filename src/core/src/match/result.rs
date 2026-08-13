@@ -53,12 +53,13 @@ impl Serialize for ResultPositionDataItem {
     where
         S: Serializer,
     {
-        // Round to 1 decimal for compact JSON output
-        let x = (self.position.x * 10.0).round() / 10.0;
-        let y = (self.position.y * 10.0).round() / 10.0;
-        let z = (self.position.z * 10.0).round() / 10.0;
+        // Rounded per axis for compact JSON output — see `Quantize` for why
+        // the vertical one does not share the horizontal step.
+        let x = Quantize::ground(self.position.x);
+        let y = Quantize::ground(self.position.y);
+        let z = Quantize::height(self.position.z);
 
-        if z.abs() < 0.05 {
+        if z.abs() < Quantize::GROUNDED {
             // 2D entry: [timestamp, x, y]
             let mut seq = serializer.serialize_seq(Some(3))?;
             seq.serialize_element(&self.timestamp)?;
@@ -80,6 +81,12 @@ impl Serialize for ResultPositionDataItem {
 /// Tolerance-based squared distance threshold for deduplication.
 /// Positions within 0.3 game units are considered unchanged.
 /// 0.3 units on an 840-unit field = 0.036% — completely imperceptible.
+///
+/// Game units on every axis, including the vertical one, which is stored in
+/// metres and has to be converted before it is compared — see
+/// [`Quantize::separation_sq`]. 0.3 u is 3.75 cm, so the ball needs to be
+/// moving faster than about 1.25 m/s to clear it in a 30 ms sample, whichever
+/// direction it is moving in.
 const DEDUP_TOLERANCE_SQ: f32 = 0.09; // 0.3 * 0.3
 
 /// Maximum interval between recorded samples for any on-pitch player.
@@ -99,11 +106,74 @@ const DEDUP_TOLERANCE_SQ: f32 = 0.09; // 0.3 * 0.3
 /// of storage per idle player per minute — negligible.
 const HEARTBEAT_INTERVAL_MS: u64 = 750;
 
-/// Quantize a coordinate to 0.1 precision.
-/// This improves dedup hit rate and produces shorter JSON floats.
-#[inline]
-fn quantize(v: f32) -> f32 {
-    (v * 10.0).round() / 10.0
+/// Rounding applied to a recorded coordinate, once on the way into the buffer
+/// and again on the way out to JSON.
+///
+/// **The two axes are not the same size.** `x` and `y` are game units of
+/// 0.125 m; `z` is metres, because the engine's vertical axis is metric (see
+/// `GRAVITY_PER_TICK` — the crossbar is 2.44 and a jump reaches 3.5). One
+/// shared step of 0.1 therefore bought 1.25 cm of resolution across the pitch
+/// and 10 cm of it up the pitch, and the ball was recorded to the nearest ten
+/// centimetres of height.
+///
+/// That is coarser than most of the things height is used to express. There
+/// was nothing at all between "on the deck" and "ten centimetres up": a 4 cm
+/// bounce rounded to zero and was written down as a ball that never left the
+/// ground, a 6 cm one rounded up to 0.1 and was written down as half again as
+/// high as it was, and a driven shot crossing the box climbed in visible 10 cm
+/// steps. `Ball::carry_height`, the 1.15 m a keeper holds it at, came out as
+/// 1.1. None of it was wrong in the simulation — only in what was kept of it.
+struct Quantize;
+
+impl Quantize {
+    /// Horizontal, in game units. 0.1 u = 1.25 cm.
+    #[inline]
+    fn ground(v: f32) -> f32 {
+        (v * 10.0).round() / 10.0
+    }
+
+    /// Vertical, in metres. 0.01 m = 1 cm — a shade finer than the horizontal
+    /// step in real terms, and still two decimal places rather than four,
+    /// which is what keeps the JSON short.
+    #[inline]
+    fn height(v: f32) -> f32 {
+        (v * 100.0).round() / 100.0
+    }
+
+    /// Under half a vertical step there is no height left to record and the
+    /// serialiser drops the element entirely. Kept in lock-step with
+    /// [`Quantize::height`]: a value this test lets through has to survive
+    /// that rounding, or the wire carries an explicit zero.
+    const GROUNDED: f32 = 0.005;
+
+    /// Game units per metre.
+    ///
+    /// The dedup below measures a horizontal delta in units against a vertical
+    /// one in metres, so one of them has to be converted or the comparison
+    /// means nothing — and it did not: the 0.3 tolerance was 3.75 cm across
+    /// the pitch and 30 cm up it. A ball dropping vertically out of the sky
+    /// recorded no sample at all until it had fallen a third of a metre.
+    const UNITS_PER_METRE: f32 = 8.0;
+
+    /// A recorded position, rounded on the axis each coordinate belongs to.
+    #[inline]
+    fn position(position: Vector3<f32>) -> Vector3<f32> {
+        Vector3::new(
+            Self::ground(position.x),
+            Self::ground(position.y),
+            Self::height(position.z),
+        )
+    }
+
+    /// Squared distance between two recorded positions, in game units on every
+    /// axis, for comparison against [`DEDUP_TOLERANCE_SQ`].
+    #[inline]
+    fn separation_sq(a: Vector3<f32>, b: Vector3<f32>) -> f32 {
+        let dx = a.x - b.x;
+        let dy = a.y - b.y;
+        let dz = (a.z - b.z) * Self::UNITS_PER_METRE;
+        dx * dx + dy * dy + dz * dz
+    }
 }
 
 /// Player state change: recorded only when the state actually changes.
@@ -378,24 +448,17 @@ impl ResultMatchPositionData {
             return;
         }
 
-        // Quantize to 0.1 precision — reduces float noise and produces shorter JSON
-        let position = Vector3::new(
-            quantize(position.x),
-            quantize(position.y),
-            quantize(position.z),
-        );
+        // Rounded per axis — reduces float noise and produces shorter JSON.
+        let position = Quantize::position(position);
 
         if let Some(player_data) = self.players.get_mut(&player_id) {
             let last = player_data.last().unwrap();
-            let dx = position.x - last.position.x;
-            let dy = position.y - last.position.y;
-            let dz = position.z - last.position.z;
 
             // Tolerance dedup + heartbeat: skip tiny movements unless we're
             // overdue for a sample. Without the heartbeat, a GK planted in
             // the six-yard box gets no updates until a save, and replay
             // viewers can't distinguish "on-pitch, idle" from "subbed off".
-            let distance_sq = dx * dx + dy * dy + dz * dz;
+            let distance_sq = Quantize::separation_sq(position, last.position);
             let since_last = timestamp.saturating_sub(last.timestamp);
             if distance_sq < DEDUP_TOLERANCE_SQ && since_last < HEARTBEAT_INTERVAL_MS {
                 return;
@@ -418,17 +481,9 @@ impl ResultMatchPositionData {
             return;
         }
 
-        let position = Vector3::new(
-            quantize(position.x),
-            quantize(position.y),
-            quantize(position.z),
-        );
+        let position = Quantize::position(position);
 
         if let Some(last) = self.ball.last() {
-            let dx = position.x - last.position.x;
-            let dy = position.y - last.position.y;
-            let dz = position.z - last.position.z;
-
             // Tolerance dedup + heartbeat. Without the heartbeat, an
             // owned-and-stationary ball (stuck with a player who isn't
             // passing) gets no ball samples for the rest of the match
@@ -436,8 +491,14 @@ impl ResultMatchPositionData {
             // chunk split discards everything after that point, even
             // though the sim is still running. Player positions use
             // the same heartbeat for the same reason.
+            //
+            // The height delta is weighted into game units before the
+            // comparison. Unweighted, this is the test that lost every
+            // near-vertical ball in the recording: a drop, the top of a lob, a
+            // bounce coming up under a boot all sat inside the tolerance until
+            // they had travelled 30 cm.
             let since_last = timestamp.saturating_sub(last.timestamp);
-            if dx * dx + dy * dy + dz * dz < DEDUP_TOLERANCE_SQ
+            if Quantize::separation_sq(position, last.position) < DEDUP_TOLERANCE_SQ
                 && since_last < HEARTBEAT_INTERVAL_MS
             {
                 return;
@@ -613,5 +674,107 @@ impl VectorExtensions for Vector3<f32> {
     fn distance_to(&self, other: &Vector3<f32>) -> f32 {
         let diff = self - other;
         diff.dot(&diff).sqrt()
+    }
+}
+
+/// The recorded position format is a wire contract with the replay viewer, and
+/// the vertical axis is the half of it that carries a different unit from the
+/// other two. These pin the rounding, the 2D/3D split and the dedup on that
+/// axis, because every one of them was wrong in the same direction — treating
+/// a metre as though it were a game unit — and nothing downstream complains
+/// when a height quietly disappears.
+#[cfg(test)]
+mod height_recording_tests {
+    use super::*;
+
+    /// Samples the recorder keeps for a ball following `path`, offered every
+    /// 30 ms — the engine's own recording cadence.
+    fn recorded(path: &[Vector3<f32>]) -> usize {
+        let mut data = ResultMatchPositionData::new();
+        for (step, position) in path.iter().enumerate() {
+            data.add_ball_positions(step as u64 * 30, *position);
+        }
+        data.ball.len()
+    }
+
+    fn as_json(position: Vector3<f32>) -> String {
+        serde_json::to_string(&ResultPositionDataItem::new(0, position)).unwrap()
+    }
+
+    #[test]
+    fn a_ball_dropping_vertically_is_recorded_all_the_way_down() {
+        // Free fall from 4 m, sampled at 30 ms, moving on no other axis. This
+        // is the case the shared tolerance lost: with the height delta left in
+        // metres the ball had to fall 30 cm before anything was written down,
+        // so a dropping ball arrived in the replay as three or four samples
+        // and was interpolated into a glide.
+        let mut path = Vec::new();
+        let (mut z, mut fall) = (4.0f32, 0.0f32);
+        while z > 0.0 {
+            path.push(Vector3::new(400.0, 272.0, z));
+            fall += 9.81 * 0.03;
+            z -= fall * 0.03;
+        }
+        let kept = recorded(&path);
+        assert!(
+            kept >= path.len() - 2,
+            "a vertical drop must survive the dedup: kept {kept} of {} samples",
+            path.len()
+        );
+    }
+
+    #[test]
+    fn a_ball_sitting_still_is_still_deduplicated() {
+        // The other half of the contract. Weighting the height axis by eight
+        // must not turn float noise on a dead ball into a sample per tick —
+        // the dedup exists to keep a match's recording down to a few hundred
+        // kilobytes.
+        let path = vec![Vector3::new(400.0, 272.0, 0.0); 20];
+        assert_eq!(recorded(&path), 1, "a dead ball is one sample");
+    }
+
+    #[test]
+    fn heights_below_a_tenth_of_a_metre_survive() {
+        // With one shared step there was nothing between "on the deck" and
+        // "ten centimetres up": a 4 cm bounce rounded to zero and serialised
+        // as a ball that never left the ground, and a 6 cm one rounded up to
+        // 0.1 and was written down as half again as high as it was. Both
+        // failures are the same missing resolution.
+        for (height, wanted) in [(0.04f32, "0.04"), (0.06, "0.06")] {
+            let json = as_json(Vector3::new(400.0, 272.0, height));
+            assert!(
+                json.contains(wanted),
+                "a {:.0} cm bounce must reach the wire as {wanted}, got {json}",
+                height * 100.0
+            );
+        }
+    }
+
+    #[test]
+    fn a_ball_in_a_keepers_gloves_records_the_height_it_is_carried_at() {
+        // `Ball::carry_height` is 1.15 m, and the viewer reads that band to
+        // know the ball is in a keeper's hands. Rounded to 0.1 it landed on
+        // 1.1; the band has to be widened to catch it, and every other height
+        // in the engine loses the same 5 cm.
+        let json = as_json(Vector3::new(400.0, 272.0, 1.15));
+        assert!(
+            json.contains("1.15"),
+            "the carry height must round-trip exactly, got {json}"
+        );
+    }
+
+    #[test]
+    fn a_grounded_ball_serialises_without_a_height_at_all() {
+        // The 2D/3D split is what keeps the common case — every player, every
+        // rolling ball — at three elements instead of four.
+        assert_eq!(as_json(Vector3::new(400.0, 272.0, 0.0)), "[0,400.0,272.0]");
+    }
+
+    #[test]
+    fn the_horizontal_axes_are_unchanged() {
+        // Only the vertical axis moved. x and y are game units of 0.125 m and
+        // 0.1 u of resolution is 1.25 cm, which was never the problem.
+        assert_eq!(Quantize::ground(400.04), 400.0);
+        assert_eq!(Quantize::ground(400.06), 400.1);
     }
 }

@@ -49,7 +49,13 @@ impl StateProcessingHandler for ForwardTacklingState {
         // Closest-teammate duel gate — see def/mid tackling for rationale.
         // Forwards rarely lead the team in chase-score, so this mostly
         // defers the counter-press to whichever midfielder is closer.
-        if !ctx.team().is_best_player_to_chase_ball() {
+        // Entry condition only. `TackleEngagement::should_commit` already
+        // applies this before anyone is sent here, so re-checking it on
+        // every tick could only ever ABANDON a challenge already under
+        // way — and the designation is a tolerance band that swaps
+        // between team-mates tick to tick, so it did exactly that. A
+        // committed engagement now runs to contact or to `DISENGAGE`.
+        if ctx.in_state_time == 0 && !ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Pressing,
             ));

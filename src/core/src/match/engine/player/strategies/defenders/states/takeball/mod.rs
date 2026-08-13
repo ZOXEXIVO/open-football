@@ -44,32 +44,107 @@ impl StateProcessingHandler for DefenderTakeBallState {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let ball_vel = ctx.tick_context.positions.ball.velocity;
         let landing = ctx.tick_context.positions.ball.landing_position;
-        let is_aerial = ball_pos.z > 2.3;
-        let target = if is_aerial { landing } else { ball_pos };
 
-        let mut arrive_velocity = if is_aerial {
+        // Aim point crosses smoothly from the ball itself to where it will
+        // land as it rises, instead of snapping between them at a fixed
+        // height.
+        //
+        // This used to be `if ball_pos.z > 2.3 { landing } else { ball_pos }`.
+        // A bouncing ball crosses 2.3 repeatedly, and the two targets can
+        // be tens of units apart in DIFFERENT directions — so the chaser's
+        // velocity inverted on every crossing. `Defender: Take Ball`
+        // measured 6.6-7.8 velocity reversals per second held with the
+        // player never leaving the state (`dev_match trace`), which is a
+        // chaser visibly shivering next to a loose ball instead of
+        // collecting it. Blending across a band means there is no height
+        // at which the aim point can jump.
+        const GROUND_H: f32 = 1.5;
+        const AERIAL_H: f32 = 3.0;
+        let t = ((ball_pos.z - GROUND_H) / (AERIAL_H - GROUND_H)).clamp(0.0, 1.0);
+        // Smoothstep: zero gradient at both ends, so the aim point has no
+        // corner where it starts or finishes moving.
+        let aerial = t * t * (3.0 - 2.0 * t);
+        let target = ball_pos + (landing - ball_pos) * aerial;
+
+        // `Arrive` brakes into a landing spot, `Pursuit` leads a rolling
+        // ball, blended across the same aerial weight as the aim point so
+        // neither the target nor the behaviour can jump.
+        //
+        // UNSOLVED — this state is the largest remaining source of
+        // position flicker in the engine: 5.8-6.5 velocity reversals per
+        // second held, with essentially ALL of them at running speed
+        // (`dev_match trace` FAST column), i.e. a chaser visibly snapping
+        // around at a sprint rather than settling onto a target. Five
+        // hypotheses have been tested and every one changed the number by
+        // less than run-to-run noise, so DON'T repeat them:
+        //
+        //   1. the aerial/ground aim point snapping at `z > 2.3`
+        //      (blended — this fix is kept below, it removes a real
+        //      discontinuity even though it did not move the number);
+        //   2. the separation weight's 0.3 -> 1.0 step at 10u (smoothed);
+        //   3. the separation force entirely (disabled outright);
+        //   4. `Pursuit`'s discontinuous interception solver (rewritten
+        //      continuous — kept, in `steering.rs`);
+        //   5. `Pursuit` swapped for `Arrive` across the whole range,
+        //      on the theory that its 0.2x min-speed floor made chasers
+        //      overshoot a loose ball and snap back.
+        //
+        // Also ruled OUT: the chaser faithfully tracking a jittery ball.
+        // The ball's own direction was measured reversing **6 times in
+        // 1.38M ticks** (the `(ball direction changes)` control row), so
+        // the target is essentially perfectly stable and the instability
+        // is being generated on the player side.
+        //
+        // The next attempt should instrument the actual per-tick velocity
+        // vectors for one chaser rather than reason about the code —
+        // inspection has now been wrong five times running.
+        let mut arrive_velocity = if aerial >= 1.0 {
             SteeringBehavior::Arrive {
                 target,
                 slowing_distance: 10.0,
             }
             .calculate(ctx.player)
             .velocity
-        } else {
+        } else if aerial <= 0.0 {
             SteeringBehavior::Pursuit {
                 target,
                 target_velocity: ball_vel,
             }
             .calculate(ctx.player)
             .velocity
+        } else {
+            let brake = SteeringBehavior::Arrive {
+                target,
+                slowing_distance: 10.0,
+            }
+            .calculate(ctx.player)
+            .velocity;
+            let lead = SteeringBehavior::Pursuit {
+                target,
+                target_velocity: ball_vel,
+            }
+            .calculate(ctx.player)
+            .velocity;
+            lead * (1.0 - aerial) + brake * aerial
         };
 
         // Add separation force to prevent player stacking
         // Reduce separation when approaching ball, but keep minimum to prevent clustering
         const SEPARATION_RADIUS: f32 = 25.0;
         const SEPARATION_WEIGHT: f32 = 0.4;
-        const BALL_CLAIM_DISTANCE: f32 = 10.0;
         const NO_SEPARATION_DISTANCE: f32 = 5.0; // Completely disable separation within this distance
 
+        // NOTE — this ramp has a genuine discontinuity: it runs 0 -> 0.3
+        // across 5..10u and then JUMPS to 1.0 beyond 10u, so a chaser
+        // hovering either side of 10u sees the force opposing his pursuit
+        // change by more than 3x between ticks. Smoothing it into one
+        // continuous ramp was tried and did NOT reduce this state's
+        // reversal rate, so it is not the cause of the `Defender: Take
+        // Ball` flicker, and the smoothed version changes how tightly
+        // chasers converge on a loose ball. Left as-is pending a real
+        // diagnosis; the step is documented so the next attempt starts
+        // from what is already known.
+        const BALL_CLAIM_DISTANCE: f32 = 10.0;
         let distance_to_ball = (ctx.player.position - target).magnitude();
         let separation_factor = if distance_to_ball < NO_SEPARATION_DISTANCE {
             0.0 // No separation at all — let the player reach the ball

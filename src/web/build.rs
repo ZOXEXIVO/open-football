@@ -112,8 +112,15 @@ fn main() {
     fs::write(&hash_file, hash_content).expect("Failed to write css_hash.rs");
 }
 
-/// Stages the Bevy replay viewer (`src/match`) into `assets/static/match/`,
+/// Stages the Bevy replay viewer (`src/match`) into `assets/static/viewer/`,
 /// where `rust-embed` picks it up along with every other static file.
+///
+/// The directory name matters. Static files are served by the router's
+/// fallback, which only runs when no route matched — and `/{lang}/match/{id}`
+/// matches `/static/match/match_viewer.js` quite happily, binding `lang` to
+/// `"static"`. Staged under `match/` the viewer answered every request with
+/// `{"error":"Match 'match_viewer.js' not found"}`. `viewer` is not a second
+/// segment any page route claims, so keep it that way.
 ///
 /// Building it here rather than by hand is what keeps the viewer honest: the
 /// wasm the server hands out is always the one built from the sources sitting
@@ -127,7 +134,7 @@ impl MatchViewerAsset {
             .parent()
             .map(|parent| parent.join("match"))
             .unwrap_or_else(|| PathBuf::from("../match"));
-        let assets_dir = manifest_dir.join("assets").join("static").join("match");
+        let assets_dir = manifest_dir.join("assets").join("static").join("viewer");
 
         MatchViewer::watch(&crate_dir);
 

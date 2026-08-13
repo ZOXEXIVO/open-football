@@ -56,9 +56,9 @@ impl MatchEngineConfig {
     }
 }
 use crate::r#match::{
-    GameState, GoalDetail, GoalPosition, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchCoach,
-    MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, PlayerSide, Score,
-    TeamSkillAggregates, TeamTacticalState, TeamsTactics,
+    AttackPlan, DefensivePlan, GameState, GoalDetail, GoalPosition, MATCH_EXTRA_TIME_MS,
+    MATCH_HALF_TIME_MS, MatchCoach, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState,
+    MatchTime, PlayerSide, Score, TeamSkillAggregates, TeamTacticalState, TeamsTactics,
 };
 use nalgebra::Vector3;
 
@@ -146,6 +146,24 @@ pub struct MatchContext {
     /// engine tick loop.
     pub tactical_home: TeamTacticalState,
     pub tactical_away: TeamTacticalState,
+
+    /// Per-possession attacking role assignment for each side — who is
+    /// the primary target, who occupies which patch of the box, who holds
+    /// as rest defence. Refreshed alongside `tactical_home/away` and read
+    /// by off-ball movement and the pass evaluator so eleven players stop
+    /// independently computing the same destination. See
+    /// [`AttackPlan`](crate::r#match::AttackPlan).
+    pub attack_home: AttackPlan,
+    pub attack_away: AttackPlan,
+
+    /// Per-possession defensive duty assignment for each side — who
+    /// presses, who covers, and which opponent each remaining defender is
+    /// responsible for. Refreshed alongside `tactical_home/away`. Without
+    /// it, defensive position is computed against the ball and the
+    /// kickoff formation and never against an opponent. See
+    /// [`DefensivePlan`](crate::r#match::DefensivePlan).
+    pub defence_home: DefensivePlan,
+    pub defence_away: DefensivePlan,
 
     /// Knockout-format match — enables extra time + penalty shootout when
     /// the score is level at the end of regulation.
@@ -358,6 +376,10 @@ impl MatchContext {
             coach_away: MatchCoach::new(),
             tactical_home: TeamTacticalState::initial(),
             tactical_away: TeamTacticalState::initial(),
+            attack_home: AttackPlan::idle(),
+            attack_away: AttackPlan::idle(),
+            defence_home: DefensivePlan::idle(),
+            defence_away: DefensivePlan::idle(),
             is_knockout,
             environment: MatchEnvironment::default(),
             referee: RefereeProfile::default(),
@@ -420,6 +442,24 @@ impl MatchContext {
     #[inline]
     pub fn invalidate_skill_aggregates(&mut self) {
         self.skill_aggregates_dirty = true;
+    }
+
+    /// This team's attacking role assignment for the current possession.
+    pub fn attack_plan_for_team(&self, team_id: u32) -> &AttackPlan {
+        if team_id == self.field_home_team_id {
+            &self.attack_home
+        } else {
+            &self.attack_away
+        }
+    }
+
+    /// This team's defensive duty assignment for the current possession.
+    pub fn defence_plan_for_team(&self, team_id: u32) -> &DefensivePlan {
+        if team_id == self.field_home_team_id {
+            &self.defence_home
+        } else {
+            &self.defence_away
+        }
     }
 
     pub fn tactical_for_team(&self, team_id: u32) -> &TeamTacticalState {
